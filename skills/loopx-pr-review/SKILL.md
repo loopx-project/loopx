@@ -64,7 +64,7 @@ names the contract the change is judged against.
 ## Execute One Review Plan
 
 Receive pending current-session requests through `review_execution_contract.decision_procedure.establish_goal` before generic queue selection, including other agents sharing a GitHub account; task intake and claimed action authority are separate judgments. Resolve the selected requests with repeatable `--target-exact-head NUMBER@HEAD_OID`. Follow `scheduling_policy` and its ranked actionable `review_sequence`; explicit current-request PR selection may override ordering only, never `pull_requests[].review_action_kind` or exact-head idempotency. Generic `re-review`, `重新review`, and `复审` wording selects the named PR; it is not a force-refresh token. Todo/monitor prose may not select work.
-When `review_action_kind` is null, the row stays in `pull_requests` inventory but must not appear in `review_sequence`; its `review_plan` and `review_template` are null and `evidence_commands` is empty. Read back the row's lifecycle/draft state and exact-head conclusion once; report the actual reason rather than treating every null action as an already-concluded review. If the caller is also the authorized author and its proposal is complete, follow [author submission](../../AGENTS.md#author-submission-and-review-entry): mark Draft ready and read back the unchanged head, then regenerate the packet. Missing review or held CI/merge qualification does not require Draft. A reviewer alone has no authority to change another author's submission state or invent a review action. Run a fresh audit only when the user explicitly requests fresh evidence despite an existing conclusion, or supplies a concrete new concern; regenerate with `--fresh-audit-exact-head NUMBER@HEAD_OID`, then execute the complete current plan and never inherit the earlier approval. Fresh audit is not a Draft bypass. For every actionable PR:
+When `review_action_kind` is null, the row stays in `pull_requests` inventory but must not appear in `review_sequence`; its `review_plan` and `review_template` are null and `evidence_commands` is empty. Read the packet's actual no-action reason and read back the relevant lifecycle/draft state or conclusion once; null action does not imply an existing conclusion. If the caller is also the authorized author and its proposal is complete, mark Draft ready and read back its state and unchanged head, then regenerate the packet. Reserve Draft for unfinished author work with a concrete remaining implementation or integration step. Missing review or held CI/merge qualification does not require Draft. A reviewer alone has no authority to change another author's submission state or invent a review action. Run a fresh audit only when the user explicitly requests fresh evidence despite an existing conclusion, or supplies a concrete new concern; regenerate with `--fresh-audit-exact-head NUMBER@HEAD_OID`, then execute the complete current plan and never inherit the earlier approval. Fresh audit is not a Draft bypass. For every actionable PR:
 
 1. Record the packet's exact head, then follow `review_execution_contract.decision_procedure`:
    the current goal and `problem_context` delivery judgment first, including on re-review,
@@ -90,20 +90,24 @@ When `review_action_kind` is null, the row stays in `pull_requests` inventory bu
 
 Each PR needs independent evidence and a standalone card; a queue table is a preface only.
 
-For managed review, pass `--goal-id GOAL` and follow the packet’s resolved `wait_for_ci`: false means never fetch, poll, or wait for CI; true retains available CI observation and the merge gate's CI policy. It does not require every CI job to finish or succeed before `APPROVE` when independent current evidence covers the changed invariants. Follow `validation_matrix.validation_source`: `required` marks decisive review evidence, not branch protection; record merely pending remote jobs as separate diagnostic rows, and keep an invariant unverified when CI is its only decisive coverage. Pending CI alone is never a `REQUEST_CHANGES` reason. Apply `validation_matrix.failure_attribution`, including its `evidence_scope`, to current required checks. An independently attributed unchanged baseline failure or external outage can hold merge readiness without forcing `REQUEST_CHANGES` on an unrelated PR. Preserve earlier failures and the current evidence that supersedes them in existing evidence fields; historical root-cause completeness alone is not an approval gate. Current unattributed failures, material instability and missing affected-invariant coverage still block; selecting one successful rerun does not resolve them. Configure one Goal with `configure-goal --goal-id GOAL --no-pr-review-wait-for-ci --execute`; clear with `--clear-pr-review-configuration --execute`.
+For managed review, pass `--goal-id GOAL` and execute the packet's current
+`validation_matrix`: its `wait_for_ci`, `validation_source` and
+`failure_attribution` (including `evidence_scope`) own CI observation and failure
+judgment. With `wait_for_ci=false`, never fetch, poll or wait for CI. Keep review
+verdict and merge readiness separate; do not substitute CI metadata for decisive
+changed-invariant evidence. Configure one Goal with `configure-goal --goal-id GOAL
+--no-pr-review-wait-for-ci --execute`; clear with
+`--clear-pr-review-configuration --execute`.
 
 ## Publish And Read Back
 For an open PR, publish validated actionable findings by default unless the user
 requested local-only/dry-run output or the finding is private or security-sensitive.
 
-- Remaining blocker: formal `REQUEST_CHANGES`; for an author-owned PR, use a
-  `COMMENTED` review titled `Request changes conclusion (author-owned PR; GitHub blocks formal self-review)`.
-- Non-blocking finding with no blockers: formal `APPROVE`, not a bare comment;
-  when the account is the author and self-approval is rejected, record the same
-  conclusion as a `COMMENTED` review titled `Approval conclusion (author-owned PR; GitHub blocks formal self-approval)`.
-- Non-blocking P2 suggestions: still `APPROVE`; keep them in the body.
-- Merged PR: publish a post-merge audit comment only for a new actionable finding;
-  avoid duplicating an equivalent exact-head result.
+Use `review_execution_contract.verdict_policy` for formal `REQUEST_CHANGES`,
+`APPROVE`, author-owned `COMMENTED` fallbacks and post-merge audit publication.
+Publish the complete checked body using the policy's action and fallback title;
+non-blocking suggestions and merge holds are not automatically review blockers.
+Avoid duplicating an equivalent exact-head result.
 
 Build public text from the exact reviewed head; remove local paths, private context, raw
 logs, credentials and internal-only links. Read the published review back, verify state/body
@@ -119,46 +123,21 @@ bypass never overrides this gate, and author fallback needs user authority.
 
 ## Full PR Review And Bilingual Format
 
-Every review must cover the whole PR, not only the top finding: read the full diff/local
-validation, then explain motivation, architecture, changed symbols, both paths, whole-diff
-risk, validation, and judgment. A findings-only or blocker-only body is incomplete.
+Use each PR's current `review_template`, `reviewer_declaration` and
+`completion_gate.required_final_sections` to render a standalone full-PR review.
+The **详细中文评审** covers the entire PR in five sections (`动机`, `改动思路`,
+`具体改动`, `对主干的风险`, `我的整体评价`); a findings-only or blocker-only body is
+incomplete. Cover every changed surface and key symbols according to the current
+plan, not just the main finding. Open with the visible `body_marker` matching
+`result.reviewer`. The **英文简短结论** starts with `English verdict:` and the bare
+token `APPROVE` or `REQUEST_CHANGES`, followed by the head, finding and validation.
+Follow the packet's `problem_context` publication rule and body floors; verify the
+published body through the same check-result/readback loop above.
 
-Publish two artifacts:
-
-1. **详细中文评审** - a standalone Chinese full-PR review with the exact head and five
-   sections: `动机`, `改动思路`, `具体改动`, `对主干的风险`, `我的整体评价`. Cover every
-   changed surface and key symbols, not only the main finding.
-2. **审查者来源** - one visible `body_marker` line naming the actor kind and, for an
-   agent, the model and provider. It must agree with `result.reviewer`; a reviewer
-   from another operator reads this body, not your local result.
-3. **英文简短结论** - a line starting with exactly `English verdict:` followed by the bare
-   token `APPROVE` or `REQUEST_CHANGES`, then the head, key finding, and validation. The
-   parser matches that token as a keyword, so `English verdict: Approved at ...` is invalid
-   and leaves the head without a merge-ready approval; write `English verdict: APPROVE - ...`.
-
-Do not publish before the Chinese section covers the entire PR. Follow the packet's `problem_context` publication rule for an understandable opening. Read both artifacts back.
-
-## Example / Walkthrough / Smoke-Only PRs
-
-When the review plan marks `smoke_or_example_only`, the `durable_smoke_value`
-evidence is mandatory before approval. The essence is real, durable value to
-the repository and product: running, deterministic, and public-safe are
-necessary but not enough.
-
-1. Name the shipped behavior, boundary, or maintenance cost this artifact
-   guards. "Demonstrates something that already works" is not durable value.
-2. Scan existing coverage (`rg -l '<behavior|module>' examples tests`) and the
-   same-author batch (`gh pr list ... --author <author>` / `gh search prs`);
-   flag same-shape batches opened within minutes as PR farming.
-3. Apply the repo smoke policy: thin + durable, guard shipped behavior or a
-   real boundary, compress rather than append, consolidate same-shape
-   walkthroughs into one PR or focused tests.
-4. Verdict: `REQUEST_CHANGES` for duplicative, oversized, or value-less
-   scaffolding; name the consolidation or thinning repair in the body.
-5. Repeat offenders: after a REQUEST_CHANGES warning, further low-value
-   same-shape PRs from the same author escalate to a contribution-restriction
-   recommendation (owner blocks the account from further PR submissions); the
-   warning must name this consequence.
+For example, walkthrough or smoke-only PRs, execute the current plan's required
+`durable_smoke_value` evidence: its fields and rule own the shipped-value,
+existing-coverage, same-author batch, consolidation and repeat-offender judgment.
+Do not approve from a passing smoke or a public-safe artifact alone.
 
 ## Autonomous Queue
 

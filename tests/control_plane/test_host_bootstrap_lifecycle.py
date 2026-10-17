@@ -188,13 +188,14 @@ def test_app_brief_with_registry_profile_keeps_budget_and_current_settlement(reg
     body = packet["task_body"]
     assert all(scope.rstrip(".!?") in body for scope in scopes)
     assert packet["agent_scope_source"] == "agent_profile_v1"
-    assert packet["interface_budget"]["max_chars"] == 4600
+    assert packet["interface_budget"]["max_chars"] == 4800
     assert packet["interface_budget"]["within_budget"], packet["interface_budget"]
     assert packet["cli_preflight"] in body
     assert "--codex-app" in body
     assert "execution_obligation.must_attempt_work" in body
     assert "heartbeat_recommendation.agent_must_attempt" in body
-    assert "interaction_contract.cli_channel.settlement_plan.ordered_steps" in body
+    assert "current settlement_plan.ordered_steps, else next_cli_actions" in body
+    assert "ambiguous effects need readback/recovery, not blind retry" in body
     assert "terminal no-follow-up" in body
     assert packet["quota_spend_command"] not in body
     assert packet["progress_refresh_state_command"] not in body

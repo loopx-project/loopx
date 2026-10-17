@@ -30,6 +30,32 @@ LoopX aims to let people express, revise and accept complex goals through a loca
 
 Product success means **accepted outcomes within constraints, human attention cost and recovery capability**. Online counts, generated text, tool calls and PR counts are process signals. Models, runtimes, storage providers, IM and memory services can change; Goal/Todo/claim/lease/quota/effect and acceptance rules retain explicit, traceable single owners.
 
+The optimization objective is **long-horizon effectiveness and efficiency**:
+better independently accepted outcomes within comparable budgets, or comparable
+accepted outcomes with less total cost and human attention. Reliability,
+recovery and collaboration support that objective. LoopX pursues it through:
+
+- **Structured state:** preserve accepted goals, constraints, evidence provenance,
+  open questions, dependencies and decisions across compaction, restart and handoff.
+- **Closed-loop feedback:** connect execution, artifact validation and permitted
+  task/user feedback to the current state and next decision, retaining negative
+  results, uncertainty and evidence that supports staying the course.
+- **Evidence-driven replan process supervision:** inspect whether relevant
+  feedback reaches the responsible Agent, informs its decision and is adopted
+  in subsequent execution; then validate the resulting outcome. A justified
+  continuation is valid, and a forced pivot can discard useful work.
+
+Qualify this chain separately from storing a checkpoint, adding graph edges,
+acknowledging a read or completing a replan. Compare task-native outcomes and
+complete costs under aligned source, starting state, feedback, budget and
+observation windows. Include model/context processing, tools, control overhead,
+evaluation, recovery and human attention where measured; preserve unknown costs
+and count newly processed context after a restore. Use the existing
+[measurement model](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model)
+and [evidence-conditioned replan studies](long-horizon-harness-benchmark-research-program-v0.md#82-evidence-stall-detection-and-semantic-replan).
+These mechanisms and study hypotheses do not by themselves establish a measured
+benefit, change production defaults or grant additional execution authority.
+
 | User and work | Shortest value path | Required accepted outcome |
 | --- | --- | --- |
 | Individual developer/researcher | Connect a project→existing or managed Agent→continued work→interruption recovery | Reproducible installation/first useful action; visible work, artifacts, cost and next step without learning every RFC |

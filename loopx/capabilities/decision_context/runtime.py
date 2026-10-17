@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -26,6 +26,7 @@ from .private_state import load_private_decision_cursors, private_file_digest
 from .profile import (
     DecisionContextProfile,
     resolve_decision_context_activation,
+    resolve_inline_decision_context_activation,
 )
 from .providers import build_decision_source_provider
 from .sources import DecisionSourceProvider, DecisionSourceScan, DecisionSourceSpec
@@ -444,6 +445,71 @@ def recall_profile_decision_context(
             reason_code="profile_unavailable_or_invalid",
         )
 
+    return _recall_activated_context(
+        activation=activation,
+        profile=profile,
+        context_scope_ref=context_scope_ref,
+        query=query,
+        query_summary=query_summary,
+        observed_at=observed_at,
+        max_results=max_results,
+        timeout_seconds=timeout_seconds,
+        runtime_root=runtime_root,
+        profile_current=lambda: profile_digest_before == _private_profile_digest(profile_path),
+    )
+
+
+def recall_inline_decision_context(
+    *,
+    goal_id: str,
+    agent_id: str,
+    profile_payload: Mapping[str, Any] | None,
+    context_scope_ref: str,
+    query: str,
+    query_summary: str,
+    observed_at: str,
+    max_results: int | None = None,
+    timeout_seconds: float | None = None,
+    runtime_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Use the same recall owner with a transient, request-owned profile copy."""
+    activation, profile = resolve_inline_decision_context_activation(
+        goal_id=goal_id, agent_id=agent_id, profile_payload=profile_payload,
+    )
+    return _recall_activated_context(
+        activation=activation,
+        profile=profile,
+        context_scope_ref=context_scope_ref,
+        query=query,
+        query_summary=query_summary,
+        observed_at=observed_at,
+        max_results=max_results,
+        timeout_seconds=timeout_seconds,
+        runtime_root=runtime_root,
+    )
+
+
+def _recall_activated_context(
+    *,
+    activation: Mapping[str, Any],
+    profile: DecisionContextProfile | None,
+    context_scope_ref: str,
+    query: str,
+    query_summary: str,
+    observed_at: str,
+    max_results: int | None,
+    timeout_seconds: float | None,
+    runtime_root: str | Path | None,
+    profile_current: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    base = _ephemeral_recall_base(activation)
+    if activation.get("available") is not True or profile is None:
+        return _ephemeral_recall_failure(
+            base,
+            status=str(activation.get("status") or "unavailable"),
+            reason_code=activation.get("reason_code"),
+        )
+
     context_config = profile.context_provider
     if context_config is None:
         return _ephemeral_recall_failure(
@@ -479,8 +545,7 @@ def recall_profile_decision_context(
             status="unavailable",
             reason_code="context_provider_not_configured",
         )
-    profile_digest_after = _private_profile_digest(profile_path)
-    if profile_digest_before != profile_digest_after:
+    if profile_current is not None and not profile_current():
         return _ephemeral_recall_failure(
             base,
             status="unavailable",

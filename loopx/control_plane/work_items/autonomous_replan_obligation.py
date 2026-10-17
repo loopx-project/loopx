@@ -498,7 +498,7 @@ def build_autonomous_replan_obligation(
                 "role": "user",
                 "priority": "P2",
                 "text": (
-                    "ask the operator only if the review changes benchmark family, public claims, "
+                    "ask the operator only if the review changes authorized goal scope, public claims, "
                     "resource budget, or protected scope"
                 ),
             }
@@ -611,8 +611,11 @@ def build_autonomous_replan_obligation(
         ),
         todo_actions=todo_actions[:3],
         stop_condition=(
-            "stop if the replan requires private material, credentials, destructive git, "
-            "production actions, or owner-only decisions"
+            "stop only the affected path when required access, destructive git, production actions, "
+            "or owner-only decisions exceed existing user authority. Keep authorized private reads "
+            "within their storage and publication boundaries; do not expose credentials or disclose "
+            "private material beyond that authority. Continue independent authorized replan work "
+            "while honoring explicit stops"
         ),
         recommended_action=recommended_action,
         agent_id=replan_agent_id,

@@ -154,6 +154,15 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
         collect(payload)
     def contains(clause: str) -> bool:
         return any(clause in value for value in strings)
+    # Exact reviewed prose transition; this observes output cost only and never
+    # classifies work/admission. Keep these clauses independent of live constants.
+    old_work = "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, never wake counts."
+    delivery_clauses = (
+        "Reuse existing authorization for the current action; ask only for missing necessary authority.",
+        "Continue through integration, negative cases and readback while feasible; preserve evidence and next action for recovery/resume.",
+        "Settle with current settlement_plan.ordered_steps, else next_cli_actions; preserve exact identities/effect ids and actual outcomes. Never reconstruct static refresh/spend; ambiguous effects need readback/recovery, not blind retry.",
+    )
+    delivery_after = contains(old_work) and all(contains(clause) for clause in delivery_clauses)
     return {
         "context_before": contains(context_prefix + context_suffix),
         "context_after": contains(context_prefix + brief + context_suffix),
@@ -161,6 +170,8 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
         "replan_after": contains(replan + " " + correction),
         "stop_before": any(contains(clause) for clause in old_stops),
         "stop_after": contains(stop),
+        "authorized_delivery_before": contains(old_work) and not any(contains(clause) for clause in delivery_clauses),
+        "authorized_delivery_after": delivery_after,
     }
 
 

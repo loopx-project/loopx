@@ -1,9 +1,9 @@
 type RecordValue = Record<string, unknown>;
-export type TodoRequestContent = {text: string; note: string | null; evidence: string | null};
+export type TodoRequestContent = {text: string; note: string | null; evidence: string | null; createdBy: string | null};
 const text = (value: unknown): string | null => typeof value === "string" && value.trim() ? value.trim() : null;
 
-/** Read-only display join inside one Goal snapshot. Never copy authority,
- * membership or lifecycle from the richer row into the selected row. */
+/** Read-only content/provenance join inside one Goal snapshot. Never copy
+ * authority, membership or lifecycle from the richer row into the selected row. */
 export function todoRequestContent(
   selected: RecordValue, snapshot: {goal_id: string; items: RecordValue[]}, goalId: string,
 ): TodoRequestContent | null {
@@ -28,5 +28,5 @@ export function todoRequestContent(
   if (!body || !label || (body !== label
       && !(label.endsWith("...") && body.startsWith(label.slice(0, -3).trimEnd()))
       && !(label.endsWith("…") && body.startsWith(label.slice(0, -1).trimEnd())))) return null;
-  return {text: body, note: text(source.note), evidence: text(source.evidence)};
+  return {text: body, note: text(source.note), evidence: text(source.evidence), createdBy: text(source.created_by)};
 }

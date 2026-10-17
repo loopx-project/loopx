@@ -296,6 +296,18 @@ def todo_priority_parts(text: str) -> tuple[str | None, str]:
     return projection_todo_priority_parts(text)
 
 
+def _structured_todo_agent_fields(item: dict[str, Any]) -> dict[str, str]:
+    """Keep request authorship, execution claim and recipient as distinct actors."""
+    actors = {}
+    for field, normalize in (("created_by", normalize_todo_claimed_by),
+                             ("claimed_by", normalize_todo_claimed_by),
+                             ("bound_agent", normalize_todo_bound_agent)):
+        actor = normalize(item.get(field))
+        if actor:
+            actors[field] = actor
+    return actors
+
+
 def structured_todo_item(
     item: dict[str, Any],
     *,
@@ -395,12 +407,7 @@ def structured_todo_item(
     )
     if decision_scope_outcomes:
         normalized["decision_scope_outcomes"] = decision_scope_outcomes
-    claimed_by = normalize_todo_claimed_by(item.get("claimed_by"))
-    if claimed_by:
-        normalized["claimed_by"] = claimed_by
-    bound_agent = normalize_todo_bound_agent(item.get("bound_agent"))
-    if bound_agent:
-        normalized["bound_agent"] = bound_agent
+    normalized.update(_structured_todo_agent_fields(item))
     goal_bound = normalize_todo_goal_bound(item.get("goal_bound"))
     if goal_bound is not None:
         normalized["goal_bound"] = goal_bound

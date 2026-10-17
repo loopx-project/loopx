@@ -453,6 +453,25 @@ def test_manager_prompt_uses_the_window_source_health_rows_as_guidance():
     assert "not a machine-checked obligation" in MANAGER_AGENT_OBJECTIVE
 
 
+def test_manager_reporting_guidance_scopes_diagnostics_to_the_requested_answer():
+    from loopx.chat_manager import manager_agent_objective
+
+    for profile in ("restricted", "trusted_owner"):
+        objective = manager_agent_objective(profile)
+        assert "For dated or coverage-sensitive reports" in objective
+        assert "For questions about Goal work, read the relevant Goals' current_todos" in objective
+        assert "every Goal within the requested and authorized coverage" in objective
+        assert "each source_id needed for the requested coverage" in objective
+        assert "material omitted coverage" in objective
+        assert "Keep routine transport and limit details in the evidence records" in objective
+        assert "Do not turn an unrelated question into a portfolio or source-health report" in objective
+        assert "Every Turn declares evidence_window" not in objective
+        # Reporting relevance does not hide a gap that changes the answer.
+        assert "When a relevant source is unavailable" in objective
+        assert "use its reason_code and reason" in objective
+        assert "unavailable source is a named coverage gap" in objective
+
+
 def test_remote_source_rows_are_typed_and_never_read_as_no_progress():
     declared = [
         {"source_id": "local", "source_host": "local", "status": "available"},

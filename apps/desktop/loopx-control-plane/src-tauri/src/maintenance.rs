@@ -678,9 +678,10 @@ fn runtime_state_publishes_own_phase(error: &str) -> bool {
 }
 
 fn resume_runtime(app: &AppHandle) -> Result<crate::services::SelectedRuntime, String> {
+    use crate::runtime_ancestry::compare_official_commits;
     use crate::runtime_selection::{
-        compare_official_commits, is_private_runtime, prefer_current_bundle,
-        prefer_discovered_runtime, same_release_installation, Selection,
+        is_private_runtime, prefer_current_bundle, prefer_discovered_runtime,
+        same_release_installation, Selection,
     };
     let mut selection = crate::runtime_selection::selected(app)?;
     let mut installed = crate::services::runtime_identity_for_executable(&selection.executable);

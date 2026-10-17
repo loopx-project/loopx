@@ -160,12 +160,12 @@ def assert_installed_release(
     assert message.startswith("Install and connect LoopX for this repo"), message
     assert not message.startswith("/goal "), message
     assert "setup/bootstrap instruction" in normalized_message, message
-    assert "/goal <thin task_body>" in normalized_message, message
+    assert "/goal <loader task_body>" in normalized_message, message
     assert "python3 -m pip install --upgrade loopx" in normalized_message, message
     assert "workflow-skills --install" in normalized_message, message
     assert "Codex CLI TUI" in normalized_message, message
     assert "quota should-run" in normalized_message, message
-    assert "quota spend-slot" in normalized_message, message
+    assert "settlement_plan.ordered_steps" in normalized_message, message
     assert "raw Codex transcripts" in normalized_message, message
 
     bundle = json.loads(

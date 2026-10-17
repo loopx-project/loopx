@@ -93,6 +93,24 @@ def test_baseline_isolated_from_loopx_skills(tmp_path):
         prepare_codex_home(**args)
 
 
+def test_catalog_staging_validates_host_bytes_but_renders_fixed_guest_path(tmp_path):
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps({"models": [{"slug": "fixture-model"}]}))
+    args = settings(tmp_path, model_catalog=catalog,
+                    model_catalog_destination=Path("/usr/local/share/codex/model-catalog.json"))
+    prepare_codex_home(**args)
+    config = tomllib.loads((args["home"] / "config.toml").read_text())
+    assert config["model_catalog_json"] == "/usr/local/share/codex/model-catalog.json"
+    with pytest.raises(ValueError, match="settings changed"):
+        prepare_codex_home(**(args | {"model_catalog_destination": Path("/different/catalog.json")}))
+    for invalid in ({"model_catalog": None}, {"model_catalog_destination": Path("relative.json")}):
+        with pytest.raises(ValueError, match="catalog destination"):
+            prepare_codex_home(**(args | invalid))
+    catalog.write_text(json.dumps({"models": [{"slug": "other-model"}]}))
+    with pytest.raises(ValueError, match="no entry"):
+        prepare_codex_home(**args)
+
+
 def worker_env(tmp_path):
     task = tmp_path / "task.md"
     task.write_text("Synthetic task.\n")

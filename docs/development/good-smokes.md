@@ -113,6 +113,42 @@ evidence.
 不要仅因 integrated smoke 很慢就删除它。应先测量成本来自哪些阶段，并证明较小测试
 覆盖同一端到端边界；只要它仍提供独有证据，就应保留。
 
+When a smoke grows beyond roughly 500 lines, re-check whether it is really one
+test. This is a review prompt, not an automatic deletion or failure threshold.
+Move reusable behavior into its product owner and keep the smoke thin. Large
+integration smokes remain appropriate when smaller tests cannot cover their
+real end-to-end adapter contract.
+
+Do not retain one-off smokes whose main purpose is to assert the exact text of
+a dated research note, candidate ranking packet, temporary run review, or
+transitional benchmark decision. Keep that information in the research document
+and cover shared invariants with a data-driven aggregate smoke.
+
+Smoke 超过约 500 行时，应重新检查它是否混合了多个测试；这不是自动删除或失败阈值。
+将可复用行为放回产品 owner，使 smoke 保持轻量；较小测试无法覆盖真实端到端 adapter
+合同时，仍可保留大型 integration smoke。不要用一次性 smoke 固化过期研究笔记、候选
+排名、临时运行评估或阶段性 benchmark 决策的精确文案；这些信息留在研究文档，共有
+不变量交给数据驱动的聚合 smoke。
+
+### Benchmark Boundaries
+
+Keep focused public/private boundary smokes such as
+`examples/benchmark-candidate-source-boundary-smoke.py`, and toolkit permission
+and integrity smokes while they validate the shipped provider-neutral contract.
+Add active benchmark smokes only for stable toolkit behavior; experiment-specific
+validation belongs with the research workspace. Benchmark-native runners,
+adapters, ledgers, scoring reducers and dated packets stay outside the active
+product surface. Follow [archive placement](../../benchmark/README.md#archive-placement):
+retired implementations and dated packets belong under `deprecate/benchmark-legacy/`;
+only the explicitly qualified immutable snapshots may remain under `benchmark/`.
+Neither archive category enters active CI benchmark execution.
+
+保留公开/私有边界，以及已交付 provider-neutral toolkit 权限和完整性 smoke。
+新增 active benchmark smoke 只保护稳定 toolkit 行为，实验专属验证归研究工作区。
+Benchmark-native runner、adapter、ledger、scoring reducer 和过期 packet 不进入活跃
+产品面；退役实现和过期 packet 归 `deprecate/benchmark-legacy/`，满足规范条件的不可变
+快照才可留在 `benchmark/`。两类归档都不参与 active CI benchmark 执行。
+
 ## Public-Safe Fixtures / 公开安全 Fixture
 
 Use temporary repositories, fake transports, synthetic records, and compact
@@ -130,6 +166,13 @@ smoke touches benchmark, host, agent, or external-system data.
 
 当 smoke 接触 benchmark、host、agent 或外部系统数据时，遵循
 [公开/私有边界](../public-private-boundary.md)。
+
+Benchmark smokes must never require raw task text, trajectories, logs, verifier
+output tails, credentials, uploads, leaderboard submissions, or local private
+artifact paths.
+
+Benchmark smoke 不得依赖原始任务文本、trajectory、日志、verifier 输出 tail、凭证、
+上传、leaderboard 提交或本地私有 artifact 路径。
 
 ## Validate The Change / 验证变更
 

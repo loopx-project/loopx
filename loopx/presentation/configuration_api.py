@@ -13,6 +13,7 @@ from . import goal_storage_api as storage_api
 from .. import chat_usage_statistics_api as usage_api
 from .. import chat_goal_configuration_api as goal_api
 from . import goal_direction_api as direction_api
+from . import decision_context_api as context_api
 from .. import chat_machine_configuration_api as machine_api
 from .. import chat_operator_provider_api as operator_api
 from .. import chat_automation_cadence_api as cadence_api
@@ -29,6 +30,7 @@ class ChatConfigurationRequestMixin(
     cadence_api.AutomationCadenceRequestMixin,
     goal_api.GoalConfigurationRequestMixin,
     direction_api.GoalDirectionRequestMixin,
+    context_api.DecisionContextRequestMixin,
     machine_api.MachineConfigurationRequestMixin,
     operator_api.OperatorProviderRequestMixin,
     backup_api.ConfigurationBackupRequestMixin,
@@ -57,6 +59,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            context_api.DECISION_CONTEXT_PATH: self._decision_context_request,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_send,
             attached_api.CODEX_ATTACHED_OPEN_PATH: self._codex_attached_open,
             request_api.REQUEST_CONTROL_PATH: self._request_control_write,

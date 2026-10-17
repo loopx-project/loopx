@@ -68,7 +68,7 @@ def test_interface_budget_uses_visible_goal_mode() -> None:
     assert budget["within_budget"] is True
 
 
-@pytest.mark.parametrize("mode,limit", [("thin", 3200), ("visible_goal", 4000)])
+@pytest.mark.parametrize("mode,limit", [("thin", 3600), ("visible_goal", 4000)])
 def test_prompt_body_limit_remains_independent_of_json_envelope(mode: str, limit: int) -> None:
     for size in (limit, limit + 1):
         budget = build_interface_budget(
@@ -259,7 +259,7 @@ def test_brief_diagnostics_keep_only_the_selected_prompt_command() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "base_budget"),
-    [("full", 12000), ("compact", 6700), ("brief", 4600), ("thin", 3200)],
+    [("full", 12000), ("compact", 6700), ("brief", 4800), ("thin", 3600)],
 )
 def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
     mode: str, base_budget: int

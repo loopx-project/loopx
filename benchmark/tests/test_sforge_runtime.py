@@ -109,6 +109,77 @@ def test_invalid_worker_inputs_fail_before_install(monkeypatch):
         SForgeWorker(config, profile="single", cwd="/task")
 
 
+@pytest.mark.parametrize("effort", ["max", "xhigh", "high"])
+@pytest.mark.parametrize("profile", ["official", "single", "heartbeat-explore"])
+def test_explicit_effort_survives_native_adapter_and_install(tmp_path, monkeypatch, effort, profile):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex, CodexOffline
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    monkeypatch.setattr(CodexOffline, "install", installed)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort=effort),
+                          profile=profile, cwd="/task")
+    if profile.startswith("heartbeat-"):
+        worker.install_stop_hook(None, None, tmp_path, None)
+        assert worker.runtime._worker_env(cwd="/task")["REASONING_EFFORT"] == effort
+        assert json.loads((tmp_path / "worker-profile.json").read_text())["reasoning_effort"] == effort
+    else:
+        for resume in (False, True):
+            command = worker.format_run_cmd("/task.md", internet=False, resume=resume)
+            assert f'model_reasoning_effort="{effort}"' in command
+
+
+@pytest.mark.parametrize("effort", ["max", "ultra", "high"])
+def test_edgebench_accepts_canonical_effort_before_provider_admission(tmp_path, effort, monkeypatch, capsys):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench import run
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://example.invalid/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(SystemExit):
+        run.main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+                  "--run-id", "fixture", "--worker", "official", "--model", "fixture",
+                  "--effort", effort, "--judge-url", "http://example.invalid:8080"])
+    assert "OPENAI_BASE_URL requires OPENAI_API_KEY" in capsys.readouterr().err
+    assert not (tmp_path / "runs").exists()
+
+
+@pytest.mark.parametrize("with_catalog", [False, True])
+def test_official_installer_binds_staged_catalog_without_leaking_host_path(tmp_path, monkeypatch, with_catalog):
+    from types import SimpleNamespace
+    import tomllib
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.agent.codex import CodexAgent
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, CodexOffline
+    from benchmark.runtime.codex_offline import MODEL_CATALOG_REMOTE
+    catalog = tmp_path / "host-catalog.json"
+    catalog.write_text(json.dumps({"models": [{"slug": "fixture"}]}))
+    async def installed(self, environment):
+        self._model_catalog_staged = with_catalog
+        self._model_catalog_source = catalog if with_catalog else None
+    monkeypatch.setattr(CodexOffline, "install", installed)
+    monkeypatch.setattr(CodexAgent, "install_stop_hook", lambda *args: None)
+    observed = {}
+    def copy(handle, source, target):
+        if source.name == "config.toml":
+            observed.update(tomllib.loads(source.read_text()))
+    backend = SimpleNamespace(copy_to_container=copy,
+        exec_run=lambda *args, **kwargs: SimpleNamespace(exit_code=0))
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="max",
+        agent_api_base_url="http://example.invalid/v1", agent_api_key="fixture"),
+        profile="official", cwd="/task")
+    worker.install_stop_hook(backend, None, tmp_path, None)
+    assert observed["model_reasoning_effort"] == "max"
+    assert observed.get("model_catalog_json") == (MODEL_CATALOG_REMOTE if with_catalog else None)
+    assert str(tmp_path) not in json.dumps(observed)
+
+
 @pytest.mark.parametrize("profile", ["official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore"])
 @pytest.mark.parametrize("unreadable", [False, True])
 def test_best_only_install_requires_ordinary_worker_hook_readback(tmp_path, monkeypatch, profile, unreadable):
@@ -178,6 +249,53 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
     assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
     with pytest.raises(ValueError, match="checkpoint_request_path"):
         SForgeWorker(config, profile="official", cwd="/task", checkpoint_request_path="/control/request.json")
+
+
+@pytest.mark.parametrize("research_paths", [(), ("/tmp/private-data.json",), ("/tmp/private-research",)])
+@pytest.mark.parametrize("refuse_transfer", [False, True])
+def test_warm_receiver_owns_only_selected_research_before_preparation(
+        tmp_path, monkeypatch, research_paths, refuse_transfer):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import BenchmarkCodex, SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    async def stage(environment, workspace):
+        return list(research_paths)  # Verified selection is exercised by WarmStart staging tests.
+    start = SimpleNamespace(goal_id="receiver", agent_id="worker", stage=stage,
+                            verify=lambda workspace: None)
+    owned = set()
+    commands = []
+    def execute(handle, command, **kwargs):
+        commands.append(command)
+        if command[:4] == ["chown", "-R", "-P", "agent:agent"]:
+            assert kwargs["user"] == "root"
+            if refuse_transfer:
+                return SimpleNamespace(exit_code=1)
+            owned.update(command[4:])
+        return SimpleNamespace(exit_code=0, output="")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore", cwd="/task", warm_start=start)
+    restored = []
+    monkeypatch.setattr(worker, "_warm_command", lambda action, **kwargs: restored.append(action))
+    backend = SimpleNamespace(exec_run=execute, copy_to_container=lambda *args: None)
+    if refuse_transfer:
+        with pytest.raises(RuntimeError, match="receiver") as failure:
+            worker.install_stop_hook(backend, None, tmp_path, None)
+        if not research_paths:
+            assert str(failure.value) == "Restored workspace is not writable by its receiver"
+        assert not (tmp_path / "worker-profile.json").exists()
+    else:
+        worker.install_stop_hook(backend, None, tmp_path, None)
+        assert owned == {"/task", *research_paths}
+        assert "/tmp/unselected-research" not in owned
+        assert not any(command[0] == "chmod" for command in commands)
+    assert restored == ["workspace"]
 
 
 @pytest.mark.parametrize("explicit,trigger,expected", [

@@ -21,6 +21,7 @@ from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
 from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
+from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
     DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
@@ -111,7 +112,7 @@ def main(argv=None):
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
     parser.add_argument("--model", required=True)
-    parser.add_argument("--effort", choices=("low", "medium", "high", "xhigh"), required=True)
+    parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
     parser.add_argument("--timeout", type=int,
                         help="Total trial seconds; task-defaults.json overrides the 18h fallback")
     parser.add_argument("--task-entry", choices=TASK_ENTRIES,

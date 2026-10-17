@@ -269,47 +269,6 @@ pub(crate) fn prefer_current_bundle(
     }
 }
 
-pub(crate) fn compare_official_commits(left: &str, right: &str) -> Option<std::cmp::Ordering> {
-    if ![left, right]
-        .iter()
-        .all(|revision| revision.len() == 40 && revision.bytes().all(|c| c.is_ascii_hexdigit()))
-    {
-        return None;
-    }
-    // GitHub includes file patches only on page one. Page two retains the
-    // comparison relation without downloading a potentially huge source diff.
-    // https://docs.github.com/en/rest/commits/commits#compare-two-commits
-    let url = format!(
-        "https://api.github.com/repos/loopx-project/loopx/compare/{left}...{right}?per_page=1&page=2"
-    );
-    let mut command = std::process::Command::new("curl");
-    crate::services::configure_runtime_environment(&mut command);
-    command.args([
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--proto",
-        "=https",
-        "--max-time",
-        "2",
-        "--header",
-        "Accept: application/vnd.github+json",
-        &url,
-    ]);
-    let output =
-        crate::services::timed_output_with_timeout(command, std::time::Duration::from_secs(3))?;
-    if !output.status.success() {
-        return None;
-    }
-    let payload: Value = serde_json::from_slice(&output.stdout).ok()?;
-    match payload["status"].as_str()? {
-        "ahead" => Some(std::cmp::Ordering::Less),
-        "behind" => Some(std::cmp::Ordering::Greater),
-        "identical" => Some(std::cmp::Ordering::Equal),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

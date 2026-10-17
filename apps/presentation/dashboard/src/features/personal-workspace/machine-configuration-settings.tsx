@@ -110,7 +110,7 @@ function shortRevision(value: string | undefined) {
   return value.replace(/^sha256:/, "").slice(0, 12);
 }
 
-export function MachineConfigurationSettings({ section, onChanged }: { section: "steward" | "other"; onChanged?: () => void }) {
+export function MachineConfigurationSettings({ section, onChanged }: { section: "steward" | "conversation" | "other"; onChanged?: () => void }) {
   const { locale, t } = useWorkspaceI18n();
   const [inspection, setInspection] = useState<MachineConfigurationInspection | null>(null);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState("");
@@ -128,9 +128,9 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
   const capabilities = useMemo(() => orderCapabilitiesForPresentation(
     (inspection?.capability_catalog.capabilities ?? []).filter((capability) =>
       capability.available_scopes.includes("machine")
-      && (section === "steward"
+      && (section === "conversation" ? capability.capability_id === "codex_chat" : section === "steward"
         ? capability.capability_id === "steward_executor" || capability.capability_id === "manager_runtime"
-        : capability.capability_id !== "steward_executor" && capability.capability_id !== "manager_runtime")),
+        : capability.capability_id !== "steward_executor" && capability.capability_id !== "manager_runtime" && capability.capability_id !== "codex_chat")),
     locale,
   ), [inspection, locale, section]);
   const invalidNamespace = inspection?.invalid_namespaces[0];
@@ -442,7 +442,7 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
 
           {editorMode === "guided" ? (
             <section className="personal-capability-field-summary">
-              <CapabilityConfigurationFields copy={localizedCapabilityFieldCopy(locale)} disabled={Boolean(busy)} editor={selected.configuration_editor}
+              <CapabilityConfigurationFields copy={localizedCapabilityFieldCopy(locale, selected.capability_id)} disabled={Boolean(busy)} editor={selected.configuration_editor}
                 omitKeys={selected.capability_id === "steward_executor" && draft.selection_policy !== "flexible" ? ["eligible_endpoints"] : []}
                 onChange={changeDraft} value={draft}
                 enabledAction={<button className="personal-capability-edit-json" onClick={() => changeMode("json")} type="button"><Code2 aria-hidden size={14} />{t("machine.editJson")}</button>} />

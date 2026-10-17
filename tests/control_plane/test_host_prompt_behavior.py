@@ -46,11 +46,9 @@ def test_probe_uses_current_production_prompts_and_hidden_independent_oracle():
             body = messages[1]["content"]
             assert "execution_obligation.must_attempt_work" in body
             assert "heartbeat_recommendation.agent_must_attempt" in body
-            assert (
-                "monitor_changed:<monitor>" in body
-                or "wait->monitor+successor/work" in body
-                or "open + monitor_changed + successor" in body
-            )
+            assert "projected monitor/continuation" in body
+            assert "no invented successor" in body
+            assert "no wait spend" in body.lower()
             assert "--codex-app" in body
             assert "LOOPX_TURN=<current_time_iso>" in body
             assert case["id"] not in json.dumps(messages)

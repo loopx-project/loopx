@@ -354,9 +354,8 @@ export const chatRecoveryScenario = {
       if (await closeButton.isDisabled()) throw new Error("Session B's own close success left its button disabled");
       pass("run-action-ownership", "Late Session close results report on, and release the guard of, only the Run that issued them");
 
-      // An executor without native steering accepts one Turn at a time. Its
-      // recovered and 409-handoff paths must keep Send closed; supported Codex
-      // instructions are covered by composer-session-admission.
+      // Without native steering, ordinary Enter still queues the next Turn.
+      // Recovery preserves that choice without automatically sending a draft.
       const turnsBeforeRunningCheck = api.turnRequests.length;
       await page.getByLabel("向 LoopX 发送消息").fill("刷新后验证中断控制：输入框应等待本轮。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -367,11 +366,11 @@ export const chatRecoveryScenario = {
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      const turnRunningHint = page.locator(".personal-composer-status", { hasText: "本轮回答进行中" });
+      const turnRunningHint = page.locator(".personal-composer-status", { hasText: "本轮进行中" });
       await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByLabel("向 LoopX 发送消息").fill("回合进行中不应发送");
-      if (!await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
-        throw new Error("Composer stayed sendable while the recovered Turn was running");
+      if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
+        throw new Error("Recovered work did not offer explicit next-Turn queuing");
       }
       // Leaving cancels the recovery and returning starts a new one for the
       // same Turn. The cancelled recovery must not leave a pending reply that
@@ -390,11 +389,11 @@ export const chatRecoveryScenario = {
       }
       if (api.turnRequests.length !== turnsBeforeRunningCheck + 1) throw new Error("A message was sent while the Turn was running");
       await page.getByLabel("向 LoopX 发送消息").fill("");
-      pass("composer-running-turn", "After a reload, and after leaving and returning, the composer waits for the running Turn and reopens when it completes");
+      pass("composer-running-turn", "Reload and view changes preserve the draft, next-Turn queue option and current-Turn controls without automatic dispatch");
       // Another page starts a Turn after this page's last snapshot, so the
       // ordinary POST is the first to learn of it: the service answers 409
       // with the running Turn. The page must adopt that Turn with its
-      // controls, keep the draft, and stay blocked until the Turn completes.
+      // controls and keep the draft; the owner can explicitly queue it next.
       const busySessionId = api.turnRequests.at(-1).sessionId;
       const foreignTurnId = `turn-foreign-${Date.now()}`;
       page.__loopxRuntime.turnMessages.set(foreignTurnId, "另一页面发起的中断控制回合");
@@ -430,10 +429,9 @@ export const chatRecoveryScenario = {
       for (let attempt = 0; attempt < 100 && (!rejectedPosts || !heldReads.length); attempt += 1) await page.waitForTimeout(50);
       if (!heldReads.length) throw new Error("The 409 did not make the page re-read the Session");
       for (let check = 0; check < 10; check += 1) {
-        if (!(await sendButton.isDisabled())) throw new Error("Send reopened before the recovery adopted the reported Turn");
+        if (await sendButton.isDisabled()) throw new Error("The reported Turn did not offer explicit queuing during recovery");
         await page.waitForTimeout(100);
       }
-      await sendButton.click({ force: true });
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times before the recovery adopted the Turn`);
       holdReads = false;
       for (const route of heldReads.splice(0)) await route.fallback();
@@ -443,10 +441,9 @@ export const chatRecoveryScenario = {
       if (await page.getByRole("button", { name: "中断本轮" }).count() !== 1) {
         throw new Error("The recovery added a second pending reply instead of adopting the handoff reply");
       }
-      await page.getByRole("button", { name: "调整本轮" }).waitFor({ state: "visible" });
+      if (await page.getByRole("button", { name: "调整本轮" }).count()) throw new Error("An executor without steering advertised an adjustment input");
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept");
-      if (!(await sendButton.isDisabled())) throw new Error("Send stayed enabled after the service reported a running Turn");
-      await sendButton.click({ force: true });
+      if (await sendButton.isDisabled()) throw new Error("Send did not offer queuing after the service reported a running Turn");
       if (await page.locator(".personal-channel-timeline .personal-message").filter({ hasText: draft }).count()) {
         throw new Error("A message the service did not accept stayed in the conversation");
       }
@@ -455,9 +452,9 @@ export const chatRecoveryScenario = {
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times into a running Turn`);
       await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
       await composerInput.fill("");
-      pass("composer-running-turn-409", "A 409 running-Turn receipt keeps Send closed through the handoff, is adopted with its controls, keeps the draft and blocks Send until completion");
+      pass("composer-running-turn-409", "A 409 hands off the reported Turn with its controls and draft, and offers explicit queuing without dispatching automatically");
       // A failed Session read after the 409 says nothing about the reported
-      // Turn, so the handoff must keep Send closed and read again rather than
+      // Turn, so the handoff must retain it and read again rather than
       // treat the failure as the Turn having ended.
       const retriedTurnId = `turn-foreign-retry-${Date.now()}`;
       page.__loopxRuntime.turnMessages.set(retriedTurnId, "读取失败后仍在运行的中断控制回合");
@@ -485,12 +482,12 @@ export const chatRecoveryScenario = {
       failReads = true;
       await sendButton.click();
       for (let attempt = 0; attempt < 200 && !heldRetryReads.length; attempt += 1) {
-        if (failedReads && !(await sendButton.isDisabled())) throw new Error("Send reopened after the Session read following the 409 failed");
+        if (failedReads && await sendButton.isDisabled()) throw new Error("The failed Session read hid explicit next-Turn queuing");
         await page.waitForTimeout(50);
       }
       if (!failedReads) throw new Error("The 409 did not make the page re-read the Session");
       if (!heldRetryReads.length) throw new Error("A failed Session read was not retried while the reported Turn could still run");
-      if (!(await sendButton.isDisabled())) throw new Error("Send reopened while the retried Session read was pending");
+      if (await sendButton.isDisabled()) throw new Error("The retried Session read hid explicit next-Turn queuing");
       await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times while the Session read was failing`);
@@ -506,7 +503,12 @@ export const chatRecoveryScenario = {
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times into a running Turn`);
       await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
       await composerInput.fill("");
-      pass("composer-running-turn-409-read-failure", "A failed Session read after a 409 keeps Send closed with the Turn controls, is retried, adopts the Turn and reopens only once it completes");
+      pass("composer-running-turn-409-read-failure", "A failed read retries the reported Turn with its controls and draft, while preserving explicit next-Turn queuing");
+      // Switch back to an observed steering-capable executor before exercising
+      // the exact-turn handoff. The unsupported path above exposes interruption only.
+      page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), adapter_kind: "codex_app_server" });
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       // The pending reply shows Adjust/Interrupt from the 409 on, so before any
       // Session read returns, both must act on the exact reported Turn.
       const controlledTurnId = `turn-foreign-controls-${Date.now()}`;
@@ -538,9 +540,9 @@ export const chatRecoveryScenario = {
       if (!heldControlReads.length) throw new Error("The 409 did not make the page re-read the Session");
       const handoffReply = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await handoffReply.getByRole("button", { name: "调整本轮", exact: true }).click();
-      await handoffReply.getByLabel("追加给本轮的指令").fill("交接期间先核对依赖。");
-      await handoffReply.getByRole("button", { name: "发送调整", exact: true }).click();
-      await handoffReply.getByText("执行器已接收本轮追加指令。", { exact: true }).waitFor({ timeout: 5_000 });
+      await composerInput.fill("交接期间先核对依赖。");
+      await composerInput.press("Meta+Enter");
+      await page.locator(".personal-action-feedback").filter({hasText: "执行器已接收本轮追加指令。"}).waitFor({ timeout: 5_000 });
       if (steers.length !== 1 || steers[0].sessionId !== busySessionId || steers[0].turnId !== controlledTurnId) {
         throw new Error(`Adjust during the handoff did not reach the reported Turn: ${JSON.stringify(steers)}`);
       }
@@ -553,8 +555,10 @@ export const chatRecoveryScenario = {
       }
       await page.locator(".personal-message").filter({ hasText: "已中断。你可以在当前会话继续发送消息。" }).last().waitFor({ timeout: 5_000 });
       await turnRunningHint.waitFor({ state: "hidden", timeout: 5_000 });
-      if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the handed-off Turn was interrupted");
-      if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept through the handoff controls");
+      if (await composerInput.inputValue() !== "") throw new Error("The accepted shared-composer adjustment did not clear");
+      await composerInput.fill("中断后的后续消息草稿");
+      if (await sendButton.isDisabled()) throw new Error("A new follow-up draft stayed blocked after interruption");
+      if (await composerInput.inputValue() !== "中断后的后续消息草稿") throw new Error("The new follow-up draft was not kept after interruption");
       for (const route of heldControlReads.splice(0)) await route.fallback();
       await page.unroute("**/api/chat/sessions?*");
       await page.waitForTimeout(500);

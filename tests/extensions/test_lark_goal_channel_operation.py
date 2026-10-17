@@ -19,6 +19,7 @@ from loopx.chat_actions import ChatActionService
 from loopx.cli_commands.goal_channel_operation import (
     GoalChannelOperationContext,
     _prepare_goal_channel_operation,
+    _safe_validation_reason,
     run_goal_channel_operation,
 )
 from loopx.control_plane.collaboration.operation_handoff import agent_operation_action
@@ -2405,3 +2406,26 @@ def test_receipt_treats_post_send_failure_as_unknown_write(
     assert exc_info.value.failure_stage == "record_delivery_receipt"
     assert exc_info.value.external_write_performed is None
     assert any("+messages-send" in call for call in calls)
+
+
+def test_safe_validation_reason_keeps_actionable_code_messages() -> None:
+    """A rejected prepare must surface its real reason, not a generic line."""
+
+    assert (
+        _safe_validation_reason(ValueError("operation executor binding is invalid"))
+        == "operation executor binding is invalid"
+    )
+    assert (
+        _safe_validation_reason(
+            ValueError("operation payload_digest does not match payload")
+        )
+        == "operation payload_digest does not match payload"
+    )
+    # Anything that could carry a private path or control characters collapses
+    # to the exception class instead of reaching the operator packet.
+    assert (
+        _safe_validation_reason(ValueError("private detail: /home/operator/secret"))
+        == "ValueError"
+    )
+    assert _safe_validation_reason(ValueError("line\nbreak")) == "ValueError"
+    assert _safe_validation_reason(ValueError("")) == "ValueError"
