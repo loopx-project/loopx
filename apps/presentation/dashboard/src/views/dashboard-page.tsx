@@ -1060,6 +1060,7 @@ function buildPersonalHomeModel(
       .find((value) => value !== "" && value !== "暂无") ?? t("projection.nextUpdatePending");
     return [{
       activationState: goal.activation_state,
+      objective: goal.goal_objective ?? null,
       agentId: agentRow?.agentId ?? registeredAgentIds[0] ?? "codex",
       agentLaneCount: goalAgentLanes.length,
       agentLanes: goalAgentLanes,
