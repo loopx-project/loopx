@@ -326,6 +326,18 @@ def handle_turn_command(
                 if isinstance(transaction, dict):
                     transaction.pop("settlement_plan", None)
         elif args.turn_command == "run-once":
+            # Opaque caller proof is private Turn input. Existing journals keep
+            # their original proof; the native terminal owner alone decides its
+            # current validity. Reading a lease never manufactures this input.
+            lease_key = args.task_lease_idempotency_key
+            lease_version = args.task_lease_expected_version
+            if lease_key is not None or lease_version is not None:
+                if not args.todo_id or not lease_key or lease_key != lease_key.strip() or lease_version is None or lease_version < 1:
+                    raise ValueError("Task completion lease proof requires an exact Todo, idempotency key and positive version")
+                proof = {"lease_idempotency_key": lease_key, "lease_expected_version": lease_version}
+                if retry_key and payload.get("completion_lease_fence") != proof:
+                    raise ValueError("Original Turn completion lease proof changed; retain its original journal")
+                payload["completion_lease_fence"] = proof
             if payload.get("route", {}).get("kind") == "capability_action_required":
                 # The normal host transaction forbids Core mutations. A
                 # capability may prepare artifacts and require authored input;

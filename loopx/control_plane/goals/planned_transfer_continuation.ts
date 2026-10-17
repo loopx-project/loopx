@@ -14,9 +14,12 @@ import {loadLegacyCoordinationWriterFence, isPlannedTransferAdmissionFence, PLAN
 import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot} from "../coordination/local_authority_provider.ts";
 import {indexCoordinationProjection} from "../coordination/coordination_projection.ts";
 import {readGoalTransferSnapshot, checkGoalTransferSourceContext} from "./planned_transfer.ts";
-import {readGoalTransferHistoryJson} from "./planned_transfer_history.ts";
+import {readGoalTransferHistoryJson, readTransferValidationDeclarations} from "./planned_transfer_history.ts";
 import {repositoryMaterialMapping, type TransferRepository} from "./planned_transfer_repository.ts";
+import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {verifyGoalTransferExecutionWorkspace} from "./planned_transfer_workspace.ts";
+
+const LOCAL_TRANSFER_CAPABILITIES = ["filesystem_read", "filesystem_write", "shell"] as const;
 
 function reject(message: string): never {throw new EffectRuntimeConflictError(message);}
 function same(a: unknown, b: unknown): boolean {return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b));}
@@ -68,7 +71,7 @@ export function localTransferGoalConfiguration(original: JsonObject): JsonObject
 
 export function requireLocalTransferTaskBindings(original: JsonObject, projection: JsonObject): void {
   const coordination = requireJsonObject(original.coordination, "original coordination");
-  const supported = new Set(["filesystem_read", "filesystem_write", "shell"]);
+  const supported = new Set<string>(LOCAL_TRANSFER_CAPABILITIES);
   for (const todo of indexCoordinationProjection(projection, String(original.id)).todos.values()) {
     if (todo.done === true || todo.archive_state === "archive") continue;
     if ((todo.required_capabilities !== undefined && !Array.isArray(todo.required_capabilities)) ||
@@ -77,6 +80,83 @@ export function requireLocalTransferTaskBindings(original: JsonObject, projectio
       reject("Original work needs an unsupported capability or Agent binding; retain its owning continuation hold");
     }
   }
+}
+
+/** This opt-in composes existing Task validation and native execution owners.
+ * It is local to this prepared move, never a Chat role or a copied Host grant. */
+export async function planTransferOriginalWork(original: JsonObject, projection: JsonObject, id: unknown, root: string): Promise<JsonObject | null> {
+  if (id === undefined) return null;
+  const todoId = requireAuthorityStoreId(id, "original continuation Task");
+  const task = indexCoordinationProjection(projection, String(original.id)).todos.get(todoId);
+  const agents = requireJsonObject(original.coordination, "original Agent registration").registered_agents as unknown[];
+  if (!task || task.done === true || task.archive_state === "archive" || task.status !== "open" ||
+      task.claimed_by !== agents[0] || !Array.isArray(task.required_write_scopes) || !task.required_write_scopes.length) {
+    reject("Automatic continuation requires the original open Task, registered Agent and declared write scopes");
+  }
+  const retained = (await readTransferValidationDeclarations(root, String(original.id), projection)).find(row => row.todo_id === todoId);
+  const declaration = normalizeTodoCompletionValidationDeclaration(retained ? requireJsonObject(retained.declaration, "original independent validator") : {});
+  if (!declaration.ok || !declaration.value.validation_command_argv) {
+    reject("Automatic continuation requires the original Task's independent argv validation declaration");
+  }
+  return {todo_id: todoId, agent_id: agents[0], host: "codex-cli", sandbox: "workspace-write", validation_workspace: "reviewed_working_tree",
+    validation_sha256: canonicalAuthoritySha256(declaration.value)};
+}
+
+/** Read the admitted operation and the current Task; downstream owners still
+ * acquire the lease and decide the exact Turn. This projection grants nothing. */
+export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id"])) reject("Read the original transfer execution identity");
+  const root = requireLocalAuthorityRuntimeRoot(value.runtime_root), goal = requireAuthorityStoreId(value.goal_id, "Goal");
+  const fence = await loadLegacyCoordinationWriterFence(root, goal);
+  if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA ||
+      fence.fence.operation_id !== value.operation_id) reject("Original destination runtime is not admitted");
+  const {requireLocalGoalTransferAdmission} = await import("./planned_transfer_cutover.ts");
+  const admission = await requireLocalGoalTransferAdmission(root, goal, fence.fence);
+  const decision = requireJsonObject(admission.decision, "original cutover");
+  const continuation = requireJsonObject(decision.continuation, "original continuation");
+  if (!continuation.continue_work) return {plan: null};
+  const work = requireJsonObject(continuation.continue_work, "reviewed original work");
+  const {snapshot, materials} = await readReviewedTransferContext(admission, "readback");
+  const execution = requireJsonObject(continuation.execution_workspace, "original execution workspace");
+  await verifyGoalTransferExecutionWorkspace(execution, materials, false);
+  const opened = await openLocalAuthorityStoreHandle(root, goal, {}, {existingOnly: true});
+  const head = await opened.store.loadAuthority();
+  if (head.status !== "loaded") reject("Current original work is unavailable");
+  const task = indexCoordinationProjection(head.head, goal).todos.get(String(work.todo_id));
+  if (!task || task.claimed_by !== work.agent_id) reject("Original Task no longer belongs to its reviewed Agent");
+  const retained = (await readTransferValidationDeclarations(root, goal, head.head)).find(row => row.todo_id === work.todo_id);
+  const declaration = normalizeTodoCompletionValidationDeclaration(retained ? requireJsonObject(retained.declaration, "original independent validator") : {});
+  if (!declaration.ok || !declaration.value.validation_command_argv ||
+      canonicalAuthoritySha256(declaration.value) !== work.validation_sha256) reject("Original independent acceptance changed; retain its current owner");
+  return {plan: {registry_path: admission.target_registry_path, runtime_root: root, goal_id: goal,
+    agent_id: work.agent_id, todo_id: work.todo_id, project: execution.path,
+    turn_instance_id: `transfer-${canonicalAuthoritySha256([decision.operation_id, decision.source_preparation_sha256, work.todo_id])}`,
+    host: work.host, sandbox: work.sandbox, task_status: task.status,
+    write_scopes: task.required_write_scopes, available_capabilities: [...LOCAL_TRANSFER_CAPABILITIES],
+    validation_argv: declaration.value.validation_command_argv,
+    validation_timeout_seconds: declaration.value.validation_timeout_seconds,
+    activation_state: snapshot.activation_state}};
+}
+
+/** Only the explicitly reviewed original work may validate pending files.
+ * This chooses its workspace, never grants a validation effect or Task lease;
+ * the ordinary terminal transaction still admits and rechecks those effects. */
+export async function validateGoalTransferWorkingState(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "todo_id", "workspace_path", "declaration_sha256"])) reject("Original validation requires its exact workspace and declaration");
+  const root = requireLocalAuthorityRuntimeRoot(value.runtime_root), goal = requireAuthorityStoreId(value.goal_id, "Goal");
+  const fence = await loadLegacyCoordinationWriterFence(root, goal);
+  if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA) return {admitted: false};
+  const {requireLocalGoalTransferAdmission} = await import("./planned_transfer_cutover.ts");
+  const admission = await requireLocalGoalTransferAdmission(root, goal, fence.fence);
+  const continuation = requireJsonObject(requireJsonObject(admission.decision, "cutover").continuation, "continuation");
+  if (!continuation.continue_work) return {admitted: false};
+  const work = requireJsonObject(continuation.continue_work, "reviewed original work");
+  if (work.todo_id !== value.todo_id || work.validation_workspace !== "reviewed_working_tree" ||
+      work.validation_sha256 !== value.declaration_sha256) return {admitted: false};
+  const {plan: rawPlan} = await readGoalTransferExecutionPlan({runtime_root: root, goal_id: goal, operation_id: fence.fence.operation_id});
+  const plan = requireJsonObject(rawPlan, "current original execution plan");
+  return {admitted: plan.activation_state === "active" && plan.task_status === "open" &&
+    typeof value.workspace_path === "string" && resolve(value.workspace_path) === plan.project};
 }
 
 /** Live document references follow the already reviewed material mapping.

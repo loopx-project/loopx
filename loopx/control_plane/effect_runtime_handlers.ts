@@ -439,6 +439,8 @@ export function createEffectRuntimeHandlers(
     ["coordination.planned_transfer.retain_local_cutover_review", lazyHandler(() => import("./goals/planned_transfer_cutover.ts"), ({retainLocalGoalTransferCutoverReview}) => retainLocalGoalTransferCutoverReview)],
     ["coordination.planned_transfer.read_local_cutover_review", lazyHandler(() => import("./goals/planned_transfer_cutover.ts"), ({readRegisteredLocalCutoverReview}) => readRegisteredLocalCutoverReview)],
     ["coordination.planned_transfer.finish_local_cutover", lazyHandler(() => import("./goals/planned_transfer_cutover.ts"), ({finishLocalGoalTransferCutover}) => finishLocalGoalTransferCutover)],
+    ["coordination.planned_transfer.validation_workspace", lazyHandler(() => import("./goals/planned_transfer_continuation.ts"), ({validateGoalTransferWorkingState}) => validateGoalTransferWorkingState)],
+    ["coordination.planned_transfer.execution_plan", lazyHandler(() => import("./goals/planned_transfer_continuation.ts"), ({readGoalTransferExecutionPlan}) => readGoalTransferExecutionPlan)],
     ["coordination.planned_transfer.host_context", lazyHandler(() => import("./goals/planned_transfer_continuation.ts"), ({readGoalTransferHostContext}) => readGoalTransferHostContext)],
     ["configuration.backup", lazyHandler(() => import("./configuration_backup.ts"), ({configurationBackupOperation}) => configurationBackupOperation)],
     ["runtime.checkpoint_artifacts", lazyHandler(() => import("./runtime/checkpoint_artifacts.ts"), ({checkpointArtifacts}) => checkpointArtifacts)],

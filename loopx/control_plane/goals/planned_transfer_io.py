@@ -7,6 +7,7 @@ input; the typed owner installs only a stopped, unbound destination read model.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +102,8 @@ def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> di
         try:
             preview = local_goal_transfer_cutover(registry_path=registry_path, goal_id=goal_id,
                 operation_id=review["operation_id"], destination_registry=Path(review["target_registry_path"]),
-                continuation="reviewed_context", reviewed_preview_sha256=review["preview_sha256"])
+                continuation="reviewed_context", reviewed_preview_sha256=review["preview_sha256"],
+                continue_todo_id=review.get("continue_todo_id"))
         except Exception:
             # Only this read-only destination observation failed. Preserve the
             # native source view/cancellation, including after a browser reload;
@@ -122,7 +124,7 @@ def cancel_registered_goal_transfer(*, registry_path: Path, goal_id: str, operat
 def local_goal_transfer_cutover(
     *, registry_path: Path, goal_id: str, operation_id: str, destination_registry: Path,
     expected_preview_sha256: str | None = None, continuation: str | None = None,
-    reviewed_preview_sha256: str | None = None,
+    reviewed_preview_sha256: str | None = None, continue_todo_id: str | None = None,
 ) -> dict[str, Any]:
     """One source-online local cutover; native owners decide every transition.
 
@@ -131,6 +133,8 @@ def local_goal_transfer_cutover(
     compensation; same-operation recovery preserves the stopped destination.
     """
     request, snapshot, before = _local_cutover_request(registry_path, goal_id, operation_id, destination_registry, continuation)
+    if continue_todo_id is not None:
+        request["continue_todo_id"] = continue_todo_id
     destination_registry = destination_registry.expanduser().absolute()
     if reviewed_preview_sha256 is not None:
         request["reviewed_preview_sha256"] = reviewed_preview_sha256
@@ -168,7 +172,7 @@ def _local_cutover_request(registry_path: Path, goal_id: str, operation_id: str,
 
 
 def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str,
-    destination_root: Path, materials: list[Path]) -> dict[str, Any]:
+    destination_root: Path, materials: list[Path], continue_todo_id: str | None = None) -> dict[str, Any]:
     """Fixed IO composition of existing Goal, custody and registry owners.
 
     The Agent supplies an explicit reviewed file selection. TypeScript chooses
@@ -180,6 +184,7 @@ def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_
         **context, "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id,
         "operation_id": operation_id, "destination_root": str(destination_root.expanduser().absolute()),
         "materials": [str(path.expanduser().absolute()) for path in materials],
+        **({"continue_todo_id": continue_todo_id} if continue_todo_id is not None else {}),
     }, timeout=60.0, retry_safe=True)
     recipient = create_planned_transfer_recipient(destination=Path(plan["recipient_directory"]))
     exported = export_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id,
@@ -193,13 +198,15 @@ def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_
     request, _, _ = _local_cutover_request(registry_path, goal_id, operation_id,
         Path(plan["project"]) / ".loopx/registry.json", "reviewed_context")
     request["execution_repository"] = plan["repository"]
+    if "continue_todo_id" in plan:
+        request["continue_todo_id"] = plan["continue_todo_id"]
     effect_runtime_result("coordination.planned_transfer.retain_local_cutover_review", request,
         timeout=300.0, retry_safe=False)
     return inspect_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
 
 
 def confirm_registered_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str,
-    expected_preview_sha256: str) -> dict[str, Any]:
+    expected_preview_sha256: str, codex_bin: str | None = None, codex_home: Path | None = None) -> dict[str, Any]:
     """Confirm/recover the retained original review, never a browser path."""
     context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
     review = effect_runtime_result("coordination.planned_transfer.read_local_cutover_review", {
@@ -207,13 +214,102 @@ def confirm_registered_goal_transfer(*, registry_path: Path, goal_id: str, opera
     }, timeout=60.0, retry_safe=True)
     local_goal_transfer_cutover(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id,
         destination_registry=Path(review["target_registry_path"]), continuation="reviewed_context",
-        expected_preview_sha256=expected_preview_sha256, reviewed_preview_sha256=review["preview_sha256"])
+        expected_preview_sha256=expected_preview_sha256, reviewed_preview_sha256=review["preview_sha256"],
+        continue_todo_id=review.get("continue_todo_id"))
+    execution = None
+    if review.get("continue_todo_id"):
+        # The accepted cutover remains recorded even if the current Host cannot
+        # finish. The same native Turn journal owns recovery, never a new job.
+        try:
+            execution = _continue_transferred_work(registry_path=Path(review["target_registry_path"]),
+                goal_id=goal_id, operation_id=operation_id, codex_bin=codex_bin, codex_home=codex_home)
+        except Exception:
+            execution = {"ok": False, "reason_code": "original_work_continuation_unavailable"}
     # A lost later read cannot turn the already accepted cutover into failure.
     try:
         readback = inspect_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
     except Exception:
         readback = None
-    return {"ok": True, "goal_id": goal_id, "recorded": True, "operation_id": operation_id, "readback": readback}
+    return {"ok": True, "goal_id": goal_id, "recorded": True, "operation_id": operation_id, "readback": readback,
+        **({"execution": execution} if execution is not None else {})}
+
+
+def _continue_transferred_work(*, registry_path: Path, goal_id: str, operation_id: str,
+    codex_bin: str | None, codex_home: Path | None) -> dict[str, Any]:
+    """IO-only composition of the native plan, lease, Turn and validator owners.
+
+    The mutex coordinates callers, not completion state. Exact replay belongs
+    exclusively to the existing Turn journal; no Chat Session or job ledger is
+    synthesized and no historic session/credential binding becomes a grant.
+    """
+    import os
+    import subprocess
+    import sys
+    from ...file_lock import exclusive_cross_runtime_file_lock
+    from ..turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
+
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    runtime = Path(context["source_context"]["runtime_root"])
+    plan = effect_runtime_result("coordination.planned_transfer.execution_plan", {
+        "runtime_root": str(runtime), "goal_id": goal_id, "operation_id": operation_id,
+    }, retry_safe=True)["plan"]
+    if plan is None:
+        return {"ok": False, "reason_code": "original_work_not_prepared"}
+    project = Path(plan["project"])
+    env = dict(os.environ)
+    if codex_home is not None:
+        env["CODEX_HOME"] = str(codex_home)
+    prefix = [sys.executable, "-I", "-m", "loopx.cli", "--format", "json",
+        "--registry", str(registry_path), "--runtime-root", str(runtime)]
+
+    def invoke(*arguments: str) -> dict[str, Any]:
+        run = subprocess.run([*prefix, *arguments], cwd=project, env=env,
+            capture_output=True, text=True, encoding="utf-8", errors="strict", check=False)
+        return json.loads(run.stdout)
+
+    identity = {key: plan[key] for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id")}
+    key = plan["turn_instance_id"]
+    with exclusive_cross_runtime_file_lock(runtime / "goals" / goal_id / "turns" / f"{key}.dispatch",
+            operation="planned_transfer_original_work"):
+        original = find_loopx_turn_key_by_settlement_identity(runtime, **identity)
+        lease = None
+        if original is None:
+            args = ["task-lease", "acquire", "--goal-id", goal_id, "--todo-id", plan["todo_id"],
+                "--owner", plan["agent_id"], "--idempotency-key", key, "--write-worktree", str(project),
+                "--ttl-seconds", "600"]
+            for scope in plan["write_scopes"]:
+                args += ["--write-scope", scope]
+            acquired = invoke(*args)
+            if not acquired.get("ok"):
+                return {"ok": False, **identity, "reason_code": "original_task_lease_unavailable"}
+            lease = acquired["lease"]
+        args = ["turn", "run-once", "--goal-id", goal_id, "--agent-id", plan["agent_id"],
+            "--todo-id", plan["todo_id"], "--turn-instance-id", key, "--project", str(project),
+            "--host", plan["host"], "--codex-bin", codex_bin or env.get("CODEX_BIN", "codex"),
+            "--codex-sandbox", plan["sandbox"], "--session-scope", "agent",
+            "--validation-command-json", json.dumps(plan["validation_argv"]),
+            "--timeout-seconds", "90", "--no-global-sync", "--execute"]
+        if lease is not None:
+            args += ["--task-lease-idempotency-key", lease["idempotency_key"],
+                "--task-lease-expected-version", str(lease["version"])]
+        if plan["validation_timeout_seconds"] is not None:
+            args += ["--validation-timeout-seconds", str(plan["validation_timeout_seconds"])]
+        for capability in plan["available_capabilities"]:
+            args += ["--available-capability", capability]
+        result = invoke(*args)
+        # A pending settlement keeps its proof for original-Turn recovery.
+        # Only a successful settled Turn may release still-active work; normal
+        # canonical completion has already retired its lease atomically.
+        if lease is not None and result.get("ok") is True:
+            current = invoke("task-lease", "inspect", "--goal-id", goal_id, "--todo-id", plan["todo_id"])
+            held = current.get("lease")
+            if isinstance(held, dict) and held.get("status") == "active" and held.get("idempotency_key") == key:
+                released = invoke("task-lease", "release", "--goal-id", goal_id, "--todo-id", plan["todo_id"],
+                    "--owner", plan["agent_id"], "--idempotency-key", key, "--expected-version", str(held["version"]))
+                if not released.get("ok"):
+                    raise ValueError("Original execution lease requires its owning recovery")
+        return {"ok": result.get("ok") is True, **identity,
+            "reason_code": None if result.get("ok") else str(result.get("error_code") or "original_work_turn_requires_recovery")}
 
 
 def read_goal_transfer_host_context(*, registry_path: Path, goal_id: str,
@@ -429,12 +525,50 @@ def _read_transfer_destination(
     return registry_path, target, registry, witness
 
 
+def _validation_store_io(action: str, runtime_root: Path, goal_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fixed private file IO through the existing declaration store codec."""
+    import stat
+    from ..todos.completion_validation_store import (
+        read_completion_validation_declaration, prepare_completion_validation_declaration,
+        completion_validation_declaration_path,
+    )
+
+    restored = []
+    for entry in entries:
+        path = completion_validation_declaration_path(runtime_root=runtime_root, goal_id=goal_id, todo_id=entry["todo_id"])
+        blob = path.parent / "blobs" / f"{entry['declaration_sha256']}.json"
+        for candidate in (path, blob):
+            if candidate.resolve() != candidate:
+                raise ValueError("Original validation store path is redirected")
+            try:
+                observed = candidate.lstat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
+                raise ValueError("Original validation store requires a physical private file")
+        if action == "restore":
+            digest = prepare_completion_validation_declaration(runtime_root=runtime_root,
+                goal_id=goal_id, declaration=entry["declaration"])
+            if digest != entry["declaration_sha256"]:
+                raise ValueError("Original validation declaration changed during restore")
+        elif action != "read":
+            raise ValueError("Unsupported private validation IO")
+        declaration = read_completion_validation_declaration(runtime_root=runtime_root, goal_id=goal_id,
+            todo_id=entry["todo_id"], expected_digest=entry["declaration_sha256"])
+        if declaration is None:
+            raise ValueError("Original private validation declaration is unavailable")
+        restored.append({"todo_id": entry["todo_id"], "declaration_sha256": entry["declaration_sha256"], "declaration": declaration})
+    return restored
+
+
 if __name__ == "__main__":
-    # Fixed native codec reader, with no write action or interpreter override.
+    # Fixed native codec IO; restoring private validator content grants no execution.
     # The invoking native owner holds the maintenance/state/registry locks.
-    import json
     import sys
 
-    if len(sys.argv) != 3:
+    if len(sys.argv) == 5 and sys.argv[1] == "--validation-io":
+        print(json.dumps(_validation_store_io(sys.argv[2], Path(sys.argv[3]), sys.argv[4], json.load(sys.stdin)), ensure_ascii=False))
+    elif len(sys.argv) != 3:
         raise ValueError("Registered Goal context reader requires a registry and Goal id")
-    print(json.dumps(_read_goal_transfer_snapshot(registry_path=Path(sys.argv[1]), goal_id=sys.argv[2]), ensure_ascii=False))
+    else:
+        print(json.dumps(_read_goal_transfer_snapshot(registry_path=Path(sys.argv[1]), goal_id=sys.argv[2]), ensure_ascii=False))

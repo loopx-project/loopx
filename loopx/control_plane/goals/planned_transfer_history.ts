@@ -6,6 +6,8 @@
  * consume this history rather than interpret an empty live run index as zero.
  */
 import {constants} from "node:fs";
+import {execFile} from "node:child_process";
+import {fileURLToPath} from "node:url";
 import {copyFile, lstat, mkdir, mkdtemp, open, readdir, rm, rmdir} from "node:fs/promises";
 import {dirname, isAbsolute, join, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
@@ -17,6 +19,9 @@ import {canonicalAuthorityBytes, canonicalAuthoritySha256, hasExactAuthorityKeys
 import {readGoalTurnJournalsForTransfer} from "../turn_driver/turn_journal_query.ts";
 import {readGoalQuotaHistoryForTransfer} from "../quota/accounting_artifact_transaction.ts";
 import {inspectTransferFile, requirePhysicalTransferPath, type TransferContainerFile} from "./planned_transfer_container.ts";
+
+import {indexCoordinationProjection} from "../coordination/coordination_projection.ts";
+import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 
 const HISTORY_SCHEMA = "loopx_planned_transfer_runtime_history_v0";
 export interface GoalTransferHistoryFile extends JsonObject {relative_path: string; sha256: string; bytes: number}
@@ -40,15 +45,60 @@ export async function readGoalTransferHistoryJson(path: string): Promise<JsonObj
   } finally {await handle.close();}
 }
 
+/** Private declaration bytes remain owned by the existing validation store.
+ * Native authority selects exact Todo/digests; this adapter only reads or
+ * restores their immutable content. It never executes a validator. */
+async function validationStoreIO(action: "read" | "restore", root: string, goal: string, entries: JsonObject[]): Promise<JsonObject[]> {
+  if (!entries.length) return [];
+  const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON;
+  if (!python || !isAbsolute(python)) reject("Original validation store needs its installed codec");
+  const output = await new Promise<string>((accept, refuse) => {
+    const child = execFile(python, ["-m", "loopx.control_plane.goals.planned_transfer_io", "--validation-io", action, root, goal],
+      {env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../../", import.meta.url))},
+        timeout: 30_000, maxBuffer: 16 * 1024 * 1024}, (error, stdout) => error ? refuse(error) : accept(stdout));
+    child.stdin?.on("error", refuse); child.stdin?.end(JSON.stringify(entries));
+  });
+  const result: unknown = JSON.parse(output);
+  return decodeTransferValidations(result);
+}
+function decodeTransferValidations(value: unknown): JsonObject[] {
+  if (!Array.isArray(value) || value.length > 20_000) reject("Original private validation inventory is invalid");
+  let previous = "";
+  return value.map(raw => {
+    const row = requireJsonObject(raw, "original validation declaration");
+    const id = requireAuthorityStoreId(row.todo_id, "original validation Task");
+    const declaration = requireJsonObject(row.declaration, "private validation declaration");
+    const normalized = normalizeTodoCompletionValidationDeclaration(declaration, {strict_fields: true, require_command: true, require_canonical_input: true});
+    if (!hasExactAuthorityKeys(row, ["todo_id", "declaration_sha256", "declaration"]) || id <= previous ||
+        !normalized.ok || canonicalAuthoritySha256(declaration) !== row.declaration_sha256) reject("Original private validation declaration differs from its authority digest");
+    previous = id; return row;
+  });
+}
+export async function readTransferValidationDeclarations(root: string, goal: string, projection: JsonObject): Promise<JsonObject[]> {
+  const references = [...indexCoordinationProjection(projection, goal).todos.values()]
+    .filter(todo => todo.completion_validation_required === true)
+    .map(todo => ({todo_id: todo.todo_id, declaration_sha256: todo.completion_validation_sha256}))
+    .sort((a, b) => String(a.todo_id) < String(b.todo_id) ? -1 : 1);
+  if (references.some(row => !BARE_SHA256_PATTERN.test(String(row.declaration_sha256)))) reject("Original validation authority digest is missing");
+  const declarations = await validationStoreIO("read", root, goal, references);
+  if (!same(declarations.map(({todo_id, declaration_sha256}) => ({todo_id, declaration_sha256})), references)) reject("Private validation store did not return the selected original declarations");
+  return declarations;
+}
+export async function restoreTransferValidationDeclarations(root: string, goal: string, entries: unknown): Promise<void> {
+  const declarations = decodeTransferValidations(entries ?? []);
+  if (!same(await validationStoreIO("restore", root, goal, declarations), declarations)) reject("Original validation store restore did not read back");
+}
+
 /** These are addresses already selected by their owners, not a runtime sweep.
  * The closed set is local to this private transfer carrier; runtime semantics
  * remain with the original journal and accounting vocabularies. */
 export function decodeGoalTransferHistory(raw: unknown): GoalTransferHistory {
   const value = requireJsonObject(raw, "original runtime history");
-  if (!hasExactAuthorityKeys(value, ["schema_version", "goal_id", "source_runtime_root", "turn_history", "quota_history", "files"]) ||
+  if (!hasExactAuthorityKeys(value, ["schema_version", "goal_id", "source_runtime_root", "turn_history", "quota_history", "files", ...(Object.hasOwn(value, "validation_declarations") ? ["validation_declarations"] : [])]) ||
       value.schema_version !== HISTORY_SCHEMA || typeof value.source_runtime_root !== "string" ||
       !isAbsolute(value.source_runtime_root) || resolve(value.source_runtime_root) !== value.source_runtime_root ||
       value.source_runtime_root.includes("\0") || !Array.isArray(value.files) || value.files.length > 20_000) reject("Original runtime history is invalid or unsupported");
+  if (value.validation_declarations !== undefined) decodeTransferValidations(value.validation_declarations);
   const goal = requireAuthorityStoreId(value.goal_id, "original runtime Goal");
   if (/[\\/\0]/u.test(goal) || goal === "." || goal === "..") reject("Original runtime Goal must be one path segment");
   const turns = requireJsonObject(value.turn_history, "original Turn history"), quota = requireJsonObject(value.quota_history, "original quota history");
@@ -68,9 +118,9 @@ export function decodeGoalTransferHistory(raw: unknown): GoalTransferHistory {
   return value as GoalTransferHistory;
 }
 
-export function goalTransferHistory(root: string, goal: string, turns: JsonObject, quota: JsonObject): GoalTransferHistory {
+export function goalTransferHistory(root: string, goal: string, turns: JsonObject, quota: JsonObject, validations: JsonObject[] = []): GoalTransferHistory {
   return decodeGoalTransferHistory({schema_version: HISTORY_SCHEMA, goal_id: goal, source_runtime_root: root,
-    turn_history: turns, quota_history: quota,
+    turn_history: turns, quota_history: quota, ...(validations.length ? {validation_declarations: validations} : {}),
     files: [...turns.files as JsonObject[], ...quota.files as JsonObject[]].sort((a, b) => String(a.relative_path) < String(b.relative_path) ? -1 : 1)});
 }
 

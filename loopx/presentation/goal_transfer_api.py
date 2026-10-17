@@ -36,7 +36,9 @@ class GoalTransferRequestMixin:
                 result = inspect_registered_goal_transfer(registry_path=self.server.registry_path, goal_id=body["goal_id"])
             elif action == "confirm":
                 result = confirm_registered_goal_transfer(registry_path=self.server.registry_path, goal_id=body["goal_id"],
-                    operation_id=body["operation_id"], expected_preview_sha256=body["preview_sha256"])
+                    operation_id=body["operation_id"], expected_preview_sha256=body["preview_sha256"],
+                    codex_bin=getattr(getattr(self.server, "runtime_controller", None), "codex_bin", None),
+                    codex_home=getattr(getattr(self.server, "runtime_controller", None), "codex_home", None))
             else:
                 result = {"ok": True, **cancel_registered_goal_transfer(registry_path=self.server.registry_path,
                     goal_id=body["goal_id"], operation_id=body["operation_id"])}

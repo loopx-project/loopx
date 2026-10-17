@@ -3,6 +3,8 @@ import {cancelGoalTransfer, confirmGoalTransfer, inspectGoalTransfer, type GoalT
 import {useWorkspaceI18n} from "./i18n";
 import "./goal-transfer-settings.css";
 
+type TransferAction = "read" | "cancel" | "confirm";
+
 /** The Agent prepares the existing local owners; this entry confirms only the
  * retained exact review and reads actual destination work. Full journey held. */
 export function GoalTransferSettings({goalId}: {goalId: string}) {
@@ -10,9 +12,11 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
   const zh = locale === "zh-CN";
   const [view, setView] = useState<GoalTransferView | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pendingAction, setPendingAction] = useState<TransferAction | null>(null);
   const [error, setError] = useState("");
   const [cancelled, setCancelled] = useState<boolean | null>(null);
   const [cutoverRecorded, setCutoverRecorded] = useState(false);
+  const [executionAccepted, setExecutionAccepted] = useState<boolean | null>(null);
   const inFlight = useRef(false);
   const holds: Record<GoalTransferView["holds"][number]["code"], string> = {
     retained_leases: zh ? "仍有未释放的任务租约，需由原任务结算。" : "Original tasks still hold unreleased leases.",
@@ -22,13 +26,15 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
     transfer_journey_incomplete: zh ? "此处可读取本地切换、原任务状态和证据引用；完整迁移流程与安装环境验证仍在开发中。" : "Local cutover, original-task status and evidence references can be read here. The complete migration flow and installed-environment validation are still in development.",
   };
 
-  async function perform(action: "read" | "cancel" | "confirm" = "read") {
+  async function perform(action: TransferAction = "read") {
     if (inFlight.current) return;
-    inFlight.current = true; setBusy(true); setError(""); setView(null);
+    inFlight.current = true; setBusy(true); setPendingAction(action); setError("");
+    if (action === "read") setView(null);
     try {
       if (action === "confirm" && view?.prepared_cutover) {
         const result = await confirmGoalTransfer(goalId, view.prepared_cutover);
         setCutoverRecorded(true); setView(result.readback);
+        if (result.execution) setExecutionAccepted(result.execution.ok);
         if (!result.readback) setError(zh ? "切换已接受，请读取当前状态以恢复结果。" : "The switch was accepted. Read current status to recover the result.");
         return;
       }
@@ -42,18 +48,24 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
       setView(await inspectGoalTransfer(goalId));
     } catch {
       setError(zh ? "无法读取原迁移状态，请重试。" : "The original transfer state could not be read. Retry.");
-    } finally {inFlight.current = false; setBusy(false);}
+    } finally {inFlight.current = false; setBusy(false); setPendingAction(null);}
   }
 
   return <details className="personal-detail-card personal-goal-transfer" onToggle={event => {
     if (event.currentTarget.open && !view && !busy && !error) void perform();
   }}>
     <summary>{zh ? "迁移 Agent" : "Move Agent"}</summary>
-    {busy ? <p role="status">{zh ? "读取原工作与迁移状态…" : "Reading original work and transfer state…"}</p> : null}
+    {busy ? <p role="status">{pendingAction === "confirm"
+      ? (zh ? "正在确认切换并继续原任务…" : "Confirming the move and continuing original work…")
+      : pendingAction === "cancel" ? (zh ? "正在取消迁移准备…" : "Cancelling move preparation…")
+      : (zh ? "读取原工作与迁移状态…" : "Reading original work and transfer state…")}</p> : null}
     {cancelled !== null ? <p role="status">{cancelled
       ? (zh ? "准备已取消，源环境的原写入边界已恢复。" : "Preparation cancelled. The original source write boundary is restored.")
       : (zh ? "取消决定已记录；源环境已有后续状态，请读取当前状态。" : "Cancellation is recorded. The source has later state; read its current status.")}</p> : null}
     {cutoverRecorded ? <p role="status">{zh ? "本次切换已接受，源环境保持停写。" : "This switch was accepted. Source writes remain closed."}</p> : null}
+    {executionAccepted !== null ? <p role={executionAccepted ? "status" : "alert"}>{executionAccepted
+      ? (zh ? "续办请求已处理；下方为原任务的当前状态和独立验收结果。" : "The continuation request was processed. Its original task's current state and independent checks appear below.")
+      : (zh ? "切换已接受，原任务续办尚未成功。可恢复同一次切换；已记录的执行和结果不会重复。" : "The switch was accepted, but original work has not continued successfully. Resume this move to recover its recorded execution without duplication.")}</p> : null}
     {view ? <>
       <p>{view.local_cutover ? (view.local_cutover.target_activation_state === "stopped"
         ? (zh ? "目标 Goal 已停止，仍可查看原任务结果。恢复该 Goal 后才可继续执行。" : "The destination Goal is stopped. Original work remains readable; resume that Goal before continuing execution.")
@@ -82,7 +94,10 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
       </details>
       {view.prepared_cutover ? <>
         <p>{zh ? "已准备的本地目标：" : "Prepared local destination: "}{view.prepared_cutover.destination_name}</p>
-        <p>{zh ? "确认后，由目标环境取得新的执行准入并继续上面的原工作。" : "Confirm to admit the destination for new execution and continue the original work above."}</p>
+        <p>{view.prepared_cutover.continue_work
+          ? (zh ? `确认后，${view.prepared_cutover.continue_work.agent_id} 使用目标环境当前的 Codex 登录，在目标工作区继续原任务并运行原验收。不会安装源环境凭证。`
+            : `Confirm to let ${view.prepared_cutover.continue_work.agent_id} continue the original task in its destination workspace with the destination's current Codex login and original independent checks. Source credentials are not installed.`)
+          : (zh ? "确认后，由目标环境取得新的执行准入并继续上面的原工作。" : "Confirm to admit the destination for new execution and continue the original work above.")}</p>
         <button className="personal-primary-action" disabled={busy} type="button" onClick={() => void perform("confirm")}>
           {view.local_cutover ? (zh ? "恢复本次切换" : "Resume this move") : (zh ? "确认切换" : "Confirm local move")}
         </button>

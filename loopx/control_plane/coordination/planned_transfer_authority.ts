@@ -33,7 +33,7 @@ import {newGoalCreationBinding} from "./new_goal_initialization.ts";
 import {readPromotionReceipt} from "./promotion_receipt.ts";
 import {NEW_GOAL_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
 import {readGoalTurnHistoryForTransfer, readGoalTurnJournalsForTransfer} from "../turn_driver/turn_journal_query.ts";
-import {goalTransferHistory, readGoalTransferHistoryJson} from "../goals/planned_transfer_history.ts";
+import {goalTransferHistory, readGoalTransferHistoryJson, readTransferValidationDeclarations} from "../goals/planned_transfer_history.ts";
 import {readGoalQuotaHistoryForTransfer} from "../quota/accounting_artifact_transaction.ts";
 import {observeLocalWorkspaceHostIdentity} from "../work_items/task_lease_workspace.ts";
 
@@ -337,7 +337,8 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     if (quotaHistory.closed !== true) reject("Source quota effects are not closed; recover the original debit or void before preparing transfer");
     // Validate the new carrier's addresses and per-file bounds before
     // changing the original writer fence.
-    const runtimeHistory = goalTransferHistory(root, goal, turnHistory, quotaHistory);
+    const validations = await readTransferValidationDeclarations(root, goal, head.head);
+    const runtimeHistory = goalTransferHistory(root, goal, turnHistory, quotaHistory, validations);
     const pendingPath = join(directory, "preparation.json");
     const pending = await optionalJson(pendingPath);
     const facts = {schema_version: PREPARATION_SCHEMA, request,
@@ -346,6 +347,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
       source_cursor: head.cursor, source_projection_sha256: canonicalAuthoritySha256(head.head),
       source_turn_history: turnHistory,
       source_quota_history: quotaHistory,
+      ...(validations.length ? {source_validation_declarations: validations} : {}),
       ...(context ? {source_context: context, source_context_sha256: canonicalAuthoritySha256(context)} : {})};
     let priorFence: JsonObject;
     if (pending) {
@@ -430,7 +432,8 @@ export async function cancelSourcePreparation(value: JsonObject): Promise<JsonOb
     if (!pending || pending.schema_version !== PREPARATION_SCHEMA || !hasExactAuthorityKeys(pending,
         ["schema_version", "request", "source_provider", "source_store_identity", "source_cursor", "source_projection_sha256",
           "source_turn_history", "source_quota_history", "source_context", "source_context_sha256", "original_writer_fence",
-          ...(pending.source_host_identity === undefined ? [] : ["source_host_identity"])])) {
+          ...(pending.source_host_identity === undefined ? [] : ["source_host_identity"]),
+          ...(pending.source_validation_declarations === undefined ? [] : ["source_validation_declarations"])])) {
       reject("Cancellation requires the retained original registered source preparation");
     }
     const request = requireJsonObject(pending.request, "original preparation request");
@@ -465,7 +468,7 @@ export async function cancelSourcePreparation(value: JsonObject): Promise<JsonOb
           archive.commits !== pending.source_cursor || archive.projection_sha256 !== pending.source_projection_sha256 ||
           !BARE_SHA256_PATTERN.test(String(archive.archive_sha256)) || receipt.archive !== join(directory, "authority.ndjson") ||
           !same(receipt.runtime_history, goalTransferHistory(root, goal,
-            requireJsonObject(pending.source_turn_history, "original Turn history"), requireJsonObject(pending.source_quota_history, "original quota history")))) {
+            requireJsonObject(pending.source_turn_history, "original Turn history"), requireJsonObject(pending.source_quota_history, "original quota history"), pending.source_validation_declarations as JsonObject[] | undefined))) {
         reject("Preparation receipt differs from its original source identity; preserve the original operation");
       }
     }

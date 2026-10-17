@@ -22,7 +22,7 @@ import {localAuthorityProviderPaths, publishLocalAuthoritySelection} from "./loc
 import {engageLegacyCoordinationWriterFenceUnderLocks, loadLegacyCoordinationWriterFence,
   PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, isPlannedTransferAdmissionFence, type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
-import {decodeGoalTransferHistory, inspectGoalTransferHistory, readGoalTransferHistoryJson, retainGoalTransferHistory, type ProtectedGoalTransferHistory} from "../goals/planned_transfer_history.ts";
+import {decodeGoalTransferHistory, inspectGoalTransferHistory, restoreTransferValidationDeclarations, readGoalTransferHistoryJson, retainGoalTransferHistory, type ProtectedGoalTransferHistory} from "../goals/planned_transfer_history.ts";
 import {PREPARATION_SCHEMA} from "./planned_transfer_authority.ts";
 import {legacyCoordinationTodoLockPath} from "./legacy_writer_lock_paths.ts";
 import {projectGoalQuotaHistoryForTransfer, readGoalQuotaHistoryForTransfer} from "../quota/accounting_artifact_transaction.ts";
@@ -284,6 +284,7 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     if (audit.status !== "matched") reject("Complete original authority/receipt readback did not match");
     await publishLocalAuthoritySelection(root, plan.goalId, target.provider as "file" | "sqlite", identity.store_identity);
     const historyReadback = history ? await retainGoalTransferHistory(directory, history, true, completed !== null, true) : null;
+    if (history) await restoreTransferValidationDeclarations(root, plan.goalId, history.manifest.validation_declarations);
     const result = {schema_version: "loopx_planned_transfer_target_stage_v0", operation_id: plan.operationId, goal_id: plan.goalId,
       identity_sha256: canonicalAuthoritySha256(plan.identity), original_authority: {...archive}, authority_readback: audit,
       target_store_identity: identity.store_identity, target_provider: target.provider,

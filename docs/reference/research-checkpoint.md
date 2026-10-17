@@ -184,11 +184,46 @@ A changed source tree/index or destination tree/index refuses the final confirma
 and retains source cancellation. After admission, normal new edits and commits
 survive retries of the original confirmation and Turn.
 
+An Agent may explicitly add `--continue-todo-id ORIGINAL_TODO` to that same
+preparation. This prepares one existing Task for automatic continuation after
+confirmation. Its preview identifies the responsible registered Agent, the
+current local Codex login, workspace-write sandbox and original independent
+checks. Confirmation composes a fresh Task lease, native session and stable Turn;
+this is execution by the responsible Agent, rather than an owner Goal Chat
+assuming that role. Without this option, confirmation retains its existing
+admission/readback behavior and launches no Host.
+
+Canonical Todos retain validation commitments rather than private command argv.
+Preparation now captures those selected private declarations inside the encrypted
+history and restores them through the existing validation store. Missing or
+changed declarations hold before source preparation or final confirmation.
+Their private paths and arguments are retained, not rewritten for another
+machine, and their contents are not privacy-certified. No source credential
+binding or native session is installed.
+
+The opt-in preview also selects validation of the original pending working
+files. Its native transfer owner requires the same admitted Goal, original Task,
+validator commitment and physical execution workspace. The original independent
+checks still run; the Agent need not commit or discard unrelated pending edits
+just to pass a clean-tree test. Generic delivery validation keeps its existing
+clean-worktree rule. The fresh caller-held lease proof is retained in the original
+Turn and rechecked by the native terminal owner. Manual Turn callers can supply
+that proof with `--task-lease-idempotency-key` and
+`--task-lease-expected-version`; reading a lease or changing those arguments on a
+journal retry cannot supply a new grant.
+
+An accepted cutover stays recorded when continuation fails. The original entry
+reads the current Task and independent acceptance. Repeated confirmation reads or
+recovers the same native Turn; already recorded work and debits are not repeated. A pending
+settlement retains its existing lease proof; its owner may still hold recovery.
+A successful request does not itself prove Task completion.
+
 Distinct source workspaces, unknown mappings, links/submodules, conflicted or
 special index states, and dirty canonical checkouts still hold before preparation.
-These holds do not complete the full profile. Responsible-Agent App dispatch,
-required credential/configuration rebinding, full Host/effect drain, secure
-cross-machine delivery and the convenience target remain unqualified. This local
+These holds do not complete the full profile. Automatic continuation is limited
+to the explicitly prepared local Codex Task above. Required credential/configuration
+rebinding, full Host/effect drain, secure cross-machine delivery and the
+convenience target remain unqualified. This local
 path never requires discarding or committing an Agent's pending edits merely to
 satisfy a clean-checkout test.
 
@@ -198,8 +233,8 @@ unsupported capability configuration and required capabilities outside this
 profile hold before source writes are fenced or a destination is created.
 Configure or rebind those dependencies through their actual owners; this profile
 does not silently drop them, copy credentials or adopt optional settings. App
-dispatch as the responsible Agent and the complete migration qualification
-remain separate work.
+automatic dispatch beyond that explicit local Codex profile and the complete
+migration qualification remain separate work.
 
 Settings → Capability Center → the original Goal → Move Agent shows the
 prepared destination and original work. **Confirm local move** performs the
