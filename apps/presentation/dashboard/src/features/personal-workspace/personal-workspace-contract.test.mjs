@@ -458,7 +458,7 @@ assert.match(machineSettings, /const configured = Boolean\(/, "Only configured c
 assert.match(machineSettings, /periodicReportActivationDescription/, "Machine periodic reports explain stage-triggered automatic delivery");
 assert.match(i18n, /Enabled means automatic delivery at validated stage boundaries/, "English machine settings name automatic stage delivery");
 assert.match(i18n, /开启后将在已验证的阶段节点自动投递/, "Chinese machine settings name automatic stage delivery");
-assert.match(machineSettings, /localizedCapabilityFieldCopy\(locale\)/, "Machine capability fields follow the selected locale");
+assert.match(machineSettings, /localizedCapabilityFieldCopy\(locale,\s*selected\.capability_id\)/, "Machine capability fields follow the selected locale");
 assert.match(goalCapabilitySettings, /localizedCapabilityFieldCopy\(locale,\s*localizedSelected\.capability_id\)/,
   "Goal fields use the selected locale and capability-specific vocabulary");
 assert.deepEqual(localizedCapabilityFieldCopy("en", "explore_harness").mode.options,

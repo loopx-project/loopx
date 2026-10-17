@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -412,6 +412,38 @@ def resolve_decision_context_activation(
     profile_path: Path | None,
     available_source_provider_ids: Collection[str] | None = None,
 ) -> tuple[dict[str, Any], DecisionContextProfile | None]:
+    return _resolve_profile_activation(
+        goal_id=goal_id,
+        agent_id=agent_id,
+        load_profile=(lambda: load_decision_context_profile(profile_path))
+        if profile_path is not None else None,
+        available_source_provider_ids=available_source_provider_ids,
+    )
+
+
+def resolve_inline_decision_context_activation(
+    *,
+    goal_id: str,
+    agent_id: str,
+    profile_payload: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], DecisionContextProfile | None]:
+    """Inspect a request-owned profile without a temporary file or provider IO."""
+    return _resolve_profile_activation(
+        goal_id=goal_id,
+        agent_id=agent_id,
+        load_profile=(lambda: normalize_decision_context_profile(profile_payload))
+        if profile_payload is not None else None,
+        available_source_provider_ids=None,
+    )
+
+
+def _resolve_profile_activation(
+    *,
+    goal_id: str,
+    agent_id: str,
+    load_profile: Callable[[], DecisionContextProfile] | None,
+    available_source_provider_ids: Collection[str] | None,
+) -> tuple[dict[str, Any], DecisionContextProfile | None]:
     normalized_goal = _token(goal_id, field_name="goal_id")
     normalized_agent = _token(agent_id, field_name="agent_id")
     if isinstance(available_source_provider_ids, (str, bytes)):
@@ -428,7 +460,7 @@ def resolve_decision_context_activation(
         "default_enabled": False,
         "goal_id": normalized_goal,
         "agent_id": normalized_agent,
-        "profile_configured": profile_path is not None,
+        "profile_configured": load_profile is not None,
         "enabled": False,
         "configured_for_agent": False,
         "available": False,
@@ -443,10 +475,10 @@ def resolve_decision_context_activation(
         "private_locator_captured": False,
         "credentials_captured": False,
     }
-    if profile_path is None:
+    if load_profile is None:
         return base | {"status": "disabled"}, None
     try:
-        config = load_decision_context_profile(profile_path)
+        config = load_profile()
     except ValueError:
         return base | {
             "status": "profile_invalid",

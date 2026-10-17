@@ -1,7 +1,8 @@
 import { openWorkspacePage } from "./scenario-context.mjs";
 
-// The ordinary composer steers a managed Codex Turn through exact-turn ingress;
-// attached hosts retain queued follow-ups and unsupported adapters remain blocked.
+// Command+Enter steers a managed Codex Turn through exact-turn ingress;
+// ordinary sends queue, attached hosts retain follow-ups, and unsupported
+// adapters cannot receive steering.
 // Browser routes are synthetic; the production HTTP/store/subprocess contract is
 // independently covered by tests/test_chat_turn_steering.py.
 export const composerSessionAdmissionScenario = {
@@ -18,7 +19,7 @@ export const composerSessionAdmissionScenario = {
     const notes = [];
     const composerInput = page.getByLabel("向 LoopX 发送消息");
     const sendButton = page.getByRole("button", { name: "发送", exact: true });
-    const turnRunningHint = page.locator(".personal-composer-status", { hasText: "本轮回答进行中" });
+    const turnRunningHint = page.locator(".personal-composer-status", { hasText: "新消息将在下一轮处理" });
     const pasteDraftImage = async (name) => {
       await composerInput.evaluate((target, filename) => {
         const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN3sAAAAASUVORK5CYII="), (char) => char.charCodeAt(0));
@@ -60,10 +61,12 @@ export const composerSessionAdmissionScenario = {
         const routes = [`**/api/chat/sessions/${sessionId}/turns/${turnId}/events`, `**/api/chat/sessions/${sessionId}/turns`];
         await page.route(routes[0], (route) => { heldEvents.push(route); });
         const posts = [];
+        const postBodies = [];
         await page.route(routes[1], async (route) => {
           if (route.request().method() !== "POST") return route.fallback();
           const body = route.request().postDataJSON();
           posts.push(body.message);
+          postBodies.push(body);
           const queuedTurnId = `${turnId}-queued-${posts.length}`;
           page.__loopxRuntime.messages.get(sessionId).push({ message_id: `${queuedTurnId}-user`, turn_id: queuedTurnId,
             role: "user", text: body.message, created_at: "2026-08-13T01:00:01Z" });
@@ -72,7 +75,7 @@ export const composerSessionAdmissionScenario = {
           await page.route(routes.at(-1), (held) => { heldEvents.push(held); });
           await route.fulfill({ contentType: "application/json", status: 202, json: {
             ok: true, schema_version: "loopx_chat_turn_accepted_v1", session_id: sessionId, turn_id: queuedTurnId,
-            created: true, status: sessionMode === "attached_host" ? "queued" : "running", events_url: `/api/chat/sessions/${sessionId}/turns/${queuedTurnId}/events`,
+            created: true, status: sessionMode === "attached_host" || body.delivery === "queue" ? "queued" : "running", events_url: `/api/chat/sessions/${sessionId}/turns/${queuedTurnId}/events`,
           } });
         });
         await page.reload({ waitUntil: "domcontentloaded" });
@@ -80,7 +83,7 @@ export const composerSessionAdmissionScenario = {
         // The recovered reply is the page's own evidence that it saw the Turn run.
         await page.getByRole("button", { name: "中断本轮", exact: true }).waitFor({ state: "visible", timeout: 10_000 });
         return {
-          posts, heldEvents, turnId,
+          posts, postBodies, heldEvents, turnId,
           async release() {
             for (const pattern of routes) await page.unroute(pattern);
             await Promise.all(heldEvents.splice(0).map((held) => held.abort().catch(() => {})));
@@ -107,10 +110,10 @@ export const composerSessionAdmissionScenario = {
         await route.fulfill({ json: receipt });
       });
       const instruction = "先做中文，别发布。";
-      await page.locator(".personal-composer-status", { hasText: "发消息可调整当前工作" }).waitFor();
+      await turnRunningHint.waitFor();
       await composerInput.fill(instruction);
       if (await sendButton.isDisabled()) throw new Error("The native Turn cannot receive instructions from its ordinary composer");
-      await sendButton.click();
+      await composerInput.press("Meta+Enter");
       await page.getByRole("status").filter({ hasText: "接收状态未确认" }).waitFor();
       await Promise.all(managed.heldEvents.splice(0).map(route => route.abort().catch(() => {})));
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -193,16 +196,16 @@ export const composerSessionAdmissionScenario = {
       await openGoalChat();
       if (new Set(adjustments.slice(0, 3).map(row => row.client_ingress_id)).size !== 1) throw new Error("Uncertain retries minted new ingress identities");
       await composerInput.fill(instruction);
-      await sendButton.click();
+      await composerInput.press("Meta+Enter");
       await page.getByRole("status").filter({ hasText: "本次未送达" }).waitFor();
-      await sendButton.click();
+      await composerInput.press("Meta+Enter");
       await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
       if (adjustments[3].client_ingress_id === adjustments[4].client_ingress_id) throw new Error("Confirmed non-delivery could not retry after recovery");
 
       // Lose a response, then let the original Turn finish. Retry reads its own
       // receipt; it must neither create another Turn nor steer a newer one.
       await composerInput.fill(instruction);
-      await sendButton.click();
+      await composerInput.press("Meta+Enter");
       await page.getByRole("status").filter({ hasText: "接收状态未确认" }).waitFor();
       page.__loopxRuntime.sessions.set(sessionId, { ...page.__loopxRuntime.sessions.get(sessionId), active_turn_id: null, status: "ready" });
       page.__loopxRuntime.messages.get(sessionId).push({ message_id: "stored-correction", turn_id: managed.turnId,
@@ -233,10 +236,10 @@ export const composerSessionAdmissionScenario = {
       // That promise must not block the same composer's native instructions.
       await composerInput.fill("给 LoopX 做份社区问卷，先给我草稿。");
       await sendButton.click();
-      await page.locator(".personal-composer-status", { hasText: "发消息可调整当前工作" }).waitFor();
+      await turnRunningHint.waitFor();
       await composerInput.fill(instruction);
       if (await sendButton.isDisabled()) throw new Error("Original send promise blocks native instructions");
-      await sendButton.click();
+      await composerInput.press("Meta+Enter");
       await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
       if (adjustments.length !== 8 || managed.posts.length !== 1
         || adjustments[7].turnId === managed.turnId || await composerInput.inputValue()) {
@@ -246,7 +249,7 @@ export const composerSessionAdmissionScenario = {
       // not reuse the history snapshot taken before the instruction was sent.
       const currentPageInstruction = "问卷里补上使用频率。";
       await composerInput.fill(currentPageInstruction);
-      await sendButton.click();
+      await composerInput.press("Meta+Enter");
       await page.getByRole("status").filter({ hasText: "接收状态未确认" }).waitFor();
       await sendButton.click();
       await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
@@ -257,14 +260,27 @@ export const composerSessionAdmissionScenario = {
         throw new Error("Delivered replay did not read back one stored instruction on the current page");
       }
       await managed.release();
-      notes.push("managed Codex: ordinary composer steers its exact Turn while the original send waits, retaining drafts and retry identity, including after completion and reload; concurrent conversations retain their own pending state, receipts, newer drafts and unsent images; restored requests never dispatch automatically");
+      notes.push("managed Codex: Command+Enter steers its exact Turn while ordinary sends queue, retaining drafts and retry identity, including after completion and reload; concurrent conversations retain their own pending state, receipts, newer drafts and unsent images; restored requests never dispatch automatically");
+
+      const queued = await reloadWithRunningTurn("managed_runtime", `turn-queue-${Date.now()}`);
+      const queuedMessage = "当前工作完成后再检查下一项。";
+      await composerInput.fill(queuedMessage);
+      await composerInput.press("Enter");
+      await page.locator(".personal-action-feedback", { hasText: "已排队，将在当前回合结束后处理" }).waitFor();
+      if (queued.posts.length !== 1 || queued.posts[0] !== queuedMessage
+        || queued.postBodies[0].delivery !== "queue" || !queued.postBodies[0].client_turn_id
+        || adjustments.length !== 10 || await composerInput.inputValue()
+        || page.__loopxRuntime.sessions.get(sessionId).active_turn_id !== queued.turnId) {
+        throw new Error("Ordinary Enter did not queue once behind the original Turn, or it silently steered current work");
+      }
+      await queued.release();
+      notes.push("managed Enter: one explicit FIFO request retains the original Session/active Turn and never becomes steering");
 
       const unsupported = await reloadWithRunningTurn("managed_runtime", `turn-unsupported-${Date.now()}`, "external");
       await turnRunningHint.waitFor();
       await composerInput.fill("不应向不支持的执行器追加指令");
-      if (!await sendButton.isDisabled()) throw new Error("Unsupported executor was offered native steering");
-      await sendButton.click({ force: true });
-      await page.waitForTimeout(100);
+      await composerInput.press("Meta+Enter");
+      await page.locator(".personal-action-feedback", { hasText: "此执行器不支持本轮纠偏" }).waitFor();
       if (unsupported.posts.length || adjustments.length !== 10) throw new Error("Unsupported executor received an effect");
       await composerInput.fill("");
       await unsupported.release();

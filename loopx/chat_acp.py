@@ -287,13 +287,25 @@ class ACPStdioAdapter:
         return options
 
     def model_options(self) -> dict[str, Any] | None:
+        return self._categorized_option("model", fallback_id="model")
+
+    def reasoning_options(self) -> dict[str, Any] | None:
+        # ACP v1 thought_level is semantic metadata, never guessed from an id.
+        return self._categorized_option("thought_level")
+
+    def _categorized_option(self, category: str, *, fallback_id: str | None = None) -> dict[str, Any] | None:
         for config_id, option in self.session_config_options.items():
-            if option["category"] == "model":
+            if option["category"] == category:
                 return {"id": config_id, "label": option["label"], "selected": option["selected"], "options": option["options"]}
-        if "model" in self.session_config_options:
-            option = self.session_config_options["model"]
-            return {"id": "model", "label": option["label"], "selected": option["selected"], "options": option["options"]}
+        if fallback_id in self.session_config_options:
+            option = self.session_config_options[fallback_id]
+            return {"id": fallback_id, "label": option["label"], "selected": option["selected"], "options": option["options"]}
         return None
+
+    @property
+    def model_settings(self) -> dict[str, str | None]:
+        reasoning = self.reasoning_options()
+        return {"agent_reasoning_effort": reasoning["selected"] or None if reasoning else None}
 
     @property
     def current_model_id(self) -> str | None:
@@ -306,6 +318,11 @@ class ACPStdioAdapter:
             if config_id == "model":
                 model = self.model_options()
                 config_id = str(model["id"]) if model else config_id
+            elif config_id == "reasoning_effort":
+                reasoning = self.reasoning_options()
+                if reasoning is None:
+                    raise self._runtime_error("ACP Agent does not offer reasoning choices.", error_code="unsupported_configuration")
+                config_id = str(reasoning["id"])
             known = self.session_config_options.get(config_id)
             if known is None:
                 raise self._runtime_error("ACP Agent does not offer the selected configuration.", error_code="unsupported_configuration")
@@ -318,6 +335,8 @@ class ACPStdioAdapter:
                 timeout_sec=self.startup_timeout_sec,
             )
             self.session_config_options = self._session_config_options(result)
+            if self.session_config_options.get(config_id, {}).get("selected") != value:
+                raise self._runtime_error("ACP Agent did not confirm the requested configuration.", error_code="unsupported_configuration")
 
     def _write(self, payload: dict[str, Any]) -> None:
         if self.process.stdin is None:
@@ -444,7 +463,7 @@ class ACPStdioAdapter:
             kind = str(update.get("sessionUpdate") or "")
             if kind == "config_option_update":
                 self.session_config_options = self._session_config_options(update)
-                event_sink("agent.model_config", {"model_id": self.current_model_id})
+                event_sink("agent.model_config", {"model_id": self.current_model_id, **self.model_settings})
             elif kind == "agent_message_chunk":
                 content = update.get("content")
                 if isinstance(content, dict) and content.get("type") == "text":

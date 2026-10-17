@@ -6,7 +6,8 @@ import { resolve } from "node:path";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
-const LONG_PROMPT = "请比较两个方案，给出完整依据和边界";
+const LONG_URL = `https://example.org/review?candidate=${"0123456789abcdef".repeat(24)}&view=full-history`;
+const LONG_PROMPT = `请比较两个方案，给出完整依据和边界。完整预览：${LONG_URL}`;
 const SHORT_PROMPT = "方案 A 的公开来源是什么？";
 const LONG_ANSWER = [
   "建议先验证方案 A，再决定是否采用。现有记录支持小范围试行，尚不足以证明生产部署成功。",
@@ -20,6 +21,11 @@ const LONG_ANSWER = [
   "",
   "依据：[公开报告](https://example.org/report)。这是记录里的结论；生产状态仍需独立读回。",
   "读回命令：`loopx status`。",
+  `候选分支：\`codex/${"research-history-".repeat(24)}\`。`,
+  "",
+  "```text",
+  `unwrapped-command ${"exact-argument-".repeat(80)}`,
+  "```",
   "填写地址：https://example.org/forms/community。English: https://example.org/forms/en。",
   "",
   "<script>window.pwned=true</script>",
@@ -51,6 +57,17 @@ async function assertAnswerTypography(answer) {
   }
 }
 
+async function assertConversationFits(page) {
+  const layout = await page.locator(".personal-channel-scroll").evaluate(node => ({
+    width: node.clientWidth, scrollWidth: node.scrollWidth,
+    messages: [...node.querySelectorAll(".personal-message")].map(message => ({width: message.clientWidth, scrollWidth: message.scrollWidth})),
+  }));
+  if (layout.scrollWidth > layout.width + 1 || layout.messages.some(row => row.scrollWidth > row.width + 1)) {
+    await page.screenshot({path: resolve(outputDir, `conversation-overflow-${page.viewportSize().width}.png`), animations: "disabled"});
+    throw new Error(`Conversation must read without sideways scrolling: ${JSON.stringify(layout)}`);
+  }
+}
+
 export const answerPresentationScenario = {
   id: "answer-presentation",
   async run({ browser, collectCoverage, url }) {
@@ -66,6 +83,7 @@ export const answerPresentationScenario = {
         hasText: "建议先验证方案 A",
       });
       await answer.waitFor({ state: "visible", timeout: 15_000 });
+      await assertConversationFits(page);
       await assertAnswerTypography(answer);
       if (await answer.locator("table").count() !== 1) throw new Error("Steward answer table was not rendered");
       if (await answer.locator('a[href="https://example.org/report"]').count() !== 1) {
@@ -85,6 +103,9 @@ export const answerPresentationScenario = {
       await page.screenshot({ path: resolve(outputDir, "answer-presentation-desktop.png"), fullPage: false, animations: "disabled" });
 
       await page.setViewportSize({ width: 390, height: 844 });
+      await assertConversationFits(page);
+      const code = answer.locator(".personal-md-pre");
+      if (!await code.evaluate(node => node.scrollWidth > node.clientWidth)) throw new Error("Code must retain its own horizontal scroll");
       await assertAnswerTypography(answer);
       await answer.scrollIntoViewIfNeeded();
       const overflow = await answer.evaluate((node) => ({
@@ -105,6 +126,7 @@ export const answerPresentationScenario = {
         hasText: "建议先验证方案 A",
       });
       await restored.waitFor({ state: "visible", timeout: 15_000 });
+      await assertConversationFits(page);
       if (await restored.locator("table").count() !== 1 || !(await restored.innerText()).includes("可回退路径")) {
         throw new Error("Reload lost the complete Markdown answer in the original conversation");
       }
@@ -184,7 +206,14 @@ export const answerPresentationScenario = {
         hasText: "建议先验证方案 A",
       });
       await goalAnswer.waitFor({ state: "visible" });
+      await assertConversationFits(page);
       await assertAnswerTypography(goalAnswer);
+      await page.locator(".personal-channel-scroll").evaluate(node => { node.scrollTop = 0; });
+      await page.screenshot({path: resolve(outputDir, "conversation-fit-goal-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await assertConversationFits(page);
+      await page.screenshot({path: resolve(outputDir, "conversation-fit-goal-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
       const goalReportHref = await goalAnswer.getByRole("link", { name: "单独阅读完整答复" }).getAttribute("href");
       if (!goalReportHref) throw new Error("Goal answer has no stable reading link");
       const goalId = new URL(page.url()).searchParams.get("goalId");
@@ -203,7 +232,7 @@ export const answerPresentationScenario = {
         throw new Error("Answers did not come from accepted conversation Turns");
       }
       return { coverageEntries: context.coverageEntries,
-        note: "Steward long Markdown and Goal short answer render safely, survive reload and fit mobile" };
+        note: "Steward and Goal Chat wrap long URLs without conversation overflow; full answers survive reload while code and tables retain local scrolling." };
     } finally {
       await context.close();
     }

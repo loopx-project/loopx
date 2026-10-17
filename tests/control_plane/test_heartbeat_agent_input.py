@@ -65,7 +65,7 @@ def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp
     packet = json.loads(subprocess.check_output(command, text=True))
     assert packet["ok"] is True
     budget = packet["interface_budget"]
-    assert budget["max_chars"] == 3200
+    assert budget["max_chars"] == 3600
     assert budget["budget_char_count"] <= budget["max_chars"]
     assert budget["within_budget"] is True
     body = packet["task_body"]

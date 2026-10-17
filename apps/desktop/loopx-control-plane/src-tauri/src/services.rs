@@ -1686,3 +1686,7 @@ mod tests {
 #[cfg(test)]
 #[path = "services_tests.rs"]
 mod supervisor_tests;
+
+#[cfg(all(test, unix))]
+#[path = "services_real_runtime_tests.rs"]
+mod real_runtime_tests;

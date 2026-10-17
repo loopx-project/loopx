@@ -5,6 +5,21 @@ from __future__ import annotations
 from typing import Any
 
 
+def decision_context_configuration_descriptor() -> dict[str, Any]:
+    return {
+        "feature_id": "decision_context",
+        "display_name": "Decision evidence recall",
+        "availability": "local_artifact_preview",
+        "effect": (
+            "Inspect an existing private profile and recall advisory evidence in "
+            "this page. No profile, cursor, settlement, or Core writes."
+        ),
+        "documentation": {
+            "path": "loopx/capabilities/decision_context/README.md",
+        },
+    }
+
+
 DECISION_CONTEXT_CATALOG_ENTRY: dict[str, Any] = {
     "id": "decision-context",
     "origin": "builtin",

@@ -44,11 +44,13 @@ def test_machine_json_keeps_values_capture_and_human_renderer(
     assert captured == [original, original]
 
 
-def run_isolated_script(script: str) -> subprocess.CompletedProcess[str]:
+def run_isolated_script(
+    script: str, *, environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-c", script],
         cwd=REPO_ROOT,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        env={**os.environ, **(environment or {}), "PYTHONPATH": str(REPO_ROOT)},
         text=True,
         capture_output=True,
         check=False,
@@ -60,6 +62,7 @@ def run_cli_main(
 	argv: list[str],
 	*,
 	forbidden_modules: tuple[str, ...] = (),
+	environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
 	script = f"""
 import sys
@@ -75,7 +78,7 @@ for forbidden_module in {forbidden_modules!r}:
     assert forbidden_module not in sys.modules
 raise SystemExit(exit_code)
 """
-	return run_isolated_script(script)
+	return run_isolated_script(script, environment=environment)
 
 
 def run_cli_batch(module: str, argv_cases: list[list[str]]) -> list[dict[str, object]]:
@@ -537,17 +540,23 @@ def test_selected_task_lease_rejections_match_full_cli(tmp_path: Path, arguments
 
 @pytest.mark.parametrize("command", ["authority-archive", "extension", "slash-commands"])
 def test_selected_admin_preview_matches_full_cli_without_writes(
-	tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str,
+	tmp_path: Path, command: str,
 ) -> None:
+	parent_environment = os.environ.copy()
 	registry, runtime_root = write_command_fixture(tmp_path)
 	runtime_root.mkdir()
 	host_home = tmp_path / "host-home"
 	host_home.mkdir()
-	monkeypatch.setenv("HOME", str(host_home))
-	monkeypatch.setenv("CODEX_HOME", str(host_home / ".codex"))
-	monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime_root))
-	monkeypatch.setenv("LOOPX_REGISTRY", str(registry))
-	monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+	# Only the CLI subprocesses use this home. Existing worker threads must not
+	# discover it through a temporary change to the pytest process environment.
+	cli_environment = {
+		"HOME": str(host_home),
+		"USERPROFILE": str(host_home),
+		"CODEX_HOME": str(host_home / ".codex"),
+		"LOOPX_RUNTIME_ROOT": str(runtime_root),
+		"LOOPX_REGISTRY": str(registry),
+		"LOOPX_USAGE_PING": "0",
+	}
 	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root),
 		"--format", "json", command]
 	if command == "authority-archive":
@@ -559,12 +568,18 @@ def test_selected_admin_preview_matches_full_cli_without_writes(
 
 	before = {str(path.relative_to(tmp_path)): path.read_bytes()
 		for path in tmp_path.rglob("*") if path.is_file()}
-	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
-	full = run_cli_main("loopx.cli", argv)
+	selected = run_cli_main(
+		"loopx.entrypoint", argv, forbidden_modules=("loopx.cli",),
+		environment=cli_environment,
+	)
+	full = run_cli_main("loopx.cli", argv, environment=cli_environment)
 
 	assert selected.returncode == full.returncode == 0, (selected.stderr, full.stderr)
 	assert selected.stdout == full.stdout
 	assert selected.stderr == full.stderr == ""
+	assert {key: os.environ.get(key) for key in cli_environment} == {
+		key: parent_environment.get(key) for key in cli_environment
+	}
 	assert {str(path.relative_to(tmp_path)): path.read_bytes()
 		for path in tmp_path.rglob("*") if path.is_file()} == before
 	assert not list(host_home.iterdir())

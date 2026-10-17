@@ -1,4 +1,4 @@
 interface:
   display_name: "LoopX PR Review"
   short_description: "Review LoopX PRs with deep key-code explanations"
-  default_prompt: "Use $loopx-pr-review to interpret the entire PR: read every changed file, explain key symbols and control/data flow, walk positive and negative paths, cover all surfaces in the Chinese five-block review, and append one concise English verdict."
+  default_prompt: "Use $loopx-pr-review to obtain and execute the current capability-owned exact-head review packet, publish the checked complete Chinese five-block review plus English verdict, and read back the published result."

@@ -6,23 +6,33 @@ export function conversationOrder(items: WorkspaceTimelineItem[]): WorkspaceTime
     const time = value ? Date.parse(value) : NaN;
     return Number.isFinite(time) ? time : -Infinity;
   };
-  const time = (item: WorkspaceTimelineItem) => item.kind === "proposal"
-    ? dated(item.proposal.createdAt)
-    : item.kind === "message" ? dated(item.message.createdAt) : -Infinity;
+  const time = (item: WorkspaceTimelineItem) => {
+    if (item.kind === "proposal") return dated(item.proposal.createdAt);
+    if (item.kind !== "message") return -Infinity;
+    const stored = dated(item.message.createdAt);
+    // Until the immutable message arrives, a terminal reply belongs at its
+    // observed completion, not at the time we prepared or queued the request.
+    return !item.message.sourceMessageId && !item.message.pending && item.message.endedAt !== undefined
+      ? Math.max(stored, item.message.endedAt) : stored;
+  };
   const turnKey = (item: WorkspaceTimelineItem) => item.kind === "message"
     && item.message.sourceSessionId && item.message.sourceTurnId
     ? JSON.stringify([item.message.sourceSessionId, item.message.sourceTurnId]) : undefined;
   const requestTimes = new Map<string, number>();
+  const latestRequestTimes = new Map<string, number>();
   for (const item of items) {
     const key = turnKey(item);
     if (key && item.kind === "message" && item.message.role === "user" && Number.isFinite(time(item))) {
       requestTimes.set(key, Math.min(requestTimes.get(key) ?? Infinity, time(item)));
+      latestRequestTimes.set(key, Math.max(latestRequestTimes.get(key) ?? -Infinity, time(item)));
     }
   }
-  // Admission precedes the durable user message. The optimistic work row has
-  // a client timestamp, so its clock alone cannot put it ahead of its request.
-  const pendingRequest = (item: WorkspaceTimelineItem) => item.kind === "message" && item.message.pending
-    ? requestTimes.get(turnKey(item) ?? "") : undefined;
+  // Optimistic timestamps never outrank same-Turn request order. While working,
+  // follow the initial request; before terminal readback, follow its last input.
+  // Stored commentary retains its actual timestamp, including before steering.
+  const pendingRequest = (item: WorkspaceTimelineItem) => item.kind === "message"
+    && item.message.role !== "user" && !item.message.sourceMessageId
+    ? (item.message.pending ? requestTimes : latestRequestTimes).get(turnKey(item) ?? "") : undefined;
   const orderedTime = (item: WorkspaceTimelineItem) => {
     const requestTime = pendingRequest(item);
     return requestTime === undefined ? time(item) : Math.max(time(item), requestTime);

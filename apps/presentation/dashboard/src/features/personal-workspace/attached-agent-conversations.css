@@ -11,7 +11,7 @@
 .attached-conversation-content button {font: inherit; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer;}
 .attached-conversation-content button:disabled, .attached-conversation-content button[aria-disabled="true"] {opacity: .5; cursor: default;}
 .attached-conversation-content .attached-conversation-open {border: 0; padding: 0; border-radius: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px;}
-.attached-conversation-messages {max-height: min(40vh, 360px); overflow: auto; overscroll-behavior: contain; margin-block: 16px;}
+.attached-conversation-messages {max-height: min(40vh, 360px); overflow: auto; overflow-anchor: none; overscroll-behavior: contain; margin-block: 16px; min-width: 0; scrollbar-gutter: stable;}
 .attached-conversation-messages article {padding-block: 16px; border-top: 1px solid var(--pw-line); overflow-wrap: anywhere;}
 .attached-conversation-messages header {display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;}
 .attached-conversation-messages time {font-size: var(--text-caption); color: var(--pw-muted);}
@@ -22,7 +22,16 @@
 .attached-conversation-messages details {margin-block: 0;}
 .attached-conversation-messages summary {cursor: pointer; min-height: 44px; align-content: center; color: var(--pw-text);}
 .attached-conversation-messages pre {font: var(--text-body) / var(--leading-prose) var(--font-mono); color: var(--pw-text); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto;}
-.attached-history-navigation {display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--text-caption);}
+.attached-history-status {min-height: 20px; color: var(--pw-muted); font-size: var(--text-caption); flex-shrink: 0;}
+.attached-conversation-messages .attached-record-group {margin-block: 8px 16px; border: 1px solid var(--pw-line); border-radius: 8px; overflow-wrap: anywhere;}
+.attached-conversation-messages .attached-record-group > summary {padding: 8px 12px; font-size: var(--text-caption); color: var(--pw-muted);}
+.attached-record-count {font-weight: normal;}
+.attached-record-warning {margin-inline-start: 8px; color: var(--pw-text);}
+.attached-record-group-body {padding-inline: 12px;}
+.attached-record-group-body article:first-child {border-top: 0;}
+.attached-conversation-messages article[data-role="assistant"] {line-height: var(--leading-prose);}
+.attached-conversation-messages article[data-role="assistant"] header {margin-bottom: 8px;}
+.attached-conversation-messages .personal-md {min-width: 0; overflow-wrap: anywhere;}
 .personal-composer-wrap[hidden] {display: none;}
 .personal-channel-scroll[data-agent-work="true"] {padding-block: 0; overflow: hidden;}
 .personal-channel-scroll[data-agent-work="true"] > .personal-goal-view-panel:not([hidden]) {height: 100%;}

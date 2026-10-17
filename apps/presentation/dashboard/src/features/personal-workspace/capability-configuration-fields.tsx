@@ -66,8 +66,10 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
     return (
       <label htmlFor={id}>
         <span>{label}</span>
-        <select disabled={readOnly} id={id} onChange={onChange ? (event) => onChange(field.key, event.target.value) : undefined} value={typeof value === "string" ? value : ""}>
+        <select aria-label={label} disabled={readOnly} id={id} onChange={onChange ? (event) => onChange(field.key, event.target.value) : undefined} value={typeof value === "string" ? value : ""}>
           <option value="">{copy[field.key]?.options?.[""] ?? (field.key === "executor_reasoning_effort" ? runtimeDefault : "")}</option>
+          {typeof value === "string" && value && !field.options?.includes(value)
+            ? <option value={value} disabled>{value} · {locale === "zh-CN" ? "当前不可用" : "Unavailable"}</option> : null}
           {(field.options ?? []).map((option) => <option key={option} value={option}>{copy[field.key]?.options?.[option] ?? (field.key === "review_order" ? directionLabel(option) : option)}</option>)}
         </select>
       </label>

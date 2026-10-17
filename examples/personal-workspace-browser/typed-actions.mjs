@@ -1082,7 +1082,7 @@ export const typedActionsScenario = {
       const expectedGoalCapabilities = [
         "变更质量验证", "Goal 复盘与步幅", "探索图谱", "探索 Harness", "飞书事件收件箱",
         "飞书看板心跳同步", "已退役的 Authority 观测", "自适应子 Agent 容量",
-        "已注册 Peer 任务协调", "周期报告", "Reward Memory 实验",
+        "已注册 Peer 任务协调", "周期报告", "记忆与资料",
       ];
       if (JSON.stringify([...goalCapabilityOrder].sort()) !== JSON.stringify(expectedGoalCapabilities.sort())) {
         throw new Error(`Goal capability workbench did not render the complete catalog: ${JSON.stringify(goalCapabilityOrder)}`);
@@ -1092,10 +1092,48 @@ export const typedActionsScenario = {
       const capabilityIndex = (name) => goalCapabilityOrder.indexOf(name);
       if (capabilityIndex("周期报告") >= capabilityIndex("探索 Harness")
         || capabilityIndex("自适应子 Agent 容量") <= capabilityIndex("探索 Harness")
-        || capabilityIndex("自适应子 Agent 容量") >= capabilityIndex("已退役的 Authority 观测")
-        || capabilityIndex("自适应子 Agent 容量") >= capabilityIndex("Reward Memory 实验")) {
+        || capabilityIndex("自适应子 Agent 容量") >= capabilityIndex("已退役的 Authority 观测")) {
         throw new Error(`Goal capability maturity ordering drifted: ${JSON.stringify(goalCapabilityOrder)}`);
       }
+      await page.locator(".personal-capability-list").getByRole("button", {name:"记忆与资料",exact:true}).click();
+      await page.getByRole("heading", {level:2,name:"记忆与资料",exact:true}).waitFor({state:"visible"});
+      const memoryTabs = page.getByRole("tablist", {name:"记忆用途"});
+      if (JSON.stringify(await memoryTabs.getByRole("tab").allTextContents()) !== JSON.stringify(["资料召回", "经验学习", "素材与风格"])) {
+        throw new Error("Memory navigation must expose the registered purposes inside one entry");
+      }
+      await page.getByRole("tab", {name:"资料召回",exact:true}).focus();
+      await page.keyboard.press("ArrowRight");
+      if (await page.getByRole("tab", {name:"经验学习",exact:true}).getAttribute("aria-selected") !== "true") {
+        throw new Error("Keyboard purpose navigation did not open the existing Agent experience editor");
+      }
+      // Authored native-shape snapshots exercise view continuity only; the
+      // real configuration/isolation owner is covered by the native suite.
+      const memoryGoalId = await page.getByLabel("目标 Goal", {exact:true}).inputValue();
+      const memoryView = {
+        registered_agents:["reviewer", "writer"], enabled_agents:["reviewer"],
+        binding_status:"available", binding_revision:`sha256:${"a".repeat(64)}`,
+        agent_bindings:[
+          {agent_id:"reviewer",binding_source:"agent",enabled:true,status:"available",automatic_recall:true,automatic_ingest:true},
+          {agent_id:"writer",binding_source:"agent",enabled:false,status:"disabled",automatic_recall:false,automatic_ingest:false},
+        ],
+      };
+      api.goalMemoryConfigurations.set(memoryGoalId, memoryView);
+      await page.getByRole("button", {name:"重新读取配置",exact:true}).click();
+      const memoryScope = page.getByLabel("经验作用范围", {exact:true});
+      await memoryScope.waitFor({state:"visible"});
+      await memoryScope.selectOption("writer");
+      api.goalMemoryConfigurations.set(memoryGoalId, {...memoryView,binding_revision:`sha256:${"b".repeat(64)}`});
+      await page.getByRole("button", {name:"重新读取配置",exact:true}).click();
+      await page.waitForFunction(revision => document.querySelector(".personal-capability-raw-values")?.textContent?.includes(revision), "b".repeat(64));
+      if (await memoryScope.inputValue() !== "writer") {
+        throw new Error("A fresh native readback silently switched the selected Agent to the shared binding");
+      }
+      if (await page.getByLabel("已启用的 Goal Agent", {exact:true}).count()) {
+        throw new Error("An independent Agent editor exposed the shared allowlist");
+      }
+      await page.keyboard.press("Home");
+      await page.getByRole("tab", {name:"资料召回",exact:true}).click();
+      await page.getByRole("region", {name:"资料召回",exact:true}).waitFor({state:"visible"});
       await page.locator(".personal-capability-list").getByRole("button", { name: "已退役的 Authority 观测" }).click();
       const retiredDetail = page.locator(".personal-capability-detail");
       await retiredDetail.getByText(/--clear-local-authority-shadow/).waitFor();

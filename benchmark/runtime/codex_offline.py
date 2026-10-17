@@ -41,6 +41,7 @@ class CodexOffline(Codex):
         self._goals = str(goals)
         self._web_search = web_search
         self._model_catalog_staged = False
+        self._model_catalog_source: Path | None = None
         super().__init__(*args, **kwargs)
 
     @staticmethod
@@ -90,6 +91,7 @@ class CodexOffline(Codex):
         if catalog.is_file():
             await environment.upload_file(catalog, f"{_STAGE_DIR}/model-catalog.json")
             self._model_catalog_staged = True
+            self._model_catalog_source = catalog.resolve()
 
         await self.exec_as_root(
             environment,

@@ -9,6 +9,8 @@ export type AttentionDetails = {
   /** False when the row was projected without a stable todo_id to write against. */
   todoIdentified: boolean;
   requestText?: string | null;
+  /** Display provenance only; never chooses the actor for a decision. */
+  createdBy?: string | null;
   reason: string | null;
   evidence: string | null;
   blocksAgent: string | null;
@@ -37,6 +39,7 @@ export function attentionDetails(todo: Record<string, unknown>): AttentionDetail
           : todo.status === "open" || todo.status === "blocked" ? "open" : "unknown",
     todoIdentified: text(todo.todo_id) !== null,
     requestText: text(todo.text),
+    createdBy: text(todo.created_by),
     reason: text(todo.note),
     evidence: text(todo.evidence),
     blocksAgent: text(todo.blocks_agent),
@@ -53,7 +56,7 @@ export function attentionDetailsFromSnapshot(
   const detail = attentionDetails(todo);
   const content = todoRequestContent(todo, {goal_id: goalId, items}, goalId);
   // A failed join remains a summary, never a purported complete request.
-  return {...detail, requestText: content?.text ?? null,
+  return {...detail, requestText: content?.text ?? null, createdBy: content?.createdBy ?? detail.createdBy,
     reason: content?.note ?? null, evidence: content?.evidence ?? null};
 }
 

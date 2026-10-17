@@ -38,7 +38,7 @@ export function ChannelTimeline({
   onSuggestReply,
   onOpenGoalEvidence,
   onInterruptTurn,
-  onSteerTurn,
+  onAdjustTurn,
   onCancelPreparation,
 }: {
   emptyState?: { title: string; description: string };
@@ -51,7 +51,7 @@ export function ChannelTimeline({
   onSuggestReply?: (text: string) => void;
   onOpenGoalEvidence?: (goalId: string) => void;
   onInterruptTurn?: (turnId: string) => Promise<void>;
-  onSteerTurn?: (turnId: string, text: string, ingressId: string) => Promise<void>;
+  onAdjustTurn?: (turnId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
   if (items.length === 0) {
@@ -150,7 +150,7 @@ export function ChannelTimeline({
             ? <a className="personal-answer-link" href={answerLink(item.message.sourceSessionId, item.message.sourceMessageId)}
                 target="_blank" rel="noopener noreferrer">{locale === "zh-CN" ? "单独阅读完整答复" : "Read full answer separately"}</a>
             : null}
-          {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onSteerTurn={onSteerTurn}/> : null}
+          {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn}/> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
             ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
           <CollaborationCard request={item.message.collaboration} />
