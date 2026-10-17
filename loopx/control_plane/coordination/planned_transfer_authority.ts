@@ -259,13 +259,20 @@ export async function inspectRegisteredGoalTransfer(value: JsonObject): Promise<
     if (cutover) {
       const {readLocalGoalTransferContinuation} = await import("../goals/planned_transfer_cutover.ts");
       const current = await readLocalGoalTransferContinuation(cutover);
+      const work = current.work as JsonObject | undefined;
+      // Runtime admission does not settle the explicitly selected Task. Keep
+      // its original confirmation reachable after a failed/lost continuation;
+      // a completed Task and the default admission-only profile need no retry.
+      const originalWorkPending = review?.continue_todo_id !== undefined && Array.isArray(work?.todos) &&
+        (work.todos as JsonObject[]).some(todo => todo.todo_id === review.continue_todo_id &&
+          todo.done !== true && todo.archive_state !== "archive" && todo.status === "open");
       return {ok: true, schema_version: "loopx_planned_transfer_operation_view_v0", goal_id: goal.id,
         source_state: "cutover_recorded", operation_id: preparedOperation, source_provider: preview.provider, source_revision: preview.provider_revision,
         authority_preparation_ready: false, cancel_available: false, continuation_available: false,
         local_cutover: {source_final: true, target_task_admitted: current.target_task_admitted,
           target_runtime_admitted: current.target_runtime_admitted,
           ...(current.target_activation_state ? {target_activation_state: current.target_activation_state} : {})},
-        ...(review && !current.target_runtime_admitted ? {_local_cutover_review: review} : {}),
+        ...(review && (!current.target_runtime_admitted || originalWorkPending) ? {_local_cutover_review: review} : {}),
         work: current.work ?? {objective: source.objective, requirements: context.state_text,
           agents: coordination.registered_agents ?? [], todos: todos.todo_ids.map(id => todos.todos.get(id)!)},
         holds: [{code: "transfer_journey_incomplete" satisfies GoalTransferHoldCode, owner: "goal_transfer"}]};

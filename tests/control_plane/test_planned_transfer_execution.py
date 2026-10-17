@@ -114,6 +114,11 @@ def test_confirmation_runs_registered_original_agent_and_independently_returns_r
             assert work["done"] is (native_outcome == "accepted")
             if native_outcome == "accepted":
                 assert "21" in work["note"]
+                assert "prepared_cutover" not in result["readback"]
+            else:
+                # Admission alone must not hide the original UI recovery.
+                assert result["readback"]["prepared_cutover"] == prepared["prepared_cutover"]
+                assert call({"action": "inspect", "goal_id": "report"})[1]["prepared_cutover"] == prepared["prepared_cutover"]
             for field in ("text", "claimed_by", "task_repository", "required_write_scopes"):
                 assert work.get(field) == original_task.get(field)
             assert work.get("required_capabilities", []) == original_task.get("required_capabilities", [])
