@@ -2,6 +2,7 @@ import {useLayoutEffect, useRef, useState, type CSSProperties} from "react";
 import type {ExploreTimeline, TimelineFinding, TimelineNode, TimelinePhase} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {exploreTimelinePhaseAt, groupExploreTimelinePoints, selectExploreTimelineDecisions} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import type {groupUnlinkedHistoryQuestions} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
+import {ContextHelp} from "./context-help";
 
 /** Default whole-history reading: thirds, recording density, recorded routes,
  * unlinked questions and explicit decisions on one record-time axis.
@@ -33,20 +34,20 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
   const copy: Copy = zh ? {
     early: "前段", middle: "中段", late: "后段", items: "研究项", findings: "结论",
     decisions: "显式决策", none: "未记录显式决策", changed: "变化", stopped: "停止", retained: "保留",
-    unstructured: "结论未按 writeback 结构记录，无法拆出依据与决策",
+    unstructured: "决策未结构化", unstructuredHint: "结论未按 writeback 结构记录，无法拆出依据与决策。",
     density: "记录密度", densityHint: "柱高为事件数；浅红为无记录空档", ticks: "转向 / 继续",
-    routes: "研究路线", routeHint: "仅由显式关联或父子分组相连", singles: "未关联研究项", singlesHint: "不推断路线或因果",
-    trail: "决策轨迹", trailHint: "保留各轮显式决策，按记录时间最近在前", more: "显示更多决策", all: "全部时段",
+    routes: "研究路线", routeHint: "仅由显式关联或父子分组相连", singles: "未关联研究项",
+    trail: "决策轨迹", more: "显示更多决策", all: "全部时段",
     span: "记录跨度", start: "起", end: "止", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
     confirmed: "来源记为确认", refuted: "已反驳", tentative: "待检查", unlabeled: "无结论", phaseNote: "按记录时间三等分，仅为阅读分组，不是预声明的评估窗口。",
     noTime: "没有可用的记录时间，无法放上时间轴；下方记录仍可完整阅读。",
   } : {
     early: "Early", middle: "Middle", late: "Late", items: "Research items", findings: "Findings",
     decisions: "Explicit decisions", none: "No explicit decision recorded", changed: "Changed", stopped: "Stopped", retained: "Retained",
-    unstructured: "Findings were not recorded in writeback sections; evidence and decisions cannot be separated",
+    unstructured: "Unstructured decisions", unstructuredHint: "Findings were not recorded in writeback sections; evidence and decisions cannot be separated.",
     density: "Recording density", densityHint: "Bar height is events; pale red is a recording gap", ticks: "Replan / continue",
-    routes: "Research routes", routeHint: "Connected only by recorded relationships or parent grouping", singles: "Unlinked research items", singlesHint: "No route or causality inferred",
-    trail: "Decision history", trailHint: "Every recorded decision, newest record time first", more: "Show more decisions", all: "Whole history",
+    routes: "Research routes", routeHint: "Connected only by recorded relationships or parent grouping", singles: "Unlinked research items",
+    trail: "Decision history", more: "Show more decisions", all: "Whole history",
     span: "Recorded span", start: "From", end: "To", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
     confirmed: "Recorded confirmation", refuted: "Refuted", tentative: "Tentative", unlabeled: "No finding", phaseNote: "Equal thirds of record time, for reading only; not a pre-declared evaluation window.",
     noTime: "No usable record time; the history cannot be placed on a time axis. All records remain readable below.",
@@ -103,10 +104,15 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     </button>;
   };
   return <div className="research-timeline">
+    <div className="research-timeline-guide"><span>{zh ? "记录时间" : "Record time"}</span><ContextHelp label={zh ? "时间线读法" : "Reading the timeline"}>
+      <p>{copy.phaseNote}</p><p>{copy.densityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
+      {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
+      <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>
+      <p>{zh ? "未关联问题按首次记录 UTC 日期收纳，不推断路线或因果。决策轨迹保留各轮显式决策，最新记录在前。" : "Unlinked questions group by first-record UTC date, without inferring a route or cause. Decision history retains each explicit decision, newest record first."}</p>
+    </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}</div>
     <div className="research-phases" role="group" aria-label={copy.phaseNote}>{timeline.phases.map(phaseCard)}</div>
-    <p className="research-history-note">{copy.phaseNote}{phase !== null ? <> · <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button></> : null}</p>
     <div className="research-timeline-grid">
-      <div className="research-row-label"><strong>{copy.density}</strong><small>{copy.densityHint}</small>{decisionOutcomes.length ? <small>{decisionOutcomes.map(outcome => <span key={outcome}><i className={`research-tick-key is-${outcome}`}/> {label(outcome)}</span>)}</small> : null}</div>
+      <div className="research-row-label"><strong>{copy.density}</strong>{decisionOutcomes.length ? <small>{decisionOutcomes.map(outcome => <span key={outcome}><i className={`research-tick-key is-${outcome}`}/> {label(outcome)}</span>)}</small> : null}</div>
       <div className="research-row-plot">
         <div className="research-density" ref={plot}>{timeline.bins.map((bin, index) => <span key={index} className={bin.events ? "" : "is-gap"} title={`${timeLabel(bin.start)} — ${timeLabel(bin.end)} · ${bin.events}`}
           style={{height: bin.events ? `${Math.max(8, (bin.events / maxEvents) * 100)}%` : "100%"}}/>)}</div>
@@ -116,7 +122,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
         {timeline.phases.slice(1).map(item => <span key={item.index} className="research-phase-divider" style={{left: pct(item.start)}}/>)}
         <div className="research-axis">{ticks.map((at, index) => index % stride ? null : <span key={at} style={{left: pct(at)}}>{dayLabel(at)}</span>)}</div>
       </div>
-      {timeline.routes.length ? <div className="research-row-heading"><strong>{copy.routes}</strong><small>{copy.routeHint} · {zh ? "相邻点合拢显示；数字为研究项数，一次展开全部原始时间与依据" : "Nearby points are grouped; the number is research items, opened once with original times and sources"}</small></div> : null}
+      {timeline.routes.length ? <div className="research-row-heading"><strong>{copy.routes}</strong></div> : null}
       {timeline.routes.map(route => {
         const members = route.nodeIds.map(id => timeline.nodes.get(id)!).filter(item => item.first !== null);
         if (!members.length) return null;
@@ -148,13 +154,13 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
         </div>;
       })}
       {dayGroups.length ? <>
-        <div className="research-row-label"><strong>{copy.singles} · {groupedIds.size}</strong><small>{zh ? "按首次记录 UTC 日期收纳；选择一次可读完整问题与证据" : "Grouped by first-record UTC date; select once for full questions and evidence"}</small></div>
+        <div className="research-row-label"><strong>{copy.singles} · {groupedIds.size}</strong></div>
         <div className="research-unlinked-days">{dayGroups.map(group => <button type="button" key={group.day} aria-pressed={selectedDay === group.day}
           className={`${selectedDay === group.day ? "is-selected" : ""}${group.nodes.some(node => inPhase(timeline.nodes.get(node.id)!.first)) ? "" : " is-dimmed"}`}
           onClick={() => onGroupSelect(group.day)}><time>{group.day || (zh ? "时间未知" : "Unknown time")}</time><strong>{group.nodes.length} {zh ? "个问题" : "questions"}</strong></button>)}</div>
       </> : null}
       {swarm.length ? <>
-        <div className="research-row-label"><strong>{copy.singles} · {swarm.length}</strong><small>{copy.singlesHint}</small></div>
+        <div className="research-row-label"><strong>{copy.singles} · {swarm.length}</strong></div>
         <div className="research-row-plot"><div className="research-swarm">
           {points(swarm, " is-small")}
         </div></div>
@@ -164,7 +170,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
       {[...timeline.nodes.values()].filter(item => item.first === null).map(item => <button key={item.node.id} type="button" className="research-link" onClick={() => onSelect(item.node.id)}>{item.node.latest.title}</button>)}
     </div> : null}
     <section className="research-trail" aria-label={copy.trail}>
-      <h3>{copy.trail}<small>{copy.trailHint}</small></h3>
+      <h3>{copy.trail}</h3>
       {!timeline.decisions.length ? <p className="research-history-note">{timeline.structuredCount ? copy.none : copy.unstructured}</p>
         : <TrailList items={trail} copy={copy} label={label} timeLabel={timeLabel} selectedIds={selectedIds} onSelect={onSelect}/>}
     </section>

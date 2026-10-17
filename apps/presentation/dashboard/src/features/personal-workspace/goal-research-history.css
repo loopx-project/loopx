@@ -1,8 +1,11 @@
 .research-history { margin-block: 0; border-block: 1px solid var(--pw-line); padding-block: 24px; min-width: 0; }
 .research-history-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .research-history-heading h2 { font-size: var(--text-heading); font-weight: 600; margin: 0 0 4px; }
+.research-history-heading > div:first-child { min-width: 0; }
+.research-history-title { display: flex; align-items: center; gap: 4px; }
+.research-history-title h2 { margin: 0; }
 .research-history-heading p, .research-history-coverage, .research-history-note { color: var(--pw-muted); font-size: var(--text-caption); line-height: 1.6; margin: 4px 0; }
-.research-history-controls { display: flex; align-items: center; flex-shrink: 0; gap: 8px; }
+.research-history-controls { display: flex; align-items: center; flex-wrap: wrap; max-width: 100%; min-width: 0; gap: 8px; }
 .research-history-controls button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 6px 10px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); font: inherit; font-size: var(--text-caption); }
 .research-history-controls button:disabled { color: var(--pw-muted); opacity: .6; cursor: not-allowed; }
 .research-history-layout { display: grid; min-width: 0; margin-top: 16px; border: 1px solid var(--pw-line); border-radius: 12px; overflow: hidden; }
@@ -53,6 +56,8 @@
 .research-history-controls .research-lens button[aria-pressed="true"] { background: var(--pw-text); color: var(--pw-bg); }
 .research-history-canvas.is-timeline { max-height: none; overflow: visible; background: var(--pw-bg); padding: 16px; }
 .research-timeline { display: grid; gap: 12px; min-width: 0; }
+.research-timeline-guide { display: flex; align-items: center; gap: 4px; color: var(--pw-muted); font-size: var(--text-caption); }
+.research-timeline-guide > .research-link { margin-inline-start: auto; }
 .research-phases { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .goal-overview .research-phase { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; padding: 14px; border: 1px solid var(--pw-line); border-radius: 10px; background: var(--pw-bg); color: var(--pw-text); font: inherit; text-align: left; cursor: pointer; }
 .goal-overview .research-phase:hover { border-color: var(--pw-line-strong); }
