@@ -547,6 +547,17 @@ def test_real_cli_quota_should_run_discloses_unreadable_scheduler_state(
 
     for path in paths:
         path.unlink()
+        path.mkdir()
+    directory_payload = run_cli()
+    directory = _sources(directory_payload["projection_envelope"])[
+        "app_scheduler_state"
+    ]
+    assert directory["read_status"] == "unreadable"
+    assert directory["status"] == "unreadable"
+    assert directory_payload["projection_envelope"]["alert"] is True
+
+    for path in paths:
+        path.rmdir()
     recovered_payload = run_cli()
     recovered = _sources(recovered_payload["projection_envelope"])[
         "app_scheduler_state"
