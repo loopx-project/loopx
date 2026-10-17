@@ -226,6 +226,12 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.setViewportSize({width:1280,height:900});
       await page.goto(new URL(`?goalId=${goal}&view=overview&statusUrl=%2Fstatus.json`,url).href,{waitUntil:'networkidle'});
       await history.getByRole('status').filter({hasText:'11 / 11'}).waitFor();
+      assert(await history.locator('.research-density .is-gap').count() > 0, 'The sparse capture includes recording gaps');
+      const gapLegend = history.getByText('无记录', {exact: true});
+      assert(await gapLegend.isVisible(), 'Recording-gap color must be explained without opening optional help');
+      assert.equal(await gapLegend.locator('i').evaluate(e => getComputedStyle(e).backgroundColor),
+        await history.locator('.research-density .is-gap').first().evaluate(e => getComputedStyle(e).backgroundColor),
+        'The visible key identifies the actual recording-gap marks');
       const target = await history.locator(".research-timeline-marker").first().evaluate(button => {
         const box = button.getBoundingClientRect(), dot = getComputedStyle(button, "::after");
         const count=button.querySelector('span');
@@ -241,6 +247,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert(target.countOffset<1,'The count is centred in its own marker, not beside an empty circle');
       for (const viewport of [{width: 1280, height: 900}, {width: 390, height: 844}]) {
         await page.setViewportSize(viewport);
+        assert(await gapLegend.isVisible(), 'The recording-gap key remains visible on desktop and narrow layouts');
         const target = history.locator('.research-route-track [data-research-nodes~="hit-6"]');
         await target.scrollIntoViewIfNeeded();
         await page.screenshot({path: resolve(outputDir, `research-history-targets-${viewport.width}.png`), animations:'disabled'});

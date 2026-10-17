@@ -60,6 +60,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
   const label = (key: string) => copy[key] ?? key;
   const hours = (from: number, to: number) => { const value = (to - from) / 3_600_000; return value >= 48 ? `${(value / 24).toFixed(1)} ${zh ? "天" : "d"}` : `${value.toFixed(1)} ${zh ? "小时" : "h"}`; };
   const maxEvents = Math.max(1, ...timeline.bins.map(bin => bin.events));
+  const hasRecordingGaps = timeline.bins.some(bin => !bin.events);
   const ticks: number[] = [];
   const midnight = new Date(start); midnight.setHours(24, 0, 0, 0);
   for (let at = midnight.getTime(); at <= end; at += 86_400_000) ticks.push(at);
@@ -112,7 +113,10 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}</div>
     <div className="research-phases" role="group" aria-label={copy.phaseNote}>{timeline.phases.map(phaseCard)}</div>
     <div className="research-timeline-grid">
-      <div className="research-row-label"><strong>{copy.density}</strong>{decisionOutcomes.length ? <small>{decisionOutcomes.map(outcome => <span key={outcome}><i className={`research-tick-key is-${outcome}`}/> {label(outcome)}</span>)}</small> : null}</div>
+      <div className="research-row-label"><strong>{copy.density}</strong>{decisionOutcomes.length || hasRecordingGaps ? <small>
+        {hasRecordingGaps ? <span><i className="research-gap-key" aria-hidden="true"/> {zh ? "无记录" : "No records"}</span> : null}
+        {decisionOutcomes.map(outcome => <span key={outcome}><i className={`research-tick-key is-${outcome}`}/> {label(outcome)}</span>)}
+      </small> : null}</div>
       <div className="research-row-plot">
         <div className="research-density" ref={plot}>{timeline.bins.map((bin, index) => <span key={index} className={bin.events ? "" : "is-gap"} title={`${timeLabel(bin.start)} — ${timeLabel(bin.end)} · ${bin.events}`}
           style={{height: bin.events ? `${Math.max(8, (bin.events / maxEvents) * 100)}%` : "100%"}}/>)}</div>

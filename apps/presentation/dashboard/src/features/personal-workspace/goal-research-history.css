@@ -91,7 +91,9 @@
 .research-row-plot { position: relative; min-width: 0; padding-inline: 22px; }
 .research-density { display: flex; align-items: flex-end; gap: 2px; height: 56px; }
 .research-density span { flex: 1; min-width: 1px; border-radius: 2px 2px 0 0; background: var(--pw-blue-soft); border-top: 2px solid var(--pw-blue); }
-.research-density span.is-gap { background: var(--pw-red-bg); border-top: 0; }
+.research-density span.is-gap, .research-gap-key { background: var(--pw-red-bg); }
+.research-density span.is-gap { border-top: 0; }
+.research-gap-key { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--pw-red); border-radius: 2px; }
 .research-decision-ticks { position: relative; height: 12px; margin-top: 4px; }
 .research-decision-ticks span { position: absolute; top: 0; width: 3px; height: 10px; margin-left: -1px; border-radius: 1px; background: var(--pw-blue); }
 .research-decision-ticks span.is-replan, .research-tick-key.is-replan { background: var(--pw-orbit); }
