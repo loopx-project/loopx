@@ -41,6 +41,10 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
         "--usage-session-id",
         help="Expected captured solver session identity; required with --usage-jsonl.",
     )
+    register.add_argument(
+        "--native-outcomes-json",
+        help="Optional provider-recorded native outcomes, relative to source-root; same pack scope, never analyzer scores.",
+    )
     add_format(register)
     listing = subparsers.add_parser(
         "trajectory-packs",
@@ -87,6 +91,7 @@ def _handle_benchmark_trajectory_command(
                 title=args.title,
                 usage_jsonl=args.usage_jsonl,
                 usage_session_id=args.usage_session_id,
+                native_outcomes_json=args.native_outcomes_json,
             )
             if args.benchmark_command == "trajectory-pack-register"
             else discover(**scope)

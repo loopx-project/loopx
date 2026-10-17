@@ -732,6 +732,16 @@ independent scientific calibration or completion of V12. Host registration
 remains preparation outside the ordinary reading journey. CLI preparation uses
 the producer's existing interface; no new interactive Lark path is qualified.
 
+The follow-up native-readback proposal extends that same trusted registration
+with an optional provider outcome capture, scoped to the exact case/run/revision.
+The existing source disclosure separates first submission, best valid in capture,
+native-retained and final valid values, with original citations and historical/
+partial/unknown states. Submission order, not feedback arrival, identifies the
+candidate. This is not another scorer or automatic solver feedback. Captured
+solver usage and the current analysis attempt's receipt stay separate; full-study
+cost and causal benefit remain unknown. No first-viewport/hero/CTA change is
+introduced; six uncalibrated process judgments retain their existing role.
+
 ## 12. Open decisions
 
 | # | Decision | Owner | Options | Recommendation | Needed before |

@@ -9,6 +9,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import (
     PackUnavailable,
@@ -132,6 +133,62 @@ def test_scope_discovery_execute_read_citation_and_changed_source_history(pack):
         ]
         == citation["text"]
     )
+
+
+def test_native_results_register_through_real_cli_and_read_without_analysis(pack, tmp_path):
+    scope, _, original, input_path, sources, _ = pack
+    native = {
+        "schema_version": "trajectory_native_outcomes_v1",
+        "scope": json.loads(input_path.read_text())["scope"],
+        "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T00:10:00Z",
+        "complete": True, "metric": {"name": "error", "unit": "points", "higher_is_better": False},
+        "retained_result_id": "native-1",
+        "samples": [{"submission_index": 1, "result_id": "native-1", "candidate_ref": "candidate-a",
+            "submitted_at": "2026-01-01T00:01:00Z", "observed_at": "2026-01-01T00:02:00Z",
+            "valid": True, "value": 2, "citation": {"source_id": "source", "first_line": 2, "last_line": 2}}],
+    }
+    native_path = sources / "native-outcomes.json"
+    native_path.write_text(json.dumps(native))
+    registry = tmp_path / "native-registry.json"
+    registry.write_text(json.dumps({"goals": []}))
+    result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+        "--runtime-root", str(scope["runtime_root"]), "--format", "json", "benchmark", "trajectory-pack-register",
+        "--goal-id", scope["owner_goal_id"], "--input-json", str(input_path), "--source-root", str(sources),
+        "--title", "Native outcome window", "--native-outcomes-json", native_path.name],
+        capture_output=True, text=True, check=True)
+    registered = json.loads(result.stdout)
+    assert registered["analysis_key"] == original["analysis_key"]
+    assert "native_outcomes" not in original
+    assert registered["native_outcomes"]["projection"]["initial"]["value"] == 2
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert view["job"] is None and view["result"] is None
+    assert view["native_outcomes"]["projection"]["retained"]["candidate_ref"] == "candidate-a"
+    citation = read_citation(**scope, pack_id=registered["pack_id"], analysis_key=registered["analysis_key"],
+        source_id="source", first_line=2, last_line=2)
+    assert citation["text"] == "The native measurement did not improve utility."
+    with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+        read_citation(**scope, pack_id=registered["pack_id"], analysis_key=registered["analysis_key"],
+            source_id="source", first_line=1, last_line=2)
+    native["samples"][0]["value"] = 3
+    native_path.write_text(json.dumps(native))
+    old = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert old["native_outcomes"]["applicability"] == "historical"
+    assert old["native_outcomes"]["projection"]["initial"]["value"] == 2
+    assert read_citation(**scope, pack_id=registered["pack_id"], analysis_key=registered["analysis_key"],
+        source_id="source", first_line=2, last_line=2)["applicability"] == "historical"
+    assert not list((scope["runtime_root"] / "benchmark" / "trajectory-assessments").glob("*/jobs/*"))
+
+
+def test_native_capture_cannot_borrow_another_run_or_escape_source_root(pack):
+    scope, _, _, input_path, sources, _ = pack
+    path = sources / "wrong-native.json"
+    raw = {"schema_version": "trajectory_native_outcomes_v1", "scope": {
+        **json.loads(input_path.read_text())["scope"], "run_id": "foreign"}}
+    path.write_text(json.dumps(raw))
+    with pytest.raises(EffectRuntimeRejected, match="scope differs"):
+        register_pack(**scope, input_path=input_path, source_root=sources, title="wrong", native_outcomes_json=path.name)
+    with pytest.raises(PackUnavailable, match="invalid_source_path"):
+        register_pack(**scope, input_path=input_path, source_root=sources, title="wrong", native_outcomes_json="../input.json")
 
 
 def test_owner_isolation_unknown_ids_and_keys_are_rejected(pack):

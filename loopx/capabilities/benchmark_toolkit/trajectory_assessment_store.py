@@ -52,6 +52,8 @@ def _pack_id(owner_goal_id: str, record: dict) -> str:
     }
     if "solver_usage" in record:
         identity["solver_usage"] = record["solver_usage"]
+    if "native_outcomes" in record:
+        identity["native_outcomes"] = record["native_outcomes"]
     return _digest(identity)
 
 
@@ -146,8 +148,8 @@ def _usage_capture(source_root: Path, artifact: str, session_id: str) -> dict:
     }
 
 
-def _usage_view(record: dict) -> dict | None:
-    captured = record.get("solver_usage")
+def _captured_view(record: dict, field: str) -> dict | None:
+    captured = record.get(field)
     if captured is None:
         return None
     reason = None
@@ -223,7 +225,7 @@ def _summary(record: dict, reason: str | None) -> dict:
         "config": record["config"],
         "availability": "unavailable" if reason else "available",
         "reason_code": reason,
-        **({"solver_usage": _usage_view(record)} if "solver_usage" in record else {}),
+        **({field: _captured_view(record, field) for field in ("solver_usage", "native_outcomes") if field in record}),
     }
 
 
@@ -237,6 +239,7 @@ def register_pack(
     config: dict | None = None,
     usage_jsonl: str | None = None,
     usage_session_id: str | None = None,
+    native_outcomes_json: str | None = None,
 ) -> dict:
     """Trusted operator only; no HTTP/renderer path-registration endpoint."""
     if not title.strip():
@@ -266,6 +269,17 @@ def register_pack(
         record["solver_usage"] = _usage_capture(
             source_root, usage_jsonl, usage_session_id
         )
+    if native_outcomes_json is not None:
+        data = _source_path(source_root, native_outcomes_json).read_bytes()
+        measured = effect_runtime_result("benchmark.trajectory.prepare", {
+            "input": record["input"], "config": record["config"],
+            "native_outcomes": json.loads(data),
+        })["native_outcomes"]
+        record["native_outcomes"] = {
+            "artifact": native_outcomes_json,
+            "artifact_sha256": hashlib.sha256(data).hexdigest(),
+            "projection": measured,
+        }
     owner = _owner(runtime_root, owner_goal_id)
     (owner / "packs").mkdir(parents=True, exist_ok=True, mode=0o700)
     pack_id = _pack_id(owner_goal_id, record)
@@ -445,12 +459,15 @@ def read_citation(
         runtime_root=runtime_root, owner_goal_id=owner_goal_id, pack_id=pack_id
     )
     result = view["result"]
-    if result is None or not any(
+    citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]
+    native = (view.get("native_outcomes") or {}).get("projection") or {}
+    native_citations = [native[key]["citation"] for key in ("initial", "best_valid", "retained", "final_valid") if native.get(key)]
+    requested = {"source_id": source_id, "first_line": first_line, "last_line": last_line}
+    if not any(
         c["source_id"] == source_id
         and c["first_line"] == first_line
         and c["last_line"] == last_line
-        for a in result["assessments"]
-        for c in a["citations"]
+        for c in [*citations, *native_citations]
     ):
         raise PackUnavailable("citation_not_in_result")
     source = next(s for s in record["input"]["sources"] if s["id"] == source_id)
@@ -465,5 +482,6 @@ def read_citation(
                 first_line - source["first_line"] : last_line - source["first_line"] + 1
             ]
         ),
-        "applicability": view["applicability"],
+        "applicability": "historical" if requested in native_citations
+        and view["native_outcomes"]["applicability"] == "historical" else view["applicability"],
     }

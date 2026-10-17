@@ -149,3 +149,27 @@ def test_http_rejects_other_owner_paths_free_configuration_and_wrong_origin(work
     with pytest.raises(HTTPError):
         read()
     assert not w["count"].exists()
+
+
+def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(workspace):
+    w = workspace
+    data = json.loads((w["tmp_path"] / "input.json").read_text())
+    native = {"schema_version": "trajectory_native_outcomes_v1", "scope": data["scope"],
+        "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T00:03:00Z", "complete": True,
+        "metric": {"name": "error", "unit": "points", "higher_is_better": False},
+        "retained_result_id": "result-one", "samples": [{"submission_index": 1,
+            "result_id": "result-one", "candidate_ref": "candidate-one", "valid": True, "value": 0.000001,
+            "submitted_at": "2026-01-01T00:01:00Z", "observed_at": "2026-01-01T00:02:00Z",
+            "citation": {"source_id": "facts", "first_line": 2, "last_line": 2}}]}
+    (w["sources"] / "native.json").write_text(json.dumps(native))
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+        input_path=w["tmp_path"] / "input.json", source_root=w["sources"], title="Native capture", native_outcomes_json="native.json")
+    snapshot = w["request"](pack_id=registered["pack_id"])
+    assert snapshot["pack"]["native_outcomes"]["projection"]["retained"]["value"] == 0.000001
+    assert snapshot["pack"]["job"] is None
+    citation = w["request"](suffix="/citation", pack_id=registered["pack_id"], analysis_key=registered["analysis_key"],
+        source_id="facts", first_line=2, last_line=2)
+    assert citation["text"] == data["sources"][0]["text"]
+    assert not w["count"].exists()
+    with pytest.raises(HTTPError):
+        w["request"](goal="other-owner", pack_id=registered["pack_id"])

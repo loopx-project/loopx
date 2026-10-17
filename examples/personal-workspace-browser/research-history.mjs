@@ -24,7 +24,15 @@ function analysisReadback(selected = "a") {
         turns: [{turn_id: "synthetic-turn", start: "2026-01-01T00:00:00Z", end: "2026-01-01T00:01:01Z", first_line: 2, last_line: 3, elapsed_seconds: 61, usage: {input_tokens: 1100, cached_input_tokens: 1000, uncached_input_tokens: 100, output_tokens: 20}}], limitations: []}}}),
     episodes: selected === "c" ? [{id: "episode", question: "Is this experiment discriminative?", source_ids: ["source"], eligible_metrics: ["discrimination"]}]
       : [{id: "episode", question: "Does a useful diagnosis prove original-objective utility?", source_ids: ["source"], eligible_metrics: ["goal_alignment", "benefit_test", "discrimination", "information_gain", "evidence_adoption", "redundancy"]}, {id: "uncertain", question: "Was the later decision informed by this evidence?", source_ids: ["source"], eligible_metrics: ["evidence_adoption"]}],
-    job: {status: "succeeded", analysis_wall_seconds: null, usage: null},
+    ...(["a", "b", "d"].includes(selected) ? {native_outcomes: {artifact: "native-outcomes.json", artifact_sha256: "9".repeat(64),
+      applicability: selected === "b" ? "historical" : "current", reason_code: selected === "b" ? "source_changed" : null,
+      projection: {method: "source_bound_native_outcomes_v1", scope, start: "2026-01-01T00:00:00Z", end: "2026-01-01T00:10:00Z",
+        complete: true, metric: {name: "error", unit: "points", higher_is_better: false}, sample_count: 3, valid_count: 2,
+        ...Object.fromEntries(["initial", "best_valid", "retained", "final_valid"].map(key => [key, {submission_index: key === "initial" ? 1 : 3,
+          result_id: key === "initial" ? "native-initial" : "native-final", candidate_ref: key === "initial" ? "candidate-first" : "candidate-retained",
+          submitted_at: "2026-01-01T00:01:00Z", observed_at: "2026-01-01T00:02:00Z", value: key === "initial" ? 7 : 3,
+          citation: {source_id: "source", first_line: 1, last_line: 2}}])), limitations: []}}} : {}),
+    job: {status: "succeeded", attempt: 2, analysis_wall_seconds: 12, usage: {input_tokens: 30, output_tokens: 4}, config},
     result: {schema_version: "trajectory_assessment_v1", method_version: "research-episodes-v2", analysis_key: (selected === "c" ? "e" : "c").repeat(64), scope, selection,
       calibration: "uncalibrated_model", evidence_manifest: [{id: "source", artifact: "facts.txt", artifact_sha256: "f".repeat(64), first_line: 1}], limitations: ["Synthetic presentation fixture; not a scientific result"],
       metrics: [...(selected === "c" ? [{metric: "benefit_test", yes: 0, no: 0, unknown: 0, eligible: 0, assessed_fraction: null, missing_data_bounds: null}, {metric: "discrimination", yes: 0, no: 0, unknown: 1, eligible: 1, assessed_fraction: 0, missing_data_bounds: [0, 1]}]
@@ -318,7 +326,24 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator('.research-usage > summary').click();
       assert.equal(await progress.getByText("100", {exact: true}).count(), 1, "Uncached input is shown without charging cache twice");
       assert.match(await progress.innerText(), /1,?100.*1,?000/s);
+      assert.match(await progress.innerText(), /30.*4.*tokens/s, "Analysis attempt cost is distinct from solver usage");
+      assert.match(await progress.innerText(), /更早失败.*恢复.*评测/s);
       await progress.locator('.research-usage > summary').click();
+      const basis = progress.locator('.research-progress-basis');
+      await basis.locator('summary').click();
+      assert.match(await basis.innerText(), /首次提交.*7.*candidate-first/s);
+      assert.match(await basis.innerText(), /原生保留结果.*3.*candidate-retained/s);
+      await basis.getByRole('button', {name: '查看原始证据', exact: true}).first().scrollIntoViewIfNeeded();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Native details remain readable on a narrow screen');
+      await page.screenshot({path: resolve(outputDir, "research-native-outcomes-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width:1280,height:900});
+      await page.screenshot({path: resolve(outputDir, "research-native-outcomes-desktop.png"), animations: "disabled"});
+      await basis.getByRole('button', {name: '查看原始证据', exact: true}).first().click();
+      await citedOriginal.waitFor();
+      assert.match(await citedOriginal.innerText(), /Synthetic original evidence/);
+      await citedOriginal.press('Escape');
+      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await basis.locator('summary').click();
       await benefitMetric.locator('summary').click();
       assert.match(await progress.innerText(), /0 \/ 1/);
       assert.match(await progress.innerText(), /1 \/ 2/);
@@ -367,6 +392,14 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /此范围尚无分析器判读/);
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
+      await basis.locator('summary').click();
+      assert.match(await basis.innerText(), /原生保留结果.*candidate-retained/s, 'Native facts do not require an analyzer result');
+      const nativeCitation = basis.getByRole('button', {name: '查看原始证据', exact: true}).first();
+      await nativeCitation.focus(); await nativeCitation.press('Enter');
+      await citedOriginal.waitFor();
+      await citedOriginal.press('Escape');
+      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await basis.locator('summary').click();
       // Analysis sources do not require an Explore log. The real read-only
       // backend must keep their measurements discoverable with zero events.
       const emptyFixture = resolve(temporary, "empty.json");

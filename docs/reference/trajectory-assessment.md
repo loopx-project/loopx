@@ -192,6 +192,77 @@ journey or qualify the model assessor.
 
 ## Measured solver session cost (optional)
 
+### Native outcome readback (optional, separate from analyzer judgments)
+
+The trusted provider/Agent may add `--native-outcomes-json native-outcomes.json`
+to the existing `benchmark trajectory-pack-register` operation. The file is
+relative to its already authorized `--source-root`; the renderer cannot register
+paths or invent measurements. Reading it does not execute analysis or change a
+solver, evaluator, retained archive or study board. Omitting it preserves the
+previous pack identity and response shape.
+
+The provider-exported JSON has this local diagnostic contract:
+
+```json
+{
+  "schema_version": "trajectory_native_outcomes_v1",
+  "scope": {"goal_id":"solver", "case_id":"case", "run_id":"run", "revision":"fixed", "window":"declared capture"},
+  "start": "2026-01-01T00:00:00Z",
+  "end": "2026-01-01T00:10:00Z",
+  "complete": true,
+  "metric": {"name":"error", "unit":"points", "higher_is_better":false},
+  "retained_result_id": "result-1",
+  "samples": [{
+    "submission_index":1, "result_id":"result-1", "candidate_ref":"candidate-a",
+    "submitted_at":"2026-01-01T00:01:00Z", "observed_at":"2026-01-01T00:02:00Z",
+    "valid":true, "value":2,
+    "citation":{"source_id":"native-source", "first_line":1, "last_line":1}
+  }]
+}
+```
+
+Every scope field must equal the registered assessment input. Source IDs and
+line ranges must belong to that input; measurement/candidate IDs are opaque.
+UTC timestamps must name real calendar instants (including leap-day validity),
+not dates that a JavaScript parser silently normalizes into another window.
+The source must contain provider-recorded released outcomes, not assessor
+ratings or hidden evaluator material. The input curator/provider remains
+responsible for the claim's truth and validity. `complete` declares prefix
+coverage, not official integrity or score countability. A complete prefix has
+contiguous submission indices starting at one. An invalid record uses
+`valid:false,value:null`; zero is a valid measured value, never a missing value.
+`retained_result_id:null` means retention is unknown, not that the mathematically
+best value was adopted.
+
+The existing typed benchmark-toolkit prepare owner returns a separate bounded
+`native_outcomes` projection: first valid submission-one value when the prefix
+is complete, best valid measurement within the capture under the explicit native
+metric direction, provider-selected retained result, and final valid submission.
+These are distinct: delayed feedback does not promote an older submission to
+the final candidate, and a better measured score does not override retention or
+guardrails. No generic score, monetary estimate or causal benefit is derived.
+The original analysis key/model input is unchanged; native capture provenance
+instead versions the pack identity. Changed/unavailable files leave historical
+captured values visible with their warning, rather than borrowing another pack.
+
+The existing Goal research source disclosure renders those facts and opens only
+their bound original citations, even before model analysis exists. Solver
+capture, native outcome and analyzed-episode windows remain separate. The cost
+disclosure also shows the current analysis attempt's observed receipt usage;
+earlier failures, native evaluation, recovery, operator costs and unmeasured
+windows are not silently combined into a full-study bill. This does not complete
+threshold-cost, gain-area, matched-study or scientific qualification.
+
+Synthetic packaged native readback (not benchmark findings):
+
+![Native outcome source disclosure](../development/assets/research-analysis/native-outcomes-desktop.png)
+
+[Narrow-screen source disclosure](../development/assets/research-analysis/native-outcomes-mobile.png).
+The existing six-judgment first viewport is unchanged; these facts live in its
+existing source disclosure, with costs in their separate disclosure.
+
+### Solver capture registration
+
 A trusted pack curator can bind a **complete captured Codex session** separately
 from the model evidence. The existing register command accepts:
 

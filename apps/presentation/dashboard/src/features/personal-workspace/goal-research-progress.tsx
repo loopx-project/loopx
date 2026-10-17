@@ -1,13 +1,17 @@
 import {ArrowUpRight, ChevronDown} from "lucide-react";
 import {TRAJECTORY_METRICS} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {AssessmentCitation, AssessmentVerdict, TrajectoryAssessment, TrajectoryEpisode, TrajectoryInput, TrajectoryMetric, TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
+import type {TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
 import "./goal-research-progress.css";
 
 // Read models from benchmark-toolkit. This view formats existing counts and
 // assessments; it never scores, reclassifies an episode or combines runs.
 export type ResearchProgressPack = {pack_id: string; title: string; scope: TrajectoryInput["scope"]; selection: TrajectoryInput["selection"];
   episode_count: number; episodes?: TrajectoryEpisode[]; result?: TrajectoryAssessment | null; applicability?: "current" | "historical";
-  solver_usage?: {artifact: string; artifact_sha256: string; projection: TrajectorySolverUsage; applicability: "current" | "historical"; reason_code: string | null}};
+  job?: {status: string; attempt?: number; analysis_wall_seconds?: number | null;
+    usage?: {input_tokens?: number; output_tokens?: number} | null; config?: {model: string; effort: string; service_tier: string}} | null;
+  solver_usage?: {artifact: string; artifact_sha256: string; projection: TrajectorySolverUsage; applicability: "current" | "historical"; reason_code: string | null};
+  native_outcomes?: {artifact: string; artifact_sha256: string; projection: TrajectoryNativeOutcomes; applicability: "current" | "historical"; reason_code: string | null}};
 export const metricCopy: Record<TrajectoryMetric, [string, string, string, string]> = {
   goal_alignment: ["目标关联", "Goal alignment", "干预是否关联原目标的真实瓶颈", "Does the intervention address a bottleneck of the original objective?"],
   benefit_test: ["收益检验", "Benefit test", "是否真正检验原目标收益，而非只完成前置诊断", "Was original-objective utility tested, beyond diagnostic prerequisites?"],
@@ -25,6 +29,7 @@ export function verdictLabel(metric: TrajectoryMetric, verdict: AssessmentVerdic
 
 export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelect, onCitation}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; error: string; zh: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
   const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
+  const native = p?.native_outcomes, outcomes = native?.projection;
   const number = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumFractionDigits: 1}).format(n);
   const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 0}).format(n);
   const duration = (s: number) => `${number(s / 60)} ${zh ? "分钟" : "min"}`;
@@ -67,10 +72,28 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
         <dt>{zh ? "题目 / 运行" : "Case / run"}</dt><dd>{p.scope.case_id}<br/>{p.scope.run_id}</dd><dt>{zh ? "证据窗口" : "Evidence window"}</dt><dd>{p.scope.window}</dd><dt>{zh ? "取样规则" : "Selection rule"}</dt><dd>{p.selection.rule}</dd>
         <dt>{zh ? "总体研究片段数" : "Population of episodes"}</dt><dd>{p.selection.population_episodes == null ? (zh ? "未知" : "Unknown") : number(p.selection.population_episodes)}</dd>
         {result ? <><dt>{zh ? "分析方法" : "Analysis method"}</dt><dd>{result.method_version} · {zh ? "Agent 判读未校准" : "Uncalibrated Agent judgment"}</dd><dt>{zh ? "结果标识" : "Result key"}</dt><dd><code>{result.analysis_key}</code></dd><dt>{zh ? "分析限制" : "Limitations"}</dt><dd>{result.limitations.map((line, i) => <p key={i}>{line}</p>)}</dd></> : null}
-        <dt>{zh ? "来源版本" : "Source revision"}</dt><dd><code>{p.scope.revision}</code></dd><dt>{zh ? "原生收益" : "Native utility"}</dt><dd>{zh ? "此包尚未接入原生起点、保留最佳、最后有效值、达标时间/成本或增益面积投影。不能从模型判读或成本补算。" : "This pack has no native incumbent, retained-best, final-valid, threshold time/cost or gain-area projection. Model judgments and usage cannot supply them."}</dd>
+        <dt>{zh ? "来源版本" : "Source revision"}</dt><dd><code>{p.scope.revision}</code></dd>
+        <dt>{zh ? "原生结果" : "Native outcomes"}</dt><dd>{outcomes ? <>
+          <p>{outcomes.metric.name} · {outcomes.metric.unit} · {outcomes.metric.higher_is_better ? (zh ? "越高越好" : "higher is better") : (zh ? "越低越好" : "lower is better")}</p>
+          <p>{outcomes.start} — {outcomes.end} · {outcomes.complete ? (zh ? "声明为完整前缀" : "Declared complete prefix") : (zh ? "部分窗口，起点未知" : "Partial window; initial unknown")} · {outcomes.valid_count} / {outcomes.sample_count} {zh ? "项有效结果" : "valid results"}</p>
+          <dl>{([ ["initial", "首次提交", "Initial submission"], ["best_valid", "窗口内最佳有效值", "Best valid in capture"], ["retained", "原生保留结果", "Native retained result"], ["final_valid", "最后有效提交", "Final valid submission"] ] as const).map(([key, cn, en]) => {
+            const point = outcomes[key];
+            return <div key={key}><dt>{zh ? cn : en}</dt><dd>{point ? <>{String(point.value)} · {point.candidate_ref} <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{zh ? "查看原始证据" : "Read original evidence"}</button></> : (zh ? "— 未知，不记零" : "— Unknown, not zero")}</dd></div>;
+          })}</dl>
+          {native?.applicability === "historical" ? <p role="status">{zh ? "原生来源已变化或不可读；仅保留历史捕获，当前结果未核验。" : "Native source changed or is unavailable; retained historical capture, current results unverified."}</p> : null}
+          <p>{zh ? "原生测量与分析器判断分开。有效性和保留选择来自提供方，不认证研究因果收益；用量窗口独立，不补算达标成本或全程账单。" : "Native measurements are separate from analyzer judgments. Validity and retention are provider-recorded, not causal benefit. Usage has its own window; threshold and total-study costs are not inferred."}</p>
+        </> : (zh ? "— 尚无同范围的原生结果捕获；不能从分析器判断或用量补算。" : "— No native capture for this scope; analyzer judgments and usage cannot supply it.")}</dd>
       </dl></details>
       <details className="research-usage"><summary>{zh ? "用量与成本" : "Usage and cost"}{usage ? ` · ${zh ? "捕获跨度" : "Captured elapsed"} ${duration(usage.elapsed_seconds)}` : ` · ${zh ? "尚无完整用量捕获" : "No complete usage capture"}`}{measured?.applicability === "historical" ? (zh ? " · 历史捕获" : " · Historical capture") : ""}</summary>
         <p>{zh ? "只读捕获，窗口可能与以上判读片段及下方 Explore 历史不同。" : "Read-only capture; its window can differ from the judgments above and Explore history below."}</p>
+        <dl className="research-usage-basis">
+          <dt>{zh ? "分析尝试开销" : "Analysis attempt cost"}</dt><dd>{p.job?.usage ? <>
+            {zh ? "第" : "Attempt"} {p.job.attempt ?? "—"} · {zh ? "输入" : "input"} {p.job.usage.input_tokens == null ? "—" : number(p.job.usage.input_tokens)} · {zh ? "输出" : "output"} {p.job.usage.output_tokens == null ? "—" : number(p.job.usage.output_tokens)} tokens
+            {p.job.config ? ` · ${p.job.config.model}` : ""}
+            {p.job.analysis_wall_seconds != null ? ` · ${duration(p.job.analysis_wall_seconds)}` : ""}
+          </> : (zh ? "— 本次分析尝试未测得，不记零" : "— No measurement for this analysis attempt; not zero")}</dd>
+          <dt>{zh ? "合计边界" : "Aggregation boundary"}</dt><dd>{zh ? "分析仅显示当前回执的本次尝试；不含更早失败、恢复、评测或操作者开销。不与求解捕获盲目相加，金额及完整研究成本仍未知。" : "Analysis is this attempt's receipt only; earlier failures, recovery, evaluation and operator work are excluded. It is not blindly added to solver capture. Monetary and complete study costs remain unknown."}</dd>
+        </dl>
         <dl className="research-progress-values">
           <div><dt>{zh ? "捕获窗口跨度" : "Captured elapsed time"}</dt><dd>{usage ? duration(usage.elapsed_seconds) : "—"}</dd><small>{usage ? `${number(usage.completed_turns)} ${zh ? "轮完整记录，不是全程总成本" : "complete Turns, not total study cost"}` : (zh ? "尚无完整用量捕获" : "No complete usage capture")}</small></div>
           <div><dt>{zh ? "未缓存输入" : "Uncached input"}</dt><dd>{usage ? number(usage.uncached_input_tokens) : "—"}</dd><small>{usage ? "tokens" : (zh ? "未测，不记零" : "Unmeasured, not zero")}</small></div>
