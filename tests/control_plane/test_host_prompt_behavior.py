@@ -17,6 +17,12 @@ ANSWERS = [
 ]
 
 
+def sent_packet(messages):
+    heading, payload = messages[-1]["content"].split("\n", 1)
+    assert heading == "Current quota result:"
+    return json.loads(payload)
+
+
 class ScriptedClient:
     actor_ref = "scripted-not-model-evidence"
 
@@ -26,7 +32,7 @@ class ScriptedClient:
         self.repeats = repeats
 
     def next_final_content(self, messages):
-        assert "expected" not in json.dumps(messages)
+        assert "expected" not in sent_packet(messages)
         answer = dict(ANSWERS[(self.count // self.repeats) % len(ANSWERS)])
         self.count += 1
         if self.mutation:
@@ -52,12 +58,21 @@ def test_probe_uses_current_production_prompts_and_hidden_independent_oracle():
             assert "--codex-app" in body
             assert "LOOPX_TURN=<current_time_iso>" in body
             assert case["id"] not in json.dumps(messages)
-            assert "expected" not in json.dumps(messages)
+            assert sent_packet(messages) == case["packet"]
     client = ScriptedClient()
     report = run_probe(client, repeats=1)
     assert report["qualification_passed"]
     assert client.count == report["provider_call_count"] == 10
     assert not report["host_execution_qualified"]
+
+
+def test_oracle_boundary_allows_version_preconditions_but_rejects_answer_leakage():
+    packet = {"lease": {"expected_version": 7}}
+    messages = probe_messages("thin", packet)
+    assert sent_packet(messages) == packet
+    assert json.loads(ScriptedClient().next_final_content(messages)) == ANSWERS[0]
+    with pytest.raises(AssertionError):
+        ScriptedClient().next_final_content(probe_messages("thin", cases()[0]))
 
 
 @pytest.mark.parametrize("mutation", [
