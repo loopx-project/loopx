@@ -3,6 +3,7 @@ import { AlertTriangle, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import type { CapabilityConfigurationCatalog } from "../../data/chat";
 import { useWorkspaceI18n, type WorkspaceLocale, type WorkspaceTranslate } from "./i18n";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
+import {isMemoryCapability, memoryCapabilities, memorySettingsTitle} from "./memory-settings";
 
 type CapabilityDescriptor = CapabilityConfigurationCatalog["capabilities"][number];
 
@@ -90,9 +91,20 @@ export function CapabilityCatalogNavigation({
   showScope?: boolean;
   t: WorkspaceTranslate;
 }>) {
+  const memory = scope === "goal" ? memoryCapabilities(capabilities) : [];
+  const memorySelected = memory.some(item => item.capability_id === selectedCapabilityId);
+  let memoryRendered = false;
   return (
     <nav aria-label={t(scope === "goal" ? "capabilities.catalog" : "machine.capabilityCatalog")} className="personal-capability-list" tabIndex={0}>
       {orderCapabilitiesForPresentation(capabilities, locale).map((rawCapability) => {
+        if (memory.length && isMemoryCapability(rawCapability.capability_id)) {
+          if (memoryRendered) return null;
+          memoryRendered = true;
+          return <button aria-current={memorySelected ? "page" : undefined} key="memory-sources"
+            onClick={() => onSelect(memorySelected ? selectedCapabilityId : memory[0].capability_id)} type="button">
+            <span><strong>{memorySettingsTitle(locale)}</strong></span>
+          </button>;
+        }
         const capability = localizeCapability(rawCapability, locale);
         return (
           <button
@@ -112,6 +124,22 @@ export function CapabilityCatalogNavigation({
       })}
     </nav>
   );
+}
+
+export function CapabilityConfigurationHelp({capability, locale}: Readonly<{
+  capability: CapabilityDescriptor;
+  locale: WorkspaceLocale;
+}>) {
+  const localized = localizeCapability(capability, locale);
+  return <details className="personal-capability-help" key={capability.capability_id}>
+    <summary>{locale === "zh-CN" ? "配置说明" : "Configuration help"}</summary>
+    <p>{localized.description}</p>
+    <dl>{capability.configuration_editor.fields.map(field => {
+      const copy = localizedCapabilityFieldCopy(locale, capability.capability_id)[field.key];
+      const description = copy?.description ?? field.description;
+      return description ? <div key={field.key}><dt>{copy?.label ?? field.label}</dt><dd>{description}</dd></div> : null;
+    })}</dl>
+  </details>;
 }
 
 export function CapabilityDetailHeader({ capability, locale, source }: Readonly<{
@@ -152,15 +180,7 @@ export function CapabilityDetailHeader({ capability, locale, source }: Readonly<
               : "LoopX Turn includes context in requests and results. For native tools, the LoopX skill reads the same interface. Execution and adoption require run evidence."}</p>
           </details>
         )}
-        <details className="personal-capability-help" key={capability.capability_id}>
-          <summary>{locale === "zh-CN" ? "配置说明" : "Configuration help"}</summary>
-          <p>{localized.description}</p>
-          <dl>{capability.configuration_editor.fields.map((field) => {
-            const copy = localizedCapabilityFieldCopy(locale, capability.capability_id)[field.key];
-            const description = copy?.description ?? field.description;
-            return description ? <div key={field.key}><dt>{copy?.label ?? field.label}</dt><dd>{description}</dd></div> : null;
-          })}</dl>
-        </details>
+        <CapabilityConfigurationHelp capability={capability} locale={locale} />
       </div>
     </header>
   );

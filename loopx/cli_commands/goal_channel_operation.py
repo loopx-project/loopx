@@ -245,6 +245,30 @@ def _operation_error_packet(
     return packet
 
 
+def _safe_validation_reason(exc: BaseException) -> str:
+    """Return the operator-actionable validation reason without private paths.
+
+    The typed-operation normalizer and proposal helpers raise code-authored
+    ValueErrors ("operation payload_digest does not match payload", "operation
+    executor binding is invalid", ...). Collapsing every one of them into
+    "the Goal Channel configuration is invalid" hides the real cause from the
+    operator and from the agent. Keep the message when it is clearly a
+    code-authored phrase, and fall back to the exception class otherwise.
+    """
+
+    text = str(exc).strip()
+    if (
+        not text
+        or len(text) > 240
+        or "/" in text
+        or "\\" in text
+        or "~" in text
+        or any(ord(character) < 32 for character in text)
+    ):
+        return type(exc).__name__
+    return text
+
+
 def run_goal_channel_operation(
     args: argparse.Namespace,
     *,
@@ -352,11 +376,14 @@ def run_goal_channel_operation(
             blocker="operation_handoff_conflict",
             summary=str(exc),
         )
-    except ValueError:
+    except ValueError as exc:
+        # Keep the compatibility blocker, but never discard the real reason the
+        # typed-operation owner rejected this request.
         return _operation_error_packet(
             request=request,
             blocker="invalid_configuration",
             summary="the Goal Channel configuration is invalid",
+            details={"validation_reason": _safe_validation_reason(exc)},
         )
     except Exception:
         return _operation_error_packet(
