@@ -13,6 +13,16 @@ function configurationObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/** A saved model override belongs to the Runtime that was selected with it. */
+export function changeStewardExecutorDraft(
+  current: Record<string, unknown>, key: string, value: unknown,
+): Record<string, unknown> {
+  const changed = { ...current, [key]: value };
+  return key === "executor_endpoint" && value !== current.executor_endpoint
+    ? { ...changed, executor_model: null, executor_reasoning_effort: null }
+    : changed;
+}
+
 /**
  * Project a public capability value onto the editor-owned write surface.
  *

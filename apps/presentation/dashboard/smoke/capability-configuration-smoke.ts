@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 
-import { goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../src/data/capability-configuration.js";
+import { changeStewardExecutorDraft, goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../src/data/capability-configuration.js";
+
+const codexDraft = { executor_endpoint: "codex", executor_model: "gpt-fixture", executor_reasoning_effort: "high", selection_policy: "preferred" };
+const managedDraft = changeStewardExecutorDraft(codexDraft, "executor_endpoint", "dsh");
+assert.deepEqual(managedDraft, { ...codexDraft, executor_endpoint: "dsh", executor_model: null, executor_reasoning_effort: null },
+  "switching Runtime lets the owning backend resolve the new provider defaults");
+assert.deepEqual(changeStewardExecutorDraft({ ...managedDraft, executor_model: "deepseek-fixture" }, "executor_endpoint", "codex"),
+  { ...codexDraft, executor_model: null, executor_reasoning_effort: null }, "switching back cannot send a DeepSeek model to Codex");
+assert.deepEqual(changeStewardExecutorDraft(codexDraft, "executor_endpoint", "codex"), codexDraft,
+  "reselecting the same Runtime preserves explicit model choices");
+assert.deepEqual(changeStewardExecutorDraft(codexDraft, "executor_model", "custom-model"), { ...codexDraft, executor_model: "custom-model" });
+assert.equal(codexDraft.executor_model, "gpt-fixture", "editing the draft does not mutate the accepted configuration");
 
 const periodicReportEditor = {
   fields: [

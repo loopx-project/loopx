@@ -204,9 +204,9 @@ def _retry_error_details(error: Any) -> dict[str, Any]:
 def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     """Project only the app-server's typed error, never its arbitrary prose."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
-    # Some app-server versions wrap an HTTP error as JSON in `message` while
-    # reporting codexErrorInfo=other. Only the structured HTTP status/type is
-    # used here; the nested message may contain private request details.
+    # Some Responses providers return a structured error without an HTTP
+    # status. The typed error still identifies a rejected request; arbitrary
+    # nested prose may contain private request details and is never projected.
     if info == "other" and isinstance(error.get("message"), str):
         try:
             upstream = json.loads(error["message"])
@@ -214,7 +214,9 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
             upstream = None
         if (
             isinstance(upstream, dict)
-            and upstream.get("status") == 400
+            and ("status" not in upstream or (
+                type(upstream["status"]) is int and upstream["status"] == 400
+            ))
             and isinstance(upstream.get("error"), dict)
             and upstream["error"].get("type") == "invalid_request_error"
         ):
@@ -224,7 +226,7 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
                 error_code="upstream_invalid_request",
                 gate=_host_tool_gate(
                     summary,
-                    "检查管家选择的模型、Codex CLI 与当前账户是否兼容，再重试。",
+                    "在设置中核对所选模型与 Codex 账户、服务商配置是否匹配，再重试；本次请求不会自动重放。",
                 ),
             )
     # App-server v2 exposes camel-case discriminators. Unknown/new variants

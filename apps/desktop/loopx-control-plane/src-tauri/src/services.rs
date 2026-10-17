@@ -273,6 +273,13 @@ fn connect_owned_service(
     }
     let mut command = Command::new(&runtime.executable);
     configure_runtime_environment(&mut command);
+    if matches!(kind, ServiceKind::Chat) {
+        configure_codex_chat_home(
+            &mut command,
+            env::var_os("HOME"),
+            env::var_os("LOOPX_CHAT_CODEX_HOME"),
+        );
+    }
     command
         .args(kind.command_args_on_port(port))
         .stdin(Stdio::null())
@@ -403,6 +410,13 @@ fn connect_service(
 
     let mut command = Command::new(executable);
     configure_runtime_environment(&mut command);
+    if matches!(kind, ServiceKind::Chat) {
+        configure_codex_chat_home(
+            &mut command,
+            env::var_os("HOME"),
+            env::var_os("LOOPX_CHAT_CODEX_HOME"),
+        );
+    }
     command
         .args(kind.command_args())
         .stdin(Stdio::null())
@@ -765,6 +779,21 @@ pub(crate) fn configure_runtime_environment(command: &mut Command) {
         "PATH",
         runtime_search_path(env::var_os("HOME"), env::var_os("PATH")),
     );
+}
+
+// A desktop Chat service has its own account binding. An unrelated terminal's
+// CODEX_HOME must not pair the selected GPT model with another provider. CLI
+// launches retain their environment semantics; explicit Chat overrides win.
+fn configure_codex_chat_home(
+    command: &mut Command,
+    home: Option<std::ffi::OsString>,
+    chat_home: Option<std::ffi::OsString>,
+) {
+    if let Some(selected) = chat_home.filter(|value| !value.is_empty()) {
+        command.env("LOOPX_CHAT_CODEX_HOME", selected);
+    } else if let Some(home) = home.filter(|value| !value.is_empty()) {
+        command.env("LOOPX_CHAT_CODEX_HOME", PathBuf::from(home).join(".codex"));
+    }
 }
 
 fn runtime_search_path(
@@ -1143,6 +1172,35 @@ fn classify_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_chat_account_default_and_explicit_override_are_independent_of_caller_home() {
+        let user_home = PathBuf::from("synthetic-user-home");
+        for chat_home in [None, Some(std::ffi::OsString::new())] {
+            let mut command = Command::new("synthetic-loopx");
+            command.env("CODEX_HOME", "different-provider-home");
+            configure_codex_chat_home(&mut command, Some(user_home.clone().into()), chat_home);
+            assert!(command
+                .get_envs()
+                .any(|(key, value)| key == "LOOPX_CHAT_CODEX_HOME"
+                    && value == Some(user_home.join(".codex").as_os_str())));
+            assert!(command.get_envs().any(|(key, value)| key == "CODEX_HOME"
+                && value == Some(std::ffi::OsStr::new("different-provider-home"))));
+        }
+        let mut command = Command::new("synthetic-loopx");
+        configure_codex_chat_home(
+            &mut command,
+            Some(user_home.into()),
+            Some("selected-chat-home".into()),
+        );
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == "LOOPX_CHAT_CODEX_HOME"
+                && value == Some(std::ffi::OsStr::new("selected-chat-home"))));
+        let mut command = Command::new("synthetic-loopx");
+        configure_codex_chat_home(&mut command, None, None);
+        assert_eq!(command.get_envs().count(), 0);
+    }
     #[test]
     fn package_identity_requires_core_installation_qualification() {
         let identity = serde_json::json!({"schema_version":"loopx_runtime_identity_v1",

@@ -1,4 +1,8 @@
 """A managed upstream thread's home is identity, not restart-time routing."""
+import json
+import os
+import sys
+
 import pytest
 
 from loopx.chat_agent import CodexChatAgentError
@@ -32,6 +36,24 @@ def legacy(runtime):
         goal_id="fixture", agent_id="codex", adapter_kind="codex_app_server",
         upstream_thread_id="fixture-thread", upstream_mode="chat",
     )
+
+
+def test_model_discovery_uses_the_same_home_as_runtime_not_ambient_provider(tmp_path, monkeypatch):
+    runtime = controller(tmp_path, monkeypatch)
+    bound = tmp_path / "bound"
+    ambient = tmp_path / "other-provider"
+    for root, model in [(bound, "gpt-fixture"), (ambient, "other-fixture")]:
+        root.mkdir()
+        (root / "models.json").write_text(json.dumps({"models": [{"slug": model}]}))
+    # Python runs this synthetic `debug models` command on every supported OS.
+    (tmp_path / "debug").write_text("import os\nfrom pathlib import Path\nprint((Path(os.environ['CODEX_HOME']) / 'models.json').read_text())\n")
+    runtime.codex_bin = sys.executable
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_HOME", str(ambient))
+    result = runtime.inspect_agent_model_options("codex", work_dir=tmp_path)
+    assert result["model"]["options"] == [{"value": "gpt-fixture", "label": "gpt-fixture"}]
+    assert os.environ["CODEX_HOME"] == str(ambient)
+    runtime.close()
 
 
 def test_new_session_records_home_and_process_environment_cannot_rebind(tmp_path, monkeypatch):

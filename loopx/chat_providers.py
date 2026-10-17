@@ -22,14 +22,15 @@ EventSink = Callable[[str, dict[str, Any]], None]
 _PRIVATE_PARTS = {".git", ".env", ".ssh", ".aws", ".config", "node_modules"}
 
 
-def codex_model_options(codex_bin: str) -> dict[str, Any] | None:
-    """Project the local Codex catalog without exposing its instructions."""
+def codex_model_options(codex_bin: str, *, codex_home: Path | None = None) -> dict[str, Any] | None:
+    """Read the selected account's catalog without exposing its instructions."""
     executable = codex_bin if Path(codex_bin).is_absolute() else shutil.which(codex_bin)
     if not executable:
         return None
     try:
         result = subprocess.run(
             [str(executable), "debug", "models"],
+            env={**os.environ, **({"CODEX_HOME": str(codex_home)} if codex_home is not None else {})},
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", errors="replace", timeout=15, check=False,
         )

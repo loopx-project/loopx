@@ -404,7 +404,7 @@ class ChatRuntimeController:
         if capability is None or not capability.get("available"):
             raise agent_endpoint_error(agent_id, reason=str((capability or {}).get("unavailable_reason") or ""))
         if agent_id == "codex":
-            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin), "supported": True}
+            return {"agent_id": agent_id, "model": codex_model_options(self.codex_bin, codex_home=self.codex_home), "supported": True}
         if agent_id == "claude-code":
             return {
                 "agent_id": agent_id,
