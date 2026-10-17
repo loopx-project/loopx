@@ -270,6 +270,27 @@ Goal”。操作复用既有 Goal 生命周期、当前目标状态摘要和原�
 丢失后的重试可读回已达到的状态，不重复改写。恢复只允许后续执行，不启动新轮次、
 不重放已完成的工作；停止阻止新准入，并不证明进行中的进程已经退出。
 
+After an admitted local move, selecting the original Goal also reads the current
+destination in its ordinary overview and delivery review. A stopped destination
+uses the existing stopped-Goal archive projection, retaining its objective and
+unfinished Tasks. The overview's existing **Stop** / **Resume** actions use the
+same verified destination and Goal lifecycle owner. A proposal prepared before
+the move becomes stale; an unavailable target refuses instead of reading or
+controlling the old source. Goals without a local move keep their existing read
+and lifecycle owners, including the established orphan-stop recovery rules.
+
+This workspace adoption covers selected status, delivery review and activation.
+Task mutations, Goal Chat/session binding, deletion and sustained original-task
+execution still need their own integration. It does not redirect source CLI
+commands or executors. The full installed-profile and 120-second acceptance
+remain unqualified.
+
+中文：已准入的本地迁移也会让原 Goal 主视图和交付评审读取真实目标。目标停止时，
+复用既有历史视图保留目标说明与未完成任务；原“停止／恢复”操作作用于经核验的
+目标。迁移前的旧预览失效，目标不可用时明确拒绝，不回退到旧源。未迁移 Goal 的
+原有行为保持。当前仍需接通任务修改、Goal 对话和会话、删除与原任务持续执行；
+旧 CLI 与执行器不自动重定向，完整安装迁移及 120 秒验收仍未通过。
+
 For a governed CLI Turn with an explicit Todo and `--turn-instance-id`, retrying
 that same identity now reads the original journal before rebuilding a live plan.
 A changed plan hash cannot allocate a second canonical journal for the same
