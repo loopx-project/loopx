@@ -5,14 +5,19 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
 from .chat import normalize_agent_response
-from .chat_store import CHAT_SESSION_MODE_ATTACHED, ChatSessionStore
+from .chat_store import (
+    CHAT_SESSION_MODE_ATTACHED,
+    CHAT_SESSION_MODE_MANAGED,
+    ChatSessionStore,
+)
 from .control_plane.effect_runtime import effect_runtime_result
+from .control_plane.collaboration import conversation_scope
 from .control_plane.goals.source_session_registry_state import (
     current_goal_ref,
     guard_path,
@@ -31,6 +36,7 @@ ATTACHED_SESSION_ADAPTER_KIND = "attached_host_session"
 ATTACHED_SESSION_UPSTREAM_MODE = "host_broker"
 MAX_ATTACHED_SESSION_CLAIM_WAIT_SECONDS = 1_800.0
 ATTACHED_SESSION_CLAIM_POLL_INTERVAL_SECONDS = 0.1
+ManagedSessionGoalCommit = Callable[[], AbstractContextManager[object]]
 
 
 def _binding_lock_path(
@@ -109,6 +115,7 @@ def _lifecycle_decision(
     session: Mapping[str, Any] | None = None,
     turn: Mapping[str, Any] | None = None,
     candidates: list[dict[str, Any]] | None = None,
+    subject: str = "attached",
 ) -> dict[str, Any]:
     facts: dict[str, Any] = {
         "operation": operation,
@@ -131,7 +138,7 @@ def _lifecycle_decision(
     if not isinstance(decision, dict):
         raise RuntimeError("Chat session lifecycle decision must be an object")
     if decision.get("kind") == "reject":
-        raise ValueError(f"attached Chat session rejected: {decision.get('code')}")
+        raise ValueError(f"{subject} Chat session rejected: {decision.get('code')}")
     return decision
 
 
@@ -526,6 +533,67 @@ def _attached_session_lifetime(
             return
         current_ref, _goal = current_goal_ref(registry, goal_id=goal_id)
         yield session, registry, current_ref
+
+
+def managed_session_goal_commit(
+    *,
+    store: ChatSessionStore,
+    registry_path: Path | None,
+    session_id: str,
+) -> ManagedSessionGoalCommit:
+    """Return a repeatable short commit guard for managed owner-Goal resume."""
+    session = store.load_session(session_id)
+    if (
+        session is None
+        or session.get("status") == "closed"
+        or session.get("session_mode") != CHAT_SESSION_MODE_MANAGED
+        or conversation_scope(session)["kind"] != "owner_goal"
+    ):
+        return nullcontext
+    goal_id = str(session.get("goal_id") or "")
+    source_registry_path = _source_registry_path_or_legacy(
+        store=store,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        agent_id=str(session.get("agent_id") or ""),
+        channel_id=str(session.get("channel_id") or f"goal.{goal_id}"),
+    )
+    if source_registry_path is None:
+        return nullcontext
+    registry = load_project_registry(source_registry_path)
+    if registry.get("profile_id") != SOURCE_SESSION_PROFILE_ID:
+        return nullcontext
+    original_identity = (goal_id, session.get("goal_instance_id"))
+
+    @contextmanager
+    def commit() -> Iterator[object]:
+        with exclusive_cross_runtime_file_lock(
+            guard_path(source_registry_path, goal_id),
+            operation="source_session_goal_lifetime",
+        ):
+            registry = load_project_registry(source_registry_path)
+            session = store.load_session(session_id)
+            if session is None or session.get("status") == "closed":
+                raise KeyError("chat session was not found")
+            if session.get("session_mode") != CHAT_SESSION_MODE_MANAGED:
+                raise ValueError("the selected Session is not a managed runtime session")
+            if (
+                registry.get("profile_id") != SOURCE_SESSION_PROFILE_ID
+                or (session.get("goal_id"), session.get("goal_instance_id"))
+                != original_identity
+            ):
+                raise ValueError("managed Chat session rejected: stale_goal_instance")
+            current_ref, _goal = current_goal_ref(registry, goal_id=goal_id)
+            _lifecycle_decision(
+                operation="admit",
+                registry=registry,
+                current_ref=current_ref,
+                session=session,
+                subject="managed",
+            )
+            yield session
+
+    return commit
 
 
 def select_current_attached_session(
