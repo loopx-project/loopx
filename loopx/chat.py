@@ -49,11 +49,38 @@ def _protected_path_replacements(
 def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
     if not replacements:
         return LOCAL_PATH_SURFACE_PATTERN
-    roots = "|".join(re.escape(raw) for raw, _ in replacements)
+    separator = r"(?:[/\\]|%2[fF]|%5[cC])"
+
+    def component_pattern(component: str) -> str:
+        if not component:
+            return ""
+        encoded_chars = []
+        for char in component:
+            encoded = "".join(
+                f"%{byte:02X}"
+                for byte in char.encode("utf-8", errors="surrogateescape")
+            )
+            encoded_chars.append(f"(?:{re.escape(char)}|(?i:{encoded}))")
+        return "".join(encoded_chars)
+
+    roots = "|".join(
+        separator.join(component_pattern(part) for part in re.split(r"[/\\]", raw))
+        for raw, _ in replacements
+    )
     return re.compile(
-        r"(?<![:/A-Za-z0-9_.\\])(?:" + roots + r")"
-        r"(?=$|[/\\\s`'\"<>.,;:!?)}\]])(?:[/\\][^\s`'\"<>]*)?"
-        + "|(?i:" + LOCAL_PATH_SURFACE_PATTERN.pattern + ")"
+        r"(?<![:/A-Za-z0-9_.\\])(?:"
+        + roots
+        + r")"
+        + r"(?=$|"
+        + separator
+        + r"|[\s`'\"<>.,;:!?)}\]])"
+        + r"(?:"
+        + separator
+        + r"[^\s`'\"<>]*)?"
+        + r"|(?<![:/A-Za-z0-9_.\\])/(?:[^\s`'\"<>]+)"
+        + "|(?i:"
+        + LOCAL_PATH_SURFACE_PATTERN.pattern
+        + ")"
     )
 
 
@@ -159,31 +186,96 @@ def redact_local_paths(
     replacements = _protected_path_replacements(protected_paths)
 
     def path_parts(value: str) -> tuple[str, ...]:
-        decoded = unquote(value).replace("\\", "/")
+        decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
         if re.match(r"^[A-Za-z]:/", decoded):
             decoded = decoded.casefold()
-        return tuple(part for part in decoded.split("/") if part not in {"", "."})
+        parts: list[str] = []
+        absolute = decoded.startswith("/") or bool(re.match(r"^[a-z]:/", decoded))
+        for part in decoded.split("/"):
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if parts and parts[-1] != ".." and not (
+                    len(parts) == 1 and re.match(r"^[a-z]:$", parts[0])
+                ):
+                    parts.pop()
+                elif not absolute:
+                    parts.append(part)
+                continue
+            parts.append(part)
+        return tuple(parts)
 
-    private_roots = [path_parts(raw) for raw, label in replacements if label == "[local-path]"]
+    def display_path_parts(value: str) -> tuple[str, ...]:
+        decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
+        parts: list[str] = []
+        absolute = decoded.startswith("/") or bool(re.match(r"^[A-Za-z]:/", decoded))
+        for part in decoded.split("/"):
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if parts and parts[-1] != ".." and not (
+                    len(parts) == 1 and re.match(r"^[A-Za-z]:$", parts[0])
+                ):
+                    parts.pop()
+                elif not absolute:
+                    parts.append(part)
+                continue
+            parts.append(part)
+        return tuple(parts)
+
+    def has_parent_segment(value: str) -> bool:
+        decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
+        return ".." in decoded.split("/")
+
+    private_roots = [
+        path_parts(raw)
+        for raw, label in replacements
+        if label == "[local-path]"
+    ]
 
     def replace_absolute_path(match: re.Match[str]) -> str:
         matched = match.group(0)
         candidate = matched.rstrip(".,;:!?)]}")
         suffix = matched[len(candidate) :]
+        candidate_forms = (
+            re.sub(r"(?i)%(?:2f|5c)", "/", candidate).replace("\\", "/"),
+            unquote(candidate, errors="surrogateescape").replace("\\", "/"),
+        )
+        if has_parent_segment(candidate):
+            for raw, label in replacements:
+                normalized_root = unquote(raw, errors="surrogateescape").replace(
+                    "\\", "/"
+                )
+                if any(
+                    value == normalized_root
+                    or value.startswith(f"{normalized_root}/")
+                    for value in candidate_forms
+                ):
+                    return f"{label}{suffix}"
+        candidate_parts = {path_parts(value) for value in candidate_forms}
         for raw, label in replacements:
-            if candidate == raw or candidate.startswith(f"{raw}/") or candidate.startswith(f"{raw}\\"):
-                if project_relative and label == "[project]" and candidate != raw:
-                    relative = re.sub(r"\\+", "/", candidate[len(raw):]).lstrip("/")
-                    components = unquote(relative).replace("\\", "/").split("/")
-                    if ".." not in components:
-                        # Equivalent spellings must not bypass a nested private
-                        # root when opting into project-relative presentation.
-                        candidate_parts = path_parts(candidate)
-                        if any(candidate_parts[:len(root)] == root for root in private_roots):
-                            return f"[local-path]{suffix}"
-                        return f"./{relative}{suffix}"
+            root_parts = path_parts(raw)
+            if any(parts[: len(root_parts)] == root_parts for parts in candidate_parts):
+                if any(
+                    parts[: len(root)] == root
+                    for parts in candidate_parts
+                    for root in private_roots
+                ):
+                    return f"[local-path]{suffix}"
+                if project_relative and label == "[project]":
+                    if has_parent_segment(candidate):
+                        return f"[project]{suffix}"
+                    relative_parts = display_path_parts(candidate)[len(root_parts) :]
+                    if relative_parts and ".." not in relative_parts:
+                        return f"./{'/'.join(relative_parts)}{suffix}"
                 return f"{label}{suffix}"
-        return f"[local-path]{suffix}"
+
+        # The broad absolute-path candidate lets a protected root be recognized
+        # after harmless dot-segment aliases. Preserve unrelated custom paths;
+        # the shared classifier still redacts its canonical machine-local set.
+        if LOCAL_PATH_SURFACE_PATTERN.fullmatch(candidate):
+            return f"[local-path]{suffix}"
+        return matched
 
     return _local_path_pattern(replacements).sub(replace_absolute_path, redacted)
 
@@ -280,9 +372,54 @@ class VisibleResponseStreamFilter:
         self.protected_paths = tuple(protected_paths)
         self._protected = _protected_path_replacements(self.protected_paths)
         self._local_path_pattern = _local_path_pattern(self._protected)
+        self._partial_protected_root_atoms = tuple(
+            self._protected_root_atoms(root.rstrip("/\\") + "/")
+            for root, _label in self._protected
+        )
         self.marker_pending = ""
         self.visible_pending = ""
         self.envelope_started = False
+
+    @staticmethod
+    def _protected_root_atoms(root: str) -> tuple[tuple[tuple[str, bool], ...], ...]:
+        atoms = []
+        for character in root:
+            if character in "/\\":
+                atoms.append((("/", False), ("\\", False), ("%2F", True), ("%5C", True)))
+                continue
+            encoded = "".join(
+                f"%{byte:02X}"
+                for byte in character.encode("utf-8", errors="surrogateescape")
+            )
+            atoms.append(((character, False), (encoded, True)))
+        # A following path separator is enough to put the complete root in
+        # path context. Include the whole separator token so partial `%2f` / `%5c`
+        # spellings stay buffered while they arrive across stream chunks.
+        atoms.append((("/", False), ("\\", False), ("%2F", True), ("%5C", True)))
+        return tuple(atoms)
+
+    def _is_partial_protected_root(self, pending: str) -> bool:
+        for atoms in self._partial_protected_root_atoms:
+            positions = {0}
+            for options in atoms:
+                next_positions = set()
+                for position in positions:
+                    remaining = pending[position:]
+                    if not remaining:
+                        return True
+                    for token, case_insensitive in options:
+                        comparable = remaining.casefold() if case_insensitive else remaining
+                        candidate = token.casefold() if case_insensitive else token
+                        if candidate.startswith(comparable):
+                            return True
+                        if comparable.startswith(candidate):
+                            next_positions.add(position + len(token))
+                positions = next_positions
+                if not positions:
+                    break
+            if len(pending) in positions:
+                return True
+        return False
 
     def _next_boundary(self, pending: str) -> int:
         boundary = -1
@@ -306,7 +443,7 @@ class VisibleResponseStreamFilter:
             )
             # A declared root itself can span several chunks or contain spaces.
             # Hold its prefix until it becomes a complete path token.
-            partial_root = any(raw.startswith(pending) for raw, _ in self._protected)
+            partial_root = self._is_partial_protected_root(pending)
             if whitespace >= 0:
                 boundary = whitespace + 1
             elif partial_root:
