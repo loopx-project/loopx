@@ -334,7 +334,13 @@ export async function resolveLoopXCommand(
 ): Promise<LoopXCommand> {
   const runner = options.runner ?? runFile
   const configured = options.env?.LOOPX_BIN ?? process.env.LOOPX_BIN
-  const python = options.env?.PYTHON_BIN ?? process.env.PYTHON_BIN ?? 'python3'
+  const configuredPython = options.env?.PYTHON_BIN ?? process.env.PYTHON_BIN
+  // A python.org Windows install registers `python`, not `python3`, and the
+  // Windows `python3` name can be the WindowsApps alias that never starts
+  // Python, so the module fallback tries both spellings in that order.
+  const pythonNames = configuredPython === undefined
+    ? ['python3', 'python']
+    : [configuredPython]
   const managedLauncher = options.managedLauncher
   const managedCandidates: Array<Omit<LoopXCommand, 'version'>> = configured
     || managedLauncher === undefined
@@ -352,11 +358,11 @@ export async function resolveLoopXCommand(
     : [
         ...managedCandidates,
         { file: 'loopx', prefix: [], skillCommand: 'loopx' },
-        {
-          file: python,
+        ...pythonNames.map(pythonName => ({
+          file: pythonName,
           prefix: ['-m', 'loopx.cli'],
-          skillCommand: `${shellWord(python)} -m loopx.cli`,
-        },
+          skillCommand: `${shellWord(pythonName)} -m loopx.cli`,
+        })),
       ]
 
   for (const candidate of candidates) {

@@ -367,6 +367,11 @@ mod tests {
     #[test]
     #[ignore = "requires an isolated private installer root and built App bundle"]
     fn real_private_installer_keeps_the_default_cli_owner() {
+        assert_eq!(
+            std::env::var("LOOPX_USAGE_PING").as_deref(),
+            Ok("0"),
+            "synthetic Core qualification requires LOOPX_USAGE_PING=0"
+        );
         let bundle = std::path::PathBuf::from(std::env::var("LOOPX_TEST_BUNDLE").unwrap());
         let root = std::path::PathBuf::from(std::env::var("LOOPX_TEST_PRIVATE_RUNTIME").unwrap());
         for key in ["LOOPX_REGISTRY", "LOOPX_RUNTIME_ROOT"] {

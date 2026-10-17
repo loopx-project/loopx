@@ -145,7 +145,7 @@ function goalCapability({
   };
 }
 
-export function goalCapabilityCatalog(multiSubagentConfiguration) {
+export function goalCapabilityCatalog(multiSubagentConfiguration, rewardMemoryConfiguration) {
   return [
     goalCapability({
       capabilityId: "todo_replan_cadence",
@@ -195,12 +195,31 @@ export function goalCapabilityCatalog(multiSubagentConfiguration) {
     }),
     multiSubagentCapability({ current: multiSubagentConfiguration }),
     goalCapability({ availability: "retired", capabilityId: "local_authority_shadow", displayName: "Retired authority observation", fields: [], readOnlyReason: "Clear retired observation config explicitly; bootstrap runtime shadow separately." }),
-    goalCapability({
+    {...goalCapability({
       availability: "experimental_opt_in",
       capabilityId: "reward_memory",
       displayName: "Reward Memory experiment",
-      fields: [],
+      fields: rewardMemoryConfiguration ? [
+        {key:"agent_id",label:"Agent",description:"",input_kind:"text",required:false},
+        {key:"enabled",label:"Enabled",description:"",input_kind:"boolean",required:false},
+        {key:"config_path",label:"Private config",description:"",input_kind:"text",required:false},
+        {key:"enabled_agents",label:"Shared Agents",description:"",input_kind:"string_list",required:false},
+      ] : [],
       readOnlyReason: "Requires a reviewed local-private provider binding.",
+    }), ...(rewardMemoryConfiguration ? {current:rewardMemoryConfiguration} : {})},
+    goalCapability({
+      availability: "supported_explicit_opt_in",
+      capabilityId: "decision_context",
+      displayName: "Decision evidence recall",
+      fields: [],
+      readOnlyReason: "Use an explicit private profile for temporary recall.",
+    }),
+    goalCapability({
+      availability: "supported_explicit_opt_in",
+      capabilityId: "content_ops",
+      displayName: "Content references",
+      fields: [],
+      readOnlyReason: "Read-only source catalog.",
     }),
   ];
 }
@@ -465,6 +484,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     goalSubagentWrites: [],
     interrupts: [],
     goalConfigurationRequests: [],
+    goalMemoryConfigurations: new Map(),
     machineConfigurationRequests: [],
     machineInspectionStatus: "configured",
     failNextMachineInspection: false,
@@ -1343,7 +1363,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
           schema_version: "capability_configuration_catalog_v0",
           capabilities: [...machineConfigurationBase.capability_catalog.capabilities.filter(
             (capability) => !capability.available_scopes.includes("goal"),
-          ), ...goalCapabilityCatalog(multiSubagentConfiguration).map((capability) => capability.capability_id === "periodic_report" ? periodicReportCapability({
+          ), ...goalCapabilityCatalog(multiSubagentConfiguration, state.goalMemoryConfigurations.get(goalId)).map((capability) => capability.capability_id === "periodic_report" ? periodicReportCapability({
               machineCurrent: periodicConfiguration,
               effectiveConfiguration: {
                 schema_version: "capability_configuration_resolution_v0",

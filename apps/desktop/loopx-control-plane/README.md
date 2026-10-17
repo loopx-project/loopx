@@ -350,6 +350,40 @@ cd ..
 npm run build
 ```
 
+To qualify the native supervisor against an actual installed Core, first build
+the runtime bundle as above with `LOOPX_USAGE_PING=0`, then run from `src-tauri`:
+
+```sh
+qa_root="$(mktemp -d)"
+mkdir "$qa_root/state"
+printf '%s\n' '{"goals":[]}' > "$qa_root/state/registry.global.json"
+(
+  set -e
+  export LOOPX_USAGE_PING=0
+  export LOOPX_REGISTRY="$qa_root/state/registry.global.json"
+  export LOOPX_RUNTIME_ROOT="$qa_root/state"
+  export LOOPX_TEST_PRIVATE_RUNTIME="$qa_root/runtime"
+  export LOOPX_TEST_BUNDLE="$PWD/../runtime"
+  cargo test --lib real_private_installer_keeps_the_default_cli_owner -- --ignored --nocapture
+  cargo test --lib real_private_runtime_serves_and_rejects_stale_identity -- --ignored --nocapture
+)
+```
+
+Both opt-in tests require the telemetry opt-out before invoking Core. A
+disposable registry does not isolate machine-wide usage reporting; this
+synthetic run must not contribute adoption or installation telemetry. The
+opt-out applies only to this test invocation and leaves user consent unchanged.
+
+This installs only in the disposable root. The second test uses an explicit
+local launch pin to route the production supervisor's two services to its own
+fresh empty registry and data directory. It checks both artifact identities,
+serves the packaged Chat document, reads zero Goals/Sessions, stops and reopens
+the services, and rejects
+a stale expected identity without leaving owned listeners. It does not launch
+the installed App, run a model, or qualify automatic runtime selection, native
+window reopening, signed replacement or rendered UI. The incognito WebKit
+regression above covers its separate navigation failure boundary.
+
 On macOS, also qualify a released artifact using the opt-in checks below
 (run from `src-tauri`, replacing the paths with downloaded release artifacts).
 Keep the updater archive's `.sig` file beside it:

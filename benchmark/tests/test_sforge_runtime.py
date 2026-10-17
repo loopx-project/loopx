@@ -180,6 +180,53 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
         SForgeWorker(config, profile="official", cwd="/task", checkpoint_request_path="/control/request.json")
 
 
+@pytest.mark.parametrize("research_paths", [(), ("/tmp/private-data.json",), ("/tmp/private-research",)])
+@pytest.mark.parametrize("refuse_transfer", [False, True])
+def test_warm_receiver_owns_only_selected_research_before_preparation(
+        tmp_path, monkeypatch, research_paths, refuse_transfer):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import BenchmarkCodex, SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    async def installed(self, environment):
+        pass
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    async def stage(environment, workspace):
+        return list(research_paths)  # Verified selection is exercised by WarmStart staging tests.
+    start = SimpleNamespace(goal_id="receiver", agent_id="worker", stage=stage,
+                            verify=lambda workspace: None)
+    owned = set()
+    commands = []
+    def execute(handle, command, **kwargs):
+        commands.append(command)
+        if command[:4] == ["chown", "-R", "-P", "agent:agent"]:
+            assert kwargs["user"] == "root"
+            if refuse_transfer:
+                return SimpleNamespace(exit_code=1)
+            owned.update(command[4:])
+        return SimpleNamespace(exit_code=0, output="")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore", cwd="/task", warm_start=start)
+    restored = []
+    monkeypatch.setattr(worker, "_warm_command", lambda action, **kwargs: restored.append(action))
+    backend = SimpleNamespace(exec_run=execute, copy_to_container=lambda *args: None)
+    if refuse_transfer:
+        with pytest.raises(RuntimeError, match="receiver") as failure:
+            worker.install_stop_hook(backend, None, tmp_path, None)
+        if not research_paths:
+            assert str(failure.value) == "Restored workspace is not writable by its receiver"
+        assert not (tmp_path / "worker-profile.json").exists()
+    else:
+        worker.install_stop_hook(backend, None, tmp_path, None)
+        assert owned == {"/task", *research_paths}
+        assert "/tmp/unselected-research" not in owned
+        assert not any(command[0] == "chmod" for command in commands)
+    assert restored == ["workspace"]
+
+
 @pytest.mark.parametrize("explicit,trigger,expected", [
     (False, None, None),
     (False, "fresh_replan", None),

@@ -12,6 +12,7 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string; 
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
+    decision_context: {displayName: "Find evidence", description: "Find advisory evidence with a temporary private profile. OpenViking and BM25 are retrieval implementations; this page does not save a binding or enable automatic memory."},
     content_ops: {displayName: "Reference styles", description: "Retrieve source styles from an existing private catalog and prepare attributed outlines. No source or material-store writes."},
     goal_storage: { displayName: "New Goal authority", description: "New Goals default to canonical SQLite with hard leases. Choose storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
     manager_runtime: {
@@ -74,11 +75,12 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       description: "Sets forward/reverse PR review directions with machine, Goal and Agent settings; it never grants GitHub, Todo, push, or merge authority.",
     },
     reward_memory: {
-      displayName: "Reward Memory experiment",
+      displayName: "Experience learning (experimental)",
       description: "Configures a reviewed local-private provider binding for Goal-scoped Agent recall and evidence-backed outcome learning.",
     },
   },
   "zh-CN": {
+    decision_context: {displayName: "资料召回", description: "通过临时私有配置查找参考证据。OpenViking、BM25 是检索实现；本页不保存绑定，也不启用自动记忆。"},
     content_ops: {displayName: "素材与风格", description: "从原有私有目录检索表达结构，准备带来源署名的提纲；不执行来源或素材库写入。"},
     goal_storage: { displayName: "新 Goal 的权威存储", description: "新 Goal 默认使用 canonical SQLite 与 hard lease；可选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
     manager_runtime: {
@@ -141,7 +143,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
       description: "配置公开 GitHub PR 审阅队列的本机默认排序；不会授予 GitHub、Todo、push 或 merge 权限。",
     },
     reward_memory: {
-      displayName: "Reward Memory 实验",
+      displayName: "经验学习（实验）",
       description: "为 Goal 内 Agent 的召回与证据化结果学习配置经过审阅的本机私有 Provider 绑定。",
     },
   },

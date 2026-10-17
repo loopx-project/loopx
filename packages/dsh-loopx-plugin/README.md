@@ -40,13 +40,17 @@ Requirements are Node.js 22.19+, `pnpm`, Python 3.11+ with `pip`, and network
 access for the first DSH start when no compatible LoopX CLI is already
 installed. LoopX itself is deliberately not a prerequisite. The initializer
 honors an explicit `PYTHON_BIN`; otherwise it tries `python3`, then discovers
-`python3.<minor>` executables on the supplied `PATH` in descending numeric order.
-Installation still checks the Python version and pip; reopening the managed
-runtime uses the same discovery and validates the LoopX CLI. No hard-coded
-minor-version list is maintained. When selecting Python for installation, an
-invalid explicit interpreter fails instead of falling back. Managed-runtime
-readback keeps the existing CLI fallback behavior. If the plugin must install
-or upgrade LoopX, it writes an isolated
+`python3.<minor>` executables on the supplied `PATH` in descending numeric
+order, then tries the bare name `python`. The last name is what a python.org
+Windows install registers, so it keeps that host reachable when `python3` is
+absent or is the `WindowsApps` App Execution Alias that never starts Python.
+Unlike the versioned names it is not a `PATH` scan result; it is resolved when
+the candidate runs. Installation still checks the Python version and pip;
+reopening the managed runtime uses the same discovery and validates the LoopX
+CLI. No hard-coded minor-version list is maintained. When selecting Python for
+installation, an invalid explicit interpreter fails instead of falling back.
+Managed-runtime readback keeps the existing CLI fallback behavior. If the
+plugin must install or upgrade LoopX, it writes an isolated
 copy under `$DSH_AGENTS_HOME/runtime/dsh-loopx-plugin` (default
 `~/.agents/runtime/dsh-loopx-plugin`) and never mutates the system Python
 environment. This works with externally managed Python distributions that

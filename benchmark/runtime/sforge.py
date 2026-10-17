@@ -281,11 +281,13 @@ class SForgeWorker(CodexAgent):
             )
             asyncio.run(self.runtime.install(self.environment))
             if self.warm_start is not None:
-                asyncio.run(self.warm_start.stage(self.environment, self.cwd))
+                research_paths = asyncio.run(self.warm_start.stage(self.environment, self.cwd))
                 self._warm_command("workspace", user="root")
-                result = backend.exec_run(handle, ["chown", "-R", "-P", "agent:agent", self.cwd], user="root")
+                result = backend.exec_run(handle,
+                    ["chown", "-R", "-P", "agent:agent", self.cwd, *research_paths], user="root")
                 if result.exit_code:
-                    raise RuntimeError("Restored workspace is not writable by its receiver")
+                    raise RuntimeError("Restored research state is not writable by its receiver"
+                        if research_paths else "Restored workspace is not writable by its receiver")
             if self.checkpoint_request is not None:
                 with tempfile.TemporaryDirectory(prefix="benchmark-checkpoint-") as directory:
                     declaration = Path(directory) / "request.json"

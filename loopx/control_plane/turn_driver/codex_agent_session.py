@@ -92,7 +92,8 @@ class CodexAgentSession:
         if not path.exists():
             return  # No process was launched.
         ids = set()
-        with path.open() as stream:
+        # The Codex CLI event stream is UTF-8 JSONL; the host default codec is not.
+        with path.open(encoding="utf-8") as stream:
             for line in stream:
                 try:
                     event = json.loads(line)
@@ -169,7 +170,7 @@ class CodexAgentSession:
                 return
             attempt.parent.mkdir(parents=True, exist_ok=True)
             descriptor = os.open(attempt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, "w") as stream:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 json.dump({"basis": basis, "stdout": str(stdout)}, stream)
                 stream.flush()
                 os.fsync(stream.fileno())

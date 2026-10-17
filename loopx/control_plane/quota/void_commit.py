@@ -22,6 +22,7 @@ QUOTA_VOID_COMMIT_RESULT_SCHEMA = "loopx_quota_void_commit_result_v0"
 QUOTA_VOID_COMMIT_STATUSES = frozenset(
     {"preview", "not_found", "written", "replayed", "repaired", "conflict"}
 )
+_USE_CURRENT_INDEX_DIGEST = object()
 _ECMASCRIPT_TRIM_CHARS = (
     "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680"
     "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
@@ -108,11 +109,27 @@ def _void_result(
     return result
 
 
-def _result_payload(result: Mapping[str, Any]) -> dict[str, Any]:
+def _result_payload(
+    result: Mapping[str, Any],
+    *,
+    include_index_digest: bool,
+) -> dict[str, Any]:
     payload = result.get("payload")
     if not isinstance(payload, Mapping):
         raise RuntimeError("TypeScript quota void commit omitted its payload")
-    return dict(payload)
+    projected = dict(payload)
+    if include_index_digest:
+        if "index_digest" not in result:
+            raise RuntimeError(
+                "TypeScript quota void commit omitted its index digest"
+            )
+        index_digest = result["index_digest"]
+        if index_digest is not None and not isinstance(index_digest, str):
+            raise RuntimeError(
+                "TypeScript quota void commit index digest must be a string or null"
+            )
+        projected["expected_index_digest"] = index_digest
+    return projected
 
 
 def _runtime_root(status_payload: Mapping[str, Any]) -> Path:
@@ -139,6 +156,7 @@ def commit_quota_slot_void(
     _operation: str = "commit",
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
+    _expected_index_digest: str | None | object = _USE_CURRENT_INDEX_DIGEST,
 ) -> dict[str, Any]:
     """Execute one TypeScript-owned quota void transaction."""
 
@@ -164,7 +182,11 @@ def commit_quota_slot_void(
     if registry_path is None and goal_ref is None:
         if execute:
             with exclusive_file_lock(index_path, operation="quota_void_commit"):
-                params["expected_index_digest"] = quota_spend_index_digest(index_path)
+                params["expected_index_digest"] = (
+                    quota_spend_index_digest(index_path)
+                    if _expected_index_digest is _USE_CURRENT_INDEX_DIGEST
+                    else _expected_index_digest
+                )
                 result = _void_result(params, expected_goal_id=safe_goal_id)
         else:
             params["expected_index_digest"] = quota_spend_index_digest(index_path)
@@ -178,13 +200,17 @@ def commit_quota_slot_void(
             operation="quota_void_commit",
             lock_legacy_index=execute,
         ) as source_admission:
-            params["expected_index_digest"] = quota_spend_index_digest(index_path)
+            params["expected_index_digest"] = (
+                quota_spend_index_digest(index_path)
+                if _expected_index_digest is _USE_CURRENT_INDEX_DIGEST
+                else _expected_index_digest
+            )
             if goal_ref is not None:
                 params["goal_ref"] = dict(goal_ref)
             if source_admission is not None:
                 params["source_admission"] = dict(source_admission)
             result = _void_result(params, expected_goal_id=safe_goal_id)
-    return _result_payload(result)
+    return _result_payload(result, include_index_digest=not execute)
 
 
 def build_quota_slot_void_preview_for_decision(
@@ -253,6 +279,17 @@ def record_quota_slot_void_from_preview(
     before = preview.get("before")
     if not isinstance(before, Mapping):
         raise ValueError("quota void preview has no before decision")
+    expected_index_digest: str | None | object = _USE_CURRENT_INDEX_DIGEST
+    if execute:
+        if "expected_index_digest" not in preview:
+            raise ValueError("quota void preview does not include its index basis")
+        expected_index_digest = preview["expected_index_digest"]
+        if expected_index_digest is not None and not isinstance(
+            expected_index_digest, str
+        ):
+            raise ValueError(
+                "quota void preview index basis must be a string or null"
+            )
     return commit_quota_slot_void(
         status_payload,
         goal_id=safe_goal_id,
@@ -265,4 +302,5 @@ def record_quota_slot_void_from_preview(
         reason_summary=reason_summary,
         registry_path=registry_path,
         goal_ref=goal_ref,
+        _expected_index_digest=expected_index_digest,
     )

@@ -162,7 +162,16 @@ def _write_source_registry(
         transaction.commit(payload)
 
 
+def _index_digest(index_path: Path) -> str | None:
+    try:
+        content = index_path.read_bytes()
+    except FileNotFoundError:
+        return None
+    return "sha256:" + hashlib.sha256(content).hexdigest()
+
+
 def _preview(runtime_root: Path) -> dict[str, Any]:
+    index_path = runtime_root / "goals" / GOAL_ID / "runs" / "index.jsonl"
     return {
         "ok": True,
         "mode": "void-slot",
@@ -189,6 +198,7 @@ def _preview(runtime_root: Path) -> dict[str, Any]:
             "spend event is inside the same accounting window."
         ),
         "classification": "quota_slot_voided",
+        "expected_index_digest": _index_digest(index_path),
     }
 
 
@@ -380,13 +390,14 @@ def test_source_void_stamps_the_current_goal_ref(
         goal_ref=goal_ref_b,
     )
     assert preview["goal_ref"] == goal_ref_b
+    assert preview["expected_index_digest"] == _index_digest(index_path)
     assert index_path.read_text(encoding="utf-8").count("\n") == 1
 
-    written = commit_quota_slot_void(
+    written = record_quota_slot_void_from_preview(
+        preview,
         {"runtime_root": str(runtime_root)},
         goal_id=GOAL_ID,
-        voided_run_generated_at=TARGET_AT,
-        before=_decision(2),
+        render_markdown=render_quota_slot_preview_markdown,
         execute=True,
         source="heartbeat",
         registry_path=registry_path,
@@ -530,9 +541,14 @@ def test_independent_invocations_against_one_target_append_twice(
     runtime_root = tmp_path / "runtime"
     index_path, _target_path = _write_spend_target(runtime_root)
     status = {"runtime_root": str(runtime_root)}
-    preview = _preview(runtime_root)
 
     def append_once() -> dict[str, Any]:
+        preview = build_quota_slot_void_preview_for_decision(
+            status,
+            goal_id=GOAL_ID,
+            voided_run_generated_at=TARGET_AT,
+            before=_decision(2),
+        )
         return record_quota_slot_void_from_preview(
             preview,
             status,
@@ -556,6 +572,138 @@ def test_independent_invocations_against_one_target_append_twice(
     for row in void_rows:
         persisted = json.loads(Path(row["json_path"]).read_text(encoding="utf-8"))
         assert persisted["quota_event"]["voided_run_generated_at"] == TARGET_AT
+
+
+def test_stale_preview_rejects_an_intervening_index_write(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    index_path, _target_path = _write_spend_target(runtime_root)
+    status = {"runtime_root": str(runtime_root)}
+    preview = build_quota_slot_void_preview_for_decision(
+        status,
+        goal_id=GOAL_ID,
+        voided_run_generated_at=TARGET_AT,
+        before=_decision(2),
+    )
+    with index_path.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "generated_at": "2026-08-31T09:02:00+08:00",
+                    "goal_id": GOAL_ID,
+                    "classification": "state_refreshed",
+                }
+            )
+            + "\n"
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="compare-and-swap precondition failed",
+    ):
+        record_quota_slot_void_from_preview(
+            preview,
+            status,
+            goal_id=GOAL_ID,
+            render_markdown=render_quota_slot_preview_markdown,
+            execute=True,
+            source="heartbeat",
+            reason_summary=REASON,
+        )
+
+    rows = [
+        json.loads(line)
+        for line in index_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["classification"] for row in rows] == [
+        "quota_slot_spent",
+        "state_refreshed",
+    ]
+
+
+def test_explicit_null_preview_basis_conflicts_when_an_index_appears(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    preview = _preview(runtime_root)
+    assert preview["expected_index_digest"] is None
+    index_path, _target_path = _write_spend_target(runtime_root)
+    before = index_path.read_bytes()
+
+    with pytest.raises(
+        ValueError,
+        match="compare-and-swap precondition failed",
+    ):
+        record_quota_slot_void_from_preview(
+            preview,
+            {"runtime_root": str(runtime_root)},
+            goal_id=GOAL_ID,
+            render_markdown=render_quota_slot_preview_markdown,
+            execute=True,
+            source="heartbeat",
+            reason_summary=REASON,
+        )
+
+    assert index_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("preview_change", ["missing", "malformed"])
+def test_execute_from_preview_rejects_invalid_index_basis_before_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    preview_change: str,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    index_path, _target_path = _write_spend_target(runtime_root)
+    preview = _preview(runtime_root)
+    if preview_change == "missing":
+        preview.pop("expected_index_digest")
+        message = "does not include its index basis"
+    else:
+        preview["expected_index_digest"] = 7
+        message = "index basis must be a string or null"
+    before = index_path.read_bytes()
+    calls = 0
+
+    def unexpected_call(_method: str, _params: dict[str, Any]) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("invalid preview basis reached the TypeScript runtime")
+
+    monkeypatch.setattr(void_commit, "effect_runtime_result", unexpected_call)
+
+    with pytest.raises(ValueError, match=message):
+        record_quota_slot_void_from_preview(
+            preview,
+            {"runtime_root": str(runtime_root)},
+            goal_id=GOAL_ID,
+            render_markdown=render_quota_slot_preview_markdown,
+            execute=True,
+        )
+
+    assert calls == 0
+    assert index_path.read_bytes() == before
+
+
+def test_non_executing_record_accepts_a_legacy_preview_without_index_basis(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    index_path, _target_path = _write_spend_target(runtime_root)
+    preview = _preview(runtime_root)
+    preview.pop("expected_index_digest")
+
+    result = record_quota_slot_void_from_preview(
+        preview,
+        {"runtime_root": str(runtime_root)},
+        goal_id=GOAL_ID,
+        render_markdown=render_quota_slot_preview_markdown,
+        execute=False,
+    )
+
+    assert result["dry_run"] is True
+    assert result["expected_index_digest"] == _index_digest(index_path)
 
 
 def test_each_python_facade_uses_one_typed_runtime_request(
@@ -657,6 +805,18 @@ def test_each_python_facade_uses_one_typed_runtime_request(
                 },
             },
             "payload effect_id mismatch",
+        ),
+        (
+            lambda result: {
+                key: value
+                for key, value in result.items()
+                if key != "index_digest"
+            },
+            "omitted its index digest",
+        ),
+        (
+            lambda result: {**result, "index_digest": 7},
+            "index digest must be a string or null",
         ),
     ],
 )
@@ -826,7 +986,7 @@ def test_blank_normalized_runtime_root_is_rejected_before_filesystem_effect(
     assert not (tmp_path / "goals").exists()
 
 
-def test_execute_holds_legacy_index_lock_and_sends_expected_digest(
+def test_direct_execute_reads_digest_while_holding_legacy_index_lock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -852,11 +1012,69 @@ def test_execute_holds_legacy_index_lock_and_sends_expected_digest(
         captured.update(params)
         return _typed_result(params, runtime_root)
 
+    def digest(path: Path) -> str | None:
+        assert path == index_path
+        timeline.append("digest")
+        return expected_digest
+
     monkeypatch.setattr(void_commit, "exclusive_file_lock", lock)
+    monkeypatch.setattr(void_commit, "quota_spend_index_digest", digest)
+    monkeypatch.setattr(void_commit, "effect_runtime_result", call)
+
+    payload = commit_quota_slot_void(
+        {"runtime_root": str(runtime_root)},
+        goal_id=GOAL_ID,
+        voided_run_generated_at=TARGET_AT,
+        before=_decision(2),
+        execute=True,
+        source="heartbeat",
+        reason_summary=REASON,
+    )
+
+    assert payload["appended"] is True
+    assert timeline == ["lock-enter", "digest", "runtime", "lock-exit"]
+    assert captured["execute"] is True
+    assert captured["expected_index_digest"] == expected_digest
+    assert str(captured["effect_id"]).startswith("quota-void:")
+
+
+def test_execute_from_preview_holds_lock_and_forwards_original_index_basis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    index_path, _target_path = _write_spend_target(runtime_root)
+    preview = _preview(runtime_root)
+    preview_basis = "sha256:preview-basis"
+    preview["expected_index_digest"] = preview_basis
+    timeline: list[str] = []
+    captured: dict[str, Any] = {}
+
+    @contextmanager
+    def lock(path: Path, **kwargs: Any) -> Iterator[Path]:
+        assert path == index_path
+        assert kwargs["operation"] == "quota_void_commit"
+        timeline.append("lock-enter")
+        try:
+            yield path.with_name(f"{path.name}.lock")
+        finally:
+            timeline.append("lock-exit")
+
+    def unexpected_digest(_index_path: Path) -> str | None:
+        raise AssertionError("execute-from-preview reread the index digest")
+
+    def call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        assert method == "quota.void.commit"
+        timeline.append("runtime")
+        captured.update(params)
+        return _typed_result(params, runtime_root)
+
+    monkeypatch.setattr(void_commit, "exclusive_file_lock", lock)
+    monkeypatch.setattr(void_commit, "quota_spend_index_digest", unexpected_digest)
     monkeypatch.setattr(void_commit, "effect_runtime_result", call)
 
     payload = record_quota_slot_void_from_preview(
-        _preview(runtime_root),
+        preview,
         {"runtime_root": str(runtime_root)},
         goal_id=GOAL_ID,
         render_markdown=render_quota_slot_preview_markdown,
@@ -867,6 +1085,4 @@ def test_execute_holds_legacy_index_lock_and_sends_expected_digest(
 
     assert payload["appended"] is True
     assert timeline == ["lock-enter", "runtime", "lock-exit"]
-    assert captured["execute"] is True
-    assert captured["expected_index_digest"] == expected_digest
-    assert str(captured["effect_id"]).startswith("quota-void:")
+    assert captured["expected_index_digest"] == preview_basis
