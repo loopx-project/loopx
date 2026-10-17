@@ -207,3 +207,47 @@ def test_accepted_legacy_request_is_not_rewritten_on_upgrade(ordinary, monkeypat
         assert native_request(transport, event) == before and before["message"] == "Approved"
     finally:
         runtime.close()
+
+
+def test_reference_is_frozen_before_first_core_admission(ordinary, monkeypatch):  # noqa: F811
+    _, runtime, provider, transport = connect(ordinary)
+    event = quoted(provider)
+    admit = transport.core.admit
+
+    def unavailable(**_kwargs):
+        raise OSError("synthetic failure before any Core admission")
+
+    try:
+        monkeypatch.setattr(transport.core, "admit", unavailable)
+        with pytest.raises(OSError, match="before any Core admission"):
+            transport.admit("notes-app", event)
+        assert not list(transport.core.root.glob("*.json"))
+        captured = json.loads(next(transport.root.glob("*.json")).read_text())
+        assert captured["status"] == "captured" and "local reading preview" in captured["reply_context_message"]
+        provider.messages[event["parent_id"]]["content"] = "A different scope after capture"
+        monkeypatch.setattr(transport.core, "admit", admit)
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = native_request(transport, event)
+        assert row["message"] == captured["reply_context_message"]
+        assert "A different scope" not in row["message"]
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+    finally:
+        runtime.close()
+
+
+def test_original_source_can_continue_after_ancestry_verification_recovers(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    event = quoted(provider)
+    provider.messages[event["message_id"]]["parent_id"] = "om_different_parent"
+    try:
+        assert transport.admit("notes-app", event)["status"] == "source_verification_failed"
+        assert not store.list_sessions()
+        provider.messages[event["message_id"]]["parent_id"] = event["parent_id"]
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = native_request(transport, event)
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        transport.reconcile()
+        assert len(store.list_sessions()) == 1 and all(profile == "notes-app" for profile, _ in provider.writes)
+        assert "local reading preview" in row["message"]
+    finally:
+        runtime.close()
