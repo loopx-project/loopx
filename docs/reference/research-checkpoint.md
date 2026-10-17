@@ -279,17 +279,33 @@ the move becomes stale; an unavailable target refuses instead of reading or
 controlling the old source. Goals without a local move keep their existing read
 and lifecycle owners, including the established orphan-stop recovery rules.
 
-This workspace adoption covers selected status, delivery review and activation.
-Task mutations, Goal Chat/session binding, deletion and sustained original-task
-execution still need their own integration. It does not redirect source CLI
+The original Task entry also reads complete requirements and applies ordinary
+creation, edits and pause/resume through the admitted destination's existing Todo
+owner. Exact reads and edits share that destination's registry/provider revision;
+old source previews become stale. A lost edit response recovers the original
+canonical operation without applying it twice. An unavailable destination refuses
+instead of reading or writing the old source. Creating a Task with automatic
+execution from this entry refuses before creation until session/runtime routing
+is qualified; the ordinary Task form creates without starting execution.
+
+This workspace adoption covers selected status, delivery review, activation and
+ordinary Task interaction. Goal Chat/session binding, decision and monitor flows,
+deletion and sustained original-task execution still need their own integration.
+It does not redirect source CLI
 commands or executors. The full installed-profile and 120-second acceptance
 remain unqualified.
 
 中文：已准入的本地迁移也会让原 Goal 主视图和交付评审读取真实目标。目标停止时，
 复用既有历史视图保留目标说明与未完成任务；原“停止／恢复”操作作用于经核验的
 目标。迁移前的旧预览失效，目标不可用时明确拒绝，不回退到旧源。未迁移 Goal 的
-原有行为保持。当前仍需接通任务修改、Goal 对话和会话、删除与原任务持续执行；
-旧 CLI 与执行器不自动重定向，完整安装迁移及 120 秒验收仍未通过。
+原有行为保持。原任务入口也会从目标读取完整要求，并复用目标 Todo owner 创建、
+编辑、暂停或恢复任务；详情与编辑绑定同一 registry/provider revision，旧源预览
+失效。编辑响应丢失后重试恢复原操作，不重复写入；目标不可用时不读写旧源。普通
+创建表单不启动执行；附带自动执行的创建请求在写入前拒绝，等待会话与运行时接通。
+当前仍需接通 Goal 对话和会话、审批与监控、删除及原任务持续执行；旧 CLI 与执行器
+不自动重定向，完整安装迁移及 120 秒验收仍未通过。
+
+![Original Task requirements saved through the admitted local destination in the normal packaged App](assets/agent-transfer-task-edit.png)
 
 For a governed CLI Turn with an explicit Todo and `--turn-instance-id`, retrying
 that same identity now reads the original journal before rebuilding a live plan.
