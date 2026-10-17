@@ -412,7 +412,8 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
             attempt = {"basis": basis, "source_thread_ids": sorted(inventory)}
             # Persist before dispatch. Partial preparation is not a license to
             # fork again; a missing outcome stays explicitly unresolved.
-            with os.fdopen(os.open(attempt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:
+            with os.fdopen(os.open(attempt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w",
+                           encoding="utf-8") as file:
                 json.dump(attempt, file, sort_keys=True)
                 file.flush()
                 os.fsync(file.fileno())

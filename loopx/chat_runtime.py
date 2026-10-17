@@ -22,6 +22,7 @@ from .chat_manager import (
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
+from .capabilities.native_chat.turn_release import TurnReleaseWakeup
 from .control_plane.collaboration import conversation_scope
 from .capabilities.manager_runtime import (
     load_bound_manager_runtime_profile, manager_runtime_session_fields,
@@ -44,7 +45,6 @@ from .chat_codex_goal import (
 from .chat_dsh import DshChatAdapter
 from .chat_endpoint_catalog import builtin_chat_endpoints
 from .chat_endpoints import AgentEndpointRegistry
-from .chat_turn_release import TurnReleaseWakeup
 from .control_plane.turn_driver.host_binding import MANAGED_TURN_HOST
 from .control_plane.turn_driver.execution_profile import managed_execution_profile
 from .kiro_cli_goal_mode import (

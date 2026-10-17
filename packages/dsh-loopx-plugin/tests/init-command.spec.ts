@@ -411,6 +411,69 @@ describe('/loopx-init implementation', () => {
     ))).toBe(true)
   })
 
+  it('finds the interpreter a python.org Windows PATH registers', async () => {
+    // A python.org Windows install registers python.exe and no python3 name,
+    // and the host's python3 name can be the WindowsApps alias, which starts
+    // and exits 9009 without running Python.
+    const pythonPath = await mkdtemp(join(tmpdir(), 'loopx-windows-pythons-'))
+    onTestFinished(() => rm(pythonPath, { recursive: true, force: true }))
+    await writeFile(join(pythonPath, 'python.exe'), '# fixture executable\n')
+    const calls: Array<{ readonly file: string; readonly args: readonly string[] }> = []
+    let installed = false
+    const runner: FileRunner = async (file, args) => {
+      calls.push({ file, args: [...args] })
+      if (file === 'python3') {
+        return { exitCode: 9009, stdout: '', stderr: '' }
+      }
+      if (args[0] === '-c') {
+        return { exitCode: 0, stdout: '', stderr: '' }
+      }
+      if (args.join(' ') === '-m pip --version') {
+        return { exitCode: 0, stdout: 'pip fixture', stderr: '' }
+      }
+      if (args.slice(0, 3).join(' ') === '-m pip install') {
+        installed = true
+        return { exitCode: 0, stdout: 'installed', stderr: '' }
+      }
+      if (args.at(-1) === '--version') {
+        if (!installed) throw new LoopXCliError('missing', 'missing', false)
+        return { exitCode: 0, stdout: 'loopx 1.2.4\n', stderr: '' }
+      }
+      if (args.includes('workflow-skills')) {
+        const operation = args.includes('--install') ? 'install' : 'inspect'
+        return {
+          exitCode: 0,
+          stdout: workflowPayload(operation, false),
+          stderr: '',
+        }
+      }
+      throw new Error(`unexpected argv: ${file} ${args.join(' ')}`)
+    }
+
+    const result = await initializeLoopX({
+      runner,
+      env: { PATH: pythonPath },
+      skillsDir: '/fixture/skills',
+      runtimeDir: '/fixture/runtime',
+    })
+
+    expect(result.cliInstalled).toBe(true)
+    expect(calls.some(call => (
+      call.file === 'python3'
+      && call.args[0] === '-c'
+    ))).toBe(true)
+    const pipCall = calls.find(call => call.args.slice(0, 3).join(' ') === '-m pip install')
+    expect(pipCall?.file).toBe('python')
+    const workflowCalls = calls.filter(call => call.args.includes('workflow-skills'))
+    expect(workflowCalls.every(call => call.file === 'python')).toBe(true)
+    const cliBins = workflowCalls.map(call => call.args[call.args.indexOf('--cli-bin') + 1])
+    expect(cliBins.every(value => (
+      typeof value === 'string'
+      && value.startsWith('python ')
+      && value.includes('loopx_cli.py')
+    ))).toBe(true)
+  })
+
   it('skips an implicit version-compatible Python that cannot run pip', async () => {
     const pythonPath = await mkdtemp(join(tmpdir(), 'loopx-installed-pythons-'))
     onTestFinished(() => rm(pythonPath, { recursive: true, force: true }))
