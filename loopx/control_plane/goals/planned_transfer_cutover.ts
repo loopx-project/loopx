@@ -266,7 +266,11 @@ export async function readLocalGoalTransferContinuation(decision: JsonObject): P
         reject("Original destination changed during readback; retry its current state");
       }
       return {target_task_admitted: true, target_runtime_admitted: fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA,
-        target_activation_state: snapshot.activation_state, work: {objective: snapshot.state_objective, requirements: context.state_text,
+        target_activation_state: snapshot.activation_state,
+        ...(fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA ? {_local_activation_target: {
+          registry_path: target.registry_path, runtime_root: root, goal_id: goal, operation_id: decision.operation_id,
+        }} : {}),
+        work: {objective: snapshot.state_objective, requirements: context.state_text,
         agents: coordination.registered_agents, todos: index.todo_ids.map(id => index.todos.get(id)!)}};
 }
 

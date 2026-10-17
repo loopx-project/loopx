@@ -91,12 +91,42 @@ def preview_registered_goal_transfer(*, registry_path: Path, goal_id: str, opera
     return result
 
 
-def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
-    """Shared Settings/CLI transport; the native owner discovers preparation."""
+def _read_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
+    """Private native view; resolved control routes never enter public packets."""
     context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
-    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.inspect_operation", {
+    return effect_runtime_result("coordination.planned_transfer.inspect_operation", {
         "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id, **context,
     }, timeout=60.0, retry_safe=True)
+
+
+def _destination_activation(target: dict[str, Any], *, state: str,
+    expected_state_fingerprint: str | None = None, execute: bool = False) -> dict[str, Any]:
+    from .activation_service import set_goal_activation_state
+
+    return set_goal_activation_state(registry_path=Path(target["registry_path"]),
+        goal_id=target["goal_id"], state=state, runtime_root_override=target["runtime_root"],
+        expected_state_fingerprint=expected_state_fingerprint,
+        actor_kind="owner" if execute else None, execute=execute)
+
+
+def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
+    """Shared Settings/CLI transport; the native owner discovers preparation."""
+    result = _read_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
+    target = result.pop("_local_activation_target", None)
+    if target is not None:
+        from .activation import GoalActivationState
+
+        state = GoalActivationState(result["local_cutover"]["target_activation_state"])
+        operation = "resume" if state is GoalActivationState.STOPPED else "stop"
+        try:
+            preview = _destination_activation(target,
+                state=GoalActivationState.ACTIVE.value if operation == "resume" else GoalActivationState.STOPPED.value)
+            if preview.get("ok") is not True:
+                raise ValueError("Current destination lifecycle is unavailable")
+            result["destination_control"] = {"operation": operation,
+                "expected_state_fingerprint": preview["observed_state_fingerprint"]}
+        except (OSError, ValueError):
+            result["destination_control_unavailable"] = True
     review = result.pop("_local_cutover_review", None)
     if review is not None:
         try:
@@ -112,6 +142,40 @@ def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> di
         else:
             result["prepared_cutover"] = preview["confirmation"]
     return result
+
+
+def control_transferred_goal(*, registry_path: Path, goal_id: str, operation_id: str,
+    operation: str, expected_state_fingerprint: str) -> dict[str, Any]:
+    """Owner-only UI transport to the original destination's lifecycle owner.
+
+    This does not redirect callers or old executors. Both the native cutover
+    binding and the existing activation fingerprint are checked per request.
+    Resuming permits future admission; it never replays a Turn or spends quota.
+    """
+    from .activation import GoalActivationState
+
+    if operation not in ("stop", "resume"):
+        raise ValueError("Use the existing Goal stop or resume operation")
+    original = _read_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
+    target = original.get("_local_activation_target")
+    if not isinstance(target, dict) or target["operation_id"] != operation_id or target["goal_id"] != goal_id:
+        raise ValueError("Original admitted destination is unavailable; preserve its source")
+    state = GoalActivationState.STOPPED if operation == "stop" else GoalActivationState.ACTIVE
+    preview = _destination_activation(target, state=state.value)
+    if preview.get("ok") is not True:
+        raise ValueError("Destination lifecycle preview is unavailable")
+    # A response-loss retry may observe the requested state, but it cannot
+    # perform another write on stale authority or claim a new execution.
+    result = preview if preview.get("changed") is False else _destination_activation(target,
+        state=state.value, expected_state_fingerprint=expected_state_fingerprint, execute=True)
+    if result.get("ok") is not True or result.get("readback", {}).get("verified") is not True:
+        raise ValueError("Destination changed; read its current state before retrying")
+    try:
+        readback = inspect_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
+    except (OSError, ValueError):
+        readback = None
+    return {"ok": True, "goal_id": goal_id, "operation_id": operation_id,
+        "after_state": state.value, "changed": result["changed"], "readback": readback}
 
 
 def cancel_registered_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str) -> dict[str, Any]:

@@ -51,6 +51,8 @@ const goalTransferViewSchema = z.object({
     continue_work: z.object({todo_id: z.string(), agent_id: z.string(), host: z.literal("codex-cli"),
       sandbox: z.literal("workspace-write"), validation_workspace: z.literal("reviewed_working_tree"), validation_sha256: z.string()}).optional()}).optional(),
   prepared_cutover_unavailable: z.boolean().optional(),
+  destination_control: z.object({operation: z.enum(["stop", "resume"]), expected_state_fingerprint: z.string()}).optional(),
+  destination_control_unavailable: z.boolean().optional(),
   work: z.object({objective: z.string(), agents: z.array(z.string()),
     todos: z.array(z.object({todo_id: z.string(), text: z.string(), status: z.string(),
       note: z.string().nullish(), evidence: z.string().nullish()}))}),
@@ -78,6 +80,16 @@ export async function confirmGoalTransfer(goalId: string, review: NonNullable<Go
       method: "POST", body: JSON.stringify({action: "confirm", goal_id: goalId,
         operation_id: review.operation_id, preview_sha256: review.preview_sha256}),
     }));
+}
+
+export async function controlGoalTransfer(goalId: string, operationId: string,
+  control: NonNullable<GoalTransferView["destination_control"]>) {
+  return z.object({ok: z.literal(true), after_state: z.enum(["active", "stopped"]),
+    changed: z.boolean(), readback: goalTransferViewSchema.nullable()}).parse(
+    await requestJson<unknown>("/api/chat/goal-transfer", {method: "POST", body: JSON.stringify({
+      action: control.operation, goal_id: goalId, operation_id: operationId,
+      expected_state_fingerprint: control.expected_state_fingerprint,
+    })}));
 }
 
 function chatApiUrl(path: string) {

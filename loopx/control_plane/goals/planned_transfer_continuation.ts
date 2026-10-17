@@ -287,5 +287,6 @@ export async function inspectAdmittedGoalTransferDestination(value: JsonObject):
     local_cutover: {source_final: true, target_task_admitted: current.target_task_admitted,
       target_runtime_admitted: current.target_runtime_admitted,
       ...(current.target_activation_state ? {target_activation_state: current.target_activation_state} : {})}, work: current.work,
+    ...(current._local_activation_target ? {_local_activation_target: current._local_activation_target} : {}),
     holds: [{code: "transfer_journey_incomplete", owner: "goal_transfer"}]};
 }

@@ -7,6 +7,7 @@ from ..control_plane.goals.planned_transfer_io import (
     cancel_registered_goal_transfer,
     inspect_registered_goal_transfer,
     confirm_registered_goal_transfer,
+    control_transferred_goal,
 )
 
 GOAL_TRANSFER_PATH = "/api/chat/goal-transfer"
@@ -24,9 +25,10 @@ class GoalTransferRequestMixin:
         try:
             body = self._read_json()
             action = body.get("action")
-            fields = {"action", "goal_id", "operation_id", "preview_sha256"} if action == "confirm" else (
-                {"action", "goal_id", "operation_id"} if action == "cancel" else {"action", "goal_id"})
-            if set(body) != fields or action not in ("inspect", "cancel", "confirm"):
+            fields = {"action", "goal_id", "operation_id", "expected_state_fingerprint"} if action in ("stop", "resume") else (
+                {"action", "goal_id", "operation_id", "preview_sha256"} if action == "confirm" else (
+                {"action", "goal_id", "operation_id"} if action == "cancel" else {"action", "goal_id"}))
+            if set(body) != fields or action not in ("inspect", "cancel", "confirm", "stop", "resume"):
                 raise ValueError("Unsupported transfer request")
             if any(not isinstance(value, str) or not value.strip() for value in body.values()):
                 raise ValueError("Transfer request requires original identifiers")
@@ -34,6 +36,10 @@ class GoalTransferRequestMixin:
             # registry codec. Browser data cannot redirect filesystem owners.
             if action == "inspect":
                 result = inspect_registered_goal_transfer(registry_path=self.server.registry_path, goal_id=body["goal_id"])
+            elif action in ("stop", "resume"):
+                result = control_transferred_goal(registry_path=self.server.registry_path, goal_id=body["goal_id"],
+                    operation_id=body["operation_id"], operation=action,
+                    expected_state_fingerprint=body["expected_state_fingerprint"])
             elif action == "confirm":
                 result = confirm_registered_goal_transfer(registry_path=self.server.registry_path, goal_id=body["goal_id"],
                     operation_id=body["operation_id"], expected_preview_sha256=body["preview_sha256"],

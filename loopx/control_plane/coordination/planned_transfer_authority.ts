@@ -273,6 +273,7 @@ export async function inspectRegisteredGoalTransfer(value: JsonObject): Promise<
           target_runtime_admitted: current.target_runtime_admitted,
           ...(current.target_activation_state ? {target_activation_state: current.target_activation_state} : {})},
         ...(review && (!current.target_runtime_admitted || originalWorkPending) ? {_local_cutover_review: review} : {}),
+        ...(current._local_activation_target ? {_local_activation_target: current._local_activation_target} : {}),
         work: current.work ?? {objective: source.objective, requirements: context.state_text,
           agents: coordination.registered_agents ?? [], todos: todos.todo_ids.map(id => todos.todos.get(id)!)},
         holds: [{code: "transfer_journey_incomplete" satisfies GoalTransferHoldCode, owner: "goal_transfer"}]};
