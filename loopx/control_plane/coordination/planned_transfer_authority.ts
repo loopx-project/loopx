@@ -9,6 +9,7 @@ import {mkdir, readFile} from "node:fs/promises";
 import {isAbsolute, join, resolve} from "node:path";
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
+import type {GoalTransferHoldCode} from "../goals/planned_transfer_contract.ts";
 import {durableWriteJson} from "../effect_runtime_io.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
@@ -154,17 +155,35 @@ export async function previewRegisteredAuthorityForPlannedTransfer(value: JsonOb
   if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id", "source_context", "registry_witness"])) {
     reject("Registered source preview requires its complete original Goal context");
   }
+  const operationId = requireAuthorityStoreId(value.operation_id, "transfer operation id");
+  return visitRegisteredTransferSource(value, operationId, async source => source.preview);
+}
+
+interface RegisteredTransferSource {
+  context: JsonObject;
+  objective: string;
+  preview: JsonObject;
+  projection: JsonObject;
+  preparedOperation: string | null;
+}
+
+/** A product read is bound to the same source/maintenance observation as
+ * preparation. It does not rediscover authority from a persisted UI carrier. */
+async function visitRegisteredTransferSource<T>(value: JsonObject, requestedOperation: string | null,
+  consume: (source: RegisteredTransferSource) => Promise<T>): Promise<T> {
   const root = requireLocalAuthorityRuntimeRoot(value.runtime_root);
   const goalId = requireAuthorityStoreId(value.goal_id, "source Goal id");
-  const operationId = requireAuthorityStoreId(value.operation_id, "transfer operation id");
   return withShadowMaintenanceLock(root, goalId, () => withVerifiedGoalTransferContext(
-    value.source_context, value.registry_witness, goalId, root, async context => {
-      await requireUncancelledPreparation(join(shadowManagementDirectory(root, goalId), "planned-transfers", canonicalAuthoritySha256(operationId)));
+    value.source_context, value.registry_witness, goalId, root, async (context, snapshot) => {
       const managed = await readShadowManagementState(root, goalId);
       if (managed && managed.status !== "inactive") reject("Source capture requires disposition before transfer preview");
       const current = await loadLegacyCoordinationWriterFence(root, goalId);
       if (current.status !== "loaded") reject("Original source writer fence is unavailable");
       let original = current.fence;
+      const preparedOperation = original.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA
+        ? requireAuthorityStoreId(original.operation_id, "prepared transfer operation") : null;
+      const operationId = requestedOperation ?? preparedOperation ?? `inspect:${goalId}`;
+      await requireUncancelledPreparation(join(shadowManagementDirectory(root, goalId), "planned-transfers", canonicalAuthoritySha256(operationId)));
       if (original.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
         const pending = await optionalJson(join(shadowManagementDirectory(root, goalId), "planned-transfers",
           canonicalAuthoritySha256(operationId), "preparation.json"));
@@ -176,8 +195,41 @@ export async function previewRegisteredAuthorityForPlannedTransfer(value: JsonOb
       if (opened.provider !== "file" && opened.provider !== "sqlite") reject("Transfer preview requires a qualified local File/SQLite source");
       const head = await opened.store.loadAuthority(), identity = await opened.store.storeIdentity();
       if (head.status !== "loaded" || identity.status !== "available") reject("Original source history is unavailable; restore it before transfer");
-      return registeredSourcePreview(context, original, opened.store, opened.provider, head, identity.store_identity, goalId, operationId);
+      const preview = await registeredSourcePreview(context, original, opened.store, opened.provider, head, identity.store_identity, goalId, operationId);
+      if (typeof snapshot.state_objective !== "string") reject("Original Goal objective is unreadable");
+      return consume({context, objective: snapshot.state_objective, preview, projection: head.head, preparedOperation});
     }));
+}
+
+/** The caller-facing continuation view. This local vocabulary describes this
+ * Goal's actual preparation and its remaining continuation gap; it is not a
+ * replacement lifecycle, provider decision or execution grant. Full native
+ * Todo records retain original declarations, relations and acceptance fields. */
+export async function inspectRegisteredGoalTransfer(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "source_context", "registry_witness"])) {
+    reject("Transfer inspection requires its registered source observation");
+  }
+  return visitRegisteredTransferSource(value, null, async source => {
+    const {context, preview, projection, preparedOperation} = source;
+    const goal = requireJsonObject(context.goal, "original Goal");
+    const coordination = requireJsonObject(goal.coordination, "original coordination");
+    const todos = indexCoordinationProjection(projection, String(goal.id));
+    const holds: Array<{code: GoalTransferHoldCode; owner: string}> = [];
+    if ((preview.retained_leases as JsonObject[]).length) holds.push({code: "retained_leases", owner: "task_lease"});
+    const turns = requireJsonObject(preview.turn_history, "original Turn history");
+    if (turns.closed !== true || turns.turn_hosts_closed !== true) holds.push({code: "turn_or_host_unsettled", owner: "turn_host"});
+    if (requireJsonObject(preview.quota_history, "original quota history").closed !== true) holds.push({code: "quota_unsettled", owner: "quota"});
+    // Staging still has no lawful destination grant. A green source preview,
+    // a copied Task or a released lease must never erase that product gap.
+    holds.push({code: "destination_admission_unavailable", owner: "goal_admission"});
+    return {ok: true, schema_version: "loopx_planned_transfer_operation_view_v0", goal_id: goal.id,
+      source_state: preparedOperation === null ? "available" : "prepared", operation_id: preparedOperation,
+      source_provider: preview.provider, source_revision: preview.provider_revision,
+      authority_preparation_ready: preview.ready_for_authority_preparation,
+      cancel_available: preparedOperation !== null, continuation_available: false,
+      work: {objective: source.objective, requirements: context.state_text,
+        agents: coordination.registered_agents ?? [], todos: todos.todo_ids.map(id => todos.todos.get(id)!)}, holds};
+  });
 }
 
 /** The maintenance guard serializes preparation against every ordinary native

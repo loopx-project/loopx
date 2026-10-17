@@ -366,6 +366,34 @@ the route, reopen the source, or admit destination execution.
 停止的目标路由，明确要求恢复原 operation；冷启动重试复用它，不删除路由、
 不重开源端，也不授予目标执行权限。
 
+### Original work and prepared-source recovery (in development)
+
+The Goal's existing Settings / Capability Center includes **Move Agent** for
+original-work and preparation readback. Goal entry points preselect that Goal;
+the device entry retains device scope. The shared `goal-transfer inspect
+--goal-id GOAL` reads the same native owner, full original Todo declarations
+and archive relations. It discovers a prepared operation without asking the
+user for runtime paths, registry edits or separate owner commands.
+
+When the source is already prepared, **Cancel move preparation** records its
+original cancellation and reads back the source fence in place. Cold retry and
+duplicate confirmation retain that decision; later source work is preserved.
+The CLI counterpart is `goal-transfer cancel --goal-id GOAL --operation-id
+OPERATION --execute`. A recorded cancellation whose follow-up read failed
+remains recorded; retry the read instead of treating it as an uncommitted move.
+These entries expose current holds. Destination admission and original-task
+continuation remain unavailable; this source recovery is not a completed Agent
+migration or a qualification of installed/cross-machine operation.
+
+中文：开发中的 Goal 设置 / 能力中心新增“迁移 Agent”，与 `goal-transfer inspect
+--goal-id GOAL` 共用原生 owner，读取原任务全文、归档和关系及当前准备状态。
+从 Goal 进入时自动选中该 Goal；设备入口仍为设备范围。原操作由 owner 发现，
+不要求本人找 runtime 路径、修改 registry 或拼接多套命令。已准备的源端可在原处
+“取消迁移准备”，记录原取消决定并读回源写入边界；冷启动、重复确认和后写均保留。
+取消已记录但后续读取失败时，重试读取，不把已提交决定说成未发生。
+目标准入和原任务在目标续办仍未接通，当前显示明确 hold；这只是源端读回和恢复，
+不是完整迁移、正常安装态或跨机资格。
+
 ## Full-state recovery after cold import
 
 Keep the reviewed pre-import backup as well as a new full-state backup after

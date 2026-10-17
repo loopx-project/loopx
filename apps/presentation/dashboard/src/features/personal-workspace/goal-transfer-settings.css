@@ -1,0 +1,12 @@
+.personal-goal-transfer {
+  min-height: 0;
+  max-height: min(28rem, 40dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+.personal-goal-transfer p,
+.personal-goal-transfer li {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}

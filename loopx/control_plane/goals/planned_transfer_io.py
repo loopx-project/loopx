@@ -45,6 +45,7 @@ def _read_goal_transfer_snapshot(*, registry_path: Path, goal_id: str) -> dict[s
     """Codec/byte IO only; the native Goal owner decides supported admission."""
     from ...registry import find_registry_goal, resolve_state_file
     from ..coordination.authority_source_capture import authority_registry_source
+    from .active_state_metadata import active_state_section_text
 
     registry_path = registry_path.expanduser().resolve()
     with authority_registry_source(registry_path) as witness:
@@ -55,10 +56,12 @@ def _read_goal_transfer_snapshot(*, registry_path: Path, goal_id: str) -> dict[s
         state = resolve_state_file(Path(goal["repo"]), goal["state_file"])
         if state is None:
             raise ValueError("Original Goal has no state route")
-        return {"source_context": {"goal": goal, "state_text": state.read_bytes().decode("utf-8"),
+        state_text = state.read_bytes().decode("utf-8")
+        return {"source_context": {"goal": goal, "state_text": state_text,
             "runtime_root": registry["common_runtime_root"], "registry_path": str(registry_path)},
             "registry_witness": witness, "registry_profile": registry.get("profile_id"),
-            "registry_role": registry.get("registry_role")}
+            "registry_role": registry.get("registry_role"),
+            "state_objective": active_state_section_text(state_text, "Objective")}
 
 
 def read_goal_transfer_context(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
@@ -83,6 +86,22 @@ def preview_registered_goal_transfer(*, registry_path: Path, goal_id: str, opera
         "operation_id": operation_id, **context,
     }, timeout=45.0, retry_safe=True)
     return result
+
+
+def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
+    """Shared Settings/CLI transport; the native owner discovers preparation."""
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.inspect_operation", {
+        "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id, **context,
+    }, timeout=60.0, retry_safe=True)
+    return result
+
+
+def cancel_registered_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str) -> dict[str, Any]:
+    """An address is not a grant; cancellation checks the retained native owner."""
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    return cancel_prepared_goal_transfer(runtime_root=Path(context["source_context"]["runtime_root"]),
+        goal_id=goal_id, operation_id=operation_id)
 
 
 def prepare_registered_goal_transfer(

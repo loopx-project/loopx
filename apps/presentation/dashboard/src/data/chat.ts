@@ -1,4 +1,5 @@
 import type {OracleEvidence} from "./goal-acceptance-observation";
+import type {GoalTransferHoldCode} from "../../../../../loopx/control_plane/goals/planned_transfer_contract.js";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
@@ -36,6 +37,31 @@ export function restoreConfigurationCheckpoint(backup: Record<string, unknown>, 
   return requestJson<ConfigurationBackupResult>("/api/chat/configuration-backup/restore", {
     method: "POST", body: JSON.stringify({backup, expected_sha256: backup.sha256, execute}),
   });
+}
+
+const goalTransferHoldSchema: z.ZodType<GoalTransferHoldCode> = z.enum([
+  "retained_leases", "turn_or_host_unsettled", "quota_unsettled", "destination_admission_unavailable",
+]);
+const goalTransferViewSchema = z.object({
+  ok: z.literal(true), goal_id: z.string(), source_state: z.enum(["available", "prepared"]),
+  operation_id: z.string().nullable(), cancel_available: z.boolean(), continuation_available: z.literal(false),
+  work: z.object({objective: z.string(), agents: z.array(z.string()),
+    todos: z.array(z.object({todo_id: z.string(), text: z.string(), status: z.string()}))}),
+  holds: z.array(z.object({code: goalTransferHoldSchema, owner: z.string()})),
+});
+export type GoalTransferView = z.infer<typeof goalTransferViewSchema>;
+
+export async function inspectGoalTransfer(goalId: string) {
+  return goalTransferViewSchema.parse(await requestJson<unknown>("/api/chat/goal-transfer", {
+    method: "POST", body: JSON.stringify({action: "inspect", goal_id: goalId}),
+  }));
+}
+
+export async function cancelGoalTransfer(goalId: string, operationId: string) {
+  return z.object({ok: z.literal(true), decision: z.object({preparation_cancelled: z.literal(true)}),
+    readback: z.object({original_writer_fence_restored: z.boolean()})}).parse(
+    await requestJson<unknown>("/api/chat/goal-transfer", {method: "POST",
+      body: JSON.stringify({action: "cancel", goal_id: goalId, operation_id: operationId})}));
 }
 
 function chatApiUrl(path: string) {

@@ -87,7 +87,7 @@ export async function readGoalTransferSnapshot(registry: string, goalId: string)
  * parser. Python owns codec/byte IO; Goal identity and profile decisions remain
  * here. The lifecycle-only profile cannot become a generic runtime grant. */
 export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitness: unknown,
-  goalId: string, root: string, operation: (context: JsonObject) => Promise<T>): Promise<T> {
+  goalId: string, root: string, operation: (context: JsonObject, snapshot: JsonObject) => Promise<T>): Promise<T> {
   const context = requireJsonObject(raw, "original Goal context");
   if (!hasExactAuthorityKeys(context, ["goal", "state_text", "runtime_root", "registry_path"]) ||
       context.runtime_root !== root || typeof context.state_text !== "string" || !context.state_text.trim()) reject("Complete registered Goal context is required");
@@ -104,11 +104,12 @@ export async function withVerifiedGoalTransferContext<T>(raw: unknown, rawWitnes
     if (observed.registry_role === "global-local") reject("A global registry is a read model; resolve the original project registration before transfer");
     if (!canonicalAuthorityBytes(observed.registry_witness).equals(canonicalAuthorityBytes(witness))) reject("Registered Goal context changed; review its original transfer");
     if (!canonicalAuthorityBytes(observed.source_context).equals(canonicalAuthorityBytes(context))) reject("Registered Goal intent differs from its reviewed transfer context");
+    return observed;
   };
   return withFileMutationLock(legacyCoordinationTodoLockPath(root, goalId), () =>
     withFileMutationLock(state, () => withFileMutationLock(registry, async () => {
-      await verify();
-      const result = await operation(context);
+      const snapshot = await verify();
+      const result = await operation(context, snapshot);
       await verify();
       return result;
     })));
