@@ -6,8 +6,8 @@
  * Neither profile copies a session or credential. This is not cross-machine
  * authorization or qualification of the complete installed user journey.
  */
-import {join, resolve} from "node:path";
-import {stat} from "node:fs/promises";
+import {basename, dirname, isAbsolute, join, relative, resolve, sep} from "node:path";
+import {readdir, stat} from "node:fs/promises";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {durableWriteJson} from "../effect_runtime_io.ts";
@@ -27,10 +27,17 @@ import {requirePhysicalTransferPath, inspectTransferFile} from "./planned_transf
 import {readGoalTransferSnapshot, withVerifiedGoalTransferContext} from "./planned_transfer.ts";
 import {planReviewedTransferContinuation, readReviewedTransferContext} from "./planned_transfer_continuation.ts";
 import {observeLocalWorkspaceHostIdentity} from "../work_items/task_lease_workspace.ts";
+import {reviewGoalTransferMaterialInputs} from "./planned_transfer_payload.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 const CUTOVER_SCHEMA = "loopx_local_goal_transfer_cutover_v0";
 const ADMISSION_SCHEMA = "loopx_local_goal_transfer_task_admission_v0";
 const RUNTIME_ADMISSION_SCHEMA = "loopx_local_goal_transfer_runtime_admission_v0";
+const REVIEW_SCHEMA = "loopx_local_goal_transfer_review_v0";
+function confirmation(decision: JsonObject, digest: unknown): JsonObject {
+  return {operation_id: decision.operation_id, preview_sha256: digest,
+    destination_name: basename(dirname(String(requireJsonObject(decision.target, "original destination").project)))};
+}
 function reject(message: string): never {throw new EffectRuntimeConflictError(message);}
 function same(a: unknown, b: unknown): boolean {return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b));}
 function operationDirectory(root: string, goal: string, operation: string, source: boolean): string {
@@ -50,6 +57,74 @@ async function locationIdentity(root: string): Promise<string> {
   const entry = await stat(await requirePhysicalTransferPath(root));
   if (!entry.isDirectory()) reject("Local target runtime must remain its original physical directory");
   return canonicalAuthoritySha256({device: entry.dev, inode: entry.ino});
+}
+
+/** One Agent-facing preparation composes existing owners. Paths and provider
+ * come from this Goal owner; the Python caller only performs their codec IO.
+ * No credentials, native sessions or optional capability settings are adopted. */
+export async function planLocalGoalTransferPreparation(value: JsonObject): Promise<JsonObject> {
+  const rawMaterials = value.materials;
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id", "source_context", "registry_witness", "destination_root", "materials"]) ||
+      !Array.isArray(rawMaterials) || process.platform === "win32") reject("Local preparation requires its explicit original Goal, destination and reviewed materials");
+  return visitRegisteredTransferSource(value, requireAuthorityStoreId(value.operation_id, "original operation"), async source => {
+    if (source.preview.ready_for_authority_preparation !== true) reject("Original work is not settled; use its existing Task/Turn owners before preparing this move");
+    const destination = await requirePhysicalTransferPath(value.destination_root);
+    const goal = requireJsonObject(source.context.goal, "original Goal");
+    const overlaps = (a: string, b: string) => {
+      const suffix = relative(a, b);
+      return suffix === "" || (!isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`));
+    };
+    if ([String(goal.repo), String(source.context.runtime_root)].some(path => overlaps(path, destination) || overlaps(destination, path))) {
+      reject("Local destination must not overlap the original project or runtime");
+    }
+    let entries: string[] = [];
+    try {entries = await readdir(destination);} catch (error) {if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;}
+    if (entries.some(name => !["recipient", "portable", "workspace", "runtime"].includes(name))) reject("Local destination is occupied; preserve it and choose another directory");
+    const materials: JsonObject[] = [];
+    for (const path of rawMaterials) {
+      const physical = await requirePhysicalTransferPath(path);
+      materials.push({path: physical, sha256: (await inspectTransferFile(physical)).sha256});
+    }
+    await reviewGoalTransferMaterialInputs(materials, source.context);
+    return {source_preview_sha256: source.preview.preview_sha256, provider: source.preview.provider, materials,
+      project: join(destination, "workspace"), runtime_root: join(destination, "runtime"),
+      recipient_directory: join(destination, "recipient"), artifact_directory: join(destination, "portable")};
+  });
+}
+
+/** A retained review is only an address and an exact reviewed digest. It lets
+ * the original Settings entry discover a prepared destination without accepting
+ * a browser-supplied filesystem route. Every confirmation rechecks real owners. */
+export async function readLocalGoalTransferCutoverReview(root: string, goal: string, operation: string): Promise<JsonObject | null> {
+  const review = await optional(join(operationDirectory(root, goal, operation, true), "cutover-review.json"));
+  if (review && (!hasExactAuthorityKeys(review, ["schema_version", "goal_id", "operation_id", "target_registry_path", "preview_sha256", "destination_name"]) ||
+      review.schema_version !== REVIEW_SCHEMA || review.goal_id !== goal || review.operation_id !== operation ||
+      !BARE_SHA256_PATTERN.test(String(review.preview_sha256)) || typeof review.destination_name !== "string")) reject("Original local cutover review is unavailable; preserve its operation");
+  return review;
+}
+
+export async function readRegisteredLocalCutoverReview(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id", "source_context", "registry_witness"])) reject("Read the original registered cutover review");
+  return visitRegisteredTransferSource(value, requireAuthorityStoreId(value.operation_id, "original operation"), async source => {
+    const review = await readLocalGoalTransferCutoverReview(String(source.context.runtime_root), String(value.goal_id), String(value.operation_id));
+    if (!review || source.preparedOperation !== value.operation_id) reject("Original local cutover has no retained review");
+    return review;
+  });
+}
+
+export async function retainLocalGoalTransferCutoverReview(value: JsonObject): Promise<JsonObject> {
+  const plan = await planLocalGoalTransferCutover(value);
+  const decision = requireJsonObject(plan.decision, "reviewed original cutover"), target = requireJsonObject(decision.target, "reviewed destination");
+  if (decision.profile !== "source_online_local_runtime_v0") reject("Product confirmation requires reviewed original-work continuation");
+  const source = requireJsonObject(value.source, "original source");
+  return visitRegisteredTransferSource(source, String(decision.operation_id), async current => {
+    if (current.preparedOperation !== decision.operation_id) reject("Original source is no longer prepared for this move");
+    const review = {schema_version: REVIEW_SCHEMA, goal_id: decision.goal_id, operation_id: decision.operation_id,
+      target_registry_path: target.registry_path, preview_sha256: plan.preview_sha256,
+      destination_name: basename(dirname(String(target.project)))};
+    await retain(join(operationDirectory(String(source.runtime_root), String(decision.goal_id), String(decision.operation_id), true), "cutover-review.json"), review);
+    return {operation_id: review.operation_id, preview_sha256: review.preview_sha256, destination_name: review.destination_name};
+  });
 }
 
 /** A positive, explicitly narrow owner profile, not absence inferred from an
@@ -182,7 +257,9 @@ export async function readLocalGoalTransferContinuation(decision: JsonObject): P
 export async function planLocalGoalTransferCutover(value: JsonObject): Promise<JsonObject> {
   const execute = value.execute === true;
   if (!hasExactAuthorityKeys(value, ["source", "target_snapshot", "target_registry",
-      ...(Object.hasOwn(value, "continuation") ? ["continuation"] : []), ...(execute ? ["execute", "expected_preview_sha256"] : [])])) reject("Local cutover requires complete current source and target observations");
+      ...(Object.hasOwn(value, "continuation") ? ["continuation"] : []),
+      ...(Object.hasOwn(value, "reviewed_preview_sha256") ? ["reviewed_preview_sha256"] : []),
+      ...(execute ? ["execute", "expected_preview_sha256"] : [])])) reject("Local cutover requires complete current source and target observations");
   const source = requireJsonObject(value.source, "original source request");
   if (!hasExactAuthorityKeys(source, ["runtime_root", "goal_id", "operation_id", "source_context", "registry_witness"])) reject("Local cutover requires its original registered source");
   const root = requireLocalAuthorityRuntimeRoot(source.runtime_root), goal = requireAuthorityStoreId(source.goal_id, "original Goal");
@@ -213,12 +290,14 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
             reject("Source already chose another destination; recover its original cutover");
           }
           if ((value.continuation === "reviewed_context") !== (priorDecision.profile === "source_online_local_runtime_v0")) reject("Original cutover continuation profile changed");
+          if (Object.hasOwn(value, "reviewed_preview_sha256") && value.reviewed_preview_sha256 !== canonicalAuthoritySha256(priorDecision)) reject("Original product cutover review changed");
           if (execute && value.expected_preview_sha256 !== canonicalAuthoritySha256(priorDecision)) reject("Reviewed cutover identity changed");
           const fence = await loadLegacyCoordinationWriterFence(targetRoot, goal);
           const admitted = fence.status === "loaded" && isPlannedTransferAdmissionFence(fence.fence);
           if (admitted) await requireLocalGoalTransferAdmission(targetRoot, goal, fence.fence);
           if (!admitted && !same(targetGoal, intent.staged_goal) && !same(targetGoal, intent.goal)) reject("Destination changed after final cutover; preserve it for recovery");
           return {decision: priorDecision, preview_sha256: canonicalAuthoritySha256(priorDecision),
+            ...(priorDecision.continuation ? {confirmation: confirmation(priorDecision, canonicalAuthoritySha256(priorDecision))} : {}),
             source_final: true, target_task_admitted: admitted,
             target_runtime_admitted: admitted && priorDecision.profile === "source_online_local_runtime_v0", publish_registry: !admitted && same(targetGoal, intent.staged_goal),
             destination_registry: admitted ? registry : {...registry, goals: (registry.goals as JsonObject[]).map(row => row.id === goal ? intent.goal : row)}};
@@ -282,6 +361,7 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
           ...(continuation ? {continuation} : {}), native_source_writes_closed: true,
           source_sessions_adopted: false, credentials_adopted: false};
         const digest = canonicalAuthoritySha256(decision);
+        if (Object.hasOwn(value, "reviewed_preview_sha256") && value.reviewed_preview_sha256 !== digest) reject("Original product cutover review changed; prepare a current destination review");
         if (execute) {
           if (value.expected_preview_sha256 !== digest) reject("Local cutover preview changed; review the current destination");
           // Intent first while target remains stopped. A crash before the source
@@ -291,6 +371,7 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
           await retain(join(sourceDirectory, "cutover.json"), decision);
         }
         return {decision, preview_sha256: digest, source_final: execute, target_task_admitted: false, target_runtime_admitted: false, publish_registry: execute,
+          ...(continuation ? {confirmation: confirmation(decision, digest)} : {}),
           destination_registry: {...registry, goals: (registry.goals as JsonObject[]).map(row => row.id === goal ? admittedGoal : row)}};
       }));
   });

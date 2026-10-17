@@ -9,6 +9,7 @@ import json
 import os
 import shlex
 import sys
+from time import perf_counter
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from loopx.history import collect_history
 from tests.control_plane.test_planned_transfer_cancellation import source as source_fixture
 from tests.control_plane.test_planned_transfer_cutover import OPERATION, _staged, _target_worktree
 from tests.control_plane.test_planned_transfer_operation import _http
+from tests.control_plane.test_planned_transfer_product import _prepared
 
 source = source_fixture
 
@@ -58,12 +60,18 @@ def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reex
         "--agent-id", "agent-a", "--evidence", "input.txt", "--successor-todo-id", source["todo"])
     source["cli"]("todo", "archive-completed", "--goal-id", "report", "--role", "user", "--max-active-done", "0", "--execute")
     original = source["cli"]("todo", "list", "--goal-id", "report", "--todo-id", source["todo"])["todo"]
-    target = _staged(source, tmp_path, source["provider"])
-    args = ("--goal-id", "report", "--operation-id", OPERATION, "--destination-registry", str(target["registry"]),
-        "--continuation", "reviewed_context")
-    preview = source["cli"]("goal-transfer", "cutover-preview", *args)
-    confirmed = source["cli"]("goal-transfer", "cutover", *args, "--expected-preview-sha256", preview["preview_sha256"], "--execute")
-    assert confirmed["target_runtime_admitted"] is True
+    started = perf_counter()
+    target, prepared = _prepared(source, tmp_path)
+    server, thread, call = _http(source)
+    try:
+        review = prepared["prepared_cutover"]
+        status, confirmed = call({"action": "confirm", "goal_id": "report", "operation_id": OPERATION,
+            "preview_sha256": review["preview_sha256"]})
+        assert status == 200 and confirmed["readback"]["local_cutover"]["target_runtime_admitted"] is True
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
     worktree = _target_worktree(target)
     lease = target["cli"]("task-lease", "acquire", "--goal-id", "report", "--todo-id", source["todo"],
         "--owner", "agent-a", "--idempotency-key", "new-target-native-work", "--write-scope", "report.txt",
@@ -151,6 +159,8 @@ def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reex
             thread.join(5)
             server.server_close()
         assert not source["runtime"].exists() and not source["project"].exists()
+        (tmp_path / "product-journey-timing.json").write_text(json.dumps({"seconds": perf_counter() - started,
+            "boundary": "Source-checkout isolated native tools and one real HTTP confirmation; not installed App or a controlled latency qualification."}))
 
 
 @pytest.mark.parametrize("fault", ["context", "materials", "mode"])

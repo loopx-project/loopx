@@ -142,6 +142,29 @@ This is a source-online, same-host development profile; it does not establish
 cross-machine authorization, portable-artifact privacy certification or the
 complete installed Settings journey. Those product qualifications remain held.
 
+An Agent can prepare this local composition with one
+`goal-transfer prepare-local --goal-id GOAL --operation-id MOVE --destination-root DIRECTORY --material INPUT --execute`
+invocation. Repeat `--material` for each explicitly reviewed workspace input.
+The existing owners prepare the source, recipient-bound artifact, stopped
+destination and retained cutover review. This does not discover every dependency,
+certify credential-free input or move capability settings. An unsupported or
+unsettled owner keeps its hold; cancellation remains in the existing Settings
+entry. Native source writes remain fenced until preparation is cancelled or the
+move is confirmed.
+
+Settings → Capability Center → the original Goal → Move Agent shows the
+prepared destination and original work. **Confirm local move** performs the
+reviewed cutover; **Resume this move** recovers an already recorded cutover whose
+destination admission is incomplete. The browser supplies identifiers and the exact reviewed digest,
+never a registry path. The CLI counterpart is
+`goal-transfer confirm --goal-id GOAL --operation-id MOVE --expected-preview-sha256 DIGEST --execute`.
+Changed materials or destination bindings refuse confirmation. Duplicate
+confirmation reads the original decision and preserves destination writes.
+An accepted switch followed by missing readback stays visibly accepted and
+offers a current-state read. The complete installed migration flow remains
+unqualified, including automatic active-work drain and necessary configuration,
+dependency and credential rebinding.
+
 For a governed CLI Turn with an explicit Todo and `--turn-instance-id`, retrying
 that same identity now reads the original journal before rebuilding a live plan.
 A changed plan hash cannot allocate a second canonical journal for the same

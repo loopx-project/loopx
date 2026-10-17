@@ -96,6 +96,19 @@ def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> di
     result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.inspect_operation", {
         "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id, **context,
     }, timeout=60.0, retry_safe=True)
+    review = result.pop("_local_cutover_review", None)
+    if review is not None:
+        try:
+            preview = local_goal_transfer_cutover(registry_path=registry_path, goal_id=goal_id,
+                operation_id=review["operation_id"], destination_registry=Path(review["target_registry_path"]),
+                continuation="reviewed_context", reviewed_preview_sha256=review["preview_sha256"])
+        except Exception:
+            # Only this read-only destination observation failed. Preserve the
+            # native source view/cancellation, including after a browser reload;
+            # no cached review becomes a confirmation or an execution grant.
+            result["prepared_cutover_unavailable"] = True
+        else:
+            result["prepared_cutover"] = preview["confirmation"]
     return result
 
 
@@ -109,6 +122,7 @@ def cancel_registered_goal_transfer(*, registry_path: Path, goal_id: str, operat
 def local_goal_transfer_cutover(
     *, registry_path: Path, goal_id: str, operation_id: str, destination_registry: Path,
     expected_preview_sha256: str | None = None, continuation: str | None = None,
+    reviewed_preview_sha256: str | None = None,
 ) -> dict[str, Any]:
     """One source-online local cutover; native owners decide every transition.
 
@@ -116,14 +130,10 @@ def local_goal_transfer_cutover(
     readable through their actual codec. A final source decision has no reverse
     compensation; same-operation recovery preserves the stopped destination.
     """
-    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    request, snapshot, before = _local_cutover_request(registry_path, goal_id, operation_id, destination_registry, continuation)
     destination_registry = destination_registry.expanduser().absolute()
-    snapshot = _read_goal_transfer_snapshot(registry_path=destination_registry, goal_id=goal_id)
-    before = load_registry(destination_registry)
-    request: dict[str, Any] = {"source": {**context, "runtime_root": context["source_context"]["runtime_root"],
-        "goal_id": goal_id, "operation_id": operation_id}, "target_snapshot": snapshot, "target_registry": before}
-    if continuation is not None:
-        request["continuation"] = continuation
+    if reviewed_preview_sha256 is not None:
+        request["reviewed_preview_sha256"] = reviewed_preview_sha256
     if expected_preview_sha256 is not None:
         request.update(execute=True, expected_preview_sha256=expected_preview_sha256)
     result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.plan_local_cutover", request,
@@ -142,6 +152,67 @@ def local_goal_transfer_cutover(
         "runtime_root": snapshot["source_context"]["runtime_root"], "goal_id": goal_id, "operation_id": operation_id,
     }, timeout=300.0, retry_safe=False)
     return {"ok": True, **result, **admitted, "registry_readback_verified": True}
+
+
+def _local_cutover_request(registry_path: Path, goal_id: str, operation_id: str,
+    destination_registry: Path, continuation: str | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    destination_registry = destination_registry.expanduser().absolute()
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    snapshot = _read_goal_transfer_snapshot(registry_path=destination_registry, goal_id=goal_id)
+    before = load_registry(destination_registry)
+    request: dict[str, Any] = {"source": {**context, "runtime_root": context["source_context"]["runtime_root"],
+        "goal_id": goal_id, "operation_id": operation_id}, "target_snapshot": snapshot, "target_registry": before}
+    if continuation is not None:
+        request["continuation"] = continuation
+    return request, snapshot, before
+
+
+def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str,
+    destination_root: Path, materials: list[Path]) -> dict[str, Any]:
+    """Fixed IO composition of existing Goal, custody and registry owners.
+
+    The Agent supplies an explicit reviewed file selection. TypeScript chooses
+    paths/provider and every business transition; this adds no Python policy.
+    Preparation stops the source but never performs the final confirmation.
+    """
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    plan = effect_runtime_result("coordination.planned_transfer.plan_local_preparation", {
+        **context, "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id,
+        "operation_id": operation_id, "destination_root": str(destination_root.expanduser().absolute()),
+        "materials": [str(path.expanduser().absolute()) for path in materials],
+    }, timeout=60.0, retry_safe=True)
+    recipient = create_planned_transfer_recipient(destination=Path(plan["recipient_directory"]))
+    exported = export_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id,
+        expected_preview_sha256=plan["source_preview_sha256"], recipient=recipient, destination=Path(plan["artifact_directory"]),
+        materials=[(Path(row["path"]), row["sha256"]) for row in plan["materials"]])
+    target = dict(directory=Path(plan["artifact_directory"]), private_key=Path(plan["recipient_directory"]) / "private-key.pem",
+        expected_artifact_sha256=exported["protected_artifact"]["artifact_sha256"],
+        project=Path(plan["project"]), runtime_root=Path(plan["runtime_root"]), provider=plan["provider"])
+    workspace = preview_protected_goal_transfer_target(**target)
+    stage_protected_goal_transfer(**target, expected_workspace_preview_sha256=workspace["reviewed_preview_sha256"])
+    request, _, _ = _local_cutover_request(registry_path, goal_id, operation_id,
+        Path(plan["project"]) / ".loopx/registry.json", "reviewed_context")
+    effect_runtime_result("coordination.planned_transfer.retain_local_cutover_review", request,
+        timeout=300.0, retry_safe=False)
+    return inspect_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
+
+
+def confirm_registered_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str,
+    expected_preview_sha256: str) -> dict[str, Any]:
+    """Confirm/recover the retained original review, never a browser path."""
+    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
+    review = effect_runtime_result("coordination.planned_transfer.read_local_cutover_review", {
+        **context, "runtime_root": context["source_context"]["runtime_root"], "goal_id": goal_id, "operation_id": operation_id,
+    }, timeout=60.0, retry_safe=True)
+    local_goal_transfer_cutover(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id,
+        destination_registry=Path(review["target_registry_path"]), continuation="reviewed_context",
+        expected_preview_sha256=expected_preview_sha256, reviewed_preview_sha256=review["preview_sha256"])
+    # A lost later read cannot turn the already accepted cutover into failure.
+    try:
+        readback = inspect_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
+    except Exception:
+        readback = None
+    return {"ok": True, "goal_id": goal_id, "recorded": True, "operation_id": operation_id, "readback": readback}
 
 
 def read_goal_transfer_host_context(*, registry_path: Path, goal_id: str,

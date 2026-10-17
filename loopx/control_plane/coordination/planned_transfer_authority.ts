@@ -254,6 +254,8 @@ export async function inspectRegisteredGoalTransfer(value: JsonObject): Promise<
     if (requireJsonObject(preview.quota_history, "original quota history").closed !== true) holds.push({code: "quota_unsettled", owner: "quota"});
     const cutover = preparedOperation === null ? null : await optionalJson(join(shadowManagementDirectory(String(context.runtime_root), String(goal.id)),
       "planned-transfers", canonicalAuthoritySha256(preparedOperation), "cutover.json"));
+    const {readLocalGoalTransferCutoverReview} = await import("../goals/planned_transfer_cutover.ts");
+    const review = preparedOperation === null ? null : await readLocalGoalTransferCutoverReview(String(context.runtime_root), String(goal.id), preparedOperation);
     if (cutover) {
       const {readLocalGoalTransferContinuation} = await import("../goals/planned_transfer_cutover.ts");
       const current = await readLocalGoalTransferContinuation(cutover);
@@ -262,18 +264,21 @@ export async function inspectRegisteredGoalTransfer(value: JsonObject): Promise<
         authority_preparation_ready: false, cancel_available: false, continuation_available: false,
         local_cutover: {source_final: true, target_task_admitted: current.target_task_admitted,
           target_runtime_admitted: current.target_runtime_admitted},
+        ...(review && !current.target_runtime_admitted ? {_local_cutover_review: review} : {}),
         work: current.work ?? {objective: source.objective, requirements: context.state_text,
           agents: coordination.registered_agents ?? [], todos: todos.todo_ids.map(id => todos.todos.get(id)!)},
         holds: [{code: "transfer_journey_incomplete" satisfies GoalTransferHoldCode, owner: "goal_transfer"}]};
     }
     // Staging still has no lawful destination grant. A green source preview,
     // a copied Task or a released lease must never erase that product gap.
-    holds.push({code: "destination_admission_unavailable", owner: "goal_admission"});
+    holds.push(review ? {code: "transfer_journey_incomplete", owner: "goal_transfer"}
+      : {code: "destination_admission_unavailable", owner: "goal_admission"});
     return {ok: true, schema_version: "loopx_planned_transfer_operation_view_v0", goal_id: goal.id,
       source_state: preparedOperation === null ? "available" : "prepared", operation_id: preparedOperation,
       source_provider: preview.provider, source_revision: preview.provider_revision,
       authority_preparation_ready: preview.ready_for_authority_preparation,
       cancel_available: preparedOperation !== null, continuation_available: false,
+      ...(review ? {_local_cutover_review: review} : {}),
       work: {objective: source.objective, requirements: context.state_text,
         agents: coordination.registered_agents ?? [], todos: todos.todo_ids.map(id => todos.todos.get(id)!)}, holds};
   });

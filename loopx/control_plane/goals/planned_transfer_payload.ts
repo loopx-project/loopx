@@ -43,12 +43,20 @@ export async function reviewProtectedGoalTransferInputs(raw: unknown, context: J
   }
   const recipient = validatePlannedTransferRecipient(transport.recipient);
   const destination = await requirePhysicalTransferPath(transport.destination), sourceVersion = version(packageVersion);
+  return {recipient, destination, sourceVersion, ...await reviewGoalTransferMaterialInputs(transport.materials, context)};
+}
+
+/** The Agent's explicit workspace selection is checked before preparation and
+ * again under the source owner's export locks. This is not a credential scan
+ * or a claim that every dependency has been selected. */
+export async function reviewGoalTransferMaterialInputs(raw: unknown, context: JsonObject) {
+  if (!Array.isArray(raw)) reject("Review an explicit workspace material selection");
   const goal = requireJsonObject(context.goal, "original Goal");
   const project = await requirePhysicalTransferPath(goal.repo), runtime = await requirePhysicalTransferPath(context.runtime_root);
   const registry = await requirePhysicalTransferPath(context.registry_path);
   const files: TransferContainerFile[] = [];
   const materials: JsonObject[] = [], seen = new Set<string>();
-  for (const [index, rawMaterial] of transport.materials.entries()) {
+  for (const [index, rawMaterial] of raw.entries()) {
     const material = requireJsonObject(rawMaterial, "reviewed Goal material");
     if (!hasExactAuthorityKeys(material, ["path", "sha256"]) || !BARE_SHA256_PATTERN.test(String(material.sha256))) reject("Goal material requires its reviewed content digest");
     const path = await requirePhysicalTransferPath(material.path), suffix = relative(project, path);
@@ -61,7 +69,7 @@ export async function reviewProtectedGoalTransferInputs(raw: unknown, context: J
     materials.push({id: (index + 2).toString(16).padStart(8, "0"), source_relative_path: suffix,
       ...facts});
   }
-  return {recipient, destination, sourceVersion, files, materials};
+  return {files, materials};
 }
 
 export async function writeProtectedGoalTransfer(reviewed: Awaited<ReturnType<typeof reviewProtectedGoalTransferInputs>>,
