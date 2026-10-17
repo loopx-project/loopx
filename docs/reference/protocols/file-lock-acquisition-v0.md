@@ -39,6 +39,13 @@ releases wrote `*.lock.holder.json`. Readers still accept that name, preferring
 the most recently acquired record, and each new holder removes it while it
 owns the kernel lock.
 
+Unreadable holder metadata, including invalid UTF-8 or malformed JSON, is
+advisory failure, not evidence that the kernel lock is free. Readers retain
+any valid alternate holder record; without one, liveness is `unreadable` and
+a timed-out waiter still receives `lock_acquire_timeout` with an empty holder
+record and the existing inspection guidance. Reading diagnostics never repairs
+or removes the damaged record; a later successful holder overwrites it normally.
+
 A timeout appends one `file_lock_incident_v0` row to the sibling
 `*.lock.incidents.jsonl` channel. That append uses `O_APPEND` directly and does
 not acquire the blocked lock. The row contains holder and waiter identities,
