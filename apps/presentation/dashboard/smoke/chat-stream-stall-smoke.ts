@@ -123,6 +123,36 @@ try {
   assert.equal(exhausted.payload.turn_id, "t");
   assert.equal(exhausted.payload.events_url, eventsUrl);
   assert.equal(exhausted.payload.reconnect_attempts, 4);
+
+  // A process exit can close a healthy stream, then refuse connections while
+  // its listener restarts. Recover the stored terminal event from the original
+  // cursor; none of these requests may start a new Turn.
+  requests.length = 0;
+  serve = () => {
+    if (requests.length === 1) return new Response(sseBlock("before-exit", "turn.started", {}));
+    if (requests.length < 6) throw new TypeError("Load failed");
+    return new Response(sseBlock("after-exit", "turn.failed", {
+      error_code: "server_restarted", message: "Saved Turn was interrupted by service restart.",
+    }));
+  };
+  const restarted = await resumeChatTurnStreaming("s", "t").then(() => null, (error: unknown) => error);
+  assert.ok(restarted instanceof ChatApiError);
+  assert.equal(restarted.payload.error_code, "server_restarted", "the stored outcome survives the listener outage");
+  assert.deepEqual(requests, ["", ...Array(5).fill("?after=before-exit")], "EOF and refused reads retain the original event cursor");
+
+  // A longer outage remains bounded and offers the existing read-only recovery
+  // route, even when the browser throws an untyped network exception.
+  requests.length = 0;
+  serve = () => { throw new TypeError("Load failed"); };
+  const offline = await resumeChatTurnStreaming("s", "t").then(() => null, (error: unknown) => error);
+  assert.ok(offline instanceof ChatApiError);
+  assert.notEqual(offline.message, "Load failed");
+  assert.equal(offline.payload.reconnectable, true);
+  assert.equal(offline.payload.session_id, "s");
+  assert.equal(offline.payload.turn_id, "t");
+  assert.equal(offline.payload.events_url, eventsUrl);
+  assert.equal(offline.payload.reconnect_attempts, 6);
+  assert.equal(requests.length, 6, "a refused listener cannot cause unbounded reconnects");
 } finally {
   globalThis.fetch = originalFetch;
   globalThis.setTimeout = originalSetTimeout;

@@ -1044,8 +1044,12 @@ export async function streamChatTurn(
   const stallTimeoutMs = options.stallTimeoutMs ?? CHAT_STREAM_STALL_TIMEOUT_MS;
   let cursor = "";
   let attempts = 0;
+  let stalls = 0;
   let terminal = false;
-  while (!terminal && attempts < 4) {
+  // An owned desktop service can need several seconds to restart. Read-only
+  // reconnects cover that window (7.75s backoff), without resubmitting a Turn.
+  // Keep the existing four-watchdog limit for genuinely silent connections.
+  while (!terminal && attempts < 6) {
     signal?.throwIfAborted();
     const origin = typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin;
     const url = new URL(chatApiUrl(eventsUrl), origin);
@@ -1094,20 +1098,20 @@ export async function streamChatTurn(
         }
         if (done || terminal) break;
       }
-      attempts = terminal ? attempts : attempts + 1;
+      if (!terminal) throw new ChatApiError("Agent 事件流连接已断开。", {});
     } catch (error) {
       if (signal?.aborted) throw error;
       attempts += 1;
-      if (attempts >= 4) {
-        // A stalled connection is a transport failure, not a caller abort, so
-        // it ends with the same typed error as any other exhausted reconnect.
-        if (stalled) {
-          throw new ChatApiError("Agent 事件流连接已断开。", {
-            reconnect_attempts: attempts,
-            stall_timeout_ms: stallTimeoutMs,
-          });
-        }
-        throw error;
+      if (stalled) stalls += 1;
+      if (attempts >= 6 || stalls >= 4) {
+        // Fetch refusals (including WebKit's raw "Load failed") and clean EOF
+        // are transport failures too. Preserve the Session/Turn recovery route
+        // through the receive wrapper instead of presenting them as an outcome.
+        throw new ChatApiError("Agent 事件流连接已断开。", {
+          ...(error instanceof ChatApiError ? error.payload : {}),
+          reconnect_attempts: attempts,
+          ...(stalled ? { stall_timeout_ms: stallTimeoutMs } : {}),
+        });
       }
       // A local phase keeps the pending reply honest while the reader resumes
       // from its cursor. It carries no event id, so the cursor is unchanged.
