@@ -254,6 +254,22 @@ in this entry. New Host/runtime execution remains stopped until the existing
 Goal lifecycle owner resumes it; viewing a result does not renew admission.
 Ordinary Todo management keeps its existing owner rules.
 
+The same **Move Agent** entry now offers **Stop destination Goal** or
+**Resume destination Goal** after the local runtime is admitted. These actions
+use the existing Goal lifecycle owner, current destination fingerprint and the
+original cutover binding. They never redirect old source workers or accept a
+browser-supplied registry path. A stale preview or unavailable destination
+requires a fresh read; a response-loss retry can observe the already requested
+state without rewriting it. Resume permits later execution; it does not launch
+another Turn or replay completed work. Stopping prevents new admission and does
+not itself prove an in-flight process has exited.
+
+中文：本地目标取得执行准入后，原“迁移 Agent”入口可“停止目标 Goal”或“恢复目标
+Goal”。操作复用既有 Goal 生命周期、当前目标状态摘要和原切换绑定，不重定向旧源
+执行器，也不接收浏览器提供的 registry 路径。旧预览或目标不可用时重新读取；响应
+丢失后的重试可读回已达到的状态，不重复改写。恢复只允许后续执行，不启动新轮次、
+不重放已完成的工作；停止阻止新准入，并不证明进行中的进程已经退出。
+
 For a governed CLI Turn with an explicit Todo and `--turn-instance-id`, retrying
 that same identity now reads the original journal before rebuilding a live plan.
 A changed plan hash cannot allocate a second canonical journal for the same

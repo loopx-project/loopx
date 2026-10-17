@@ -440,6 +440,9 @@ open. Existing ordinary Goals and their provider defaults retain their behavior.
 原 effect 去重和收据保持有效。源最终决定之前可取消，之后仅同操作向前恢复；重复确认
 不覆盖目标后写。原设置和 `inspect` 从目标读取原任务状态和证据引用，目标失联则明确报错；
 引用本身不代表已在此处读取产物字节或完成原 Goal 验收。
+取得本地 runtime 准入后，同一入口可停止或恢复实际目标 Goal；当前状态摘要和原切换
+绑定由既有 owner 校验。源端仍保持停写，浏览器不能指定另一 registry；恢复不额外
+派发或重放工作。该控制不证明进行中的 Host 已退出，也不补足持续多轮迁移验收。
 源准备绑定原 OS 安装身份，目标任务准入还绑定原物理 runtime；复制收据或重建目录不获新写权限。
 此路径在准入前要求两个原本地环境均可达；不是跨机授权令牌。再次迁移和 provider/
 策略替换仍待原谱系 owner 资格。自动准备、完整设置交互、必要配置/session 依赖、
