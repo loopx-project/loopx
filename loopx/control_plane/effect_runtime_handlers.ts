@@ -679,6 +679,8 @@ export function createEffectRuntimeHandlers(
     ["reward_memory.binding.patch", lazyHandler(() => import("./capabilities/reward_memory_binding.ts"), ({patchRewardMemoryBinding}) => patchRewardMemoryBinding)],
     ["reward_memory.binding.verify_readback", lazyHandler(() => import("./capabilities/reward_memory_binding.ts"), ({verifyRewardMemoryBindingReadback}) => verifyRewardMemoryBindingReadback)],
     ["reward_memory.binding.project", lazyHandler(() => import("./capabilities/reward_memory_binding.ts"), ({projectRewardMemoryBindings}) => projectRewardMemoryBindings)],
+    ["reward_memory.app_outcome.bind", lazyHandler(() => import("./capabilities/reward_memory_app_outcome.ts"), ({bindRewardMemoryAppOutcome}) => bindRewardMemoryAppOutcome)],
+    ["reward_memory.app_outcome.identity", lazyHandler(() => import("./capabilities/reward_memory_app_outcome.ts"), ({rewardMemoryAppOutcomeIdentity}) => rewardMemoryAppOutcomeIdentity)],
     [
       "manager.return_delivery.normalize_attempt",
       lazyHandler(() => import("./collaboration/return_delivery.ts"), ({normalizeManagerReturnDeliveryAttempt}) => (params) => normalizeManagerReturnDeliveryAttempt(params.attempt)),

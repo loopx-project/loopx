@@ -73,6 +73,7 @@ from .project_lifecycle_sinks import (
     lark_explore_graph_syncer,
 )
 from .quota_reward_memory import (
+    attach_reward_memory_ingest_after_spend,
     reward_memory_candidate_details,
     stage_reward_memory_outcome_candidate,
 )
@@ -756,6 +757,19 @@ def handle_refresh_state_command(
             elif settlement_receipt_repair:
                 payload["receipt_repair_required"] = False
                 payload["receipt_repaired"] = True
+            candidate = payload.get("reward_memory_outcome_candidate")
+            if (material_refresh_ready and isinstance(candidate, Mapping)
+                    and candidate.get("validation_bound") is True):
+                # A late reflection may recover after spend already committed.
+                # Read the same settlement; never repeat its accounting effect.
+                attach_reward_memory_ingest_after_spend(
+                    payload, execute=True, registry_path=registry_path,
+                    runtime_root=runtime_root, goal_id=args.goal_id,
+                    agent_id=args.agent_id, todo_id=args.todo_id,
+                    turn_instance_id=args.turn_instance_id,
+                    replan_obligation_id=getattr(args, "replan_obligation_id", None),
+                    goal_ref=goal_ref,
+                )
         if material_refresh_ready and post_writeback_hooks:
             settlement_identity = (
                 payload.get("settlement_identity")
