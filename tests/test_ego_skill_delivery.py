@@ -115,13 +115,23 @@ def test_guidance_correction_refreshes_existing_install_without_version_bump(
     with monkeypatch.context() as old:
         old.setattr(delivery, "_POLICY", "\n\nPrevious managed continuation policy.\n")
         assert workflow_skill_install(skills_dir=skills, execute=True)["ok"]
-    assert workflow_skill_install(skills_dir=skills)["ego_browser"]["status"] == "would_refresh"
+    assert (
+        workflow_skill_install(skills_dir=skills)["ego_browser"]["status"]
+        == "would_refresh"
+    )
     result = workflow_skill_install(skills_dir=skills, execute=True)
     assert result["ok"] and result["ego_browser"]["status"] == "refreshed"
-    assert (entry / "SKILL.md").read_text() == upstream.decode().rstrip() + current_policy
+    assert (
+        entry / "SKILL.md"
+    ).read_text() == upstream.decode().rstrip() + current_policy
     marker = json.loads((entry / ".loopx-ego-skill.json").read_text())
-    assert marker["policy_sha256"] == hashlib.sha256(current_policy.encode()).hexdigest()
-    assert workflow_skill_install(skills_dir=skills)["ego_browser"]["status"] == "unchanged"
+    assert (
+        marker["policy_sha256"] == hashlib.sha256(current_policy.encode()).hexdigest()
+    )
+    assert (
+        workflow_skill_install(skills_dir=skills)["ego_browser"]["status"]
+        == "unchanged"
+    )
     assert (vendor / "SKILL.md").read_bytes() == upstream
 
 
@@ -137,6 +147,40 @@ def test_user_edits_are_preserved_during_upgrade_and_rollback(host, uninstall):
     assert result["status"] == "preserved_modified" and not result["ready"]
     assert "Reconcile these edits" in result["reason"]
     assert local.read_text() == "My customization\n"
+
+
+@pytest.mark.parametrize(
+    "phase,uninstall", [("staged", False), ("parked", False), ("parked", True)]
+)
+def test_edits_during_skill_publication_are_preserved(
+    host, monkeypatch, phase, uninstall
+):
+    _, vendor, _, entry, skills = host
+    delivery.reconcile_ego_browser_skill(skills_dir=skills, execute=True)
+    (vendor / "references/api.md").write_text("New upstream API\n")
+    copytree, replace = delivery.shutil.copytree, Path.replace
+
+    def after_copy(source, target, *args, **kwargs):
+        result = copytree(source, target, *args, **kwargs)
+        if Path(source) == vendor and phase == "staged":
+            (entry / "references/api.md").write_text("Independent user edit\n")
+        return result
+
+    def after_park(source, target):
+        result = replace(source, target)
+        if source == entry and phase == "parked":
+            (Path(target) / "references/api.md").write_text("Independent user edit\n")
+        return result
+
+    monkeypatch.setattr(delivery.shutil, "copytree", after_copy)
+    monkeypatch.setattr(Path, "replace", after_park)
+    result = delivery.reconcile_ego_browser_skill(
+        skills_dir=skills, execute=True, uninstall=uninstall
+    )
+    assert not result["ready"], (
+        "Concurrent local edits cannot be reported as a ready refresh"
+    )
+    assert (entry / "references/api.md").read_text() == "Independent user edit\n"
 
 
 def test_unmanaged_copy_is_not_overwritten(host):
@@ -366,6 +410,28 @@ def test_profile_refresh_preserves_custom_shared_alias(host):
     entry.unlink()
     entry.symlink_to(custom, target_is_directory=True)
     delivery.reconcile_ego_browser_skill(skills_dir=skills, execute=True)
+    assert entry.resolve() == custom
+    assert (entry / "SKILL.md").read_text() == "Personal policy\n"
+
+
+def test_reconnect_preserves_alias_changed_during_staging(host, monkeypatch):
+    home, _, _, _, _ = host
+    entry, _, skills = _profile_copy_with_reset_shared_entry(host)
+    custom = home / "custom-browser"
+    custom.mkdir()
+    (custom / "SKILL.md").write_text("Personal policy\n")
+    symlink_to = Path.symlink_to
+
+    def change_shared_alias(path, target, **kwargs):
+        result = symlink_to(path, target, **kwargs)
+        if path.name == "alias":
+            entry.unlink()
+            symlink_to(entry, custom, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(Path, "symlink_to", change_shared_alias)
+    result = delivery.reconcile_ego_browser_skill(skills_dir=skills, execute=True)
+    assert not result["ready"] and result["status"] == "preserved_unmanaged"
     assert entry.resolve() == custom
     assert (entry / "SKILL.md").read_text() == "Personal policy\n"
 

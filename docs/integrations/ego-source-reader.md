@@ -44,9 +44,11 @@ both affected entries.
 `loopx workflow-skills --uninstall` removes unchanged LoopX workflow skills and
 restores an unchanged managed Ego copy to Ego's **current** upstream link.
 Locally modified copies are preserved; an unresolved restore is reported rather
-than silently removing their policy. An interrupted publish restores the old
-entry. If restoring it also fails, its original is retained at the reported
-backup path; restore that entry before retrying. Ego's own updater can reset its
+than silently removing their policy. Publication rechecks the original entry's
+identity and contents after staging and parking it; a concurrent local edit or
+shared-alias change keeps refresh unready and preserves the original. An
+interrupted publish restores the old entry. If restoring it also fails, its
+original is retained at the reported backup path; restore that entry before retrying. Ego's own updater can reset its
 host entry, so rerun the refresh after that independently authorized upgrade;
 LoopX does not intercept or promise to modify the browser's updater.
 

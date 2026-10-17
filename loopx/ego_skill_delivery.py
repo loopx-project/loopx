@@ -143,7 +143,33 @@ def _remove(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def _publish(candidate: Path, entry: Path) -> None:
+def _entry_version(entry: Path) -> str:
+    """Bind this publication to the entry checked before staging, not its name."""
+    digest = hashlib.sha256()
+    for path in [entry, *sorted(entry.rglob("*"))]:
+        metadata = path.lstat()
+        digest.update(
+            json.dumps(
+                [
+                    path.relative_to(entry).as_posix(),
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_mode,
+                    metadata.st_mtime_ns,
+                ]
+            ).encode()
+        )
+    if entry.is_symlink():
+        digest.update(os.fsencode(os.readlink(entry)))
+    else:
+        digest.update(_digest(entry).encode())
+        marker = entry / _MARKER
+        if marker.is_file():
+            digest.update(marker.read_bytes())
+    return digest.hexdigest()
+
+
+def _publish(candidate: Path, entry: Path, *, expected_version: str) -> bool:
     # Keep the original outside the temporary staging directory: a failure of
     # both publish and restore must leave it available for recovery.
     backups = list(entry.parent.glob(f".{entry.name}.loopx-previous.*"))
@@ -151,14 +177,34 @@ def _publish(candidate: Path, entry: Path) -> None:
         raise RuntimeError(
             f"Ego skill recovery required; inspect the preserved original at {backups[0]}"
         )
+    if _entry_version(entry) != expected_version:
+        return False
     backup = entry.with_name(f".{entry.name}.loopx-previous.{os.getpid()}")
     entry.replace(backup)
+    if _entry_version(backup) != expected_version:
+        # A user can edit without taking our publisher lock, including through
+        # a file handle opened before the move. Keep that changed original.
+        if entry.exists() or entry.is_symlink():
+            raise RuntimeError(
+                f"Ego skill changed during publish; original preserved at {backup}"
+            )
+        backup.replace(entry)
+        return False
     try:
         candidate.replace(entry)
     except BaseException:
+        if entry.exists() or entry.is_symlink():
+            raise RuntimeError(
+                f"Ego skill publish interrupted; original preserved at {backup}"
+            )
         backup.replace(entry)
         raise
+    if _entry_version(backup) != expected_version:
+        raise RuntimeError(
+            f"Ego skill changed during publish; original preserved at {backup}"
+        )
     _remove(backup)
+    return True
 
 
 def reconcile_ego_browser_skill(
@@ -184,13 +230,20 @@ def reconcile_ego_browser_skill(
                 vendor = (Path.home() / ".local/share/ego/ego-skills").resolve()
                 # A browser reinstall may restore its pristine shared link.
                 # Recheck before replacing it; custom aliases are never owned.
+                shared_version = _entry_version(shared)
                 if shared.is_symlink() and shared.resolve() == vendor:
                     with tempfile.TemporaryDirectory(
                         prefix=".loopx-ego-alias-", dir=shared.parent
                     ) as temporary:
                         alias = Path(temporary) / "alias"
                         alias.symlink_to(entry, target_is_directory=True)
-                        alias.replace(shared)
+                        if not _publish(alias, shared, expected_version=shared_version):
+                            return {
+                                **result,
+                                "ready": False,
+                                "status": "preserved_unmanaged",
+                                "reason": "Shared Ego entry changed during refresh; its custom target was preserved.",
+                            }
                     result.update(
                         status="refreshed",
                         reason="Reconnected the upstream shared Ego link to its current managed host skill.",
@@ -226,6 +279,7 @@ def _reconcile(entry: Path, *, execute: bool, uninstall: bool) -> dict[str, Any]
             "status": "recovery_required",
             "reason": f"A failed publish preserved the original at {backups[0]}; restore that entry before refreshing. No browser files were changed.",
         }
+    entry_version = _entry_version(entry)
     try:
         marker = (
             json.loads((entry / _MARKER).read_text(encoding="utf-8"))
@@ -344,7 +398,13 @@ def _reconcile(entry: Path, *, execute: bool, uninstall: bool) -> dict[str, Any]
                 + "\n",
                 encoding="utf-8",
             )
-        _publish(candidate, entry)
+        if not _publish(candidate, entry, expected_version=entry_version):
+            return {
+                **result,
+                "ok": not uninstall,
+                "status": "preserved_modified",
+                "reason": "Ego skill changed during refresh; the original was preserved. Reconcile these edits before retrying.",
+            }
     return {
         **result,
         "ready": not uninstall,
