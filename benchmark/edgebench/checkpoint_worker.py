@@ -240,7 +240,7 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                     if prepared is not None:
                         observed = effect_runtime_result("runtime.checkpoint_artifacts", {
                             "action": "probe", "components": components,
-                        }, timeout=_remaining(deadline), retry_safe=False)
+                        }, timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
                         if observed["source_sha256"] != prepared["source_sha256"]:
                             changed = []
                             for key, rows in observed["source_witness"].items():
@@ -298,11 +298,11 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                     metadata["writer_barrier"] = "docker_pause"
                 probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components,
                     "deadline_epoch_ms": sealing_epoch_ms},
-                                              timeout=_remaining(deadline), retry_safe=False)
+                                              timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
                 return effect_runtime_result("runtime.checkpoint_artifacts", {
                     "action": "capture", "components": components, "destination": str(destination),
                     "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
                     "deadline_epoch_ms": sealing_epoch_ms,
-                }, timeout=_remaining(deadline), retry_safe=False)
+                }, timeout=_remaining(deadline), retry_safe=False, large_local_snapshot=True)
     finally:
         client.close()

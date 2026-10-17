@@ -185,7 +185,7 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
 
     def verify_artifact():
         effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "verify", "root": str(unit), "expected_sha256": digest}, timeout=read_timeout())
+            "action": "verify", "root": str(unit), "expected_sha256": digest}, timeout=read_timeout(), large_local_snapshot=True)
         read_timeout()  # A late successful read cannot authorize the next write.
 
     def read_session():
@@ -532,7 +532,7 @@ def capture_research_checkpoint(env: dict[str, str], request: dict, *,
                 {**entry, "id": allocated[entry["id"]]} for entry in native["metadata"]["store_members"]]}
             probe = effect_runtime_result("runtime.checkpoint_artifacts", {
                 "action": "probe", "components": components, "deadline_epoch_ms": deadline*1000},
-                timeout=max(.1, deadline-time.time()), retry_safe=False)
+                timeout=max(.1, deadline-time.time()), retry_safe=False, large_local_snapshot=True)
             if native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time()), transport=reader) != native:
                 raise ValueError("native checkpoint source moved before sealing")
             _, confirmed = native_binding_participant(env, components, metadata)
@@ -545,7 +545,7 @@ def capture_research_checkpoint(env: dict[str, str], request: dict, *,
             result = effect_runtime_result("runtime.checkpoint_artifacts", {
                 "action": "capture", "destination": str(destination), "components": components,
                 "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
-                "deadline_epoch_ms": deadline*1000}, timeout=max(.1, deadline-time.time()), retry_safe=False)
+                "deadline_epoch_ms": deadline*1000}, timeout=max(.1, deadline-time.time()), retry_safe=False, large_local_snapshot=True)
     return result
 
 

@@ -151,7 +151,7 @@ class CheckpointWake:
                 metadata["held_decision_component_id"] = decision_id
             probe = effect_runtime_result("runtime.checkpoint_artifacts", {
                 "action": "probe", "components": components, "deadline_epoch_ms": window * 1000,
-            }, timeout=max(.1, window - time.time()), retry_safe=False)
+            }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
             if native is not None:
                 if restored_capture_history(self.env, self.receipt.get("checkpoint_restore"),
                         session_id=self.receipt["session"]["session_id"]) != native_options:
@@ -181,7 +181,7 @@ class CheckpointWake:
                 "action": "capture", "components": components, "destination": str(destination),
                 "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
                 "deadline_epoch_ms": window * 1000,
-            }, timeout=max(.1, window - time.time()), retry_safe=False)
+            }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
 
     def run(self, execution, body, wake, session_wake, stdout, stderr, timeout):
         from .worker import child_process, native_command

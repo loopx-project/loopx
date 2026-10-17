@@ -1030,3 +1030,47 @@ def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatc
                   '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999'])
     receipt = (tmp_path / 'runs/route/fixture/runtime-receipt.json').read_text()
     assert 'synthetic-provider-secret' not in receipt
+
+
+@pytest.mark.parametrize("capture", [False, True])
+def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_path, monkeypatch, capture):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.edgebench import run
+    from benchmark.edgebench.prompts import native_task_prompt, native_task_instructions
+
+    monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
+    monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
+    (tmp_path / "fixture.json").write_text("{}")
+    monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
+    monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
+    monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
+        cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
+        game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
+        judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
+    def before_solver(**kwargs):
+        worker = kwargs["agent"]
+        assert worker.task_objective == "Original acceptance."
+        assert worker.feedback_prompt.startswith(worker.workspace_instructions)
+        assert worker.feedback_prompt.endswith("---\n\nOriginal acceptance.\n")
+        assert ("### Durable Research Artifacts" in worker.workspace_instructions) is capture
+        if not capture:
+            policy = dict(submission_cooldown=3600, eval_interval=0, internet=False,
+                          selection="score_first", score_direction="maximize")
+            assert worker.workspace_instructions == native_task_instructions(["solver.py"], **policy)
+            assert worker.feedback_prompt == native_task_prompt("Original acceptance.", ["solver.py"], **policy)
+        raise RuntimeError("validated before model execution")
+    monkeypatch.setattr(run, "run_agent", before_solver)
+    args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+            "--run-id", "storage", "--worker", "heartbeat-explore", "--model", "fixture",
+            "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", "--feedback", "native"]
+    if capture:
+        declaration = tmp_path / "request.json"
+        declaration.write_text(json.dumps({"destination": "/logs/agent/checkpoints",
+            "components": [{"id": "workspace", "source_path": "/task"}], "point_metadata": {}}))
+        args += ["--checkpoint-request", str(declaration)]
+    with pytest.raises(RuntimeError, match="validated before model execution"):
+        run.main(args)

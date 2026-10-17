@@ -44,6 +44,7 @@ from .chat_codex_goal import (
 from .chat_dsh import DshChatAdapter
 from .chat_endpoint_catalog import builtin_chat_endpoints
 from .chat_endpoints import AgentEndpointRegistry
+from .chat_turn_release import TurnReleaseWakeup
 from .control_plane.turn_driver.host_binding import MANAGED_TURN_HOST
 from .control_plane.turn_driver.execution_profile import managed_execution_profile
 from .kiro_cli_goal_mode import (
@@ -347,6 +348,7 @@ class ChatRuntimeController:
         self.cancelled_turns: set[tuple[str, str]] = set()
         self.turn_event_buffers: dict[tuple[str, str], _TurnEventBuffer] = {}
         self.turn_done_events: dict[tuple[str, str], threading.Event] = {}
+        self.turn_release_wakeup = TurnReleaseWakeup()
         self.lock = threading.RLock()
         self.session_open_locks: dict[tuple[str, str, str], threading.Lock] = {}
         self.session_adapter_locks: dict[str, threading.Lock] = {}
@@ -1197,6 +1199,7 @@ class ChatRuntimeController:
                 if self.turn_done_events.get(key) is done_event:
                     self.turn_done_events.pop(key, None)
             done_event.set()
+            self.turn_release_wakeup.notify()
             raise
         return True
 
@@ -1541,6 +1544,7 @@ class ChatRuntimeController:
             )
         finally:
             done_event.set()
+            self.turn_release_wakeup.notify()
             if owns_done_event:
                 with self.lock:
                     if self.turn_done_events.get(key) is done_event:
@@ -1596,6 +1600,7 @@ class ChatRuntimeController:
                     pass
         finally:
             done_event.set()
+            self.turn_release_wakeup.notify()
             with self.lock:
                 if self.turn_done_events.get(key) is done_event:
                     self.turn_done_events.pop(key, None)

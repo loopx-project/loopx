@@ -47,12 +47,14 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
     "todo.context.page",
     "work_item.context.project",
     "work_item.replan_semantics.project",
+    "quota.settlement.read",
     "goal.checkpoint_read_context.resolve",
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
     "performance_diagnosis.inspect",
     "state.recovery.archive.verify",
     "state.recovery.manifest.verify",
+    "runtime.checkpoint_artifacts",
 })
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0

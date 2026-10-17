@@ -1,23 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {existsSync} from "node:fs";
-import {mkdir, mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readFile, rename, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {dirname, join} from "node:path";
-import {authorityBackupDirectory, captureAuthorityBackup} from "../../loopx/control_plane/coordination/authority_backup.ts";
+import {authorityBackupDirectory, captureAuthorityBackup, inspectAuthorityBackup} from "../../loopx/control_plane/coordination/authority_backup.ts";
 import {verifyAuthorityArchive} from "../../loopx/control_plane/coordination/authority_archive.ts";
 import {openLocalAuthorityStore, localAuthorityProviderPaths, selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {legacyCoordinationWriterFencePath, COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
+import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 
 for (const provider of ["file", "sqlite"] as const) {
-  test(`${provider} owner capture keeps a complete prefix during an actual append`, async () => {
+  test(`${provider} owner capture retains its inspected checkpoint after a later append and source loss`, async () => {
     const root = await mkdtemp(join(tmpdir(), "loopx-authority-backup-"));
     try {
-      if (provider === "sqlite") await selectLocalSqliteAuthority(root, "goal-a", true);
-      const store = await openLocalAuthorityStore(root, "goal-a");
+      const source = join(root, "source");
+      if (provider === "sqlite") await selectLocalSqliteAuthority(source, "goal-a", true);
+      const store = await openLocalAuthorityStore(source, "goal-a");
+      const projection = (value: number) => authorityProjectionFixture("goal-a", [], [], "native", {value});
       const first = await store.commitAuthority({expected_provider_revision: null, operation_id: "first",
-        events: [], receipts: [{operation_id: "first", retained: true}], next_projection: {goal_id: "goal-a", value: 1}});
+        events: [], receipts: [{operation_id: "first", retained: true}], next_projection: projection(1)});
       assert.equal(first.status, "applied");
       let appended = false;
       // Wrap only scheduling of a real provider read. Both commits and the
@@ -28,7 +31,7 @@ for (const provider of ["file", "sqlite"] as const) {
           if (!appended) {
             appended = true;
             const second = await target.commitAuthority({expected_provider_revision: first.provider_revision!,
-              operation_id: "second", events: [], receipts: [], next_projection: {goal_id: "goal-a", value: 2}});
+              operation_id: "second", events: [], receipts: [], next_projection: projection(2)});
             assert.equal(second.status, "applied");
           }
           return page;
@@ -37,13 +40,28 @@ for (const provider of ["file", "sqlite"] as const) {
         return typeof value === "function" ? value.bind(target) : value;
       }});
       const destination = join(root, "capture");
-      const result = await captureAuthorityBackup({runtime_root: root, goal_id: "goal-a", destination},
+      const result = await captureAuthorityBackup({runtime_root: source, goal_id: "goal-a", destination},
         {createStore: () => interleaved});
       assert.equal(result.state, "readable");
-      const exported = await verifyAuthorityArchive(join(destination, authorityBackupDirectory("goal-a"), "authority.jsonl"));
+      const archivePath = join(destination, authorityBackupDirectory("goal-a"), "authority.jsonl");
+      const exported = await verifyAuthorityArchive(archivePath);
       assert.equal(exported.commits, "1");
-      assert.equal((await store.loadAuthority()).cursor, "2");
+      const later = await store.loadAuthority();
+      assert.equal(later.status, "loaded");
+      assert.equal(later.cursor, "2");
       assert.equal(appended, true);
+      await rename(source, join(root, "unavailable-source"));
+      const bytes = await readFile(archivePath);
+      const inspected = await inspectAuthorityBackup(destination, result);
+      assert.equal(inspected.provider_revision, first.provider_revision);
+      assert.equal(inspected.cursor, "1");
+      assert.equal(inspected.history_commits, 1);
+      // A manifest's claimed position cannot replace the archive owner's
+      // verified source position, even when it names a real later revision.
+      await assert.rejects(() => inspectAuthorityBackup(destination, {...result,
+        archive: {...exported, source_provider_revision: later.provider_revision}}), /summary mismatch/);
+      assert.deepEqual(await readFile(archivePath), bytes);
+      assert.equal(existsSync(source), false);
     } finally { await rm(root, {recursive: true, force: true}); }
   });
 }

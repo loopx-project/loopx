@@ -6,6 +6,8 @@ SForge owns submission, grading and selection; these wrappers describe the actua
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
 
 def native_research_guidance() -> str:
     """Encourage continued research without replacing the task-owned objective."""
@@ -13,6 +15,44 @@ def native_research_guidance() -> str:
         "Continue researching and improving the original task objective. "
         "Treat implementation, passing checks, and submission as milestones; "
         "pursue the next useful experiment and preserve the best validated candidate."
+    )
+
+
+def checkpoint_research_instructions(request: dict, workspace: str) -> str:
+    """Describe declared coverage without inferring or expanding capture authority.
+
+    Directory membership remains the artifact owner's responsibility at capture.
+    This provider guidance keeps newly generated scientific outputs in that scope;
+    it neither proves dependency closure nor changes the evaluator's file set.
+    """
+    root = PurePosixPath(workspace)
+    covered = any(
+        isinstance(entry, dict) and isinstance(entry.get("source_path"), str)
+        and root.is_relative_to(PurePosixPath(entry["source_path"]))
+        for entry in request["components"]
+    )
+    coverage = (
+        "The checkpoint declaration includes this task workspace. New files saved "
+        "inside that directory are included when it is captured. "
+        if covered else
+        "The checkpoint declaration does not cover the whole task workspace. "
+        "Do not assume new research files are captured; report the missing directory "
+        "coverage before relying on continuation. "
+    )
+    return (
+        "### Durable Research Artifacts\n\n"
+        "Checkpoint capture is enabled. " + coverage +
+        "Keep reusable research artifacts in a dedicated subdirectory of the task "
+        "workspace: candidate snapshots, fitted parameters, local test inputs, "
+        "experiment reports and negative results needed to reproduce or reconsider "
+        "a decision. Use workspace-relative references where possible. Reserve "
+        "temporary directories for disposable scratch; a report that only names an "
+        "external file does not preserve its bytes. Keep existing external dependencies "
+        "explicit until they have been copied and their references updated and checked; "
+        "do not delete or silently substitute historical evidence.\n\n"
+        "This storage guidance does not change submitted files, task acceptance, "
+        "feedback access or execution authority. Capture and receiver verification "
+        "still determine which artifacts are actually available.\n\n"
     )
 
 

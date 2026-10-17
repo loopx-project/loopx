@@ -310,7 +310,9 @@ def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp
         return run("quota", "should-run", *identity, "--codex-app", "--turn-instance-id", turn)
 
     update = ["todo", "update", *identity, "--note", "Canonical delivery retained"]
-    rejected = run(*update, succeeds=False)
+    # Copy is administrative, while explicitly supplied execution stays fenced.
+    rejected = run(*update, "--task-lease-idempotency-key", "not-acquired",
+                   "--task-lease-expected-version", "1", succeeds=False)
     assert rejected["error_code"] == "handoff_mode_requires_lease"
     acquired = run("task-lease", "acquire", "--goal-id", settlement.GOAL_ID,
                    "--todo-id", settlement.TODO_ID, "--owner", settlement.AGENT_ID,

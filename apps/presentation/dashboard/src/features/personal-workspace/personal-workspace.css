@@ -1235,6 +1235,14 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-context-drawer[data-context-kind="todo"] .personal-drawer-body { padding: 0; }
 .personal-task-inspector-summary { padding: 24px 24px 20px; border-bottom: 1px solid var(--pw-line); background: #fff; }
 .personal-task-inspector-summary h3 { margin: 14px 0 0; font-size: var(--text-heading); font-weight: 600; letter-spacing: -.015em; line-height: var(--leading-heading); overflow-wrap: anywhere; }
+.personal-task-requirements-editor { display: grid; gap: 12px; margin-top: 16px; }
+.personal-task-requirements-editor label { display: grid; gap: 8px; font-weight: 500; }
+.personal-task-requirements-editor textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; color: var(--pw-text); background: var(--pw-card); font: inherit; line-height: var(--leading-prose); resize: vertical; }
+.personal-task-requirements-editor p { margin: 0; color: var(--pw-muted); font-size: var(--text-caption); }
+.personal-task-requirements-editor > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.personal-task-requirements-editor [role="alert"] { display: grid; }
+.personal-task-requirements-editor [role="alert"] p { color: var(--pw-red); }
+.personal-drawer-body:has(.personal-task-requirements-editor) > .personal-task-inspector-actions { display: none; }
 .personal-task-inspector-status { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .personal-task-inspector-status > span { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 8px; border-radius: 6px; background: #f1f2f5; color: #62697a; font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 600; }
 .personal-task-inspector-status > span:first-child { padding-left: 7px; }

@@ -13,7 +13,7 @@ import {GOAL_ACCEPTANCE_OWNED_SCHEMA, GOAL_ACCEPTANCE_SCHEMA, acceptanceKeys, ac
   acceptanceText, acceptanceTodos, acceptanceCompletionRequirements, bindGoalAcceptanceStateOwner,
   goalAcceptanceTodoDigest, goalAcceptanceWorkDigest, normalizeAcceptanceResults,
   normalizeGoalAcceptanceDocument, projectGoalAcceptance, readGoalAcceptance, readGoalAcceptanceAuthority,
-  type AcceptanceState, type AcceptanceVerification} from "./acceptance_contract.ts";
+  type AcceptanceDocument, type AcceptanceState, type AcceptanceVerification} from "./acceptance_contract.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {GOAL_ACCEPTANCE_LIFECYCLE_SCHEMA, parseGoalAcceptanceLifecycleTransition, parseWireExactGoalRef,
   readGoalAcceptanceLifecycle, sameExactGoalRef, type GoalAcceptanceLifecycle,
@@ -33,7 +33,7 @@ function mutationRequest(value: unknown, verification: boolean): JsonObject {
   // its wire call need not impersonate an owner. Explicit Agent actors fail.
   if (verification && !Object.hasOwn(request, "actor_agent_id")) request.actor_agent_id = null;
   acceptanceKeys(request, [...REQUEST_FIELDS, ...(verification ? ["contract_digest", "revision", "results"] : ["document"])],
-    [...LOCAL_FIELDS, "goal_ref", ...(verification ? ["todo_id"] : ["disable"])]);
+    [...LOCAL_FIELDS, "goal_ref", ...(verification ? ["todo_id"] : ["disable", "review_context_digest"])]);
   acceptanceRequire(request.actor_agent_id === null, "goal acceptance mutation requires the trusted owner/host; agent actors cannot configure or attest acceptance");
   for (const field of ["goal_id", "operation_id", "expected_provider_revision"]) {
     requireAuthorityStoreId(request[field], field);
@@ -41,6 +41,10 @@ function mutationRequest(value: unknown, verification: boolean): JsonObject {
   acceptanceText(request.operation_id, "acceptance operation id", 256);
   acceptanceRequire(request.dry_run === undefined || typeof request.dry_run === "boolean", "dry_run must be boolean");
   if (!verification) acceptanceRequire(request.disable === undefined || typeof request.disable === "boolean", "disable must be boolean");
+  if (request.review_context_digest !== undefined) acceptanceRequire(
+    typeof request.review_context_digest === "string" && BARE_SHA256_PATTERN.test(request.review_context_digest)
+      && request.document !== null && request.disable !== true,
+    "review context requires a document and its typed acceptance digest");
   if (request.goal_ref !== undefined) parseWireExactGoalRef(request.goal_ref, "acceptance request goal_ref");
   return request;
 }
@@ -98,6 +102,15 @@ function current(loaded: AuthorityStoreLoadResult, request: JsonObject): Authori
 function loaded(value: AuthorityStoreHead | JsonObject): value is AuthorityStoreHead {
   return "status" in value && value.status === "loaded";
 }
+/** Only this owner classifies the work and governance an owner reviewed.
+ * Verification observations and unrelated provider writes cannot change it. */
+function reviewContext(head: JsonObject, goalId: string, document: AcceptanceDocument): string {
+  const state = readGoalAcceptance(head, goalId);
+  return canonicalAuthoritySha256({goal_id: goalId, document,
+    lifecycle: readGoalAcceptanceLifecycle(head, goalId),
+    contract: state === null ? null : {...state, verification: null},
+    work_digest: goalAcceptanceWorkDigest(head, goalId, document.scope)});
+}
 async function replayWithCurrentProjection(
   store: AuthorityStore,
   result: JsonObject,
@@ -133,12 +146,20 @@ async function commit(store: AuthorityStore, request: JsonObject, head: Authorit
     };
   }
   if (committedState !== null) next.goal_acceptance = committedState;
+  const reviewed = kind === "configure" && request.document !== null && committedState !== null;
   const result = {goal_id: request.goal_id, operation_id: request.operation_id,
-    goal_acceptance_contract: projectGoalAcceptance(next, String(request.goal_id))};
+    goal_acceptance_contract: projectGoalAcceptance(next, String(request.goal_id)),
+    ...(reviewed && request.review_context_digest !== undefined ? {
+      review_context_digest: reviewContext(next, String(request.goal_id), committedState.document),
+    } : {})};
   if (request.dry_run === true) return source(store, {status: "planned", dry_run: true, changed: false,
-    provider_revision: head.provider_revision, ...result});
+    provider_revision: head.provider_revision, ...result,
+    ...(reviewed ? {review_context_digest: reviewContext(head.head, String(request.goal_id), committedState.document)} : {})});
   const committed = await command.receipt.commit(store, {
-    operation_id: String(request.operation_id), expected_provider_revision: String(request.expected_provider_revision),
+    // Reviewed-context admission may accept an unrelated intervening write.
+    // CAS still compares the exact head just observed; receipt identity retains
+    // the original request, including its original revision and review digest.
+    operation_id: String(request.operation_id), expected_provider_revision: head.provider_revision,
     next_projection: next,
     events: [{schema_version: RECEIPT_SCHEMA, kind: `goal_acceptance_${kind}`, goal_id: request.goal_id,
       operation_id: request.operation_id, revision: committedState?.revision ?? null,
@@ -161,7 +182,16 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
   if (observation.kind === "receipt") {
     return replayWithCurrentProjection(store, observation.result, String(request.goal_id));
   }
-  const head = current(observation.authority, request);
+  let admission = request;
+  if (request.review_context_digest !== undefined && observation.authority.status === "loaded") {
+    acceptanceTodos(observation.authority.head, String(request.goal_id));
+    if (document === null || reviewContext(observation.authority.head, String(request.goal_id), document)
+        !== request.review_context_digest) return source(store, {
+      ...failure("goal_acceptance_review_context_mismatch", "The reviewed work or acceptance configuration changed."),
+      status: "conflict", current_provider_revision: observation.authority.provider_revision});
+    admission = {...request, expected_provider_revision: observation.authority.provider_revision};
+  }
+  const head = current(observation.authority, admission);
   if (!loaded(head)) return source(store, head);
   const previous = readGoalAcceptance(head.head, String(request.goal_id));
   let state: AcceptanceState | null = previous;

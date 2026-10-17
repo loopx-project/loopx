@@ -159,6 +159,7 @@ export async function inspectAuthorityBackup(dataRoot: string, row: JsonObject):
     if (head === null) throw new Error("authority capture has no head");
     const collection = canonicalTodoCollection(head, goalId, true);
     return {provider: archive.summary.source_provider, head_digest: archive.summary.projection_sha256,
+      provider_revision: archive.summary.source_provider_revision, cursor: archive.summary.commits,
       history_commits: Number(archive.summary.commits), todo_count: collection.projection.todo_ids.length,
       historical_lease_count: collection.leaseIndex?.lease_todo_ids.length ?? 0,
       capture_started_at: row.started_at, capture_completed_at: row.completed_at};

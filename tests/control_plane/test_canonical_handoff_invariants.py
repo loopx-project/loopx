@@ -540,17 +540,27 @@ def test_metadata_cannot_rewrite_hard_lease_execution_grants(
     _unchanged(registry, state, before, display)
 
 
-def test_metadata_edit_requires_current_execution_proof(tmp_path, canonical_workspace):
+def test_administrative_copy_preserves_explicit_execution_fence(tmp_path, canonical_workspace):
     registry, state = canonical_workspace(tmp_path, handoff_mode="hard_lease")
     todo = _add_todo(registry, claimed_by=AGENT_A)
+    original = _snapshot(registry)
+    updated = update_goal_todo(
+        registry_path=registry, goal_id=GOAL_ID, todo_id=todo["todo_id"],
+        agent_id=AGENT_A, note="Reviewed context",
+    )
+    assert updated["ok"]
+    assert _snapshot(registry)["leases"] == original["leases"]
     before, display = _snapshot(registry), state.read_bytes()
+    # Copy edits grant no execution. Supplying proof retains the strict fence.
     with pytest.raises(LocalCoordinationAuthorityRejection):
         update_goal_todo(
             registry_path=registry,
             goal_id=GOAL_ID,
             todo_id=todo["todo_id"],
             agent_id=AGENT_A,
-            note="Validated progress",
+            note="Unqualified execution",
+            task_lease_idempotency_key="not-acquired",
+            task_lease_expected_version=1,
         )
     _unchanged(registry, state, before, display)
     _acquire(registry, tmp_path, todo["todo_id"], owner=AGENT_A)

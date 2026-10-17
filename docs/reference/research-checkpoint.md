@@ -44,6 +44,13 @@ history and qualified native stores. The native inventory excludes credential
 files; arbitrary caller-declared artifacts remain private and are not privacy
 certified. A new destination is required; capture never overwrites a point.
 
+Artifact operations use the existing private local snapshot transport for full
+inventories and retained metadata above the ordinary 2 MiB Effect wire limit.
+The existing 64 MiB local snapshot bound and original operation deadlines still
+apply. No witness is truncated, no capture is enabled implicitly, and a lost
+capture response must be reconciled under its original identity before another
+operation is considered.
+
 The inventory covers only declared file roots plus the automatically owned
 session and LoopX state participants. A conversation mentioning an external
 candidate or report does not capture that file. Declare every needed research
@@ -54,6 +61,20 @@ from a later state under the original point identity. Domain receivers must
 explicitly materialize their selected research components; the
 [SForge warm transport](../../benchmark/README.md#explicit-warm-worker-composition-qualification-in-progress)
 provides that selection for its data paths.
+
+For new checkpoint-enabled native EdgeBench runs, the startup prompt and workspace
+`AGENTS.md` now tell the solver to keep reusable research artifacts in a task
+workspace subdirectory, including local inputs and negative results. The prompt
+states whether the supplied declaration covers that workspace. A declared
+directory includes files created later; an explicit file list does not grow
+when a conversation or report mentions another path. Capture-disabled prompts
+are unchanged. This is storage guidance, not an enforced completeness check.
+
+For new donors, declare the task workspace directory before launch. For existing
+runs, preserve their frozen instructions and source; use a newly qualified
+attempt when adopting this guidance. Previously external artifacts still need
+explicit capture and receiver validation. Do not rewrite an old point using
+later live files or claim that the new guidance repairs missing historical bytes.
 
 Verify the returned digest before preparing a receiver:
 

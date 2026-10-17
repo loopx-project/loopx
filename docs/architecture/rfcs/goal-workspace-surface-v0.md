@@ -42,8 +42,9 @@ acceptance rule, cost computation or new action.
 **Unchanged:** Todo, gate, quota, lifecycle, acceptance and usage authority;
 the Tasks board, W1 map, Chat, Files and the Stage 4 delivery section keep their
 contracts and become lenses or destinations of this page. **Default boundary:**
-the Overview composition is a default UI change and requires the owner's
-first-screen preview approval before M1 becomes default. **Not approved here:**
+the Overview composition is a default UI change. M1 follows the repository's
+first-screen evidence rule, with the concrete viewport in the PR description
+and ordinary refinements within authorized direction requiring no extra confirmation. **Not approved here:**
 new Todo fields (including display numbers), a lifetime usage aggregate,
 browser authoring of executable acceptance checks, Lark or CLI parity, and any
 live-team L1/L2 or G1 claim.
@@ -541,7 +542,7 @@ This view does not authorize intervention in a frozen benchmark.
 | Copy the reference pattern literally (flat list, `#n`, lifetime runtime) | Rejected | Breaks the identity, liveness and unknown-is-not-zero invariants |
 | A separate Goal page route beside the workspace tabs | Rejected | Duplicates navigation; Overview is already the direct Goal destination |
 | A Python-served page projection | Rejected | The TypeScript presentation boundary is the established owner; a Python decision mirror is forbidden |
-| The W1 task map as every Overview's hero | Deferred | Ordinary work keeps its responsibility lens; research Goals use the whole-history Explore composition in Section 5.11, without turning task dependencies into research evidence; first-screen approval still applies |
+| The W1 task map as every Overview's hero | Deferred | Ordinary work keeps its responsibility lens; research Goals use the whole-history Explore composition in Section 5.11, without turning task dependencies into research evidence; first-screen PR evidence still applies |
 | Vitals on Overview only | Rejected | Owners working in Chat or Tasks would lose stop and needs-you context |
 | Lifetime totals summed from windows | Rejected | Double counting and retention gaps; lifetime belongs to the usage owner |
 
@@ -560,7 +561,8 @@ This view does not authorize intervention in a frozen benchmark.
   Agent time / Agent 用时, Cost / 成本, Last activity / 最近活动, Stopped / 已停止,
   Done / 已完成, Accepted / 已验收.
 - Default change: while under review, M1 may ship behind a local view toggle.
-  After first-screen approval it becomes the default, with release notes naming
+  After the required PR review and merge authorization it becomes the default,
+  with first-screen evidence in the PR description and release notes naming
   the changed Overview and masthead.
 
 ## 8. Migration and rollback
@@ -604,7 +606,7 @@ second upgrade.
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
 | M0 Contract | This RFC, the composition study and roadmap/RFC reconciliation | — | Docs governance smoke; owner review | Revert docs |
-| M1 Masthead and vitals | Persistent masthead with Stop/Resume readback on all Goal views; vitals from `goal_workspace_digest_v0`; Overview order Direction (read-only) → Needs you → existing sections | First-screen preview approval of the Goal page | V1, V2 (strip), V4, V6, V9 | Revert composition |
+| M1 Masthead and vitals | Persistent masthead with Stop/Resume readback on all Goal views; vitals from `goal_workspace_digest_v0`; Overview order Direction (read-only) → Needs you → existing sections | Goal first-viewport evidence in the PR description | V1, V2 (strip), V4, V6, V9 | Revert composition |
 | M2 Work lenses and rail | Now by owner with Board/Map lenses; All-work rail and Activity; shared selection and `todo` deep link; inline Add task; Results region | M1 | V2, V3, V6, V7, V9, V10 | Revert to M1 |
 | M3 Direction and return | Since-you-looked delta; target declaration through the acceptance owner | M2; D3 decided by its owner | V5, V8 | Hide declaration; delete marker |
 | M4 Live and expressive | W2 live state on rows and map from the execution observation owner; event motion; keyboard map and palette; dark inverse | M2; W2 observation available | V6 (motion, dark); live-team W2 acceptance | Disable motion/theme |
@@ -693,7 +695,8 @@ question to close. Research supplies permitted cases, assessment contracts and
 method qualification; product owns rendering, interaction and result consumption.
 This documentation establishes neither implementation, an available analysis
 provider, evaluator calibration, installed behavior nor scientific benefit.
-Any new first-screen composition still needs its concrete preview approval.
+New first-screen compositions follow the repository evidence rule: concrete
+viewport in the PR description, with no repeated approval for authorized refinements.
 
 The current author candidate combines the scoped paginated history reader with
 a default record-time lens and optional relationship view. Reading thirds,

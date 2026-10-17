@@ -338,13 +338,14 @@ def test_probe_deadline_survives_descendant_inheriting_stdout(monkeypatch, capsy
 
 @pytest.mark.parametrize("mode,expected,child_startup_delay", [
     ("timeout_default", "timeout", 0), ("timeout", "timeout", 0),
-    ("output_limit", "output_limit", 0), ("exit_pipe", "timeout", 0),
+    ("output_limit", "output_limit", 0), ("output_limit", "output_limit", .6),
+    ("exit_pipe", "timeout", 0),
     ("exit_closed", "observed", 0), ("exit_closed", "observed", .6),
 ])
 def test_probe_reclaims_persistent_descendants_before_return(tmp_path, monkeypatch, mode, expected, child_startup_delay):
-    # Successful closure uses the shipped deadline so interpreter and child
-    # startup are not constrained by a deadline for deliberately blocked probes.
-    if mode not in {"timeout_default", "exit_closed"}:
+    # Output and successful closure use the shipped deadline so two interpreter
+    # startups are not constrained by the synthetic timeout-case deadline.
+    if mode in {"timeout", "exit_pipe"}:
         monkeypatch.setattr(diagnostics, "PROBE_TIMEOUT_SECONDS", .5)
     # Publishing the ready PID must imply that the first pulse already exists.
     child_script = f"import time; time.sleep({child_startup_delay!r})\nimport pathlib, sys, os; p=pathlib.Path(sys.argv[1]); p.with_suffix('.pulse').write_text('0'); p.write_text(str(os.getpid())); n=0\nwhile True:\n n+=1; p.with_suffix('.pulse').write_text(str(n)); time.sleep(.01)"

@@ -40,6 +40,23 @@ provider 读回确认回复；发生没有 receipt 的不确定写入时不盲�
 飞书排队提示只表达已观测的队列状态，不断言已有前一条请求正在运行：首个 Turn
 也可能等待原生 claim。恢复继续使用已持久化提示的原文与 provider intent。
 
+私聊受理返回及本地 Turn worker 退出（含准备失败）时，唤醒既有四槽回复池。
+进程内 Event 只作提示，不携带内容或投递权限，也不执行 provider IO；扫描仍读取
+canonical journal，并重新核验来源与 Core。扫描前清除提示，避免扫描期间到达的
+信号在随后等待时丢失；关闭服务会唤醒等待并注销 runtime 提示。保留一秒恢复轮询、
+工作池上限、请求公平性和三十秒 owner 通知节奏；没有 hook 的自定义 controller
+继续轮询。工作槽被占用时，请求仍可能延至后续扫描；不通过已完成 Future 的回调
+反复重排尚未完成的工作。File/Core 与原生协议 fixture 单独验证这一调度路径，
+不替代安装态服务、provider 延迟、完整停止回执及 Web 首次可见结果的验收。
+
+原生 Lark 新发送和回执恢复在单次操作内，由同一来源校验核验当前 App、确切
+profile/chat/message 及 Core grant，与既有回复编辑路径一致。观测到的 Bot 名称
+必须匹配 Inbox 元数据；改名时仍先停止发送，刷新元数据后再继续。校验等待全部
+来源读取完成，并在返回前重读确切绑定。丢失读回保留同一 attempt，重新校验但不
+重复发送。操作之间不缓存身份或 grant；旧 membership-only callback 继续独立验证
+发送身份。File/Core fixture 验证这一传输事务及读取期间撤权，不认证安装态 provider
+延迟、完整停止 SLA 或 Web 首次可见结果。
+
 源码 canary 已验证打包页面的桌面/窄屏、撤权拒绝与恢复、慢会话期间另一 App 完成、
 后续消息持久排队、exact stop，以及重启后原会话恢复和已确认回复不重复发送。
 这些是合成 provider/协议验收；真实原生 Codex 另行验证独立线程与上下文隔离。

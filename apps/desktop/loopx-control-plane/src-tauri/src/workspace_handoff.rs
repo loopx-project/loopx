@@ -16,6 +16,7 @@ pub(crate) enum NavigationRetry {
 pub(crate) struct WorkspaceHandoff {
     boot_url: Url,
     workspace_url: Url,
+    launch_workspace_url: Option<Url>,
     last_workspace_url: Option<Url>,
     retry: NavigationRetry,
     pending: bool,
@@ -25,9 +26,13 @@ pub(crate) struct WorkspaceHandoff {
 impl WorkspaceHandoff {
     const RETRY_INTERVAL: Duration = Duration::from_secs(2);
     pub(crate) fn new(boot_url: Url, workspace_url: Url, retry: NavigationRetry) -> Self {
+        let mut root = workspace_url.clone();
+        root.set_query(None);
+        root.set_fragment(None);
         Self {
             boot_url,
-            workspace_url,
+            workspace_url: root,
+            launch_workspace_url: Some(workspace_url),
             last_workspace_url: None,
             retry,
             pending: false,
@@ -36,9 +41,20 @@ impl WorkspaceHandoff {
     }
     pub(crate) fn reconnect(&mut self) {
         // Explicit runtime repair retains its established workspace-root handoff.
+        self.launch_workspace_url = None;
         self.last_workspace_url = None;
         self.pending = true;
         self.last_attempt = None;
+    }
+    pub(crate) fn services_ready(&mut self) {
+        // A normal launch consumes the saved selection once. Explicit runtime
+        // repair still returns to the root; it must not replay an old selection.
+        let launch = self.launch_workspace_url.take();
+        self.reconnect();
+        self.last_workspace_url = launch;
+    }
+    pub(crate) fn origin(&self) -> &Url {
+        &self.workspace_url
     }
     pub(crate) fn page_reached(&mut self, current: &Url) {
         if current.origin() == self.workspace_url.origin() {
@@ -127,6 +143,26 @@ pub(crate) fn content_lost(webview: &tauri::Webview) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn normal_launch_resumes_once_but_explicit_repair_keeps_its_root_handoff() {
+        let launch: Url = "http://127.0.0.1:49123/chat/?goalId=example&view=tasks"
+            .parse()
+            .unwrap();
+        let root: Url = "http://127.0.0.1:49123/chat/".parse().unwrap();
+        let mut h = WorkspaceHandoff::new(
+            "tauri://localhost/".parse().unwrap(),
+            launch.clone(),
+            NavigationRetry::UntilNativeCommit,
+        );
+        assert!(!h.needs_navigation(Instant::now()));
+        h.services_ready();
+        assert_eq!(h.destination(), &launch);
+        h.page_reached(&launch);
+        h.reconnect();
+        assert_eq!(h.destination(), &root);
+        h.services_ready();
+        assert_eq!(h.destination(), &root);
+    }
     #[test]
     fn failed_workspace_load_retries_until_a_native_commit() {
         let boot: Url = "tauri://localhost/".parse().unwrap();

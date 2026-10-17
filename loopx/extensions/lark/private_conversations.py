@@ -141,7 +141,8 @@ class LarkPrivateConversations:
         return None
 
     def _source_message(self, record: dict[str, Any], *, selected: dict[str, Any] | None = None,
-                        render_content: bool = True) -> Mapping[str, Any] | None:
+                        render_content: bool = True,
+                        sender_identity: dict[str, str] | None = None) -> Mapping[str, Any] | None:
         """Read the exact source under this App, then recheck the Core audience.
 
         A p2p source read proves the destination without requiring group-member
@@ -174,7 +175,8 @@ class LarkPrivateConversations:
                     if current != read_binding or current != selected["binding"]:
                         return None  # Revocation/replacement while reads ran is not a delivery grant.
                 else:
-                    selected = self.bindings.resolve(binding_id=record["binding_id"], **record["source"])
+                    selected = self.bindings.resolve(binding_id=record["binding_id"],
+                                                     include_observation=sender_identity is not None, **record["source"])
             native_path = self.core.root / f"{record['request_ref']}.json"
             native = _read_json(native_path) if native_path.exists() else {}
             if native.get("agent_target"):
@@ -188,6 +190,8 @@ class LarkPrivateConversations:
             # Resolve has just verified this App for this invocation. Reuse
             # that observation for mention checks, never across verifications.
             observation = selected.get("observation")
+            if sender_identity is not None and observation is not None:
+                sender_identity["bot_display_name"] = str(observation.get("bot_display_name") or "")
             stop_root: Mapping[str, Any] | None = None
             completed_stop = False
             if group:
@@ -302,13 +306,34 @@ class LarkPrivateConversations:
                         message["_command_input"] = self._group_text_command_input(message, observation)
                         if not message["_command_input"]:
                             return None  # A display rendering cannot supply missing canonical text.
+                # Outbound source reads must join before consuming this
+                # operation's proof. Admission retains Core's fenced rejection
+                # and its existing response when a binding changes mid-read.
+                if not render_content:
+                    current = next((row for row in self.bindings.read()["bindings"]
+                                    if row.get("binding_id") == record["binding_id"]), None)
+                    if current != selected["binding"]:
+                        return None
+                if sender_identity is not None:
+                    if observation is None:
+                        return None
                 return message
         except (KeyError, ValueError, OSError):
             pass
         return None
 
-    def _source_verified(self, record: dict[str, Any]) -> bool:
-        return self._source_message(record, render_content=False) is not None
+    def _source_verified(self, record: dict[str, Any], *, sender_identity: dict[str, str] | None = None) -> bool:
+        return self._source_message(record, render_content=False, sender_identity=sender_identity) is not None
+
+    def _source_authority(self, record: dict[str, Any], profile: str, chat_id: str,
+                          message_id: str) -> tuple[str | None, bool]:
+        """Verify one exact outbound operation; retain no identity or grant."""
+        if (profile != record["profile"] or chat_id != record["event"]["chat_id"]
+                or message_id != record["event"]["message_id"]):
+            return None, False
+        identity: dict[str, str] = {}
+        verified = self._source_verified(record, sender_identity=identity)
+        return identity.get("bot_display_name"), verified
 
     @staticmethod
     def _group_text_command_input(message: Mapping[str, Any], observation: Mapping[str, Any]) -> str | None:
@@ -569,7 +594,7 @@ class LarkPrivateConversations:
         kwargs = dict(project=self.runtime_root, config_path=config,
             message_id=record["event"]["message_id"], text=text, runner=self._reply_runner,
             finalize_reactions=phase not in {"admission", "progress"} and not (phase == "terminal" and record.get("commission_resources")),
-            source_membership_verifier=lambda: self._source_verified(record))
+            source_authority_verifier=lambda profile, chat, message: self._source_authority(record, profile, chat, message))
         progress = record["deliveries"].get("progress") or {}
         stream = record.get("stream") or {}
         edit = phase_state.get("edit_from")
@@ -665,7 +690,8 @@ class LarkPrivateConversations:
             message_id=record["event"]["message_id"], text=text,
             previous_text=_presentation_text(stream.get("confirmed_text") or progress["text"]),
             attempt=stream.get("confirmed_attempt") or progress["attempt"],
-            runner=self._reply_runner, source_membership_verifier=lambda: self._source_verified(record),
+            runner=self._reply_runner,
+            source_authority_verifier=lambda profile, chat, message: self._source_authority(record, profile, chat, message),
             before_send=before_send, delivery_attempt_recorder=lambda value: confirmed.update(value))
         stream["blocker"] = result.get("blocker")
         if result.get("blocker") == "provider_update_edit_limit":

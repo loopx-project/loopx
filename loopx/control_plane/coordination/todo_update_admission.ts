@@ -2,7 +2,7 @@
  * Grants may cross a claim owner;
  * exclusions, bindings and execution lineage remain independent restrictions. */
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
-import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
+import {leaseRepositoryRejection, ownerAdministrativeRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {isExploreReferenceAppend} from "../todos/field_update.ts";
 import {acceptanceRestoration} from "./todo_acceptance_restoration.ts";
 import {monitorMutationRejection} from "./todo_monitor_cycle.ts";
@@ -15,6 +15,7 @@ import {evaluateCoordinationTodoMutationDecision,
 import {decodeTaskLeaseProof, evaluateCanonicalTaskLeaseProof, todoUpdateLeaseRecovery, leasedTodoEditRejection, isBoundUserActionMetadataUpdate, isSoftClaimReleasedCopyUpdate, isOwnerAdministrativeCopyUpdate} from "./task_lease_proof.ts";
 import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
+import {isOwnerWorkRequirementsRevision, workRequirementsRevisionRejection} from "./todo_work_requirements_lifecycle.ts";
 import {indexCoordinationProjection} from "./coordination_projection.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {leaseIsActive} from "../work_items/task_lease_acquire.ts";
@@ -133,6 +134,23 @@ export function todoUpdateAdmissionRejection(
     }
     return null;
   }
+  if (mode === "hard_lease" && isOwnerWorkRequirementsRevision(todo, input)) {
+    try {
+      // Supplied proof pins one live generation. Never turn stale/partial proof
+      // into a proof-free administrative request by looking up another lease.
+      if (hasProof) {
+        const fence = evaluateCanonicalTaskLeaseProof({todo, lease, handoff_mode: mode,
+          registered_agents: input.registered_agents, actor_agent_id: input.actor_agent_id,
+          lease_idempotency_key: input.lease_idempotency_key ?? null,
+          lease_expected_version: input.lease_expected_version ?? null, now: input.now});
+        if (fence.outcome !== "apply") return withRecovery(reject(String(fence.code),
+          "Explicit execution proof is stale or unavailable; inspect this Todo before retrying"));
+      }
+      return withRecovery(workRequirementsRevisionRejection(todo, input, lease));
+    } catch (error) {
+      return reject("invalid_coordination_projection", error instanceof Error ? error.message : "invalid retained lease");
+    }
+  }
   if (mode === "hard_lease" && isBlockedLifecycleTransition(input, todo)) {
     try {
       // Proof, if supplied, is an explicit generation constraint. Never replace
@@ -145,7 +163,8 @@ export function todoUpdateAdmissionRejection(
         if (fence.outcome !== "apply") return withRecovery(reject(String(fence.code), "Explicit execution proof is stale or unavailable; inspect this Todo before retrying"));
       }
       if (lease !== undefined) {
-        const repository = leaseRepositoryRejection(todo, canonicalTaskLease(lease, input.goal_id, input.todo_id));
+        const repository = ownerAdministrativeRepositoryRejection(todo,
+          canonicalTaskLease(lease, input.goal_id, input.todo_id), input.actor_agent_id);
         if (repository !== null) return withRecovery(reject(repository, "Lifecycle change must preserve the execution repository"));
       }
       return withRecovery(blockedLifecycleRejection({goal_id: input.goal_id, todo_id: input.todo_id,
@@ -178,7 +197,7 @@ export function todoUpdateAdmissionRejection(
       if (lease !== undefined) {
         const current = canonicalTaskLease(lease, input.goal_id, input.todo_id);
         leaseIsActive(current, input.now); // Validate the retained clock as well.
-        const repository = leaseRepositoryRejection(todo, current);
+        const repository = ownerAdministrativeRepositoryRejection(todo, current, input.actor_agent_id);
         if (repository !== null) return withRecovery(reject(repository, "Administrative edit must preserve the execution repository"));
         if (current.owner !== input.actor_agent_id) return withRecovery(reject("lease_owner_mismatch",
           "This Todo retains another holder's execution; reconcile that holder before editing"));

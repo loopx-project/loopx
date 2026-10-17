@@ -186,9 +186,15 @@ def test_reviewed_cli_migration_preserves_busy_assignment_and_backs_up(canonical
             *args, "--goal-id", "mode-goal", "--todo-id", todo["todo_id"]], capture_output=True, text=True, timeout=90)
         assert child.returncode == expected_exit, child.stdout + child.stderr
         return json.loads(child.stdout)
-    # Policy migration preserves assignment, but does not authorize an execution.
-    rejected = work("todo", "update", "--agent-id", "agent-a", "--text", "Continued work", expected_exit=1)
+    # Ordinary copy is administrative after migration; lease lineage stays intact.
+    assert work("todo", "update", "--agent-id", "agent-a", "--text", "Continued work")["ok"]
+    copied = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="mode-goal", include_leases=True)
+    assert copied["leases"] == after["leases"]
+    rejected = work("todo", "update", "--agent-id", "agent-a", "--note", "Unqualified execution",
+                    "--task-lease-idempotency-key", "not-acquired", "--task-lease-expected-version", "1",
+                    expected_exit=1)
     assert rejected["error_code"] == "handoff_mode_requires_lease"
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="mode-goal", include_leases=True) == copied
     acquired = work("task-lease", "acquire", "--owner", "agent-a", "--idempotency-key", "continued-execution",
                     "--expected-version", "0", "--ttl-seconds", "600", "--write-scope", "src/**")
     assert acquired["acquired"] is True

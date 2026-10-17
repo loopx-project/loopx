@@ -56,7 +56,7 @@ class WarmStart:
             raise ValueError("Original warm start deadline expired before checkpoint verification")
         effect_runtime_result("runtime.checkpoint_artifacts", {
             "action": "verify", "root": str(self.root), "expected_sha256": self.sha256},
-            timeout=min(_CHECKPOINT_VERIFY_TIMEOUT_SECONDS, remaining))
+            timeout=min(_CHECKPOINT_VERIFY_TIMEOUT_SECONDS, remaining), large_local_snapshot=True)
         metadata = json.loads((self.root / "checkpoint.json").read_bytes())["point_metadata"]
         native, source = metadata["native_session"], metadata["loopx_state"]
         if (native["guest_workspace"] != workspace or native["guest_home"] != _CODEX_HOME
@@ -192,7 +192,7 @@ def restore_workspace(declaration: dict, workspace: Path):
     unit = Path(declaration["root"])
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": declaration["sha256"]},
-        timeout=_phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS))
+        timeout=_phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS), large_local_snapshot=True)
     _phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS)
     manifest = json.loads((unit / "checkpoint.json").read_bytes())
     metadata = manifest["point_metadata"]
@@ -227,7 +227,7 @@ def restore_workspace(declaration: dict, workspace: Path):
     if research:
         copied = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe",
             "components": [{"id": key, "source_path": str(target)} for key, _, target in research]},
-            timeout=_phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS))
+            timeout=_phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS), large_local_snapshot=True)
         if any(copied["source_witness"][key] != manifest["artifact_witness"][key] for key, _, _ in research):
             raise ValueError("Restored research files differ from the sealed artifacts; preserve this failed receiver")
     _phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS)

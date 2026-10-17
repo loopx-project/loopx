@@ -233,6 +233,7 @@ def configure_goal_acceptance(
     operation_id: str | None = None,
     execute: bool = False,
     disable: bool = False,
+    review_context_digest: str | None = None,
 ) -> dict[str, Any]:
     """Explicit local-owner configuration; Agent tool callers have no writer."""
     route = _routing(registry_path, goal_id, runtime_root, agent_id)
@@ -246,6 +247,7 @@ def configure_goal_acceptance(
             "disable": disable,
             "dry_run": not execute,
             "operation_id": operation_id or f"goal-acceptance:{uuid4().hex}",
+            **({"review_context_digest": review_context_digest} if review_context_digest is not None else {}),
         },
     )
 

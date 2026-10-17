@@ -14,6 +14,25 @@ const output = () => ({assessments:[
   {episode_id:'e2',metric:'information_gain',verdict:'unknown',reason:'No valid measurement',citations:[]}],limitations:['Synthetic contract test, not evaluator calibration']});
 const prepared = () => prepareTrajectoryAssessment({input:input(), config});
 
+test('artifact digests retain the exact bare SHA-256 boundary', () => {
+  for (const hash of ['0'.repeat(64), '0123456789abcdef'.repeat(4), 'f'.repeat(64)]) {
+    const x = input(); x.sources[0]!.artifact_sha256 = hash;
+    assert.equal(prepareTrajectoryAssessment({input:x, config}).input.sources[0]!.artifact_sha256, hash);
+  }
+  for (const hash of ['a'.repeat(63), 'a'.repeat(65), 'A'.repeat(64), 'g'.repeat(64),
+    'sha256:' + 'a'.repeat(64), ' ' + 'a'.repeat(64), 'a'.repeat(64) + ' ',
+    '\n' + 'a'.repeat(64), 'a'.repeat(64) + '\n', 'a'.repeat(64) + '\r\n']) {
+    const x = input(); x.sources[0]!.artifact_sha256 = hash;
+    assert.throws(() => prepareTrajectoryAssessment({input:x, config}),
+      {message:'artifact_sha256 must be a sha256 hex digest'});
+  }
+  for (const hash of [null, undefined, true, 64, {}, [], '', ' ', 'a'.repeat(64) + '\0']) {
+    const x = input(); Object.assign(x.sources[0]!, {artifact_sha256:hash});
+    assert.throws(() => prepareTrajectoryAssessment({input:x, config}),
+      {message:'artifact_sha256 must be nonempty text'});
+  }
+});
+
 test('known denominator retains unknown and produces missing-data bounds, not a confidence interval', () => {
   const result=qualifyTrajectoryAssessment({...prepared(),output:output()});
   assert.deepEqual(result.metrics.find(m=>m.metric==='information_gain'),{metric:'information_gain',yes:1,no:0,unknown:1,eligible:2,assessed_fraction:.5,missing_data_bounds:[.5,1]});

@@ -80,8 +80,8 @@ def test_app_import_actions_and_restart_without_legacy_consumers(cold_api, provi
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_app_rejects_missing_lease_and_provider_without_legacy_consumers(cold_api, provider):
-    cold.test_app_enforces_lease_and_missing_provider_without_legacy_fallback(cold_api, provider)
+def test_app_copy_preserves_execution_and_provider_fences_without_legacy_consumers(cold_api, provider):
+    cold.test_app_copy_preserves_execution_and_provider_fences_without_legacy_fallback(cold_api, provider)
 
 
 def test_app_rejects_changed_source_and_backup_without_legacy_consumers(cold_api):

@@ -60,6 +60,66 @@ async function assertAnchorInView(page, id) {
   });
 }
 
+async function assertTimeMachineJourney(page, lang) {
+  await page.goto(`${publicOrigin}/loopx/?lang=${lang}`);
+  const entry = page.locator('#explore .resource-card[href*="/lab/time-machine/"]');
+  await entry.focus();
+  await Promise.all([
+    page.waitForURL(`${publicOrigin}/loopx/lab/time-machine/${lang === "zh" ? "?lang=zh" : ""}`),
+    entry.press("Enter"),
+  ]);
+  // Anchors come from the three public captures, independently of the UI scene copy.
+  const captures = [
+    ["portfolio", 76, "finding_5b6717a721136e001cd0cd18d38ac167431bbe265445e669bac92c72d990aef2", /13\.84/, /20\.53/],
+    ["graph", 134, "finding_b5860e437b2905fbc0b9db2bbdc3ba567783817eee67e0ecc433bf4e65c00b1a", /32%/],
+    ["ad", 105, "finding_c652328314cf9ac2757f85dfcbdb9907bb719cf1a1e36185926640694663a9f2", /32/],
+  ];
+  for (const [index, [id, count, findingId, ...metrics]] of captures.entries()) {
+    if (index) {
+      await page.locator(".tm-cases button").nth(index).click();
+      await page.waitForURL((url) => url.searchParams.get("case") === id);
+    }
+    const capture = JSON.parse(await readFile(resolve(exportSite, `lab/time-machine/data/${id}.json`), "utf8"));
+    assert.equal(capture.events.length, count);
+    const finding = capture.events.find((row) => row.result_id === findingId);
+    assert.equal(finding?.event_kind, "finding");
+    const choice = page.locator(".tm-choices button:not([disabled])").first();
+    await choice.focus();
+    await choice.press("Enter");
+    await page.locator(".tm-revealed").waitFor();
+    for (const metric of metrics) assert.match(await page.locator(".tm-revealed").innerText(), metric);
+    const title = await page.locator(".tm-revealed h3").innerText();
+    await page.locator(".tm-choices button").nth(1).click();
+    assert.equal(await page.locator(".tm-revealed h3").innerText(), title, "either choice reveals the same historical outcome");
+    await page.getByRole("button", { name: lang === "zh" ? "核对这条发现" : "Inspect this finding", exact: true }).click();
+    await page.locator(".tm-original").waitFor({ state: "visible" });
+    // Inspect queues a focus transfer; finish it before sending the next key.
+    await page.waitForFunction(() => document.querySelector(".tm-original h3") === document.activeElement);
+    assert.equal(await page.locator(".tm-record-body").textContent(), finding.summary, "the outcome opens its original finding");
+    assert.equal(await page.locator(".tm-source").getAttribute("href"), `/loopx/lab/time-machine/data/${id}.json`);
+    const cursor = page.locator("#tm-cursor");
+    assert.equal(await cursor.getAttribute("max"), String(count));
+    await cursor.press("End");
+    await page.waitForFunction((summary) => document.querySelector(".tm-record-body")?.textContent === summary, capture.events.at(-1).summary);
+    assert.equal(await cursor.inputValue(), String(count));
+    await page.locator(".tm-return").click();
+    assert.ok(await page.locator("#tm-question").evaluate((heading) => heading === document.activeElement));
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "Time Machine fits the viewport");
+  }
+  // A real missing HTTP capture must hide outcomes and disable choices; retry
+  // then reads the actual exported bytes through the production verifier.
+  await page.route("**/lab/time-machine/data/portfolio.json", (route) => route.fulfill({ status: 404, body: "Missing capture" }), { times: 1 });
+  await page.reload();
+  await page.locator(".tm-cases button").first().click();
+  await page.locator(".tm-error [role=alert]").waitFor();
+  assert.equal(await page.locator(".tm-revealed").count(), 0);
+  assert.equal(await page.locator(".tm-choices button:disabled").count(), 2);
+  await page.locator(".tm-error button").click();
+  await page.locator(".tm-choices button:not([disabled])").first().click();
+  await page.locator(".tm-revealed").waitFor();
+  assert.match(await page.locator(".tm-revealed").innerText(), /13\.84/);
+}
+
 let browser;
 try {
   for (let i = 0; ; i++) {
@@ -249,7 +309,7 @@ try {
       await page.locator("#explore").waitFor();
       assert.equal(await page.locator("html").getAttribute("lang"), lang === "zh" ? "zh-CN" : "en");
       assert.equal(await page.locator('a[href*="deprecated"], a[href*="frontstage/"]').count(), 0);
-      const expected = ["docs/guides/personal-workspace-user-guide/", `benchmarks/swe-marathon/${lang === "zh" ? "?lang=zh" : ""}`, `benchmarks/lhtb/${lang === "zh" ? "?lang=zh" : ""}`, "benchmarks/deepswe/behavior-discovery/", "benchmarks/deepswe-sol/", `docs/showcases/index${lang === "en" ? ".en" : ""}.html`];
+      const expected = ["docs/guides/personal-workspace-user-guide/", `benchmarks/swe-marathon/${lang === "zh" ? "?lang=zh" : ""}`, `benchmarks/lhtb/${lang === "zh" ? "?lang=zh" : ""}`, "benchmarks/deepswe/behavior-discovery/", "benchmarks/deepswe-sol/", `lab/time-machine/${lang === "zh" ? "?lang=zh" : ""}`];
       assert.deepEqual(await page.locator("#explore .resource-card").evaluateAll((links) => links.map((a) => a.getAttribute("href"))), expected.map((path) => `/loopx/${path}`));
       if (width === 390) {
         await page.getByRole("button", { name: "Open navigation" }).click();
@@ -279,12 +339,14 @@ try {
         await page.goto(`${publicOrigin}/loopx/${expected[i]}`);
         await page.locator("h1").first().waitFor();
       }
+      await assertTimeMachineJourney(page, lang);
+      console.log(`Time Machine discovery, three outcomes, original records and retry: ${width}px, ${lang}: ok`);
     }
   }
   if (process.env.LOOPX_PUBLIC_SITE_DIR) {
     // Check the assembled publication, including the separately built books.
     const checked = new Set();
-    for (const path of ["", "?lang=zh", "benchmarks/swe-marathon/", "benchmarks/lhtb/", "benchmarks/lhtb/?lang=zh", "benchmarks/deepswe/behavior-discovery/", "benchmarks/deepswe-sol/", "docs/showcases/index.html", "docs/showcases/index.en.html", "docs/guides/personal-workspace-user-guide/", "docs/book/", "docs/book/en/", "blog/", "blog/zh/"]) {
+    for (const path of ["", "?lang=zh", "benchmarks/swe-marathon/", "benchmarks/lhtb/", "benchmarks/lhtb/?lang=zh", "benchmarks/deepswe/behavior-discovery/", "benchmarks/deepswe-sol/", "lab/time-machine/", "lab/time-machine/?lang=zh", "docs/showcases/index.html", "docs/showcases/index.en.html", "docs/guides/personal-workspace-user-guide/", "docs/book/", "docs/book/en/", "blog/", "blog/zh/"]) {
       await page.goto(`${publicOrigin}/loopx/${path}`);
       await page.locator("h1").first().waitFor();
       const links = await page.locator("a[href]").evaluateAll((links) => links.map((link) => link.href));

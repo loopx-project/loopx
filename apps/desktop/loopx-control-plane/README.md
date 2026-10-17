@@ -153,6 +153,7 @@ cargo run --example webcontent_recovery -- --baseline
 ```
 
 It reads no Goals or accounts and never targets an installed LoopX process.
+
 The fault injector uses a private WebKit process-id getter only in this example;
 production recovery uses the public Tauri termination hook.
 This controlled regression does not establish long-duration reliability or
@@ -187,6 +188,33 @@ counter and expands Recovery & updates. Unchanged invalid selections are
 rechecked at most every 30 seconds; an explicit recovery action wakes the
 supervisor immediately. It returns to the loading shape as soon as the
 snapshot leaves the terminal phase (for example while an explicit repair runs).
+
+### Returning After A Normal Close
+
+The packaged App remembers the selected local Goal, view, Agent and Todo when
+its main window closes or the App quits. Reopening uses the newly allocated
+loopback origin and returns to that selection without another navigation step.
+Selecting **LoopX 管家** before closing instead returns to Manager next time.
+This restores a reading position; it never submits a message or starts work.
+
+The optional `workspace-location.json` in the App's private data directory
+contains only those selection identifiers. It stores no origin, raw URL, prompt,
+credentials or report/session query. Missing, corrupt or obsolete preferences
+fall back to the ordinary workspace; unknown views fall back to the frontend's
+default. Boot and foreign pages cannot overwrite a saved local selection.
+Remote status sources and host-granted workspace contexts are not restored:
+they reopen at local Manager, so their Goal identifiers cannot be replayed
+against the local source. Vite development navigation is unchanged. Explicit
+runtime repair retains its existing root handoff; WebContent crash recovery
+continues to retain the current in-process route.
+
+For native qualification, use a separately identified packaged App with the
+real backend: select a local Goal and Agent page, quit normally, reopen, and
+check the same selection on the new port. Also check window-close, an explicit
+return to Manager and a corrupt preference in that disposable App profile.
+Retain Session IDs and active-Turn readbacks before and after; navigation is
+not evidence that work was resumed or accepted. Cross-platform and sustained
+use require their own qualification.
 
 ## Known Issues
 

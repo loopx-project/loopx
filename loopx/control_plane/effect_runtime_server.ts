@@ -33,12 +33,14 @@ const LOCAL_SNAPSHOT_METHODS = new Set([
   "todo.context.page",
   "work_item.context.project",
   "work_item.replan_semantics.project",
+  "quota.settlement.read",
   "goal.checkpoint_read_context.resolve",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",
   "performance_diagnosis.inspect",
   "state.recovery.archive.verify",
   "state.recovery.manifest.verify",
+  "runtime.checkpoint_artifacts",
 ]);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;
 // Bounds for LOOPX_EFFECT_RUNTIME_IDLE_MS. The upper bound is the largest

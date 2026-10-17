@@ -14,6 +14,7 @@ import type {CoordinationTodoUpdateInput} from "./todo_update_intent.ts";
 import {deferredReopenRejection, isDeferredReopen, isOwnerDeferral} from "./todo_deferred_lifecycle.ts";
 import {blockedLifecycleRejection, isBlockedLifecycleTransition} from "./todo_blocked_lifecycle.ts";
 import {TODO_WORK_REQUIREMENT_FIELDS} from "../todos/work_requirements.ts";
+import {isOwnerWorkRequirementsRevision} from "./todo_work_requirements_lifecycle.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
@@ -163,6 +164,15 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
     execution_authority_granted: false,
   };
   const intent = input.planning_intent ?? {};
+  if (mode === "hard_lease" && isOwnerWorkRequirementsRevision(todo, input) &&
+      (input.lease_idempotency_key != null || input.lease_expected_version != null)) {
+    return {...base, action: "inspect_current_proof",
+      reason: "The explicit proof did not qualify. Inspect the current generation; do not replace its key/version or silently retry without proof. A separately reviewed proof-free requirement revision retires only the actor's own current grant and grants no execution."};
+  }
+  if (mode === "hard_lease" && isOwnerWorkRequirementsRevision(todo, input) && lease !== null && !sameOwner) {
+    return {...base, action: "reconcile_lease_owner",
+      reason: "This Todo retains another holder's execution history. Inspect that holder and reconcile the ownership through its lifecycle before preparing a requirement revision; this request cannot retire foreign history, borrow proof or acquire on the holder's behalf."};
+  }
   if ((intent.status === "blocked" || intent.status === "deferred") &&
       (input.lease_idempotency_key != null || input.lease_expected_version != null)) {
     return {...base, action: "inspect_current_proof", reason: "This lifecycle request supplied execution proof that did not qualify. Inspect the current lease and review the intended operation; do not silently replace its key or version. A proof-free administrative pause is a new, explicit request, not a retry of the stale execution."};

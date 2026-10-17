@@ -966,6 +966,14 @@ File/SQLite CLI 恢复覆盖超过 wire 预算的完整事实、后续独立工�
 游标/checkpoint 归约保留为以测量驱动、完整源语义一致
 为前提的后续工作，不再造 Python 规则。见[历史决策证据](ledger/typescript-control-plane-migration-v0/2026-09-22-replan-history-policy.zh-CN.md)。
 
+结算等待适配器现在对完整依赖图共用既有 resume 事实投影，保留绑定 Todo 的
+resume 证明及 Monitor 时钟、hash、cadence；不重复传递无关正文，也不截断
+canonical 记录。受阻 writeback、回执绑定等待恢复和普通 `quota.settlement.read`
+回读按需显式复用同 UID、摘要绑定的私有 snapshot 通道，2 MiB wire 和 64 MiB
+snapshot 上限均不变。依赖资格、冻结观测、原 Turn 身份、受阻不扣额收尾及
+精确一次记账仍由既有 TS owner 判断。隔离 File/SQLite CLI 验证覆盖完整多 MiB
+Goal 与重放；源码验证不代表已安装宿主采用或整 Goal 资格通过。
+
 **Checkpoint 恢复编写契约。** 现有 TS vision owner 只能投影校验器接受的恢复
 选项：没有持久 vision 时，缺失的 checkpoint 必须提交 vision patch；有该基线时
 才提供 unchanged reason。Authoring 契约复用校验器的 `todo_delta` 限制：保留前
