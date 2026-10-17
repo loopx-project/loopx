@@ -6,7 +6,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENTS = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+ENGINEERING = (ROOT / "docs/development/agent-engineering.md").read_text(encoding="utf-8")
 GUIDE = (ROOT / "docs" / "reference" / "extensions.md").read_text(encoding="utf-8")
+
+assert "agent-engineering.md#capability-and-extension-placement" in AGENTS
 
 for anchor in (
     "## Capability And Extension Placement",
@@ -16,7 +19,7 @@ for anchor in (
     "capability id, provider id",
     "name public capabilities after caller outcomes",
 ):
-    assert anchor in AGENTS, anchor
+    assert anchor in ENGINEERING, anchor
 
 for anchor in (
     "## Placement Decision For Agents",

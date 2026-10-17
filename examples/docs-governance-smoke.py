@@ -983,6 +983,9 @@ def assert_technical_direction_governance_is_current() -> None:
 
 
 def main() -> int:
+    import runpy
+
+    runpy.run_path(str(REPO_ROOT / "examples/agent-instructions-smoke.py"), run_name="__main__")
     docs_index = read("docs/README.md")
     root_readme = read("README.md")
     root_readme_zh = read("README.zh-CN.md")
