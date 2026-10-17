@@ -27,7 +27,7 @@ const attentionNotificationSupportCopy = {
   unsupported: "settings.attentionNotificationsUnsupported",
 } as const;
 
-type WorkspaceSettingsTab = "ownership" | "steward" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
+type WorkspaceSettingsTab = "ownership" | "steward" | "conversation" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
 
 type SettingsPage = Exclude<WorkspaceSettingsTab, "machine">;
 
@@ -40,6 +40,7 @@ const tabIcons: Record<SettingsPage, typeof Settings2> = {
   lark: Settings2,
   provider: KeyRound,
   steward: Bot,
+  conversation: Bot,
 };
 
 export function WorkspaceSettingsPage({
@@ -99,6 +100,7 @@ export function WorkspaceSettingsPage({
       label: t("settings.agentGroup"),
       tabs: [
         { key: "steward", label: t("settings.steward") },
+        { key: "conversation", label: locale === "zh-CN" ? "对话与模型" : "Conversations and models" },
         // The model provider is one machine decision (which endpoint and key the
         // operator credential holds); the capability catalog is another (which
         // machine defaults every Goal inherits). They answer different questions
@@ -128,6 +130,7 @@ export function WorkspaceSettingsPage({
     },
   ];
   const headings: Record<SettingsPage, { title: string }> = {
+    conversation: {title: locale === "zh-CN" ? "Goal 对话默认值" : "Goal conversation defaults"},
     ownership: {title: t("ownership.title")},
     appearance: {
       title: t("settings.appearance"),
@@ -230,6 +233,7 @@ export function WorkspaceSettingsPage({
         ) : null}
 
         {tab === "steward" ? <MachineConfigurationSettings onChanged={onChanged} section="steward" /> : null}
+        {tab === "conversation" ? <MachineConfigurationSettings onChanged={onChanged} section="conversation" /> : null}
         {tab === "capabilities" && capabilityScope === "machine" ? <MachineConfigurationSettings onChanged={onChanged} section="other" /> : null}
         {tab === "capabilities" && capabilityScope === "goal" ? (
           <GoalCapabilitySettings

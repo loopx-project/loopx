@@ -3,7 +3,7 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 
 // An attached_host Session queues a follow-up while its host runs a Turn
 // (ChatRuntimeController.submit_turn -> enqueue_attached_agent_turn), whereas a
-// managed_runtime Session accepts one Turn at a time with native steering when supported. The composer must follow
+// managed_runtime Session queues ordinary sends and accepts explicit steering when supported. The composer must follow
 // the Session's typed mode, not read every running Turn as a rejected send.
 const attachedGoal = { id: "product-release", label: "Product Release" };
 const managedGoal = { id: "research-monitor", label: "Research Monitor" };
@@ -74,7 +74,7 @@ export const attachedHostFollowUpScenario = {
     };
     try {
       await openGoalChat(managedGoal);
-      await page.locator(".personal-composer-status", { hasText: "发消息可调整当前工作" }).waitFor();
+      await page.locator(".personal-composer-status", { hasText: "新消息将在下一轮处理" }).waitFor();
       await composer.fill("当前工作先检查依赖");
       if (await sendButton.isDisabled()) throw new Error("Managed Codex instructions were blocked");
       // This scenario isolates attached queues; exact native steering and retry

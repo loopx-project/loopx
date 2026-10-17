@@ -37,6 +37,14 @@ unknown; this is maintenance of the App's own installation, not proof that one
 source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
 artifact's identity before the workspace opens.
 
+If anonymous GitHub ancestry lookup is unavailable, the App can reuse an
+existing GitHub CLI login for the same fixed public-repository GET. It never
+starts login or requests account permissions. Each tool has a three-second
+process deadline; missing, failed or unauthenticated `gh` leaves ancestry
+unknown. A successful non-ordering answer is not retried under another account.
+Core still owns wheel qualification; this read neither changes its identity
+rules nor grants Goal or account authority.
+
 The bundled runtime carries its Core package version from the archived wheel
 metadata. Native validation and ordering use Python's [PEP 440 version format](https://packaging.python.org/en/latest/specifications/version-specifiers/),
 including alpha, beta, release candidate, development, post-release and local
@@ -212,6 +220,11 @@ For native qualification, use a separately identified packaged App with the
 real backend: select a local Goal and Agent page, quit normally, reopen, and
 check the same selection on the new port. Also check window-close, an explicit
 return to Manager and a corrupt preference in that disposable App profile.
+Bind the disposable registry and its `common_runtime_root` at the QA launch
+entrypoint, and set `LOOPX_USAGE_PING=0` for all synthetic Core invocations:
+a caller-only environment can be lost when a window tool or the
+system relaunches the bundle. Verify the reopened process's data route before
+observing or operating it; never use the installed App as a fault fixture.
 Retain Session IDs and active-Turn readbacks before and after; navigation is
 not evidence that work was resumed or accepted. Cross-platform and sustained
 use require their own qualification.
@@ -303,19 +316,23 @@ restricted to loopback CORS and the existing preview/apply authority boundary.
 
 ## Coexistence With `loopx dashboard`
 
-The desktop shell and `loopx dashboard` share the same loopback services on
-`8766` and `8767`, and both entry points reuse an already-running matching
-LoopX service:
+The packaged App allocates its own private Status and Chat endpoints for each
+window. `loopx dashboard` keeps its CLI endpoints on `8766` and `8767`; either
+entrypoint can run without adopting or stopping the other's listeners. Vite
+development retains those CLI ports and its qualified-service reuse path.
 
-- Start `loopx dashboard` first, then open the desktop shell: the shell keeps
-  using the running status and Chat services and only opens the native window.
-- Start the desktop shell first, then run `loopx dashboard`: the command
-  detects the matching LoopX Chat service, prints its URL, and opens the
-  browser/PWA route without starting a second server.
+The packaged App watches its own direct service children. When one exits, it
+restarts that service on the same private endpoint with the same qualified
+runtime and identity, keeping the healthy peer running. Recovery attempts are
+at least two seconds apart. An occupied endpoint fails closed and is retried;
+the intervening listener is never adopted or stopped. A live but unresponsive
+child is outside this exit-recovery path.
 
-Either order works. Closing the desktop window stops only the service process
-groups it started; a Chat service started by `loopx dashboard` keeps running
-until that command is stopped.
+Recovery keeps an update check's error or available-update choice visible. It
+waits during maintenance and after an App replacement requires restart or leaves
+the App incomplete. The native shell sends no conversation input or replay;
+persisted Session and Turn recovery remain owned by Core. Closing the App stops
+only its own service process groups.
 
 ## Prerequisites
 
@@ -339,6 +356,40 @@ npm run dev
 
 ## Validation
 
+For a process-exit drill, use a separately identified packaged QA App whose
+launcher fixes a disposable empty registry and `LOOPX_USAGE_PING=0` before any
+Core command. Keep its qualified Core artifact immutable across baseline and
+candidate runs. Deny public network access only in that launcher, check for
+updates through the actual App, then terminate its exact owned Chat and Status
+children separately. Read back both HTTP identities, unchanged peer PID, exact
+registry, retained Session and update failure, then normal quit/reopen cleanup.
+Never substitute an installed App, real Goal or shared listener as a fixture.
+This qualifies child-exit recovery, not an interrupted model Turn, an
+unresponsive process, a signed update installation or cross-OS operation.
+
+This empty-registry macOS QA capture follows separate real Chat and Status
+process exits. Both services recovered while the failed network update check
+stayed visible. It uses a separately frozen installed Core; it is not a
+single-revision release or official installation qualification.
+
+![Packaged QA after private service recovery, retaining the failed update check](docs/assets/native-service-recovery-qa.jpg)
+
+For the ancestry fallback, use that isolated packaged App and a qualified Core
+fixture. A QA-only invalid `CURL_CA_BUNDLE` can deny curl's public read while the
+existing `gh` still reads the real relation. Compare the old and candidate
+native binaries with the same corrupt preference and immutable Core fixture;
+read both service identities and the saved selection after the window opens.
+Also check that unavailable public transports retain a qualified runtime and
+that normal reopening preserves the disposable Session. Remove faults from the
+QA launcher afterwards; never change the system proxy or certificate store.
+
+The viewport below is a separately packaged macOS QA shell with an empty
+synthetic Goal registry. It records a successful workspace opening, not model
+execution, model-selection qualification or an installed-product upgrade. The
+ancestry change adds no new UI control or configuration step.
+
+![Packaged QA workspace with zero Goals](docs/assets/native-ancestry-qa.jpg)
+
 ```bash
 cd apps/desktop/loopx-control-plane/src-tauri
 cargo fmt --check
@@ -349,6 +400,40 @@ cd ..
 ./scripts/dashboard.sh build
 npm run build
 ```
+
+To qualify the native supervisor against an actual installed Core, first build
+the runtime bundle as above with `LOOPX_USAGE_PING=0`, then run from `src-tauri`:
+
+```sh
+qa_root="$(mktemp -d)"
+mkdir "$qa_root/state"
+printf '%s\n' '{"goals":[]}' > "$qa_root/state/registry.global.json"
+(
+  set -e
+  export LOOPX_USAGE_PING=0
+  export LOOPX_REGISTRY="$qa_root/state/registry.global.json"
+  export LOOPX_RUNTIME_ROOT="$qa_root/state"
+  export LOOPX_TEST_PRIVATE_RUNTIME="$qa_root/runtime"
+  export LOOPX_TEST_BUNDLE="$PWD/../runtime"
+  cargo test --lib real_private_installer_keeps_the_default_cli_owner -- --ignored --nocapture
+  cargo test --lib real_private_runtime_serves_and_rejects_stale_identity -- --ignored --nocapture
+)
+```
+
+Both opt-in tests require the telemetry opt-out before invoking Core. A
+disposable registry does not isolate machine-wide usage reporting; this
+synthetic run must not contribute adoption or installation telemetry. The
+opt-out applies only to this test invocation and leaves user consent unchanged.
+
+This installs only in the disposable root. The second test uses an explicit
+local launch pin to route the production supervisor's two services to its own
+fresh empty registry and data directory. It checks both artifact identities,
+serves the packaged Chat document, reads zero Goals/Sessions, stops and reopens
+the services, and rejects
+a stale expected identity without leaving owned listeners. It does not launch
+the installed App, run a model, or qualify automatic runtime selection, native
+window reopening, signed replacement or rendered UI. The incognito WebKit
+regression above covers its separate navigation failure boundary.
 
 On macOS, also qualify a released artifact using the opt-in checks below
 (run from `src-tauri`, replacing the paths with downloaded release artifacts).

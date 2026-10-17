@@ -83,6 +83,17 @@ export function reconcileConversationHistory<T extends ConversationMessage>(
   for (const sessionId of sessions) {
     updated = reconcileConversationReturns(updated, sessionId, messages.filter((message) => message.session_id === sessionId), createMessage);
   }
+  // A history read can arrive before admission hydrates the optimistic row.
+  // Deduplicate only established Session/message identities, never body text.
+  const identities = new Set<string>();
+  const unique = updated.filter((message) => {
+    if (!message.sourceSessionId || !message.sourceMessageId) return true;
+    const key = JSON.stringify([message.sourceSessionId, message.sourceMessageId]);
+    if (identities.has(key)) return false;
+    identities.add(key);
+    return true;
+  });
+  if (unique.length !== updated.length) updated = unique;
   const seen = new Set(updated.map((message) => `${message.sourceSessionId}:${message.sourceMessageId}`));
   const recovered = messages.filter((message) => !seen.has(`${message.session_id}:${message.message_id}`)).map(createMessage);
   if (!recovered.length) return updated;

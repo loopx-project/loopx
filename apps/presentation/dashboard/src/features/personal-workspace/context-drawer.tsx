@@ -1,7 +1,7 @@
 import { ZCodeGoalControl } from "./zcode-goal-control";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { AttentionActions } from "./attention-actions";
-import { AttentionDetailCard } from "./attention-detail-card";
+import { AttentionDetailCard, AttentionProvenance } from "./attention-detail-card";
 import { attentionSuccessor } from "./attention-details";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -178,6 +178,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     ? selection.item.fields.filter(field => field.key === "task_lease_idempotency_key" || field.key === "task_lease_expected_version") : [];
   const visibleProposalFields = selection.kind === "proposal"
     ? selection.item.fields.filter(field => !completionProofFields.includes(field)) : [];
+  const proposalTarget = selection.kind === "proposal" ? selection.item : null;
+  const proposalRequests = proposalTarget?.todoId
+    ? attentionHistory.filter(item => item.goalId === proposalTarget.goalId && item.todoId === proposalTarget.todoId) : [];
 
   useEffect(() => {
     previewAttemptRef.current += 1;
@@ -1162,6 +1165,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 : `${t(`proposal.kind.${selection.item.actionKind}`)} · ${t(`proposal.status.${selection.item.status}`)}`}</small>
               {decisionFrame ? <span className={`personal-decision-chip is-${decisionFrame.decision}`}>{t(`proposal.decision.${decisionFrame.decision}`)}</span> : null}
               <h3>{selection.item.title}</h3>
+              {selection.item.todoId && (selection.item.actionKind === "gate.resolve" || selection.item.actionKind === "todo.update")
+                ? <div className="personal-attention-meta"><AttentionProvenance detail={proposalRequests.length === 1 ? proposalRequests[0].details : undefined} /></div> : null}
               {selection.item.impact ? <p>{selection.item.impact}</p> : null}
               {selection.item.reviewPlan && !selection.item.reviewPlan.retryOriginal && selection.item.actionKind !== "team.plan" && !(decisionFrame && ["ready", "applied"].includes(selection.item.status)) ? <p className="personal-proposal-explainer" data-action-review={selection.item.reviewPlan.interaction}>{operationUnknown
                 ? t("actionReview.operation_reconcile_original")

@@ -35,6 +35,7 @@ export function useGoalWorkspaceDigest(goal: WorkspaceGoal | null, userTodos: Wo
     const byTodo = new Map(map?.nodes.flatMap(node => (node.refs.todo_ids ?? []).map(id => [id, node] as const)));
     return compileGoalWorkspaceDigest({
       observedAt: new Date().toISOString(),
+      objective: goal?.objective,
       activation: goal?.activationState ?? "active",
       todos: (goal?.agentTodos ?? []).map(todo => ({
         todoId: todo.todoId, done: todo.done, status: todo.status, taskClass: todo.taskClass,

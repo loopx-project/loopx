@@ -81,8 +81,11 @@ with (
                     self._send_json({"ok": True, "count": len(_inputs)})
                 elif self.path == "/fixture/following":
                     self._send_json({"events": request.follow_events})
-                elif (body_fault and self.path.startswith("/api/chat/codex-attached?")
-                      and "agent_id=" not in self.path):
+                elif (
+                    body_fault
+                    and self.path.startswith("/api/chat/codex-attached?")
+                    and "agent_id=" not in self.path
+                ):
                     # Headers first, then a body that never completes: the client
                     # read limit aborts a stalled body, and a short close against
                     # the declared length surfaces as a network error. Both keep
@@ -138,6 +141,51 @@ with (
                             )
                     append_message(rollout, "assistant", "工作结果已返回。")
                     self._send_json({"ok": True})
+                elif self.path == "/fixture/tool-heavy":
+                    append_message(
+                        rollout, "user", "请核对这些结果，并说明未通过的检查。"
+                    )
+                    with rollout.open("a") as stream:
+                        for index in range(200):
+                            for item in (
+                                {
+                                    "type": "function_call",
+                                    "name": "validate",
+                                    "call_id": f"check-{index}",
+                                    "arguments": f"Check artifact {index}",
+                                },
+                                {
+                                    "type": "function_call_output",
+                                    "call_id": f"check-{index}",
+                                    "output": f"Saved output {index}",
+                                },
+                            ):
+                                stream.write(
+                                    json.dumps(
+                                        {"type": "response_item", "payload": item}
+                                    )
+                                    + "\n"
+                                )
+                        stream.write(
+                            json.dumps(
+                                {
+                                    "type": "event_msg",
+                                    "payload": {
+                                        "type": "error",
+                                        "message": "A check is unavailable; no acceptance has been recorded.",
+                                    },
+                                }
+                            )
+                            + "\n"
+                        )
+                    append_message(
+                        rollout,
+                        "assistant",
+                        "检查记录已保存，尚有一项无法确认。\n\n"
+                        + "这是完整的说明，应直接阅读。\n" * 120
+                        + "LONG DIALOGUE END",
+                    )
+                    self._send_json({"ok": True})
                 elif self.path == "/fixture/metadata-gap":
                     # A real rollout page with no displayable rows, between two
                     # visible records. Boundaries belong to the production reader.
@@ -166,7 +214,7 @@ with (
                                         "type": "custom_tool_call_output",
                                         "output": [
                                             {
-                                                "type": "text",
+                                                "type": "input_text",
                                                 "text": json.dumps(
                                                     {
                                                         "output": "Readable shell result\nSecond line",
@@ -294,7 +342,9 @@ with (
                                                 "status": "inProgress",
                                                 "server": "synthetic",
                                                 "tool": "verify_artifact",
-                                                "arguments": {"artifact": "release candidate"},
+                                                "arguments": {
+                                                    "artifact": "release candidate"
+                                                },
                                             },
                                         ],
                                     }

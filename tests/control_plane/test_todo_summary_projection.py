@@ -14,6 +14,23 @@ def summarize(items, **kwargs):
     return compact_todo_group(items, role="agent", source_section="Agent Todo", **kwargs)
 
 
+def test_user_request_creator_survives_summary_and_compact_workspace_projection():
+    from loopx.control_plane.todos.todo_summary import project_asset_todo_summary
+
+    request = row(1, role="user", task_class="user_gate", created_by="request-author",
+                  bound_agent="reply-agent", blocks_agent="reply-agent")
+    original = dict(request)
+    summary = compact_todo_group([request], role="user", source_section="User Todo")
+    compact = project_asset_todo_summary(summary, role="user")
+    for item in [summary["items"][0], compact["items"][0]]:
+        assert item["created_by"] == "request-author"
+        assert item["bound_agent"] == item["blocks_agent"] == "reply-agent"
+    assert request == original
+    legacy = compact_todo_group([{k: v for k, v in request.items() if k != "created_by"}],
+                                role="user", source_section="User Todo")
+    assert "created_by" not in project_asset_todo_summary(legacy, role="user")["items"][0]
+
+
 def test_recent_completions_compare_instants_not_offset_strings():
     items = [row(1, status="done", no_followup=True, completed_at="2026-01-01T10:00:00+08:00"),
              row(2, status="done", no_followup=True, completed_at="2026-01-01T03:00:00Z")]

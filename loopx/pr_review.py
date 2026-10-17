@@ -1371,7 +1371,7 @@ def render_pr_review_markdown(payload: dict[str, Any]) -> str:
         "",
         "- Do not stop at the queue/table summary.",
         "- Do not collapse this packet to `.summary` and `.review_sequence` only; preserve the paths named by `agent_response_contract.required_packet_fields_to_preserve`.",
-        "- For each actionable selected PR, read PR body/files/diff/checks first, then return one review card.",
+        "- For each actionable selected PR, follow review_execution_contract.decision_procedure: establish goal/specification first, then execute its evidence_commands and applicable validation; honor wait_for_ci before any CI read.",
         "- Execute each non-null `pull_requests[].review_plan` against `agent_response_contract.review_execution_contract`; inventory-only rows expose no execution artifacts.",
         "- Code-changing PRs must include a `关键代码讲解` subsection under `具体改动`, grounded in exact-head symbols and short excerpts or equivalent pseudocode.",
         "- Bind the verdict to the remote head SHA and recheck it before answering.",
@@ -1416,11 +1416,11 @@ def render_pr_review_markdown(payload: dict[str, Any]) -> str:
         template = _as_dict(pr.get("review_template"))
         review_plan = _as_dict(pr.get("review_plan"))
         action_kind = str(pr.get("review_action_kind") or "").strip()
-        row_instruction = (
-            "> Agentloop should fill the five-block review after reading the PR body and diff. The template below is intentionally blank."
-            if action_kind
-            else "> Inventory-only exact head: read back the existing conclusion; do not run a full evidence review."
-        )
+        row_instruction = "> " + str(pr.get("review_goal") or (
+            "Follow the current review plan and decision procedure."
+            if action_kind else
+            "Inventory-only exact head: read back lifecycle and conclusion state; do not invent a review action."
+        ))
         lines.extend(
             [
                 "",

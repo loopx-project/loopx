@@ -301,6 +301,48 @@ hold delivery.
 workflow 会在临时实例上运行该 ladder row 与 service admission 套件，因此这条路径在
 CI 与本地都会保持验证。没有安全的真实环境则暂停交付。
 
+#### Default-Provider Performance Qualification / 默认 Provider 性能资格
+
+Default delivery qualifies the shipped default execution/storage profile. New
+local Goals currently default to SQLite through the existing
+[`goal_storage` configuration owner](../../loopx/capabilities/machine_configuration/goal_storage.py).
+Apply the owning RFC's unchanged performance limits to the real SQLite caller,
+complete workload and immutable base/head. A passing File result cannot replace
+a failing SQLite result; a File-only performance miss does not veto an otherwise
+qualified default SQLite delivery.
+
+The profile distinction applies to performance qualification. Correctness,
+durability, permissions, data integrity, migration/recovery and supported-caller
+compatibility remain mandatory on every affected backend. In particular, this
+does not waive the real PostgreSQL requirement above, or permit a shared-runtime
+regression that affects SQLite. A PR explicitly targeting File performance,
+changing a provider default, or claiming another profile must qualify that
+profile before claiming its result.
+
+Declare the profile in the existing PR/review validation matrix and CQR evidence;
+do not add a separate approval workflow. Keep measured File regressions visible
+as nonblocking performance risks for default SQLite delivery, with their actual
+values, source and limits. They are not passing checks. When the maintainer
+revises a previously declared profile, record a new scoped qualification and
+the reason; retain the original failed observation and its original criteria.
+This rule changes neither performance thresholds nor frozen benchmark/scoring,
+resource, deadline or promotion contracts.
+
+默认交付按实际发布的默认执行／存储 profile 取得性能资格；当前新建本地 Goal
+由既有 `goal_storage` owner 默认选择 SQLite。对真实 SQLite 入口、完整负载及
+不可变 base/head 使用所属 RFC 的原性能门槛。File 通过不能替代 SQLite 失败；
+仅 File 性能未达标，不阻塞其它条件均合格的默认 SQLite 交付。
+
+这一区分只适用于性能资格。受影响后端的正确性、持久化、权限、数据完整性、
+迁移／恢复及支持调用方兼容性仍必须验证；上面的真实 PostgreSQL 要求和影响
+SQLite 的共享运行时回归仍是门禁。明确优化 File、改变默认 provider 或宣称其它
+profile 的 PR，仍须验证相应 profile，才能宣称该结果。
+
+在既有 PR／评审验证矩阵和 CQR 证据中说明 profile，不新增审批流程。File 的
+性能失败按实际数值、版本和门槛披露，作为默认 SQLite 交付的非阻塞性能风险，
+不能写成通过。维护者修订既定 profile 时，保留原标准及失败，另记有明确原因的
+新范围资格；性能阈值及冻结 benchmark／评分、资源、时限和晋升合同均不改变。
+
 When one semantic owner fronts multiple authority providers, use a three-arm
 refactor comparison: the immutable legacy baseline, the file provider, and a
 real PostgreSQL provider. All three arms must start from the same
@@ -707,9 +749,18 @@ pull requests. It intentionally excludes provider-backed evaluation and the
 full smoke catalog, so ordinary iteration does not depend on credentials,
 network latency, provider availability, or a two-hour matrix.
 
+The existing `kernel-static-checks` job first checks the Stage 2C dependency
+lock and top-level module budget. A failed invariant makes the existing
+`checks` preflight fail, so PR long-test shards do not enter their shared queue.
+These tests also remain in the complete six-shard collection.
+
 `.github/workflows/python-tests.yml` 会在相关 Python PR 上运行这条快速通道。
 它刻意不包含真实模型调用和 full smoke catalog，因此普通迭代不依赖凭证、网络
 时延、模型服务可用性或两小时级测试矩阵。
+
+既有 `kernel-static-checks` 作业先检查 Stage 2C 依赖锁和顶层模块预算。不变量失败
+会使既有 `checks` 前置门失败，阻止 PR 的长测试分片进入共享队列。这些测试仍保留
+在六分片的完整 collection 中。
 
 The Linux suite uses six hosted runners with two xdist workers each.
 `pytest-split` partitions the complete collection using `least_duration`;

@@ -12,8 +12,10 @@ from typing import Any
 INTERFACE_BUDGET_CHARS = {
     "full": 12_000,
     "compact": 6_700,
-    "brief": 4_600,
-    "thin": 3_200,
+    "brief": 4_800,
+    # Same supported 320-char scope + capabilities: 3,172 -> 3,599.
+    # Preserve action authority, continuation/readback and exact settlement.
+    "thin": 3_600,
     "visible_goal": 4_000,
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]

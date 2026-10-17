@@ -1,0 +1,131 @@
+"""Codex app-server transport for managed native Chat.
+
+Provider-specific start/resume, observed model settings and interruption stay
+here; the Chat controller continues to own Session/Turn admission and effects.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+import logging
+from pathlib import Path
+from typing import Any, Callable
+
+from ...chat_agent import CodexChatAgentSession, CodexChatTimeoutError
+from ...chat_codex_goal import CodexGoalDriver
+
+
+@dataclass
+class CodexAppServerAdapter:
+    session: CodexChatAgentSession
+    goal_driver: CodexGoalDriver | None = None
+
+    @property
+    def current_model_id(self) -> str | None:
+        return getattr(self.session, "resolved_model", None)
+
+    @property
+    def model_settings(self) -> dict[str, str | None]:
+        return {"agent_reasoning_effort": getattr(self.session, "resolved_reasoning_effort", None),
+                "agent_service_tier": getattr(self.session, "service_tier", None)}
+
+    @property
+    def upstream_thread_id(self) -> str:
+        return self.session.thread_id
+
+    @classmethod
+    def start(
+        cls,
+        *,
+        codex_bin: str,
+        work_dir: Path,
+        goal_id: str | None,
+        objective: str,
+        resume_thread_id: str | None = None,
+        startup_timeout_sec: float = 30.0,
+        idle_timeout_sec: float = 180.0,
+        hard_timeout_sec: float = 900.0,
+        execution_mode: bool = False,
+        runtime_profile: str = "restricted",
+        sandbox: str | None = None,
+        project_context: dict[str, str] | None = None,
+        codex_home: Path | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        service_tier: str | None = None,
+        dynamic_tools: list[dict[str, Any]] | None = None,
+    ) -> "CodexAppServerAdapter":
+        retry_timeout = bool(resume_thread_id)
+        while True:
+            try:
+                return cls(
+                    CodexChatAgentSession.start(
+                        codex_bin=codex_bin,
+                        work_dir=work_dir,
+                        goal_id=goal_id,
+                        objective=objective,
+                        response_timeout_sec=startup_timeout_sec,
+                        idle_timeout_sec=idle_timeout_sec,
+                        hard_timeout_sec=hard_timeout_sec,
+                        execution_mode=execution_mode,
+                        runtime_profile=runtime_profile,
+                        sandbox=sandbox,
+                        project_context=project_context,
+                        resume_thread_id=resume_thread_id,
+                        codex_home=codex_home,
+                        model=model,
+                        reasoning_effort=reasoning_effort,
+                        host_config={"service_tier": service_tier} if service_tier else None,
+                        dynamic_tools=dynamic_tools,
+                    )
+                )
+            except CodexChatTimeoutError as exc:
+                if not retry_timeout or exc.error_code != "response_timeout":
+                    raise
+                # start() has closed the failed process; no Turn was dispatched.
+                # Retry the same known thread once, never an unknown thread/start
+                # effect, a host gate or a request that has already begun.
+                retry_timeout = False
+                logging.getLogger(__name__).warning(
+                    "Codex resumed-session startup timed out; retrying once before Turn dispatch"
+                )
+
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "adapter_kind": "codex_app_server",
+            "streaming": True,
+            "resume": True,
+            "interrupt": True,
+            "steering": True,
+        }
+
+    def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None]) -> dict[str, Any]:
+        return self.session.send(message, on_event=event_sink)
+
+    def steer_turn(self, message: str, expected_turn_id: str) -> str:
+        return self.session.steer(message, expected_turn_id=expected_turn_id)
+
+    def start_turn_with_attachments(
+        self,
+        message: str,
+        event_sink: Callable[[str, dict[str, Any]], None],
+        attachments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return self.session.send(message, attachments=attachments, on_event=event_sink)
+
+    def interrupt_turn(self, turn_id: str | None = None) -> None:
+        driver = self.goal_driver
+        if driver is not None:
+            driver.pause()
+            return
+        self.session.interrupt(turn_id)
+
+    def close_session(self) -> None:
+        try:
+            driver = self.goal_driver
+            if driver is not None:
+                driver.pause()
+        finally:
+            self.session.close()
+
+    def healthcheck(self) -> bool:
+        return self.session.process.poll() is None

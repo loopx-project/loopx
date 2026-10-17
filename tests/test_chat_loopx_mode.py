@@ -353,6 +353,7 @@ def test_pause_fences_dispatch_and_does_not_cancel_members(mode, monkeypatch):
         inventory = adapter.session.read_tool_handler(TOOL["name"], {"action": "operations"})
         assert inventory["ok"] and inventory["items"] == []
         assert inventory["page_readback_complete"] and not inventory["has_more"]
+        assert inventory["projection_envelope"]["fresh"] and inventory["projection_envelope"]["complete"]
         invalid = adapter.session.read_tool_handler(TOOL["name"], {"action": "operations", "operation_id": "one"})
         assert invalid["error"] == "collaboration_request_rejected"
 
@@ -555,6 +556,7 @@ def test_owner_team_readback_is_configured_scoped_and_does_not_start_a_turn(mode
     before = service.store.load_session(sid)
     result = service.read_team(sid, {"operation": "operations"})
     assert result["items"] == [] and result["page_readback_complete"]
+    assert result["projection_envelope"]["coverage"]["scope"] == "requester_page"
     assert service.store.load_session(sid) == before
     assert calls == []
     with pytest.raises(ValueError, match="invalid team readback"):

@@ -158,6 +158,8 @@ export type WorkspaceGoalSubagentConfiguration = {
 };
 
 export type WorkspaceGoal = {
+  /** Bounded, safe text from this Goal's declared source document. */
+  objective?: string | null;
   acceptanceObservation?: GoalAcceptanceObservation | null;
   loadState?: "loading" | "error";
   loadError?: WorkspaceLoadError;
@@ -318,6 +320,8 @@ export type WorkspaceSchedule = {
 };
 
 export type WorkspaceActionPreview = {
+  /** Exact Todo target from the stored action, used only for display joins. */
+  todoId?: string;
   reviewPlan?: ActionReviewPlan;
   actionKind:
     | "goal.create"
@@ -508,7 +512,7 @@ export type WorkspaceDrawerSelection =
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
   | { item: WorkspaceActionPreview; kind: "proposal" }
-  | { goalId?: string; kind: "settings"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "steward" }
+  | { goalId?: string; kind: "settings"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "steward" | "conversation" }
   | {
       item: WorkspaceSchedule;
       kind: "schedule";
@@ -547,6 +551,7 @@ export type PersonalWorkspaceCallbacks = {
   onCancelConversationPreparation?: (contextId: string) => void;
   onInterruptConversationTurn?: (contextId: string, turnId: string) => Promise<void>;
   onSteerConversationTurn?: (contextId: string, turnId: string, message: string, ingressId: string) => Promise<void>;
+  onQueueConversationTurn?: (contextId: string, sessionId: string, message: string, ingressId: string, attachments?: WorkspaceImageAttachment[]) => Promise<void>;
   onOpenGoal?: (goalId: string) => void | Promise<void>;
   onOpenGoalView?: (tab: WorkspaceGoalTab) => void;
   onOpenRunSession?: (run: WorkspaceRun) => void | Promise<void>;
@@ -599,6 +604,7 @@ export type PersonalWorkspaceCallbacks = {
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
   onSelectAgentModel?: (agentId: string, modelId: string) => void;
+  onSelectAgentReasoningEffort?: (agentId: string, effort: string) => void;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;

@@ -366,6 +366,8 @@ def _is_profile_self_message(
 
 def _reply_source_content(message: Mapping[str, Any]) -> str:
     """Extract visible provider text, never card callback/operation payloads."""
+    if message.get("deleted") is True:
+        return ""
     body = message.get("body")
     raw = body.get("content") if isinstance(body, Mapping) else message.get("content")
     if not isinstance(raw, str):
@@ -409,8 +411,13 @@ def enrich_lark_event_reply_context(
     configured_chat_id: str,
     attempts: int = 3,
     sleeper: Sleeper = time.sleep,
+    current_message: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Verify whether an event structurally replies to this profile's bot."""
+    """Verify a reply, optionally reusing this invocation's provider read.
+
+    ``current_message`` is an authenticated transport observation, not an
+    event field or caller-supplied context. It grants no admission authority.
+    """
 
     enriched = dict(event)
     enriched.pop("reply_context", None)
@@ -421,14 +428,18 @@ def enrich_lark_event_reply_context(
     message_id = str(event.get("message_id") or "").strip()
     if not MESSAGE_ID_PATTERN.fullmatch(message_id):
         return enriched
-    current, current_status = _read_message_with_status(
-        runner=runner,
-        command_prefix=command_prefix,
-        profile=profile,
-        message_id=message_id,
-        attempts=attempts,
-        sleeper=sleeper,
-    )
+    if current_message is None:
+        current, current_status = _read_message_with_status(
+            runner=runner,
+            command_prefix=command_prefix,
+            profile=profile,
+            message_id=message_id,
+            attempts=attempts,
+            sleeper=sleeper,
+        )
+    else:
+        current = current_message if current_message.get("message_id") == message_id else None
+        current_status = "message_context_verified" if current else "message_context_unavailable"
     enriched["message_context_status"] = current_status
     if current is None or str(current.get("chat_id") or "") != configured_chat_id:
         return enriched

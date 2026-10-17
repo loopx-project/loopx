@@ -111,6 +111,23 @@ error presentation, not automatic model replay or proof that an effect did not
 run; effect-aware recovery remains Core-owned. The existing model-capacity
 recovery guidance is unchanged.
 
+### Native reply references
+
+New ordinary replies in bound private conversations and group topics carry the
+referenced provider message through the existing shared TypeScript context
+projection. This changes the native input from a bare follow-up to the bounded
+reference plus the current request. The authenticated current envelope must
+match its source ancestry; another conversation, deleted content and unreadable
+references cannot supply quoted text. Visible posts/cards omit callback data.
+Missing or truncated context stays explicit, and quotes grant no authority.
+
+Controls are still selected from the current message alone; they add no parent
+lookup. The transport freezes a new ordinary reply's input before Core admission.
+Duplicate events reuse it, including after the parent changes; already admitted
+pre-upgrade requests retain their original input. Core still freshly checks
+bindings, grants and the original return route. Source/provider regression tests
+do not establish installed model interpretation or completion of a user approval.
+
 ### Private-message progress
 
 Private project and steward conversations present the original Turn's persisted

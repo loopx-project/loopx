@@ -1,8 +1,9 @@
 import {useEffect, useRef, useState} from "react";
-import {ArrowLeft, ArrowRight, ArrowUpRight} from "lucide-react";
+import {ArrowLeft, ArrowRight, ArrowUpRight, FolderOpen} from "lucide-react";
 import {usePublicPageNavigation} from "../usePublicPageNavigation";
 import {captureRevision, datasetUrl, readPinnedCapture, type CapturedRecord} from "./records";
 import scenes from "./scenes.json";
+import LocalLogReader from "./LocalLogReader";
 
 const strings = {
   en: {
@@ -20,6 +21,7 @@ const strings = {
     sources: "Fixed public source", fixture: "This exact capture", totals: "76 + 134 + 105 = 315 Explore records. Record counts are not experiment counts.",
     close: "Back to the question", noJs: "Enable JavaScript to make choices and browse records. The fixed public archive is also available directly.",
     lesson: "What stays with the next decision?",
+    openLog: "Open your research log", localStage: "Your research record",
   },
   zh: {
     back: "LoopX 首页", name: "时光机",
@@ -33,6 +35,7 @@ const strings = {
     cursor: "原始记录序号", record: "记录", previous: "上一条记录", following: "下一条记录", original: "原文 · 未翻译", identifiers: "来源标识",
     sources: "固定版本公开来源", fixture: "这份原始记录", totals: "76 + 134 + 105 = 315 条 Explore 记录，记录数量不是实验次数。",
     close: "回到问题", noJs: "启用 JavaScript 后可做选择、浏览原记录，也可以直接打开固定版本的公开来源。", lesson: "下一次判断，能留下什么？",
+    openLog: "打开你的研究日志", localStage: "你的研究记录",
   },
 };
 const readCase = () => {
@@ -48,6 +51,11 @@ export default function TimeMachine() {
   const [failedFor, setFailed] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [position, setPosition] = useState(0);
+  const [upload, setUpload] = useState<{file: File; version: number} | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const openLog = useRef<HTMLButtonElement>(null);
+  const fileVersion = useRef(0);
+  const localReading = upload !== null;
   const resultTitle = useRef<HTMLHeadingElement>(null);
   const questionTitle = useRef<HTMLHeadingElement>(null);
   const reader = useRef<HTMLDetailsElement>(null);
@@ -75,6 +83,7 @@ export default function TimeMachine() {
     let active = true;
     setLoaded(null); setFailed(null); setPosition(0);
     if (reader.current) reader.current.open = false;
+    if (localReading) return () => {active = false; abort.abort();};
     void (async () => {
       const response = await fetch(fileUrl, {signal: abort.signal});
       if (!response.ok) throw new Error(`Capture HTTP ${response.status}`);
@@ -82,7 +91,7 @@ export default function TimeMachine() {
       if (active) setLoaded({id: scene.id, rows});
     })().catch(() => {if (active) setFailed(scene.id);});
     return () => {active = false; abort.abort();};
-  }, [fileUrl, scene, attempt]);
+  }, [fileUrl, scene, attempt, localReading]);
 
   useEffect(() => {
     if (chosen && records && pendingFocus.current) {
@@ -116,7 +125,7 @@ export default function TimeMachine() {
   }
 
   return <div className="tm-page">
-    <a className="skip-link" href="#tm-question">{c.stage}</a>
+    <a className="skip-link" href={localReading ? "#tm-local-heading" : "#tm-question"}>{localReading ? c.localStage : c.stage}</a>
     <header className="tm-header">
       <a href={`${basePath}${language === "zh" ? "?lang=zh" : ""}`} className="brand" aria-label={c.back}>
         <span className="product-mark" aria-hidden="true"><span/><span/></span>LoopX <span className="tm-brand-suffix">/ {c.name}</span>
@@ -127,7 +136,20 @@ export default function TimeMachine() {
       </div>
     </header>
     <main className="tm-shell">
-      <div className="tm-intro"><div><p className="tm-eyebrow">IF YOU WERE THERE</p><h1>{c.title}</h1><p>{c.deck}</p></div>
+      <input hidden ref={fileInput} id="tm-log-file" type="file" accept=".jsonl,application/x-ndjson,application/jsonl" aria-label={c.openLog} onChange={event => {
+        const file = event.target.files?.[0];
+        event.target.value = ""; // Selecting the same file again is a real retry.
+        if (!file) return; // Cancelling the chooser leaves the current reading intact.
+        fileVersion.current += 1;
+        setUpload({file, version: fileVersion.current});
+        window.scrollTo({top: 0, behavior: "instant"});
+      }}/>
+      {upload ? <LocalLogReader key={upload.version} file={upload.file} language={language} onChoose={() => fileInput.current?.click()} onClose={() => {
+        setUpload(null);
+        window.requestAnimationFrame(() => openLog.current?.focus());
+      }}/> : <>
+      <div className="tm-intro"><div><p className="tm-eyebrow">IF YOU WERE THERE</p><h1>{c.title}</h1><p>{c.deck}</p>
+        <button ref={openLog} id="tm-open-log" className="tm-open-log" type="button" onClick={() => fileInput.current?.click()}><FolderOpen size={16} aria-hidden="true"/>{c.openLog}<span className="tm-log-format">Explore .jsonl</span></button></div>
         <p className="tm-counter">{c.count} {Object.keys(answers).length} / 3</p>
       </div>
       <nav className="tm-cases" aria-label={c.caseNav}>{scenes.map((item, index) =>
@@ -172,6 +194,7 @@ export default function TimeMachine() {
         <a href={`${basePath}docs/book/${language === "en" ? "en/" : ""}`}>{language === "zh" ? "了解 LoopX 如何延续工作" : "See how LoopX continues work"}<ArrowUpRight size={16} aria-hidden="true"/></a></section>}
       <footer className="tm-footer"><span>{c.totals}</span><a href={datasetUrl} target="_blank" rel="noopener" referrerPolicy="strict-origin-when-cross-origin">{c.sources}<ArrowUpRight size={14} aria-hidden="true"/></a></footer>
       <noscript><p>{c.noJs}</p></noscript>
+      </>}
     </main>
   </div>;
 }

@@ -2,6 +2,7 @@ mod bundled_runtime;
 #[cfg(target_os = "macos")]
 mod macos_update;
 mod maintenance;
+mod runtime_ancestry;
 mod runtime_selection;
 mod service_endpoints;
 mod services;
@@ -207,6 +208,11 @@ pub fn run() {
                                 *current = None;
                                 handoff.lock().expect("workspace handoff lock").reconnect();
                             } else {
+                                maintenance::recover_services(
+                                    &handle,
+                                    current.as_mut().expect("connected services"),
+                                    &endpoints,
+                                );
                                 drop(current);
                                 WorkspaceHandoff::reconcile(&handoff, &handle);
                                 std::thread::sleep(std::time::Duration::from_millis(200));

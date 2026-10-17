@@ -352,6 +352,7 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
     lines = [
         "# LoopX Quota Should Run",
         "",
+        *render_projection_envelope_markdown(payload.get("projection_envelope")),
         f"- ok: `{payload.get('ok')}`",
         f"- goal_id: `{payload.get('goal_id')}`",
         f"- decision: `{payload.get('decision')}`",

@@ -69,8 +69,10 @@ def test_web_census_never_enters_dependencies(tmp_path: Path, monkeypatch: pytes
             raise FileNotFoundError("dependency tree was concurrently replaced")
         return scan(path)
 
-    monkeypatch.setattr(os, "scandir", guarded_scan)
-    assert _web_sources(tmp_path) == [source]
+    # The fault belongs to the census, not pytest's later runtime cleanup scan.
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "scandir", guarded_scan)
+        assert _web_sources(tmp_path) == [source]
 
 
 def test_web_census_does_not_hide_first_party_io_errors(
@@ -82,9 +84,10 @@ def test_web_census_does_not_hide_first_party_io_errors(
     def inaccessible_source(path):
         raise PermissionError("first-party source is unreadable")
 
-    monkeypatch.setattr(os, "scandir", inaccessible_source)
-    with pytest.raises(PermissionError, match="first-party source"):
-        _web_sources(tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "scandir", inaccessible_source)
+        with pytest.raises(PermissionError, match="first-party source"):
+            _web_sources(tmp_path)
 
 
 def _module_bindings(root: Path) -> dict[str, int]:

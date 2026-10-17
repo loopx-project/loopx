@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -16,11 +17,13 @@ from typing import Any
 
 from ...capabilities.native_chat.external_conversations import ChatExternalConversations
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
+from ...control_plane.collaboration import conversation_reply_context
 from ...file_lock import exclusive_file_lock
 from ...presentation.markdown import markdown_scalar
 from ...presentation.renderers.conversation_status_markdown import render_conversation_status
 from .conversation_identity import identity_ref, lark_private_source
 from .event_inbox import acknowledge_lark_event_inbox, ingest_lark_event_inbox
+from .event_collector_runtime import enrich_lark_event_reply_context
 from .goal_channel_transport import call, json_payload, lark_args, lark_provider_mention_identities
 from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
@@ -494,6 +497,57 @@ class LarkPrivateConversations:
             raise ValueError("private source could not be captured")
         return path
 
+    def _reply_context_message(self, path: Path, record: dict[str, Any], *,
+                               selected: dict[str, Any] | None, source_message: Mapping[str, Any],
+                               text: str) -> str:
+        """Freeze new ordinary reply context before the existing Core admission.
+
+        Core remains the owner of accepted requests. In particular, an older
+        request's exact message must survive an adapter upgrade unchanged.
+        """
+        if "reply_context_message" in record:
+            if record["reply_context_source_text"] != text:
+                raise ValueError("reply source content changed")
+            return str(record["reply_context_message"])
+        event = record["event"]
+        if ((self.core.root / f"{record['request_ref']}.json").exists()
+                or not (event.get("parent_id") or (event.get("root_id")
+                        and event["root_id"] != event["message_id"]))):
+            return text
+        # Group admission already verified the lossless envelope. Formatted
+        # private mget may omit ancestry, so read its exact provider envelope;
+        # never treat event-supplied reference text as a provider observation.
+        if selected is None:
+            raise ValueError("reply binding observation unavailable")
+        current = (source_message if selected["binding"].get("audience") == "group"
+                   else self._group_source_message(record["profile"], event["message_id"]))
+        sender = current.get("sender") if current else None
+        if (not current or current.get("message_id") != event["message_id"]
+                or current.get("chat_id") != event["chat_id"]
+                or not isinstance(sender, Mapping) or sender.get("id") != event["sender_id"]
+                or sender.get("sender_type") != "user"
+                or current.get("msg_type", current.get("message_type")) != event["message_type"]
+                or current.get("deleted") is True
+                or (event.get("thread_id") and current.get("thread_id") != event["thread_id"])
+                or any(str(current.get(key) or "") != str(event.get(key) or "")
+                       for key in ("parent_id", "root_id"))):
+            raise ValueError("reply source ancestry unavailable or changed")
+        def read(args: Sequence[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+            result = call(self.runner, list(args))
+            return subprocess.CompletedProcess(args, int(result["returncode"]),
+                str(result.get("stdout") or ""), str(result.get("stderr") or ""))
+
+        context = enrich_lark_event_reply_context(event, runner=read,
+            command_prefix=[self.cli_bin], profile=record["profile"],
+            profile_app_id=selected["observation"]["bot_app_id"],
+            configured_chat_id=event["chat_id"], current_message=current)
+        projected = conversation_reply_context({**context, "source_conversation_id": event["chat_id"]})
+        prefix = str(projected["context_text"])
+        message = f"{prefix}\n\nCurrent user message:\n{text}" if prefix else text
+        record.update(reply_context_message=message, reply_context_source_text=text)
+        _atomic_write_json(path, record)
+        return message
+
     def admit(self, profile: str, event: dict[str, Any], *,
               defer_background_stop: bool = False) -> dict[str, Any]:
         try:
@@ -600,6 +654,12 @@ class LarkPrivateConversations:
                         break
             if message_type not in {"text", "image", "post"} or record.get("attachment_notice"):
                 command = "unsupported"
+            if command is None:
+                try:
+                    text = self._reply_context_message(path, record, selected=selected,
+                        source_message=source_message, text=text)
+                except (KeyError, ValueError, OSError):
+                    return {"status": "source_verification_failed"}
             try:
                 admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                     request_ref=request, message=text, command=command, attachments=attachments,

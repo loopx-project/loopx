@@ -87,8 +87,9 @@ class WarmStart:
             raise ValueError("Original warm start deadline expired during checkpoint verification")
         return metadata
 
-    async def stage(self, environment, workspace: str):
-        self.verify(workspace)
+    async def stage(self, environment, workspace: str) -> list[str]:
+        metadata = self.verify(workspace)
+        research = _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
         # Install tools first without creating the native home. Stage inert
         # participants outside the workspace so restoring its bytes cannot
         # replace the active controller, registry or installed executable.
@@ -115,6 +116,10 @@ class WarmStart:
             f"chmod 0400 {config} {_CONTROL}/warm-start.json", user="root")
         if result.return_code:
             raise RuntimeError("Could not stage the verified checkpoint participants")
+        # The root-only materializer preserves sealed modes. Its receiver must
+        # transfer these selected data copies to the worker before preparation;
+        # making private directories world-readable would change the artifact.
+        return [str(target) for _, _, target in research]
 
 
 # Provider-owned data locations; selecting a component never grants permission

@@ -39,6 +39,7 @@ def _display_record(raw: bytes) -> dict[str, Any] | None:
     text = ""
     role = "activity"
     label = kind
+    tool_exit_codes: list[int] = []
     if record.get("type") == "response_item":
         if kind == "message":
             message_role = item.get("role")
@@ -74,21 +75,37 @@ def _display_record(raw: bytes) -> dict[str, Any] | None:
         elif kind in {"function_call_output", "custom_tool_call_output"}:
             role = "tool"
             text = item.get("output", "")
-            # Codex custom tools can persist a list of text blocks. Decode only
-            # that exact shape before pagination so Unicode offsets remain stable.
+            # Codex custom tools persist native input/output text blocks as well
+            # as MCP text blocks. Decode only those exact shapes before paging.
             # Preserve unfamiliar blocks/metadata as JSON rather than drop facts.
+            parts = [text] if isinstance(text, str) else []
             if (
                 isinstance(text, list)
                 and text
                 and all(
                     isinstance(part, dict)
                     and set(part) == {"type", "text"}
-                    and part["type"] == "text"
+                    and part["type"] in {"text", "input_text", "output_text"}
                     and isinstance(part["text"], str)
                     for part in text
                 )
             ):
-                text = "\n".join(part["text"] for part in text)
+                parts = [part["text"] for part in text]
+                text = "\n".join(parts)
+            # Read only the saved shell envelope's explicit observation. A
+            # nonzero code is not a failed task, and prose/input is not evidence.
+            for part in parts:
+                try:
+                    shell = json.loads(part)
+                except ValueError:
+                    continue
+                if (
+                    isinstance(shell, dict)
+                    and isinstance(shell.get("output"), str)
+                    and type(shell.get("wall_time_seconds")) in {int, float}
+                    and type(shell.get("exit_code")) is int
+                ):
+                    tool_exit_codes.append(shell["exit_code"])
         elif kind == "reasoning":
             return None  # Never expose reasoning/encrypted_content.
         else:
@@ -130,6 +147,11 @@ def _display_record(raw: bytes) -> dict[str, Any] | None:
         "redacted": redacted,
         "timestamp": record.get("timestamp"),
         "call_id": call_id,
+        **(
+            {"tool_exit_codes": tool_exit_codes}
+            if tool_exit_codes and not redacted
+            else {}
+        ),
     }
 
 

@@ -18,7 +18,7 @@ export const turnStepsScenario = {
     let live;
     const server = createServer((request, response) => {
       response.writeHead(200, { "Content-Type": "text/event-stream", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
-      response.write(phase("Agent 正在思考", { id: "rs_1", kind: "reasoning", state: "running", title: "Compare the release owners",
+      response.write(phase("Agent 正在思考", { id: "rs_1", kind: "reasoning", state: "running", reasoning_summary: true, title: "Compare the release owners",
         detail: "Compare the release owners\n\nThe English and Chinese notes publish on separate schedules, so keep both owners." }));
       response.write(phase("Agent 正在执行命令", { id: "exec_1", kind: "command", state: "running", verb: "search", title: "release owner",
         detail: "rg -n \"release owner\" docs/releases" }));
@@ -38,17 +38,18 @@ export const turnStepsScenario = {
       const current = page.locator(".personal-message-work-current .personal-message-pending");
       await current.getByText("正在搜索 release owner", { exact: true }).waitFor();
 
-      live.write(phase("Agent 返回了处理状态", { id: "rs_1", kind: "reasoning", state: "completed", title: "Compare the release owners", duration_ms: 4200 }));
+      live.write(phase("Agent 返回了处理状态", { id: "rs_1", kind: "reasoning", state: "completed", reasoning_summary: true, title: "Compare the release owners", duration_ms: 4200 }));
       live.write(phase("Agent 返回了处理状态", { id: "exec_1", kind: "command", state: "completed", verb: "search", title: "release owner", exit_code: 0, duration_ms: 120 }));
       live.write(phase("Agent 正在调用工具", { id: "tool_1", kind: "tool", state: "running", title: "loopx · todo_list" }));
       live.write(phase("Agent 返回了处理状态", { id: "tool_1", kind: "tool", state: "completed", title: "loopx · todo_list", duration_ms: 1800 }));
       live.write(phase("Agent 返回了处理状态", { id: "exec_2", kind: "command", state: "failed", verb: "run", title: "npm run check:release", exit_code: 2, duration_ms: 3100 }));
       live.write(phase("Agent 返回了处理状态", { id: "edit_1", kind: "file_change", state: "completed", title: "docs/releases/owners.md", count: 2,
         detail: "docs/releases/owners.md\ndocs/releases/owners.zh-CN.md" }));
-      live.write(phase("Agent 正在思考", { id: "rs_2", kind: "reasoning", state: "running", title: "" }));
+      live.write(phase("Agent 正在思考", { id: "rs_2", kind: "reasoning", state: "running", title: "raw-private-fixture", detail: "raw-private-fixture" }));
       live.write(phase("Agent 正在思考", { id: "bad", kind: "telepathy", state: "running", title: "ignored" }));
       live.write(event("answer.delta", { text: "两位负责人都保留，中英文分别择时发布。" }));
-      await current.getByText("正在思考", { exact: true }).waitFor();
+      await current.getByText("正在处理", { exact: true }).waitFor();
+      assert.ok(!(await page.locator("body").textContent()).includes("raw-private-fixture"), "legacy/raw reasoning never reaches the primary status or work details");
 
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       const steps = pending.locator(".personal-turn-steps");
@@ -58,12 +59,12 @@ export const turnStepsScenario = {
       assert.match(await steps.locator(":scope > summary").textContent(), /执行过程\s*6\s*1 步失败/);
       const texts = (await rows.locator("summary, .personal-turn-step-head").allTextContents()).map(text => text.replace(/\s+/g, " ").trim());
       assert.deepEqual(texts, [
-        "思考Compare the release owners4.2 秒",
+        "推理摘要Compare the release owners4.2 秒",
         "搜索release owner",
         "调用loopx · todo_list1.8 秒",
         "运行npm run check:release失败 · 退出码 2 · 3.1 秒",
         "修改docs/releases/owners.md2 个文件",
-        "思考进行中",
+        "处理进行中",
       ]);
       const search = rows.nth(1);
       assert.equal(await search.locator("pre").isVisible(), false, "details start collapsed");

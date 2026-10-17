@@ -23,9 +23,37 @@ Python-owned projections do so through `loopx/control_plane/projection_envelope_
 | `loopx global-gates` | `global_gates` | `global` |
 | `loopx global-todos` | `global_todos` | `global` |
 | `loopx global-risks` | `global_risks` | `global` |
+| `loopx quota should-run` | `quota_should_run` | `goal` |
+| Delegation operations (CLI, MCP, Goal Chat) | `delegation_inventory` | `requester_page` |
+| Goal task map in delivery review | `goal_task_map` | `goal_task_map` |
+| `GET /api/chat/delivery-review` | `delivery_review` | `selected_goal_delivery` |
+
+The delegation inventory seals directory and operation read facts in its existing
+native page reduction. A complete `requester_page` certifies only the requested
+page: `has_more`, `next_cursor` and the shown/available counts disclose the
+remaining requester inventory, not whole-Goal completion. Unavailable operations
+remain visible and count as omissions with unreadable-source alerts. A missing
+journal is a freshly observed empty inventory; a denied directory read still
+fails rather than returning an apparently complete empty page. No cache or
+cross-page snapshot is introduced; restart paging to discover earlier additions.
+
+The Goal map seals actual Todo-read time and source/display omissions in its
+existing native composition. Its envelope does not certify task acceptance or
+execution readiness. The outer review inherits both the status and map sources;
+an unreadable map remains `null` and alerts without hiding healthy components.
+Unknown or truncated source scope cannot certify complete coverage. The shipped
+reader displays these flags, preserves them in exports and uses the existing
+refresh operation. Older responses without the envelope show unknown coverage.
 
 Other read models adopt the envelope in the order listed in the RFC; until
 then they carry no freshness guarantee and consumer rule 1 below applies.
+
+`quota_should_run` inherits the status envelope. It also records each live
+source that the decision reads, including automation cadence, an applicable
+App scheduler state, the selected delivery workspace, the operator inbox, and
+replan exploration. A missing persisted App scheduler state is a successful
+empty read. `owner_read_failed` makes automation cadence unreadable, while
+`runtime_root_unavailable` means that source was not read.
 
 ## Shape
 

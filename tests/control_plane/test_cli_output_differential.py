@@ -112,6 +112,9 @@ def test_authoring_growth_is_bounded_one_time_and_surface_scoped(
     ("heartbeat_prompt_compact", "markdown", ["stop"], 215),
     ("heartbeat_prompt_brief", "markdown", ["stop"], 163),
     ("heartbeat_prompt_thin", "json", ["stop"], 154),
+    ("heartbeat_prompt_thin", "json", ["authorized_delivery"], 405),
+    ("heartbeat_prompt_thin", "markdown", ["authorized_delivery"], 405),
+    ("heartbeat_prompt_brief", "json", ["authorized_delivery"], 280),
 ])
 def test_continuation_growth_requires_observed_transition_and_bounds(surface, fmt, clauses, growth):
     from loopx.control_plane.testing.cli_output_differential import _compare_row
@@ -1279,15 +1282,31 @@ def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None
 
 
 @pytest.mark.parametrize("output_format", ["json", "markdown"])
-def test_projection_envelope_migration_is_status_only_bounded_and_one_time(output_format):
+@pytest.mark.parametrize(
+    ("surface_id", "row_prefix"),
+    [
+        ("status", "surface/status"),
+        ("status", "variant/status_task_graph_detail"),
+        ("quota_should_run", "surface/quota_should_run"),
+        ("quota_should_run", "variant/quota_should_run_all_detail"),
+    ],
+)
+def test_projection_envelope_migration_is_bounded_and_one_time(
+    output_format, surface_id, row_prefix,
+):
     from loopx.control_plane.testing.cli_output_semantics import projection_envelope_schema_versions
 
     assert projection_envelope_schema_versions({"projection_envelope": {
         "schema_version": "loopx_projection_envelope_v0"}}) == ["loopx_projection_envelope_v0"]
     assert projection_envelope_schema_versions("- projection: envelope=`loopx_projection_envelope_v0` observed_at=`today`") == ["loopx_projection_envelope_v0"]
-    limits = ({"chars": 3000, "utf8_bytes": 3000, "lines": 110, "compact_payload_chars": 2048}
+    compact_limit = 2800 if surface_id == "quota_should_run" else 2048
+    limits = ({"chars": 3000, "utf8_bytes": 3000, "lines": 110, "compact_payload_chars": compact_limit}
               if output_format == "json" else {"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0})
-    base = _row(format=output_format, row_id=f"surface/status/small/{output_format}")
+    base = _row(
+        format=output_format,
+        row_id=f"{row_prefix}/small/{output_format}",
+        surface_id=surface_id,
+    )
     candidate = {**base, "projection_envelope_schema_versions": ["loopx_projection_envelope_v0"],
                  **{metric: base[metric] + limit for metric, limit in limits.items()}}
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -1305,9 +1324,17 @@ def test_projection_envelope_migration_is_status_only_bounded_and_one_time(outpu
     for versions in ([], ["loopx_projection_envelope_v1"]):
         unknown = {**candidate, "projection_envelope_schema_versions": versions}
         assert not compare_cli_output_receipts(_receipt(candidate), _receipt(unknown))["ok"]
-    for surface in ("quota_should_run", "todo_list", "status_unrelated"):
-        outside_base = {**base, "row_id": f"surface/{surface}/small/{output_format}"}
-        outside = {**candidate, "row_id": outside_base["row_id"]}
+    for surface in ("todo_list", "status_unrelated", "quota_should_run_unrelated"):
+        outside_base = {
+            **base,
+            "row_id": f"surface/{surface}/small/{output_format}",
+            "surface_id": surface,
+        }
+        outside = {
+            **candidate,
+            "row_id": outside_base["row_id"],
+            "surface_id": surface,
+        }
         assert not compare_cli_output_receipts(_receipt(outside_base), _receipt(outside))["ok"]
 
 
@@ -1452,3 +1479,24 @@ def test_first_delivery_growth_requires_every_reviewed_instruction():
             assert not authoring_input_observations(render(guidance.replace(clause, "")))["first_delivery_guidance"]
     assert not authoring_input_observations(json.dumps({"note": guidance}))["first_delivery_guidance"]
     assert not authoring_input_observations("note: " + guidance)["first_delivery_guidance"]
+
+
+def test_delivery_guidance_cost_observation_cannot_qualify_partial_or_repeated_change():
+    from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations
+
+    old = "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, never wake counts."
+    clauses = [
+        "Reuse existing authorization for the current action; ask only for missing necessary authority.",
+        "Continue through integration, negative cases and readback while feasible; preserve evidence and next action for recovery/resume.",
+        "Settle with current settlement_plan.ordered_steps, else next_cli_actions; preserve exact identities/effect ids and actual outcomes. Never reconstruct static refresh/spend; ambiguous effects need readback/recovery, not blind retry.",
+    ]
+    for render in (lambda value: value, lambda value: json.dumps({"task_body": value})):
+        before = continuation_instruction_observations(render(old))
+        after = continuation_instruction_observations(render(old + " " + " ".join(clauses)))
+        assert before["authorized_delivery_before"] and not before["authorized_delivery_after"]
+        assert after["authorized_delivery_after"] and not after["authorized_delivery_before"]
+        for removed in range(len(clauses)):
+            partial = continuation_instruction_observations(render(old + " " + " ".join(
+                clause for i, clause in enumerate(clauses) if i != removed)))
+            assert not partial["authorized_delivery_after"]
+            assert not partial["authorized_delivery_before"]

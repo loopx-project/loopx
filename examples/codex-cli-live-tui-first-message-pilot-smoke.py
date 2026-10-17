@@ -95,7 +95,7 @@ def assert_bootstrap_message_still_copy_first() -> None:
     assert not message.startswith("/goal "), message
     assert "Codex CLI TUI" in normalized, message
     assert "setup/bootstrap instruction" in normalized, message
-    assert "/goal <thin task_body>" in normalized, message
+    assert "/goal <loader task_body>" in normalized, message
     assert "raw Codex transcripts" in normalized, message
     assert "watch, steer, review, and take over" in normalized, message
 

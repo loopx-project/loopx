@@ -72,6 +72,23 @@ class _FakeAppServerProcess:
         self.returncode = -1
 
 
+@pytest.mark.parametrize("reported", [None, "fixture-model"])
+def test_requested_model_is_not_reported_as_observed_without_native_readback(tmp_path, monkeypatch, reported):
+    from loopx.chat_runtime import CodexAppServerAdapter
+    response = {"thread": {"id": "model-readback"}, **({"model": reported} if reported else {})}
+    process = _FakeAppServerProcess(thread_response=response)
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+        goal_id="fixture", objective="Read configuration.", model="fixture-model")
+    try:
+        assert session.model == "fixture-model"  # The request remains explicit for execution.
+        assert CodexAppServerAdapter(session).current_model_id == reported
+        assert not any(json.loads(line).get("method") == "turn/start" for line in process.stdin.getvalue().splitlines())
+    finally:
+        session.close()
+
+
 def _stop_server(tmp_path, monkeypatch, *, failure=None):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="stop-thread", work_dir=tmp_path,
@@ -970,7 +987,8 @@ def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_
     steps = [p["step"] for kind, p in events if kind == "agent.phase" and "step" in p]
     assert [(s["id"], s["state"]) for s in steps] == [
         ("rs_1", "running"), ("rs_1", "completed"), ("exec-1", "running"), ("exec-1", "completed")]
-    assert steps[1]["detail"] == "Read the notes first."
+    assert steps[1]["title"] == "" and "detail" not in steps[1]
+    assert "Read the notes first." not in json.dumps(events)
     assert (steps[3]["verb"], steps[3]["title"], steps[3]["exit_code"]) == ("read", "notes.md", 0)
     assert steps[3]["detail"] == "cat notes.md"
     serialized = json.dumps(events)
@@ -1375,6 +1393,37 @@ def test_focused_edit_guidance_reaches_confirmed_execution_only(tmp_path, monkey
     assert ("For bounded workspace edits" in prompt) is execution_mode
     assert ("Do not edit files" in prompt) is not execution_mode
     assert "protected_action" in prompt and "gate" in prompt
+    for competing_route in (
+        "For a Todo proposal include goal_id",
+        "emit context_handoff={goal_id,agent_id,brief}",
+        "include goal_draft={objective,completion_criteria",
+    ):
+        assert (competing_route in prompt) is not execution_mode
+    if execution_mode:
+        assert chat_agent.WORK_RESULT_VERIFICATION_INSTRUCTION in prompt
+        assert "Never claim the change has been written without a verified control-plane receipt" not in prompt
+        assert "keep proposals=[], goal_draft=null and context_handoff=null" in prompt
+        assert "protected_action must be null" in prompt
+
+
+@pytest.mark.parametrize("mode", [
+    {}, {"runtime_profile": "trusted_owner"}, {"project_work": True}, {"execution_mode": True},
+])
+def test_turn_guidance_scopes_gates_without_cutting_requested_results(mode):
+    prompt = chat_agent._turn_prompt(
+        "Inspect the seven requested files; publishing still needs owner authorization.", **mode
+    )
+    assert "stop only actions that depend on the missing authority or tool" in prompt
+    assert "Continue independent authorized work" in prompt
+    assert "End the request only when no independent authorized work remains" in prompt
+    assert "describe the unresolved gate in gate" in prompt
+    assert "Preserve all requested results" in prompt
+    assert "more than five actionable items" not in prompt
+    # Scoped continuation cannot grant execution through the protected route.
+    if mode.get("execution_mode"):
+        assert "protected_action must be null" in prompt
+    else:
+        assert "never authority to execute" in prompt
 
 
 @pytest.mark.parametrize("config", [[], {"model": 42}, {"model_reasoning_effort": {"invalid": "high"}}])

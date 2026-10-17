@@ -1,5 +1,7 @@
 from typing import Any
 
+import pytest
+
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
@@ -11,7 +13,40 @@ from loopx.control_plane.todos.user_gate import (
     apply_scoped_user_gate_fallback_projection,
     build_user_todo_notification,
 )
+from loopx.control_plane.work_items.interaction_contract import build_interaction_contract
 from loopx.quota import build_quota_should_run
+
+
+@pytest.mark.parametrize(
+    ("admitted_work", "cooldown", "expected_mode", "expected_notify", "spend_after_validation"),
+    [
+        (False, False, "user_todo_blocker_push", "NOTIFY", False),
+        (True, False, "bounded_delivery_with_user_notice", "NOTIFY", True),
+        (False, True, "user_gate_cooldown_wait", "DONT_NOTIFY", False),
+    ],
+)
+def test_open_todo_notice_does_not_override_admitted_work_or_settlement(
+    admitted_work: bool, cooldown: bool, expected_mode: str,
+    expected_notify: str, spend_after_validation: bool,
+) -> None:
+    contract = build_interaction_contract({
+        "goal_id": "public-notification-fixture",
+        "requires_user_action": True,
+        "notify_user_on_open_todo": True,
+        "user_gate_notification_cooldown": {"notification_suppressed": cooldown},
+        "should_run": admitted_work,
+        "execution_obligation": {
+            "must_attempt_work": admitted_work,
+            "delivery_allowed": admitted_work,
+        },
+    })
+
+    assert contract["mode"] == expected_mode
+    assert contract["user_channel"]["notify"] == expected_notify
+    assert contract["agent_channel"]["must_attempt"] is admitted_work
+    assert contract["agent_channel"]["delivery_allowed"] is admitted_work
+    assert contract["cli_channel"]["spend_allowed_now"] is False
+    assert contract["cli_channel"]["spend_after_validation"] is spend_after_validation
 
 
 def _quota_guard_for_user_todos(

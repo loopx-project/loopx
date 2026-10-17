@@ -699,16 +699,24 @@ work effect
 
 ### 1. Replan 不能靠 classification 或 ACK，必须带 typed semantic delta
 
-`loopx/control_plane/work_items/progress_observation.py` 从显式 enum 与稳定 ID
-推导语义变化，不从 prose 猜测：
+`loopx/control_plane/work_items/progress_delta.ts` 从显式 enum、稳定 ID 与完整
+证据窗口推导语义变化，再由既有 replan owner 判断是否满足当前义务。Python
+facade 保留输入与历史 codec；调用完整资格入口，不能用预计算 outcome 代替：
 
 ```python
-observation = normalize_progress_observation(progress_observation)
-delta = semantic_progress_delta(
-    observation,
-    baseline=obligation.get("progress_baseline"),
+from loopx.control_plane.work_items.progress_observation import semantic_delta_from_writeback
+
+delta = semantic_delta_from_writeback(
+    obligation=obligation,
+    progress_observation=progress_observation,
+    history_runs=newest_first_runs,
 )
+if not delta["accepted"]:
+    print(delta["reason"])
 ```
+
+仅刷新 evidence ID 不构成新语义维度；旧 blocker 不因更换 work item 而成为新结果。
+若 context 已截断 coverage，必须提供完整历史，缺失时资格入口拒绝写回。
 
 成功 receipt 必须携带当前 `obligation_id`，且 outcome 属于该 obligation 的
 `required_any_of`。`new_runnable_successor` 不走 `refresh-state` 的 successor 声明；

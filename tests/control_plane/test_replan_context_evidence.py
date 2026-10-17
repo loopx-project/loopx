@@ -233,13 +233,16 @@ def test_generated_omitted_read_recovers_full_agent_history_before_limit(tmp_pat
     assert not (runtime / "goals/evidence-goal/rollout-event-log.jsonl").exists()
 
 
-def test_truncated_display_cannot_make_an_old_blocker_new():
+@pytest.mark.parametrize("count", [40, 12000])
+def test_truncated_display_cannot_make_an_old_blocker_new(count):
+    from datetime import datetime, timedelta, timezone
     from loopx.control_plane.work_items.progress_observation import semantic_delta_from_writeback
 
-    rows = [_run(generated_at=f"2026-08-19T01:{i:02}:00Z", progress_observation={
+    start = datetime(2026, 8, 19, 1, tzinfo=timezone.utc)
+    rows = [_run(generated_at=(start + timedelta(seconds=i)).isoformat(), progress_observation={
         "schema_version": "typed_progress_observation_v0", "result_class": "blocked",
         "blocker_id": f"blocker-{i}", "evidence_ids": [f"proof-{i}"],
-    }) for i in range(40)]
+    }) for i in range(count)]
     obligation = {"obligation_id": "replan-a", "triggers": [{"kind": "typed_progress_repeat"}],
                   "progress_baseline": rows[-1]["progress_observation"]}
     obligation["replan_context"] = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows, obligation=obligation)

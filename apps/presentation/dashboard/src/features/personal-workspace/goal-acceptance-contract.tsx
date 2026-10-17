@@ -81,7 +81,11 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
     } finally {if (token === generation.current) {flight.current = false; setBusy(false);}}
   }
   const unavailable = read.isError || actions.isError || !!error;
-  if (!management && !enabled && !plan && !unavailable) return <>{children}{notice ? <p role="status">{notice}</p> : null}</>;
+  if (!management && !enabled && !plan && !unavailable) return <>{children}
+    {overview ? <p className="goal-overview-note">{contract?.enabled === false
+      ? (zh ? "验收标准未配置（可选）。" : "Acceptance criteria are not configured (optional).")
+      : (zh ? "此来源未提供验收标准（可选）。" : "This source has not provided acceptance criteria (optional).")}</p> : null}
+    {notice ? <p role="status">{notice}</p> : null}</>;
   const readOnly = !canManage;
   const criterionText = (item: typeof criteria[number]) => item.oracle
     ? ({current: zh ? "当前版本已核对" : "Current versions checked", recorded: zh ? "历史结果，当前版本未核对" : "Recorded; current versions not checked", stale: zh ? "来源或版本已变化，请重新检查" : "Source or versions changed; check again", failed: zh ? "检查失败；修复交付物后可再次检查" : "Checks failed; repair the delivery before checking again", unverified: zh ? "尚未检查" : "Not checked", unavailable: zh ? "证据不可用" : "Evidence unavailable"})[fresh ? item.oracle.state : "recorded"]

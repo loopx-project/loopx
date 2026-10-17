@@ -84,7 +84,21 @@ def capability_configuration_editor(
     # same values instead of restating them: a form cannot submit an executor or
     # effort the owning namespace would reject.
     steward_endpoints, steward_efforts = _steward_executor_editor_options()
+    from .native_chat.machine_defaults import codex_profile_options
     definitions: dict[str, dict[str, Any]] = {
+        "codex_chat": {
+            "supported_scopes": ["machine"], "writable_scopes": ["machine"],
+            "fields": [
+                _field("codex_profile", "Codex configuration profile", "select", nullable=True,
+                       options=codex_profile_options(), description="Existing native account/configuration home; credentials are not copied."),
+                _field("model", "Conversation model", "text", nullable=True,
+                       description="For example gpt-6.1-sol. Blank inherits this Codex profile's default."),
+                _field("reasoning_effort", "Reasoning effort", "select", nullable=True,
+                       options=list(steward_efforts)),
+                _field("service_tier", "Service tier", "text", nullable=True,
+                       description="For example fast. This is independent of the model and reasoning effort; the native provider validates support."),
+            ],
+        },
         "goal_capability_organization": {
             "supported_scopes": ["goal"], "writable_scopes": ["goal"],
             "fields": [

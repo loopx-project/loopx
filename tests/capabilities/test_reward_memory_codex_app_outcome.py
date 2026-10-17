@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,19 @@ from loopx.capabilities.reward_memory.codex_app_outcome import (
     codex_app_outcome_candidate_sidecar_path,
     run_staged_codex_app_turn_outcome_ingest,
     stage_codex_app_turn_outcome_candidate,
+    run_staged_codex_app_turn_outcome_ingest_fail_open,
 )
+
+
+@pytest.fixture(autouse=True)
+def candidate_registry(tmp_path: Path) -> None:
+    # Direct adapter tests keep a real invoked registry. They do not resolve an
+    # installed or global Goal when qualifying candidate identity fences.
+    (tmp_path / "registry.json").write_text(json.dumps({
+        "schema_version": 1, "common_runtime_root": str(tmp_path / "runtime"),
+        "goals": [{"id": "goal", "repo": str(tmp_path),
+                   "coordination": {"registered_agents": ["pilot"]}}],
+    }))
 
 
 def _reflection() -> str:
@@ -92,6 +106,112 @@ def _validator(path: Path, *, attest: bool) -> list[str]:
     )
     path.write_text(body + "\n", encoding="utf-8")
     return [sys.executable, str(path)]
+
+
+@pytest.fixture
+def staged_case(tmp_path, monkeypatch):
+    argv = _validator(tmp_path / "validate.py", attest=True)
+    declaration = {"validation_command": None, "validation_command_argv": argv,
+                   "validation_label": "exact outcome", "validation_timeout_seconds": 5}
+    monkeypatch.setattr(codex_app_outcome, "_validation_declaration", lambda **_: declaration)
+    stage = dict(registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+                 goal_id="goal", agent_id="pilot", todo_id="todo_app", turn_instance_id="turn-app",
+                 effect_id="effect:app", state_file=tmp_path / "STATE.md", validation_workspace=tmp_path,
+                 reflection_json=_reflection(), observed_at="2026-10-17T00:00:00Z")
+    result = stage_codex_app_turn_outcome_candidate(**stage)
+    path = codex_app_outcome_candidate_sidecar_path(tmp_path, goal_id="goal", agent_id="pilot", candidate_id=result["candidate_id"])
+    finalize = {key: stage[key] for key in ("registry_path", "runtime_root", "goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id")}
+    finalize.update(candidate_id=None, writeback_appended=True, spend_appended=True)
+    return stage, finalize, path, declaration
+
+
+@pytest.mark.parametrize("field", ["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id",
+                                  "candidate_id", "reflection_digest", "binding_fingerprint", "validation_declaration_sha256"])
+def test_corrupted_candidate_never_reaches_provider(staged_case, monkeypatch, field):
+    _, finalize, path, _ = staged_case
+    value = json.loads(path.read_text())
+    value[field] = "other"
+    path.write_text(json.dumps(value))
+    monkeypatch.setattr(codex_app_outcome, "run_configured_turn_outcome_ingest", lambda **_: pytest.fail("invalid candidate reached provider"))
+    result = run_staged_codex_app_turn_outcome_ingest_fail_open(**finalize)
+    assert result["external_writes_performed"] is False
+    assert result["status"] == "runtime_unavailable"
+
+
+def test_reflection_tampering_and_legacy_unstamped_candidates_are_held(staged_case, monkeypatch):
+    _, finalize, path, _ = staged_case
+    original = json.loads(path.read_text())
+    monkeypatch.setattr(codex_app_outcome, "run_configured_turn_outcome_ingest", lambda **_: pytest.fail("unbound reflection reached provider"))
+    changed = json.loads(path.read_text())
+    changed["reflection"]["content_summary"] = "A different proposed lesson."
+    path.write_text(json.dumps(changed))
+    assert run_staged_codex_app_turn_outcome_ingest_fail_open(**finalize)["external_writes_performed"] is False
+    del original["binding_fingerprint"]
+    path.write_text(json.dumps(original))
+    assert run_staged_codex_app_turn_outcome_ingest_fail_open(**finalize)["status"] == "runtime_unavailable"
+
+
+@pytest.mark.parametrize("missing", ["writeback_appended", "spend_appended"])
+def test_candidate_waits_for_both_settlement_steps(staged_case, monkeypatch, missing):
+    _, finalize, _, _ = staged_case
+    monkeypatch.setattr(codex_app_outcome, "run_configured_turn_outcome_ingest", lambda **_: pytest.fail("unsettled candidate reached provider"))
+    result = run_staged_codex_app_turn_outcome_ingest_fail_open(**{**finalize, missing: False})
+    assert result["status"] == "evidence_validation_required"
+    assert result["external_writes_performed"] is False
+
+
+def test_changed_route_and_validator_cannot_reuse_earlier_attestation(staged_case, monkeypatch):
+    stage, finalize, _, declaration = staged_case
+    monkeypatch.setattr(codex_app_outcome, "run_configured_turn_outcome_ingest", lambda **_: pytest.fail("drifted candidate reached provider"))
+    declaration["validation_label"] = "replacement declaration"
+    assert run_staged_codex_app_turn_outcome_ingest_fail_open(**finalize)["status"] == "runtime_unavailable"
+    # The same reflection can be independently revalidated against the current
+    # declaration, but the destination route cannot move with it.
+    assert stage_codex_app_turn_outcome_candidate(**stage)["validation_bound"] is True
+    registry = stage["registry_path"]
+    data = json.loads(registry.read_text())
+    data["goals"][0]["control_plane"] = {"reward_memory": {"enabled": True, "experimental": True, "config_path": "replacement.json"}}
+    registry.write_text(json.dumps(data))
+    assert run_staged_codex_app_turn_outcome_ingest_fail_open(**finalize)["status"] == "runtime_unavailable"
+    with pytest.raises(RuntimeError, match="binding_fingerprint"):
+        stage_codex_app_turn_outcome_candidate(**stage)
+
+
+def test_failed_revalidation_does_not_reuse_previous_pass(staged_case, monkeypatch):
+    stage, finalize, path, _ = staged_case
+    _validator(stage["validation_workspace"] / "validate.py", attest=False)
+    assert stage_codex_app_turn_outcome_candidate(**stage)["validation_bound"] is False
+    assert json.loads(path.read_text())["task_validation"]["ok"] is False
+    monkeypatch.setattr(codex_app_outcome, "run_configured_turn_outcome_ingest", lambda **_: pytest.fail("failed revalidation reached provider"))
+    assert run_staged_codex_app_turn_outcome_ingest_fail_open(**finalize)["status"] == "evidence_validation_required"
+
+
+def test_concurrent_stages_cannot_replace_the_first_reflection(staged_case, monkeypatch):
+    stage, _, path, _ = staged_case
+    path.unlink()  # A disposable fixture, before either competing first stage.
+    calls = []
+    original = codex_app_outcome._run_reflection_validator
+
+    def validate(**kwargs):
+        calls.append(kwargs["reflection_digest"])
+        time.sleep(0.05)  # Allow the other caller to contend for this candidate.
+        return original(**kwargs)
+
+    monkeypatch.setattr(codex_app_outcome, "_run_reflection_validator", validate)
+    changed = json.loads(stage["reflection_json"])
+    changed["content_summary"] = "A different competing proposal for the same Turn."
+
+    def attempt(text):
+        try:
+            return stage_codex_app_turn_outcome_candidate(**{**stage, "reflection_json": text})
+        except ValueError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, [stage["reflection_json"], json.dumps(changed)]))
+    assert sum(result is not None for result in results) == 1
+    assert len(calls) == 1
+    assert json.loads(path.read_text())["reflection_digest"] == calls[0]
 
 
 def test_app_refresh_stages_private_candidate_and_spend_finalizes_it(

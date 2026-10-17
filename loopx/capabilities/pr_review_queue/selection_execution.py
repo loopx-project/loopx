@@ -114,11 +114,19 @@ def materialize_review_execution(
         "merge_readiness_observation": readiness_observation,
     }
     if not action_kind:
+        # No action is an inventory decision, not evidence that a review exists.
+        # Keep its explanation beside selection so every presentation uses the
+        # same lifecycle/conclusion facts without granting another action.
+        if item.get("is_draft") is True:
+            instruction = "Draft PR: read back submission state and any recorded conclusion."
+        elif str(item.get("state") or "").upper() == "CLOSED":
+            instruction = "This PR is closed: read back lifecycle state and any recorded conclusion."
+        elif conclusion.get("valid") is True:
+            instruction = "Read back the existing exact-head conclusion."
+        else:
+            instruction = "Read back lifecycle state; no valid exact-head conclusion is established."
         return result | {
-            "review_goal": (
-                "Read back the existing exact-head conclusion; no full evidence review "
-                "is authorized."
-            ),
+            "review_goal": instruction.rstrip(".") + "; no full evidence review is authorized.",
             "evidence_commands": [],
             "review_plan": None,
             "review_template": None,
@@ -128,10 +136,11 @@ def materialize_review_execution(
     actionable_item = dict(item) | result
     return result | {
         "review_goal": (
-            "Run a fresh five-block exact-head audit despite the valid prior conclusion."
+            "Run a fresh exact-head audit despite the valid prior conclusion. "
             if fresh_audit_requested
-            else "Fill the five-block review template after reading the PR body and diff."
-        ),
+            else ""
+        ) + "Follow review_execution_contract.decision_procedure: establish the goal and "
+        "specification first, then execute this exact-head review_plan and its evidence commands.",
         "evidence_commands": [
             f"gh pr view {number} --json title,body,files,commits,headRefOid,updatedAt" + (",statusCheckRollup" if item.get("wait_for_ci", True) else ""),
             f"gh pr diff {number} --name-only",

@@ -213,10 +213,13 @@ added to status hot paths.
 - Edges use the relation mapping in the table above. `enforcement` reuses the
   `planning_relations` catalog (`typed_lifecycle`, `typed_condition`,
   `lineage_only`), so a reader can tell a lifecycle link from lineage.
-- The TS effect `work_item.task_graph.goal_topology` owns admission, edges and
-  `depth` (the longest recorded prerequisite path). Admission is deterministic:
+- The TS effect `work_item.task_graph.goal_topology` composes the map's node
+  kinds, metadata visibility, edges, limits and `depth` (the longest recorded
+  prerequisite path). Python retains shared source/text/state/identity codecs;
+  owner labels are sanitized only after admission. Admission is deterministic:
   unfinished work first, then direct completed prerequisites of unfinished
-  work, then remaining history, up to `node_limit` (at most 200).
+  work, then remaining history, up to the public map's 120-node limit. The
+  reusable internal topology lens accepts limits up to 200.
 - `depends_on` edges order the map. Lineage (`continues`, `supersedes`)
   carries no ordering obligation: it adds depth only where it agrees with the
   dependency order. A follow-up recorded opposite to a dependency, such as a
@@ -228,6 +231,14 @@ added to status hot paths.
   nodes.
 - An unreadable Todo source returns `goal_map: null` and leaves the rest of the
   delivery review available.
+- The native map carries the existing `projection_envelope`, scoped to
+  `goal_task_map`. Actual Todo read time is distinct from assembly time;
+  missing read facts stay unknown. Unrenderable Todos, display-limit omissions
+  and unresolved relations prevent a whole-map completeness claim. A truncated
+  source has an unknown denominator. The outer delivery review inherits source
+  age and incomplete coverage from status and the map; an unreadable map alerts.
+  The UI and Markdown export disclose these flags without changing source-open
+  or execution authorization. See the [kernel read contract](../contracts/projection-envelope-contract.md).
 
 Like the predecessor lens, the map has no write authority. A drawn line is a
 recorded relation, not a readiness verdict; the resume evaluator and lifecycle

@@ -158,7 +158,12 @@ def connect_group(fixture):
     fake.write_text(fake.read_text().replace('"thread": {"id": "durable-thread"},',
         '"thread": {"id": "durable-thread"}, '
         '"activePermissionProfile": {"id": request["params"].get("permissions")}, '
-        '"runtimeWorkspaceRoots": [request["params"]["cwd"]],'))
+        '"runtimeWorkspaceRoots": [request["params"]["cwd"]],').replace(
+            '        if "wait for interrupt" in json.dumps(request.get("params") or {}) or "wait for steer" in json.dumps(request.get("params") or {}):',
+            # The synthetic host's wait trigger belongs to the current input,
+            # not a preceding message quoted as context.
+            '        current = json.dumps(request.get("params") or {}).rsplit("Current user message:", 1)[-1]\n'
+            '        if "wait for interrupt" in current or "wait for steer" in current:'))
     binding = transport.bindings.read()["bindings"][0]
     refs = [identity_ref(binding["provider_ref"], chat) for chat in ["oc_community", "oc_second"]]
     transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
@@ -167,7 +172,8 @@ def connect_group(fixture):
 
 
 def finish_group_turn(runtime, transport, *, message):
-    row = next(row for row in transport.core.pending() if row["message"] == message)
+    row = next(row for row in transport.core.pending() if row["message"] == message
+               or row["message"].endswith(f"\n\nCurrent user message:\n{message}"))
     assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
     transport.reconcile()
     return row
@@ -648,7 +654,7 @@ def test_group_mention_text_does_not_invent_a_control(ordinary, raw_text, identi
             mentions=[{"key": key, "name": "notes-app", "id": identity}])
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = finish_group_turn(runtime, transport, message=rendered)
-        assert row["message"] == rendered
+        assert row["message"].endswith(f"\n\nCurrent user message:\n{rendered}")
     finally:
         runtime.close()
 
@@ -1586,7 +1592,7 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
             return original_observe(*args, **kwargs)
 
         def overlap(args, cwd=None, timeout=None):
-            if ("+messages-mget" in args or
+            if (("+messages-mget" in args and args[args.index("--message-ids") + 1] == event["message_id"]) or
                     ("GET" in args and args[args.index("GET") + 1].endswith(event["message_id"]))):
                 started.wait(timeout=2)
             return provider(args, cwd, timeout)
@@ -1596,7 +1602,7 @@ def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordi
         monkeypatch.setattr(transport.bindings, "observe", observe)
         assert transport.admit("notes-app", event)["status"] == "durably_accepted"
         row = transport.core.pending()[0]
-        assert row["message"] == event["content"]
+        assert row["message"].endswith(f"\n\nCurrent user message:\n{event['content']}")
         assert row["source"]["topic_ref"] == lark_private_source(
             provider_ref=identity_ref("cli_notes_app"), event=event)["topic_ref"]
         assert not provider.writes
