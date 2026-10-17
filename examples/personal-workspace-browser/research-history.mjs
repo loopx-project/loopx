@@ -232,6 +232,22 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await gapLegend.locator('i').evaluate(e => getComputedStyle(e).backgroundColor),
         await history.locator('.research-density .is-gap').first().evaluate(e => getComputedStyle(e).backgroundColor),
         'The visible key identifies the actual recording-gap marks');
+      const barLegend = history.getByText('柱高=事件数', {exact: true});
+      assert(await barLegend.isVisible(), 'The bar-height meaning must be visible without opening optional help');
+      assert.equal(await barLegend.locator('i').evaluate(e => getComputedStyle(e).borderTopColor),
+        await history.locator('.research-density span:not(.is-gap)').first().evaluate(e => getComputedStyle(e).borderTopColor),
+        'The visible bar key matches the real density bars');
+      // The default reading must survive a locale switch, not only the zh copy.
+      await page.evaluate(key => localStorage.setItem(key, 'en'), 'loopx-pw-locale');
+      await page.reload({waitUntil: 'networkidle'});
+      const englishHistory = page.getByRole('region', {name: 'Research history', exact: true});
+      await englishHistory.getByText('Bar height = events', {exact: true}).waitFor()
+        .catch(error => {throw new Error(`The English reading keeps the bar-height key: ${error.message}`);});
+      await englishHistory.getByText('No records', {exact: true}).waitFor()
+        .catch(error => {throw new Error(`The English reading keeps the recording-gap key: ${error.message}`);});
+      await page.evaluate(key => localStorage.setItem(key, 'zh-CN'), 'loopx-pw-locale');
+      await page.reload({waitUntil: 'networkidle'});
+      await history.getByText('柱高=事件数', {exact: true}).waitFor();
       const target = await history.locator(".research-timeline-marker").first().evaluate(button => {
         const box = button.getBoundingClientRect(), dot = getComputedStyle(button, "::after");
         const count=button.querySelector('span');
@@ -248,6 +264,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       for (const viewport of [{width: 1280, height: 900}, {width: 390, height: 844}]) {
         await page.setViewportSize(viewport);
         assert(await gapLegend.isVisible(), 'The recording-gap key remains visible on desktop and narrow layouts');
+        assert(await barLegend.isVisible(), 'The bar-height key remains visible on desktop and narrow layouts');
         const target = history.locator('.research-route-track [data-research-nodes~="hit-6"]');
         await target.scrollIntoViewIfNeeded();
         await page.screenshot({path: resolve(outputDir, `research-history-targets-${viewport.width}.png`), animations:'disabled'});

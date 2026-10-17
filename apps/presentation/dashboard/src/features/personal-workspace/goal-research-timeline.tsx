@@ -113,10 +113,11 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}</div>
     <div className="research-phases" role="group" aria-label={copy.phaseNote}>{timeline.phases.map(phaseCard)}</div>
     <div className="research-timeline-grid">
-      <div className="research-row-label"><strong>{copy.density}</strong>{decisionOutcomes.length || hasRecordingGaps ? <small>
+      <div className="research-row-label"><strong>{copy.density}</strong><small>
+        <span><i className="research-bar-key" aria-hidden="true"/> {zh ? "柱高=事件数" : "Bar height = events"}</span>
         {hasRecordingGaps ? <span><i className="research-gap-key" aria-hidden="true"/> {zh ? "无记录" : "No records"}</span> : null}
         {decisionOutcomes.map(outcome => <span key={outcome}><i className={`research-tick-key is-${outcome}`}/> {label(outcome)}</span>)}
-      </small> : null}</div>
+      </small></div>
       <div className="research-row-plot">
         <div className="research-density" ref={plot}>{timeline.bins.map((bin, index) => <span key={index} className={bin.events ? "" : "is-gap"} title={`${timeLabel(bin.start)} — ${timeLabel(bin.end)} · ${bin.events}`}
           style={{height: bin.events ? `${Math.max(8, (bin.events / maxEvents) * 100)}%` : "100%"}}/>)}</div>

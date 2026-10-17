@@ -94,6 +94,7 @@
 .research-density span.is-gap, .research-gap-key { background: var(--pw-red-bg); }
 .research-density span.is-gap { border-top: 0; }
 .research-gap-key { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--pw-red); border-radius: 2px; }
+.research-bar-key { display: inline-block; width: 10px; height: 10px; background: var(--pw-blue-soft); border-top: 2px solid var(--pw-blue); border-radius: 2px 2px 0 0; }
 .research-decision-ticks { position: relative; height: 12px; margin-top: 4px; }
 .research-decision-ticks span { position: absolute; top: 0; width: 3px; height: 10px; margin-left: -1px; border-radius: 1px; background: var(--pw-blue); }
 .research-decision-ticks span.is-replan, .research-tick-key.is-replan { background: var(--pw-orbit); }
