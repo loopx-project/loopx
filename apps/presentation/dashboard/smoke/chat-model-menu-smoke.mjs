@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ChatModelMenu } from "../src/features/personal-workspace/chat-model-menu.tsx";
+import { ChannelHeader } from "../src/features/personal-workspace/channel-header.tsx";
 import { WorkspaceI18nProvider } from "../src/features/personal-workspace/i18n.tsx";
 
 // Presentation semantics only. Real width, focus, IME and native delivery still
@@ -35,7 +36,20 @@ try {
     const defaultsLabel = locale === "zh-CN" ? "默认对话配置" : "Conversation defaults";
     assert.match(render({ onOpenDefaults() {} }), new RegExp(defaultsLabel), "Defaults remain discoverable inside the relevant settings disclosure");
     assert.doesNotMatch(render({ ordinary: false, onOpenDefaults() {} }), new RegExp(defaultsLabel), "Ordinary defaults are not offered for the steward binding");
-    assertions += 15;
+    const header = refreshState => renderToStaticMarkup(createElement(WorkspaceI18nProvider, null,
+      createElement(ChannelHeader, { agents: [], selectedGoal: null, selectedAgentId: "status-only",
+        selectedGoalTab: "chat", onSelectGoalTab() {}, onSelectAgent() {}, onRefresh() {}, refreshState })));
+    const loadingText = locale === "zh-CN" ? "刷新中" : "Refreshing";
+    const doneText = locale === "zh-CN" ? "刚刚更新" : "Updated just now";
+    const failedText = locale === "zh-CN" ? "刷新失败" : "Refresh failed";
+    assert.doesNotMatch(header("idle"), new RegExp(`${loadingText}|${doneText}|${failedText}`), "Idle refresh does not announce an event");
+    assert.match(header("loading"), new RegExp(`<small>${loadingText}</small>`), "Loading remains visible");
+    assert.match(header("loading"), /<button[^>]*disabled=""/, "An in-flight refresh cannot be repeated");
+    assert.match(header("done"), new RegExp(`class="personal-sr-only" role="status">${doneText}</span>`), "Success is announced to assistive technology");
+    assert.doesNotMatch(header("done"), new RegExp(`<small>${doneText}</small>`), "Success does not add a second visible header label");
+    assert.match(header("error"), new RegExp(`<small>${failedText}</small>`), "A failure remains visibly actionable");
+    assert.doesNotMatch(header("error"), /<button[^>]*disabled=""/, "A failed refresh can be retried");
+    assertions += 22;
   }
-  console.log(`Chat model menu: ${assertions} bilingual current-vs-requested, unknown, collapsed and steward-boundary assertions passed (SSR only)`);
+  console.log(`Chat model/header: ${assertions} bilingual model, defaults and accessible refresh assertions passed (SSR only)`);
 } finally { globalThis.window = originalWindow; }
