@@ -1,5 +1,6 @@
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from urllib.request import urlopen
 from urllib.request import Request
 from urllib.error import HTTPError
@@ -62,6 +63,82 @@ def test_snapshot_byte_budget_is_enforced():
     with pytest.raises(ValueError, match="too_large"):
         pages.page(scope="a", cursor="", load=lambda: [{"text": "x" * 100}])
     assert not pages._snapshots
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_slow_history_load_does_not_block_another_goal(cached):
+    pages = CompletedTodoPages()
+    rows = [{"todo_id": f"todo_ready_{index}"} for index in range(85)]
+    cursor = pages.page(scope="ready", cursor="", load=lambda: rows)["next_cursor"] if cached else ""
+    loading, release = threading.Event(), threading.Event()
+
+    def slow_load():
+        loading.set()
+        assert release.wait(10), "The blocked history read was not released"
+        return [{"todo_id": "todo_slow"}]
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        slow = workers.submit(pages.page, scope="slow", cursor="", load=slow_load)
+        try:
+            assert loading.wait(2)
+            ready = workers.submit(pages.page, scope="ready", cursor=cursor, load=lambda: rows)
+            page = ready.result(timeout=2)
+            assert page["items"] == (rows[40:80] if cached else rows[:40])
+            assert page["total"] == 85
+            assert not slow.done(), "The independent page must finish before the slow read"
+        finally:
+            release.set()
+        assert slow.result(timeout=2)["items"] == [{"todo_id": "todo_slow"}]
+
+
+@pytest.mark.parametrize("budget", ["snapshots", "bytes"])
+def test_concurrent_history_publication_keeps_cache_bounded(budget):
+    pages = CompletedTodoPages()
+    pages.max_snapshots = 2 if budget == "snapshots" else 8
+    pages.max_cache_bytes = 6000 if budget == "bytes" else 16 * 1024 * 1024
+    loading = threading.Barrier(4)
+
+    def first_page(index):
+        rows = [{"todo_id": f"todo_{index}_{number}", "text": "r" * 80} for number in range(41)]
+
+        def load():
+            loading.wait(timeout=5)
+            return rows
+
+        page = pages.page(scope=index, cursor="", load=load)
+        assert page["items"] == rows[:40] and page["total"] == 41
+        return page["next_cursor"]
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        cursors = list(workers.map(first_page, range(4)))
+    retained = 0
+    for index, cursor in enumerate(cursors):
+        try:
+            page = pages.page(scope=index, cursor=cursor, load=lambda: pytest.fail("Cached pages must not reload"))
+        except ValueError as exc:
+            assert str(exc) == "history_cursor_expired"
+        else:
+            assert page["items"][0]["todo_id"] == f"todo_{index}_40"
+            retained += 1
+    assert retained == (1 if budget == "bytes" else 2)
+
+
+def test_snapshot_expiry_starts_when_loading_finishes(monkeypatch):
+    pages = CompletedTodoPages()
+    pages.ttl_seconds = 1
+    clock = [0]
+    monkeypatch.setattr("loopx.chat_completed_todos.monotonic", lambda: clock[0])
+    rows = [{"todo_id": f"todo_{index}"} for index in range(41)]
+
+    def load():
+        clock[0] = 2
+        return rows
+
+    cursor = pages.page(scope="goal", cursor="", load=load)["next_cursor"]
+    assert pages.page(scope="goal", cursor=cursor, load=load)["items"] == rows[40:]
+    clock[0] = 3
+    with pytest.raises(ValueError, match="history_cursor_expired"):
+        pages.page(scope="goal", cursor=cursor, load=load)
 
 
 def test_goal_report_verification_is_bounded_by_requested_page(monkeypatch):

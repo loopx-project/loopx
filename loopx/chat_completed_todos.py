@@ -86,6 +86,12 @@ class CompletedTodoPages:
         self._lock = Lock()
 
     def page(self, *, scope, cursor, load):
+        # A slow source must not hold up unrelated cached pages.
+        if not cursor:
+            rows = load()
+            size = len(json.dumps(rows, ensure_ascii=False).encode("utf-8"))
+            if size > self.max_cache_bytes:
+                raise ValueError("history_snapshot_too_large")
         with self._lock:
             now = monotonic()
             for key, (created, _, _, _) in list(self._snapshots.items()):
@@ -101,10 +107,6 @@ class CompletedTodoPages:
                 except (ValueError, KeyError):
                     raise ValueError("history_cursor_expired") from None
             else:
-                rows = load()
-                size = len(json.dumps(rows, ensure_ascii=False).encode("utf-8"))
-                if size > self.max_cache_bytes:
-                    raise ValueError("history_snapshot_too_large")
                 key, offset = token_urlsafe(18), 0
                 while self._snapshots and (len(self._snapshots) >= self.max_snapshots or sum(snapshot[3] for snapshot in self._snapshots.values()) + size > self.max_cache_bytes):
                     self._snapshots.popitem(last=False)
