@@ -44,6 +44,13 @@ export const PLANNED_TRANSFER_WRITER_FENCE_SCHEMA = "loopx_planned_transfer_writ
 /** Native Task/accounting admission after a final source decision. Host,
  * session and effect execution remain held. This is not new-Goal creation. */
 export const PLANNED_TRANSFER_TASK_FENCE_SCHEMA = "loopx_planned_transfer_task_fence_v0";
+/** A distinct, Goal-owned runtime admission. Historical Task-only fences stay
+ * Task-only; older installations reject this new contract instead of widening it. */
+export const PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA = "loopx_planned_transfer_runtime_fence_v0";
+export function isPlannedTransferAdmissionFence(fence: JsonObject): boolean {
+  return fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA ||
+    fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA;
+}
 export interface PlannedTransferWriterFence extends JsonObject {
   schema_version: typeof PLANNED_TRANSFER_WRITER_FENCE_SCHEMA;
   state: "engaged";
@@ -126,10 +133,11 @@ export function legacyCoordinationWriterFencePath(root: string, goalId: string):
 
 export function decodeLegacyCoordinationWriterFence(value: unknown): JsonObject {
   const fence = canonicalAuthorityObject(value, "legacy coordination writer fence");
-  if (fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
+  if (isPlannedTransferAdmissionFence(fence)) {
+    const digestKey = fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA ? "runtime_admission_sha256" : "task_admission_sha256";
     if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
-        ["schema_version", "state", "goal_id", "fence_id", "operation_id", "source_identity_sha256", "task_admission_sha256", "store_identity"]) ||
-        !BARE_SHA256_PATTERN.test(String(fence.source_identity_sha256)) || !BARE_SHA256_PATTERN.test(String(fence.task_admission_sha256))) {
+        ["schema_version", "state", "goal_id", "fence_id", "operation_id", "source_identity_sha256", digestKey, "store_identity"]) ||
+        !BARE_SHA256_PATTERN.test(String(fence.source_identity_sha256)) || !BARE_SHA256_PATTERN.test(String(fence[digestKey]))) {
       throw new Error("Invalid planned transfer admission fence");
     }
     for (const key of ["goal_id", "fence_id", "operation_id", "store_identity"]) requireAuthorityStoreId(fence[key], key);
@@ -272,7 +280,7 @@ export async function admitPlannedTransferTaskWriterUnderLock(root: string, goal
   prepared: JsonObject, admitted: JsonObject): Promise<void> {
   decodeLegacyCoordinationWriterFence(prepared); decodeLegacyCoordinationWriterFence(admitted);
   if (prepared.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || prepared.role !== "target" ||
-      admitted.schema_version !== PLANNED_TRANSFER_TASK_FENCE_SCHEMA || prepared.goal_id !== goalId || admitted.goal_id !== goalId ||
+      !isPlannedTransferAdmissionFence(admitted) || prepared.goal_id !== goalId || admitted.goal_id !== goalId ||
       prepared.operation_id !== admitted.operation_id || prepared.source_identity_sha256 !== admitted.source_identity_sha256) {
     throw new Error("Invalid planned target admission transition");
   }

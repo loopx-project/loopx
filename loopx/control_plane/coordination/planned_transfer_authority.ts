@@ -22,7 +22,7 @@ import {canonicalTaskLease} from "./task_lease_state.ts";
 import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot} from "./local_authority_provider.ts";
 import {loadLegacyCoordinationWriterFence, preparePlannedTransferWriterFenceUnderLock,
   restorePlannedTransferWriterFenceUnderLock, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA,
-  PLANNED_TRANSFER_TASK_FENCE_SCHEMA,
+  isPlannedTransferAdmissionFence,
   type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
 import {PREPARATION_SCHEMA, checkGoalTransferSourceContext, readGoalTransferSnapshot,
@@ -72,12 +72,12 @@ export async function checkPlannedTransferRegistryWrite(value: JsonObject): Prom
       const root = requireLocalAuthorityRuntimeRoot(rawRoot);
       const fence = await loadLegacyCoordinationWriterFence(root, goalId);
       if (fence.status === "failed") reject("Goal writer fence is unreadable; preserve its original registration");
-      if (fence.status !== "loaded" || ![PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, PLANNED_TRANSFER_TASK_FENCE_SCHEMA].includes(String(fence.fence.schema_version))) continue;
+      if (fence.status !== "loaded" || !(fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || isPlannedTransferAdmissionFence(fence.fence))) continue;
       const matches = proposed.filter(row => row !== null && typeof row === "object" && !Array.isArray(row) && (row as JsonObject).id === goalId);
       const prior = original.filter(row => row !== null && typeof row === "object" && !Array.isArray(row) && (row as JsonObject).id === goalId);
-      if (fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
-        const {requireLocalTaskTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
-        await requireLocalTaskTransferAdmission(root, goalId, fence.fence);
+      if (isPlannedTransferAdmissionFence(fence.fence)) {
+        const {requireLocalGoalTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
+        await requireLocalGoalTransferAdmission(root, goalId, fence.fence);
         const beforeGoal = prior[0] as JsonObject | undefined, afterGoal = matches[0] as JsonObject | undefined;
         if (prior.length !== 1 || matches.length !== 1 || root !== before.common_runtime_root || root !== after.common_runtime_root ||
             ["repo", "state_file", "planned_transfer", "goal_instance_id", "creation_operation_id"].some(key => !same(beforeGoal?.[key] ?? null, afterGoal?.[key] ?? null)) ||
@@ -239,6 +239,9 @@ export async function inspectRegisteredGoalTransfer(value: JsonObject): Promise<
   if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "source_context", "registry_witness"])) {
     reject("Transfer inspection requires its registered source observation");
   }
+  const {inspectAdmittedGoalTransferDestination} = await import("../goals/planned_transfer_continuation.ts");
+  const destination = await inspectAdmittedGoalTransferDestination(value);
+  if (destination !== null) return destination;
   return visitRegisteredTransferSource(value, null, async source => {
     const {context, preview, projection, preparedOperation} = source;
     const goal = requireJsonObject(context.goal, "original Goal");
@@ -257,7 +260,8 @@ export async function inspectRegisteredGoalTransfer(value: JsonObject): Promise<
       return {ok: true, schema_version: "loopx_planned_transfer_operation_view_v0", goal_id: goal.id,
         source_state: "cutover_recorded", operation_id: preparedOperation, source_provider: preview.provider, source_revision: preview.provider_revision,
         authority_preparation_ready: false, cancel_available: false, continuation_available: false,
-        local_cutover: {source_final: true, target_task_admitted: current.target_task_admitted},
+        local_cutover: {source_final: true, target_task_admitted: current.target_task_admitted,
+          target_runtime_admitted: current.target_runtime_admitted},
         work: current.work ?? {objective: source.objective, requirements: context.state_text,
           agents: coordination.registered_agents ?? [], todos: todos.todo_ids.map(id => todos.todos.get(id)!)},
         holds: [{code: "transfer_journey_incomplete" satisfies GoalTransferHoldCode, owner: "goal_transfer"}]};

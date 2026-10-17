@@ -45,7 +45,7 @@ const goalTransferHoldSchema: z.ZodType<GoalTransferHoldCode> = z.enum([
 const goalTransferViewSchema = z.object({
   ok: z.literal(true), goal_id: z.string(), source_state: z.enum(["available", "prepared", "cutover_recorded"]),
   operation_id: z.string().nullable(), cancel_available: z.boolean(), continuation_available: z.literal(false),
-  local_cutover: z.object({source_final: z.literal(true), target_task_admitted: z.boolean()}).optional(),
+  local_cutover: z.object({source_final: z.literal(true), target_task_admitted: z.boolean(), target_runtime_admitted: z.boolean().optional()}).optional(),
   work: z.object({objective: z.string(), agents: z.array(z.string()),
     todos: z.array(z.object({todo_id: z.string(), text: z.string(), status: z.string(),
       note: z.string().nullish(), evidence: z.string().nullish()}))}),

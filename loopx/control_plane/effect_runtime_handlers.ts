@@ -432,6 +432,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.planned_transfer.read_target_runs", lazyHandler(() => import("./coordination/planned_transfer_target.ts"), ({readStagedGoalTransferRuns}) => readStagedGoalTransferRuns)],
     ["coordination.planned_transfer.plan_local_cutover", lazyHandler(() => import("./goals/planned_transfer_cutover.ts"), ({planLocalGoalTransferCutover}) => planLocalGoalTransferCutover)],
     ["coordination.planned_transfer.finish_local_cutover", lazyHandler(() => import("./goals/planned_transfer_cutover.ts"), ({finishLocalGoalTransferCutover}) => finishLocalGoalTransferCutover)],
+    ["coordination.planned_transfer.host_context", lazyHandler(() => import("./goals/planned_transfer_continuation.ts"), ({readGoalTransferHostContext}) => readGoalTransferHostContext)],
     ["configuration.backup", lazyHandler(() => import("./configuration_backup.ts"), ({configurationBackupOperation}) => configurationBackupOperation)],
     ["runtime.checkpoint_artifacts", lazyHandler(() => import("./runtime/checkpoint_artifacts.ts"), ({checkpointArtifacts}) => checkpointArtifacts)],
     ["state.recovery.archive.verify", lazyHandler(() => import("./state_recovery.ts"), ({verifyStateRecoveryArchive}) => verifyStateRecoveryArchive)],

@@ -46,6 +46,7 @@ def _read_goal_transfer_snapshot(*, registry_path: Path, goal_id: str) -> dict[s
     from ...registry import find_registry_goal, resolve_state_file
     from ..coordination.authority_source_capture import authority_registry_source
     from .active_state_metadata import active_state_section_text
+    from .activation import goal_activation_state
 
     registry_path = registry_path.expanduser().resolve()
     with authority_registry_source(registry_path) as witness:
@@ -61,6 +62,7 @@ def _read_goal_transfer_snapshot(*, registry_path: Path, goal_id: str) -> dict[s
             "runtime_root": registry["common_runtime_root"], "registry_path": str(registry_path)},
             "registry_witness": witness, "registry_profile": registry.get("profile_id"),
             "registry_role": registry.get("registry_role"),
+            "activation_state": goal_activation_state(goal).value,
             "state_objective": active_state_section_text(state_text, "Objective")}
 
 
@@ -106,7 +108,7 @@ def cancel_registered_goal_transfer(*, registry_path: Path, goal_id: str, operat
 
 def local_goal_transfer_cutover(
     *, registry_path: Path, goal_id: str, operation_id: str, destination_registry: Path,
-    expected_preview_sha256: str | None = None,
+    expected_preview_sha256: str | None = None, continuation: str | None = None,
 ) -> dict[str, Any]:
     """One source-online local cutover; native owners decide every transition.
 
@@ -120,6 +122,8 @@ def local_goal_transfer_cutover(
     before = load_registry(destination_registry)
     request: dict[str, Any] = {"source": {**context, "runtime_root": context["source_context"]["runtime_root"],
         "goal_id": goal_id, "operation_id": operation_id}, "target_snapshot": snapshot, "target_registry": before}
+    if continuation is not None:
+        request["continuation"] = continuation
     if expected_preview_sha256 is not None:
         request.update(execute=True, expected_preview_sha256=expected_preview_sha256)
     result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.plan_local_cutover", request,
@@ -138,6 +142,18 @@ def local_goal_transfer_cutover(
         "runtime_root": snapshot["source_context"]["runtime_root"], "goal_id": goal_id, "operation_id": operation_id,
     }, timeout=300.0, retry_safe=False)
     return {"ok": True, **result, **admitted, "registry_readback_verified": True}
+
+
+def read_goal_transfer_host_context(*, registry_path: Path, goal_id: str,
+    agent_id: str, todo_id: str) -> dict[str, Any]:
+    """Read the current Goal owner's context; this IO adapter grants nothing."""
+    from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
+
+    route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+    result: dict[str, Any] = effect_runtime_result("coordination.planned_transfer.host_context", {
+        "runtime_root": route["source_runtime_root"], "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
+    }, timeout=60.0, retry_safe=True)
+    return result
 
 
 def prepare_registered_goal_transfer(

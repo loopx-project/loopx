@@ -229,7 +229,7 @@ function evidenceForJournal(
   };
 }
 
-async function querySettlementJournal(
+export async function querySettlementJournal(
   runtimeRootValue: unknown,
   identity: BoundSettlementIdentity,
   goalRef: ExactGoalRef | null,
@@ -277,7 +277,11 @@ export async function findTurnJournalBySettlement(params: JsonObject): Promise<{
     todo_id: requireNonEmptyString(params.todo_id, "todo_id"),
     turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
   }));
-  const evidence = await querySettlementJournal(params.runtime_root, identity, null);
+  const goalRef = Object.hasOwn(params, "goal_ref") ? decodeGoalRef(params.goal_ref) : null;
+  if (goalRef !== null && goalRef.goalId.value !== identity.goal_id) {
+    throw new EffectRuntimeRequestError("Turn journal lookup GoalRef conflicts with its settlement identity");
+  }
+  const evidence = await querySettlementJournal(params.runtime_root, identity, goalRef);
   return { turn_key: evidence?.turn_key ?? null };
 }
 

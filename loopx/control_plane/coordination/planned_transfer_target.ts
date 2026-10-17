@@ -20,7 +20,7 @@ import {FileAuthorityStore} from "./file_authority_store.ts";
 import {SqliteAuthorityStore} from "./sqlite_authority_store.ts";
 import {localAuthorityProviderPaths, publishLocalAuthoritySelection} from "./local_authority_provider.ts";
 import {engageLegacyCoordinationWriterFenceUnderLocks, loadLegacyCoordinationWriterFence,
-  PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, PLANNED_TRANSFER_TASK_FENCE_SCHEMA, type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
+  PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, isPlannedTransferAdmissionFence, type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
 import {decodeGoalTransferHistory, inspectGoalTransferHistory, readGoalTransferHistoryJson, retainGoalTransferHistory, type ProtectedGoalTransferHistory} from "../goals/planned_transfer_history.ts";
 import {PREPARATION_SCHEMA} from "./planned_transfer_authority.ts";
@@ -332,14 +332,14 @@ export async function readStagedGoalTransferRuns(value: JsonObject): Promise<Jso
   const operation = requireAuthorityStoreId(value.operation_id, "original transfer operation");
   if (/[\\/\0]/u.test(goal) || goal === "." || goal === "..") reject("Original transfer Goal must be one path segment");
   const fence = await loadLegacyCoordinationWriterFence(root, goal);
-  const admitted = fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA;
+  const admitted = fence.status === "loaded" && isPlannedTransferAdmissionFence(fence.fence);
   if (fence.status !== "loaded" || fence.fence.operation_id !== operation ||
       (!admitted && (fence.fence.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || fence.fence.role !== "target"))) {
     reject("Original staged target accounting binding is unavailable");
   }
   if (admitted) {
-    const {requireLocalTaskTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
-    await requireLocalTaskTransferAdmission(root, goal, fence.fence);
+    const {requireLocalGoalTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
+    await requireLocalGoalTransferAdmission(root, goal, fence.fence);
   }
   const directory = join(shadowManagementDirectory(root, goal), "planned-transfer-targets", canonicalAuthoritySha256(operation));
   const pending = await readGoalTransferHistoryJson(join(directory, "preparation.json"));

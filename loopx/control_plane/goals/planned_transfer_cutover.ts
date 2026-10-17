@@ -2,8 +2,9 @@
  *
  * The original source is read through its native owner, not a copied receipt.
  * Its final decision and cancellation share maintenance. The destination Goal
- * owner admits native Tasks/accounting after registry readback; Host/session/
- * effect execution remains held. This is not cross-machine authorization.
+ * owner admits Tasks/accounting, or a separately reviewed new local runtime.
+ * Neither profile copies a session or credential. This is not cross-machine
+ * authorization or qualification of the complete installed user journey.
  */
 import {join, resolve} from "node:path";
 import {stat} from "node:fs/promises";
@@ -18,15 +19,18 @@ import {auditAuthorityArchive} from "../coordination/authority_archive_audit.ts"
 import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot} from "../coordination/local_authority_provider.ts";
 import {indexCoordinationProjection} from "../coordination/coordination_projection.ts";
 import {loadLegacyCoordinationWriterFence, admitPlannedTransferTaskWriterUnderLock,
-  PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, PLANNED_TRANSFER_TASK_FENCE_SCHEMA} from "../coordination/legacy_writer_fence.ts";
+  PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, PLANNED_TRANSFER_TASK_FENCE_SCHEMA,
+  PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA, isPlannedTransferAdmissionFence} from "../coordination/legacy_writer_fence.ts";
 import {shadowManagementDirectory, withShadowMaintenanceLock} from "../coordination/shadow_management.ts";
 import {readGoalTransferHistoryJson} from "./planned_transfer_history.ts";
 import {requirePhysicalTransferPath, inspectTransferFile} from "./planned_transfer_container.ts";
 import {readGoalTransferSnapshot, withVerifiedGoalTransferContext} from "./planned_transfer.ts";
+import {planReviewedTransferContinuation, readReviewedTransferContext} from "./planned_transfer_continuation.ts";
 import {observeLocalWorkspaceHostIdentity} from "../work_items/task_lease_workspace.ts";
 
 const CUTOVER_SCHEMA = "loopx_local_goal_transfer_cutover_v0";
 const ADMISSION_SCHEMA = "loopx_local_goal_transfer_task_admission_v0";
+const RUNTIME_ADMISSION_SCHEMA = "loopx_local_goal_transfer_runtime_admission_v0";
 function reject(message: string): never {throw new EffectRuntimeConflictError(message);}
 function same(a: unknown, b: unknown): boolean {return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b));}
 function operationDirectory(root: string, goal: string, operation: string, source: boolean): string {
@@ -52,7 +56,7 @@ async function locationIdentity(root: string): Promise<string> {
  * empty backup. Unknown Goal/adapter/config fields require their actual owner.
  * Source sessions and credentials remain historical; none is auto-installed.
  */
-function localTaskGoal(original: JsonObject, staged: JsonObject): JsonObject {
+function localAdmittedGoal(original: JsonObject, staged: JsonObject, continuation: JsonObject | null): JsonObject {
   const keys = ["id", "display_name", "domain", "status", "role", "parent_goal_id", "repo", "state_file",
     "authority_sources", "adapter", "spawn_policy", "coordination", "execution_profile", "next_probe", "guards",
     "creation_operation_id", "activation"];
@@ -78,9 +82,11 @@ function localTaskGoal(original: JsonObject, staged: JsonObject): JsonObject {
     parent_goal_id: null, spawn_policy: spawn, coordination: currentCoordination,
     ...(original.execution_profile === undefined ? {} : {execution_profile: original.execution_profile}),
     ...(original.guards === undefined ? {} : {guards: original.guards}),
-    activation: {schema_version: "loopx_goal_activation_v1", state: "active", reason: "Native local Task admission; Host continuation remains unqualified"},
+    activation: {schema_version: "loopx_goal_activation_v1", state: "active", reason: continuation ? "Reviewed original work continues in this new local runtime" : "Native local Task admission; Host continuation remains unqualified"},
     planned_transfer: {...requireJsonObject(staged.planned_transfer, "staged transfer"),
-      state: "task_admitted", identity_continuity: "same_goal_task_continuation", fresh_admission_required: true, task_write_admitted: true}};
+      state: continuation ? "runtime_admitted" : "task_admitted",
+      identity_continuity: continuation ? "same_goal_new_runtime" : "same_goal_task_continuation",
+      fresh_admission_required: true, task_write_admitted: true, ...(continuation ? {runtime_admitted: true} : {})}};
 }
 
 /** The registry codec calls this under its original transaction. This is only
@@ -88,23 +94,25 @@ function localTaskGoal(original: JsonObject, staged: JsonObject): JsonObject {
 export async function localTransferRegistryPublication(root: string, goal: string,
   operation: string, registry: string, proposed: JsonObject): Promise<boolean> {
   const intent = await optional(join(operationDirectory(root, goal, operation, false), "admission.json"));
-  if (!intent || intent.schema_version !== ADMISSION_SCHEMA || intent.target_registry_path !== registry ||
+  if (!intent || ![ADMISSION_SCHEMA, RUNTIME_ADMISSION_SCHEMA].includes(String(intent.schema_version)) || intent.target_registry_path !== registry ||
       !same(intent.goal, proposed)) return false;
   const decision = requireJsonObject(intent.decision, "native source cutover");
   return decision.schema_version === CUTOVER_SCHEMA && decision.goal_id === goal && decision.operation_id === operation &&
     same(await optional(join(operationDirectory(String(decision.source_runtime_root), goal, operation, true), "cutover.json")), decision);
 }
 
-/** Read-only native Task admission used by canonical writers and accounting.
- * It proves this runtime's retained lineage, not an imported lease/session. */
-export async function requireLocalTaskTransferAdmission(root: string, goal: string, fence: JsonObject): Promise<JsonObject> {
-  if (fence.schema_version !== PLANNED_TRANSFER_TASK_FENCE_SCHEMA) reject("Target admission fence is required");
+/** Read-only admission from the existing Goal-owned cutover receipt.
+ * It proves this physical runtime's retained lineage, not a copied grant. */
+export async function requireLocalGoalTransferAdmission(root: string, goal: string, fence: JsonObject): Promise<JsonObject> {
+  if (!isPlannedTransferAdmissionFence(fence)) reject("Target admission fence is required");
   const directory = operationDirectory(root, goal, String(fence.operation_id), false);
   const receipt = await readGoalTransferHistoryJson(join(directory, "admission-receipt.json"));
   const decision = requireJsonObject(receipt.decision, "admitted original cutover");
   const target = requireJsonObject(decision.target, "admitted destination");
   const intent = await readGoalTransferHistoryJson(join(directory, "admission.json"));
-  if (receipt.schema_version !== ADMISSION_SCHEMA || canonicalAuthoritySha256(receipt) !== fence.task_admission_sha256 ||
+  const runtime = fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA;
+  if (receipt.schema_version !== (runtime ? RUNTIME_ADMISSION_SCHEMA : ADMISSION_SCHEMA) ||
+      canonicalAuthoritySha256(receipt) !== fence[runtime ? "runtime_admission_sha256" : "task_admission_sha256"] ||
       !same(intent, receipt) || decision.goal_id !== goal || decision.operation_id !== fence.operation_id ||
       target.runtime_root !== root || target.identity_sha256 !== fence.source_identity_sha256 ||
       target.store_identity !== fence.store_identity) reject("Original target admission changed; recover its original operation");
@@ -137,9 +145,10 @@ export async function readLocalGoalTransferContinuation(decision: JsonObject): P
       if (!same(fence, await loadLegacyCoordinationWriterFence(root, goal)) || physical !== await locationIdentity(root)) {
         reject("Original destination changed during readback");
       }
-      return {target_task_admitted: false, work: null};
+      return {target_task_admitted: false, target_runtime_admitted: false, work: null};
     }
-    const admission = await requireLocalTaskTransferAdmission(root, goal, fence.fence);
+    const admission = await requireLocalGoalTransferAdmission(root, goal, fence.fence);
+    if (fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA) await readReviewedTransferContext(admission);
     if (!same(admission.decision, decision)) reject("Original destination admission differs from source-final");
     const snapshot = await readGoalTransferSnapshot(String(target.registry_path), goal);
       const opened = await openLocalAuthorityStoreHandle(root, goal, {}, {existingOnly: true});
@@ -161,7 +170,7 @@ export async function readLocalGoalTransferContinuation(decision: JsonObject): P
           !same(snapshot, await readGoalTransferSnapshot(String(target.registry_path), goal))) {
         reject("Original destination changed during readback; retry its current state");
       }
-      return {target_task_admitted: true, work: {objective: snapshot.state_objective, requirements: context.state_text,
+      return {target_task_admitted: true, target_runtime_admitted: fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA, work: {objective: snapshot.state_objective, requirements: context.state_text,
         agents: coordination.registered_agents, todos: index.todo_ids.map(id => index.todos.get(id)!)}};
 }
 
@@ -173,7 +182,7 @@ export async function readLocalGoalTransferContinuation(decision: JsonObject): P
 export async function planLocalGoalTransferCutover(value: JsonObject): Promise<JsonObject> {
   const execute = value.execute === true;
   if (!hasExactAuthorityKeys(value, ["source", "target_snapshot", "target_registry",
-      ...(execute ? ["execute", "expected_preview_sha256"] : [])])) reject("Local cutover requires complete current source and target observations");
+      ...(Object.hasOwn(value, "continuation") ? ["continuation"] : []), ...(execute ? ["execute", "expected_preview_sha256"] : [])])) reject("Local cutover requires complete current source and target observations");
   const source = requireJsonObject(value.source, "original source request");
   if (!hasExactAuthorityKeys(source, ["runtime_root", "goal_id", "operation_id", "source_context", "registry_witness"])) reject("Local cutover requires its original registered source");
   const root = requireLocalAuthorityRuntimeRoot(source.runtime_root), goal = requireAuthorityStoreId(source.goal_id, "original Goal");
@@ -203,13 +212,15 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
               priorDecision.goal_id !== goal || priorDecision.operation_id !== operation || !intent || !same(intent.decision, priorDecision)) {
             reject("Source already chose another destination; recover its original cutover");
           }
+          if ((value.continuation === "reviewed_context") !== (priorDecision.profile === "source_online_local_runtime_v0")) reject("Original cutover continuation profile changed");
           if (execute && value.expected_preview_sha256 !== canonicalAuthoritySha256(priorDecision)) reject("Reviewed cutover identity changed");
           const fence = await loadLegacyCoordinationWriterFence(targetRoot, goal);
-          const admitted = fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA;
-          if (admitted) await requireLocalTaskTransferAdmission(targetRoot, goal, fence.fence);
+          const admitted = fence.status === "loaded" && isPlannedTransferAdmissionFence(fence.fence);
+          if (admitted) await requireLocalGoalTransferAdmission(targetRoot, goal, fence.fence);
           if (!admitted && !same(targetGoal, intent.staged_goal) && !same(targetGoal, intent.goal)) reject("Destination changed after final cutover; preserve it for recovery");
           return {decision: priorDecision, preview_sha256: canonicalAuthoritySha256(priorDecision),
-            source_final: true, target_task_admitted: admitted, publish_registry: !admitted && same(targetGoal, intent.staged_goal),
+            source_final: true, target_task_admitted: admitted,
+            target_runtime_admitted: admitted && priorDecision.profile === "source_online_local_runtime_v0", publish_registry: !admitted && same(targetGoal, intent.staged_goal),
             destination_registry: admitted ? registry : {...registry, goals: (registry.goals as JsonObject[]).map(row => row.id === goal ? intent.goal : row)}};
         }
         const pending = await readGoalTransferHistoryJson(join(sourceDirectory, "preparation.json"));
@@ -245,7 +256,12 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
         if (head.status !== "loaded" || storeIdentity.status !== "available" || storeIdentity.store_identity !== receipt.target_store_identity ||
             (await auditAuthorityArchive(String(sourceReceipt.archive), opened.store,
               String(requireJsonObject(sourceReceipt.authority_archive, "original archive").archive_sha256))).status !== "matched") reject("Original target authority is missing or changed");
-        const admittedGoal = localTaskGoal(requireJsonObject(current.context.goal, "original Goal"), targetGoal);
+        if (!same(await readGoalTransferHistoryJson(resolve(String(target.project), ".loopx", "goals", goal, "TRANSFER_CONTEXT.json")), current.context) ||
+            !same(await readGoalTransferHistoryJson(resolve(String(target.project), ".loopx", "goals", goal, "TRANSFER_MATERIALS.json")), materials)) {
+          reject("Original destination review context changed before source-final");
+        }
+        const continuation = planReviewedTransferContinuation(value.continuation, requireJsonObject(current.context.goal, "original Goal"), current.context, current.preview, materials);
+        const admittedGoal = localAdmittedGoal(requireJsonObject(current.context.goal, "original Goal"), targetGoal, continuation);
         const originalCoordination = requireJsonObject(requireJsonObject(current.context.goal, "original Goal").coordination, "original coordination");
         const supportedCapabilities = new Set(["filesystem_read", "filesystem_write", "shell"]);
         for (const todo of indexCoordinationProjection(current.projection, goal).todos.values()) {
@@ -262,18 +278,19 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
             host_identity: await observeLocalWorkspaceHostIdentity(), runtime_identity: await locationIdentity(targetRoot),
             provider_revision: head.provider_revision, stage_receipt_sha256: canonicalAuthoritySha256(receipt)},
           admitted_goal: admittedGoal, history_sha256: receipt.runtime_history_sha256,
-          profile: "source_online_local_task_v0", native_source_writes_closed: true,
+          profile: continuation ? "source_online_local_runtime_v0" : "source_online_local_task_v0",
+          ...(continuation ? {continuation} : {}), native_source_writes_closed: true,
           source_sessions_adopted: false, credentials_adopted: false};
         const digest = canonicalAuthoritySha256(decision);
         if (execute) {
           if (value.expected_preview_sha256 !== digest) reject("Local cutover preview changed; review the current destination");
           // Intent first while target remains stopped. A crash before the source
           // decision still permits source cancellation; no target grant exists.
-          await retain(join(directory, "admission.json"), {schema_version: ADMISSION_SCHEMA, decision,
+          await retain(join(directory, "admission.json"), {schema_version: continuation ? RUNTIME_ADMISSION_SCHEMA : ADMISSION_SCHEMA, decision,
             target_registry_path: registryPath, staged_goal: targetGoal, goal: admittedGoal});
           await retain(join(sourceDirectory, "cutover.json"), decision);
         }
-        return {decision, preview_sha256: digest, source_final: execute, target_task_admitted: false, publish_registry: execute,
+        return {decision, preview_sha256: digest, source_final: execute, target_task_admitted: false, target_runtime_admitted: false, publish_registry: execute,
           destination_registry: {...registry, goals: (registry.goals as JsonObject[]).map(row => row.id === goal ? admittedGoal : row)}};
       }));
   });
@@ -291,9 +308,10 @@ export async function finishLocalGoalTransferCutover(value: JsonObject): Promise
     const intent = await readGoalTransferHistoryJson(join(directory, "admission.json"));
     const decision = requireJsonObject(intent.decision, "final original source decision");
     const fence = await loadLegacyCoordinationWriterFence(root, goal);
-    if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
-      await requireLocalTaskTransferAdmission(root, goal, fence.fence);
-      return {source_final: true, target_task_admitted: true, replayed: true, goal_id: goal, operation_id: operation};
+    if (fence.status === "loaded" && isPlannedTransferAdmissionFence(fence.fence)) {
+      await requireLocalGoalTransferAdmission(root, goal, fence.fence);
+      return {source_final: true, target_task_admitted: true,
+        target_runtime_admitted: fence.fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA, replayed: true, goal_id: goal, operation_id: operation};
     }
     if (!await localTransferRegistryPublication(root, goal, operation, String(intent.target_registry_path), requireJsonObject(intent.goal, "admitted Goal"))) {
       reject("Original source has no final cutover decision; target remains stopped");
@@ -312,13 +330,15 @@ export async function finishLocalGoalTransferCutover(value: JsonObject): Promise
       if (identity.status !== "available" || identity.store_identity !== target.store_identity ||
           head.status !== "loaded" || head.provider_revision !== target.provider_revision) reject("Target authority changed before admission; preserve it for recovery");
       await readStagedGoalTransferRuns({runtime_root: root, goal_id: goal, operation_id: operation});
+      if (decision.continuation) await readReviewedTransferContext(intent);
       await retain(join(directory, "admission-receipt.json"), intent);
       await admitPlannedTransferTaskWriterUnderLock(root, goal, fence.fence, {
-        schema_version: PLANNED_TRANSFER_TASK_FENCE_SCHEMA, state: "engaged", goal_id: goal,
+        schema_version: decision.continuation ? PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA : PLANNED_TRANSFER_TASK_FENCE_SCHEMA, state: "engaged", goal_id: goal,
         fence_id: `planned-transfer-task:${operation}`, operation_id: operation,
-        source_identity_sha256: target.identity_sha256, task_admission_sha256: canonicalAuthoritySha256(intent), store_identity: target.store_identity,
+        source_identity_sha256: target.identity_sha256,
+        [decision.continuation ? "runtime_admission_sha256" : "task_admission_sha256"]: canonicalAuthoritySha256(intent), store_identity: target.store_identity,
       });
-      return {source_final: true, target_task_admitted: true, replayed: false, goal_id: goal, operation_id: operation};
+      return {source_final: true, target_task_admitted: true, target_runtime_admitted: decision.continuation !== undefined, replayed: false, goal_id: goal, operation_id: operation};
     });
   });
 }

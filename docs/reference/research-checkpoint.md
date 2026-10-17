@@ -130,6 +130,24 @@ work and obtain fresh destination admission; it is not implemented merely by
 creating a fresh conversation. The fixed-path native profile remains available
 without making it the only allowed design for the planned Agent-transfer journey.
 
+The development `goal-transfer cutover` composition can separately review
+`--continuation reviewed_context` for an already protected, staged local Goal.
+It admits a new physical destination runtime while retaining the original
+Goal/Task ids, archived relations, requirements, material mappings and original
+accounting. The ordinary Codex Turn driver receives that reviewed context and
+still needs current Task/lease authority and independent result validation.
+It neither copies a native session nor installs the source's credentials or
+creation receipt. The default Task-only cutover remains unable to launch a Host.
+This is a source-online, same-host development profile; it does not establish
+cross-machine authorization, portable-artifact privacy certification or the
+complete installed Settings journey. Those product qualifications remain held.
+
+For a governed CLI Turn with an explicit Todo and `--turn-instance-id`, retrying
+that same identity now reads the original journal before rebuilding a live plan.
+A changed plan hash cannot allocate a second canonical journal for the same
+structured settlement identity. Unknown, inconsistent or conflicting history
+refuses; use the original recovery path instead of starting another conversation.
+
 The existing continuation owner prepares/adopts a complete context reference.
 Explore knowledge seeds the fresh Goal with preserved counterevidence, topology,
 authorship, timestamps and checkpoint provenance. Ordered-prefix recovery rejects

@@ -14,7 +14,7 @@ import {
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import {withGoalRuntimeWriter} from "../coordination/local_authority_write.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, PLANNED_TRANSFER_TASK_FENCE_SCHEMA} from "../coordination/legacy_writer_fence.ts";
+import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, isPlannedTransferAdmissionFence} from "../coordination/legacy_writer_fence.ts";
 import {shadowManagementDirectory} from "../coordination/shadow_management.ts";
 import {
   jsonObject,
@@ -535,7 +535,7 @@ export async function lookupQuotaAccountingReplay(
       try {await lstat(join(shadowManagementDirectory(root, goalId), "planned-transfer-targets")); retainedTarget = true;}
       catch (error) {if (!isNodeErrorCode(error, "ENOENT")) throw error;}
       const targetFence = fence.status === "loaded" && ((fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA && fence.fence.role === "target") ||
-        fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA);
+        isPlannedTransferAdmissionFence(fence.fence));
       if (retainedTarget || targetFence) {
         // Retained lineage without its fence is damaged state, not an absent
         // old debit. Unrelated ordinary/legacy replay retains its prior rule.

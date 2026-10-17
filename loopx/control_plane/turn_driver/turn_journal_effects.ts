@@ -21,6 +21,7 @@ import { decideFirstPartyHostRuntime } from "../goals/first_party_host_runtime.t
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { requireNonEmptyString as requiredString } from "../runtime_decode.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
+import {querySettlementJournal} from "./turn_journal_query.ts";
 import {
   interpretTurnJournalEffect,
   journalPhaseViolation,
@@ -338,6 +339,8 @@ export async function commitTurnJournal(
     );
   }
   const incomingOperationId = operationId(journal);
+  const turns = dirname(path), goal = dirname(turns), goals = dirname(goal);
+  const canonicalRoute = basename(turns) === "turns" && basename(goals) === "goals";
   const commitBytes = async (): Promise<JsonObject> =>
     await withFileMutationLock(path, async () => {
       let existing: JsonObject | null = null;
@@ -374,6 +377,19 @@ export async function commitTurnJournal(
       )) {
         conflict("A new Turn journal must begin in progress with no completed phases");
       }
+      if (existing === null && canonicalRoute) {
+        // The ordinary runtime maintenance lock serializes this check and
+        // publication. A changed plan hash cannot allocate a second Host
+        // attempt for the same structured caller/Task/Turn identity.
+        const parsed = settlementIdentityFromPlan(asObject(asObject(journal.plan).transaction));
+        if (parsed.failure !== null) conflict(parsed.failure.reason);
+        const exact = goalBinding.kind === "exact" ? parseExactGoalRef(goalBinding.goal_ref) : null;
+        if (exact?.kind === "invalid") conflict("Turn journal GoalRef is invalid");
+        const original = await querySettlementJournal(dirname(goals), parsed.value, exact?.value ?? null);
+        if (original !== null && original.turn_key !== journal.turn_key) {
+          conflict(`Original settlement already belongs to Turn ${original.turn_key}; resume its original journal`);
+        }
+      }
       await atomicWriteJson(path, journal);
       return {
         ok: true,
@@ -384,8 +400,7 @@ export async function commitTurnJournal(
       };
     });
   const commit = async (): Promise<JsonObject> => {
-    const turns = dirname(path), goal = dirname(turns), goals = dirname(goal);
-    if (basename(turns) !== "turns" || basename(goals) !== "goals") {
+    if (!canonicalRoute) {
       if (params.maintenance_lock !== undefined) conflict("Turn journal maintenance handoff requires its canonical runtime route");
       return commitBytes();
     }
