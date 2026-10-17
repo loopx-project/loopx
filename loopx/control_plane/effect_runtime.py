@@ -42,6 +42,7 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
+    "collaboration.delegation.inventory_page",
     "benchmark.trajectory.codex-usage",
     "coordination.local_authority.todo_source",
     "todo.context.page",

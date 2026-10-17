@@ -6,9 +6,40 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane import effect_runtime
-from test_local_delegation import service as delegation_service
+from test_local_delegation import brief, service as delegation_service
 
 service = delegation_service
+
+
+def test_each_inventory_page_pins_once_and_reads_current_records(service, monkeypatch):
+    root, runner = service
+    monkeypatch.setattr(runner, "_spawn", lambda _: None)
+    for name in ["first", "second", "third"]:
+        runner.start("analysis", name, brief())
+    original = effect_runtime._runtime_fingerprint
+    revisions = []
+
+    def measured_fingerprint():
+        revision = original()
+        revisions.append(revision)
+        return revision
+
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", measured_fingerprint)
+    first = runner.operations(limit=2)
+    assert len(revisions) == 1
+    assert first["page_readback_complete"] and first["has_more"]
+    second = runner.operations(limit=2, cursor=first["next_cursor"])
+    assert len(revisions) == 2
+    assert second["page_readback_complete"] and len(second["items"]) == 1
+
+    # A page pins executable source, never a previous operation observation.
+    runner.path(first["items"][0]["operation_id"]).write_text("{")
+    damaged = runner.operations(limit=2)
+    assert len(revisions) == 3
+    assert not damaged["page_readback_complete"]
+    assert not damaged["projection_envelope"]["complete"]
+    assert len(damaged["items"]) == 2
+    assert not (root / "host-started").exists()
 
 
 def test_each_inspection_pins_once_and_reads_current_binding(service, monkeypatch):

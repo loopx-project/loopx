@@ -408,6 +408,15 @@ evidence gap that holds delivery qualification, not a passing skip. Keep code
 volume a cost: refactors should localize the next change, test and rollback,
 not introduce unused production structure.
 
+Performance qualification follows the [default-provider rule](docs/development/testing-and-quality.md#default-provider-performance-qualification--默认-provider-性能资格).
+The current default local authority is SQLite: its real-path performance gates
+qualify default delivery. A File-only performance miss must be disclosed but
+does not block that SQLite qualification. Explicit File performance work still
+qualifies File separately. Keep correctness, durability, authority, recovery and
+data-integrity checks for every affected supported backend, including File and
+the required real PostgreSQL suite. Preserve historical failures and frozen
+experiment criteria; changing the qualification scope is not a historical pass.
+
 ### Bounded Future-Facing Refactoring
 
 During development and before approving or merging, apply the

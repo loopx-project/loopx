@@ -605,7 +605,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.delegation.checked_artifacts", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationCheckedArtifacts}) => delegationCheckedArtifacts)],
     ["collaboration.delegation.turn_plan", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationTurnPlanDecision}) => delegationTurnPlanDecision)],
     ["collaboration.delegation.inventory_query", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationInventoryQuery}) => delegationInventoryQuery)],
-    ["collaboration.delegation.inventory_item", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationInventoryItem}) => delegationInventoryItem)],
+    ["collaboration.delegation.inventory_page", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationInventoryPage}) => delegationInventoryPage)],
     ["collaboration.chat_mode", lazyHandler(() => import("./collaboration/chat_mode.ts"), ({planChatMode}) => planChatMode)],
     ["collaboration.goal_draft", lazyHandler(() => import("./collaboration/goal_draft.ts"), ({admitGoalDraft}) => (params) => ({draft: admitGoalDraft(params)}))],
     ["collaboration.conversation.trigger", lazyHandler(() => import("./collaboration/conversation_trigger.ts"), ({resolveConversationTrigger}) => resolveConversationTrigger)],

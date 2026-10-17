@@ -7,9 +7,15 @@ from pathlib import Path
 import pytest
 
 import loopx.control_plane.projection_envelope_facts as projection_envelope
+import loopx.control_plane.quota.should_run as quota_should_run_module
+import loopx.control_plane.quota.should_run_packet as should_run_packet
 import loopx.global_risks as global_risks
 import loopx.global_todos as global_todos
 import loopx.summary_all as summary_all
+from loopx.control_plane.testing.quota_fixtures import (
+    quota_status_payload,
+    quota_todo_item,
+)
 from loopx.control_plane.runtime.status_projection_cache import (
     load_status_projection_cache,
     status_projection_cache_path,
@@ -17,7 +23,15 @@ from loopx.control_plane.runtime.status_projection_cache import (
     write_status_projection_cache,
 )
 from loopx.control_plane.runtime.time import now_utc, utc_isoformat
+from loopx.control_plane.scheduler.state import (
+    APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    CODEX_APP_SURFACE,
+    LEGACY_CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+    scheduler_state_path,
+)
+from loopx.presentation.renderers.quota_markdown import render_quota_should_run_markdown
 from loopx.presentation.renderers.status_markdown import render_status_markdown
+from loopx.quota import build_quota_should_run
 from loopx.status import collect_status
 
 
@@ -104,6 +118,453 @@ def test_goal_status_scopes_coverage_to_the_goal(tmp_path: Path) -> None:
 
     assert (envelope["coverage"]["scope"], envelope["coverage"]["expected_count"]) == ("goal", 1)
     assert envelope["complete"] is True
+
+
+def test_quota_should_run_inherits_status_and_covers_the_selected_goal(
+    tmp_path: Path,
+) -> None:
+    status = _status(_registry(tmp_path, ("goal-a",)), goal_id="goal-a")
+
+    payload = build_quota_should_run(
+        status,
+        goal_id="goal-a",
+        runtime_root=status["runtime_root"],
+    )
+
+    envelope = payload["projection_envelope"]
+    sources = _sources(envelope)
+    assert envelope["projection"] == "quota_should_run"
+    assert envelope["coverage"]["scope"] == "goal"
+    assert envelope["coverage"]["expected_count"] == 1
+    assert envelope["coverage"]["included_count"] == 1
+    assert envelope["coverage"]["omitted"] == []
+    assert envelope["coverage"]["complete"] is True
+    assert envelope["complete"] is True and envelope["alert"] is False
+    assert envelope["upstream"][0]["projection"] == "status"
+    assert sources["automation_cadence"]["status"] == "fresh"
+    assert str(tmp_path) not in json.dumps(envelope)
+
+
+def test_quota_should_run_alerts_when_the_status_envelope_is_missing(
+    tmp_path: Path,
+) -> None:
+    status = _status(_registry(tmp_path, ("goal-a",)), goal_id="goal-a")
+    status.pop("projection_envelope")
+
+    payload = build_quota_should_run(
+        status,
+        goal_id="goal-a",
+        runtime_root=status["runtime_root"],
+    )
+
+    envelope = payload["projection_envelope"]
+    assert _sources(envelope)["status"]["status"] == "not_read"
+    assert envelope["alert_reasons"] == ["missing_required_sources"]
+    markdown = render_quota_should_run_markdown(payload)
+    assert markdown.index("projection alerts") < markdown.index("decision:")
+
+
+def test_quota_should_run_marks_an_unknown_goal_as_incomplete(tmp_path: Path) -> None:
+    status = _status(_registry(tmp_path, ("goal-a",)))
+
+    envelope = build_quota_should_run(
+        status,
+        goal_id="goal-missing",
+        runtime_root=status["runtime_root"],
+    )["projection_envelope"]
+
+    assert envelope["coverage"]["scope"] == "goal"
+    assert envelope["coverage"]["expected_count"] == 1
+    assert envelope["coverage"]["included_count"] == 0
+    assert envelope["coverage"]["omitted"] == [
+        {"reason": "goal_not_found", "count": 1, "refs": ["goal-missing"]}
+    ]
+    assert envelope["complete"] is False
+    assert envelope["alert_reasons"] == ["incomplete_coverage"]
+
+
+def test_quota_should_run_propagates_unreadable_and_stale_status_sources(
+    tmp_path: Path,
+) -> None:
+    observed_at = projection_envelope.now_utc_iso()
+    status = quota_status_payload(
+        goal_id="goal-a",
+        status="active",
+        recommended_action="Advance the goal.",
+    )
+    status["runtime_root"] = str(tmp_path / "runtime")
+    status["projection_envelope"] = projection_envelope.seal_projection_envelope(
+        projection="status",
+        observed_at=observed_at,
+        sources=[
+            projection_envelope.source_fact(
+                "registry",
+                read_status="unreadable",
+                last_read_at=observed_at,
+            ),
+            projection_envelope.source_fact(
+                "goal_state_contract",
+                last_read_at="2000-01-01T00:00:00Z",
+            ),
+        ],
+        coverage={
+            "scope": "goal",
+            "expected_count": 1,
+            "included_count": 1,
+            "omitted": [],
+        },
+    )
+
+    envelope = build_quota_should_run(
+        status,
+        goal_id="goal-a",
+        runtime_root=status["runtime_root"],
+    )["projection_envelope"]
+
+    assert "unreadable_sources" in envelope["alert_reasons"]
+    assert "stale_sources" in envelope["alert_reasons"]
+    assert envelope["complete"] is True
+
+
+def test_quota_should_run_seals_paused_and_health_blocked_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = quota_status_payload(
+        goal_id="goal-a",
+        status="active",
+        quota_state="paused",
+        recommended_action="Wait for the owner.",
+    )
+    status["runtime_root"] = str(tmp_path / "runtime")
+    status["projection_envelope"] = _status(
+        _registry(tmp_path, ("goal-a",)), goal_id="goal-a"
+    )["projection_envelope"]
+
+    paused = build_quota_should_run(
+        status,
+        goal_id="goal-a",
+        runtime_root=status["runtime_root"],
+    )
+    assert paused["state"] == "paused"
+    assert paused["projection_envelope"]["projection"] == "quota_should_run"
+
+    monkeypatch.setattr(
+        quota_should_run_module,
+        "_build_quota_plan_for_goal",
+        lambda *_args, **_kwargs: (
+            {
+                "ok": False,
+                "groups": {},
+                "health_items": [
+                    {
+                        "goal_id": "goal-a",
+                        "recommended_action": "Repair the goal state.",
+                        "status": "invalid",
+                        "source": "contract",
+                    }
+                ],
+                "summary": {},
+            },
+            False,
+        ),
+    )
+    blocked = build_quota_should_run(
+        status,
+        goal_id="goal-a",
+        runtime_root=status["runtime_root"],
+    )
+    assert blocked["state"] == "blocked_health"
+    assert blocked["projection_envelope"]["projection"] == "quota_should_run"
+
+
+def test_quota_should_run_records_live_workspace_inbox_and_scheduler_reads(
+    tmp_path: Path,
+) -> None:
+    agent_id = "codex-a"
+    status = quota_status_payload(
+        goal_id="goal-a",
+        status="active",
+        recommended_action="Advance the goal.",
+        agent_todo_items=[
+            quota_todo_item(
+                todo_id="todo_delivery",
+                title="Advance the goal.",
+                claimed_by=agent_id,
+                required_capabilities=[],
+            )
+        ],
+        coordination={"agent_model": "peer_v1", "registered_agents": [agent_id]},
+        goal_extra={
+            "repo": str(tmp_path),
+            "control_plane": {
+                "lark_event_inbox": {
+                    "enabled": True,
+                    "config_path": ".loopx/config/lark/inbox.json",
+                }
+            },
+        },
+    )
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    registry_path = tmp_path / "registry.fixture.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "goals": [
+                    {
+                        "id": "goal-a",
+                        "status": "active",
+                        "repo": str(tmp_path),
+                        "control_plane": {
+                            "lark_event_inbox": {
+                                "enabled": True,
+                                "config_path": ".loopx/config/lark/inbox.json",
+                            }
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    status["registry"] = str(registry_path)
+    status["runtime_root"] = str(runtime_root)
+    status["projection_envelope"] = _status(
+        _registry(tmp_path, ("goal-a",)), goal_id="goal-a"
+    )["projection_envelope"]
+
+    payload = build_quota_should_run(
+        status,
+        goal_id="goal-a",
+        agent_id=agent_id,
+        runtime_root=runtime_root,
+        scheduler_execution_context={
+            "host_surface": "codex_app",
+            "scheduler_owner": "host_automation",
+            "execution_mode": "hosted_automation",
+        },
+        operator_inbox_urgency_projector=lambda **_kwargs: {
+            "schema_version": "operator_inbox_urgency_v0",
+            "enabled": True,
+            "pending_count": 0,
+            "attention_required_count": 0,
+            "reply_due": False,
+            "material_review_count": 0,
+            "material_attachment_count": 0,
+            "material_review_due": False,
+            "material_review_drain_limit": 20,
+            "local_private_content_returned": False,
+        },
+    )
+
+    sources = _sources(payload["projection_envelope"])
+    assert sources["operator_inbox"]["status"] == "fresh"
+    assert sources["delivery_workspace"]["status"] == "fresh"
+    assert sources["app_scheduler_state"]["status"] == "fresh"
+    assert str(tmp_path) not in json.dumps(payload["projection_envelope"])
+
+
+def test_quota_should_run_maps_cadence_read_failures_to_source_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _status(_registry(tmp_path, ("goal-a",)), goal_id="goal-a")
+    original_effect_runtime_result = should_run_packet.effect_runtime_result
+
+    def fail_cadence_read(method: str, *args, **kwargs):
+        if method == "quota.automation_cadence.manage":
+            raise RuntimeError("cadence owner unavailable")
+        return original_effect_runtime_result(method, *args, **kwargs)
+
+    monkeypatch.setattr(
+        should_run_packet,
+        "effect_runtime_result",
+        fail_cadence_read,
+    )
+    failed = build_quota_should_run(
+        status,
+        goal_id="goal-a",
+        runtime_root=status["runtime_root"],
+    )
+    assert _sources(failed["projection_envelope"])["automation_cadence"][
+        "status"
+    ] == "unreadable"
+
+    unavailable_status = quota_status_payload(
+        goal_id="goal-a",
+        status="active",
+        recommended_action="Advance the goal.",
+    )
+    unavailable_status["projection_envelope"] = status["projection_envelope"]
+    unavailable = build_quota_should_run(
+        unavailable_status,
+        goal_id="goal-a",
+    )
+    assert _sources(unavailable["projection_envelope"])["automation_cadence"][
+        "status"
+    ] == "not_read"
+
+
+def test_quota_should_run_inherits_a_replayed_status_envelope(
+    tmp_path: Path,
+) -> None:
+    registry_path = _registry(tmp_path, ("goal-a",))
+    status = _status(registry_path)
+    args = _cache_args(registry_path)
+    write_status_projection_cache(payload=status, max_age_seconds=3600, **args)
+    cached, metadata = load_status_projection_cache(
+        max_age_seconds=3600,
+        **args,
+    )
+
+    assert metadata["hit"] is True
+    assert cached["projection_envelope"]["served_from_cache"] is True
+    payload = build_quota_should_run(
+        cached,
+        goal_id="goal-a",
+        runtime_root=cached["runtime_root"],
+    )
+
+    upstream = payload["projection_envelope"]["upstream"]
+    assert upstream[0]["projection"] == "status"
+    assert (
+        upstream[0]["observed_at"]
+        == cached["projection_envelope"]["observed_at"]
+    )
+    assert any(
+        row.get("via") == "status"
+        for row in payload["projection_envelope"]["sources"]
+    )
+
+
+def test_real_cli_quota_should_run_emits_the_projection_envelope(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+
+    registry_path = _registry(tmp_path, ("goal-a",))
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "--format",
+            "json",
+            "--registry",
+            str(registry_path),
+            "quota",
+            "should-run",
+            "--goal-id",
+            "goal-a",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["projection_envelope"]["projection"] == "quota_should_run"
+    assert payload["projection_envelope"]["coverage"]["included_count"] == 1
+    assert payload["projection_envelope"]["upstream"][0]["projection"] == "status"
+
+
+def test_real_cli_quota_should_run_discloses_unreadable_scheduler_state(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+
+    registry_path = _registry(tmp_path, ("goal-a",))
+    runtime_root = tmp_path / "runtime"
+    agent_id = "reader-a"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"] = {
+        "agent_model": "peer_v1",
+        "registered_agents": [agent_id],
+    }
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    command = [
+        sys.executable,
+        "-m",
+        "loopx.cli",
+        "--format",
+        "json",
+        "--registry",
+        str(registry_path),
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_heartbeat",
+        "--goal-id",
+        "goal-a",
+        "--agent-id",
+        agent_id,
+    ]
+
+    def run_cli() -> dict:
+        completed = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        return json.loads(completed.stdout)
+
+    missing = _sources(run_cli()["projection_envelope"])["app_scheduler_state"]
+    assert missing["read_status"] == "read"
+    assert missing["status"] == "fresh"
+
+    paths = [
+        scheduler_state_path(
+            runtime_root,
+            goal_id="goal-a",
+            agent_id=agent_id,
+            surface=CODEX_APP_SURFACE,
+            state_key=state_key,
+        )
+        for state_key in (
+            APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+            LEGACY_CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+        )
+    ]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{truncated", encoding="utf-8")
+
+    corrupt_payload = run_cli()
+    corrupt = _sources(corrupt_payload["projection_envelope"])[
+        "app_scheduler_state"
+    ]
+    assert corrupt["read_status"] == "unreadable"
+    assert corrupt["status"] == "unreadable"
+    assert corrupt_payload["projection_envelope"]["alert"] is True
+
+    for path in paths:
+        path.unlink()
+        path.mkdir()
+    directory_payload = run_cli()
+    directory = _sources(directory_payload["projection_envelope"])[
+        "app_scheduler_state"
+    ]
+    assert directory["read_status"] == "unreadable"
+    assert directory["status"] == "unreadable"
+    assert directory_payload["projection_envelope"]["alert"] is True
+
+    for path in paths:
+        path.rmdir()
+    recovered_payload = run_cli()
+    recovered = _sources(recovered_payload["projection_envelope"])[
+        "app_scheduler_state"
+    ]
+    assert recovered["read_status"] == "read"
+    assert recovered["status"] == "fresh"
+    assert recovered_payload["projection_envelope"]["alert"] is False
 
 
 def _cache_args(registry_path: Path) -> dict:

@@ -2,7 +2,7 @@ from __future__ import annotations
 from .effective_action import EffectiveAction
 from ..effect_runtime import effect_runtime_result
 from .effect_program import ReceiptBoundReplayPhase
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -219,6 +219,7 @@ def _load_app_automation_scheduler_state(
     goal_id: str,
     agent_id: str | None,
     surface: str,
+    read_observer: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     raw_runtime_root = status_payload.get("runtime_root")
     safe_agent_id = normalize_todo_claimed_by(agent_id)
@@ -229,6 +230,7 @@ def _load_app_automation_scheduler_state(
         goal_id=goal_id,
         agent_id=safe_agent_id,
         surface=surface,
+        read_observer=read_observer,
     )
 
 
@@ -1628,6 +1630,9 @@ def _build_quota_should_run_payload(
     include_agent_todo_detail: bool = False,
     runtime_root: str | Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    scheduler_state_read_observer: (
+        Callable[[Mapping[str, Any]], None] | None
+    ) = None,
 ) -> dict[str, Any]:
     if prepared.receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED:
         payload = _build_settled_quota_payload(prepared, route)
@@ -1669,6 +1674,7 @@ def _build_quota_should_run_payload(
                 agent_id=quota_decision_agent_id(payload)
                 or prepared.requested_agent_id,
                 surface=prepared.resolved_scheduler_context.context.host_surface.value,
+                read_observer=scheduler_state_read_observer,
             )
             if prepared.resolved_scheduler_context.ok
             and prepared.resolved_scheduler_context.context is not None

@@ -28,6 +28,23 @@ identity. No second inbox store, per-field bridge expansion or full rewrite is
 required for the first App outcome. These are planned product consumers of
 T0–T4, not additional provider promotion or completed migration claims.
 
+Requester-scoped delegation inventory now composes page readback in
+`collaboration/delegation.ts`. Python retains bounded address scanning, requester
+registration and fresh `Delegations.read` IO, including canonical acceptance and
+artifact checks. TypeScript validates page order and item observations, selects
+the next cursor and reports completeness. The per-item projection RPC and Python
+page decisions are retired: query admission and final page projection use two
+requests per page; provider reads and validation calls remain. The existing
+private snapshot transport carries complete pages above the inline wire budget.
+CLI, MCP and Goal Chat keep their existing live-page contract. Async lifecycle
+cutover and receiver-adoption qualification remain separate.
+The same page reduction now seals actual directory/operation read times through
+the existing `projection_envelope.ts` owner. Completeness is scoped to
+`requester_page`; unreadable operations alert, while shown/available counts
+disclose remaining pages. Replay preserves the original observation time.
+Each page reuses the existing executable-revision request scope; operation
+records remain live reads, and the next page resolves the current code again.
+
 
 <a id="current-delivery-frontier-2026-10-02"></a>
 
@@ -1742,12 +1759,12 @@ facade-exit condition in §4), TS gathers the facts directly and the adapter is
 deleted.
 
 Rollout. `status` (including `--goal-id` and projection-cache hits),
-`global-summary`, `global-gates`, `global-todos` and `global-risks` now carry
-the envelope. Every other `collect_status` caller receives the status envelope
-in its payload but does not yet emit its own. Next, in order: `quota
-should-run`, `review-packet`, and Decision Context packets. A read model added
-to or migrated into TypeScript emits the envelope in the same PR; §6 makes
-this a promotion gate.
+`global-summary`, `global-gates`, `global-todos`, `global-risks`, and `quota
+should-run` now carry the envelope. Every other `collect_status` caller receives
+the status envelope in its payload but does not yet emit its own. Next, in
+order: `review-packet` and Decision Context packets. A read model added to or
+migrated into TypeScript emits the envelope in the same PR; §6 makes this a
+promotion gate.
 
 Consumers treat a missing envelope as unknown freshness, and disclose an
 alerting one before stating any conclusion that depends on it. Field
@@ -1819,7 +1836,7 @@ choice is now implemented rather than hypothetical.
 | Quota monitor-poll commit transaction | TypeScript owns monitor admission revalidation, target/event/result construction, effect replay/index CAS, provider intent, and repairable JSON/Markdown/index persistence | Python projects compact `should-run` facts, invokes the real Todo provider between at most two reductions, reloads legacy status, and holds the cross-writer index lock |
 | Runtime decoders ([#3443](https://github.com/loopx-project/loopx/pull/3443)) | Stable primitive decoding has one small shared module; domain decoders remain local | No larger schema framework is justified |
 | Transaction payoff ([#3464](https://github.com/loopx-project/loopx/pull/3464), [#3481](https://github.com/loopx-project/loopx/pull/3481), and Todo completion) | Turn settlement, quota delivery routing, and Todo completion each cross one coarse TS boundary; the Todo transaction owns identity, replay fencing, validation planning/result reduction, continuation/recovery, and completion metadata | Python still executes explicitly external providers and materializes legacy Markdown results; other domains still need their own bounded cutovers |
-| Projection envelope | TypeScript owns decoding of `loopx_projection_envelope_v0` and every freshness, alert, completeness and replay decision | Python gathers read facts for `status`, `global-summary`, `global-gates`, `global-todos` and `global-risks` until those projections migrate |
+| Projection envelope | TypeScript owns decoding of `loopx_projection_envelope_v0` and every freshness, alert, completeness and replay decision | Python gathers read facts for `status`, `global-summary`, `global-gates`, `global-todos`, `global-risks`, and quota `should-run` until those projections migrate |
 | Promoted-authority Todo claim | TypeScript owns the provider-head read, lifecycle validation, complete-record update, hard-lease check, CAS, receipt, and readback-safe result for claims after authority promotion | Default local Markdown mode remains on the legacy writer; other Todo mutations and Markdown regeneration remain bounded follow-ups |
 
 The scheduler facade exit now includes its first bounded Stage 3 route. A
@@ -2256,6 +2273,15 @@ matched durability baseline rather than the 2 ms kernel budget. A miss, or a
 tail regression hidden by a faster microbenchmark, is an owner review gate and
 cannot be silently relaxed.
 
+Default delivery applies these performance gates to the shipped default profile,
+currently SQLite for new local Goals. File performance is separate: disclose a
+File-only miss without blocking an otherwise qualified default SQLite delivery.
+Explicit File performance claims still require File qualification. Correctness,
+durability, authority, data integrity and recovery remain required for every
+affected supported backend. Declare the profile in existing review evidence;
+preserve historical failures and frozen experiment criteria when a maintainer
+changes the qualification scope. See the [validation rule](../../development/testing-and-quality.md#default-provider-performance-qualification--默认-provider-性能资格).
+
 ## 7. Install, upgrade, and rollback
 
 The migration must not ask users to manage a service. The Python-transition
@@ -2388,9 +2414,10 @@ exact diagnostic floors for wait, fallback and replan readers. One Goal-context
 reduction shares fresh counts with its nested helpers, while standalone calls
 remain fresh. Python retains fact/result codecs and original row identity;
 there is no persisted cache, new packet field or changed execution authority.
-The same real File/SQLite entrypoints must qualify functional parity and the
-original full-CLI cost gate together. Fewer crossings alone do not explain a
-whole-CLI tail regression or complete writer/backup/default-provider retirement.
+The same real File/SQLite entrypoints must qualify functional parity; full-CLI
+performance follows the default SQLite profile and explicit additional targets
+in §6. Fewer crossings alone do not explain a whole-CLI tail regression or
+complete writer/backup/default-provider retirement.
 
 Fresh public-boundary scanning retains its specialized Python regex / Host IO
 owner. Characterization covers all eleven `splitlines`

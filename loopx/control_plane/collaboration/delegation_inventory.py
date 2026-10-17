@@ -8,6 +8,7 @@ from ..effect_runtime import EffectRuntimeRemoteError, effect_runtime_result
 from .inbox import _read
 from .peers import _goal, require_operation_id
 from ..content_digest import BARE_SHA256_PATTERN
+from ..runtime.time import now_utc_iso
 
 if TYPE_CHECKING:
     from ...collaboration_mcp import Delegations
@@ -25,8 +26,10 @@ def read_delegation_inventory(service: Delegations, *, limit: int = 20,
                                   {"limit": limit, "cursor": cursor})
     _goal(service.registry, service.goal_id, service.agent_id)
     directory = service.path("inventory").parent
+    available_count = 0
 
     def addresses():
+        nonlocal available_count
         try:
             entries = directory.iterdir()
             for path in entries:
@@ -35,6 +38,7 @@ def read_delegation_inventory(service: Delegations, *, limit: int = 20,
                 if not BARE_SHA256_PATTERN.fullmatch(path.stem):
                     raise ValueError("unexpected delegation record address; reconcile inventory storage")
                 if query["cursor"] is None or path.stem > query["cursor"]:
+                    available_count += 1
                     yield path.stem
         except FileNotFoundError:
             # No journal yet is a valid empty inventory; other IO errors propagate.
@@ -42,7 +46,10 @@ def read_delegation_inventory(service: Delegations, *, limit: int = 20,
                 raise
 
     keys = heapq.nsmallest(query["limit"] + 1, addresses())
-    items = []
+    directory_read_at = now_utc_iso()
+    # Bound the aggregate by its earliest read, never by final page assembly.
+    operations_read_at = now_utc_iso() if keys else directory_read_at
+    observations = []
     for key in keys[:query["limit"]]:
         record = {"record_id": key, "operation_id": None}
         try:
@@ -54,20 +61,12 @@ def read_delegation_inventory(service: Delegations, *, limit: int = 20,
                 raise ValueError("delegation record identity mismatch")
             record["operation_id"] = operation_id
             observed = service.read(operation_id)
-            item = effect_runtime_result("collaboration.delegation.inventory_item",
-                                          {"record": record, "observation": observed})
         except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRemoteError):
-            # A corrupt/stale branch must not hide healthy siblings or be called accepted.
-            item = effect_runtime_result("collaboration.delegation.inventory_item",
-                                          {"record": record, "observation": None})
-        items.append(item)
-    more = len(keys) > query["limit"]
-    return {
-        "schema_version": "loopx_delegation_inventory_v0",
-        "items": items, "has_more": more,
-        "next_cursor": keys[query["limit"] - 1] if more else None,
-        "page_readback_complete": all(item["status"] != "unavailable" for item in items),
-        "note": "Live requester-scoped page, not a snapshot or proof that the whole Goal is complete. "
-                "Read original operations for full results; resume only when recovery is required. "
-                "Restart paging to discover work added before the cursor. Listing starts no work.",
-    }
+            observed = None
+        observations.append({"record": record, "observation": observed})
+    return effect_runtime_result("collaboration.delegation.inventory_page", {
+        "query": query, "record_ids": keys, "observations": observations,
+        "read_facts": {"observed_at": now_utc_iso(), "directory_read_at": directory_read_at,
+                       "operations_read_at": operations_read_at,
+                       "available_count": available_count},
+    }, large_local_snapshot=True)
