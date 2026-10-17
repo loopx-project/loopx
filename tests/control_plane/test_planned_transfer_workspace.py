@@ -178,6 +178,8 @@ def test_original_task_entry_reads_edits_and_creates_at_current_target(source, t
         assert service.apply(create["proposal_id"])["proposal"] == created
         new_id = created["receipt"]["resource_ids"]["todo_id"]
         assert _task_detail(server, new_id)[1]["text"] == "[P1] Review the completed original report"
+        assert any(row["todo_id"] == new_id for row in
+            _status(server)[1]["attention_queue"]["items"][0]["agent_todos"]["items"])
         pause = _task_preview(service, "todo.update", "target-pause", todo_id=source["todo"],
             operation="block", note="Wait for the independent report review")
         assert service.apply(pause["proposal_id"])["proposal"]["status"] == "applied"

@@ -1973,7 +1973,7 @@ export function PersonalWorkspacePage({
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
         callbacks.onGoalDeleted?.(applied.goalId);
       }
-      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve" || applied.actionKind === "todo.update") {
+      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve" || applied.actionKind === "todo.update" || applied.actionKind === "todo.create") {
         void reconcileStatus(applied.goalId ? [applied.goalId] : undefined);
       }
       return applied;
