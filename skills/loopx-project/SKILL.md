@@ -34,6 +34,18 @@ automatically.
 
 ## Slash Command Fallback
 
+LoopX's normal upgrade/install path also refreshes task-continuation guidance
+for an already installed Ego browser skill. Reuse the same known idle TaskSpace
+for the same authorized task without asking again merely because the previous
+round finished or handed it back. Active user intervention, explicit pauses,
+reserved control and unverified spaces retain the installed Ego skill's stop
+rules. This is host guidance, not permission to bypass Ego's ownership checks.
+After an independently authorized Ego upgrade, run `loopx workflow-skills
+--install` and read `ego_browser`: it follows the current installed Ego source,
+preserves custom edits and reports recovery steps. It does not upgrade Ego.
+Use `loopx workflow-skills --uninstall` to restore an unchanged managed Ego
+skill to its upstream link while removing LoopX-managed workflow skills.
+
 When asked to upgrade LoopX on a machine with the desktop App, inspect the App
 bundle and its runtime as well as the CLI. `loopx doctor` exposes
 `desktop_installation` for standard macOS install locations; a paired bundle
