@@ -471,6 +471,7 @@ from loopx.skill_install_readback import (
     write_skill_install_readback,
 )
 from loopx.slash_command_install import materialize_loopx_entry_skill
+from loopx.ego_skill_delivery import reconcile_ego_browser_skill
 
 result = materialize_loopx_entry_skill(
     skills_dir=Path(os.environ["LOOPX_SKILL_INSTALL_DIR"]),
@@ -500,6 +501,12 @@ write_skill_install_readback(
     source_root=Path(os.environ["LOOPX_SKILL_INSTALL_SOURCE_ROOT"]),
     installed_at=os.environ["LOOPX_SKILL_INSTALLED_AT"],
 )
+ego = reconcile_ego_browser_skill(
+    skills_dir=Path(os.environ["LOOPX_SKILL_INSTALL_DIR"]), execute=True,
+)
+print(f"Ego skill: {ego['status']}: {ego['reason']}", file=sys.stderr)
+if not ego["ok"]:
+    raise SystemExit(1)
 if os.environ.get("LOOPX_SKILL_DEDUPE_OTHER_ROOT") != "0":
     dedupe = retire_duplicate_managed_skills(
         skills_dir=Path(os.environ["LOOPX_SKILL_INSTALL_DIR"]),
@@ -544,6 +551,12 @@ from pathlib import Path
 
 from loopx.skill_install_readback import SKILL_INSTALL_READBACK_FILENAME
 from loopx.slash_command_install import materialize_loopx_entry_skill
+from loopx.ego_skill_delivery import reconcile_ego_browser_skill
+
+ego = reconcile_ego_browser_skill(skills_dir=Path(os.environ["LOOPX_SKILL_INSTALL_DIR"]))
+if not ego["ok"]:
+    print(f"loopx installer error: {ego['reason']}", file=sys.stderr)
+    raise SystemExit(1)
 
 result = materialize_loopx_entry_skill(
     skills_dir=Path(os.environ["LOOPX_SKILL_INSTALL_DIR"]),
