@@ -73,13 +73,13 @@ def _cutover(source: dict, target: dict, preview: dict, *, expected_code: int = 
         "--execute", expected_code=expected_code)
 
 
-def _target_worktree(target: dict):
+def _target_worktree(target: dict, *, material_paths: tuple[str, ...] = ("input.txt",)):
     project = target["project"]
     def git(*arguments: str):
         subprocess.run(["git", "-C", str(project), *arguments], check=True, capture_output=True)
     git("init", "-q")
     git("remote", "add", "origin", "https://example.org/fixtures/agent-transfer.git")
-    git("add", "input.txt")
+    git("add", *material_paths)
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.org", "commit", "-qm", "Original transferred input")
     worktree = project.parent / "destination-agent"
     git("worktree", "add", "-qb", "continue-original", str(worktree))

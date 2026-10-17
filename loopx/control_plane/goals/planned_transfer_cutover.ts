@@ -24,8 +24,10 @@ import {loadLegacyCoordinationWriterFence, admitPlannedTransferTaskWriterUnderLo
 import {shadowManagementDirectory, withShadowMaintenanceLock} from "../coordination/shadow_management.ts";
 import {readGoalTransferHistoryJson} from "./planned_transfer_history.ts";
 import {requirePhysicalTransferPath, inspectTransferFile} from "./planned_transfer_container.ts";
-import {readGoalTransferSnapshot, withVerifiedGoalTransferContext} from "./planned_transfer.ts";
-import {planReviewedTransferContinuation, readReviewedTransferContext} from "./planned_transfer_continuation.ts";
+import {decodePlannedTransferMaterial, readGoalTransferSnapshot, withVerifiedGoalTransferContext} from "./planned_transfer.ts";
+import {localTransferGoalConfiguration, localTransferGoalDocuments, localTransferMappedGoalDocuments,
+  requireLocalTransferTaskBindings, planReviewedTransferContinuation, readReviewedTransferContext} from "./planned_transfer_continuation.ts";
+import {planGoalTransferWorkspace} from "./planned_transfer_workspace.ts";
 import {observeLocalWorkspaceHostIdentity} from "../work_items/task_lease_workspace.ts";
 import {reviewGoalTransferMaterialInputs} from "./planned_transfer_payload.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
@@ -70,6 +72,8 @@ export async function planLocalGoalTransferPreparation(value: JsonObject): Promi
     if (source.preview.ready_for_authority_preparation !== true) reject("Original work is not settled; use its existing Task/Turn owners before preparing this move");
     const destination = await requirePhysicalTransferPath(value.destination_root);
     const goal = requireJsonObject(source.context.goal, "original Goal");
+    localTransferGoalConfiguration(goal);
+    requireLocalTransferTaskBindings(goal, source.projection);
     const overlaps = (a: string, b: string) => {
       const suffix = relative(a, b);
       return suffix === "" || (!isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`));
@@ -85,7 +89,15 @@ export async function planLocalGoalTransferPreparation(value: JsonObject): Promi
       const physical = await requirePhysicalTransferPath(path);
       materials.push({path: physical, sha256: (await inspectTransferFile(physical)).sha256});
     }
-    await reviewGoalTransferMaterialInputs(materials, source.context);
+    for (const document of localTransferGoalDocuments(goal)) {
+      const physical = await requirePhysicalTransferPath(resolve(String(goal.repo), String(document.path)));
+      if (!materials.some(row => row.path === physical)) materials.push({path: physical, sha256: (await inspectTransferFile(physical)).sha256});
+    }
+    const reviewed = await reviewGoalTransferMaterialInputs(materials, source.context);
+    // Discover reserved/colliding destinations before any source fence or key
+    // directory is published, using the same workspace placement owner.
+    planGoalTransferWorkspace(join(destination, "workspace"), join(destination, "runtime"),
+      reviewed.materials.map((row, index) => ({...decodePlannedTransferMaterial(row, index), path: String(materials[index]!.path)})), null);
     return {source_preview_sha256: source.preview.preview_sha256, provider: source.preview.provider, materials,
       project: join(destination, "workspace"), runtime_root: join(destination, "runtime"),
       recipient_directory: join(destination, "recipient"), artifact_directory: join(destination, "portable")};
@@ -131,32 +143,9 @@ export async function retainLocalGoalTransferCutoverReview(value: JsonObject): P
  * empty backup. Unknown Goal/adapter/config fields require their actual owner.
  * Source sessions and credentials remain historical; none is auto-installed.
  */
-function localAdmittedGoal(original: JsonObject, staged: JsonObject, continuation: JsonObject | null): JsonObject {
-  const keys = ["id", "display_name", "domain", "status", "role", "parent_goal_id", "repo", "state_file",
-    "authority_sources", "adapter", "spawn_policy", "coordination", "execution_profile", "next_probe", "guards",
-    "creation_operation_id", "activation"];
-  if (Object.keys(original).some(key => !keys.includes(key)) || original.parent_goal_id != null) {
-    reject("Source Goal configuration requires its owning continuation profile");
-  }
-  if (original.activation !== undefined && requireJsonObject(original.activation, "original activation").state !== "active") {
-    reject("A stopped original Goal requires its lifecycle decision before target activation");
-  }
-  const adapter = requireJsonObject(original.adapter, "source adapter");
-  const spawn = requireJsonObject(original.spawn_policy, "source spawn policy");
-  const coordination = requireJsonObject(original.coordination, "source coordination");
-  if (!hasExactAuthorityKeys(adapter, ["kind", "status"]) || adapter.kind !== "generic_project_goal_v0" ||
-      spawn.allowed !== false || !Array.isArray(original.authority_sources) || original.authority_sources.length !== 0 ||
-      Object.keys(coordination).some(key => !["write_scope", "requires_parent_approval", "registered_agents", "storage_target", "agent_model"].includes(key)) ||
-      coordination.agent_model !== "peer_v1" ||
-      !Array.isArray(coordination.registered_agents) || coordination.registered_agents.length !== 1 ||
-      coordination.registered_agents.some(agent => typeof agent !== "string") || !Array.isArray(coordination.write_scope)) {
-    reject("Local Task transfer needs its qualified single-Agent configuration; required materials, capabilities or Host bindings need their original owner");
-  }
-  const {storage_target: _originalCreationTarget, ...currentCoordination} = coordination;
-  return {...staged, domain: original.domain, role: original.role,
-    parent_goal_id: null, spawn_policy: spawn, coordination: currentCoordination,
-    ...(original.execution_profile === undefined ? {} : {execution_profile: original.execution_profile}),
-    ...(original.guards === undefined ? {} : {guards: original.guards}),
+function localAdmittedGoal(original: JsonObject, staged: JsonObject, continuation: JsonObject | null, materials: JsonObject): JsonObject {
+  return {...staged, ...localTransferGoalConfiguration(original),
+    authority_sources: [...localTransferMappedGoalDocuments(original, materials), ...(staged.authority_sources as JsonObject[])],
     activation: {schema_version: "loopx_goal_activation_v1", state: "active", reason: continuation ? "Reviewed original work continues in this new local runtime" : "Native local Task admission; Host continuation remains unqualified"},
     planned_transfer: {...requireJsonObject(staged.planned_transfer, "staged transfer"),
       state: continuation ? "runtime_admitted" : "task_admitted",
@@ -342,17 +331,9 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
           reject("Original destination review context changed before source-final");
         }
         const continuation = planReviewedTransferContinuation(value.continuation, requireJsonObject(current.context.goal, "original Goal"), current.context, current.preview, materials);
-        const admittedGoal = localAdmittedGoal(requireJsonObject(current.context.goal, "original Goal"), targetGoal, continuation);
-        const originalCoordination = requireJsonObject(requireJsonObject(current.context.goal, "original Goal").coordination, "original coordination");
-        const supportedCapabilities = new Set(["filesystem_read", "filesystem_write", "shell"]);
-        for (const todo of indexCoordinationProjection(current.projection, goal).todos.values()) {
-          if (todo.done === true || todo.archive_state === "archive") continue;
-          if ((todo.required_capabilities !== undefined && !Array.isArray(todo.required_capabilities)) ||
-              (Array.isArray(todo.required_capabilities) && todo.required_capabilities.some(capability => !supportedCapabilities.has(String(capability)))) ||
-              (todo.claimed_by && !(originalCoordination.registered_agents as unknown[]).includes(todo.claimed_by))) {
-            reject("Original work needs an unsupported capability or Agent binding; retain its owning continuation hold");
-          }
-        }
+        const originalGoal = requireJsonObject(current.context.goal, "original Goal");
+        const admittedGoal = localAdmittedGoal(originalGoal, targetGoal, continuation, materials);
+        requireLocalTransferTaskBindings(originalGoal, current.projection);
         const decision = {schema_version: CUTOVER_SCHEMA, goal_id: goal, operation_id: operation, source_runtime_root: root,
           source_preparation_sha256: canonicalAuthoritySha256(pending), source_receipt_sha256: canonicalAuthoritySha256(sourceReceipt),
           target: {...target, identity_sha256: receipt.identity_sha256, store_identity: storeIdentity.store_identity,

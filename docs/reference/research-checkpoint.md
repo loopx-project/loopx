@@ -152,6 +152,23 @@ unsettled owner keeps its hold; cancellation remains in the existing Settings
 entry. Native source writes remain fenced until preparation is cancelled or the
 move is confirmed.
 
+For a normal generic Goal created with `bootstrap --goal-doc`, preparation also
+includes its registered primary Goal document. The document must be a physical
+workspace file accepted by the existing material owner. It needs no separate
+`--material` argument. Cutover maps its live reference to the reviewed destination;
+the original context and receipts retain their historical source paths. The
+native continuation context supplies `current_goal` for current document reads.
+Later destination edits survive retries of the original confirmation.
+
+The local configuration and required-Task capability checks run before source
+preparation as well as at final cutover. Missing, unsafe or unmapped documents,
+unsupported capability configuration and required capabilities outside this
+profile hold before source writes are fenced or a destination is created.
+Configure or rebind those dependencies through their actual owners; this profile
+does not silently drop them, copy credentials or adopt optional settings. App
+dispatch as the responsible Agent and the complete migration qualification
+remain separate work.
+
 Settings → Capability Center → the original Goal → Move Agent shows the
 prepared destination and original work. **Confirm local move** performs the
 reviewed cutover; **Resume this move** recovers an already recorded cutover whose

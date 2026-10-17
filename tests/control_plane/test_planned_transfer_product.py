@@ -14,11 +14,106 @@ import pytest
 
 from loopx.control_plane.goals import planned_transfer_io
 from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.projects.registry_codec import project_registry_transaction
 from tests.control_plane.test_planned_transfer_cancellation import source as source_fixture
 from tests.control_plane.test_planned_transfer_cutover import OPERATION
 from tests.control_plane.test_planned_transfer_operation import _http
 
 source = source_fixture
+
+
+def _goal_document(source: dict, *, absolute: bool = False) -> Path:
+    document = source["project"] / "requirements/GOAL.md"
+    document.parent.mkdir()
+    document.write_text("# Original acceptance\nRead input.txt and produce exactly 21 in report.txt.\n")
+    with project_registry_transaction(source["registry"], operation="fixture-goal-document") as transaction:
+        registry = transaction.payload_copy()
+        registry["goals"][0]["authority_sources"] = [{"kind": "goal_doc",
+            "path": str(document) if absolute else "requirements/GOAL.md", "role": "primary_goal_document"}]
+        transaction.commit(registry)
+    return document
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_preparation_carries_the_registered_goal_document_without_manual_enumeration(source: dict, tmp_path: Path, absolute: bool):
+    document = _goal_document(source, absolute=absolute)
+    expected = document.read_bytes()
+    target, prepared = _prepared(source, tmp_path)
+    assert (target["project"] / "requirements/GOAL.md").read_bytes() == expected
+    assert _prepared(source, tmp_path)[1] == prepared
+    review = prepared["prepared_cutover"]
+    source["cli"]("goal-transfer", "confirm", "--goal-id", "report", "--operation-id", OPERATION,
+        "--expected-preview-sha256", review["preview_sha256"], "--execute")
+    goal = json.loads(target["registry"].read_text())["goals"][0]
+    assert {"kind": "goal_doc", "path": "requirements/GOAL.md", "role": "primary_goal_document"} in goal["authority_sources"]
+    later = expected + b"\nLater destination clarification remains current.\n"
+    (target["project"] / "requirements/GOAL.md").write_bytes(later)
+    source["cli"]("goal-transfer", "confirm", "--goal-id", "report", "--operation-id", OPERATION,
+        "--expected-preview-sha256", review["preview_sha256"], "--execute")
+    assert (target["project"] / "requirements/GOAL.md").read_bytes() == later
+    source["project"].rename(tmp_path / "offline-source-project")
+    source["runtime"].rename(tmp_path / "offline-source-runtime")
+    context = target["cli"]("goal-transfer", "context", "--goal-id", "report",
+        "--agent-id", "agent-a", "--todo-id", source["todo"])["context"]
+    assert context["current_goal"] == goal
+    assert context["original_goal"]["authority_sources"][0]["path"] == (str(document) if absolute else "requirements/GOAL.md")
+    assert any(row["relative_path"] == "requirements/GOAL.md" for row in context["materials"])
+    assert not source["project"].exists() and not source["runtime"].exists()
+
+
+def test_changed_goal_document_keeps_the_original_product_cancel_path(source: dict, tmp_path: Path):
+    _goal_document(source)
+    target, prepared = _prepared(source, tmp_path)
+    (target["project"] / "requirements/GOAL.md").write_text("Changed after review\n")
+    server, thread, call = _http(source)
+    try:
+        review = prepared["prepared_cutover"]
+        assert call({"action": "confirm", "goal_id": "report", "operation_id": OPERATION,
+            "preview_sha256": review["preview_sha256"]})[0] == 400
+        view = call({"action": "inspect", "goal_id": "report"})[1]
+        assert view["cancel_available"] and view["prepared_cutover_unavailable"]
+        assert call({"action": "cancel", "goal_id": "report", "operation_id": OPERATION})[0] == 200
+        lease = source["acquire"]("resume-after-goal-document-refusal")["lease"]
+        source["release"](lease)
+        assert (target["project"] / "requirements/GOAL.md").read_bytes() == b"Changed after review\n"
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("fault", ["missing_document", "external_document", "reserved_document", "unsupported_configuration", "required_capability"])
+def test_required_goal_dependencies_are_held_before_preparation_changes_source(source: dict, tmp_path: Path, fault: str):
+    document = _goal_document(source)
+    if fault == "missing_document":
+        document.unlink()
+    elif fault == "required_capability":
+        source["cli"]("todo", "add", "--goal-id", "report", "--role", "agent", "--claimed-by", "agent-a",
+            "--text", "Retain the required evidence dependency", "--required-capability", "external_evidence_poll",
+            "--operation-id", "required-evidence")
+    else:
+        with project_registry_transaction(source["registry"], operation="fixture-required-dependency") as transaction:
+            registry = transaction.payload_copy()
+            if fault == "external_document":
+                outside = tmp_path / "external-credentials.txt"
+                outside.write_text("Not a workspace material\n")
+                registry["goals"][0]["authority_sources"][0]["path"] = str(outside)
+            elif fault == "reserved_document":
+                reserved = source["project"] / ".loopx/GOAL.md"
+                reserved.write_bytes(document.read_bytes())
+                registry["goals"][0]["authority_sources"][0]["path"] = str(reserved)
+            else:
+                registry["goals"][0]["control_plane"] = {"capability_improvement": {"mode": "bounded"}}
+            transaction.commit(registry)
+    before = source["fence"].read_bytes(), source["registry"].read_bytes()
+    destination = tmp_path / "unprepared-dependencies"
+    result = source["cli"]("goal-transfer", "prepare-local", "--goal-id", "report", "--operation-id", OPERATION,
+        "--destination-root", str(destination), "--material", str(source["project"] / "input.txt"), "--execute", expected_code=1)
+    assert result["ok"] is False
+    assert not destination.exists()
+    assert before == (source["fence"].read_bytes(), source["registry"].read_bytes())
+    lease = source["acquire"]("continue-after-unprepared-dependency")["lease"]
+    source["release"](lease)
 
 
 def _prepared(source: dict, root: Path) -> tuple[dict, dict]:

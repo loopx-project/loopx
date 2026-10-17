@@ -4,7 +4,7 @@
  * and current Goal/Task owners; it creates no session, lease or second ledger.
  * Historical source bindings and receipts are context, never executable proof.
  */
-import {dirname, join, resolve} from "node:path";
+import {dirname, join, relative, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
@@ -18,6 +18,77 @@ import {readGoalTransferHistoryJson} from "./planned_transfer_history.ts";
 
 function reject(message: string): never {throw new EffectRuntimeConflictError(message);}
 function same(a: unknown, b: unknown): boolean {return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b));}
+
+/** Reuse bootstrap's primary Goal document vocabulary. Other material/provider
+ * contracts need their own mapping; never omit them to obtain admission. */
+export function localTransferGoalDocuments(original: JsonObject): JsonObject[] {
+  if (!Array.isArray(original.authority_sources)) reject("Original Goal sources require their owning continuation profile");
+  return original.authority_sources.map(raw => {
+    const source = requireJsonObject(raw, "original Goal document");
+    if (!hasExactAuthorityKeys(source, ["kind", "path", "role"]) || source.kind !== "goal_doc" ||
+        source.role !== "primary_goal_document" || typeof source.path !== "string" || !source.path.trim()) {
+      reject("Original Goal source requires its owning material mapping before preparation");
+    }
+    return source;
+  });
+}
+
+/** The same positive configuration profile runs before preparation and again
+ * at cutover. Unsupported dependencies must not strand a fenced source. */
+export function localTransferGoalConfiguration(original: JsonObject): JsonObject {
+  const keys = ["id", "display_name", "domain", "status", "role", "parent_goal_id", "repo", "state_file",
+    "authority_sources", "adapter", "spawn_policy", "coordination", "execution_profile", "next_probe", "guards",
+    "creation_operation_id", "activation"];
+  if (Object.keys(original).some(key => !keys.includes(key)) || original.parent_goal_id != null) {
+    reject("Source Goal configuration requires its owning continuation profile");
+  }
+  if (original.activation !== undefined && requireJsonObject(original.activation, "original activation").state !== "active") {
+    reject("A stopped original Goal requires its lifecycle decision before target activation");
+  }
+  const adapter = requireJsonObject(original.adapter, "source adapter");
+  const spawn = requireJsonObject(original.spawn_policy, "source spawn policy");
+  const coordination = requireJsonObject(original.coordination, "source coordination");
+  if (!hasExactAuthorityKeys(adapter, ["kind", "status"]) || adapter.kind !== "generic_project_goal_v0" ||
+      spawn.allowed !== false ||
+      Object.keys(coordination).some(key => !["write_scope", "requires_parent_approval", "registered_agents", "storage_target", "agent_model"].includes(key)) ||
+      coordination.agent_model !== "peer_v1" ||
+      !Array.isArray(coordination.registered_agents) || coordination.registered_agents.length !== 1 ||
+      coordination.registered_agents.some(agent => typeof agent !== "string") || !Array.isArray(coordination.write_scope)) {
+    reject("Local Task transfer needs its qualified single-Agent configuration; required materials, capabilities or Host bindings need their original owner");
+  }
+  localTransferGoalDocuments(original);
+  const {storage_target: _originalCreationTarget, ...currentCoordination} = coordination;
+  return {domain: original.domain, role: original.role, parent_goal_id: null,
+    spawn_policy: spawn, coordination: currentCoordination,
+    ...(original.execution_profile === undefined ? {} : {execution_profile: original.execution_profile}),
+    ...(original.guards === undefined ? {} : {guards: original.guards})};
+}
+
+export function requireLocalTransferTaskBindings(original: JsonObject, projection: JsonObject): void {
+  const coordination = requireJsonObject(original.coordination, "original coordination");
+  const supported = new Set(["filesystem_read", "filesystem_write", "shell"]);
+  for (const todo of indexCoordinationProjection(projection, String(original.id)).todos.values()) {
+    if (todo.done === true || todo.archive_state === "archive") continue;
+    if ((todo.required_capabilities !== undefined && !Array.isArray(todo.required_capabilities)) ||
+        (Array.isArray(todo.required_capabilities) && todo.required_capabilities.some(capability => !supported.has(String(capability)))) ||
+        (todo.claimed_by && !(coordination.registered_agents as unknown[]).includes(todo.claimed_by))) {
+      reject("Original work needs an unsupported capability or Agent binding; retain its owning continuation hold");
+    }
+  }
+}
+
+/** Live document references follow the already reviewed material mapping.
+ * Historical source context and receipts keep their original paths/bytes. */
+export function localTransferMappedGoalDocuments(original: JsonObject, materials: JsonObject): JsonObject[] {
+  if (!Array.isArray(materials.materials) || !Array.isArray(materials.workspace_destinations)) reject("Original material mapping is unavailable");
+  return localTransferGoalDocuments(original).map(source => {
+    const path = relative(String(original.repo), resolve(String(original.repo), String(source.path)));
+    const material = (materials.materials as JsonObject[]).find(row => row.source_relative_path === path);
+    const destination = (materials.workspace_destinations as JsonObject[]).find(row => row.id === material?.id);
+    if (!material || !destination) reject("Required Goal document has no reviewed destination material; preserve the source");
+    return {...source, path: destination.relative_path};
+  });
+}
 
 /** Local extension of the existing cutover profile, explicitly reviewed in its
  * preview. Current registration and execution permissions remain independent. */
@@ -105,10 +176,11 @@ export async function readGoalTransferHostContext(value: JsonObject): Promise<Js
       !same(snapshot, await readGoalTransferSnapshot(String(admission.target_registry_path), goal)) ||
       !same(fence, await loadLegacyCoordinationWriterFence(root, goal))) reject("Original work changed during continuation context read; retry its current owner");
   return {context: {kind: "reviewed_context", goal_id: goal, agent_id: agent,
-    requirements: context.state_text, original_goal: context.goal, selected_todo: selected,
+    requirements: context.state_text, original_goal: context.goal,
+    current_goal: requireJsonObject(snapshot.source_context, "current context").goal, selected_todo: selected,
     todos: index.todo_ids.map(id => index.todos.get(id)!), materials, original_accounting: history.provenance,
     source_sessions_adopted: false, credentials_adopted: false,
-    guidance: "Continue the original work using current Task/lease and Host authority. Historical decisions and receipts grant no execution permission."}};
+    guidance: "Continue the original work using current Task/lease and Host authority. Read required Goal documents through current_goal and the reviewed destination material paths; original_goal retains historical source references. Historical decisions and receipts grant no execution permission."}};
 }
 
 /** The existing Settings/CLI entry also works after moving to the destination.

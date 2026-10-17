@@ -22,7 +22,7 @@ from loopx.history import collect_history
 from tests.control_plane.test_planned_transfer_cancellation import source as source_fixture
 from tests.control_plane.test_planned_transfer_cutover import OPERATION, _staged, _target_worktree
 from tests.control_plane.test_planned_transfer_operation import _http
-from tests.control_plane.test_planned_transfer_product import _prepared
+from tests.control_plane.test_planned_transfer_product import _goal_document, _prepared
 
 source = source_fixture
 
@@ -52,6 +52,7 @@ def test_reviewed_context_admits_a_new_runtime_without_copying_a_session(source:
 def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reexecution(source: dict, tmp_path: Path, monkeypatch):
     from tests.control_plane.codex_checkpoint_fixture import real_native_source
 
+    _goal_document(source, absolute=True)
     # Original accepted context and its relation survive; no replacement Todo
     # is invented after transfer. Expected 21 is fixed before any model output.
     accepted = source["cli"]("todo", "add", "--goal-id", "report", "--role", "user", "--task-class", "user_action",
@@ -72,12 +73,12 @@ def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reex
         server.shutdown()
         thread.join(5)
         server.server_close()
-    worktree = _target_worktree(target)
+    worktree = _target_worktree(target, material_paths=("input.txt", "requirements/GOAL.md"))
     lease = target["cli"]("task-lease", "acquire", "--goal-id", "report", "--todo-id", source["todo"],
         "--owner", "agent-a", "--idempotency-key", "new-target-native-work", "--write-scope", "report.txt",
         "--write-worktree", str(worktree))["lease"]
     assert lease["lease_epoch"] > 1 and lease["idempotency_key"] != "original-work"
-    script = "from pathlib import Path; p=Path('report.txt'); assert not p.exists(); p.write_text(str(sum(map(int,Path('input.txt').read_text().split())))+'\\n')"
+    script = "from pathlib import Path; assert 'produce exactly 21' in Path('requirements/GOAL.md').read_text(); p=Path('report.txt'); assert not p.exists(); p.write_text(str(sum(map(int,Path('input.txt').read_text().split())))+'\\n')"
     requests = []
 
     def response(body, number, message):
@@ -96,6 +97,8 @@ def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reex
         assert requests, "The ordinary native driver must supply the complete current request"
         context = requests[0]["transfer_context"]
         assert context["selected_todo"]["todo_id"] == source["todo"]
+        assert {"kind": "goal_doc", "path": "requirements/GOAL.md", "role": "primary_goal_document"} in context["current_goal"]["authority_sources"]
+        assert any(row["relative_path"] == "requirements/GOAL.md" for row in context["materials"])
         assert context["requirements"].find("Produce report.txt from input.txt") >= 0
         archived = next(row for row in context["todos"] if row["todo_id"] == accepted)
         assert archived["archive_state"] == "archive" and archived["successor_todo_ids"] == [source["todo"]]
