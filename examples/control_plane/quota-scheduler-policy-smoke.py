@@ -19,6 +19,9 @@ from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
 from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint  # noqa: E402
 from loopx.control_plane.agents.agent_scope_frontier import AgentScopeFrontierAction  # noqa: E402
 from loopx.control_plane.quota.should_run_packet import _scheduler_hint  # noqa: E402
+from loopx.control_plane.work_items.interaction_contract import (  # noqa: E402
+    _interaction_reads_and_arbitration,
+)
 
 
 AGENT_SCOPE_ACTIONS = [action.value for action in AgentScopeFrontierAction]
@@ -72,6 +75,7 @@ def payload(
                 "delivery_allowed": must_attempt,
                 "quiet_noop_allowed": not user_required and not must_attempt,
             },
+            "cli_channel": {},
         },
     }
 
@@ -85,8 +89,17 @@ def assert_policy_case(
     expected_progression: list[int] | None = None,
     expected_same_identity_action: str = "advance_index_after_applied_interval_elapsed",
 ) -> None:
+    base_payload = deepcopy(base_payload)
+    _, arbitration = _interaction_reads_and_arbitration(
+        base_payload,
+        base_payload["interaction_contract"],
+        runtime_root=None,
+        registry_path=None,
+        agent_scope_frontier_actions=AGENT_SCOPE_ACTIONS,
+    )
     quota_wrapper = _scheduler_hint(
         deepcopy(base_payload),
+        arbitration=arbitration,
         scheduler_execution_context=CODEX_APP_SCHEDULER_CONTEXT,
     )
     extracted = build_scheduler_hint(
@@ -96,7 +109,7 @@ def assert_policy_case(
             .get("user_channel", {})
             .get("action_required")
         ),
-        agent_scope_frontier_actions=AGENT_SCOPE_ACTIONS,
+        arbitration=arbitration,
         scheduler_execution_context=CODEX_APP_SCHEDULER_CONTEXT,
     )
     detailed = build_scheduler_hint(
@@ -106,7 +119,7 @@ def assert_policy_case(
             .get("user_channel", {})
             .get("action_required")
         ),
-        agent_scope_frontier_actions=AGENT_SCOPE_ACTIONS,
+        arbitration=arbitration,
         include_detail=True,
         scheduler_execution_context=CODEX_APP_SCHEDULER_CONTEXT,
     )

@@ -94,7 +94,7 @@ def packet(monkeypatch, *, seconds=120, user_class="user_action", newer=False, r
         scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
             runtime or SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT))
     if floor:
-        from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+        from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint as build_scheduler_hint
         result["automation_cadence"] = {"schema_version": "automation_cadence_result_v1",
             "ok": True, "enabled": True, "min_interval_minutes": floor}
         result["scheduler_hint"] = build_scheduler_hint(result,
@@ -168,7 +168,7 @@ def test_newer_run_supersedes_retry(monkeypatch):
 def test_real_user_gate_survives_retry_clock(monkeypatch):
     # A real final gate contract wins over an independently pending retry.
     # Source Todo copy alone is not a final gate/admission contract.
-    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+    from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint as build_scheduler_hint
     result = packet(monkeypatch)
     contract = result["interaction_contract"]
     contract["mode"] = "user_gate"

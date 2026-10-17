@@ -23,6 +23,7 @@ from loopx.control_plane.work_items.execution_obligation import (  # noqa: E402
     build_execution_obligation,
 )
 from loopx.control_plane.work_items.interaction_contract import (  # noqa: E402
+    _build_interaction_contract_projection,
     build_interaction_contract,
     user_channel_action_required,
 )
@@ -182,16 +183,15 @@ def base_payload(
 
 
 def finalize(payload: dict[str, Any]) -> dict[str, Any]:
-    payload["interaction_contract"] = build_interaction_contract(
+    payload["interaction_contract"], arbitration = _build_interaction_contract_projection(
         payload,
+        agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
         scheduler_execution_context=APP_SCHEDULER_CONTEXT,
     )
     payload["scheduler_hint"] = build_scheduler_hint(
         payload,
         user_action_required=user_channel_action_required(payload),
-        agent_scope_frontier_actions=[
-            action.value for action in AgentScopeFrontierAction
-        ],
+        arbitration=arbitration,
         scheduler_execution_context=APP_SCHEDULER_CONTEXT,
     )
     return payload

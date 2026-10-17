@@ -59,6 +59,10 @@ Carry the same task through these steps:
    individual cards. Navigation follows user purpose; clearly show the target
    and source of a setting. Do not expose storage scopes as competing pages or
    list controls that cannot apply to the selected target.
+   Inventory repeated scope/method/limitation copy across the whole view. Follow
+   [explanations on demand](design.md#explanations-on-demand): keep results and
+   consequential qualifiers visible, share optional contextual help by region,
+   and reuse existing provenance details instead of adding footnotes to each card.
 3. **Implement and challenge.** Use the smallest meaningful regression derived
    from the accepted outcome. Select realistic populated data and one negative
    or recovery path likely to falsify the claim: multiple owners, out-of-order
@@ -71,6 +75,9 @@ Carry the same task through these steps:
    back the result. Validate affected narrow/keyboard/language behavior. Pair
    browser fixtures with the real owning backend when they replace the rule
    being claimed. Use disposable synthetic state; do not alter active Goals.
+   For contextual help, verify hover-to-panel continuity, keyboard focus/Escape,
+   touch dismissal and narrow positioning. Confirm that opening help causes no
+   operation and that failures/unknowns remain legible with every help closed.
    Record source/build identity and fixture boundaries. Source preview, packaged
    browser, installed App and real model each prove different things.
 5. **Review the task before the diff narrative.** The review capability's

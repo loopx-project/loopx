@@ -1,6 +1,8 @@
 .research-progress { margin-block: 16px; padding-block: 16px; border-block: 1px solid var(--pw-line); color: var(--pw-text); min-width: 0; overflow-wrap: anywhere; }
 .research-progress > header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .research-progress h3 { margin: 0; font-size: var(--text-body); font-weight: 600; }
+.research-progress-title { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.research-progress-scope { margin-block: 4px 8px; }
 .research-progress label { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--text-caption); }
 .research-progress select { min-width: 0; max-width: 400px; min-height: 44px; border: 1px solid var(--pw-line); border-radius: 6px; padding: 8px; background: var(--pw-bg); color: var(--pw-text); font: inherit; }
 .research-progress p, .research-progress small { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-prose); }

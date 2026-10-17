@@ -22,7 +22,7 @@ from loopx.control_plane.scheduler.execution_context import (
 from loopx.control_plane.scheduler.automation_liveness import (
     build_automation_liveness,
 )
-from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint as build_scheduler_hint
 from loopx.control_plane.testing.quota_fixtures import (
     quota_status_payload,
     quota_todo_item,
@@ -251,6 +251,8 @@ def test_scheduler_execution_context_decision_table(
 
 
 def test_partial_scheduler_context_fails_closed_without_app_action() -> None:
+    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+
     hint = build_scheduler_hint(
         _active_payload(),
         scheduler_execution_context={"host_surface": "generic_cli"},
@@ -263,12 +265,32 @@ def test_partial_scheduler_context_fails_closed_without_app_action() -> None:
 
 
 def test_missing_scheduler_context_fails_closed() -> None:
+    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+
     hint = build_scheduler_hint(_active_payload())
 
     assert hint["action"] == "repair_scheduler_execution_context"
     assert hint["execution_context"]["valid"] is False
     assert hint["codex_app"]["applicability"] == "blocked_invalid_context"
     assert hint["execution_phase"]["disposition"] == "contract_error"
+
+
+def test_valid_scheduler_context_requires_the_supplied_native_arbitration() -> None:
+    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+
+    with pytest.raises(ValueError, match="scheduler arbitration must come from the interaction projection"):
+        build_scheduler_hint(_active_payload(), scheduler_execution_context=
+            scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"))
+
+
+@pytest.mark.parametrize("mode", ["goal_stopped", "quota_paused"])
+def test_explicit_shutdown_precedes_the_native_arbitration_requirement(mode: str) -> None:
+    from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+
+    hint = build_scheduler_hint({"heartbeat_recommendation": {"recommended_mode": mode}},
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"))
+    assert hint["cadence_class"] == mode
+    assert hint["app_automation"]["host_action"] == "pause_or_delete_current_heartbeat"
 
 
 def test_codex_app_runtime_profile_preserves_host_backoff_and_authority() -> None:

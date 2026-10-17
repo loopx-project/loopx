@@ -8,9 +8,11 @@ import pytest
 from loopx.control_plane.scheduler import scheduler_hint as scheduler_hint_module
 from loopx.control_plane.scheduler.arbitration import (
     SchedulerDisposition,
-    build_scheduler_arbitration,
 )
-from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+from tests.control_plane.scheduler_arbitration_fixture import (
+    build_native_scheduler_hint as build_scheduler_hint,
+    project_native_arbitration,
+)
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
@@ -182,7 +184,7 @@ def test_interaction_contract_drives_scheduler(
     disposition: SchedulerDisposition,
     cadence: str,
 ) -> None:
-    arbitration = build_scheduler_arbitration(
+    arbitration = project_native_arbitration(
         payload,
         agent_scope_frontier_actions=AGENT_SCOPE_ACTIONS,
     )
@@ -547,3 +549,18 @@ def test_structurally_invalid_contract_fails_closed() -> None:
         "interaction_contract.agent_channel.quiet_noop_allowed_must_be_boolean"
         in hint["consistency_error"]["errors"]
     )
+
+
+@pytest.mark.parametrize("flag", [None, 0, 1, "false"])
+def test_python_source_codec_does_not_coerce_non_boolean_authority(flag) -> None:
+    payload = _payload(mode="\u0085bounded_delivery\u001c", should_run=True,
+        user_required=False, must_attempt=True, delivery_allowed=True, quiet_noop_allowed=False)
+    payload["interaction_contract"]["user_channel"]["action_required"] = flag
+    original = deepcopy(payload)
+
+    arbitration = project_native_arbitration(payload)
+
+    assert arbitration.mode == "bounded_delivery"
+    assert arbitration.disposition is SchedulerDisposition.CONSISTENCY_REPAIR
+    assert arbitration.errors == ("interaction_contract.user_channel.action_required_must_be_boolean",)
+    assert payload == original

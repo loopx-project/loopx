@@ -6,7 +6,6 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { interpretQuotaShouldRunPacket } from "../../loopx/control_plane/effect_program.ts";
 import {
   decodeInteractionContract,
-  projectInteractionConsistencyValidation,
   projectInteractionRequiredReads,
   projectInteractionWorkContext,
   projectBlockedSuccessorWaitObservation,
@@ -68,26 +67,13 @@ test("a closed contract can notify without requiring user action or spending", (
   assert.deepEqual(decodeInteractionContract(contract), contract);
 });
 
-test("shared consistency validation retains diagnostic order and does not gate independent capability intent", () => {
-  const invalid = {mode: "heartbeat_settled_skip", user_required: true,
-    must_attempt: false, delivery_allowed: true, quiet_noop_allowed: true,
-    spend_allowed_now: false, spend_after_validation: true};
-  assert.deepEqual(projectInteractionConsistencyValidation(invalid), {errors: [
-    "interaction_contract.delivery_without_attempt",
-    "interaction_contract.quiet_noop_conflicts_with_required_action",
-    "interaction_contract.settled_conflicts_with_open_action",
-    "interaction_contract.settled_conflicts_with_spend",
-  ]});
-  assert.deepEqual(projectInteractionConsistencyValidation({
-    mode: "governed_capability_intent", user_required: true,
-    must_attempt: true, delivery_allowed: true, quiet_noop_allowed: false,
-    spend_allowed_now: false, spend_after_validation: false,
-  }), {errors: []});
-  assert.throws(() => projectInteractionConsistencyValidation({...invalid, must_attempt: "false"}), /must_attempt.*boolean/);
-});
-
 function readFacts(): JsonObject {
-  return {required_reads: [{command: "read-existing-evidence", source: "existing"}],
+  return {arbitration_facts: {
+    schema_version: "loopx_interaction_contract_v0", mode: "bounded_delivery",
+    user_channel: {present: true, action_required: false},
+    agent_channel: {present: true, must_attempt: true, delivery_allowed: true, quiet_noop_allowed: false},
+    cli_channel: {}, agent_scope_frontier_actions: [],
+  }, required_reads: [{command: "read-existing-evidence", source: "existing"}],
     goal_id: "goal-requirements", goal_state_file: "/tmp/goal source/state's requirements.md",
     command_prefix: "loopx --registry '/tmp/goal source/registry.json' --runtime-root '/tmp/goal source/runtime'",
     goal_acceptance_enabled: true, should_run: true, delivery_allowed: true, selection_required: false,

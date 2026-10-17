@@ -104,6 +104,38 @@ board may be wider than a conversation's reading column. Keep ready-state
 runtime details alongside their model context, allow failures to expand, and
 size empty summaries to their content rather than filling large decorative cards.
 
+### Explanations On Demand
+
+The primary view presents the result, its unit and scope, material uncertainty,
+and the next useful action. A truthful interface does not need to repeat its
+methodology in every component. Review the whole viewport for repeated scope,
+source, method and limitation paragraphs before adding another note.
+
+- Keep the smallest qualifier needed to read a value correctly beside it:
+  selected sample, partial window, uncalibrated, unknown or historical. Keep
+  failed reads, missing authority and consequences such as separate model usage
+  visible at the affected value or action. Never hide these in help.
+- Put optional definitions, denominator rules, sampling caveats and chart-reading
+  explanations in one nearby information disclosure per related region. Prefer
+  one shared explanation to an icon beside every metric or repeated footnotes.
+  Put long provenance and diagnostic fields in the existing collapsed details.
+- The same help must work on hover, keyboard focus and click/tap. It must remain
+  readable when the pointer enters it, dismiss with Escape or an outside click,
+  fit a narrow viewport, and not trigger the operation it explains. Do not rely
+  on a native `title` alone, color alone or hover-only access.
+- Preserve actual unknowns, denominators, negative results and evidence links.
+  Reduce explanatory noise without replacing missing evidence with a reassuring
+  summary. Keep chart keys that are necessary to decode the marks visible.
+
+For example, research metrics can show “19 episodes · purposive sample ·
+uncalibrated” once, with a nearby explanation of yes/eligible counts and unknowns.
+They should not repeat a whole-study exclusion paragraph above and below the
+same six values. A source-read failure still appears directly beside the values.
+
+中文要点：结果、单位、必要范围标记与异常直接可见；范围、方法、分母和读图的重复
+解释就近按需展开。整页去重，保留图例及真实未知；悬浮、键盘和触屏使用同一入口，
+不能把失败、权限缺失或额外用量藏进提示。
+
 ## Source Of Truth
 
 - Use this file as the default visual contract for all new LoopX UI work.
@@ -523,6 +555,8 @@ parity is required. Framework migration alone must not alter the UI.
 - [ ] Marketing and application controls use the correct shape language.
 - [ ] Desktop and mobile layouts are validated.
 - [ ] Keyboard, focus, contrast, and reduced-motion behavior are preserved.
+- [ ] Repeated explanations are consolidated; help works on hover, focus and tap,
+      while material qualifiers, failures and action consequences remain visible.
 - [ ] Owner decisions complete in place with a readback; live treatment is
       backed by an observed active fact; protocol identifiers are not primary copy.
 - [ ] English and Chinese content remain usable.

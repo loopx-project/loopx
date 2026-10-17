@@ -41,8 +41,7 @@ export function GoalResearchResults({goalId, api, zh}: {goalId: string; api: Goa
 
   return <section className="goal-team-results goal-research-results min-w-0 [overflow-wrap:anywhere]"
     aria-label={zh ? "研究成果" : "Research results"} aria-busy={busy}>
-    <header><div><h3>{zh ? "研究成果" : "Research results"}</h3>
-      <p>{zh ? "查看本 Goal 已保存的研究结论、反证和待复核事项。" : "Review this Goal’s saved conclusions, counterevidence and open questions."}</p></div>
+    <header><div><h3>{zh ? "研究成果" : "Research results"}</h3></div>
       <button type="button" disabled={busy} onClick={() => {setResults([]); setRevision(value => value + 1);}}>
         <RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新" : "Refresh"}
       </button></header>

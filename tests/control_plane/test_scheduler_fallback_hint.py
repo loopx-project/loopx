@@ -17,7 +17,7 @@ from loopx.control_plane.quota.scheduler_ack import (
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
-from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint as build_scheduler_hint
 from loopx.upgrade import (
     load_codex_app_automation_manifest,
     prompt_digest,

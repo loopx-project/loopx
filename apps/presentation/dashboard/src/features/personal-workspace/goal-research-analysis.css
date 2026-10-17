@@ -1,6 +1,9 @@
 .research-analysis { margin-block: 16px; padding: 24px; border: 1px solid var(--pw-line); border-radius: 12px; min-width: 0; color: var(--pw-text); background: var(--pw-bg); font-size: var(--text-body); line-height: var(--leading-prose); overflow-wrap: anywhere; }
 .research-analysis > header, .analysis-source > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .analysis-header-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.research-analysis-entry { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.research-analysis-entry-actions, .analysis-scope { display: flex; align-items: center; gap: 4px; }
+.research-analysis-entry > small { font-size: var(--text-caption); color: var(--pw-muted); }
 .research-analysis h3 { font-size: var(--text-heading); font-weight: 600; margin: 0; }
 .research-analysis h4 { font-size: var(--text-lead); font-weight: 600; line-height: 1.5; margin: 0 0 8px; }
 .research-analysis p { margin: 8px 0; }

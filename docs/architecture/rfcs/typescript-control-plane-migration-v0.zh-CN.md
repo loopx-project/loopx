@@ -868,6 +868,19 @@ argv；同一 interaction packet 复用结果，重入投影本身在健康路�
 选择前，可执行的低优先级推荐不能隐藏受阻任务的真实能力验证；验证成功在原 Turn 重入，
 失败后仍可显式选择其他工作。已提交 receipt 的 Todo 不变。
 
+调度仲裁现在与 required-read 投影在 `work_items/interaction_contract.ts` 内组合。
+结构诊断、共享一致性检查和 disposition 选择由同一个原生 owner 负责。Quota 消费私有
+`{required_reads, arbitration}` 结果，不增加公共 contract 字段。Python 选择规则与独立
+consistency RPC 已删除。后续 cooldown 与 recovery 构造仍返回 dict，并丢弃未消费的
+仲裁；它们不覆盖 scheduler hint 较早的决策。完整 fact 的 compact ASCII JSON
+不超过 64 KiB 时使用 inline 通道。原 reads 透传、最多三条生成 read、shell 引号展开和
+有界诊断给出 `16B + 8 KiB` 保守结果上界；B 为完整 compact ASCII JSON 的字节数。
+当 `B <= 64 KiB` 时，该上界低于 2 MiB。
+更大的 fact 继续走既有私有快照，不截断数据。2 MiB wire 与 64 MiB snapshot 上限不变。
+Python 暂留 scalar/Mapping codec、
+Enum/dataclass 结果适配、调度 cadence 和 Host IO，直到对应 consumer 迁移。
+这不代表整个 scheduler 或正式安装采用已完成。
+
 `agents/capability_memory.ts` 现在持有本机 Agent 运行时能力声明、校验与幂等合并，
 复用现有文件锁及 durable JSON writer；`capability_gate.ts` 统一 Goal、Agent、本次
 调用的继承规则及不可用覆盖，删除 Python 的重复 union 规则。Live quota 与实际执行

@@ -1,0 +1,8 @@
+.context-help { display: inline-flex; vertical-align: middle; flex: 0 0 auto; }
+.context-help > .context-help-trigger { display: inline-flex; align-items: center; justify-content: center; width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--pw-muted); cursor: help; }
+.context-help > .context-help-trigger:hover, .context-help > .context-help-trigger[aria-expanded="true"] { color: var(--pw-text); background: var(--pw-hover); }
+.context-help > .context-help-trigger:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: -2px; }
+.context-help-popover { position: fixed; inset: auto; margin: 0; box-sizing: border-box; width: min(360px, calc(100vw - 24px)); max-height: min(440px, calc(100dvh - 24px)); overflow: auto; padding: 16px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-bg); color: var(--pw-text); box-shadow: 0 4px 16px color-mix(in srgb, var(--pw-text) 12%, transparent); font-size: var(--text-caption); font-weight: 400; line-height: var(--leading-prose); text-align: start; overflow-wrap: anywhere; }
+.context-help-popover > strong { font-size: inherit; font-weight: 600; }
+.context-help-popover p { margin: 8px 0 0; color: var(--pw-muted); font-size: inherit; line-height: inherit; }
+@media (pointer: coarse), (max-width: 640px) { .context-help > .context-help-trigger { width: 44px; min-width: 44px; height: 44px; min-height: 44px; } }
