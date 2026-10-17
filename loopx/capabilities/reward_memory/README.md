@@ -293,6 +293,19 @@ makes zero provider calls. The App does not need a separate manual
 `reward-memory ingest-event` command for this lifecycle. DSH currently carries
 recall context but does not claim this post-settlement ingest boundary.
 
+App candidates have a stable key for the exact Goal, Agent, Todo, Turn and
+settlement effect. If the first refresh omitted a reflection or its stage
+failed, retry that same `refresh-state` identity with inline reflection JSON.
+The original accounting and rollout receipts remain unchanged; spend discovers
+the private candidate by its exact key. If spend already committed, the refresh
+retry itself can finalize the candidate after reading both original settlement
+steps. No second charge or manual ingestion is needed. Candidate processing is
+serialized; a changed reflection or destination binding is rejected. The current
+Todo validation declaration must match the staged attestation; an explicit
+refresh retry reruns validation and cannot reuse an earlier pass to mask a
+current failure. Unstamped legacy candidates cannot gain write authority from
+old metadata. These receipts establish ingestion and readback, not memory utility.
+
 Dashboard, CLI/status, and Lark projections reuse the same capability owner and
 public receipt. Dashboard writes only an ignored config pointer and registered
 Goal-local Agent allowlist through the existing preview/apply/readback

@@ -57,7 +57,7 @@ export const agentModelSelectionScenario = {
         });
         assert.deepEqual(layout, { title: true, runtime: true, fits: true }, "The manager title and runtime label remain readable beside known or unknown model readback");
       };
-      await page.locator(".personal-model-current").filter({hasText: "模型未回传"}).waitFor();
+      await page.locator(".personal-model-current").filter({hasText: "模型设置"}).waitFor();
       await page.setViewportSize({width: 390, height: 844});
       await assertReadableHeader();
       assert.equal(discoveryCount, 0, "Unknown current facts do not start catalog discovery");
@@ -74,7 +74,17 @@ export const agentModelSelectionScenario = {
       const menu = page.locator(".personal-chat-model-menu");
       const modelControl = page.getByRole("combobox", {name: "选择模型"});
       const openSettings = async () => {
-        if (!(await menu.evaluate(node => node.open))) await menu.locator("summary").click();
+        if (!(await menu.evaluate(node => node.open))) {
+          // Opening reloads the catalog and replaces its controls. Wait for that
+          // response before accepting an old visible control or measuring it.
+          const [request] = await Promise.all([
+            page.waitForRequest(request => new URL(request.url()).pathname === "/api/chat/agent-model-options"),
+            menu.locator("summary").click(),
+          ]);
+          const catalog = await request.response();
+          assert.ok(catalog, "Opening model settings receives its current catalog response");
+          await catalog.finished();
+        }
         await modelControl.waitFor();
       };
       await menu.locator(".personal-model-current").filter({hasText: "runtime-default"}).waitFor();

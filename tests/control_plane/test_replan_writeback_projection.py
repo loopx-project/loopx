@@ -129,3 +129,33 @@ def test_turn_envelope_preserves_executable_vision_authoring_contract() -> None:
     writeback = source["replan_action_packet"]["writeback_contract"]
     assert "path_delta.evidence_refs" in writeback["required_fields"]
     assert envelope["replan_action_packet"]["writeback_contract"] == writeback
+
+
+@pytest.mark.parametrize("current", [None, [], 42])
+def test_missing_current_does_not_normalize_invalid_baseline_or_window(current):
+    result = semantic_delta_from_writeback(
+        obligation={"progress_baseline": {"result_class": "invalid"},
+                    "progress_window": [{"result_class": "invalid"}]},
+        progress_observation=current,
+    )
+    assert result["accepted"] is False
+    assert result["observation_fingerprint"] is None
+    assert result["outcomes"] == []
+
+
+def test_current_normalization_error_precedes_baseline_normalization():
+    with pytest.raises(ValueError, match="result_class must be one of"):
+        semantic_delta_from_writeback(
+            obligation={"progress_baseline": {"result_class": "advanced", "surface_id": "not an identifier"}},
+            progress_observation={"result_class": "invalid"},
+        )
+
+
+def test_malformed_window_entries_do_not_replace_valid_novel_progress():
+    result = semantic_delta_from_writeback(
+        obligation={"progress_window": [{"result_class": "invalid"}, "untyped"]},
+        progress_observation={"result_class": "advanced", "surface_id": "surface-new",
+                              "evidence_ids": ["evidence-new"]},
+    )
+    assert result["accepted"] is True
+    assert result["satisfying_outcomes"] == ["new_surface"]

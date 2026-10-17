@@ -26,6 +26,18 @@ R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 首个 App 结果不需要第二份 inbox 存储、逐字段 RPC 或全量重写。
 这里是 T0–T4 的产品消费计划，不新增 provider promotion，也不声称迁移完成。
 
+请求者范围内的委派清单现在由 `collaboration/delegation.ts` 一次组装整页读回。
+Python 保留有界地址扫描、请求者注册检查和实时 `Delegations.read` IO，
+包括 canonical 验收与产物检查。TS 校验页内顺序和逐项观察，选择下一游标并报告
+完整性。逐项投影 RPC 与 Python 页级决定已退役：查询准入和整页投影每页共两次
+请求；provider 读取与验证调用仍保留。超过内联传输预算的完整页复用既有私有
+快照传输。CLI、MCP 与 Goal Chat 保持原有实时分页契约。异步生命周期切换和
+接收方采用资格仍需单独验收。
+同一次整页投影现经既有 `projection_envelope.ts` owner 封装真实目录与操作读取
+时间。完整性仅限 `requester_page`；不可读操作触发告警，展示/可用数量说明
+剩余页，重放保留原始观察时间。
+每页复用既有代码版本请求作用域；操作记录仍实时读取，下一页重新解析当前代码。
+
 
 <a id="当前交付边界2026-10-02"></a>
 
@@ -375,11 +387,23 @@ token／重试成本、source-mode 修复和常规短上下文／replan 完整�
 
 Replan 的义务结果规则现收敛到 `work_items/replan_semantics.ts`：接受结果选择、
 vision path／terminal 一致性校验与对应 refresh 输入投影共用同一 owner。
-Python 保留 progress 归一化／新颖性与持久化适配，不再重复义务匹配规则。
+`work_items/progress_delta.ts` 现在在同一资格请求内推导语义维度、终态覆盖及
+证据／blocker 新颖性；删除 Python 的 delta 与终态覆盖规则。Python 保留共享的
+observation／fingerprint 归一化、历史 codec 和持久化适配。TS 对完整的归一化窗口
+比较身份复用；更大的资格输入复用既有私有快照传输，不截断旧声明。更换 Turn／
+work-item 或刷新证据不能让旧 blocker 成为新结果，独立的 Vision 证据路径仍可使用。
+资格请求次数与输入错误顺序不变。共享 codec 随 refresh writer、replan history／
+context reader、external review 与 Explore evidence 消费者一起迁移后退役。
 这是有界规则收敛，不是 settlement writer 或存储迁移。先刻画既有接受语义，
 再修正所有 vision trigger 的可执行写入投影，并验证真实绑定 CLI 闭环、回读及
 资格范围错配反例。Checkpoint 恢复与 in-flight 规则仍由既有边界负责，
 不新增 capability、provider 或设置。
+
+有限的 refresh／checkpoint CLI 与独立 replan 资格判断复用既有 managed-runtime
+request scope。它只固定代码版本；source／provider 读取、canonical 写入、错误顺序与
+Turn 回执仍实时执行，保持原语义。晋升同时要求完整 File／SQLite CLI 资格与原生请求
+测量；减少指纹扫描本身不能证明收益。既往尾部失败、相同代码的 A/A 波动与当前资格
+分别保留在 PR 验证记录中。
 
 交付历史边界将 `classification`、`health_check` 与 `recommended_action` 视为
 叙述文本。它们不能生成或解除 follow-through obligation，不能证明 outcome，也
@@ -738,7 +762,19 @@ Handoff mode 的 legacy adapter 与原生 CAS／receipt 事务现共用 TS 空�
 Task graph topology 与 inventory/horizon 共用 `work_items/planning_relations.ts`。
 一轮纯 TS 请求拥有关系发现、稳定有界遍历、边去重与缺失/截断完整度；删除
 Python 的前驱索引、条件拆解和遍历。Python 保留 status 来源适配及节点、
-evidence/handoff 的脱敏展示。明确的语义修正：successor 谱系不再冒充完成
+evidence/handoff 的脱敏展示，适用于选中工作项的图。整 Goal 任务地图现在在
+同一 TS 拓扑请求内组合节点类型、元数据可见性、边和公共地图结构。Python 暂留共享的
+可展示来源、文本/状态及稳定 ID codec；元数据只对已准入节点做脱敏。剩余的
+选中工作项图和共享来源消费者一起迁移后，这些 codec 退役。一张地图仍只发
+一次请求；扩大的完整输入复用既有私有快照传输，不在普通传输上限处截断来源。
+HTTP delivery-review 的既有读取复用同一托管运行时代码版本作用域；provider
+读取和新鲜度检查仍由既有 owner 持有。
+原生地图现经既有 projection envelope owner 封装真实 Todo 读取时间、无法展示或
+超出上限的条目及未解析关系。HTTP 外层用一次整批封装请求继承 status 与地图来源；
+完整 HTTP 读取增加一次运行时调用，不增加逐节点调用。已交付读界面披露过期、
+不可读、部分或未知来源，导出保留封套。原来源打开和授权 owner 不变；这些元数据
+不成为新的执行或配置门槛。
+明确的语义修正：successor 谱系不再冒充完成
 依赖，unblocks 方向修正，补 Monitor generation 条件，上限处保留平行关系
 和菱形汇合边。详见[图协议](../../reference/protocols/task-graph-projection-v0.md#typed-todo-topology)。
 不改变生命周期准入、claim/lease 或默认 provider。来源仍可能不完整：本批
@@ -1205,11 +1241,11 @@ status projection 迁入 kernel（§4 已将其列为 facade 退出条件），�
 facts，adapter 随之删除。
 
 推广顺序。`status`（含 `--goal-id` 与 projection cache 命中）、`global-summary`、
-`global-gates`、`global-todos` 与 `global-risks` 现已携带 envelope。其他 `collect_status`
-调用方会在 payload 里收到 status envelope，但尚未输出自己的 envelope。下一步依次为：
-`quota should-run`、`review-packet`，
-以及 Decision Context packet。新加入或迁入 TypeScript 的读模型在同一个 PR 里输出
-envelope；§6 把这一条定为 promotion 门禁。
+`global-gates`、`global-todos`、`global-risks` 与 `quota should-run` 现已携带
+envelope。其他 `collect_status` 调用方会在 payload 里收到 status envelope，但尚未
+输出自己的 envelope。下一步依次为：`review-packet` 与 Decision Context packet。
+新加入或迁入 TypeScript 的读模型在同一个 PR 里输出 envelope；§6 把这一条定为
+promotion 门禁。
 
 消费者把缺失 envelope 视为新鲜度未知；envelope 告警时，必须先披露，再陈述依赖它的
 结论。字段语义与消费者规则见
@@ -1267,7 +1303,7 @@ replay、receipt 与 settlement。这个架构选择已经落地，不再是假�
 | Quota monitor-poll commit transaction | TypeScript 拥有 monitor admission 复核、target/event/result 构造、effect replay/index CAS、provider intent，以及可修复的 JSON/Markdown/index persistence | Python 投影 compact `should-run` facts，在最多两次 reduction 之间调用真实 Todo provider，刷新 legacy status，并持有 cross-writer index lock |
 | Runtime decoder（[#3443](https://github.com/loopx-project/loopx/pull/3443)） | 稳定 primitive decoding 进入一个很小的共享模块；domain decoder 仍留在本地 | 没有理由建设更大的 schema framework |
 | Transaction 兑现（[#3464](https://github.com/loopx-project/loopx/pull/3464)、[#3481](https://github.com/loopx-project/loopx/pull/3481) 与 Todo completion） | Turn settlement、quota delivery routing 与 Todo completion 均只跨一个粗粒度 TS boundary；Todo transaction 拥有 identity、replay fence、validation planning/result reduction、continuation/recovery 与 completion metadata | Python 仍执行显式 external provider，并物化 legacy Markdown result；其他 domain 仍需各自的 bounded cutover |
-| Projection envelope | TypeScript 拥有 `loopx_projection_envelope_v0` 的解码，以及全部 freshness、告警、完整性与重放判定 | 在 `status`、`global-summary`、`global-gates`、`global-todos`、`global-risks` 迁移前，Python 仍为它们收集读取 facts |
+| Projection envelope | TypeScript 拥有 `loopx_projection_envelope_v0` 的解码，以及全部 freshness、告警、完整性与重放判定 | 在这些投影迁移前，Python 仍为 `status`、`global-summary`、`global-gates`、`global-todos`、`global-risks` 与 quota `should-run` 收集读取 facts |
 
 Scheduler facade exit 已交付第一段有边界的 Stage 3 路径。带版本的
 `heartbeat_followup_cli.ts` 从生成的 ACK/failure hint 接收有大小上限的 compact host
@@ -1635,6 +1671,12 @@ transaction 要和 matched durability baseline 比较，而不是套用 2 ms ker
 不达标，或用更快的 microbenchmark 隐藏 tail regression，都是 owner review gate，
 不能静默放宽。
 
+默认交付将上述性能门槛用于实际发布的默认 profile，当前新建本地 Goal 为 SQLite。
+File 性能单独判断：仅 File 未达标须披露，但不阻塞其它条件已合格的默认 SQLite
+交付；明确宣称 File 性能结果仍须取得 File 资格。受影响支持后端的正确性、持久化、
+authority、数据完整性和恢复要求保持。在既有评审证据声明 profile；维护者修订资格
+范围时保留历史失败和冻结实验标准，见[验证规则](../../development/testing-and-quality.md#default-provider-performance-qualification--默认-provider-性能资格)。
+
 ## 7. 安装、升级与回滚
 
 迁移不能要求用户管理服务。Python 过渡版本要求 Node.js 22.18.0 或更新版本，
@@ -1724,6 +1766,10 @@ TS 摘要批次；Python 保留旧格式解码、公开字段筛选及渲染。�
 公开 `todo_summary_v0` 和持久记录不变；完整来源的关系求值先于筛选，来源完整性不被
 查询命中情况覆盖。见[语义及回滚](../../reference/todo-work-counts.md)。这是 T3/L5 的
 共享读取边界推进，不替代 D2/D3 或 provider 默认切换。
+
+上述共享读取边界仍须通过真实 File/SQLite 入口的功能等价验证；完整 CLI 性能
+按 §6 的默认 SQLite profile 及明确附加目标判断。减少 crossing 不能替代尾延迟
+解释，也不代表 writer／备份／默认 provider 退役已完成。
 
 fresh 公共边界扫描继续归现有专门 Python regex／Host IO owner。
 Characterization 已覆盖全部十一种 `splitlines` 分隔符、Unicode regex 折叠、

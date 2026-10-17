@@ -1040,6 +1040,7 @@ export function PersonalWorkspacePage({
   const followConversationRef = useRef(true);
   const [showLatestMessage, setShowLatestMessage] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
+  const settingsFromModelMenuRef = useRef(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const lifecyclePendingGoalIdsRef = useRef(new Set<string>());
   const quickCompletingTodoIdsRef = useRef(new Set<string>());
@@ -1150,15 +1151,18 @@ export function PersonalWorkspacePage({
     [workspaceGoals],
   );
   const selectedGoal = workspaceGoals.find((goal) => goal.goalId === selectedGoalId) ?? null;
-  function openSettings(target: Extract<WorkspaceDrawerSelection, { kind: "settings" }>) {
+  function openSettings(target: Extract<WorkspaceDrawerSelection, { kind: "settings" }>, returnToModel = false) {
     settingsReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    settingsFromModelMenuRef.current = returnToModel;
     setMobileSidebarOpen(false);
     setSelection(target);
   }
   function closeSettings() {
     setSelection(null);
     window.requestAnimationFrame(() => {
-      const target = settingsReturnFocusRef.current;
+      const target = settingsFromModelMenuRef.current
+        ? document.querySelector<HTMLElement>(".personal-chat-model-menu > summary")
+        : settingsReturnFocusRef.current;
       if (target?.isConnected && target.getClientRects().length) target.focus({ preventScroll: true });
       else document.querySelector<HTMLElement>(".personal-mobile-menu")?.focus({ preventScroll: true });
     });
@@ -2689,7 +2693,7 @@ export function PersonalWorkspacePage({
             onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
-            onOpenConversationSettings={!readOnly ? () => openSettings({kind: "settings", tab: "conversation"}) : undefined}
+            onOpenConversationSettings={!readOnly ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
             onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {

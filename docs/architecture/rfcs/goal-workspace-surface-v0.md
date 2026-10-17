@@ -133,7 +133,7 @@ Facts at `5c62c5c03`:
 | Tasks | `GoalTasksView` | Lanes: awaiting confirmation, pending/running, scheduled, completed; agent-lane filter; completed history from `/api/chat/completed-todos` | Not grouped by responsibility; text assignee; no observed elapsed time |
 | Usage | `usage_summary` | 24h/7d tokens, `cost_usd`, `duration_ms`; fields absent when unmeasured; `sample_run_count`, `available` | No lifetime aggregate; no explicit per-runtime coverage |
 | Acceptance | Goal authority via `goal-acceptance` (preview, provider CAS, exact replay); Dashboard reads only | Objective, criteria, coverage scope, bindings; observation projection is bounded and partial by design | No App declaration path; target absence is silent |
-| Goal brief | Status Goal snapshot | No general objective field; the Agent's progress sentence and, when enabled, the acceptance contract objective | The page has no stable brief for Goals without a contract |
+| Goal brief | Status Goal snapshot | Bounded declared Goal-document objective; progress and optional contract stay separate | Missing source content stays unavailable |
 | Todo identity | Status `todoItemSchema` | Native Todos are addressed by `todo_id` and intentionally carry no synthetic index; legacy Markdown Todos keep `index` | A numbered rail would invent identity |
 | Activity | `goal-activity.ts`, agent-lane `lastActivityAt`, host-thread activity, run timeline | Work-kind chip and per-lane observation | Not summarized as one observed last-activity fact |
 | Themes | `workspace-theme.ts` (`loopx`, `paper`, `brutal`) | Light-first presets | No dark inverse of the LoopX theme |
@@ -154,7 +154,7 @@ owns cross-region page semantics, so this RFC owns composition only.
 | --- | --- | --- |
 | Masthead | Goal registry and lifecycle activation | `goal_lifecycle` typed action |
 | Vitals | Todo projection, attention queue, `usage_summary`, execution observation | None; each cell focuses its region |
-| Direction | Acceptance contract and observation; progress summary (Section 12 D6) | Acceptance owner configuration (M3, Section 12 D3) |
+| Direction | Recorded Goal-document objective; separate acceptance contract and progress observation (Section 12 D6) | Acceptance owner configures checks, not the Goal's recorded objective (M3, Section 12 D3) |
 | Needs you | Attention and gate owners; action review plan | Existing gate decision actions |
 | Now, rail | Todo projection, execution observation, run timeline, `goal_task_map_v0` relations | Todo create dry-run/apply; existing drawer actions |
 | Results | Files and Goal-results owner; acceptance owner for badges | Existing open/read actions |
@@ -178,7 +178,7 @@ screen.*
 | 1 | **Masthead**: breadcrumb (Workspace / Goals / Goal), title, team line (Agent label or count, repository), Stop/Resume, settings | Always, on every Goal view; compacts on scroll | Identity and the one consequential control stay one glance away |
 | 2 | **Vitals strip**: at most six cells; each cell is a button that focuses its region | Always | Answers moving / waiting on me / how far / what cost in one line |
 | 3 | **Delta line**: "Since you looked at 09:12: 2 done · 1 new decision" | Only for a material delta; cost omitted until its owner qualifies the interval | The return moment the product promises |
-| 4 | **Direction**: objective, acceptance criteria with verification state | Always; criteria only with a contract | What "done" means and how close it is |
+| 4 | **Direction**: recorded Goal objective, separate optional acceptance criteria and verification state | Always; criteria only with a contract | What the Goal is for; what its configured checks establish |
 | 5 | **Needs you**: decision cards with recommendation, consequence and actions | Only when non-empty | Decisions are the owner's actual work |
 | 6 | **Now**: lens switch (By owner / Board / Map) and Add task | Open work exists | Who is doing what, who is blocked |
 | 7 | **Results**: returned outputs, with acceptance shown separately | At least one result | What came back and whether it is trusted |
@@ -320,18 +320,20 @@ qualification remain required.
 
 ### 5.8 Direction and measurable target
 
-- When an acceptance contract is enabled, show its objective and criteria.
-  Otherwise show the current progress sentence, labeled as the Agent's
-  summary. Status projects no general Goal objective today; adding one is an
-  owner decision (Section 12 D6), not a frontend inference from chat or Todo
-  text.
+- Always show the Goal's recorded objective independently of acceptance. Status
+  transports the existing Goal document's `objective` metadata through the
+  typed workspace digest, with the existing public-safety filter and a 1,000
+  character bound. It performs no additional source read. Missing or unreadable
+  content stays unavailable; a title, Todo, progress sentence, Agent Vision or
+  acceptance contract cannot fill it. Current progress is a separate disclosure.
+  An enabled acceptance contract keeps its own scoped objective and criteria.
 - Each criterion shows its owner state: verified (with time), failing, not yet
   verified, or waiting on work. A summary reads "1 of 3 verified". Observation
   partiality stays visible; an absence of gaps is not acceptance.
-- **No contract:** a quiet line, "No measurable target declared", with a
-  "Declare target" action once M3 admits an App path. Until then, the line
-  explains plainly that targets are declared through the Goal owner's
-  acceptance configuration. A command-copy button is not offered as the action.
+- **No contract:** a quiet "Acceptance criteria are not configured (optional)"
+  line when that absence is observed; an older or incomplete source says that
+  criteria were not provided. Existing Goal settings own configuration. This
+  never denies the Goal's objective, enables a contract or creates a new gate.
 - **M3:** declaration goes through the acceptance owner: objective, criteria
   descriptions, coverage scope (`selected_work` or `all_advancement`) and
   bindings. It follows preview, one confirmation, provider CAS and readback, and
@@ -394,7 +396,7 @@ separate identity.
 - At 1200px and wider: sidebar, one content frame and the rail.
 - From 768px to 1199px: the rail becomes a drawer toggled from the masthead.
 - At 640px and narrower: one column in this order: masthead with an icon Stop,
-  vitals in a 3×2 grid, the delta line, Needs you and Now. Direction collapses,
+  vitals in a 3×2 grid, the delta line, Needs you and Now. Current progress collapses; the recorded Goal objective stays visible,
   and All work opens from the top bar.
 
 ![Phone composition](assets/goal-workspace-surface-v0/goal-workspace-phone.jpg)
@@ -654,7 +656,7 @@ local packaged rendering, not cross-host latency or W2 live scale. V6 desktop/mo
 have been inspected; the PR's final validation record owns the full regression result. Activity covers
 material observations available in the existing timeline, not a complete audit or independent acceptance.
 Results keep their existing readback validators; run summaries cannot prove adoption.
-The approved narrow-screen presentation folds Direction on phones and opens All work from the
+The narrow-screen presentation keeps the Goal objective visible, folds current progress and opens All work from the
 masthead in a native dialog. Escape restores launcher focus; selecting a task returns to the existing
 inspector. History keeps its loaded state when reads are inactive, and missing remote Todo links
 show an unavailable notice without querying local owners.
@@ -754,7 +756,7 @@ introduced; six uncalibrated process judgments retain their existing role.
 | D3 | App authoring scope for acceptance targets | Goal acceptance authority | Descriptions, scope and bindings with checks kept local; full check authoring; none | The first option | M3 |
 | D4 | Usage coverage signal | Usage RFC owner | Sample counts only; explicit measured versus observed runtimes | An explicit field before "partial" means more than sampling | M1 "partial" beyond sampling |
 | D5 | Dark theme default | Presentation owner | Opt-in; follow system preference | Opt-in until AA review on real data | M4 |
-| D6 | Goal objective in status | Goal registry / Vision owner | Contract objective or progress summary only; an additive projected objective from the Goal's recorded creation or Vision text | The additive field, public-safe and length-bounded | A brief for Goals without a contract |
+| D6 | Goal objective in status | Goal registry / Vision owner | Recorded Goal-document objective, independent of acceptance and progress; unavailable remains explicit | The additive field, public-safe and length-bounded | A brief for Goals without a contract |
 | D7 | Since-last-look spend | Usage RFC owner | Omit cost; owner-qualified interval aggregate or compatible monotonic counter | Omit cost until source/scope/currency/generation, interval coverage and retention are qualified; no rolling-total subtraction | Any cost in the M3 delta line |
 
 ## Appendix A: Execution ledger

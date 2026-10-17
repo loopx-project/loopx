@@ -73,15 +73,13 @@ SURFACE_BUDGETS = {
         # provider-neutral app_automation packet becomes canonical.
         # Full Goal/selected-work read commands add necessary source continuity.
         # One Agent-channel carrier avoids duplicating them in the CLI channel.
-        # M3 adds one validated cadence readback envelope to the quota packet:
-        # 357 -> 368 nested keys and 51 -> 52 top-level keys.
-        # Identical raw packet: 15,201 at the ordinary temp root, 15,865 at
-        # the original longer root. Full command routes are useful; retain
-        # them with 635 chars of headroom, without widening structural guards.
-        "max_json_chars": 16_500,
-        # Full-source frontier readiness/coverage adds ten useful keys:
-        # base 368 -> 378, preserving eight keys of structural headroom.
-        "max_nested_keys": 386,
+        # The projection envelope adds the source freshness and goal coverage
+        # needed to trust this decision. On the same fixture, main/head measure
+        # 15,419/18,636 characters, 378/513 nested keys, and 52/53 top-level
+        # keys. Keep the complete typed envelope rather than dropping source
+        # facts that the consumer must inspect before it spends compute.
+        "max_json_chars": 20_500,
+        "max_nested_keys": 525,
         "max_top_level_keys": 54,
     },
     "dashboard_status_json": {

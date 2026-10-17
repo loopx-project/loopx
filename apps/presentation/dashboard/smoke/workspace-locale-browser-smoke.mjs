@@ -71,10 +71,11 @@ export async function verifyWorkspaceLocales({ browser, url, installApi, outputD
     const englishText = await page.locator("body").innerText();
     for (const chinese of ["本机", "仅查状态"]) assert.ok(!englishText.includes(chinese), `English Workspace shows ${chinese}`);
     await page.screenshot({ path: resolve(outputDir, "locale-default-english.png") });
-    await page.getByRole("combobox", { name: "Select chat runtime", exact: true }).click();
-    const statusOnly = page.getByRole("option", { name: "Status only", exact: true });
-    assert.ok(await statusOnly.isVisible(), "English Runtime picker shows the translated status-only route");
+    const statusOnly = page.getByRole("button", { name: "Status only · No model calls", exact: true });
+    assert.ok(await statusOnly.isVisible(), "The independent status-only control follows the selected language");
+    assert.equal(await statusOnly.getAttribute("aria-pressed"), "false");
     await statusOnly.click();
+    assert.equal(await statusOnly.getAttribute("aria-pressed"), "true");
     await page.getByLabel("Send a message to LoopX").fill("Show the current state.");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.locator(".personal-manager-conversation-messages article.is-assistant > strong").getByText("Status only", { exact: true }).waitFor();

@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { goalAcceptanceDisplayStatus, goalAcceptanceObservationSchema, type GoalAcceptanceContract } from "./goal-acceptance-observation.js";
 
+// Consumer validation only; freshness and coverage remain kernel decisions.
+const projectionEnvelopeSchema = z.object({
+  schema_version: z.literal("loopx_projection_envelope_v0"), projection: z.string(),
+  observed_at: z.string().datetime({offset: true}), served_at: z.string().datetime({offset: true}),
+  fresh: z.boolean(), complete: z.boolean(), alert: z.boolean(), alert_reasons: z.array(z.string()),
+  sources: z.array(z.object({source_id: z.string(), last_read_at: z.string().nullable(), status: z.string()}).passthrough()),
+  coverage: z.object({scope: z.string(), expected_count: z.number().int().nonnegative().nullable(),
+    included_count: z.number().int().nonnegative(), omitted: z.array(z.object({reason: z.string(), count: z.number().int().positive()}).passthrough())}).passthrough(),
+}).passthrough();
+
 const refsSchema = z.record(z.string(), z.array(z.string()));
 const nodeSchema = z.object({
   node_id: z.string().min(1),
@@ -45,6 +55,7 @@ const goalMapNodeSchema = z.object({
 });
 const goalMapSchema = z.object({
   schema_version: z.literal("goal_task_map_v0"), mode: z.literal("read_only"), goal_id: z.string(),
+  projection_envelope: projectionEnvelopeSchema.optional(),
   limits: z.object({
     node_limit: z.number().int().positive(), emitted_node_count: z.number().int().nonnegative(),
     omitted_node_count: z.number().int().nonnegative(), source_truncated: z.boolean(),
@@ -66,6 +77,7 @@ const goalMapSchema = z.object({
 });
 const snapshotSchema = z.object({
   ok: z.literal(true), goal_id: z.string(), observed_at: z.string().datetime({ offset: true }),
+  projection_envelope: projectionEnvelopeSchema.optional(),
   graph: graphSchema.nullable(), goal_map: goalMapSchema.nullable().optional(),
   acceptance: goalAcceptanceObservationSchema.nullable(),
 });
@@ -81,7 +93,9 @@ export function parseDeliveryReview(value: unknown, goalId: string): DeliveryRev
   const result = snapshotSchema.parse(value);
   if (result.goal_id !== goalId || (result.graph && result.graph.goal_id !== goalId)
       || (result.goal_map && result.goal_map.goal_id !== goalId)
-      || (result.acceptance && result.acceptance.goal_id !== goalId)) {
+      || (result.acceptance && result.acceptance.goal_id !== goalId)
+      || (result.projection_envelope && result.projection_envelope.projection !== "delivery_review")
+      || (result.goal_map?.projection_envelope && result.goal_map.projection_envelope.projection !== "goal_task_map")) {
     throw new Error("Review source does not match the selected Goal");
   }
   return result;
@@ -136,15 +150,27 @@ export type ReviewExportLabels = {
   acceptance: string; acceptanceBoundary: string; noGraph: string; incomplete: string;
   unavailable: string; refs: string; required: string; guards: string; next: string;
   owner: string; reason: string; historical: string; checks: string; missingSources: string; observedScope: string;
+  sourceUnknown: string; sourceWarning: string; coverageWarning: string;
   kind: Record<ReviewNode["kind"], string>; state: Record<ReviewNode["state"], string>;
   relation: Record<ReviewRelation, string>;
   workMap: { title: string; boundary: string; kind: Record<GoalMapNode["kind"], string>; relation: Record<GoalMapEdge["relation"], string> } & Record<string, unknown>;
 };
 
+/** Display the owner's flags, including unknown older responses; do not age a second clock. */
+export function deliveryReviewWarning(snapshot: DeliveryReviewSnapshot, labels: Pick<ReviewExportLabels,
+  "sourceUnknown" | "sourceWarning" | "coverageWarning">) {
+  const envelope = snapshot.projection_envelope;
+  return !envelope ? labels.sourceUnknown : !envelope.fresh ? labels.sourceWarning
+    : !envelope.complete ? labels.coverageWarning : null;
+}
+
 /** Export the entire validated snapshot, never the search-filtered screen. */
 export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels: ReviewExportLabels) {
   const line = (value: unknown) => String(value ?? labels.unavailable).replace(/[\\`*_{}[\]<>|#]/g, "\\$&").replace(/[\r\n]+/g, " ");
   const rows = [`# ${labels.title}`, "", `Goal: ${line(snapshot.goal_id)}`, `${labels.observed}: ${line(snapshot.observed_at)}`, "", labels.scope, "", labels.acceptanceBoundary, "", `## ${labels.chain}`, ""];
+  const warning = deliveryReviewWarning(snapshot, labels);
+  if (warning) rows.push(warning, "");
+  if (snapshot.projection_envelope) rows.push("```json", JSON.stringify(snapshot.projection_envelope, null, 2), "```", "");
   const graph = snapshot.graph;
   if (!graph) rows.push(labels.noGraph);
   else {
@@ -164,6 +190,7 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
   const map = snapshot.goal_map;
   if (map) {
     rows.push("", `## ${labels.workMap.title}`, "", labels.workMap.boundary, "", "```json", JSON.stringify(map.limits, null, 2), "```", "");
+    if (map.projection_envelope) rows.push("```json", JSON.stringify(map.projection_envelope, null, 2), "```", "");
     const names = new Map(map.nodes.map(node => [node.node_id, node.title]));
     for (const node of map.nodes) rows.push(`- ${line(node.title)} · ${labels.workMap.kind[node.kind]} · ${labels.state[node.state]}${node.owner_agent ? ` · ${line(node.owner_agent)}` : ""} (${line(node.refs.todo_ids?.join(", "))})`);
     if (map.edges.length) rows.push("");

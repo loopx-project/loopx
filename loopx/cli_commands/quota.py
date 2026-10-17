@@ -197,6 +197,7 @@ def _record_automatic_heartbeat_stall(
     runtime_root_arg: str | None,
     context: QuotaCommandContext,
     interaction_projection_hooks: tuple[InteractionProjectionHookRegistration, ...],
+    turn_start_hook_dispatch: Mapping[str, object] | None,
     action_selection: RequestedQuotaActionSelection,
     cache_metadata: object,
     goal_ref: Mapping[str, object] | None,
@@ -272,6 +273,7 @@ def _record_automatic_heartbeat_stall(
         ),
         turn_instance_id=turn_id,
         interaction_projection_hooks=interaction_projection_hooks,
+        turn_start_hook_dispatch=turn_start_hook_dispatch,
         goal_ref=goal_ref,
     )
     rebuilt["heartbeat_stall_writeback"] = {
@@ -667,6 +669,7 @@ def handle_quota_command(
                         runtime_root_arg=runtime_root_arg,
                         context=context,
                         interaction_projection_hooks=interaction_projection_hooks,
+                        turn_start_hook_dispatch=turn_start_hook_dispatch,
                         action_selection=action_selection,
                         cache_metadata=cache_metadata,
                         goal_ref=goal_ref,

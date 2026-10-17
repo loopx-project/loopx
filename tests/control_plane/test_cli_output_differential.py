@@ -1282,15 +1282,31 @@ def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None
 
 
 @pytest.mark.parametrize("output_format", ["json", "markdown"])
-def test_projection_envelope_migration_is_status_only_bounded_and_one_time(output_format):
+@pytest.mark.parametrize(
+    ("surface_id", "row_prefix"),
+    [
+        ("status", "surface/status"),
+        ("status", "variant/status_task_graph_detail"),
+        ("quota_should_run", "surface/quota_should_run"),
+        ("quota_should_run", "variant/quota_should_run_all_detail"),
+    ],
+)
+def test_projection_envelope_migration_is_bounded_and_one_time(
+    output_format, surface_id, row_prefix,
+):
     from loopx.control_plane.testing.cli_output_semantics import projection_envelope_schema_versions
 
     assert projection_envelope_schema_versions({"projection_envelope": {
         "schema_version": "loopx_projection_envelope_v0"}}) == ["loopx_projection_envelope_v0"]
     assert projection_envelope_schema_versions("- projection: envelope=`loopx_projection_envelope_v0` observed_at=`today`") == ["loopx_projection_envelope_v0"]
-    limits = ({"chars": 3000, "utf8_bytes": 3000, "lines": 110, "compact_payload_chars": 2048}
+    compact_limit = 2800 if surface_id == "quota_should_run" else 2048
+    limits = ({"chars": 3000, "utf8_bytes": 3000, "lines": 110, "compact_payload_chars": compact_limit}
               if output_format == "json" else {"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0})
-    base = _row(format=output_format, row_id=f"surface/status/small/{output_format}")
+    base = _row(
+        format=output_format,
+        row_id=f"{row_prefix}/small/{output_format}",
+        surface_id=surface_id,
+    )
     candidate = {**base, "projection_envelope_schema_versions": ["loopx_projection_envelope_v0"],
                  **{metric: base[metric] + limit for metric, limit in limits.items()}}
     result = compare_cli_output_receipts(_receipt(base), _receipt(candidate))
@@ -1308,9 +1324,17 @@ def test_projection_envelope_migration_is_status_only_bounded_and_one_time(outpu
     for versions in ([], ["loopx_projection_envelope_v1"]):
         unknown = {**candidate, "projection_envelope_schema_versions": versions}
         assert not compare_cli_output_receipts(_receipt(candidate), _receipt(unknown))["ok"]
-    for surface in ("quota_should_run", "todo_list", "status_unrelated"):
-        outside_base = {**base, "row_id": f"surface/{surface}/small/{output_format}"}
-        outside = {**candidate, "row_id": outside_base["row_id"]}
+    for surface in ("todo_list", "status_unrelated", "quota_should_run_unrelated"):
+        outside_base = {
+            **base,
+            "row_id": f"surface/{surface}/small/{output_format}",
+            "surface_id": surface,
+        }
+        outside = {
+            **candidate,
+            "row_id": outside_base["row_id"],
+            "surface_id": surface,
+        }
         assert not compare_cli_output_receipts(_receipt(outside_base), _receipt(outside))["ok"]
 
 

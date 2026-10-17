@@ -20,7 +20,7 @@ from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
-from .codex_offline import CodexOffline, stage_portable_python
+from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
@@ -221,7 +221,7 @@ class SForgeWorker(CodexAgent):
     def _install_worker(self, backend, handle, log_dir, logger):
         self.backend, self.handle = backend, handle
         self.log_dir = log_dir
-        effort = {"max": "xhigh"}.get(self._config.agent_effort, self._config.agent_effort)
+        effort = self._config.agent_effort
         common = dict(logs_dir=log_dir / "worker", model_name=self._config.agent_model,
                       reasoning_effort=effort)
         if self._config.agent_api_base_url:
@@ -231,7 +231,8 @@ class SForgeWorker(CodexAgent):
                 "CODEX_AUTH_JSON_PATH": "",
             }
         if self.profile in {"official", "single"}:
-            asyncio.run(CodexOffline(**common).install(self.environment))
+            offline = CodexOffline(**common)
+            asyncio.run(offline.install(self.environment))
             result = backend.exec_run(handle, "mkdir -p /home/agent/.codex", user="agent")
             if result.exit_code:
                 raise RuntimeError("Could not create isolated Codex home")
@@ -245,6 +246,9 @@ class SForgeWorker(CodexAgent):
                     model=self._config.agent_model, effort=effort,
                     base_url=self._config.agent_api_base_url or "",
                     api_key=self._config.agent_api_key or "", wire_api="responses", skills=None,
+                    model_catalog=offline._model_catalog_source,
+                    model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
+                                               if offline._model_catalog_staged else None),
                 )
                 for name in ("auth.json", "config.toml"):
                     if not (home / name).exists():
@@ -367,8 +371,15 @@ class SForgeWorker(CodexAgent):
             (self.log_dir / "agent_prompt.md").write_text(self.feedback_prompt)
             self.prompt_installed = True
         if self.profile in {"official", "single"}:
-            return self._execution_command(super().format_run_cmd(prompt_path, model=model, cwd=cwd,
-                                          internet=internet, resume=resume))
+            command = super().format_run_cmd(prompt_path, model=model, cwd=cwd,
+                                            internet=internet, resume=resume)
+            # Native SForge predates clients/providers with a distinct max
+            # effort. Undo its legacy alias instead of silently downgrading
+            # the explicit trial input; all other native command behavior stays.
+            if self._config.agent_effort == "max":
+                command = command.replace('model_reasoning_effort="xhigh"',
+                                          'model_reasoning_effort="max"', 1)
+            return self._execution_command(command)
         if self.runtime is None:
             raise RuntimeError("Run the native SForge installation hook before execution")
         if not self.prepared:

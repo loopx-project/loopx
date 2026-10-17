@@ -393,6 +393,7 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
                 assert not (root / "host-started").exists()
                 inventory = await session.call_tool("list_delegations", {})
                 assert not inventory.isError and json.loads(inventory.content[0].text)["items"] == []
+                assert json.loads(inventory.content[0].text)["projection_envelope"]["complete"]
                 assert "stop_delegation" in {tool.name for tool in (await session.list_tools()).tools}
                 result = await session.call_tool("start_delegation", {
                     "binding_id": "analysis", "operation_id": "analysis-1", "brief": brief()})
@@ -400,6 +401,7 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
                 inventory = await session.call_tool("list_delegations", {})
                 assert not inventory.isError
                 assert json.loads(inventory.content[0].text)["items"][0]["operation_id"] == "analysis-1"
+                assert json.loads(inventory.content[0].text)["projection_envelope"]["fresh"]
                 return json.loads(result.content[0].text)
         # Exiting the real stdio session closes the requesting MCP process.
     first = asyncio.run(disconnect_requester())

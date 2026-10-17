@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
+import { deliveryReadFixture } from "./showcase-workspace.mjs";
 import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 async function requestAuthority(text) {
@@ -123,7 +124,7 @@ export const goalWorkMapScenario = {
       const routeReview = (api, page) => page.route("**/api/chat/delivery-review?*", route => {
         const goalId = new URL(route.request().url()).searchParams.get("goal_id");
         reads.push(goalId);
-        return route.fulfill({ json: { ok: true, goal_id: goalId, observed_at: new Date().toISOString(), graph: null, goal_map: goalMap(goalId, limits), acceptance: null } });
+        return route.fulfill({ json: deliveryReadFixture({ ok: true, goal_id: goalId, observed_at: new Date().toISOString(), graph: null, goal_map: goalMap(goalId, limits), acceptance: null }) });
       });
       const beforeGoto = async (api, page) => { await routeReview(api, page); await routeRequest(api, page); };
       const desktop = await openWorkspacePage(browser, url, { collectCoverage, beforeGoto });

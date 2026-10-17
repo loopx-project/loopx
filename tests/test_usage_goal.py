@@ -156,12 +156,15 @@ def test_metadata_cannot_redirect_timing_read_outside_selected_home(tmp_path, mo
     assert usage_goal._bound_codex_session(registry, "goal", "agent") is None
 
 
-def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters: int = 0, numeric_seconds: bool = False):
+def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters: int = 0, numeric_seconds: bool = False,
+                                     caller_relative_paths: bool = False):
     """Drive the real quota observer -> detached TS chain over one bound session.
 
     `header_characters` widens the session_meta line the way Codex's recorder
     does with base_instructions, so the same entry point covers a header that
-    does not fit in one fixed read.
+    does not fit in one fixed read.  `caller_relative_paths` names the registry
+    and runtime root the way an ordinary `loopx --registry .loopx/registry.json`
+    call does: relative to the caller, not to the detached child.
     """
     from datetime import datetime, timezone
     from pathlib import Path
@@ -188,8 +191,15 @@ def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters
         pytest.fail("detached timing did not reach TS owner")
 
     now = time.time_ns() // 1_000_000
+    registry_path, runtime_root = registry, tmp_path / "runtime"
+    if caller_relative_paths:
+        # The observer is a caller: its paths are relative to this directory,
+        # while the detached child runs in the stable OS temp directory.
+        monkeypatch.chdir(tmp_path)
+        registry_path, runtime_root = Path("registry.json"), Path("runtime")
+
     def publish(phase):
-        usage_goal.observe_quota_cycle(registry_path=registry, runtime_root=tmp_path / "runtime", goal_id="goal",
+        usage_goal.observe_quota_cycle(registry_path=registry_path, runtime_root=runtime_root, goal_id="goal",
                                        agent_id="agent", turn_id="turn-a", phase=phase,
                                        at=time.time_ns() // 1_000_000, host="unknown")
     publish("start")
@@ -224,6 +234,14 @@ def test_real_detached_cycle_and_bound_codex_event_reach_shared_ts_aggregator(tm
     monkeypatch.setattr(usage_ping, "_detach", lambda *a, **k: pytest.fail("disabled observer spawned"))
     publish("start")
     assert not cycle_path.exists() and not goals.exists()
+
+
+def test_caller_relative_registry_and_runtime_reach_the_detached_observer(tmp_path, monkeypatch):
+    """Leaving the caller's directory must not re-resolve the caller's own paths."""
+    preview, _, _, _ = _bound_cycle_through_detached_ts(tmp_path, monkeypatch, caller_relative_paths=True)
+    assert {row["measurement"] for row in preview["counters"]} == {"quota_cycle", "codex_turn"}
+    assert all(row["host"] == "codex_app" for row in preview["counters"])
+    usage_ping.control("disable")
 
 
 def test_provider_numeric_timing_reaches_real_detached_installation_aggregator(tmp_path, monkeypatch):

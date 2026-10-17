@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -58,3 +59,41 @@ def test_listener_failure_preserves_safe_diagnostic_and_retry_boundary(
     runtime_dir = effect_runtime._runtime_dir()
     assert not list(runtime_dir.glob("runtime-*.json"))
     assert not list(runtime_dir.glob("start-*.lock"))
+
+
+def test_runtime_host_spawn_leaves_the_callers_directory_free(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    hook = tmp_path / "denied-listener.mjs"
+    hook.write_text(
+        'import { Server } from "node:net";\n'
+        'Server.prototype.listen = function () {\n'
+        '  process.nextTick(() => this.emit("error", Object.assign(\n'
+        '    new Error("private-listener-fixture"),\n'
+        '    { code: "EPERM", syscall: "listen" })));\n'
+        '  return this;\n'
+        '};\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NODE_OPTIONS", f"--import={hook.as_uri()}")
+    recorded: list[dict[str, object]] = []
+    original = subprocess.Popen
+
+    def record(args, *rest, **kwargs):
+        if "effect_runtime_server.ts" in str(args):
+            recorded.append(kwargs)
+        return original(args, *rest, **kwargs)
+
+    monkeypatch.setattr(effect_runtime.subprocess, "Popen", record)
+
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError):
+        effect_runtime.effect_runtime_result("runtime.ping", {})
+
+    # The host outlives the command; on Windows an inherited caller directory
+    # stays locked for the whole host lifetime.
+    assert len(recorded) == 1
+    assert Path(str(recorded[0]["cwd"])).resolve() == tmp_path.resolve()

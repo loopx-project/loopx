@@ -95,6 +95,7 @@ def build_run_history(
                 "activation_state": goal.get("activation_state") or "active",
                 "registry_goal_digest": goal.get("registry_goal_digest"),
                 "display_name": goal.get("display_name"),
+                "goal_objective": goal.get("goal_objective"),
                 "domain": goal.get("domain"),
                 "status": goal.get("status"),
                 "lifecycle_phase": lifecycle_fields["lifecycle_phase"],

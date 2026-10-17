@@ -10,7 +10,7 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 16500` | `nested_keys <= 386` | `top_level_keys <= 54` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 20500` | `nested_keys <= 525` | `top_level_keys <= 54` |
 | `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 24000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
@@ -23,21 +23,24 @@ indentation and Markdown wrappers can make emitted output materially larger;
 the emitted-output qualification matrix below measures that separate boundary
 through the real CLI entry point.
 
-The current quota fixture retains 378 nested keys: the M3 automatic-cadence
-readback established 368, and full-source frontier counts add ten keys for
-deferred readiness and explicit known/unknown coverage. On the same synthetic
-workload, base/head measure 14,897/15,115 JSON characters, 368/378 nested keys
-and 52/52 top-level keys. Dashboard status grows 22,256/22,362 characters while
-its 336 nested and 26 top-level keys stay unchanged. The quota nested-key
-ceiling moves from 376 to 386, preserving eight keys of headroom. Character,
-top-level, per-Todo growth and other surface ceilings remain unchanged. These
-facts prevent hidden rows from becoming blocked work; removing the coverage
-fields to meet the old ceiling would lose useful meaning.
+The current quota fixture measures 15,419 characters, 378 nested keys, and 52
+top-level keys on `main`. The `quota_should_run` projection envelope raises the
+same workload to 18,636 characters, 513 nested keys, and 53 top-level keys. The
+new keys carry the inherited status sources, direct live-read facts, freshness,
+alerts, and Goal coverage that a consumer must inspect before spending compute.
+The character ceiling moves from 16,500 to 20,500, and the nested-key ceiling
+moves from 386 to 525. The top-level ceiling stays at 54. The new ceilings leave
+1,864 characters, 12 nested keys, and one top-level key on the measured head.
+Removing envelope rows would violate the projection contract, so the budget
+records the useful contract growth instead of hiding it through compaction.
 
-同一合成 workload 的 quota 在 base/head 分别为 14,897/15,115 字符、368/378
-嵌套键和 52/52 顶层键。新增十个键保留 deferred 就绪计数及 known/unknown 证据；
-只将嵌套键预算从 376 调至 386，仍留八键余量。字符、顶层键、每任务增长和其他
-surface 上限不变；不通过删除来源完整性来把未展示任务误报为 blocked。
+同一合成 workload 在 `main` 上为 15,419 字符、378 个嵌套键和 52 个顶层键；加入
+`quota_should_run` projection envelope 后为 18,636 字符、513 个嵌套键和 53 个
+顶层键。新增字段携带继承的 status 来源、实时读取事实、freshness、告警与 Goal
+覆盖，消费者必须在花费 compute 前读取这些信息。字符上限从 16,500 调至 20,500，
+嵌套键上限从 386 调至 525，顶层键上限仍为 54。精确 head 仍保留 1,864 字符、
+12 个嵌套键与一个顶层键余量。删除 envelope 行会破坏投影合同，因此这里记录有用的
+合同增长，而不是用压缩隐藏它。
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact

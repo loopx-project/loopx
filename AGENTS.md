@@ -5,7 +5,15 @@
 LoopX is a local-first, runtime-neutral control plane for long-horizon agents
 and personal agent teams. The Agent host supplies models and tools; LoopX keeps
 goals, decisions, work ownership and evidence durable across sessions and hosts.
-核心目标：让 Agent 围绕长期目标持续推进，协作、恢复，并交付可验证的结果。
+The core objective is better long-horizon effectiveness and efficiency: more
+independently verifiable outcome value within comparable budgets, or comparable
+accepted outcomes with less total cost and human attention. Structured state,
+closed-loop feedback and evidence-driven replanning provide process supervision
+across sessions, recovery and collaboration; their value depends on actual
+decisions, execution and outcomes.
+核心目标：通过结构化状态、闭环反馈和基于证据的重规划过程监督，提升 Agent 与
+Agent 团队的长程效果和长程效率：在可比预算下取得更好的可验证成果，或以更低的
+完整成本与人工介入交付同等验收成果。
 
 - **Goals and work:** durable Goals, Todos, dependencies, acceptance and recovery.
 - **Governed continuation:** heartbeat, scheduling, quota and explicit stop/wait
@@ -58,6 +66,15 @@ Choose a complete, independently reviewable and reversible outcome slice.
 Small diffs, fields, receipts, test counts and merged PR counts do not establish
 progress. Characterization, prerequisites, research, docs and maintenance are
 valid when they remove an evidenced gap or enable a named real next step.
+
+For changes intended to improve long-horizon work, trace the accepted goal and
+structured state through feedback, the replan decision, actual subsequent work
+and validated outcomes. Check whether new evidence changed the action or
+justified continuing it; preserve useful negative results and uncertainty.
+State survival, a graph edge, a read receipt or a replan record alone does not
+prove adoption or benefit. Compare outcomes and complete costs under comparable
+conditions using the [existing measurement contract](docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model);
+do not force a direction change merely to increase replan counts.
 
 Continue through the selected slice's implementation, integration, negative
 cases and readback while authorized work remains feasible. Do not stop after
@@ -390,6 +407,15 @@ Goal/registry/writer-fence/Todo/lease state. An unavailable environment is an
 evidence gap that holds delivery qualification, not a passing skip. Keep code
 volume a cost: refactors should localize the next change, test and rollback,
 not introduce unused production structure.
+
+Performance qualification follows the [default-provider rule](docs/development/testing-and-quality.md#default-provider-performance-qualification--默认-provider-性能资格).
+The current default local authority is SQLite: its real-path performance gates
+qualify default delivery. A File-only performance miss must be disclosed but
+does not block that SQLite qualification. Explicit File performance work still
+qualifies File separately. Keep correctness, durability, authority, recovery and
+data-integrity checks for every affected supported backend, including File and
+the required real PostgreSQL suite. Preserve historical failures and frozen
+experiment criteria; changing the qualification scope is not a historical pass.
 
 ### Bounded Future-Facing Refactoring
 

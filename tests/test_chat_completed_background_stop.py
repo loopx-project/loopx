@@ -9,6 +9,7 @@ from test_chat_ordinary_project import ordinary  # noqa: F401
 from test_lark_private_conversations import connect_group, finish_group_turn
 from loopx.chat_agent import CodexChatAgentError
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from loopx.extensions.lark.conversation_identity import identity_ref
 
 
 class BackgroundWire:
@@ -164,7 +165,7 @@ def test_active_topic_stop_is_not_gated_by_unrelated_completed_history(ordinary,
     try:
         active = provider.topic("active-after-history", "wait for interrupt", root=root["message_id"])
         transport.admit("notes-app", active)
-        row = next(r for r in transport.core.pending() if r["message"] == active["content"])
+        row = transport.core.read_request(identity_ref(transport._binding("notes-app")["provider_ref"], active["message_id"]))
         deadline = time.monotonic() + 10
         while not (store.load_turn(sid, row["turn_id"])["status"] == "running"
                    and store.load_turn(sid, row["turn_id"]).get("upstream_turn_id")):
@@ -328,7 +329,7 @@ def test_first_inventory_failure_cannot_expand_retried_stop(ordinary, monkeypatc
                                  "wait for interrupt" if later in {"active", "new_session"} else "Another answer",
                                  root=root["message_id"])
         transport.admit("notes-app", message)
-        newer = next(r for r in transport.core.pending() if r["message"] == message["content"])
+        newer = transport.core.read_request(identity_ref(transport._binding("notes-app")["provider_ref"], message["message_id"]))
         newer_sid, newer_tid = newer["session_id"], newer["turn_id"]
         if later in {"completed", "resume"}:
             # Keep the failed control request pending until the explicit retry

@@ -9,6 +9,8 @@ from ..coordination.local_authority import (
     canonical_todo_summary_fields,
     read_canonical_todos_if_promoted,
 )
+from ..goals.active_state_metadata import parse_state_frontmatter
+from ..runtime.public_safety import public_safe_compact_text
 
 from .succession_warning import public_todo_summary
 from .resume_condition import TodoResumeRolloutEvents
@@ -145,6 +147,12 @@ def active_state_todo_fields(
             preferred_todo_ids=preferred_todo_ids,
             rollout_events=events,
         )
+    # Transport the Goal document's declared objective, independently of the
+    # optional acceptance contract. This is display content, never a write basis
+    # or a target inferred from Todos, progress, model output or a contract.
+    fields["goal_objective"] = public_safe_compact_text(
+        parse_state_frontmatter(state_text).get("objective"), limit=1000,
+    )
     issue_meta_surface = parse_issue_meta_surface(state_text)
     if issue_meta_surface:
         fields["issue_meta_surface"] = issue_meta_surface

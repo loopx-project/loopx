@@ -7,7 +7,6 @@ from loopx.control_plane.work_items.progress_observation import (
     build_replan_context,
     normalize_progress_observation,
     semantic_delta_from_writeback,
-    semantic_progress_delta,
     typed_progress_repeat_trigger,
 )
 
@@ -180,68 +179,6 @@ def test_text_changes_cannot_hide_an_equivalent_typed_repeat() -> None:
     assert typed_progress_repeat_trigger(runs, agent_id=AGENT_ID) is not None
 
 
-def test_new_probe_family_is_a_semantic_delta_but_new_evidence_alone_is_not() -> None:
-    baseline = normalize_progress_observation(_observation())
-    new_probe = normalize_progress_observation(
-        _observation(result_class="advanced", probe_kind="probe-permission-graph")
-    )
-    evidence_only = normalize_progress_observation(
-        _observation(
-            result_class="advanced",
-            evidence_ids=["evidence-new-output"],
-        )
-    )
-
-    assert semantic_progress_delta(new_probe, baseline=baseline)["delta_kinds"] == [
-        "new_probe_family"
-    ]
-    assert semantic_progress_delta(evidence_only, baseline=baseline)["accepted"] is False
-    # The codec also states whether any evidence id is absent from the baseline;
-    # obligation sources that require it behind a renamed identifier read it.
-    assert semantic_progress_delta(new_probe, baseline=baseline)["evidence_novel"] is False
-    assert semantic_progress_delta(evidence_only, baseline=baseline)["evidence_novel"] is True
-    assert semantic_progress_delta(new_probe, baseline=None)["evidence_novel"] is True
-    # With an obligation window, novelty is judged against every claim in it
-    # and a replayed claim is reported as such.
-    windowed = semantic_progress_delta(evidence_only, baseline=baseline, window=[evidence_only, new_probe])
-    assert windowed["evidence_novel"] is False
-    assert windowed["observation_repeated"] is True
-    assert windowed["window_size"] == 2
-    fresh = semantic_progress_delta(
-        normalize_progress_observation(_observation(result_class="advanced", evidence_ids=["evidence-unseen"])),
-        baseline=baseline, window=[evidence_only, new_probe],
-    )
-    assert fresh["evidence_novel"] is True and fresh["observation_repeated"] is False
-    # Malformed window entries are ignored rather than failing the writeback.
-    assert semantic_progress_delta(new_probe, baseline=baseline, window=[{"bogus": True}, "text"])["window_size"] == 0
-
-
-def test_repeated_blocker_cannot_close_replan() -> None:
-    baseline = normalize_progress_observation(
-        _observation(
-            result_class="blocked",
-            blocker_id="blocker-permission",
-        )
-    )
-    repeated = normalize_progress_observation(
-        _observation(
-            result_class="blocked",
-            blocker_id="blocker-permission",
-        )
-    )
-    novel = normalize_progress_observation(
-        _observation(
-            result_class="blocked",
-            blocker_id="blocker-missing-runtime",
-        )
-    )
-
-    assert semantic_progress_delta(repeated, baseline=baseline)["accepted"] is False
-    assert semantic_progress_delta(novel, baseline=baseline)["delta_kinds"] == [
-        "new_concrete_blocker"
-    ]
-
-
 @pytest.mark.parametrize("history_source", ["coverage", "window", "trigger_window"])
 @pytest.mark.parametrize("evidence_id", ["evidence-route-map", "evidence-readback"])
 def test_known_blocker_does_not_become_new_under_another_work_item(
@@ -279,128 +216,6 @@ def test_known_blocker_does_not_become_new_under_another_work_item(
         progress_observation={**current, "blocker_id": "blocker-runtime"},
     )
     assert novel["satisfying_outcomes"] == ["new_concrete_blocker"]
-
-
-def test_exhaustion_requires_coverage_proof() -> None:
-    incomplete = normalize_progress_observation(
-        _observation(
-            result_class="exploration_exhausted",
-            coverage_scope_id="scope-public-entrypoints",
-            coverage_complete=False,
-        )
-    )
-    complete = normalize_progress_observation(
-        _observation(
-            result_class="exploration_exhausted",
-            coverage_scope_id="scope-public-entrypoints",
-            coverage_complete=True,
-        )
-    )
-
-    assert semantic_progress_delta(incomplete, baseline=None)["accepted"] is False
-    assert semantic_progress_delta(complete, baseline=None)["delta_kinds"] == [
-        "coverage_backed_exploration_exhausted"
-    ]
-    assert semantic_progress_delta(complete, baseline=incomplete)["delta_kinds"] == [
-        "coverage_backed_exploration_exhausted"
-    ]
-
-
-@pytest.mark.parametrize(
-    ("result_class", "terminal_fields", "delta_kind"),
-    [
-        (
-            "exploration_exhausted",
-            {"coverage_complete": True},
-            "coverage_backed_exploration_exhausted",
-        ),
-        (
-            "no_followup",
-            {},
-            "coverage_backed_no_followup",
-        ),
-    ],
-)
-def test_terminal_coverage_requires_a_semantically_new_scope(
-    result_class: str,
-    terminal_fields: dict[str, object],
-    delta_kind: str,
-) -> None:
-    baseline = normalize_progress_observation(
-        _observation(
-            result_class=result_class,
-            coverage_scope_id="scope-public-entrypoints",
-            **terminal_fields,
-        )
-    )
-    repeated = normalize_progress_observation(dict(baseline))
-    evidence_only = normalize_progress_observation(
-        _observation(
-            result_class=result_class,
-            coverage_scope_id="scope-public-entrypoints",
-            evidence_ids=["evidence-new-output"],
-            **terminal_fields,
-        )
-    )
-    new_scope = normalize_progress_observation(
-        _observation(
-            result_class=result_class,
-            coverage_scope_id="scope-public-cli",
-            **terminal_fields,
-        )
-    )
-
-    assert baseline["fingerprint"] == repeated["fingerprint"]
-    assert baseline["fingerprint"] != evidence_only["fingerprint"]
-    assert semantic_progress_delta(repeated, baseline=baseline)["accepted"] is False
-    assert (
-        semantic_progress_delta(evidence_only, baseline=baseline)["accepted"] is False
-    )
-    assert semantic_progress_delta(new_scope, baseline=baseline)["delta_kinds"] == [
-        delta_kind
-    ]
-
-
-def test_terminal_result_class_change_is_a_semantic_delta() -> None:
-    baseline = normalize_progress_observation(
-        _observation(
-            result_class="exploration_exhausted",
-            coverage_scope_id="scope-public-entrypoints",
-            coverage_complete=True,
-        )
-    )
-    no_followup = normalize_progress_observation(
-        _observation(
-            result_class="no_followup",
-            coverage_scope_id="scope-public-entrypoints",
-        )
-    )
-
-    assert semantic_progress_delta(no_followup, baseline=baseline)["delta_kinds"] == [
-        "coverage_backed_no_followup"
-    ]
-
-
-def test_no_followup_ignores_coverage_complete_churn() -> None:
-    baseline = normalize_progress_observation(
-        _observation(
-            result_class="no_followup",
-            coverage_scope_id="scope-public-entrypoints",
-            coverage_complete=False,
-        )
-    )
-    coverage_flag_only = normalize_progress_observation(
-        _observation(
-            result_class="no_followup",
-            coverage_scope_id="scope-public-entrypoints",
-            coverage_complete=True,
-        )
-    )
-
-    assert (
-        semantic_progress_delta(coverage_flag_only, baseline=baseline)["accepted"]
-        is False
-    )
 
 
 @pytest.mark.parametrize(
@@ -505,3 +320,31 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
         "blocked",
         "no_followup",
     ]
+
+
+@pytest.mark.parametrize("result_class", ["exploration_exhausted", "no_followup"])
+def test_terminal_codec_fingerprint_distinguishes_evidence_changes(result_class: str) -> None:
+    baseline = normalize_progress_observation(_observation(
+        result_class=result_class, coverage_scope_id="scope-public-entrypoints",
+        coverage_complete=True,
+    ))
+    repeated = normalize_progress_observation(dict(baseline))
+    evidence_only = normalize_progress_observation({
+        **baseline, "evidence_ids": ["evidence-new-output"],
+    })
+    assert baseline["fingerprint"] == repeated["fingerprint"]
+    assert baseline["fingerprint"] != evidence_only["fingerprint"]
+
+
+def test_malformed_progress_window_rows_do_not_fail_typed_writeback() -> None:
+    delta = semantic_delta_from_writeback(
+        obligation={
+            "progress_baseline": _observation(),
+            "progress_window": [{"bogus": True}, "text"],
+        },
+        progress_observation=_observation(
+            result_class="advanced", probe_kind="probe-permission-graph",
+        ),
+    )
+    assert delta["accepted"] is True
+    assert delta["satisfying_outcomes"] == ["new_probe_family"]

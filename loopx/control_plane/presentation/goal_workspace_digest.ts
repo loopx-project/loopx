@@ -52,6 +52,8 @@ export type DigestActivity = { actor: string; at: string | null };
 
 export type GoalWorkspaceDigestInput = {
   observedAt: string;
+  /** Declared Goal document content; never an acceptance-contract or progress fallback. */
+  objective?: string | null;
   activation: "active" | "stopped";
   todos: readonly DigestTodo[];
   /** Owner-projected done count; the item list carries only recent completions. */
@@ -76,6 +78,7 @@ export type DigestCoverage = "complete" | "partial" | "unknown";
 export type GoalWorkspaceDigest = {
   schema: typeof GOAL_WORKSPACE_DIGEST_SCHEMA;
   observedAt: string;
+  objective: string | null;
   lifecycle: { activation: "active" | "stopped"; finishingTurn: boolean };
   work: {
     open: number;
@@ -235,6 +238,7 @@ export function compileGoalWorkspaceDigest(input: GoalWorkspaceDigestInput): Goa
   return {
     schema: GOAL_WORKSPACE_DIGEST_SCHEMA,
     observedAt: input.observedAt,
+    objective: input.objective?.trim() || null,
     lifecycle: { activation: input.activation, finishingTurn: input.activation === "stopped" && executionObserved },
     work: {
       open: openWork.length,

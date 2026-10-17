@@ -4,6 +4,7 @@ import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import {normalizeStrideDecision, normalizeStrideStrategy, STRIDE_DECISION_SCHEMA, strideControlContract, stridePlanningGuidance, strideReviewMismatch} from "./stride_policy.ts";
+import { projectProgressDelta } from "./progress_delta.ts";
 
 const PROGRESS_OUTCOMES = [
   "new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor",
@@ -341,6 +342,15 @@ function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
     gaps.length > 0 && gaps.every(time => time !== null && time <= acknowledgedAt)};
 }
 
+export function projectReplanWriteback(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "work_item.replan_semantics params");
+  if (request.operation !== "qualify") return projectReplanSemantics(request);
+  if (!Object.hasOwn(request, "progress_source") || Object.hasOwn(request, "observation_delta")) {
+    throw new EffectRuntimeRequestError("qualify requires progress_source, not a precomputed observation_delta");
+  }
+  return projectReplanSemantics({...request, observation_delta: projectProgressDelta(request.progress_source)});
+}
+
 export function projectReplanSemantics(value: unknown): JsonObject {
   const request = requireJsonObject(value, "work_item.replan_semantics params");
   if (request.operation === "lifecycle_source") return lifecycleSource(request);
@@ -379,8 +389,8 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation !== "qualify") {
     throw new EffectRuntimeRequestError("replan semantics operation must be requirements or qualify");
   }
-  // The progress codec computes evidence novelty; this boundary decides which
-  // outcomes discharge this obligation. Vision has already passed prepare.
+  // The native progress owner computes novelty before this outcome kernel.
+  // Vision has already passed prepare.
   const observation = object(request.observation_delta);
   const vision = object(request.agent_vision);
   const patch = object(vision.vision_patch);

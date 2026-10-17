@@ -227,6 +227,21 @@ def request(
         }
 
 
+def _return_consumed(path, row, reply, *, agent_id):
+    """One readback identity for peer consumption and the per-Turn agenda."""
+    consumed = path.with_name(path.stem + ".consumed.json")
+    if not consumed.exists():
+        return False
+    value = _read(consumed)
+    expected = {"request_id": row["request_id"], "goal_id": row["goal_id"],
+        "agent_id": agent_id,
+        **({"result_key": path.stem} if "result_key" in reply else {}),
+        **({"goal_ref": row["goal_ref"]} if "goal_ref" in row else {})}
+    if any(value.get(key) != item for key, item in expected.items()):
+        raise ValueError("peer consumption receipt scope mismatch")
+    return True
+
+
 def _collect_returns(root, goal_id, agent_id, *, scope=None):
     items = []
     deliveries = []
@@ -296,24 +311,7 @@ def _collect_returns(root, goal_id, agent_id, *, scope=None):
                 )
                 if lifecycle.get("kind") == "omit":
                     continue
-            consumed = path.with_name(path.stem + ".consumed.json")
-            if consumed.exists():
-                value = _read(consumed)
-                if any(
-                    value.get(k) != v
-                    for k, v in {
-                        "request_id": row["request_id"],
-                        **({"result_key": path.stem} if "result_key" in reply else {}),
-                        "goal_id": goal_id,
-                        "agent_id": agent_id,
-                        **(
-                            {"goal_ref": row["goal_ref"]}
-                            if "goal_ref" in row
-                            else {}
-                        ),
-                    }.items()
-                ):
-                    raise ValueError("peer consumption receipt scope mismatch")
+            if _return_consumed(path, row, reply, agent_id=agent_id):
                 continue
             items.append(
                 {
@@ -673,6 +671,10 @@ def read_inbox(
                     record=return_deliveries[0][1],
                 )
             _record_return_reads(root, return_deliveries, scope=goal_scope)
+    from .turn_context_observation import read_delegation_turn_context
+
+    result["unfinished_delegations"] = read_delegation_turn_context(
+        root, registry, goal_id, agent_id)["unfinished_delegations"]
     result["followthrough"] = (
         "Use each request's receiver_followthrough to reconcile it with actual Core work. "
         "Record an explicit assessment even when continuing other work; a read is not a decision. "

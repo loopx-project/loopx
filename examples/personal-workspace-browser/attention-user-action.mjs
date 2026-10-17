@@ -130,7 +130,8 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
     assert.equal(applications, 2, "Exactly one confirmed write per request");
     // The Goal's settings entry uses the same native machine transaction, not
     // a browser-only model pick or an implicit Agent Loop start.
-    await page.getByRole("button", {name: "对话与模型设置", exact: true}).click();
+    await page.locator(".personal-chat-model-menu > summary").click();
+    await page.getByRole("button", {name: "默认对话配置", exact: true}).click();
     await page.getByLabel("Codex 配置来源", {exact: true}).selectOption("codex-gpt");
     await page.getByLabel("对话模型", {exact: true}).fill("gpt-6.1-sol");
     await page.getByLabel("推理强度", {exact: true}).selectOption("high");
@@ -152,6 +153,11 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
     await page.getByRole("button", {name: "确认回滚", exact: true}).click();
     await page.getByText("已恢复前一版机器策略，并通过校验。", {exact: true}).waitFor();
     assert.equal(await inspect(), null, "native rollback restores absence instead of retaining a browser preference");
+    await page.getByRole("button", {name: "返回工作区", exact: true}).click();
+    await page.locator(".personal-chat-model-menu > summary").waitFor();
+    await page.waitForFunction(() => document.activeElement?.matches(".personal-chat-model-menu > summary"));
+    assert.ok(await page.locator(".personal-chat-model-menu > summary").evaluate(node => node === document.activeElement),
+      "Closing defaults returns keyboard focus to the model control, not a removed disclosure button");
   } finally {
     clearTimeout(timer); lines.close();
     if (context) await context.close();

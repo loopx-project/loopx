@@ -101,6 +101,11 @@ def _opaque_id(value: Any, *, field: str) -> str:
     return token
 
 
+def normalize_idempotency_key(value: Any) -> str:
+    """Return the canonical token this store binds and persists."""
+    return _opaque_id(value, field="idempotency_key")
+
+
 def _bounded_text(value: Any, *, field: str, limit: int = 4000) -> str:
     text = str(value or "").strip()
     if not text or len(text) > limit or any(ord(character) < 32 for character in text):
@@ -231,7 +236,7 @@ class ChatActionStore:
             },
             path="preview",
         )
-        key = _opaque_id(idempotency_key, field="idempotency_key")
+        key = normalize_idempotency_key(idempotency_key)
         request_digest = _canonical_digest(request)
         with exclusive_file_lock(
             self.path,
