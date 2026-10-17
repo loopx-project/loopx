@@ -14,6 +14,8 @@ export const stewardGroupTriggerScenario = {
       const dialog = page.getByRole("dialog", {name: "连接 Lark App"});
       await dialog.getByRole("option", {name: "Product group"}).waitFor({state: "attached"});
       await dialog.getByLabel("群聊").selectOption({label: "Product group"});
+      const readScope = dialog.getByLabel("Goal 证据读取范围");
+      if (await readScope.inputValue() !== "all_registered") throw new Error("New steward does not default to all registered evidence");
       const trigger = dialog.getByLabel("何时回应");
       if (await trigger.inputValue() !== "addressed") throw new Error("Legacy mention default changed");
       await trigger.selectOption("human_messages");
@@ -23,6 +25,7 @@ export const stewardGroupTriggerScenario = {
       const row = page.locator(".personal-lark-table-row", {hasText: "Product group"});
       await row.getByText("群成员直接发消息，无需 @", {exact: true}).waitFor();
       await row.getByText("监听已连接，尚无新消息验证这条连接。请在群里直接发一条任务，无需 @；若没有收到事件，再检查 im.message.receive_v1 和接收群内所有消息的权限。", {exact: true}).waitFor();
+      if (api.larkWrites[0]?.read_goal_scope !== "all_registered") throw new Error("Evidence scope not saved");
       if (api.larkWrites.length !== 1 || api.larkWrites[0].turn_trigger !== "human_messages") throw new Error("Trigger not saved");
       const connection = api.larkConnections[0];
       for (const [reason, detail] of [
@@ -46,10 +49,14 @@ export const stewardGroupTriggerScenario = {
       await page.setViewportSize({width: 390, height: 844});
       await editor.getByLabel("何时回应").scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "steward-group-trigger-mobile.png"), animations: "disabled"});
+      if (await editor.getByLabel("Goal 证据读取范围").inputValue() !== "all_registered") throw new Error("Evidence scope not read back");
+      await editor.getByLabel("Goal 证据读取范围").selectOption("selected");
       await editor.getByLabel("何时回应").selectOption("addressed");
       await editor.getByRole("button", {name: "保存连接", exact: true}).click();
       await editor.waitFor({state: "hidden"});
       await row.getByText("仅 @ 或回复管家时", {exact: true}).waitFor();
+      await row.getByText("保留选定 Goal 范围", {exact: true}).waitFor();
+      if (api.larkWrites[1]?.read_goal_scope !== "selected") throw new Error("Evidence scope could not be narrowed");
       if (api.larkWrites[1]?.turn_trigger !== "addressed") throw new Error("Trigger not restored");
       if (context.errors.length) throw new Error(context.errors.join(" | "));
       return {coverageEntries: await context.close(), note: "Steward group trigger opt-in/readback/revocation and typed non-execution feedback; desktop and narrow screen; scripted provider state only"};

@@ -535,25 +535,34 @@ class LarkChatRequestMixin:
         if cli_bin is None:
             return
         registry = load_registry(self.server.registry_path)
-        self._send_json(
-            {
-                "ok": True,
-                "schema_version": "loopx_lark_goal_topic_connections_v0",
-                "connections": list_lark_connections(
-                    registry=registry,
-                    target_path=self._goal_channel_target_path(),
-                    binding_paths=self._lark_binding_paths(registry),
-                    runner=self._lark_runner(),
-                    cli_bin=cli_bin,
-                    runtime_health=(
-                        self.server.lark_goal_topic_runtime.health_snapshot()
-                        if getattr(self.server, "lark_goal_topic_runtime", None)
-                        is not None
-                        else None
-                    ),
-                ),
-            }
+        connections = list_lark_connections(
+            registry=registry,
+            target_path=self._goal_channel_target_path(),
+            binding_paths=self._lark_binding_paths(registry),
+            runner=self._lark_runner(),
+            cli_bin=cli_bin,
+            runtime_health=(
+                self.server.lark_goal_topic_runtime.health_snapshot()
+                if getattr(self.server, "lark_goal_topic_runtime", None) is not None
+                else None
+            ),
         )
+        from .capabilities.manager_context import evidence_scope_readback
+
+        targets = read_goal_channel_targets(self._goal_channel_target_path())
+        for row in connections:
+            if row.get("conversation_kind") != "manager":
+                continue
+            controller = getattr(self.server, "runtime_controller", None)
+            policy_root = getattr(controller, "coordination_runtime_root", None) or controller_runtime_root(controller)
+            target = goal_channel_target_for_name(targets, row["target_ref"]) or {}
+            audience = f"{(target.get('identity') or {}).get('sender_profile') or 'default'}\0{(target.get('channel') or {}).get('chat_id') or ''}"
+            readback = evidence_scope_readback(
+                policy_root, manager_channel(provider="lark", audience=audience),
+                registry_path=self.server.registry_path,
+            ) if policy_root is not None else {"goal_scope": None}
+            row["read_goal_scope"] = readback["goal_scope"]
+        self._send_json({"ok": True, "schema_version": "loopx_lark_goal_topic_connections_v0", "connections": connections})
 
     def _lark_connect(self) -> None:
         cli_bin = self._require_lark_cli()
@@ -569,6 +578,7 @@ class LarkChatRequestMixin:
                 "connection_id",
                 "conversation_kind",
                 "turn_trigger",
+                "read_goal_scope",
                 "executor_endpoint_id",
                 "chat_id",
                 "chat_name",
@@ -630,6 +640,11 @@ class LarkChatRequestMixin:
                 if conversation_kind != "manager" or app_refs_by_agent is not None:
                     raise ValueError("turn_trigger is only supported for manager connections")
                 conversation_trigger(body["turn_trigger"])
+            if "read_goal_scope" in body and (
+                conversation_kind != "manager" or not isinstance(body["read_goal_scope"], str)
+                or body["read_goal_scope"] not in {"all_registered", "selected"}
+            ):
+                raise ValueError("read_goal_scope requires a manager and all_registered or selected")
             # The machine owns its manager channel's executor, so the machine
             # setting -- not a stored connection field or a request field --
             # decides which endpoint this connection runs on and which Session
@@ -699,6 +714,20 @@ class LarkChatRequestMixin:
                         "the manager requires an exact App and group audience"
                     )
                 audience = f"{audience_app}\0{audience_chat}"
+                read_scope = body.get("read_goal_scope", "all_registered" if not stored else None)
+                read_scope_args = None
+                if read_scope is not None:
+                    from .capabilities.manager_context import configure_evidence_scope, evidence_scope_readback
+                    policy_root = getattr(self.server.runtime_controller, "coordination_runtime_root", None) or controller_runtime_root(self.server.runtime_controller)
+                    if policy_root is None:
+                        raise ValueError("manager runtime is unavailable")
+                    read_channel = manager_channel(provider="lark", audience=audience)
+                    previous = evidence_scope_readback(policy_root, read_channel, registry_path=self.server.registry_path)
+                    if previous["goal_scope"] is None:
+                        raise ValueError("manager read scope is unavailable; restore its policy before editing")
+                    read_scope_args = {"channel": read_channel, "goal_scope": read_scope,
+                                       "goal_ids": previous["goal_ids"] if previous["goal_scope"] == "selected" and previous["goal_ids"] is not None else [goal_id]}
+                    configure_evidence_scope(policy_root, self.server.registry_path, **read_scope_args)
                 if body.get("execute") is True:
                     goal = goal_from_registry(registry, goal_id)
                     session, _ = open_manager_session(
@@ -779,6 +808,24 @@ class LarkChatRequestMixin:
                     else None,
                     session_id=session_id,
                 )
+                if conversation_kind == "manager" and read_scope_args is not None and packet.get("ok") is True:
+                    try:
+                        packet.setdefault("details", {})["read_scope"] = configure_evidence_scope(
+                            policy_root, self.server.registry_path, **read_scope_args,
+                            execute=body.get("execute") is True,
+                        )
+                    except (OSError, ValueError, RuntimeError):
+                        # The provider binding has already committed. Preserve its
+                        # receipt and refresh routing even when the read grant fails.
+                        if body.get("execute") is True:
+                            self._refresh_lark_goal_topic_runtime()
+                        packet.update(
+                            ok=False,
+                            status="partially_connected" if body.get("execute") is True else "failed",
+                            error="Connection saved, but its Goal read scope could not be verified. Retry saving the read scope.",
+                        )
+                        self._send_json(packet, status=400)
+                        return
         except CodexChatAgentError as exc:
             self._send_error(
                 str(exc), status=400, gate=exc.gate, error_code=exc.error_code

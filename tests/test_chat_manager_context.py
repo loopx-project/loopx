@@ -100,6 +100,7 @@ def test_current_agent_work_reaches_prompt_without_extra_detail_reads(
 ):
     from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME, manager_index
 
+    (tmp_path / "registry.json").write_text(json.dumps({"goals": [{"id": "alpha"}]}))
     todos = [{"todo_id": f"todo_{i}", "title": f"Implement task {i}",
               "status": "in-progress", "priority": "P0", "claimed_by": "worker",
               "readiness": "runnable", "raw_receipt": "excluded"} for i in range(5)]

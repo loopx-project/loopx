@@ -2302,6 +2302,7 @@ export async function fetchLarkGroupChats(appRef: string, query?: string) {
 export type LarkGoalConnection = {
   conversation_kind?: "goal" | "manager";
   turn_trigger?: "addressed" | "human_messages";
+  read_goal_scope?: "all_registered" | "selected" | null;
   agent_id: string | null;
   connection_id: string;
   app_label: string;
@@ -2334,6 +2335,7 @@ const larkConnectionsSchema = z.object({
   connections: z.array(z.object({
     conversation_kind: z.enum(["goal", "manager"]).default("goal"),
     turn_trigger: z.enum(["addressed", "human_messages"]).default("addressed"),
+    read_goal_scope: z.enum(["all_registered", "selected"]).nullable().default("selected"),
     agent_id: z.string().nullable().default(null),
     connection_id: z.string(),
     app_label: z.string(),
@@ -2381,6 +2383,7 @@ export async function fetchLarkConnections() {
 export async function connectLarkGoalTopic(options: {
   conversationKind?: "goal" | "manager";
   turnTrigger?: "addressed" | "human_messages";
+  readGoalScope?: "all_registered" | "selected";
   agentBindings?: Array<{ agentId: string; appRef: string }>;
   agentId?: string;
   appRef?: string;
@@ -2409,6 +2412,7 @@ export async function connectLarkGoalTopic(options: {
         ...(options.connectionId ? { connection_id: options.connectionId } : {}),
         conversation_kind: options.conversationKind ?? "goal",
         ...(options.turnTrigger ? { turn_trigger: options.turnTrigger } : {}),
+        ...(options.readGoalScope ? { read_goal_scope: options.readGoalScope } : {}),
         capture_scope: options.captureScope,
         chat_id: options.chatId,
         chat_name: options.chatName,

@@ -108,7 +108,7 @@ def query(
         key=lambda row: (row.get("delivered_at") or "", row["request_id"]), reverse=True
     )
     projected, todos_cache = [], {}
-    core_read_goals = set(evidence_goal_scope(root, channel_id) or []) if not owner_scope else set()
+    core_read_goals = set(evidence_goal_scope(root, channel_id, registry_path=registry_path) or []) if not owner_scope else set()
     for row in rows[offset : offset + limit]:
         read, read_error = _receipt(root, "reads", row)
         decision, decision_error = _receipt(root, "decisions", row)

@@ -507,6 +507,8 @@ def manager_turn_context(
     runtime_root: Path,
     *,
     authorized_goal_ids: list[str] | None = None,
+    requested_goal_ids: list[str] | None = None,
+    include_stopped: bool = False,
     include_details: bool = True,
     evidence_window_days: int | None = None,
     remote_evidence: bool = False,
@@ -569,12 +571,14 @@ def manager_turn_context(
                 **window_kwargs,
             ),
         )
+    if requested_goal_ids is not None and scope is not None and not set(requested_goal_ids).issubset(scope):
+        raise ValueError("requested Goals exceed the current evidence grant")
     portfolio = build_goal_portfolio(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        goal_ids=scope,
+        goal_ids=requested_goal_ids if requested_goal_ids is not None else scope,
         limit=128,
-        include_stopped=False,
+        include_stopped=include_stopped,
         # The steward's answer order names the Goal's milestones and baseline,
         # so the lifecycle projection the status collector already derived
         # travels with the row instead of being reconstructed from todos.

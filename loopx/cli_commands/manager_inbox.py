@@ -64,6 +64,8 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--channel-id")
     parser.add_argument("--ssh-host")
     parser.add_argument("--read-goal-id", action="append", default=[])
+    parser.add_argument("--read-goal-scope", choices=("all_registered", "selected"),
+                        help="Read scope only: all current/future registered Goals, or explicit --read-goal-id entries.")
     parser.add_argument("--local-delivery-scope", choices=("all_registered", "selected"))
     parser.add_argument("--sender-id", help="For configuring a new delivery source: its independently verified sender.")
     parser.add_argument("--execute", action="store_true")
@@ -88,6 +90,8 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        if getattr(args, "read_goal_scope", None) is not None and args.manager_inbox_action != "configure-read-scope":
+            raise ValueError("--read-goal-scope is only supported for configure-read-scope")
         if args.manager_inbox_action != "control" and any(getattr(args, key, None) is not None for key in ("control_operation", "control_file", "goal_instance_id")):
             raise ValueError("request control routing flags require the control action")
         if getattr(args, "request_revision", None) is not None and args.manager_inbox_action not in {"acknowledge", "report"}:
@@ -157,6 +161,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 registry_path,
                 channel=args.channel_id or "",
                 goal_ids=args.read_goal_id,
+                goal_scope=args.read_goal_scope or "selected",
                 execute=args.execute,
             )
             print(json.dumps(result, ensure_ascii=False, indent=2))

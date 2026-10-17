@@ -294,31 +294,35 @@ def turn_start_hook(
     )
 
 
-def evidence_goal_scope(runtime_root: Path, channel: str) -> list[str] | None:
-    """Audience-wide read grant; absent preserves the existing connection scope.
+def evidence_scope_readback(runtime_root: Path, channel: str, *, registry_path: Path | None = None) -> dict:
+    """Observe this audience's typed read grant, separately from delivery.
 
-    Separate from sender-bound context delivery targets. An explicit empty grant
-    revokes access. Malformed policy fails closed, never widens to the registry.
+    Historical exact lists stay selected. An explicit all-registered grant
+    resolves the current registry on every observation; no saved inventory is
+    authority for newly registered work. Missing or corrupt sources fail closed.
     """
     path = _root(runtime_root) / "policy.json"
     if not path.exists():
-        return None
+        return {"goal_scope": "selected", "goal_ids": None}
     try:
         policy = _read(path)
         if policy.get("schema_version") != POLICY_SCHEMA:
-            return []
+            return {"goal_scope": None, "goal_ids": []}
         source = policy.get("sources", {}).get(channel, {})
-        if "evidence_goal_ids" not in source:
-            return None
-        ids = source["evidence_goal_ids"]
-        if not isinstance(ids, list) or any(
-            not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}", v)
-            for v in ids
-        ):
-            return []
-        return sorted(set(ids))
-    except (OSError, ValueError, TypeError, AttributeError):
-        return []
+        available = None
+        if source.get("evidence_goal_scope") == "all_registered":
+            if registry_path is None:
+                return {"goal_scope": None, "goal_ids": []}
+            available = [g["id"] for g in load_project_registry(registry_path).get("goals", [])]
+        return effect_runtime_result("collaboration.source.evidence_goals", {
+            "source": source, "available_goal_ids": available,
+        })
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+        return {"goal_scope": None, "goal_ids": []}
+
+
+def evidence_goal_scope(runtime_root: Path, channel: str, *, registry_path: Path | None = None) -> list[str] | None:
+    return evidence_scope_readback(runtime_root, channel, registry_path=registry_path)["goal_ids"]
 
 
 def _require_external_channel(channel: str) -> None:
@@ -329,27 +333,40 @@ def _require_external_channel(channel: str) -> None:
 
 
 def configure_evidence_scope(runtime_root: Path, registry_path: Path, *, channel: str,
-                             goal_ids: list[str], execute: bool = False) -> dict:
-    """Local operator grants only selected Goal summaries to an exact audience."""
+                             goal_ids: list[str], goal_scope: str = "selected", execute: bool = False) -> dict:
+    """Configure read-only evidence through the existing audience policy owner."""
     _require_external_channel(channel)
     registry = load_project_registry(registry_path)
-    available = {g.get("id") for g in registry.get("goals", []) if isinstance(g, dict)}
-    if any(g not in available for g in goal_ids):
-        raise ValueError("every read Goal must be registered")
-    ids = sorted(set(goal_ids))
+    available = [g["id"] for g in registry.get("goals", [])]
     path = _root(runtime_root) / "policy.json"
+
+    def update(apply: bool) -> dict:
+        policy = _read(path) if path.exists() else {"schema_version": POLICY_SCHEMA, "sources": {}}
+        if policy.get("schema_version") != POLICY_SCHEMA or not isinstance(policy.get("sources"), dict):
+            raise ValueError("invalid manager policy")
+        try:
+            planned = effect_runtime_result("collaboration.source.configure_evidence_scope", {
+                "source": policy["sources"].get(channel, {}), "goal_scope": goal_scope,
+                "goal_ids": goal_ids, "available_goal_ids": available,
+            })
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        if apply and planned["would_change"]:
+            policy["sources"][channel] = planned["source"]
+            _write(path, policy)
+        return planned
+
     if execute:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with exclusive_file_lock(path.with_suffix(".lock")):
-            policy = _read(path) if path.exists() else {"schema_version": POLICY_SCHEMA, "sources": {}}
-            if policy.get("schema_version") != POLICY_SCHEMA:
-                raise ValueError("invalid manager policy")
-            policy.setdefault("sources", {}).setdefault(channel, {})["evidence_goal_ids"] = ids
-            _write(path, policy)
-        if evidence_goal_scope(runtime_root, channel) != ids:
-            raise ValueError("read scope verification failed")
+            result = update(True)
+            if update(False)["would_change"]:
+                raise ValueError("read scope verification failed")
+    else:
+        result = update(False)
     return {"ok": True, "executed": execute, "channel_id": channel,
-            "evidence_goal_ids": ids, "scope": "audience_goal_summaries",
+            "evidence_goal_ids": result["goal_ids"], "goal_scope": result["goal_scope"],
+            "scope": "audience_goal_summaries", "would_change": result["would_change"],
             "delegation_authority_changed": False}
 
 
