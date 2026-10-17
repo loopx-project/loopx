@@ -25,10 +25,17 @@ try {
     assert.match(actual, new RegExp(locale === "zh-CN" ? "保留原历史和活动回合" : "existing history and active work are preserved"));
     const unknown = render({});
     const unknownSummary = unknown.slice(unknown.indexOf("<summary"), unknown.indexOf("</summary>"));
-    assert.match(unknownSummary, new RegExp(locale === "zh-CN" ? "模型未回传" : "Model not reported"));
+    assert.match(unknownSummary, new RegExp(locale === "zh-CN" ? "模型设置" : "Model settings"));
+    assert.doesNotMatch(unknownSummary, /未知|未回传|unknown|not reported/i, "The closed control offers settings instead of a permanent missing-state label");
+    assert.match(unknown, new RegExp(locale === "zh-CN" ? "运行时尚未回传实际模型" : "Runtime has not reported the actual model"), "Opening settings still explains the missing observation");
     assert.doesNotMatch(unknownSummary, /next-model|low|Fast/, "Neither defaults nor a pending choice fill an unknown observation");
+    const partial = render({ readback: { agent_reasoning_effort: "high", agent_service_tier: "priority" } });
+    assert.doesNotMatch(partial.slice(partial.indexOf("<summary"), partial.indexOf("</summary>")), /high|Fast/, "Partial settings do not decorate a missing model as a complete current binding");
     assert.doesNotMatch(render({ ordinary: false }), new RegExp(locale === "zh-CN" ? "新对话配置" : "New conversation settings"), "Steward settings keep their existing owner");
-    assertions += 10;
+    const defaultsLabel = locale === "zh-CN" ? "默认对话配置" : "Conversation defaults";
+    assert.match(render({ onOpenDefaults() {} }), new RegExp(defaultsLabel), "Defaults remain discoverable inside the relevant settings disclosure");
+    assert.doesNotMatch(render({ ordinary: false, onOpenDefaults() {} }), new RegExp(defaultsLabel), "Ordinary defaults are not offered for the steward binding");
+    assertions += 15;
   }
   console.log(`Chat model menu: ${assertions} bilingual current-vs-requested, unknown, collapsed and steward-boundary assertions passed (SSR only)`);
 } finally { globalThis.window = originalWindow; }
