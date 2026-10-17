@@ -36,6 +36,10 @@ PROGRESS_EDIT_BUDGET = 12
 CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}
 
 
+class _ControlReadFallback(Exception):
+    """A valid source needs ordinary rendering, before any Core write."""
+
+
 class LarkPrivateConversations:
     def __init__(self, *, controller: Any, runtime_root: Path, runner: Any, cli_bin: str,
                  reaction_feedback: bool = True) -> None:
@@ -102,10 +106,11 @@ class LarkPrivateConversations:
             return None
         return _message(payload, message_id)
 
-    def _completed_stop_sources(self, profile: str, message_id: str,
-                                root_id: str) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
-        # Both IDs must already belong to the persisted Core stop below. Raw
-        # mget retains body/ancestry/mentions; the display shortcut does not.
+    def _group_source_pair(self, profile: str, message_id: str,
+                           root_id: str) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+        # Callers bound these IDs to an admitted topic or a frozen Core stop.
+        # This is readonly scheduling, not authority; raw mget retains
+        # body/ancestry/mentions and the current Core selection validates them.
         result = call(self.runner, lark_args(cli_bin=self.cli_bin, profile=profile,
             tail=["api", "GET", "/open-apis/im/v1/messages/mget", "--params",
                   json.dumps({"message_ids": [message_id, root_id]}), "--as", "bot"]))
@@ -142,7 +147,9 @@ class LarkPrivateConversations:
 
     def _source_message(self, record: dict[str, Any], *, selected: dict[str, Any] | None = None,
                         render_content: bool = True,
-                        sender_identity: dict[str, str] | None = None) -> Mapping[str, Any] | None:
+                        sender_identity: dict[str, str] | None = None,
+                        source_pair: tuple[Mapping[str, Any] | None, Mapping[str, Any] | None] | None = None,
+                        ) -> Mapping[str, Any] | None:
         """Read the exact source under this App, then recheck the Core audience.
 
         A p2p source read proves the destination without requiring group-member
@@ -165,7 +172,7 @@ class LarkPrivateConversations:
                 root = self._completed_stop_root(record, read_binding) if read_binding else None
                 if root:
                     with ThreadPoolExecutor(max_workers=1) as reads:
-                        envelopes = reads.submit(self._completed_stop_sources,
+                        envelopes = reads.submit(self._group_source_pair,
                                                  record["profile"], event["message_id"], root)
                         selected = self.bindings.resolve(binding_id=record["binding_id"],
                                                          include_observation=True, **record["source"])
@@ -193,7 +200,7 @@ class LarkPrivateConversations:
             if sender_identity is not None and observation is not None:
                 sender_identity["bot_display_name"] = str(observation.get("bot_display_name") or "")
             stop_root: Mapping[str, Any] | None = None
-            completed_stop = False
+            paired_root = False
             if group:
                 # Canonical envelopes alone supply ancestry and @. Outbound
                 # provenance needs no display rendering; ordinary admission
@@ -231,18 +238,20 @@ class LarkPrivateConversations:
                             message = _message(json_payload(result), event["message_id"])
                 else:
                     root_id = str(event.get("root_id") or event["message_id"])
-                    # Only batch IDs already fixed by a target-frozen Core stop.
-                    # The current binding above still authorizes this read.
-                    # Event hints alone keep the source-first lookup.
+                    # Batch a frozen stop's IDs or a caller's admitted-topic
+                    # pair; the current selection must validate either result.
                     completed_stop = self._completed_stop_root(record, selected["binding"]) == root_id
+                    paired_root = completed_stop or source_pair is not None
                     # Delivery reuses only its own binding observation. An
                     # explicitly supplied selection without one still needs a
                     # fresh identity; join that read before ancestry and @.
                     def sources() -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+                        if source_pair is not None:
+                            return source_pair
                         if completed_stop:
                             if prefetched is not None and read_binding == selected["binding"]:
                                 return prefetched
-                            return self._completed_stop_sources(record["profile"], event["message_id"], root_id)
+                            return self._group_source_pair(record["profile"], event["message_id"], root_id)
                         return self._group_source_message(record["profile"], event["message_id"]), None
 
                     if observation is not None:
@@ -288,7 +297,7 @@ class LarkPrivateConversations:
                             or parent != event_parent
                             or (event_thread and event_thread != str(message.get("thread_id") or ""))):
                         return None
-                    original = (message if root == event["message_id"] else stop_root if completed_stop else
+                    original = (message if root == event["message_id"] else stop_root if paired_root else
                                 self._group_source_message(record["profile"], root))
                     from .event_inbox import lark_event_mentions_bot
                     if observation is None:
@@ -334,6 +343,93 @@ class LarkPrivateConversations:
         identity: dict[str, str] = {}
         verified = self._source_verified(record, sender_identity=identity)
         return identity.get("bot_display_name"), verified
+
+    def _admitted_control_root(self, record: dict[str, Any], binding: dict[str, Any]) -> str | None:
+        """Schedule readonly IO only for a topic already admitted by this Core."""
+        event = record["event"]
+        root = event.get("root_id")
+        if (binding.get("enabled") is not True or binding.get("audience") != "group"
+                or event.get("message_type") != "text" or not isinstance(event.get("content"), str)
+                or event["content"] not in CHAT_CONTROL_COMMANDS
+                or not isinstance(root, str) or not root or root == event["message_id"]):
+            return None
+        try:
+            original_ref = identity_ref(binding["provider_ref"], root)
+            original = _read_json(self.core.root / f"{original_ref}.json")
+            existing = self.core.root / f"{record['request_ref']}.json"
+            if existing.exists() and _read_json(existing).get("message") != event["content"]:
+                return None  # Keep older journals' exact rendered representation.
+            if (original.get("request_ref") == original_ref
+                    and original.get("binding_id") == binding["binding_id"]
+                    and original.get("status") == "accepted" and original.get("command") is None
+                    and original.get("session_id")
+                    and original.get("source", {}).get("group_human_message") is True
+                    and original["source"].get("source_ref") == record["source"]["source_ref"]):
+                return root
+        except (KeyError, ValueError, OSError):
+            pass
+        return None
+
+    def _admit_group_control(self, path: Path, record: dict[str, Any], binding: dict[str, Any],
+                            root: str, *, defer_background_stop: bool) -> dict[str, Any] | None:
+        checked = False
+        source_verified = False
+        # Read only the source and its locally admitted root. Fresh Core
+        # identity resolution must follow this IO, inside both fences: an App
+        # change while the provider reads run must not inherit an earlier check.
+        try:
+            envelopes = self._group_source_pair(record["profile"], record["event"]["message_id"], root)
+        except (KeyError, ValueError, OSError):
+            return {"status": "source_verification_failed"}
+        if any(message is None for message in envelopes):
+            return {"status": "source_verification_failed"}
+
+        def preflight(selected: dict[str, Any]) -> None:
+            nonlocal checked, source_verified
+            checked = True
+            if selected["binding"] != binding:
+                raise ValueError("conversation binding changed during source read")
+            message = self._source_message(record, selected=selected, render_content=False,
+                                           source_pair=envelopes)
+            if message is None:
+                raise ValueError("canonical control source verification failed")
+            if message.get("_command_input") != record["event"]["content"]:
+                raise _ControlReadFallback
+            source_verified = True
+            _atomic_write_json(path, record)
+
+        try:
+            admitted = self.core.admit(binding_id=binding["binding_id"], source=record["source"],
+                request_ref=record["request_ref"], message=record["event"]["content"],
+                command=CHAT_CONTROL_COMMANDS[record["event"]["content"]],
+                defer_background_stop=defer_background_stop, source_preflight=preflight)
+        except _ControlReadFallback:
+            return None
+        except ValueError:
+            if not checked:
+                return {"status": "audience_rejected"}
+            if not source_verified:
+                return {"status": "source_verification_failed"}
+            return self._reject_command(path, record, binding)
+        return self._record_admission(path, record, admitted)
+
+    @staticmethod
+    def _reject_command(path: Path, record: dict[str, Any], binding: dict[str, Any]) -> dict[str, Any]:
+        record.update(status="rejected", response=("群助手仅处理当前项目和话题，不能选择个人 Agent 会话；/status 查看状态，/help 查看用法。" if binding.get("audience") == "group" else "操作或原授权不可用；Agent 请先用 /agents 查看确切命令，/project 返回项目对话。新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。"))
+        _atomic_write_json(path, record)
+        return {"status": "command_rejected"}
+
+    @staticmethod
+    def _record_admission(path: Path, record: dict[str, Any], admitted: dict[str, Any]) -> dict[str, Any]:
+        # Keep the existing recoverable capture until Core performs the frozen
+        # stop. A prepared command never claims execution or a delivered reply.
+        record.update(status="captured" if admitted["status"] == "prepared" else admitted["status"],
+                      session_id=admitted["session_id"], turn_id=admitted["turn_id"],
+                      response=admitted.get("response"), response_code=admitted.get("response_code"))
+        _atomic_write_json(path, record)
+        status = "durably_accepted" if admitted["status"] == "accepted" else (
+            "queue_rejected" if admitted["status"] == "rejected" else "command_recorded")
+        return {"status": status}
 
     @staticmethod
     def _group_text_command_input(message: Mapping[str, Any], observation: Mapping[str, Any]) -> str | None:
@@ -403,7 +499,11 @@ class LarkPrivateConversations:
         try:
             binding = self._binding(profile)
             source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
-            selected = self.bindings.resolve(binding_id=binding["binding_id"], **source, include_observation=True)
+            request = identity_ref(binding["provider_ref"], event["message_id"])
+            control_root = self._admitted_control_root({"request_ref": request, "source": source,
+                                                       "event": event}, binding)
+            selected = (None if control_root else self.bindings.resolve(
+                binding_id=binding["binding_id"], **source, include_observation=True))
         except (KeyError, StopIteration, ValueError):
             return {"status": "audience_rejected"}
         request = identity_ref(binding["provider_ref"], event["message_id"])
@@ -422,6 +522,16 @@ class LarkPrivateConversations:
                     "event": event, "deliveries": {}, "status": "captured"}
                 if binding.get("audience") != "group":
                     _atomic_write_json(path, record)
+            if control_root:
+                result = self._admit_group_control(path, record, binding, control_root,
+                                                  defer_background_stop=defer_background_stop)
+                if result is not None:
+                    return result
+                try:
+                    selected = self.bindings.resolve(binding_id=binding["binding_id"], **source,
+                                                     include_observation=True)
+                except ValueError:
+                    return {"status": "audience_rejected"}
             # Reuse this admission preflight only; Core rechecks under its
             # source fence, and outbound writes always perform a fresh check.
             source_message = self._source_message(record, selected=selected)
@@ -495,24 +605,14 @@ class LarkPrivateConversations:
                     request_ref=request, message=text, command=command, attachments=attachments,
                     defer_background_stop=defer_background_stop)
             except ValueError:
-                record.update(status="rejected", response=("群助手仅处理当前项目和话题，不能选择个人 Agent 会话；/status 查看状态，/help 查看用法。" if binding.get("audience") == "group" else "操作或原授权不可用；Agent 请先用 /agents 查看确切命令，/project 返回项目对话。新委托请使用 /delegate --tokens N 具体目标，确认或取消请使用原预览中的完整命令。"))
-                _atomic_write_json(path, record)
-                return {"status": "command_rejected"}
+                return self._reject_command(path, record, binding)
             except RuntimeError as exc:
                 if str(exc) != "session_queue_full":
                     raise
                 record.update(status="rejected", response="队列已满，本条没有被受理；请稍后重试。")
                 _atomic_write_json(path, record)
                 return {"status": "queue_rejected"}
-            # Keep the existing recoverable capture until Core has performed
-            # the frozen stop. Older transport readers can recover it too.
-            record.update(status="captured" if admitted["status"] == "prepared" else admitted["status"],
-                          session_id=admitted["session_id"],
-                          turn_id=admitted["turn_id"], response=admitted.get("response"), response_code=admitted.get("response_code"))
-            _atomic_write_json(path, record)
-            status = "durably_accepted" if admitted["status"] == "accepted" else (
-                "queue_rejected" if admitted["status"] == "rejected" else "command_recorded")
-            return {"status": status}
+            return self._record_admission(path, record, admitted)
 
     def _reply_runner(self, args: Sequence[str]) -> Any:
         return self.runner([self.cli_bin, *args[1:]], None, 30)

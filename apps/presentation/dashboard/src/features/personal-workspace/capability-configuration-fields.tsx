@@ -22,6 +22,7 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
   const { locale } = useWorkspaceI18n();
   const label = copy[field.key]?.label ?? field.label;
   const readOnly = !onChange;
+  const runtimeDefault = locale === "zh-CN" ? "使用所选 Runtime 的默认值" : "Use the selected Runtime's default";
   const directionLabel = (direction: string) => locale === "zh-CN"
     ? direction === "forward" ? "正向" : "反向"
     : direction === "forward" ? "Forward" : "Reverse";
@@ -66,7 +67,7 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
       <label htmlFor={id}>
         <span>{label}</span>
         <select disabled={readOnly} id={id} onChange={onChange ? (event) => onChange(field.key, event.target.value) : undefined} value={typeof value === "string" ? value : ""}>
-          <option value="">{copy[field.key]?.options?.[""] ?? ""}</option>
+          <option value="">{copy[field.key]?.options?.[""] ?? (field.key === "executor_reasoning_effort" ? runtimeDefault : "")}</option>
           {(field.options ?? []).map((option) => <option key={option} value={option}>{copy[field.key]?.options?.[option] ?? (field.key === "review_order" ? directionLabel(option) : option)}</option>)}
         </select>
       </label>
@@ -96,6 +97,7 @@ function ConfigurationFieldControl({ copy, field, id, onChange, value, timezone 
         max={field.maximum}
         min={field.minimum}
         onChange={onChange ? (event) => onChange(field.key, numeric ? Number(event.target.value) : event.target.value) : undefined}
+        placeholder={field.key === "executor_model" ? runtimeDefault : undefined}
         readOnly={readOnly}
         required={field.required}
         type={numeric ? "number" : "text"}

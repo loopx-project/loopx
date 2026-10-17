@@ -1043,6 +1043,14 @@ strategy comparison declares the same extension on both arms and reports the
 shared prefix separately; it is not a matched-total-budget comparison with the
 original source. See the warm-entry options below for activation and rollback.
 
+The warm receiver now places the admitted continuation intent on its existing
+preparation Todo, distinguishing historical Host phase messages from current
+Goal authority without reintroducing a countdown. Before reporting preparation
+ready, it reads the live Todo and quota/interaction owner within the unchanged
+phase. This qualifies current preparation or review readiness only; native work,
+current semantic replan and research benefit retain their separate acceptance.
+Unqualified terminal archives and historical source authority remain inert.
+
 The ordinary SForge worker's explicit warm entry composes these
 owners. It uses a fresh current preparation Todo with full retained evidence,
 then requires an accepted current replan before restoring the normal cadence.

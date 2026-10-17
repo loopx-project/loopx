@@ -835,6 +835,11 @@ Warm 接续默认保留捕获的剩余 phase。显式获得 operator 授权的�
 相同增量，共享前缀单独报告，不能再与原 source 声称总预算相同。激活与回退
 沿用下方 warm 入口文档中的参数；运行中实验和原结果不重写。
 
+Warm 目标在既有准备 Todo 中传达本次已准入的继续意图，将旧 Host 阶段信息与当前
+Goal 权威区分，不重新注入倒计时。报告准备就绪前，须在原 phase 内读回实际 Todo
+与 quota/交互 owner。此项仅验证当前准备或复盘可执行；原生工作、当前语义复盘和
+研究收益仍按各自验收。未资格化的终态归档与历史来源权限保持惰性。
+
 显式 Docker controller 现提供有界的文件写入屏障：暂停自己拥有的运行中 worker，
 经 daemon archive 复制声明文件及 phase 时钟，捕获原生 evaluator capsule，恢复
 worker 后再发布惰性联合产物。真实持续写入容器与 native HTTP 验证了文件稳定、

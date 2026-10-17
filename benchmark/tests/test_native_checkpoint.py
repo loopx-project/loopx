@@ -291,7 +291,7 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Requires an explicit real native Host binary; only a local static provider is used")
 @pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change", "joint", "binding_reply_loss",
-                                 "fork_reply_loss", "fork_missing", "fork_ambiguous"])
+                                 "fork_reply_loss", "fork_missing", "fork_ambiguous", "warm_preparation"])
 def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case, request):
     """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
 
@@ -301,6 +301,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     outside this fixture. No benchmark cell or paid model is launched.
     """
     import shutil
+    import shlex
     import subprocess
     import sys
     from pathlib import Path
@@ -323,6 +324,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     research.write_text("candidate 3 was rejected by the original synthetic check\n")
     source_goal, source_agent = "source-research", "source-researcher"
     destination_goal, destination_agent = "branch-research", "branch-researcher"
+    from benchmark.runtime.sforge_warm_start import _PREPARATION_TASK, _read_preparation
+
     def register(name, agent):
         registry = tmp_path / name / "registry.json"
         runtime = tmp_path / name / "runtime"
@@ -336,7 +339,9 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         capsys.readouterr()
         assert main([*prefix, "todo", "add", "--goal-id", name, "--role", "agent", "--claimed-by", agent,
             "--task-class", "advancement_task", "--required-capability", "shell",
-            "--text", "Verify the retained candidate and preserve applicable negative evidence."]) == 0
+            *(["--operation-id", "checkpoint-preparation"] if case == "warm_preparation" and name == destination_goal else []),
+            "--text", _PREPARATION_TASK if case == "warm_preparation" and name == destination_goal else
+            "Verify the retained candidate and preserve applicable negative evidence."]) == 0
         added = json.loads(capsys.readouterr().out)
         return registry, runtime, added["todo_id"]
     source_registry, source_runtime, source_todo = register(source_goal, source_agent)
@@ -345,9 +350,10 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     turn_id = "checkpoint-continuation-fixture"
     binding = ["--goal-id", destination_goal, "--agent-id", destination_agent,
                "--todo-id", destination_todo, "--turn-instance-id", turn_id]
-    assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
-    guard = json.loads(capsys.readouterr().out)
-    assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    if case != "warm_preparation":
+        assert main([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding]) == 0
+        guard = json.loads(capsys.readouterr().out)
+        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     from loopx.hosts.research_checkpoint import canonical_context, research_context, adopt_todo_context, _encoded
     source_prefix = ["--format", "json", "--registry", str(source_registry), "--runtime-root", str(source_runtime)]
     def invoke(arguments):
@@ -388,21 +394,45 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
 
     def response(request, index, message):
         requests.append(request)
+        if case == "warm_preparation" and index == 1:
+            message["content"][0]["text"] = "The previous Host deadline has passed; the prior phase was closed."
         if index == 2:
+            current_command = [sys.executable, "-m", "loopx.cli", *prefix, "todo", "list",
+                "--goal-id", destination_goal, "--todo-id", destination_todo]
+            # Read the actual Todo but emit only its task text. Whole authority
+            # envelopes can hide the adjacent retained files in native output
+            # truncation, which is unrelated to continuation admission.
+            read_current = (shlex.join([sys.executable, "-c",
+                "import json, subprocess; print(json.loads(subprocess.check_output("
+                + repr(current_command) + ", text=True))['todo']['text'])"]) + " && "
+                if case == "warm_preparation" else "")
             return {"type": "function_call", "id": "fc_retained", "call_id": "call_retained",
                 "name": "exec_command", "arguments": json.dumps({
-                    "cmd": "cat candidate.txt research.txt " + retained_context_path + joint_command, "max_output_tokens": 6000})}
+                    "cmd": read_current + "cat candidate.txt research.txt " + retained_context_path + joint_command,
+                    "max_output_tokens": 6000})}
         if index == 3:
             message["content"][0]["text"] = "Retained candidate 7 verified; candidate 3 remains rejected."
         return message
 
     binary = os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"]
-    execution = Execution(context="resume", sandbox="workspace-write" if case == "joint" else "read-only")
+    # The warm receiver uses the benchmark's execution profile inside its
+    # isolated worker. Other cases retain their original sandbox contract.
+    sandbox = ("danger-full-access" if case == "warm_preparation" else
+               "workspace-write" if case == "joint" else "read-only")
+    execution = Execution(context="resume", sandbox=sandbox)
     with real_native_source(tmp_path / "native", binary, workspace, close_source=True,
                             response_builder=response, sandbox=execution.sandbox) as (env, source_session, _, calls):
         env.update(LOOPX_REGISTRY=str(source_registry), LOOPX_RUNTIME_ROOT=str(source_runtime),
                    LOOPX_GOAL_ID=source_goal, LOOPX_AGENT_ID=source_agent,
                    MODEL_NAME="fixture", REASONING_EFFORT="high", LOOPX_CODEX_SANDBOX=execution.sandbox)
+        if case == "warm_preparation":
+            executable = tmp_path / "receiver-cli"
+            executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' -m loopx.cli "$@"\n')
+            executable.chmod(0o700)
+            skills = tmp_path / "shared-skills"
+            skills.mkdir()
+            env.update(LOOPX_CLI=str(executable), LOOPX_SHARED_SKILLS=str(skills),
+                       PYTHONPATH=str(Path(__file__).resolve().parents[2]) + os.pathsep + env.get("PYTHONPATH", ""))
         source_wake = BenchmarkSessionWake(env, execution, {})
         source_wake.admission.accept_result(lambda: _store_codex_cli_session(source_runtime,
             lineage={"goal_id": source_goal, "agent_id": source_agent}, session_scope="agent",
@@ -643,26 +673,50 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
 
         # Both participants meet at the real destination continuation owner.
         # No source claim/lease is replayed; adoption alone still starts no work.
-        lease = invoke([*prefix, "task-lease", "acquire", "--goal-id", destination_goal,
-            "--todo-id", destination_todo, "--owner", destination_agent, "--idempotency-key", "branch-context"])
-        current = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
-        context_command = [sys.executable, "-m", "loopx.hosts.research_checkpoint",
-            "--root", str(unit), "--expected-sha256", digest, "--source-todo-id", source_todo,
-            "--todo-id", destination_todo, "--operation-id", "branch-context",
-            "--expected-revision", current["authority_read"]["provider_revision"],
-            "--lease-key", "branch-context", "--lease-version", str(lease["lease"]["version"])]
-        assert not explore_result_log_path(runtime, destination_goal).exists(), "session admission must not adopt knowledge"
-        adopted_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
-        assert adopted_cli.returncode == 0, adopted_cli.stderr
-        context_result = json.loads(adopted_cli.stdout)
-        # Retrying the exact CLI after a lost result reuses both original
-        # receipts; it must not fork, charge, edit the Todo or run a model.
-        replay_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
-        assert replay_cli.returncode == 0, replay_cli.stderr
-        replay_result = json.loads(replay_cli.stdout)
-        assert replay_result["continuation"]["adoption"]["status"] == "replayed"
-        assert replay_result["continuation"]["provider_revision"] == context_result["continuation"]["provider_revision"]
-        assert len(calls) == 1
+        if case == "warm_preparation":
+            declaration = tmp_path / "warm-start.json"
+            payload = {"root": str(unit), "sha256": digest, "config": str(config),
+                "goal_id": destination_goal, "agent_id": destination_agent,
+                "source_todo_id": source_todo, "normal_cadence": 6,
+                "deadline_epoch": int(time.time()) + 600}
+            declaration.write_text(json.dumps(payload))
+            prepared_cli = subprocess.run([sys.executable, "-m", "benchmark.runtime.sforge_warm_start",
+                "context", "--declaration", str(declaration)], env=env, cwd=workspace,
+                text=True, capture_output=True, timeout=90)
+            assert prepared_cli.returncode == 0, prepared_cli.stderr
+            prepared = json.loads(prepared_cli.stdout)
+            assert prepared["preparation_todo_id"] == destination_todo
+            assert prepared["preparation_actionable"] and prepared["model_calls"] == 0
+            assert prepared["research_continuation_qualified"] is False
+            context_result = prepared["context"]
+            _read_preparation(lambda *args: invoke([*prefix, *args]), destination_goal,
+                destination_agent, destination_todo, payload)
+            assert json.loads(declaration.read_text()) == payload
+            guard = invoke([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding,
+                "--available-capability", "shell", "--available-capability", "filesystem_write"])
+            assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
+            assert len(calls) == 1
+        else:
+            lease = invoke([*prefix, "task-lease", "acquire", "--goal-id", destination_goal,
+                "--todo-id", destination_todo, "--owner", destination_agent, "--idempotency-key", "branch-context"])
+            current = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
+            context_command = [sys.executable, "-m", "loopx.hosts.research_checkpoint",
+                "--root", str(unit), "--expected-sha256", digest, "--source-todo-id", source_todo,
+                "--todo-id", destination_todo, "--operation-id", "branch-context",
+                "--expected-revision", current["authority_read"]["provider_revision"],
+                "--lease-key", "branch-context", "--lease-version", str(lease["lease"]["version"])]
+            assert not explore_result_log_path(runtime, destination_goal).exists(), "session admission must not adopt knowledge"
+            adopted_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
+            assert adopted_cli.returncode == 0, adopted_cli.stderr
+            context_result = json.loads(adopted_cli.stdout)
+            # Retrying the exact CLI after a lost result reuses both original
+            # receipts; it must not fork, charge, edit the Todo or run a model.
+            replay_cli = subprocess.run(context_command, env=env, text=True, capture_output=True, timeout=60)
+            assert replay_cli.returncode == 0, replay_cli.stderr
+            replay_result = json.loads(replay_cli.stdout)
+            assert replay_result["continuation"]["adoption"]["status"] == "replayed"
+            assert replay_result["continuation"]["provider_revision"] == context_result["continuation"]["provider_revision"]
+            assert len(calls) == 1
         retained_context_path = str(Path(context_result["artifact"]).relative_to(workspace))
         assert Path(context_result["artifact"]).read_bytes() == context_raw and len(calls) == 1
         adopted_todo = invoke([*prefix, "todo", "list", "--goal-id", destination_goal, "--todo-id", destination_todo])
@@ -734,7 +788,9 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         (logs / "stdout.jsonl").write_text(result.stdout)
         wake.observe(logs / "stdout.jsonl")
         assert wake.session_id == admitted["session_id"] and len(calls) == 3
-        assert "Synthetic source result." in json.dumps(requests[1])
+        retained_message = ("previous Host deadline has passed" if case == "warm_preparation"
+                            else "Synthetic source result.")
+        assert retained_message in json.dumps(requests[1])
         assert destination_goal in json.dumps(requests[1]) and destination_todo in json.dumps(requests[1])
         assert "retained candidate: 7" in json.dumps(requests[2])
         assert "candidate 3 was rejected" in json.dumps(requests[2])
@@ -774,6 +830,10 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
             for secret in (source_token, fresh["token"], source_judge.state.judge.admin_secret,
                            branch_judge.state.judge.admin_secret):
                 assert secret not in json.dumps(requests)
+        if case == "warm_preparation":
+            assert "previous Host deadline has passed" in json.dumps(requests[1])
+            assert _PREPARATION_TASK in json.dumps(requests[2])
+            assert "Earlier Host deadlines" not in json.dumps(requests[2])
         assert "Retained candidate 7 verified" in result.stdout
         retained = native_session_checkpoint(env, admitted["session_id"], timeout=20)
         assert retained["metadata"]["turn_ids"][:-1] == native["metadata"]["turn_ids"]
@@ -785,11 +845,12 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
             admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
         assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
             "agent_id": destination_agent}, session_scope="agent") == after_work
-        with pytest.raises(ValueError, match="native history or configuration moved"):
-            adopt_todo_context(env, unit, digest, source_todo_id=source_todo,
-                todo_id=destination_todo, operation_id="must-not-adopt-later-session",
-                expected_revision=adopted_todo["authority_read"]["provider_revision"],
-                lease_key="branch-context", lease_version=lease["lease"]["version"])
+        if case != "warm_preparation":
+            with pytest.raises(ValueError, match="native history or configuration moved"):
+                adopt_todo_context(env, unit, digest, source_todo_id=source_todo,
+                    todo_id=destination_todo, operation_id="must-not-adopt-later-session",
+                    expected_revision=adopted_todo["authority_read"]["provider_revision"],
+                    lease_key="branch-context", lease_version=lease["lease"]["version"])
         assert len(calls) == 3
         assert invoke([*prefix, "todo", "list", "--goal-id", destination_goal,
                        "--todo-id", destination_todo])["todo"] == adopted_todo["todo"]

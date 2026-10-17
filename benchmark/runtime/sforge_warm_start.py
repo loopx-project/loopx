@@ -22,6 +22,15 @@ from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _SRC
 
 
 _CHECKPOINT_VERIFY_TIMEOUT_SECONDS = 60
+_PREPARATION_TASK = (
+    "Read the full retained checkpoint research and pending decision, verify the current code, "
+    "incumbent and remaining native opportunities. Do not modify candidates or submit during "
+    "this preparation. Settle actual findings under current authority, then complete the first "
+    "current replan before choosing a complete research experiment."
+)
+# Compatibility for the already accepted longer preparation request. Never
+# submit that guidance to a new receiver or rewrite an existing create receipt.
+_LEGACY_PREPARATION_TEXT_SHA256 = "c1480d8fcec20909567f39bac1b0af2a0a3d3703c56556f4356e5b3e43e0ba45"
 
 
 @dataclass(frozen=True)
@@ -271,6 +280,34 @@ def admit_warm_session(env: dict[str, str], declaration: dict) -> dict:
     return result
 
 
+def _preparation_todo(cli, goal: str, agent: str) -> str:
+    """Replay the exact accepted create payload; history grants no readiness."""
+    operation = "checkpoint-preparation"
+    found = cli("todo", "receipt", "--goal-id", goal, "--operation-id", operation)
+    text = _PREPARATION_TASK
+    if found.get("status") == "found":
+        receipts = found.get("receipts")
+        original = receipts[0] if isinstance(receipts, list) and len(receipts) == 1 else {}
+        todo = original.get("todo") or {}
+        # Canonical presentation may decorate text with a priority prefix;
+        # title retains the create intent. The create owner checks its digest.
+        text = todo.get("title", todo.get("text"))
+        if (original.get("schema_version") != "loopx_coordination_todo_create_receipt_v0"
+                or original.get("goal_id") != goal or original.get("operation_id") != operation
+                or not isinstance(text, str)
+                or (text != _PREPARATION_TASK and hashlib.sha256(text.encode()).hexdigest()
+                    != _LEGACY_PREPARATION_TEXT_SHA256)):
+            raise ValueError("Warm preparation operation names another request; inspect its original receipt")
+    elif found.get("status") != "missing":
+        raise ValueError("Warm preparation create receipt is unavailable; preserve its operation identity")
+    # The canonical owner still compares the complete request digest, including
+    # owner/capabilities/class. Do not derive a second Todo or accept a receipt
+    # as permission to execute a completed/transferred preparation.
+    return cli("todo", "add", "--goal-id", goal, "--role", "agent", "--claimed-by", agent,
+        "--operation-id", operation, "--required-capability", "shell",
+        "--task-class", "advancement_task", "--text", text)["todo_id"]
+
+
 def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     """Join actual session + research owners on one freshly bootstrapped Goal."""
     from loopx.hosts.research_checkpoint import adopt_todo_context
@@ -287,7 +324,8 @@ def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     _prepare_native_skills(Path(env["CODEX_HOME"]), Path(env["LOOPX_SHARED_SKILLS"]))
     def cli(*args):
         result = subprocess.run([*loopx_command(env), *args], env=env,
-            cwd=env["LOOPX_PROJECT"], text=True, capture_output=True, timeout=60, check=True)
+            cwd=env["LOOPX_PROJECT"], text=True, capture_output=True,
+            timeout=_phase_read_timeout(declaration, 60), check=True)
         value = json.loads(result.stdout)
         if value.get("ok") is not True:
             raise ValueError("Checkpoint destination operation failed: " + args[0])
@@ -295,13 +333,7 @@ def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     goal, agent = declaration["goal_id"], declaration["agent_id"]
     # Preparation is actual current work, not imported completion. The normal
     # model/guard must inspect the retained evidence and settle this Todo.
-    todo = cli("todo", "add", "--goal-id", goal, "--role", "agent", "--claimed-by", agent,
-        "--operation-id", "checkpoint-preparation", "--required-capability", "shell",
-        "--task-class", "advancement_task", "--text",
-        "Read the full retained checkpoint research and pending decision, verify the current code, "
-        "incumbent and remaining native opportunities. Do not modify candidates or submit during "
-        "this preparation. Settle actual findings under current authority, then complete the first "
-        "current replan before choosing a complete research experiment.")["todo_id"]
+    todo = _preparation_todo(cli, goal, agent)
     key = "checkpoint-preparation"
     lease = cli("task-lease", "acquire", "--goal-id", goal, "--todo-id", todo,
                 "--owner", agent, "--idempotency-key", key)["lease"]
@@ -314,10 +346,49 @@ def prepare_context(env: dict[str, str], declaration: dict) -> dict:
     # finished before this lease is released; no historical lease is imported.
     cli("task-lease", "release", "--goal-id", goal, "--todo-id", todo,
         "--owner", agent, "--idempotency-key", key, "--expected-version", str(lease["version"]))
+    readback = _read_preparation(cli, goal, agent, todo, declaration)
+    # Rejected readiness must not mutate cadence. Once this succeeds the worker
+    # still acquires fresh ordinary admission; no best-effort rollback may erase
+    # an owed current review after an ambiguous configuration response.
     cli("configure-goal", "--goal-id", goal, "--execution-replan-after-turns", "1", "--execute")
     return {"session": native, "context": context, "preparation_todo_id": todo,
-            "model_calls": 0, "research_continuation_qualified": False}
+            "preparation_readback": readback,
+            "preparation_actionable": True, "model_calls": 0,
+            "research_continuation_qualified": False}
 
+
+
+def _read_preparation(cli, goal, agent, todo, declaration):
+    """Read current owner facts; a saved plan alone cannot admit continuation."""
+    _phase_read_timeout(declaration, 60)
+    before = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)
+    preparation = before["todo"]
+    if preparation.get("status") != "open" or preparation.get("claimed_by") != agent:
+        raise ValueError("Warm preparation Todo is not open under the destination agent")
+    guard = cli("quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+        "--available-capability", "shell", "--available-capability", "filesystem_write")
+    channel = (guard.get("interaction_contract") or {}).get("agent_channel") or {}
+    selected = guard.get("selected_todo") or {}
+    pending_review = guard.get("autonomous_replan_obligation") or {}
+    if (guard.get("should_run") is not True or channel.get("delivery_allowed") is not True or
+            not (selected.get("todo_id") == todo or pending_review.get("required") is True)):
+        raise ValueError("Warm continuation has no actionable current preparation or review")
+    # The guard can legitimately require a review after this Todo completes.
+    # That review cannot make an older open/owned preparation snapshot current.
+    # Bracket it with the existing canonical read revision; do not invent a
+    # ready receipt, retry budget, or permission from imported history.
+    after = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)
+    revision = (before.get("authority_read") or {}).get("provider_revision")
+    current = after["todo"]
+    if (not isinstance(revision, str) or not revision
+            or (after.get("authority_read") or {}).get("provider_revision") != revision
+            or current.get("status") != "open" or current.get("claimed_by") != agent):
+        raise ValueError("Warm preparation state changed during current readiness readback; inspect this receiver")
+    _phase_read_timeout(declaration, 60)
+    return {"authority_read": after["authority_read"], "preparation_todo_id": todo,
+            "selected_todo_id": selected.get("todo_id"),
+            "current_replan_obligation_id": pending_review.get("obligation_id"),
+            "current_replan_required": pending_review.get("required") is True}
 
 
 def finish_preparation(env: dict[str, str]) -> dict:

@@ -1022,6 +1022,52 @@ returns. Preparation and context-reading cost belong in the comparison. Omit all
 restore flags for the unchanged cold entry; never reuse an ambiguous trial
 folder as a new attempt.
 
+Warm preparation retains the original evidence-reading task on its existing Todo;
+it does not add a prompt paragraph interpreting historical deadlines. Current
+Goal/guard authority, task time constraints, native cooldowns and user stops
+remain binding. Preparation reads the current claimed Todo and actual quota
+result before reporting `preparation_actionable=true` in the existing `checkpoint-context.json`
+receipt. Closed or unavailable work and a deadline that expires during readback
+fail before model execution; an old ready plan is not current admission. This
+readback neither grants execution nor qualifies subsequent research or recapture.
+It applies only to the existing explicitly admitted complete-checkpoint path;
+ordinary terminal archives are not converted into complete checkpoints.
+
+The receiver brackets the guard with the exact preparation Todo's canonical
+authority revision. Completion, transfer or another canonical edit during that
+observation rejects readiness; a later required review cannot revive an earlier
+open snapshot. The existing context receipt includes `preparation_readback` with
+that revision, the selected Todo and current replan identity, so an operator can
+inspect what was actually observed instead of relying on a readiness boolean.
+This is a bounded observation, not an execution lease; the worker must still use
+fresh ordinary admission. Readiness is validated before changing cadence, so a
+rejected preparation does not change the Goal's cadence. An ambiguous cadence
+write must be inspected, not blindly rolled back across an owed current review.
+Creation retries read the original `checkpoint-preparation` receipt and replay
+its exact accepted task through the canonical create owner, including receivers
+created with the earlier longer task. They never mint a second operation or Todo.
+This covers partial creation, not arbitrary retries after context adoption or
+worker execution. Such uncertain operations retain their original receipt,
+revision and lease recovery boundary; actual model/research adoption is separate.
+
+Warm 准备保留既有 Todo 中原本的证据读取任务，不再增加解释历史截止时间的提示段落。
+当前 Goal、guard、题目时限、原生冷却、用户门槛及停止权限仍有效。
+准备步骤须读回当前 claimed Todo 和实际 quota 结果，才在既有
+`checkpoint-context.json` 回执中报告 `preparation_actionable=true`；工作已闭合、不可用或读回
+期间期限耗尽时，在模型执行前失败。旧 ready 计划不等于当前准入；此读回不授予
+执行权，也不认证后续研究或再次捕获，仅作用于显式准入的完整检查点路径。
+普通终态资料归档不会因此被升级为完整检查点。
+
+接收端用准确准备 Todo 的规范权威修订号夹住 guard 读取；期间完成、转交或其他规范
+修改都会拒绝 ready，后来的 required review 不能复活较早的 open 快照。既有上下文
+回执的 `preparation_readback` 返回该修订、当前选中 Todo 与 replan 身份，便于检查
+实际观察依据；它不是执行租约，worker 仍须重新走普通准入。先验证准备资格，再改
+cadence，因此拒绝准备不会改变 Goal 的 cadence；不确定的配置写入须检查，不能盲目
+回滚而抹掉欠下的当前复盘。创建重试读回原 `checkpoint-preparation` 回执，通过规范
+创建 owner 重放当时接受的准确任务（兼容此前较长任务），不创建第二个操作或 Todo。
+此兼容范围是部分创建，不是上下文采用或 worker 执行后的任意重试；不确定的操作仍须
+保留原回执、修订与租约的恢复边界，真实模型/研究采用也需单独验证。
+
 To test a new decision from the same pre-replan state, use
 `--restore-fresh-replan`. The point must contain a verified pending replan packet.
 The first destination model call starts a fresh native conversation, before

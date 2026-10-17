@@ -50,6 +50,26 @@ Resume and submit reject a different home before starting an upstream process
 or modifying a turn. Legacy sessions acquire the binding only after successful
 upstream restoration; startup alone neither rebinds nor copies their history.
 
+Desktop-owned Chat processes explicitly default `LOOPX_CHAT_CODEX_HOME` to
+`~/.codex`, independently of the launching terminal's `CODEX_HOME`. An explicit
+`LOOPX_CHAT_CODEX_HOME` still selects another native account configuration.
+Direct CLI launches and existing LaunchAgents retain their documented
+precedence. Switching the service home requires a new conversation; existing
+threads remain bound to their original store. The steward defaults to Codex/GPT;
+DeepSeek Harness remains an explicit Runtime choice with its own SDK and
+operator credential, rather than sending GPT model names to a DeepSeek provider.
+Model discovery uses the same captured native home as execution. The guided
+steward editor clears model/effort overrides when changing executor, and labels
+empty values as Runtime defaults; the existing preview/apply owns the write.
+
+中文：桌面自己启动的 Chat 默认固定到 `~/.codex`，不再继承启动终端的
+`CODEX_HOME`；显式 `LOOPX_CHAT_CODEX_HOME` 仍可选择其它原生账号配置。
+直接 CLI 和已有 LaunchAgent 的优先级不变。换目录需要新对话，旧线程保持原存储绑定。
+管家默认 Codex/GPT；DeepSeek Harness 是可选 Runtime，单独检查 SDK 与 operator
+凭据，不把 GPT 模型名发给 DeepSeek provider。
+模型发现与执行共用启动时固定的原生目录。引导表单切换执行器会清空模型与档位覆盖，
+空值明确表示 Runtime 默认值；写入仍归原有预览/应用流程。
+
 The macOS LaunchAgent installer preserves an existing binding on upgrade,
 including older shell-export plists. Use `LOOPX_CHAT_CODEX_HOME` explicitly when
 installing a deliberately different host profile. A later ambient `CODEX_HOME`

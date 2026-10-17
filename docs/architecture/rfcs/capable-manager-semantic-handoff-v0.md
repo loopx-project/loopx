@@ -808,6 +808,20 @@ Target an ingress receipt within two seconds on a healthy local service, indepen
 
 Use existing service recovery and receipt pumps. No manager-specific business automation for each kind of request. Expose configuration and failures through the existing CLI, capability settings and manager conversation. Troubleshooting distinguishes model failure, tool/policy denial, state conflict, unreachable receiver and transport formatting/delivery failure.
 
+**Provider configuration rejection:** a structured Responses
+`invalid_request_error` remains a rejected request when its JSON envelope omits
+HTTP status; conflicting or malformed status does not establish that category.
+Chat explains the model/account/provider check without publishing upstream prose
+or replaying the request. Desktop-owned Chat defaults to the standard Codex home
+unless its dedicated Chat override is explicit, so an unrelated terminal's
+provider configuration cannot replace the default account. CLI and LaunchAgent
+home precedence, original Session identity, explicit Runtime selection and
+provider permissions remain with their existing owners. Model discovery reads
+the same native home as execution. Changing the executor in the guided settings
+clears the previous model/effort overrides for the existing backend to resolve;
+preview and apply still own the persisted change. This bounded repair
+does not qualify sustained operation or every provider/model combination.
+
 **Turn-bound steering (A23):** preserve the requested Session, exact Turn,
 unchanged text and ingress identity through browser persistence, dispatch and
 replay. The current frontend requires persistent retry readback before sending;

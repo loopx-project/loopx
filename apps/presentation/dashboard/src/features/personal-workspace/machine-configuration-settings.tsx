@@ -17,7 +17,7 @@ import {
   type MachineConfigurationRollbackPlan,
   type MachineConfigurationTransaction,
 } from "../../data/chat";
-import { goalStorageEditorValue, projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
+import { changeStewardExecutorDraft, goalStorageEditorValue, projectEditableCapabilityConfiguration, replanCadenceEditorValue } from "../../data/capability-configuration";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
@@ -210,7 +210,9 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
 
   function changeDraft(key: string, value: unknown) {
     setDraft((current) => selected?.capability_id === "periodic_report"
-      ? withReportScheduleTimezone(current, key, value) : { ...current, [key]: value });
+      ? withReportScheduleTimezone(current, key, value)
+      : selected?.capability_id === "steward_executor"
+        ? changeStewardExecutorDraft(current, key, value) : { ...current, [key]: value });
     setPreview(null);
     setPreviewOperation("upsert");
     setError(null);

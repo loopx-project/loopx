@@ -1390,7 +1390,7 @@ def test_completed_stop_source_verification_reuses_one_current_observation_only_
 def test_completed_stop_preselected_without_observation_joins_a_fresh_identity(completed_group_stop, monkeypatch, identity_fails):
     _, provider, transport, _, _, record = completed_group_stop
     started, observed, release = threading.Event(), threading.Event(), threading.Event()
-    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
     observations = []
 
     def sources(*args):
@@ -1407,7 +1407,7 @@ def test_completed_stop_preselected_without_observation_joins_a_fresh_identity(c
                 raise ValueError("fresh App observation unavailable")
         return original_observe(*args, **kwargs)
 
-    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
     monkeypatch.setattr(transport.bindings, "observe", observe)
     selected = transport.bindings.resolve(binding_id=record["binding_id"], **record["source"])
     with ThreadPoolExecutor(max_workers=1) as caller:
@@ -1428,7 +1428,7 @@ def test_completed_stop_default_overlaps_readonly_observations_but_joins_and_rec
 ):
     _, provider, transport, _, _, record = completed_group_stop
     source_started, identity_started, release = threading.Event(), threading.Event(), threading.Event()
-    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
 
     def sources(*args):
         source_started.set()
@@ -1443,7 +1443,7 @@ def test_completed_stop_default_overlaps_readonly_observations_but_joins_and_rec
             raise ValueError("current App observation unavailable")
         return observation
 
-    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
     monkeypatch.setattr(transport.bindings, "observe", observe)
     with ThreadPoolExecutor(max_workers=1) as caller:
         pending = caller.submit(transport._source_verified, record)
@@ -1468,7 +1468,7 @@ def test_completed_stop_reply_worker_waits_for_both_reads_and_does_not_send_afte
         threading.Event() for _ in range(4)
     )
     original_verify = transport._source_verified
-    original_sources, original_observe = transport._completed_stop_sources, transport.bindings.observe
+    original_sources, original_observe = transport._group_source_pair, transport.bindings.observe
 
     def verify(value, **kwargs):
         checking_source.set()
@@ -1487,7 +1487,7 @@ def test_completed_stop_reply_worker_waits_for_both_reads_and_does_not_send_afte
         return observation
 
     monkeypatch.setattr(transport, "_source_verified", verify)
-    monkeypatch.setattr(transport, "_completed_stop_sources", sources)
+    monkeypatch.setattr(transport, "_group_source_pair", sources)
     monkeypatch.setattr(transport.bindings, "observe", observe)
     path = transport.root / f"{record['request_ref']}.json"
     with ThreadPoolExecutor(max_workers=1) as caller:

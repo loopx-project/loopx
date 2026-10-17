@@ -6,7 +6,8 @@ runner. Write it before admission so a crash can replay the same client identity
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from copy import deepcopy
 from pathlib import Path
 import re
 from datetime import datetime, timedelta, timezone
@@ -91,7 +92,8 @@ class ChatExternalConversations:
     def admit(self, *, binding_id: str, source: dict[str, Any], request_ref: str,
               message: str, command: str | None = None,
               attachments: list[dict[str, Any]] | None = None,
-              origin: str = "lark", defer_background_stop: bool = False) -> dict[str, Any]:
+              origin: str = "lark", defer_background_stop: bool = False,
+              source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         import re
         if origin not in {"lark", "external"}:
             raise ValueError("unsupported external conversation origin")
@@ -99,6 +101,8 @@ class ChatExternalConversations:
             raise ValueError("invalid external request reference")
         if command not in {None, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"}:
             raise ValueError("unsupported external conversation command")
+        if source_preflight is not None and not callable(source_preflight):
+            raise ValueError("source preflight must be an in-process verifier")
         # These references enter the lock path before authority is resolved.
         # Check path-safe shape here; the typed owner checks current grants
         # and provider identity after both fences are acquired.
@@ -113,7 +117,14 @@ class ChatExternalConversations:
                 # Resolve after waiting for both fences, including exact replay.
                 # A lock-external provider probe cannot authorize the write and
                 # would duplicate this fresh authority check on every request.
-                selected = self.bindings.resolve(binding_id=binding_id, **source)
+                selected = self.bindings.resolve(binding_id=binding_id, **source,
+                    **({"include_observation": True} if source_preflight is not None else {}))
+                # Earlier provider IO and App observations cannot authorize
+                # admission. Validate against this fresh selection inside both fences,
+                # before creating or replaying any canonical request.
+                if source_preflight is not None:
+                    if source_preflight(deepcopy(selected)) is not None:
+                        raise ValueError("source preflight must complete verification or raise")
                 expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
                             "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
                 recovering_request = path.exists()

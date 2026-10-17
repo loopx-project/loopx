@@ -1494,14 +1494,15 @@ def test_typed_terminal_errors_preserve_category_without_promoting_partial_answe
         assert "不会自动重放" in caught.value.gate["next_action"]
 
 
-def test_structured_invalid_upstream_request_is_not_a_generic_host_gate() -> None:
+@pytest.mark.parametrize("status", [{}, {"status": 400}])
+def test_structured_invalid_upstream_request_is_not_a_generic_host_gate(status) -> None:
     error = chat_agent._terminal_turn_error(
         {
             "codexErrorInfo": "other",
             "message": json.dumps(
                 {
                     "type": "error",
-                    "status": 400,
+                    **status,
                     "error": {
                         "type": "invalid_request_error",
                         "message": "private upstream model detail",
@@ -1514,6 +1515,41 @@ def test_structured_invalid_upstream_request_is_not_a_generic_host_gate() -> Non
     assert error.error_code == "upstream_invalid_request"
     assert "private upstream" not in str(error) + json.dumps(error.gate)
     assert "模型" in error.gate["next_action"]
+    assert "不会自动重放" in error.gate["next_action"]
+
+
+@pytest.mark.parametrize("status", [None, True, 400.0, "400", 401, 500])
+def test_conflicting_or_malformed_http_status_does_not_classify_request_error(status):
+    error = chat_agent._terminal_turn_error({"codexErrorInfo": "other", "message": json.dumps({
+        "status": status, "error": {"type": "invalid_request_error", "message": "private detail"},
+    })}, "generic fallback")
+    assert error.error_code == "host_gate"
+    assert str(error) == "generic fallback"
+    assert "private detail" not in json.dumps(error.gate)
+
+
+@pytest.mark.parametrize("terminal_method", ["error", "turn/completed"])
+def test_statusless_request_rejection_settles_without_final_answer(monkeypatch, tmp_path, terminal_method):
+    session = chat_agent.CodexChatAgentSession(
+        process=_FakeAppServerProcess(), messages=queue.Queue(),
+        thread_id="request-fixture", work_dir=tmp_path,
+    )
+    error = {"codexErrorInfo": "other", "message": json.dumps({"error": {
+        "type": "invalid_request_error", "message": "private provider model details",
+    }})}
+    params = {"threadId": "request-fixture", "turnId": "rejected-turn"}
+    if terminal_method == "error":
+        params.update(error=error, willRetry=False)
+    else:
+        params["turn"] = {"id": "rejected-turn", "status": "failed", "error": error}
+    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "rejected-turn"}})
+    monkeypatch.setattr(session, "_next_event", lambda **kw: {"method": terminal_method, "params": params})
+    events = []
+    with pytest.raises(chat_agent.CodexChatAgentError) as caught:
+        session.send("Answer this synthetic request.", on_event=lambda k, p: events.append((k, p)))
+    assert caught.value.error_code == "upstream_invalid_request"
+    assert "private provider" not in str(caught.value) + json.dumps(caught.value.gate)
+    assert not any(k == "answer.final" for k, _ in events)
 
 
 def test_unstructured_upstream_error_stays_generic() -> None:
