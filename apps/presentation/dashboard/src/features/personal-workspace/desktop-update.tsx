@@ -136,7 +136,7 @@ export function DesktopUpdate() {
     runtime_pairing_required: zh ? "旧版启动器未能自动选择可用组件。请检查 App 更新，或通过恢复入口重新连接。" : "The older launcher could not select a usable runtime. Check for an App update or reconnect through recovery.",
     idle: zh ? "App 启动时会检查并安装当前通道的可用更新；也可在此手动检查。" : "On launch, the App checks and installs available updates on its current channel. You can also check here.",
     runtime_required: zh ? "请完成匹配组件安装，或检查 App 更新。" : "Install matching components or check for an App update.",
-    connecting: zh ? "正在连接更新后的服务…" : "Connecting to updated services…",
+    connecting: zh ? "正在连接本地服务…" : "Connecting to local services…",
     checking: zh ? "正在检查更新…" : "Checking for updates…",
     available: zh ? "新版本已就绪，一次更新 App 与匹配的运行时。" : "Update the App and its matching runtime together.",
     up_to_date: zh ? "当前通道暂无更新。" : "No newer update on this channel.",
@@ -144,12 +144,12 @@ export function DesktopUpdate() {
     installing_app: zh ? "正在安装 App，请保持窗口打开。" : "Installing the App. Keep this window open.",
     installing_runtime: zh ? "正在安装匹配的运行时，请稍候…" : "Installing the matching runtime…",
     restart_required: zh ? "重启后将自动完成运行时安装与服务连接。" : "Restart to finish runtime installation and reconnect services.",
-    ready: zh ? "更新完成，服务已就绪。" : "Update completed; services are ready.",
+    ready: zh ? "本地服务已就绪。" : "Local services are ready.",
     error: updateErrors[state.details?.code ?? ""]?.[zh ? 0 : 1] ?? (repairAvailable
       ? (zh ? "更新未完成。请重试；启动失败可尝试修复当前版本。" : "Update incomplete. Retry; repair this version if startup fails.")
       : (zh ? "更新未完成。请重新检查更新；若仍失败，请重新安装完整 App。" : "Update incomplete. Check for updates again; if it still fails, reinstall the complete App.")),
   };
-  const label = working ? (zh ? "正在更新…" : "Updating…") : state.phase === "available" ? (zh ? "有可用更新" : "Update available") : state.phase === "restart_required" ? (zh ? "重启完成更新" : "Restart to finish") : state.phase === "error" ? (zh ? "更新需重试" : "Retry update") : (zh ? "更新 LoopX" : "Update LoopX");
+  const label = state.phase === "connecting" ? (zh ? "正在连接…" : "Connecting…") : working ? (zh ? "正在更新…" : "Updating…") : state.phase === "available" ? (zh ? "有可用更新" : "Update available") : state.phase === "restart_required" ? (zh ? "重启完成更新" : "Restart to finish") : state.phase === "error" ? (zh ? "更新需重试" : "Retry update") : (zh ? "更新 LoopX" : "Update LoopX");
   return <div className="personal-desktop-update">
     <button className="personal-update-trigger" type="button" aria-expanded={open} aria-controls="desktop-update-panel" onClick={(event) => {
       panel.current?.style.setProperty("bottom", `${window.innerHeight - event.currentTarget.getBoundingClientRect().top + 8}px`);
