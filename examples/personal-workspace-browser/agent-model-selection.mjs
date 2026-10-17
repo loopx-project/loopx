@@ -57,7 +57,7 @@ export const agentModelSelectionScenario = {
         });
         assert.deepEqual(layout, { title: true, runtime: true, fits: true }, "The manager title and runtime label remain readable beside known or unknown model readback");
       };
-      await page.locator(".personal-model-current").filter({hasText: "模型未回传"}).waitFor();
+      await page.locator(".personal-model-current").filter({hasText: "模型设置"}).waitFor();
       await page.setViewportSize({width: 390, height: 844});
       await assertReadableHeader();
       assert.equal(discoveryCount, 0, "Unknown current facts do not start catalog discovery");

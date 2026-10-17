@@ -158,6 +158,8 @@ export type WorkspaceGoalSubagentConfiguration = {
 };
 
 export type WorkspaceGoal = {
+  /** Bounded, safe text from this Goal's declared source document. */
+  objective?: string | null;
   acceptanceObservation?: GoalAcceptanceObservation | null;
   loadState?: "loading" | "error";
   loadError?: WorkspaceLoadError;

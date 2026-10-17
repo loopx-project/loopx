@@ -1,6 +1,6 @@
 import { useId, useMemo, useRef, useState } from "react";
 import { ArrowRight, CircleAlert, Download, ExternalLink, RefreshCw, Search } from "lucide-react";
-import { deliveryReviewMarkdown, filterReviewNodes, reviewCoverageIncomplete, reviewNodeColumn, type ReviewFocus, type ReviewGraph, type ReviewNode } from "../../data/delivery-review";
+import { deliveryReviewMarkdown, deliveryReviewWarning, filterReviewNodes, reviewCoverageIncomplete, reviewNodeColumn, type ReviewFocus, type ReviewGraph, type ReviewNode } from "../../data/delivery-review";
 import type { WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceModel, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { GoalAcceptanceContractSection } from "./goal-acceptance-contract";
@@ -12,6 +12,14 @@ import {useDeliveryReview, type DeliveryReviewRead} from "./delivery-review-stat
 import "./delivery-review.css";
 
 type Copy = typeof deliveryReviewCopy.en;
+
+function SourceNotice({review, copy, mapOnly = false}: {review: DeliveryReviewRead; copy: Copy; mapOnly?: boolean}) {
+  const snapshot = review.snapshot;
+  const warning = snapshot ? deliveryReviewWarning(mapOnly ? {...snapshot,
+    projection_envelope: snapshot.goal_map?.projection_envelope} : snapshot, copy) : null;
+  const envelope = mapOnly ? snapshot?.goal_map?.projection_envelope : snapshot?.projection_envelope;
+  return warning ? <p role={!envelope || !envelope.fresh ? "alert" : "status"} className="delivery-notice"><CircleAlert aria-hidden size={15} />{warning}</p> : null;
+}
 
 function ReviewMap({ graph, nodes, selected, onSelect, copy }: {
   graph: ReviewGraph; nodes: ReviewNode[]; selected: string | null; onSelect: (id: string) => void; copy: Copy;
@@ -119,7 +127,8 @@ export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review
       <p className="delivery-snapshot-time">{copy.observed} · <time dateTime={snapshot.observed_at}>{new Date(snapshot.observed_at).toLocaleString(locale)}</time>
         {state.kind === "loading" || (stale && state.kind !== "error") ? <span role="status"> · {copy.updating}</span> : null}</p>
       {stale && state.kind === "error" ? <p role="alert" className="delivery-notice is-error"><CircleAlert aria-hidden size={15} />{copy.changed}</p> : null}
-      {!hideWorkMap ? <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={selection => {if (selection) onSelect(selection);}} /> : null}
+      <SourceNotice review={review} copy={copy} />
+      {!hideWorkMap ? <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} showSourceNotice={false} onSelect={selection => {if (selection) onSelect(selection);}} /> : null}
       <p className="delivery-boundary">{copy.scope} {copy.acceptanceBoundary}</p>
       {graph ? <>
         {reviewCoverageIncomplete(graph) ? <details className="delivery-notice"><summary>{copy.incomplete}</summary><dl>
@@ -160,9 +169,10 @@ export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review
 }
 
 /** Same map and exact-request fallback, now usable as an Overview work lens. */
-export function DeliveryWorkMap({goal, userTodos, review, onSelect, selectedTodoId}: {
+export function DeliveryWorkMap({goal, userTodos, review, onSelect, selectedTodoId, showSourceNotice = true}: {
   goal: WorkspaceGoal; userTodos: WorkspaceModel["userTodos"]; review: DeliveryReviewRead;
   onSelect: (selection: WorkspaceDrawerSelection | null) => void; selectedTodoId?: string | null;
+  showSourceNotice?: boolean;
 }) {
   const {locale} = useWorkspaceI18n();
   const copy = deliveryReviewCopy[locale];
@@ -185,13 +195,17 @@ export function DeliveryWorkMap({goal, userTodos, review, onSelect, selectedTodo
     return { kind: "todo", item: { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy } };
   }
   const map = review.snapshot?.goal_map;
-  if (!map) return <p role="status">{review.kind === "loading" ? copy.loading : copy.workMap.unavailable}</p>;
+  if (!map) return <div className="delivery-notice" role="status">
+    {review.kind === "loading" ? copy.loading : <>{copy.workMap.unavailable}
+      <button type="button" onClick={() => review.refresh()}><RefreshCw aria-hidden size={15} />{copy.refresh}</button></>}
+  </div>;
   const selected = selectedTodoId === undefined ? localSelection
     : selectedTodoId ? map.nodes.find(node => node.refs.todo_ids?.includes(selectedTodoId))?.node_id ?? null
       : (() => {const node = map.nodes.find(node => node.node_id === localSelection);
           return node && (node.kind === "gate" || !node.refs.todo_ids?.length) ? localSelection : null;}) ();
   return <>
-    {!review.usable ? <p role="status">{review.kind === "error" ? copy.refreshError : copy.updating}</p> : null}
+    {!review.usable && review.kind !== "ready" ? <p role="status">{review.kind === "error" ? copy.refreshError : copy.updating}</p> : null}
+    {showSourceNotice ? <SourceNotice review={review} copy={copy} mapOnly /> : null}
     <GoalWorkMapView map={map} copy={copy.workMap} selectedId={selected}
       onSelect={id => {
         setLocalSelection(id);

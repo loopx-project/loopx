@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import Any, Callable
 
 from ..runtime.time import now_utc_iso
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import MAX_REQUEST_BYTES, effect_runtime_result
 from ..todos.contract import TODO_STATUS_DEFERRED
 from ..todos.summary_item import todo_planning_source_items
 
@@ -966,10 +967,6 @@ def build_task_graph_projection(
     }
 
 
-GOAL_TASK_MAP_SCHEMA_VERSION = "goal_task_map_v0"
-GOAL_TASK_MAP_MAX_NODES = 120
-
-
 def build_goal_task_map(
     *,
     goal_id: str,
@@ -980,79 +977,68 @@ def build_goal_task_map(
     todo_done_for_status: Callable[[str], bool],
     todo_status_open: str,
     monitor_task_class: str,
+    source_read_at: str | None = None,
 ) -> dict[str, Any]:
-    """Read-only map of one Goal's active Todos and their recorded relations."""
+    """Adapt shared source/identity codecs to the native Goal-map composer."""
 
-    renderable: dict[str, tuple[dict[str, Any], str, str]] = {}
     rows = []
+    renderable: dict[str, tuple[dict[str, Any], str, str]] = {}
     for value in todos:
         tid = public_safe_compact_text(value.get("todo_id"), limit=120)
         title = public_safe_compact_text(value.get("title") or value.get("text"), limit=160)
         if not tid or not title or tid in renderable:
             continue
         state = _task_graph_todo_state(
-            value,
-            normalize_todo_status=normalize_todo_status,
-            todo_done_for_status=todo_done_for_status,
-            todo_status_open=todo_status_open,
+            value, normalize_todo_status=normalize_todo_status,
+            todo_done_for_status=todo_done_for_status, todo_status_open=todo_status_open,
         )
         renderable[tid] = (value, title, state)
-        rows.append(_task_graph_topology_row(
-            tid, value, done=state == "done", public_safe_compact_text=public_safe_compact_text,
-        ))
-    result = effect_runtime_result("work_item.task_graph.goal_topology", {
-        "schema_version": "task_graph_goal_topology_request_v0",
-        "items": rows,
-        "node_limit": GOAL_TASK_MAP_MAX_NODES,
-        "source_truncated": source_truncated,
-    })
-    if not isinstance(result, dict) or result.get("schema_version") != "task_graph_goal_topology_result_v0":
-        raise RuntimeError("TypeScript goal task graph topology shape mismatch")
-    nodes: list[dict[str, Any]] = []
-    node_ids: dict[str, str] = {}
-    for entry in result["nodes"]:
-        tid = entry["todo_id"]
-        value, title, state = renderable[tid]
-        gate = value.get("role") == "user"
-        node_ids[tid] = _task_graph_node_id(
-            "node_gate" if gate else "node_todo", tid,
-            public_safe_compact_text=public_safe_compact_text, durable_id=tid,
-        )
-        node: dict[str, Any] = {
-            "node_id": node_ids[tid],
-            "kind": "gate" if gate else (
-                "monitor" if value.get("task_class") == monitor_task_class else "deliverable"
+        rows.append({
+            **_task_graph_topology_row(
+                tid, value, done=state == "done", public_safe_compact_text=public_safe_compact_text,
             ),
-            "title": title,
-            "state": state,
-            "depth": entry["depth"],
-            "refs": {"todo_ids": [tid]},
-        }
+            "is_user": value.get("role") == "user",
+            "is_monitor": value.get("task_class") == monitor_task_class,
+        })
+    request = {
+        "schema_version": "goal_task_map_request_v0", "goal_id": goal_id,
+        "items": rows, "source_truncated": source_truncated,
+        "read_facts": {"observed_at": now_utc_iso(), "source_read_at": source_read_at,
+                       "source_count": len(todos)},
+    }
+    # Reserve framing bytes while keeping ordinary maps on the inline transport.
+    use_snapshot = len(json.dumps(request, separators=(",", ":")).encode()) > MAX_REQUEST_BYTES - 4096
+    result = effect_runtime_result(
+        "work_item.task_graph.goal_topology", request, large_local_snapshot=use_snapshot,
+    )
+    if not isinstance(result, dict) or result.get("schema_version") != "goal_task_map_result_v0":
+        raise RuntimeError("TypeScript goal task map shape mismatch")
+    projection = result["projection"]
+    nodes = projection["nodes"]
+    node_ids = []
+    materialized = []
+    for node, prefix, fields in zip(nodes, result["node_identity_prefixes"], result["node_metadata_fields"], strict=True):
+        tid = node["refs"]["todo_ids"][0]
+        node_ids.append(_task_graph_node_id(
+            prefix, tid, public_safe_compact_text=public_safe_compact_text, durable_id=tid,
+        ))
+        value, title, state = renderable[tid]
+        rendered = {"node_id": node_ids[-1], "kind": node["kind"], "title": title,
+                    "state": state, "depth": node["depth"], "refs": node["refs"]}
         for key, field in (("owner_agent", "claimed_by"), ("task_domain", "task_domain")):
             text = public_safe_compact_text(value.get(field), limit=80)
-            if text and not gate:
-                node[key] = text
-        nodes.append(node)
-    edges = [
-        {
-            "edge_id": _task_graph_node_id(
-                f"edge_{edge['source_relation']}",
-                f"{node_ids[edge['from_todo_id']]}:{node_ids[edge['to_todo_id']]}",
-                public_safe_compact_text=public_safe_compact_text,
-            ),
-            "from_node_id": node_ids[edge["from_todo_id"]],
-            "to_node_id": node_ids[edge["to_todo_id"]],
-            "relation": edge["relation"],
-            "enforcement": edge["enforcement"],
-            "reason": edge["reason"],
-        }
-        for edge in result["edges"]
-    ]
-    return {
-        "schema_version": GOAL_TASK_MAP_SCHEMA_VERSION,
-        "mode": "read_only",
-        "goal_id": goal_id,
-        "limits": result["completeness"],
-        "nodes": nodes,
-        "edges": edges,
-    }
+            if text and key in fields:
+                rendered[key] = text
+        materialized.append(rendered)
+    projection["nodes"] = materialized
+    # These codecs also serve the status graph; keep one owner until that caller migrates.
+    projection["edges"] = [{
+        "edge_id": _task_graph_node_id(
+            f"edge_{identity['source_relation']}",
+            f"{node_ids[identity['from_node_index']]}:{node_ids[identity['to_node_index']]}",
+            public_safe_compact_text=public_safe_compact_text,
+        ),
+        "from_node_id": node_ids[identity["from_node_index"]],
+        "to_node_id": node_ids[identity["to_node_index"]], **edge,
+    } for edge, identity in zip(projection["edges"], result["edge_identities"], strict=True)]
+    return projection

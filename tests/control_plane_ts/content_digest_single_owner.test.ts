@@ -105,6 +105,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/collaboration/result_publication.ts",
   "control_plane/collaboration/return_delivery.ts",
   "control_plane/collaboration/semantic_request.ts",
+  "control_plane/collaboration/turn_context.ts",
   "control_plane/coordination/authority_archive_read.ts",
   "control_plane/coordination/authority_source.ts",
   "control_plane/coordination/cold_source_import.ts",

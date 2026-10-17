@@ -180,9 +180,8 @@ export function ChannelHeader({
     {!statusOnly ? <ChatModelMenu key={`${selectedGoal?.goalId ?? workspaceGrantLabel ?? "steward"}:${selectedAgentId}`}
       agentId={selectedAgentId} goalId={selectedGoal?.goalId} ordinary={ordinaryConversation}
       model={selectedAgentModelId} effort={selectedAgentReasoningEffort} readback={selectedAgentModelReadback}
-      onModel={onSelectAgentModel} onEffort={onSelectAgentReasoningEffort}/> : null}
-    {selectedGoal && onOpenConversationSettings ? <button className="personal-icon-button" onClick={onOpenConversationSettings}
-      aria-label={locale === "zh-CN" ? "对话与模型设置" : "Conversation and model settings"} type="button"><SlidersHorizontal size={16}/></button> : null}
+      onModel={onSelectAgentModel} onEffort={onSelectAgentReasoningEffort}
+      onOpenDefaults={selectedGoal ? onOpenConversationSettings : undefined}/> : null}
   </>;
 
   const executionChipClass = managerExecutionUnavailable
@@ -288,7 +287,8 @@ export function ChannelHeader({
         {!selectedGoal ? runtimeControl : null}
         {onRefresh ? (
           <span className={`personal-refresh-control is-${refreshState ?? "idle"}`}>
-            {refreshState === "loading" ? <small>{t("header.refreshing")}</small> : refreshState === "done" ? <small>{t("header.refreshDone")}</small> : refreshState === "error" ? <small>{t("header.refreshFailed")}</small> : null}
+            {refreshState === "loading" ? <small>{t("header.refreshing")}</small> : refreshState === "error" ? <small>{t("header.refreshFailed")}</small> : null}
+            <span className="personal-sr-only" role="status">{refreshState === "done" ? t("header.refreshDone") : null}</span>
             <button aria-label={refreshState === "loading" ? t("header.refreshing") : t("header.refresh")} className="personal-icon-button" disabled={refreshState === "loading"} onClick={onRefresh} type="button">
               <RefreshCw className={refreshState === "loading" ? "is-spinning" : undefined} size={17} />
             </button>

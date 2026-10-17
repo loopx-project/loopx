@@ -90,16 +90,19 @@ def attach_reward_memory_ingest_after_spend(
         registry_path=registry_path,
         goal_ref=goal_ref,
     )
-    identity = readback.identity.value if readback else None
-    writeback_event = readback.writeback_event if readback else None
+    if readback is None:
+        return
+    identity = readback.identity.value
+    writeback_event = readback.writeback_event
     details_value = (
         writeback_event.get("details") if isinstance(writeback_event, Mapping) else None
     )
     details: Mapping[str, Any] = details_value if isinstance(details_value, Mapping) else {}
     candidate_id = str(details.get("reward_memory_candidate_id") or "").strip()
-    if not candidate_id or identity is None or not identity.todo_id:
+    if (identity is None or not identity.todo_id
+            or readback.writeback.failure is not None or readback.spend.failure is not None):
         return
-    payload["reward_memory_ingest"] = (
+    result = (
         run_staged_codex_app_turn_outcome_ingest_fail_open(
             registry_path=registry_path,
             goal_id=identity.goal_id,
@@ -108,10 +111,13 @@ def attach_reward_memory_ingest_after_spend(
             turn_instance_id=identity.turn_instance_id,
             effect_id=identity.effect_id,
             candidate_id=candidate_id,
+            runtime_root=runtime_root,
             writeback_appended=readback.writeback.failure is None,
             spend_appended=readback.spend.failure is None,
         )
     )
+    if result is not None:
+        payload["reward_memory_ingest"] = result
 
 
 def attach_reward_memory_recall_after_should_run(

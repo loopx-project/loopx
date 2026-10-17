@@ -671,11 +671,18 @@ def _schema_migration_growth_allowance(
 
 
 # The unchanged status matrix adds 2,801 pretty JSON chars / 102 lines /
-# 1,910 compact chars for five source rows. This reviewed one-time transition
-# leaves headroom without changing absolute ceilings or ordinary v0-to-v0 growth.
+# 1,910 compact chars for five source rows. Quota should-run adds 2,617 JSON
+# chars or 167 Markdown chars for its inherited and direct source rows. This
+# reviewed one-time transition leaves headroom without changing absolute
+# ceilings or ordinary v0-to-v0 growth.
 _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
     ratio=0,
     json={"chars": 3_000, "utf8_bytes": 3_000, "lines": 110, "compact_payload_chars": 2_048},
+    markdown={"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0},
+)
+_QUOTA_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
+    ratio=0,
+    json={"chars": 3_000, "utf8_bytes": 3_000, "lines": 110, "compact_payload_chars": 2_800},
     markdown={"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0},
 )
 
@@ -683,16 +690,24 @@ _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
 def _projection_envelope_migration(
     base: dict[str, Any], candidate: dict[str, Any], *, output_format: str,
 ) -> tuple[dict[Metric, int], list[str], list[str]]:
-    """Qualify the one-time status schema transition, never unrelated growth."""
+    """Qualify the one-time projection schema transition, never unrelated growth."""
     before = tuple(base.get("projection_envelope_schema_versions") or [])
     after = tuple(candidate.get("projection_envelope_schema_versions") or [])
     if before == after:
         return {}, [], []
-    row_id = str(base["row_id"])
-    if (row_id.startswith(("surface/status/", "variant/status_task_graph_detail/"))
+    surface_id = str(base.get("surface_id") or "")
+    if (surface_id in {"status", "quota_should_run"}
             and before == () and after == ("loopx_projection_envelope_v0",)):
-        allowance = (_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE.json
-                     if output_format == "json" else _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE.markdown)
+        migration_allowance = (
+            _QUOTA_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE
+            if surface_id == "quota_should_run"
+            else _PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE
+        )
+        allowance = (
+            migration_allowance.json
+            if output_format == "json"
+            else migration_allowance.markdown
+        )
         return allowance, [], ["projection envelope schema migrated: none -> loopx_projection_envelope_v0"]
     return {}, ["projection envelope schema coverage changed"], []
 

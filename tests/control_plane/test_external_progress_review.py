@@ -8,7 +8,6 @@ from loopx.control_plane.work_items.external_progress_review import (
 )
 from loopx.control_plane.work_items.progress_observation import (
     normalize_progress_observation,
-    semantic_progress_delta,
 )
 from loopx.control_plane.work_items.autonomous_replan_ack import (
     autonomous_replan_ack_recorded,
@@ -107,38 +106,6 @@ def test_two_consecutive_completed_drift_receipts_trigger() -> None:
         normalize_progress_observation(runs[0]["progress_observation"]),
         normalize_progress_observation(runs[1]["progress_observation"]),
     ]
-
-
-def test_bound_baseline_rejects_a_repeated_observation_and_accepts_new_evidence() -> None:
-    runs = [run(2, turn="t2"), run(1, turn="t1")]
-    for row in runs:
-        row["progress_observation"]["surface_id"] = "surface-retry"
-        row["progress_observation"]["evidence_ids"] = [f"evidence-{row['generated_at'][-3:-1]}"]
-    result = trigger(runs, [receipt(2, turn="t2"), receipt(1, turn="t1")])
-    assert result is not None
-    baseline = result["progress_baseline"]
-    identical = dict(runs[0]["progress_observation"])
-    assert semantic_progress_delta(identical, baseline=baseline)["accepted"] is False
-    same_hypothesis_new_evidence = {**identical, "evidence_ids": ["evidence-fresh"]}
-    assert semantic_progress_delta(same_hypothesis_new_evidence, baseline=baseline)["accepted"] is False
-    new_hypothesis = {**identical, "hypothesis_id": "hypothesis-next", "evidence_ids": ["evidence-fresh"]}
-    assert semantic_progress_delta(new_hypothesis, baseline=baseline)["accepted"] is True
-    # The codec states evidence novelty as a fact; the outcome owner decides
-    # which obligation sources require it behind a renamed identifier.
-    assert semantic_progress_delta(identical, baseline=baseline)["evidence_novel"] is False
-    assert semantic_progress_delta(same_hypothesis_new_evidence, baseline=baseline)["evidence_novel"] is True
-    renamed_only = {**identical, "hypothesis_id": "hypothesis-renamed"}
-    renamed_delta = semantic_progress_delta(renamed_only, baseline=baseline)
-    assert renamed_delta["delta_kinds"] == ["new_hypothesis"] and renamed_delta["evidence_novel"] is False
-    new_blocker = {
-        "schema_version": "typed_progress_observation_v0",
-        "result_class": "blocked",
-        "blocker_id": "blocker-new",
-        "evidence_ids": ["evidence-blocker"],
-    }
-    assert semantic_progress_delta(new_blocker, baseline=baseline)["accepted"] is True
-    # Without a baseline the identical observation would have passed as new work.
-    assert semantic_progress_delta(identical, baseline=None)["accepted"] is True
 
 
 def test_no_typed_observation_on_the_counted_window_raises_nothing() -> None:

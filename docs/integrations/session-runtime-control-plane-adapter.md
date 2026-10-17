@@ -140,11 +140,16 @@ existing history stays addressable. Active Turns, exact Session resumes,
 attached Agents, task workers and an already started Agent Loop retain their
 original identity. The header separates **New conversation model/reasoning**
 choices from the current Session readback. Its compact model control keeps the
-observed model and settings visible; opening it shows the complete observation
+observed model and settings visible. Without a model observation it offers
+settings, with the missing-model explanation inside the disclosure rather than
+a permanent unknown-model label. Opening it shows the complete observation
 and optional new-conversation choices in place. Native catalog discovery begins
 when those choices are opened, rather than while reading an overview or typing
 an ordinary message. Closing or changing the executor cancels that read; retry
 remains explicit, and catalog failures do not replace the observed model.
+The same disclosure links to the existing ordinary-conversation defaults editor;
+the header does not need a second model-settings button. Refresh failures remain
+visible; successful status refreshes are announced without another header label.
 Effort and tier appear only when the native host reports
 them; Fast may be returned as `priority`. Model selection does not enable a
 LoopX Agent Loop: its separate settings own coordinator identity, token

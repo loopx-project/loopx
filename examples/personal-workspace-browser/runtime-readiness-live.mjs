@@ -85,8 +85,9 @@ export const runtimeReadinessLiveScenario = {
             await page.locator(".personal-goal-link").first().click();
             await page.getByRole("navigation", { name: zh ? "Goal 视图" : "Goal view" }).getByRole("button", { name: zh ? "对话" : "Chat", exact: true }).click();
           }
-          await page.getByRole("combobox", { name: zh ? "选择聊天 Runtime" : "Select chat runtime", exact: true }).click();
-          await page.getByRole("option", { name: zh ? "仅查状态" : "Status only", exact: true }).click();
+          const statusOnly = page.getByRole("button", { name: zh ? "仅查状态 · 不调用模型" : "Status only · No model calls", exact: true });
+          if (await statusOnly.getAttribute("aria-pressed") !== "true") await statusOnly.click();
+          assert.equal(await statusOnly.getAttribute("aria-pressed"), "true");
           const question = zh ? `当前有哪些 Goal？${scope}` : `Which Goals are present? ${scope}`;
           const saved = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/chat/projection-messages" && response.request().method() === "POST");
           await page.getByLabel(zh ? "向 LoopX 发送消息" : "Send a message to LoopX").fill(question);
@@ -121,9 +122,8 @@ export const runtimeReadinessLiveScenario = {
         await projectLine.waitFor({ state: "visible" });
         assert.match(await projectLine.innerText(), zh ? /Agent 执行尚未就绪/ : /Agent execution is not ready/);
         assert.doesNotMatch(await projectLine.innerText(), /仅查状态|Status only/);
-        await page.getByRole("combobox", { name: zh ? "选择聊天 Runtime" : "Select chat runtime", exact: true }).click();
-        assert.equal(await page.getByRole("option", { name: zh ? "仅查状态" : "Status only", exact: true }).count(), 0);
-        await page.keyboard.press("Escape");
+        assert.equal(await page.getByRole("button", { name: zh ? "仅查状态 · 不调用模型" : "Status only · No model calls", exact: true }).count(), 0,
+          "A project conversation does not offer the read-only control");
         const admissionsBefore = admissions.length;
         const draft = zh ? "保留这条未发送的项目请求" : "Retain this unsent project request";
         const input = page.getByLabel(zh ? "向 LoopX 发送消息" : "Send a message to LoopX");

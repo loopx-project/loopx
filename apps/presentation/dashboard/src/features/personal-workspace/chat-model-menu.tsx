@@ -5,10 +5,11 @@ import { chatModelControls } from "./chat-model-controls";
 import { useWorkspaceI18n } from "./i18n";
 import { WorkspaceSelect } from "./workspace-select";
 
-/** Current facts stay visible; optional new-conversation settings open in place. */
-export function ChatModelMenu({ agentId, goalId, ordinary, model = "", effort, readback, onModel, onEffort }: {
+/** Reported models stay visible; missing observations belong in the settings disclosure. */
+export function ChatModelMenu({ agentId, goalId, ordinary, model = "", effort, readback, onModel, onEffort, onOpenDefaults }: {
   agentId: string; goalId?: string; ordinary: boolean; model?: string; effort?: string;
   readback?: ChatSessionSummary; onModel?: (value: string) => void; onEffort?: (value: string) => void;
+  onOpenDefaults?: () => void;
 }) {
   const { locale } = useWorkspaceI18n();
   const zh = locale === "zh-CN";
@@ -43,10 +44,10 @@ export function ChatModelMenu({ agentId, goalId, ordinary, model = "", effort, r
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", close); };
   }, [open]);
   const controls = chatModelControls(discovery, model, effort, readback);
-  const observed = controls.observedModel ?? (zh ? "模型未回传" : "Model not reported");
-  const observedSettings = [controls.observedEffort,
+  const observed = controls.observedModel ?? (zh ? "模型设置" : "Model settings");
+  const observedSettings = controls.observedModel ? [controls.observedEffort,
     controls.observedTier ? (["priority", "fast"].includes(controls.observedTier) ? "Fast" : controls.observedTier) : null,
-  ].filter(Boolean).join(" · ");
+  ].filter(Boolean).join(" · ") : "";
   return <details className="personal-chat-model-menu" ref={root} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary aria-label={`${zh ? "模型与思考深度" : "Model and reasoning"} · ${observed}${observedSettings ? ` · ${observedSettings}` : ""}`}>
       <span><span className="personal-model-current">{observed}</span>{observedSettings ? <small>{observedSettings}</small> : null}</span>
@@ -82,6 +83,9 @@ export function ChatModelMenu({ agentId, goalId, ordinary, model = "", effort, r
         {discovery?.supported === false ? <p>{zh ? "执行器未提供可选模型与思考深度" : "Executor provides no model or reasoning choices"}</p> : null}
         {loading ? <p role="status">{zh ? "正在读取可选配置…" : "Reading available settings…"}</p> : null}
         {error ? <><p role="alert">{error}</p><button className="personal-action-button" type="button" onClick={() => setRetry(value => value + 1)}>{zh ? "配置读取失败，重试" : "Settings unavailable · Retry"}</button></> : null}
+        {onOpenDefaults ? <button className="personal-action-button" type="button" onClick={onOpenDefaults}>
+          {zh ? "默认对话配置" : "Conversation defaults"}
+        </button> : null}
       </> : null}
     </div>
   </details>;

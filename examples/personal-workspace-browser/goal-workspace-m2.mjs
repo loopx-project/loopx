@@ -3,7 +3,7 @@ import {resolve} from "node:path";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {readFile} from "node:fs/promises";
 import {openWorkspacePage} from "./scenario-context.mjs";
-import {installShowcaseWorkspace, openShowcaseGoal, showcaseGoalId} from "./showcase-workspace.mjs";
+import {deliveryReadFixture, installShowcaseWorkspace, openShowcaseGoal, showcaseGoalId} from "./showcase-workspace.mjs";
 
 export const goalWorkspaceM2Scenario = {
   id: "goal-workspace-m2",
@@ -36,11 +36,11 @@ export const goalWorkspaceM2Scenario = {
       };
       await page.route("**/api/chat/delivery-review?*", async route => {
         if (!scale) {await route.fallback(); return;}
-        await route.fulfill({json: {ok:true, goal_id:showcaseGoalId, observed_at:new Date().toISOString(), acceptance:null, graph:null,
+        await route.fulfill({json: deliveryReadFixture({ok:true, goal_id:showcaseGoalId, observed_at:new Date().toISOString(), acceptance:null, graph:null,
           goal_map:{schema_version:"goal_task_map_v0",mode:"read_only",goal_id:showcaseGoalId,
             limits:{node_limit:200,emitted_node_count:200,omitted_node_count:0,source_truncated:false,missing_endpoint_count:0,cycle_edge_count:0,topology_complete:true},
             nodes:many.map((todo,i)=>({node_id:todo.todo_id,kind:"deliverable",title:todo.text,state:i===0?"blocked":"open",depth:i%2,refs:{todo_ids:[todo.todo_id]}})),
-            edges:many.filter((_,i)=>i%2===1).map(todo=>({edge_id:`edge-${todo.todo_id}`,from_node_id:todo.todo_id,to_node_id:`scale-${String(Number(todo.todo_id.slice(6))-1).padStart(3,"0")}`,relation:"depends_on",enforcement:"typed_condition",reason:"Recorded synthetic completion condition"}))}}});
+            edges:many.filter((_,i)=>i%2===1).map(todo=>({edge_id:`edge-${todo.todo_id}`,from_node_id:todo.todo_id,to_node_id:`scale-${String(Number(todo.todo_id.slice(6))-1).padStart(3,"0")}`,relation:"depends_on",enforcement:"typed_condition",reason:"Recorded synthetic completion condition"}))}})});
       });
       page.on("request", request => {if (request.method() !== "GET" && /actions|quota|validat/.test(request.url())) writes.push(request.url());});
     }});

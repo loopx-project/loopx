@@ -14,6 +14,16 @@ const base: GoalWorkspaceDigestInput = { observedAt, activation: "active", todos
 const running = (observed: boolean, quiet = false, lastActivityAt: string | null = "2026-10-11T09:58:00.000Z") =>
   ({ kind: "running" as const, observed, quiet, lastActivityAt });
 
+test("a declared Goal objective is independent of work, progress and optional acceptance", () => {
+  assert.equal(compileGoalWorkspaceDigest({ ...base, objective: "  Preserve the original research question.  " }).objective,
+    "Preserve the original research question.");
+  for (const objective of [undefined, null, "", "  "]) {
+    const digest = compileGoalWorkspaceDigest({ ...base, objective,
+      todos: [{todoId: "work", done: false}], execution: running(true) });
+    assert.equal(digest.objective, null, "Missing objective content is not inferred from activity or work");
+  }
+});
+
 test("absent usage is unknown, never zero, and a measured zero stays zero", () => {
   for (const usage of [undefined, null, {}]) {
     const digest = compileGoalWorkspaceDigest({ ...base, usage });

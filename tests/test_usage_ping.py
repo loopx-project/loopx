@@ -9,6 +9,7 @@ import select
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -364,6 +365,25 @@ def test_detached_sender_honors_proxy_and_no_proxy(isolated, collector, monkeypa
     assert not release.is_set(), 'CLI must finish before network response'
     usage_ping.control('disable')
     release.set()
+
+
+def test_detached_sender_leaves_the_callers_directory_free(isolated, tmp_path):
+    """On Windows a live child whose cwd is the caller's directory pins it."""
+    observed = tmp_path / 'sender-cwd.json'
+    code = ("import json, os, sys\n"
+            "json.load(sys.stdin)\n"
+            f"open({str(observed)!r}, 'w', encoding='utf-8').write(json.dumps(os.getcwd()))\n")
+    usage_ping._detach(usage_ping._request('observe', isolated / 'usage-ping.json'),
+                       command=[sys.executable, '-c', code])
+    deadline = time.monotonic() + 30
+    child_cwd = None
+    while time.monotonic() < deadline and child_cwd is None:
+        try:
+            child_cwd = json.loads(observed.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            time.sleep(0.05)
+    assert child_cwd is not None, 'detached sender did not report its working directory'
+    assert Path(child_cwd).resolve() == Path(tempfile.gettempdir()).resolve()
 
 
 @pytest.mark.parametrize('upgrade', [False, True])
