@@ -8,9 +8,14 @@ const copy = {
     privacy: "Local reading · No file upload or storage.",
     choose: "Choose another file", close: "Back to the three episodes", reading: "Reading your file…",
     span: "Recorded between", unknown: "Unknown record time", unknownEvents: "distinct events have unknown record times.",
-    search: "Find in the original record", placeholder: "A question, a phrase, an evidence reference…",
+    search: "Find in the original record", filters: "Search and source filters", placeholder: "A question, a phrase, an evidence reference…",
     status: "Source label", allLabels: "All labels", emptyLabel: "Unrecorded label", time: "Record time", allTime: "Whole recording",
     phases: ["First third", "Middle third", "Last third"], match: "Matching records", of: "of", line: "Source line",
+    readingView: "Read your record", allRecords: "All records", decisions: "Decision records", outcome: "Recorded decision", allOutcomes: "All decisions",
+    outcomes: {continue: "Continue", no_change: "No change", replan: "Replan", stop: "Stop", wait: "Wait", ask_human: "Ask the owner"},
+    changed: "Changed", stopped: "Stopped", retained: "Retained", noChanges: "No path changes were listed.",
+    decisionBoundary: "Decisions recorded by the source, not a new assessment.", noDecisions: "This file contains no explicitly recorded decisions.",
+    context: "Source context", inputRevision: "Input revision", allRecordsAction: "Read all records",
     previous: "Previous record", next: "Next record", previousPage: "Previous 50", nextPage: "Next 50", page: "Page",
     noMatch: "No matching record.", reset: "Clear filters", original: "Original text · untranslated", structured: "Source sections · untranslated",
     observation: "Source observation", applicability: "Tested scope · source", interpretation: "Source interpretation", fullOriginal: "Read the complete original text",
@@ -26,9 +31,14 @@ const copy = {
     privacy: "本地阅读 · 文件内容不上传、不保存。",
     choose: "换一份文件", close: "回到三个案例", reading: "正在读取你的文件…",
     span: "记录跨度", unknown: "记录时间未知", unknownEvents: "个事件的记录时间未知（按事件 ID 去重）。",
-    search: "在原记录里找一找", placeholder: "一个问题、一段话、一条证据引用…",
+    search: "在原记录里找一找", filters: "搜索与来源筛选", placeholder: "一个问题、一段话、一条证据引用…",
     status: "来源标记", allLabels: "全部标记", emptyLabel: "未记录标记", time: "记录时间", allTime: "完整记录跨度",
     phases: ["前段", "中段", "后段"], match: "匹配记录", of: "/", line: "来源行",
+    readingView: "阅读记录", allRecords: "全部记录", decisions: "决策记录", outcome: "已记录决策", allOutcomes: "全部决策",
+    outcomes: {continue: "继续", no_change: "不变", replan: "调整方向", stop: "停止", wait: "等待", ask_human: "请本人决定"},
+    changed: "改变了什么", stopped: "停止了什么", retained: "保留了什么", noChanges: "来源未列出路径变更。",
+    decisionBoundary: "这里展示来源已记录的决策，不作新的判断。", noDecisions: "这份文件没有明确记录的决策。",
+    context: "来源上下文", inputRevision: "输入版本", allRecordsAction: "阅读全部记录",
     previous: "上一条记录", next: "下一条记录", previousPage: "前 50 条", nextPage: "后 50 条", page: "页",
     noMatch: "没有找到匹配的记录。", reset: "清除筛选", original: "原文 · 未翻译", structured: "来源分段 · 未翻译",
     observation: "来源中的观察", applicability: "测试范围 · 来源原文", interpretation: "来源中的解释", fullOriginal: "展开完整原文",
@@ -81,10 +91,15 @@ function LoadedLog({log, language}: {log: LocalExploreLog; language: "en" | "zh"
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [phase, setPhase] = useState<number | "unknown" | null>(null);
+  // UI-only filter over the shared owner's decoded outcomes; unknown source
+  // values remain selectable. undefined reads all rows, null all decisions.
+  const [outcome, setOutcome] = useState<string | null | undefined>(() => log.timeline.decisions.length ? null : undefined);
   const [selectedLine, setSelectedLine] = useState<number | null>(null);
   const original = useRef<HTMLHeadingElement>(null);
   const search = useRef<HTMLInputElement>(null);
-  const entries = useMemo(() => selectLocalLogEntries(log, query, status, phase), [log, query, status, phase]);
+  const entries = useMemo(() => selectLocalLogEntries(log, query, status, phase, outcome), [log, query, status, phase, outcome]);
+  const decisionEntries = useMemo(() => selectLocalLogEntries(log, "", null, null, null), [log]);
+  const outcomes = useMemo(() => [...new Set(log.timeline.decisions.map(item => item.sections!.decision!.outcome))], [log]);
   const labels = useMemo(() => [...new Set(log.entries.map(entry => entry.event.status))], [log]);
   const selected = entries.find(entry => entry.line === selectedLine) ?? entries[0];
   const position = selected ? entries.indexOf(selected) : -1;
@@ -93,7 +108,9 @@ function LoadedLog({log, language}: {log: LocalExploreLog; language: "en" | "zh"
   const {timeline, history} = log;
   // Reuse the existing codec for Explore-authored section labels only. Other
   // summaries stay raw; the complete source text is always available unchanged.
-  const sections = selected ? timeline.findings.find(item => item.event.event_id === selected.event.event_id)?.sections : null;
+  const sections = selected ? log.findingsByEventId.get(selected.event.event_id)?.sections : null;
+  const decision = sections?.decision;
+  const outcomeLabel = (value: string) => Object.hasOwn(c.outcomes, value) ? c.outcomes[value as keyof typeof c.outcomes] : value;
   const maxBin = Math.max(1, ...timeline.bins.map(bin => bin.events));
   const date = (value: number | null) => value === null ? c.unknown : new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-GB",
     {year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short"}).format(value);
@@ -101,7 +118,12 @@ function LoadedLog({log, language}: {log: LocalExploreLog; language: "en" | "zh"
     setSelectedLine(entries[index]!.line);
     window.requestAnimationFrame(() => original.current?.focus());
   }
-  function reset() { setQuery(""); setStatus(null); setPhase(null); search.current?.focus(); }
+  function changeView(value: undefined | null) {
+    const visible = selectLocalLogEntries(log, query, status, phase, value);
+    setSelectedLine(visible.some(entry => entry.line === selected?.line) ? selected!.line : visible[0]?.line ?? null);
+    setOutcome(value);
+  }
+  function reset() { setQuery(""); setStatus(null); setPhase(null); setOutcome(outcome === undefined ? undefined : null); setSelectedLine(null); search.current?.focus(); }
 
   return <>
     <div className="tm-log-overview">
@@ -110,24 +132,39 @@ function LoadedLog({log, language}: {log: LocalExploreLog; language: "en" | "zh"
         {timeline.bins.map((bin, index) => <rect key={index} x={index * 720 / timeline.bins.length} y={40 - 36 * bin.events / maxBin}
           width={Math.max(1, 720 / timeline.bins.length - 3)} height={Math.max(1, 36 * bin.events / maxBin)}/>)}</svg>}
     </div>
-    <div className="tm-log-filters">
-      <label htmlFor="tm-log-search">{c.search}<input ref={search} id="tm-log-search" type="search" value={query} placeholder={c.placeholder} onChange={event => setQuery(event.target.value)}/></label>
-      <label htmlFor="tm-log-label">{c.status}<select id="tm-log-label" value={status === null ? "" : JSON.stringify(status)} onChange={event => setStatus(event.target.value ? JSON.parse(event.target.value) as string : null)}>
+    <div className="tm-log-views" role="group" aria-label={c.readingView}>
+      <button type="button" aria-pressed={outcome === undefined} onClick={() => changeView(undefined)}>{c.allRecords} <span>{log.entries.length}</span></button>
+      <button type="button" aria-pressed={outcome !== undefined} onClick={() => changeView(null)}>{c.decisions} <span>{decisionEntries.length}</span></button>
+      {outcome !== undefined && outcomes.length > 0 && <label htmlFor="tm-log-outcome">{c.outcome}<select id="tm-log-outcome" value={outcome === null ? "" : JSON.stringify(outcome)} onChange={event => {setOutcome(event.target.value ? JSON.parse(event.target.value) as string : null); setSelectedLine(null);}}>
+        <option value="">{c.allOutcomes}</option>{outcomes.map(value => <option key={value} value={JSON.stringify(value)}>{outcomeLabel(value)}</option>)}
+      </select></label>}
+    </div>
+    <details className="tm-log-filter-disclosure"><summary>{c.filters}</summary><div className="tm-log-filters">
+      <label htmlFor="tm-log-search">{c.search}<input ref={search} id="tm-log-search" type="search" value={query} placeholder={c.placeholder} onChange={event => {setQuery(event.target.value); setSelectedLine(null);}}/></label>
+      <label htmlFor="tm-log-label">{c.status}<select id="tm-log-label" value={status === null ? "" : JSON.stringify(status)} onChange={event => {setStatus(event.target.value ? JSON.parse(event.target.value) as string : null); setSelectedLine(null);}}>
         <option value="">{c.allLabels}</option>{labels.map(label => <option key={label} value={JSON.stringify(label)}>{label || c.emptyLabel}</option>)}</select></label>
-      <label htmlFor="tm-log-time">{c.time}<select id="tm-log-time" value={phase === null ? "" : phase} onChange={event => setPhase(event.target.value === "" ? null : event.target.value === "unknown" ? "unknown" : Number(event.target.value))}>
+      <label htmlFor="tm-log-time">{c.time}<select id="tm-log-time" value={phase === null ? "" : phase} onChange={event => {setPhase(event.target.value === "" ? null : event.target.value === "unknown" ? "unknown" : Number(event.target.value)); setSelectedLine(null);}}>
         <option value="">{c.allTime}</option>{timeline.phases.map((item, index) => <option key={index} value={index}>{c.phases[index]} · {date(item.start)}</option>)}
         {history.unknownTimeCount > 0 && <option value="unknown">{c.unknown}</option>}</select></label>
-    </div>
+    </div></details>
     <p className="tm-log-match" role="status">{c.match}: <strong>{entries.length}</strong> {c.of} {log.entries.length}
-      {(query || status !== null || phase !== null) && <button type="button" onClick={reset}>{c.reset}</button>}</p>
-    {!selected ? <div className="tm-log-message"><p>{c.noMatch}</p><button type="button" onClick={reset}>{c.reset}</button></div> :
+      {(query || status !== null || phase !== null || typeof outcome === "string") && <button type="button" onClick={reset}>{c.reset}</button>}</p>
+    {!selected ? <div className="tm-log-message"><p>{outcome !== undefined && !decisionEntries.length ? c.noDecisions : c.noMatch}</p>
+      {outcome !== undefined && !decisionEntries.length ? <button type="button" onClick={() => changeView(undefined)}>{c.allRecordsAction}</button> : <button type="button" onClick={reset}>{c.reset}</button>}</div> :
       <div className="tm-log-reading">
         <div className="tm-log-detail"><article className="tm-original">
           <small>{sections ? c.structured : c.original}</small><p className="tm-record-meta"><time>{selected.event.recorded_at}</time> · {selected.event.status || c.emptyLabel} · {selected.event.event_kind}</p>
           <h2 ref={original} tabIndex={-1}>{selected.event.title}</h2>
-          {sections ? <div className="tm-log-finding"><p className="tm-log-field-label">{c.observation}</p><p className="tm-log-observation">{sections.observation}</p>
+          {decision && <section className="tm-log-decision" aria-label={c.outcome}>
+            <p className="tm-log-decision-outcome">{c.outcome} · <strong>{outcomeLabel(decision.outcome)}</strong></p>
+            <dl>{(["changed", "stopped", "retained"] as const).map(key => decision[key].length > 0 && <div key={key}><dt>{c[key]}</dt><dd><ul>{decision[key].map((item, index) => <li key={index}>{item}</li>)}</ul></dd></div>)}</dl>
+            {![...decision.changed, ...decision.stopped, ...decision.retained].length && <p>{c.noChanges}</p>}
+            <p className="tm-log-decision-note">{c.decisionBoundary}</p>
+          </section>}
+          {sections ? <div className="tm-log-finding">
+            {decision ? <details className="tm-log-context"><summary>{c.context}</summary><dl><dt>{c.inputRevision}</dt><dd>{sections.inputRevision}</dd><dt>{c.applicability}</dt><dd>{sections.applicability}</dd><dt>{c.observation}</dt><dd>{sections.observation}</dd></dl></details> : <><p className="tm-log-field-label">{c.observation}</p><p className="tm-log-observation">{sections.observation}</p>
             <p className="tm-log-field-label">{c.applicability}</p><p>{sections.applicability}</p>
-            <p className="tm-log-field-label">{c.interpretation}</p><p>{sections.interpretation}</p>
+            <p className="tm-log-field-label">{c.interpretation}</p><p>{sections.interpretation}</p></>}
             <details><summary>{c.fullOriginal}</summary><p className="tm-record-body">{selected.event.summary}</p></details></div> : <p className="tm-record-body">{selected.event.summary}</p>}
           <details className="tm-log-source"><summary>{c.details}</summary>
             <dl><dt>{c.line}</dt><dd>{selected.line}</dd><dt>Goal</dt><dd>{log.goalId}</dd><dt>Result</dt><dd>{selected.event.result_id}</dd><dt>Event</dt><dd>{selected.event.event_id}</dd></dl>

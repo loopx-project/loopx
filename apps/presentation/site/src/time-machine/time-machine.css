@@ -79,6 +79,15 @@
 .tm-log-overview { border-block: 1px solid var(--border); padding: 20px 0 0; margin-top: 20px; }
 .tm-log-overview>p { font-size: 13px; color: var(--body); margin: 0 0 8px; }
 .tm-log-strip { display: block; width: 100%; height: 40px; margin-top: 16px; fill: var(--body); opacity: .65; }
+.tm-log-views { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.tm-log-views>button { padding-inline: 12px; color: var(--body); border-radius: 6px; }
+.tm-log-views>button[aria-pressed=true] { color: var(--ink); background: var(--soft); }
+.tm-log-views>button span { font: 12px/1.5 var(--font-mono); }
+.tm-log-views>label { display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: var(--body); min-width: 0; }
+.tm-log-views select { font: inherit; font-size: 14px; min-height: 44px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); padding: 8px; max-width: 100%; }
+.tm-log-filter-disclosure { margin-top: 12px; font-size: 13px; color: var(--body); }
+.tm-log-filter-disclosure>summary { min-height: 44px; align-content: center; cursor: pointer; width: fit-content; }
+.tm-log-filter-disclosure .tm-log-filters { padding-top: 8px; }
 .tm-log-filters { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding-top: 24px; }
 .tm-log-filters label { display: grid; gap: 8px; font-size: 12px; color: var(--body); min-width: 0; }
 .tm-log-filters :is(input, select) { font: inherit; font-size: 14px; width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); padding: 10px 12px; }
@@ -96,6 +105,19 @@
 .tm-log-finding>p { font-size: 14px; line-height: 1.8; color: var(--body); margin: 8px 0 20px; white-space: pre-wrap; }
 .tm-log-finding>p.tm-log-field-label { font-size: 12px; margin: 16px 0 4px; }
 .tm-log-finding>p.tm-log-observation { color: var(--ink); }
+.tm-log-decision { border-top: 1px solid var(--border); padding-top: 12px; }
+.tm-log-decision-outcome { font-size: 14px; color: var(--body); margin: 0 0 16px; }
+.tm-log-decision-outcome strong { color: var(--ink); font-weight: 500; }
+.tm-log-decision dl { margin: 0; }
+.tm-log-decision dl>div { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 16px; padding-block: 12px; }
+.tm-log-decision dt { font-size: 12px; color: var(--body); padding-top: 2px; }
+.tm-log-decision dd { margin: 0; font-size: 14px; line-height: 1.8; white-space: pre-wrap; }
+.tm-log-decision ul { padding: 0; margin: 0; list-style: none; }
+.tm-log-decision li+li { margin-top: 8px; }
+.tm-log-decision-note { font-size: 12px; color: var(--body); margin: 16px 0; }
+.tm-log-context dl { display: grid; gap: 8px; font-size: 14px; line-height: 1.8; }
+.tm-log-context dt { font-size: 12px; color: var(--body); }
+.tm-log-context dd { margin: 0 0 12px; white-space: pre-wrap; }
 .tm-log-source dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; font: 12px/1.7 var(--font-mono); }
 .tm-log-source dd { margin: 0; }
 .tm-log-source ul { padding-left: 20px; }
@@ -135,6 +157,10 @@
   .tm-log-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding-top: 16px; }
   .tm-log-match { margin-block: 8px; }
   .tm-log-filters>label:first-child { grid-column: 1 / -1; }
+  .tm-log-views { gap: 4px; margin-top: 12px; }
+  .tm-log-views>label { width: 100%; margin-top: 4px; }
+  .tm-log-views select { flex: 1; min-width: 0; }
+  .tm-log-decision dl>div { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .tm-log-reading { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .tm-log-index, .tm-log-detail { grid-column: auto; grid-row: auto; }
   .tm-log h1 { font-size: 20px; }

@@ -111,6 +111,48 @@ test("local search and time/label filters preserve source order, exact labels an
   assert.equal(selectLocalLogEntries(futureLabel, "", "all", null).length, 1, "a source label is data, not a reserved UI option");
 });
 
+// Independently declared Explore writeback semantics: only a finding with the
+// owner's complete section envelope and an explicit leading Outcome is a
+// decision. Status labels and incidental words do not confer that meaning.
+const decisionSummary = interpretation => `Input revision: input-v2\nApplicability: Synthetic source only.\nObservation: The earlier route missed counterevidence.\nInterpretation: ${interpretation}`;
+const decisionRows = () => {
+  const replan = localEvent({event_id: "decision-replan", event_kind: "finding", node_id: "question", result_id: "decision-1", status: "tentative",
+    summary: decisionSummary("Outcome: replan changed: - Read the early counterexample. stopped: - Retry the same input. retained: - Keep source references."), recorded_at: "2026-01-01T18:00:00Z"});
+  return [localEvent({summary: decisionSummary("Outcome: stop"), status: "replan"}), replan,
+    localEvent({event_id: "plain-mention", event_kind: "finding", result_id: "plain", summary: "Discuss Outcome: replan, changed: and retained: without a structured decision."}),
+    localEvent({event_id: "decision-continue", event_kind: "finding", result_id: "decision-2", summary: decisionSummary("Outcome: continue retained: - Keep the negative result."), recorded_at: "2026-01-01T03:00:00Z"}),
+    localEvent({event_id: "unknown-outcome", event_kind: "finding", result_id: "decision-3", summary: decisionSummary("Outcome: __proto__")}), replan,
+    localEvent({event_id: "unknown-time-decision", event_kind: "finding", result_id: "decision-4", recorded_at: "unknown", summary: decisionSummary("Outcome: all")})];
+};
+
+test("decision reading uses explicit source outcomes, keeps repeated rows and never invents chronology or links", () => {
+  const rows = decisionRows();
+  const log = readLocalExploreLog(jsonl(rows));
+  assert.deepEqual(selectLocalLogEntries(log, "", null, null).map(row => row.line), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(selectLocalLogEntries(log, "", null, null, null).map(row => row.line), [2, 4, 5, 6, 7]);
+  assert.deepEqual(selectLocalLogEntries(log, "", null, null, "replan").map(row => row.line), [2, 6]);
+  assert.deepEqual(selectLocalLogEntries(log, "", null, null, "continue").map(row => row.line), [4]);
+  assert.deepEqual(selectLocalLogEntries(log, "", null, null, "__proto__").map(row => row.line), [5]);
+  assert.deepEqual(selectLocalLogEntries(log, "", null, null, "all").map(row => row.line), [7]);
+  assert.equal(selectLocalLogEntries(log, "", null, null, "stop").length, 0, "a node is not a finding decision");
+  assert.equal(log.timeline.decisions.length, 4, "the shared owner deduplicates its projection, not source rows");
+  assert.equal(log.timeline.routes.length, 0);
+  assert.equal(log.history.edges.length, 0);
+  const sections = log.findingsByEventId.get("decision-replan").sections;
+  assert.deepEqual(sections.decision, {outcome: "replan", changed: ["Read the early counterexample."], stopped: ["Retry the same input."], retained: ["Keep source references."]});
+  assert.equal(sections.inputRevision, "input-v2");
+  assert.equal(selectLocalLogEntries(log, "", null, null, "replan")[0].source.summary, rows[1].summary, "the complete original is never rewritten");
+});
+
+test("decision filters compose with original search, source labels and unknown record times", () => {
+  const log = readLocalExploreLog(jsonl(decisionRows()));
+  assert.deepEqual(selectLocalLogEntries(log, "early counterexample", "tentative", 2, "replan").map(row => row.line), [2, 6]);
+  assert.equal(selectLocalLogEntries(log, "", "replan", null, null).length, 0, "a source status is separate from an outcome");
+  assert.deepEqual(selectLocalLogEntries(log, "", null, "unknown", null).map(row => row.line), [7]);
+  assert.equal(selectLocalLogEntries(log, "absent", null, null, "replan").length, 0);
+  assert.equal(selectLocalLogEntries(readLocalExploreLog(jsonl(localRows())), "", null, null, null).length, 0, "a file without decisions stays empty in this view");
+});
+
 test("bad local files are rejected as a whole, with a line when the fault belongs to one record", () => {
   assert.throws(() => readLocalExploreLog(encoded("\n \r\n")), issue("empty"));
   assert.throws(() => readLocalExploreLog(new Uint8Array([0xff]).buffer), issue("encoding"));

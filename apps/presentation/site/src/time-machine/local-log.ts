@@ -53,14 +53,22 @@ export function readLocalExploreLog(bytes: ArrayBuffer) {
   try { history = projectExploreHistory(entries.map(entry => entry.event), goalId); }
   catch { throw new LocalLogError("identity"); }
   const timeline = buildExploreTimeline(history.nodes, history.edges, history.events);
-  return {goalId, entries, history, timeline};
+  const findingsByEventId = new Map(timeline.findings.map(item => [item.event.event_id, item]));
+  return {goalId, entries, history, timeline, findingsByEventId};
 }
 
-/** Filter source records without changing append order, labels or time semantics. */
-export function selectLocalLogEntries(log: LocalExploreLog, query: string, status: string | null, phase: number | "unknown" | null) {
+/** Filter source records without changing append order, labels or time semantics.
+ * decisionOutcome is a local reading filter: undefined reads every record,
+ * null reads every explicitly decoded decision, and a string matches its
+ * source outcome verbatim. This does not classify prose or node updates. */
+export function selectLocalLogEntries(log: LocalExploreLog, query: string, status: string | null, phase: number | "unknown" | null, decisionOutcome?: string | null) {
   const needle = query.trim().toLowerCase();
   return log.entries.filter(entry => {
     const event = entry.event;
+    if (decisionOutcome !== undefined) {
+      const decision = log.findingsByEventId.get(event.event_id)?.sections?.decision;
+      if (!decision || (decisionOutcome !== null && decision.outcome !== decisionOutcome)) return false;
+    }
     if (status !== null && event.status !== status) return false;
     if (phase !== null) {
       const parsed = Date.parse(event.recorded_at);
