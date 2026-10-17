@@ -7,14 +7,14 @@
 面向长程 Agent 与个人 Agent 团队的开源、本地优先控制面。<br>
 <sub>跨会话保留目标、决策与证据，连接 Codex、Claude Code、DeepSeek Harness 等已有运行时。</sub>
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?filter=v*&display_name=tag)](https://github.com/loopx-project/loopx/releases/latest) [![GitHub 贡献者](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Release](https://img.shields.io/badge/releases-GitHub-181717)](https://github.com/loopx-project/loopx/releases/latest) [![GitHub 贡献者](https://img.shields.io/badge/contributors-GitHub-181717)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml) [![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md)
 
 <a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="loopx-project/loopx 在 Trendshift 的趋势排名" width="220" height="48"></a>
 
 [开始使用](#试用-loopx) · [个人工作区](#认识个人-agent-工作区) · [LHTB 结果](#lhtb-results) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
-<a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4"><img src="docs/assets/personal-workspace/workspace-hero.zh-CN.webp" alt="LoopX 个人 Agent 工作区：工作地图展示任务依赖、负责 Agent、进展与等待用户处理的决策" width="960"></a><br>
-<sub>源码构建的 App 运行预设的 <a href="demo/workspace/README.md">Workspace 场景回放</a>，未执行实时 Agent 任务 · <a href="docs/assets/personal-workspace/loopx-dashboard-launch.mp4">观看 32 秒完整演示</a></sub>
+<a href="https://github.com/user-attachments/assets/2293aa7e-fac0-48cb-adf7-bdf959fddd33"><img src="docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp" alt="LoopX 研发工作台：真实本机工作区中记录的问题、结论与显式转向，沿时间线保留研究过程" width="960"></a><br>
+<sub>真实研究与任务归属实录，结合工作区场景回放、机制示意与来源数据图 · <a href="https://github.com/user-attachments/assets/2293aa7e-fac0-48cb-adf7-bdf959fddd33">观看 44 秒研发工作台影片</a></sub>
 
 **两步在 Codex App 里用上 LoopX。** 先安装一次：
 

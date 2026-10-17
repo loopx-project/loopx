@@ -33,7 +33,7 @@ def main() -> int:
         "long-horizon agents",
         "personal agent teams",
         "## Meet the Personal Agent Workspace",
-        "docs/assets/personal-workspace/workspace-hero.webp",
+        "docs/assets/personal-workspace/research-workbench-hero.webp",
         "docs/architecture/rfcs/capable-manager-semantic-handoff-v0.md",
         "## Why LoopX",
         "docs/assets/harness-neutral.en.svg",
@@ -70,7 +70,7 @@ def main() -> int:
         assert required in readme, required
 
     for required in [
-        "docs/assets/personal-workspace/workspace-hero.zh-CN.webp",
+        "docs/assets/personal-workspace/research-workbench-hero.zh-CN.webp",
         '<a id="快速开始"></a>',
         '<a id="看几个例子"></a>',
         "docs/assets/harness-neutral.zh.svg",
