@@ -65,7 +65,7 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
     {cutoverRecorded ? <p role="status">{zh ? "本次切换已接受，源环境保持停写。" : "This switch was accepted. Source writes remain closed."}</p> : null}
     {executionAccepted !== null ? <p role={executionAccepted ? "status" : "alert"}>{executionAccepted
       ? (zh ? "续办请求已处理；下方为原任务的当前状态和独立验收结果。" : "The continuation request was processed. Its original task's current state and independent checks appear below.")
-      : (zh ? "切换已接受，原任务续办尚未成功。可恢复同一次切换；已记录的执行和结果不会重复。" : "The switch was accepted, but original work has not continued successfully. Resume this move to recover its recorded execution without duplication.")}</p> : null}
+      : (zh ? "切换已接受，本次续办请求需要恢复。请以下方原任务的当前状态为准；恢复本次切换不会重复已记录的工作或扣额。" : "The switch was accepted. This continuation request needs recovery; read the original task's current status below. Resume this move without repeating recorded work or debits.")}</p> : null}
     {view ? <>
       <p>{view.local_cutover ? (view.local_cutover.target_activation_state === "stopped"
         ? (zh ? "目标 Goal 已停止，仍可查看原任务结果。恢复该 Goal 后才可继续执行。" : "The destination Goal is stopped. Original work remains readable; resume that Goal before continuing execution.")
@@ -82,7 +82,7 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
       {view.prepared_cutover_unavailable ? <p role="alert">{zh
         ? "已准备目标的当前状态无法确认。可重新读取；尚未切换时也可取消准备，恢复源环境。"
         : "The prepared destination could not be verified. Read current status again, or cancel preparation if the switch has not happened."}</p> : null}
-      <details>
+      <details open={cutoverRecorded ? true : undefined}>
         <summary>{zh ? "原工作" : "Original work"} · {view.work.todos.length}</summary>
         {view.work.agents.length ? <p>{view.work.agents.join(" · ")}</p> : null}
         <ul>{view.work.todos.map(todo => <li key={todo.todo_id}>{todo.text} · {zh
@@ -93,11 +93,12 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
         </li>)}</ul>
       </details>
       {view.prepared_cutover ? <>
-        <p>{zh ? "已准备的本地目标：" : "Prepared local destination: "}{view.prepared_cutover.destination_name}</p>
-        <p>{view.prepared_cutover.continue_work
+        <p>{view.local_cutover ? (zh ? "本地目标：" : "Local destination: ")
+          : (zh ? "已准备的本地目标：" : "Prepared local destination: ")}{view.prepared_cutover.destination_name}</p>
+        {!view.local_cutover ? <p>{view.prepared_cutover.continue_work
           ? (zh ? `确认后，${view.prepared_cutover.continue_work.agent_id} 使用目标环境当前的 Codex 登录，在目标工作区继续原任务并运行原验收。不会安装源环境凭证。`
             : `Confirm to let ${view.prepared_cutover.continue_work.agent_id} continue the original task in its destination workspace with the destination's current Codex login and original independent checks. Source credentials are not installed.`)
-          : (zh ? "确认后，由目标环境取得新的执行准入并继续上面的原工作。" : "Confirm to admit the destination for new execution and continue the original work above.")}</p>
+          : (zh ? "确认后，由目标环境取得新的执行准入并继续上面的原工作。" : "Confirm to admit the destination for new execution and continue the original work above.")}</p> : null}
         <button className="personal-primary-action" disabled={busy} type="button" onClick={() => void perform("confirm")}>
           {view.local_cutover ? (zh ? "恢复本次切换" : "Resume this move") : (zh ? "确认切换" : "Confirm local move")}
         </button>
