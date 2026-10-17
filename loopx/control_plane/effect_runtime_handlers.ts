@@ -422,6 +422,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.planned_transfer.cancel_source_preparation", lazyHandler(() => import("./coordination/planned_transfer_authority.ts"), ({cancelSourcePreparation}) => cancelSourcePreparation)],
     ["coordination.planned_transfer.registry_write_check", lazyHandler(() => import("./coordination/planned_transfer_authority.ts"), ({checkPlannedTransferRegistryWrite}) => checkPlannedTransferRegistryWrite)],
     ["coordination.planned_transfer.runtime_write_check", lazyHandler(() => import("./coordination/local_authority_write.ts"), ({checkGoalRuntimeWrite}) => checkGoalRuntimeWrite)],
+    ["coordination.planned_transfer.runtime_current_check", lazyHandler(() => import("./coordination/local_authority_write.ts"), ({checkGoalRuntimeCurrent}) => checkGoalRuntimeCurrent)],
     ["coordination.planned_transfer.stage_target", lazyHandler(() => import("./coordination/planned_transfer_target.ts"), ({stageAuthorityForPlannedTransfer}) => stageAuthorityForPlannedTransfer)],
     ["coordination.planned_transfer.create_recipient", lazyHandler(() => import("./goals/planned_transfer_container.ts"), ({createPlannedTransferRecipient}) => createPlannedTransferRecipient)],
     ["coordination.planned_transfer.preview_protected", lazyHandler(() => import("./coordination/planned_transfer_target.ts"), ({previewProtectedGoalTransfer}) => previewProtectedGoalTransfer)],

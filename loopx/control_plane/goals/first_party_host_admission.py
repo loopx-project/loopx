@@ -333,10 +333,9 @@ class FirstPartyHostGoalAdmission:
     def require_current(self) -> None:
         if not self.source_profile:
             if self.runtime_root is not None:
-                from ..turn_driver.turn_host_process import goal_runtime_write
+                from ..turn_driver.turn_host_process import require_goal_runtime_current
 
-                with goal_runtime_write(self.runtime_root, self.goal_id):
-                    pass
+                require_goal_runtime_current(self.runtime_root, self.goal_id)
             return
         with exclusive_cross_runtime_file_lock(
             guard_path(self.registry_path, self.goal_id),

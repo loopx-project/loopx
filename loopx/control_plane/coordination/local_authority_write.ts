@@ -65,27 +65,44 @@ interface CanonicalWriterOptions {
  * that could otherwise repair a receipt or debit outside the Todo provider.
  * Ordinary missing/promotion fences preserve their existing runtime behavior.
  */
+async function requireGoalRuntimeFence(root: string, goalId: string,
+  purpose: "runtime" | "quota_accounting"): Promise<void> {
+  const fence = await loadLegacyCoordinationWriterFence(root, goalId);
+  if (fence.status === "failed") throw new EffectRuntimeConflictError(fence.reason, "canonical_authority_fence_invalid");
+  if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
+    throw new EffectRuntimeConflictError(`Goal runtime is prepared for transfer ${fence.fence.operation_id}; recover that original operation`,
+      "canonical_authority_transfer_prepared");
+  }
+  if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
+    const {requireLocalTaskTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
+    await requireLocalTaskTransferAdmission(root, goalId, fence.fence);
+    // This partial profile admits native Tasks and their accounting only.
+    // Host/session/effect callers cannot select the quota-owned purpose in
+    // their RPC payload. Whole-Agent continuation needs its actual owners.
+    if (purpose !== "quota_accounting") {
+      throw new EffectRuntimeConflictError("Local Task transfer has no Host/session/effect admission; qualify the original Goal runtime before continuing a Host");
+    }
+  }
+}
+
 export async function withGoalRuntimeWriter<T>(root: string, goalId: string,
   write: () => Promise<T>, borrowedMaintenance?: unknown, purpose: "runtime" | "quota_accounting" = "runtime"): Promise<T> {
   return withShadowMaintenanceLock(root, goalId, async () => {
-    const fence = await loadLegacyCoordinationWriterFence(root, goalId);
-    if (fence.status === "failed") throw new EffectRuntimeConflictError(fence.reason, "canonical_authority_fence_invalid");
-    if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
-      throw new EffectRuntimeConflictError(`Goal runtime is prepared for transfer ${fence.fence.operation_id}; recover that original operation`,
-        "canonical_authority_transfer_prepared");
-    }
-    if (fence.status === "loaded" && fence.fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA) {
-      const {requireLocalTaskTransferAdmission} = await import("../goals/planned_transfer_cutover.ts");
-      await requireLocalTaskTransferAdmission(root, goalId, fence.fence);
-      // This partial profile admits native Tasks and their accounting only.
-      // Host/session/effect callers cannot select the quota-owned purpose in
-      // their RPC payload. Whole-Agent continuation needs its actual owners.
-      if (purpose !== "quota_accounting") {
-        throw new EffectRuntimeConflictError("Local Task transfer has no Host/session/effect admission; qualify the original Goal runtime before continuing a Host");
-      }
-    }
+    await requireGoalRuntimeFence(root, goalId, purpose);
     return write();
   }, borrowedMaintenance);
+}
+
+/** A point-in-time read, not an execution grant. Observers must not rewrite
+ * mutex metadata inside the checkpoint they are verifying. Every real write
+ * and supervised launch still rechecks this same fence under maintenance. */
+export async function checkGoalRuntimeCurrent(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id"])) {
+    throw new EffectRuntimeConflictError("Runtime observation requires its exact Goal route");
+  }
+  await requireGoalRuntimeFence(requireLocalAuthorityRuntimeRoot(value.runtime_root),
+    requireAuthorityStoreId(value.goal_id, "runtime Goal"), "runtime");
+  return {current: true};
 }
 
 /** The caller owns this exact maintenance lock while publishing Host/session

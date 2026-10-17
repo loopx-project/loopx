@@ -48,6 +48,26 @@ def goal_runtime_write(runtime_root: Path, goal_id: str) -> Iterator[None]:
         yield
 
 
+def require_goal_runtime_current(runtime_root: Path, goal_id: str) -> None:
+    """Observe the native fence without mutating a captured source's mutex.
+
+    This check grants no future IO. Writes and launches retain their locked
+    admission even if a source is prepared immediately after this observation.
+    """
+    from ..coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
+
+    goal_id = validate_goal_id_path_segment(goal_id)
+    root = runtime_root.expanduser().resolve()
+    fence = legacy_coordination_writer_fence_path(runtime_root=root, goal_id=goal_id)
+    if not fence.exists() and not fence.is_symlink():
+        return
+    result = effect_runtime_result("coordination.planned_transfer.runtime_current_check", {
+        "runtime_root": str(root), "goal_id": goal_id,
+    })
+    if result != {"current": True}:
+        raise RuntimeError("Goal runtime observation is unavailable")
+
+
 @dataclass(frozen=True, slots=True)
 class TurnHostProcess:
     runtime_root: Path

@@ -29,7 +29,7 @@ from loopx.control_plane.goals.planned_transfer_io import (
 from loopx.control_plane.projects.registry_codec import project_registry_transaction
 from loopx.control_plane.projects import registry_codec
 from loopx.control_plane.quota.spend_commit import record_quota_slot_spend_from_preview, replay_quota_spend_by_effect_ref
-from loopx.control_plane.turn_driver.codex_sessions import _session_path, _store_codex_cli_session
+from loopx.control_plane.turn_driver.codex_sessions import _session_path, _store_codex_cli_session, select_codex_cli_session
 from loopx.file_lock import exclusive_cross_runtime_file_lock
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_spend_commit_runtime import _preview as quota_preview
@@ -101,6 +101,17 @@ def source(tmp_path: Path, monkeypatch, request):
             "original_fence": json.loads(fence.read_bytes()), "fence": fence, "provider": request.param}
     finally:
         restart_effect_runtime(wait_for_exit=True)
+
+
+def test_current_host_observation_preserves_checkpoint_source_bytes(source):
+    """Checking a current binding must not mutate the source it observes."""
+    mutex = shadow_management_directory(source["runtime"], "report") / "maintenance.lock"
+    original = mutex.read_bytes()
+    source["admission"].require_current()
+    selected = select_codex_cli_session(source["runtime"], lineage=source["lineage"],
+        goal_admission=source["admission"])
+    assert selected["session_id"] == "original-context"
+    assert mutex.read_bytes() == original
 
 
 def operation_directory(source: dict, operation: str) -> Path:
