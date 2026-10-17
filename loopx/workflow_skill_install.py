@@ -12,7 +12,6 @@ import tempfile
 from typing import Any, Iterator, Mapping
 
 from . import __version__
-from .ego_skill_delivery import reconcile_ego_browser_skill
 from .file_lock import exclusive_file_lock
 from .skill_install_readback import (
     ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
@@ -28,6 +27,7 @@ from .skill_install_readback import (
     write_skill_install_readback,
 )
 from .slash_command_install import materialize_loopx_entry_skill
+from .workflow_skills.ego_delivery import reconcile_ego_browser_skill
 
 
 WORKFLOW_SKILL_INSTALL_SCHEMA_VERSION = "loopx_workflow_skill_install_v0"
