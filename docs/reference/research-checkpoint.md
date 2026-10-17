@@ -44,6 +44,13 @@ history and qualified native stores. The native inventory excludes credential
 files; arbitrary caller-declared artifacts remain private and are not privacy
 certified. A new destination is required; capture never overwrites a point.
 
+Artifact operations use the existing private local snapshot transport for full
+inventories and retained metadata above the ordinary 2 MiB Effect wire limit.
+The existing 64 MiB local snapshot bound and original operation deadlines still
+apply. No witness is truncated, no capture is enabled implicitly, and a lost
+capture response must be reconciled under its original identity before another
+operation is considered.
+
 The inventory covers only declared file roots plus the automatically owned
 session and LoopX state participants. A conversation mentioning an external
 candidate or report does not capture that file. Declare every needed research

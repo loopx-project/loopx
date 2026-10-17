@@ -441,7 +441,8 @@ def test_restored_capture_cannot_drop_its_preflight_basis(tmp_path, monkeypatch,
         gate["capture_allowed"] = False
     reads = []
     monkeypatch.setattr(continuation, "load_codex_cli_session", lambda *a, **k: binding)
-    def basis(method, request):
+    def basis(method, request, *, large_local_snapshot):
+        assert large_local_snapshot is True
         assert request == {"action": "read_basis", "root": str(tmp_path / "point"), "expected_sha256": "a" * 64}
         reads.append(True)
         return {"point_metadata": {"native_session": native}}

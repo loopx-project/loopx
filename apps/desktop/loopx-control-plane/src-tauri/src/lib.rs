@@ -7,6 +7,7 @@ mod service_endpoints;
 mod services;
 mod update_backup;
 mod workspace_handoff;
+mod workspace_location;
 
 use services::ServiceSet;
 use std::sync::{
@@ -15,7 +16,7 @@ use std::sync::{
 };
 use tauri::{
     ipc::CapabilityBuilder, webview::PageLoadEvent, AppHandle, Manager, RunEvent, Url, WebviewUrl,
-    WebviewWindowBuilder,
+    WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
 use workspace_handoff::{NavigationRetry, WorkspaceHandoff};
@@ -135,6 +136,11 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, WindowEvent::CloseRequested { .. }) {
+                workspace_location::remember_current(window.app_handle());
+            }
+        })
         .setup(move |app| {
             let origin: Url = web_origin.parse()?;
             app.add_capability(
@@ -155,7 +161,7 @@ pub fn run() {
             };
             let handoff = Arc::new(Mutex::new(WorkspaceHandoff::new(
                 boot_url(app.handle()),
-                origin.clone(),
+                workspace_location::launch_destination(app.handle(), &origin),
                 retry,
             )));
             app.manage(Arc::clone(&handoff));
@@ -220,7 +226,10 @@ pub fn run() {
                             }
                             let healed = started.healed;
                             *services_for_setup.lock().expect("service state lock") = Some(started);
-                            handoff.lock().expect("workspace handoff lock").reconnect();
+                            handoff
+                                .lock()
+                                .expect("workspace handoff lock")
+                                .services_ready();
                             WorkspaceHandoff::reconcile(&handoff, &handle);
                             if healed {
                                 let _ = handle
@@ -279,8 +288,9 @@ pub fn run() {
     let app = builder
         .build(tauri::generate_context!())
         .expect("failed to build LoopX desktop shell");
-    app.run(move |_app, event| {
+    app.run(move |app, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
+            workspace_location::remember_current(app);
             shutting_down.store(true, Ordering::Release);
             if let Ok(mut guard) = services.lock() {
                 if let Some(current) = guard.as_mut() {

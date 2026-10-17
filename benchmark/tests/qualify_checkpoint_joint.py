@@ -139,7 +139,7 @@ def main():
                 raise ValueError("Reused point/configuration must be physical paths")
             packet = json.loads((point / "checkpoint.json").read_bytes())
             verified = effect_runtime_result("runtime.checkpoint_artifacts", {
-                "action": "verify", "root": str(point), "expected_sha256": packet["sha256"]})
+                "action": "verify", "root": str(point), "expected_sha256": packet["sha256"]}, large_local_snapshot=True)
             assert verified["integrity_verified"]
             metadata = packet["point_metadata"]
             assert metadata["held_decision_component_id"] and metadata["worker_file_snapshot"]["prepared_source_verified"]
@@ -231,7 +231,7 @@ def main():
                 recaptured = newer[0]
                 next_packet = json.loads((recaptured / "checkpoint.json").read_bytes())
                 check = effect_runtime_result("runtime.checkpoint_artifacts", {
-                    "action": "verify", "root": str(recaptured), "expected_sha256": next_packet["sha256"]})
+                    "action": "verify", "root": str(recaptured), "expected_sha256": next_packet["sha256"]}, large_local_snapshot=True)
                 assert check["integrity_verified"]
                 third = output / "grandreceiver"
                 third.mkdir()

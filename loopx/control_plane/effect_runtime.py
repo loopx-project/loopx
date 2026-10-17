@@ -53,6 +53,7 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
     "performance_diagnosis.inspect",
     "state.recovery.archive.verify",
     "state.recovery.manifest.verify",
+    "runtime.checkpoint_artifacts",
 })
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
