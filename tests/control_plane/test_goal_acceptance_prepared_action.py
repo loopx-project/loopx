@@ -198,6 +198,27 @@ def test_preparation_retry_does_not_return_another_preparers_plan(conversation_c
     assert not (project / "runs.txt").exists()
 
 
+@pytest.mark.parametrize("retry_spelling", ["padded", "canonical"])
+def test_preparation_retry_uses_the_canonical_operation_id(conversation_check, retry_spelling):
+    project, cli, controller, _, _, call, _ = conversation_check
+    padded = "  recover-original-intent  "
+    # The store strips and persists the canonical token; the first tool reply may
+    # be lost after that write, so the retry must find the same accepted intent.
+    original = call(operation_id=padded)["proposal"]
+    assert original["idempotency_key"] == "recover-original-intent"
+    store = ChatActionStore(project.parent / "runtime/chat/actions")
+    code, updated = run_json_cli_result("todo", "update", "--goal-id", "goal-acceptance",
+        "--todo-id", "todo_export", "--agent-id", "agent-a", "--note", "Work is progressing",
+        registry_path=controller.registry_path, runtime_root=project.parent / "runtime")
+    assert code == 0, updated
+    authority, journal = cli("inspect")[1], store.path.read_bytes()
+    recovered = call(operation_id=padded if retry_spelling == "padded" else "recover-original-intent")
+    assert recovered["ok"] is True and recovered["executed"] is False, recovered
+    assert recovered["proposal"] == original
+    assert cli("inspect")[1] == authority and store.path.read_bytes() == journal
+    assert not (project / "runs.txt").exists()
+
+
 def test_preparation_retry_does_not_replace_unavailable_authority(conversation_check, monkeypatch):
     project, cli, _, _, _, call, _ = conversation_check
     call()
