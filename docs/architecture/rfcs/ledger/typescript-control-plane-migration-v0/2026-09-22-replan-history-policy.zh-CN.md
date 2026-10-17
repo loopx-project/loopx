@@ -20,6 +20,24 @@ Python 保留历史解码、指纹及 obligation 呈现；删除被替代的触�
 组装、frontier 结算及完整捕获资格仍有各自归属。没有加入模型观察器、provider
 切换、前端配置项或可选 capability。
 
+## 基于回执的证据展示修复
+
+Replan 证据消费者原先可能为工作及其 quota 扣记各重复一次相同接续。既有 TypeScript
+work-item owner 现使用限定作用域的 settlement 与 spend receipt 事实去重。Python
+传递身份及完整文本摘要，不分类资格。新增事实不进入公开历史行 hash，已投递的 history
+reference 因此仍解析到原不可变记录。
+
+归约要求完整 Goal/Agent/Todo/Turn/effect 身份、实际类型化 progress observation 及
+完整接续都匹配。每个合并 occurrence 都须有自己的匹配，且对应工作须在展示窗口内保留。
+不同 health 仍可见；不同 outcome、缺失或不支持的 receipt、身份不匹配和不同接续尾部
+保留原展示。raw count、负向覆盖与 obligation identity 不变，不新增共享词汇、能力、
+store 或权限。
+
+验收使用临时真实 File/SQLite quota CLI fixture、不可变 history-reference CLI
+读回、inline/snapshot 对等和类型化负例。本修复减少消费侧重复；完整历史仍有
+O(history) 传输与处理成本，并增加身份字节。不证明已安装采用、模型 token/时间效果、
+整项任务有效性或剩余 T3/provider 资格。
+
 ## 长历史传输修复
 
 此前 600 行演练不足以证明长期运行的 Goal。即使去掉正文，所有紧凑事实仍随历史

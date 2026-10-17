@@ -493,6 +493,17 @@ def _diff_hygiene_checks(
             "checks unstaged changes not yet committed",
         ),
     ]
+    rfc_checker = "scripts/check_rfc_bilingual.py"
+    checker_registered = (repo_root / rfc_checker).is_file() or subprocess.run(
+        ["git", "cat-file", "-e", f"{base}:{rfc_checker}"],
+        cwd=repo_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    ).returncode == 0
+    if checker_registered:
+        specs.append((
+            "rfc_bilingual_diff",
+            [sys.executable, rfc_checker, "--base", base, "--head", "HEAD"],
+            "requires both existing RFC mirrors in the committed PR diff before merge",
+        ))
     checks: list[dict[str, Any]] = []
     for index, (check_id, argv, reason) in enumerate(specs, start=1):
         checks.append(

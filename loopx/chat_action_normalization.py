@@ -566,7 +566,9 @@ class ChatActionNormalizationMixin:
                 if values.get(field):
                     result[field] = _opaque(values[field], field=field)
             if result.get("agent_id"):
-                self._agent_eligibility(str(result["agent_id"]))
+                # A creation's Agent is refused as a typed gate, so a fresh install
+                # learns which Agent is missing instead of reading a protocol sentence.
+                self._creation_agent_eligibility(str(result["agent_id"]))
             if values.get("heartbeat") is not None:
                 if not isinstance(values["heartbeat"], Mapping):
                     raise ValueError("heartbeat must be an object")

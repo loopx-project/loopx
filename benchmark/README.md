@@ -959,8 +959,14 @@ All six inputs are required together. Keep the existing native
 `RestoredRegistration`; an older provider fails instead of cold-registering.
 
 This adapter composes existing artifact, Codex session, Todo-continuation and
-native-judge owners. It preserves the captured workspace and effective Codex
-configuration, admits a distinct native session and fresh Goal/Agent, and adopts
+native-judge owners. A captured parent directory may contain the native task
+workspace: the receiver resolves exactly one physical task subtree from the
+verified component and restores only that subtree. Captured siblings remain
+inert unless separately selected as research data; absent, ambiguous or
+noncanonical roots reject before the receiver workspace changes.
+
+It preserves the captured workspace and effective Codex configuration, admits
+a distinct native session and fresh Goal/Agent, and adopts
 retained research as evidence on a current preparation Todo. Historical registry,
 claims, leases and settlement records are not installed as current authority.
 If the sealed context contains Explore events, adoption also seeds the fresh

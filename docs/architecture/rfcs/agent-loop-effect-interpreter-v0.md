@@ -479,7 +479,7 @@ Current source-path audit for the first convergence slice:
 | Full requirements | Authoritative Agent-channel work context plus remaining reads; effective Todo, acceptance and scoped User obligations, with the full Goal on its progressive read | Registered source readers fulfill current task reads inline in both transports; the mixed Goal remains mandatory on its full read path; source failure holds dependent delivery. Live model adoption and packaged host journeys remain unqualified |
 | Capability refusal | Existing quota `capability_gate_v0`; compact boundary now retains exact `required`/`missing` arrays and historical source names | This repairs omitted facts, not readiness policy or capability activation |
 | Selection / claim / lease | Selected Todo, action portfolio and current owning transactions | Compact selected ownership is not a fresh lease; retain the captured source and revalidate at the owning mutation |
-| Replan / Goal closure | Replan action packet and the existing TS capsule preserve full audit steps/guidance, current judge and evidence/non-proof conditions | Same captured File/SQLite decisions qualify clause retention and signature mutation; full evidence stays on authorized detail paths. Host/model adoption remains open; Todo completion is not Goal completion |
+| Replan / Goal closure | Replan action packet and the existing TS capsule preserve full audit steps/guidance, current closure assessment (judge) and evidence/non-proof conditions | Same captured File/SQLite decisions qualify clause retention and signature mutation; full evidence stays on authorized detail paths. Host/model adoption remains open; Todo completion is not Goal completion |
 | Settlement / scheduler | Intact typed settlement plan and explicit host-owned scheduler projection; omitted scheduler argv references resolve the same captured full decision | Unbound detail commands are retired in this projection. Actual host readback, stale mutation refusal and exactly-once recovery still need host adoption qualification |
 | Optional memory | Verified boundary participation plus fresh host binding | Off/recall/ingest/stale/provider-failure isolation remains mandatory; transport parity is not model value |
 
@@ -494,7 +494,7 @@ open until their own acceptance is met; this inventory is not blanket permission
 to delete the remaining Python IO adapters.
 
 The continuation-audit projection also retains every ordered closeout step and
-the complete current judge. Earlier capsules dropped those fields while signing
+the complete current closure assessment (judge). Earlier capsules dropped those fields while signing
 their already reduced projection, and clipped the continuation guidance to 48
 characters. Captured File/SQLite work and replan paths now retain those clauses
 and reject signature equivalence after a step/order/judge mutation. The existing

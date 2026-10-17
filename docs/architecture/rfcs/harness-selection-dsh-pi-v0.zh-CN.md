@@ -444,20 +444,25 @@ journal 与配额语义；B 作为上游接口出现时的低成本替代；只�
 `steward_executor`（`loopx/capabilities/steward_executor/machine_defaults.py`），
 本机的管家选择因此成为一等公民。
 
-该命名空间只有三个字段，且不保存任何凭据：
+当前命名空间保存主要端点、模型/effort 和封闭的选择策略，不保存凭据：
 
 ```json
 {
-  "schema_version": "steward_executor_machine_defaults_v0",
+  "schema_version": "steward_executor_machine_defaults_v1",
+  "selection_policy": "preferred",
   "executor_endpoint": "codex",
+  "eligible_endpoints": [],
   "executor_model": null,
   "executor_reasoning_effort": null
 }
 ```
 
 `executor_endpoint` 必填，且仅限 LoopX 作为通道执行器出货的端点；模型或推理档位留空
-表示本机对该字段不做决定，通道继续从更低层解析。未知字段、未知 schema 版本、未列出
-的端点、不支持的档位都会在任何生效前 fail closed。需要命名空间未列出适配器的运维方
+表示本机对该字段不做决定，通道继续从更低层解析。`preferred` 以该端点为默认，但尊重
+用户显式选择；`pinned` 拒绝不同的显式选择；`flexible` 要求非空 `eligible_endpoints`
+包含主要端点，只能在该池内按可用性 fallback。未知字段、未知 schema 版本、未列出
+端点、非法 pool 或不支持的档位都在任何效果前失败关闭。已存 v0 文档保留原 `preferred`
+行为。需要命名空间未列出适配器的运维方
 仍然可以使用 `LOOPX_MANAGER_ENDPOINT`。
 
 优先级只在通道所有者（`loopx/chat_manager.py`）声明一次：machine configuration、
@@ -465,6 +470,22 @@ journal 与配额语义；B 作为上游接口出现时的低成本替代；只�
 `loopx machine-config describe` 发布模板，前端通过既有的 revision 锁定事务编辑同一份
 文档；通道回读新增 `executor_endpoint_source: machine_configuration` 以及该文档的
 `status` 与 `configuration_revision`，无需读取存储即可区分"机器决定"与"服务环境值"。
+
+解析后的 endpoint、model、effort、policy、分配原因、候选端点池与来源 revision
+也持久化在 manager Session。运行中的 Turn 保留原分配。同 endpoint 的 model/effort
+修改在下一空闲或已接受的 queued Turn 边界采用：用新模型打开上游 adapter，按时间顺序
+保留完整可见历史和相同权限，启动成功后才持久化、投影新分配。模型或 context/tool
+迁移创建新线程，不能任意截取最近消息而丢掉早期用户约束；空原生线程尚无 rollout 时
+同样适用。每次分配捕获已接受的机器 model/effort 输入，单改 policy 不触碰 provider，
+改一个字段保留另一个字段的持久值。显式值清空后只从既有低层解析该字段，即使它原先
+等于有效值。旧分配没有捕获机器输入时，未知 unset 字段继续未知，只有有证据的显式编辑
+才能原地更新。环境变化或其他 endpoint 默认值不在重启后重解释既有 binding。
+
+App model/effort badge 打开既有 Steward 设置，在设置事务或对话 Turn 后刷新权威
+channel 读回，不把已保存默认值当作当前 Turn 已换模型的证明。
+`loopx chat-endpoint inspect-steward` 通过同一公开投影读取有效配置与当前 Session
+binding。本阶段交付分配边界及可用性 fallback，不从对话 prose 推断语义任务适配。
+后续 Agent 可明确选择 executor，但仍由相同 pinned/flexible 边界准入或拒绝。
 
 本次不做改变的边界：出货默认值在每台机器上仍是 `codex`；凭据仍然只做认证、不做选择；
 托管宿主仍然需要自己的凭据与 runtime；该选择不授予任何权限——它只命名一个由运维方
@@ -475,7 +496,7 @@ journal 与配额语义；B 作为上游接口出现时的低成本替代；只�
 验证：`tests/capabilities/test_steward_executor_machine_defaults.py`、
 `tests/test_manager_channel_binding.py`、`tests/test_chat_machine_configuration_api.py`、
 `tests/capabilities/test_capability_configuration_ui.py`，以及
-`examples/loopx-steward-channel-binding-smoke.py`。
+`apps/presentation/dashboard/src/features/personal-workspace/personal-workspace-contract.test.mjs`。
 
 ### 管家回答身份与 Runtime 选择（2026-09-16）
 

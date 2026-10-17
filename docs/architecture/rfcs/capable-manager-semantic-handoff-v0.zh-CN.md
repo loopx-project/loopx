@@ -680,6 +680,11 @@ bundled provider 的[就绪指南](../../../loopx/extensions/lark/docs/realtime-
 记录有界跨会话处理和仍待完成的替代验收；私聊开通、普通非 Goal 对话、流式回显与媒体输入，
 须等固定版本的已安装旅程通过后才能宣称就绪。
 
+群回复的来源验证先并发读取新鲜消息 envelope 和 App 身份，再检查 canonical topic root。
+这消除了两次读取的串行 IO 依赖，但不缓存任何观察，也不提前读取事件提供的祖先关系。
+每次向外操作仍受 root mention、当前 grant 与原回复 receipt 约束。仅来源检查的耗时
+不能证明入口反馈、完整回答延迟或已安装实时旅程已通过。
+
 **模型容量失败（S5/S10）：** Codex adapter 把 typed `serverOverloaded` 终结错误保留为
 `server_overloaded`，上游任意 prose 不能建立该分类。启用后的 Codex app-server Chat Turn
 现在默认对这个精确 typed 过载做有界同请求续接：同一 worker 内，Session、Turn、请求、

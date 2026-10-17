@@ -620,8 +620,7 @@ active Goal dependency optional.
 | Scheduler and optional Host automation: [scheduler state owner](../../../loopx/control_plane/scheduler/state_store.ts), [backup discovery](../../../loopx/state_backup.py) | Runtime scheduler files and explicitly included Codex automation/skill directories can be copied. A saved timer is not an observed active Host schedule. | Bind cadence/reset identity, reconcile actual Host state and exclude duplicate admission. Other Host/provider state needs its own explicit capture contract. |
 | Knowledge/artifacts, extension state and credentials: the selected Goal's material and provider owners, including [decision-context recovery](../../../loopx/capabilities/decision_context/capture_recovery.py) where applicable | Only discovered roots are included; a physical SQLite snapshot proves no semantic provider completeness. Credentials may be present in private raw bytes. | Enumerate actual required sources and provider versions; obtain their own export/verify evidence. Credential custody, rotation/revocation and external access remain with their owners; copied bytes grant no access. |
 
-The [source-session lifecycle path
-owner](../../../loopx/control_plane/goals/source_session_registry_state.py) now
+The [source-session lifecycle path owner](../../../loopx/control_plane/goals/source_session_registry_state.py) now
 supplies the same registration, recreation and Turn-settlement directories to
 the writers and full-backup discovery. This closes the omission beside an
 external source registry, without sweeping other Goal directories or treating

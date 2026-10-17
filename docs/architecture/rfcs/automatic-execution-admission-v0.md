@@ -125,7 +125,7 @@ protection against clock manipulation.
 
 For App, show desired versus observed schedule and apply failure. Unsupported
 intervals require holding the affected automation, not shortening the interval.
-Codex App ACK commands must re-read the matched heartbeat after the host update.
+Codex App schedule acknowledgement (ACK) commands must re-read the matched heartbeat after the host update.
 The requested RRULE and the hint's earlier observation cannot certify that update.
 The typed scheduler commit rejects missing or mismatched current observations
 before migration, identity reset or persistence. This applies to the console's

@@ -316,6 +316,13 @@ baseline/experience 两组，包含合理内部前置阶段与误阻断对照。
 
 ## 10. 验证标准
 
+Agent binding 前置能力复用现有 Reward Memory 配置 owner：可选的精确 Agent 覆盖保留
+legacy/shared 路由与全部 sibling，禁用或非法覆盖失败关闭。配置、runtime 准入、同 Turn
+receipt 复用及 pending outcome 对账共享 binding 身份；有界重试先选择当前路由再应用
+上限，保留其他路由的不确定 journal。provider 可写性与精确读回仍是必需条件。
+Goal 设置旅程复用相同 preview/apply owner，并区分已提交配置和失败读回。这只验证
+配置与生命周期，不代表 Stage 3/4 效用或排序资格。
+
 Focused fixture 必须证明：
 
 - 记忆即使被 `applied`，在 artifact evidence 反驳时仍可判为 `harmful`；

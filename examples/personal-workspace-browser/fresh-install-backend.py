@@ -26,8 +26,9 @@ from loopx.chat_server import default_chat_assets_dir, serve_chat  # noqa: E402
 (root / "project").mkdir(parents=True, exist_ok=True)
 bins = root / "bin"
 bins.mkdir(exist_ok=True)
-(bins / "codex").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-(bins / "codex").chmod(0o755)
+if "--no-agent" not in sys.argv[2:]:
+    (bins / "codex").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (bins / "codex").chmod(0o755)
 for variable in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
     os.environ.pop(variable, None)
 os.environ["LOOPX_USAGE_PING"] = "0"
@@ -40,6 +41,7 @@ print(json.dumps({
     "project": str(root / "project"),
     "runtime": str(root / "runtime"),
     "default_runtime": str(home / ".loopx"),
+    "bins": str(bins),
 }), flush=True)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 serve_chat(

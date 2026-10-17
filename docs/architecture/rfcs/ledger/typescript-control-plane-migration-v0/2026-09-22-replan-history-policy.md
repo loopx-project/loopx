@@ -34,7 +34,7 @@ The replan evidence consumer could repeat the same continuation once for work
 and once for its quota debit. The existing TypeScript work-item owner now uses
 scoped settlement and spend-receipt facts to remove that repetition. Python
 transports identities and complete-text digests; it does not classify eligibility.
-The additional facts stay outside the public row hash, so previously delivered
+The additional facts stay outside the public history-row hash, so previously delivered
 history references still resolve the original immutable record.
 
 Reduction requires matching complete Goal/Agent/Todo/Turn/effect identity, an

@@ -1,6 +1,17 @@
 // Public URLs are independent of the local preview's deployment base.
 export const siteUrl = "https://loopx-project.github.io/loopx/";
 export const pageMetadata = {
+  timeMachine: {
+    path: "lab/time-machine/",
+    en: {
+      title: "LoopX Time Machine — If you were there",
+      description: "Make three choices for a research Agent, then compare them with real recorded outcomes. Inspect the original evidence, failed routes and remaining uncertainty.",
+    },
+    zh: {
+      title: "LoopX 时光机 — 如果你在场",
+      description: "先替研究 Agent 做选择，再看真实记录里的结果。逐条阅读原始证据、失败路线和仍未回答的问题，体验长程研究如何延续。",
+    },
+  },
   home: {
     path: "",
     en: {

@@ -518,8 +518,7 @@ dependency closure，区分 owner 确认不存在、来源不可读和来源无�
 | Scheduler 与可选 Host automation：[scheduler state owner](../../../loopx/control_plane/scheduler/state_store.ts)、[备份发现](../../../loopx/state_backup.py) | 可复制 runtime scheduler 文件及显式纳入的 Codex automation/skill 目录；保存的 timer 不是观察到的活跃 Host schedule。 | 绑定 cadence/reset identity，reconcile 真实 Host 状态并排除重复 admission；其他 Host/provider 状态需要独立、显式的捕获契约。 |
 | Knowledge/artifact、extension 状态与 credential：所选 Goal 的 material/provider owner，适用时包括 [decision-context recovery](../../../loopx/capabilities/decision_context/capture_recovery.py) | 只纳入发现的 root；physical SQLite snapshot 不证明 provider 语义完整性。私有原始字节可能含 credential。 | 枚举实际必要来源与 provider version，取得各自 export/verify 证据。Credential custody、轮换／撤销及外部访问仍归各自 owner；复制字节不授予访问权。 |
 
-[Source-session lifecycle 路径
-owner](../../../loopx/control_plane/goals/source_session_registry_state.py) 现在为
+[Source-session lifecycle 路径 owner](../../../loopx/control_plane/goals/source_session_registry_state.py) 现在为
 实际 writer 与完整备份发现提供同一注册、重建和 Turn-settlement 目录，关闭外部
 source registry 相邻日志的遗漏；不扫描其他 Goal 目录，也不把日志字节当作已处置
 的 effect。File/SQLite 真实 producer/verifier 的失源验证保留这些字节和本地声明的

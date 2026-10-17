@@ -1,6 +1,6 @@
 import {useDeliveryReview} from "./delivery-review-state";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
-import { goalCreateRequest } from "./goal-create-request";
+import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request";
 import { todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest } from "./steering-recovery";
 import { useConversationInputState } from "./use-conversation-input-state";
@@ -36,8 +36,7 @@ import {
   type LarkGoalConnection,
   type ManagerChannelBinding,
   type ManagerRuntimeSessionReadback,
-  type TypedActionProposal,
-} from "../../data/chat";
+  type TypedActionProposal, agentBackendLabel } from "../../data/chat";
 import { useTypedActionReadback, useTypedActionProposalReadback } from "../../data/use-typed-action-readback";
 
 import { ChannelHeader } from "./channel-header";
@@ -818,6 +817,7 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
       ? t("proposal.impact.protected")
       : "",
     previewId: proposal.proposal_id,
+    persisted: true,
     regeneratedFrom: proposal.regenerated_from,
     lifecycleOperation,
     gate: proposal.gate ? {
@@ -1040,6 +1040,7 @@ export function PersonalWorkspacePage({
   const selectedGoalId = controlledGoalId === undefined ? localGoalId : controlledGoalId;
   const actionReadback = useTypedActionReadback(readOnly, selectedGoalId);
   const selectedAgentId = controlledAgentId ?? localAgentId;
+  const goalAgentId = goalCreationAgentId(selectedAgentId, agents);
   // Only execution runtimes count: the read-only status projection answers
   // questions but runs nothing, and the loading placeholder is not a fact.
   const runtimeReadiness = useMemo(() => deriveRuntimeReadiness(agents
@@ -1080,14 +1081,14 @@ export function PersonalWorkspacePage({
     // Source message + reviewed contents survive retry without merging distinct requests.
     if (!edit && !draft.question && draft.completion_criteria.trim()) {
       const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
-        JSON.stringify([draftId, draft, selectedAgentId, locale])));
+        JSON.stringify([draftId, draft, goalAgentId, locale])));
       const operationId = Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, "0")).join("");
       await createPreview(goalCreateRequest({ objective: draft.objective,
         completion: draft.completion_criteria, boundary: draft.execution_boundary,
-        permission: "read_only", agentId: selectedAgentId, contextGoalId: null, operationId }, t));
+        permission: "read_only", agentId: goalAgentId, contextGoalId: null, operationId }, t));
       return;
     }
-    setActionDraft({ kind: "goal", goalId: null, goalTitle: "", agentId: selectedAgentId,
+    setActionDraft({ kind: "goal", goalId: null, goalTitle: "", agentId: goalAgentId,
       text: draft.objective, completionCriteria: draft.completion_criteria,
       executionBoundary: draft.execution_boundary, permission: "read_only" });
   }
@@ -1471,7 +1472,7 @@ export function PersonalWorkspacePage({
 
   const creationProposalId = drawerSelection?.kind === "proposal"
     && drawerSelection.item.actionKind === "goal.create"
-    && !drawerSelection.item.previewId.startsWith("workspace-choice-")
+    && drawerSelection.item.persisted !== false
       ? drawerSelection.item.previewId : null;
   const proposalReadback = useTypedActionProposalReadback(readOnly, creationProposalId);
   useEffect(() => {
@@ -1614,6 +1615,24 @@ export function PersonalWorkspacePage({
       const gateKind = String(rawGate.kind ?? "workspace_selection_required");
       const requiresAgentBinding = gateKind === "agent_binding_required"
         || gateKind === "agent_identity_selection_required";
+      // An unavailable first Agent is told in the owner's language from the
+      // service's typed facts (which Agent, the catalog's own reason), never
+      // from its protocol sentence; the form and its draft stay available.
+      const agentGate = gateKind === "agent_unavailable" ? (() => {
+        const agent = agentBackendLabel(String(rawGate.agent_id ?? "codex"));
+        const reasonCode = String(rawGate.unavailable_reason ?? "");
+        const reason = reasonCode === "executable_not_found" && typeof rawGate.executable === "string"
+          ? t("proposal.agentGate.reason.executable_not_found", { executable: rawGate.executable })
+          : reasonCode === "api_key_not_set" && typeof rawGate.environment_variable === "string"
+            ? t("proposal.agentGate.reason.api_key_not_set", { variable: rawGate.environment_variable })
+            : rawGate.registered === false ? t("proposal.agentGate.reason.unregistered") : t("proposal.agentGate.reason.unavailable");
+        return {
+          title: t("proposal.agentGate.title", { agent }),
+          summary: t("proposal.agentGate.summary", { reason }),
+          nextAction: t("proposal.agentGate.nextAction", { agent }),
+          impact: t("proposal.agentGate.impact"),
+        };
+      })() : null;
       local = {
         actionKind: request.actionKind,
         fields: workspaceCandidates.map((candidate) => ({
@@ -1623,16 +1642,17 @@ export function PersonalWorkspacePage({
         })),
         gate: {
           kind: gateKind,
-          nextAction: typeof rawGate.next_action === "string" ? rawGate.next_action : undefined,
-          summary: String(rawGate.summary ?? t("proposal.workspaceGate.defaultSummary")),
+          nextAction: agentGate ? agentGate.nextAction : typeof rawGate.next_action === "string" ? rawGate.next_action : undefined,
+          summary: agentGate ? agentGate.summary : String(rawGate.summary ?? t("proposal.workspaceGate.defaultSummary")),
         },
-        impact: requiresAgentBinding
+        impact: agentGate ? `${agentGate.summary} ${agentGate.impact}` : requiresAgentBinding
           ? t("proposal.workspaceGate.agentImpact")
           : t("proposal.workspaceGate.selectionImpact"),
         previewId: `workspace-choice-${Date.now().toString(36)}`,
+        persisted: false,
         sourceRequest: request,
         status: "gated",
-        title: requiresAgentBinding ? t("proposal.workspaceGate.agentTitle") : t("proposal.workspaceGate.selectionTitle"),
+        title: agentGate ? agentGate.title : requiresAgentBinding ? t("proposal.workspaceGate.agentTitle") : t("proposal.workspaceGate.selectionTitle"),
         workspaceCandidates,
       };
     }
@@ -1643,7 +1663,7 @@ export function PersonalWorkspacePage({
   }
 
   function requestGoalCreate() {
-    setActionDraft({ kind: "goal", goalId: null, goalTitle: "", agentId: selectedAgentId });
+    setActionDraft({ kind: "goal", goalId: null, goalTitle: "", agentId: goalAgentId });
   }
 
   /** `keepGoalSelected` reads the result back on the Goal page instead of returning to the directory. */
@@ -2037,6 +2057,17 @@ export function PersonalWorkspacePage({
       }
     },
     onTransitionProposal: async (proposal, transition) => {
+      if (proposal.persisted === false) {
+        if (transition === "regenerate" && proposal.sourceRequest) {
+          await createPreview(proposal.sourceRequest);
+          setProposals((current) => {
+            const next = { ...current };
+            delete next[proposal.previewId];
+            return next;
+          });
+        }
+        return;
+      }
       const result = await transitionTypedAction(proposal.previewId, transition);
       await actionReadback.acceptProposal(result, transition === "regenerate" ? proposal.previewId : undefined);
       const transitioned = workspaceProposal(result, t);
@@ -2500,7 +2531,8 @@ export function PersonalWorkspacePage({
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && !goal.loadState && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
-        proposalReadbackUnavailable={creationProposalId ? proposalReadback.isError || !proposalReadback.data
+        proposalReadbackUnavailable={drawerSelection.kind === "proposal" && drawerSelection.item.persisted === false ? false
+          : creationProposalId ? proposalReadback.isError || !proposalReadback.data
           : actionReadback.isError || !actionReadback.data
             || (drawerSelection.kind === "proposal" && !actionReadback.data.some(proposal => proposal.proposal_id === drawerSelection.item.previewId))}
         proposalReadbackFetching={creationProposalId ? proposalReadback.isFetching : actionReadback.isFetching}

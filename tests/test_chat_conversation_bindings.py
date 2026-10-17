@@ -19,6 +19,210 @@ def _wait_for_native_turn(store, session_id, turn_id):
         time.sleep(.01)
 
 
+def _listener_private_admitter(transport, runtime, monkeypatch):
+    """Use the shipped listener callback, without opening a provider stream."""
+    import threading
+    from pathlib import Path
+    from loopx.extensions.lark import goal_topic_runtime
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+    stop, callbacks = threading.Event(), []
+    monkeypatch.setattr(Path, "home", lambda: runtime.store.root.parent / "listener-home")
+    def stream(**kwargs):
+        callbacks.append(kwargs["private_admitter"])
+        stop.set()
+        return {"status": "stopped"}
+    monkeypatch.setattr(goal_topic_runtime, "stream_lark_goal_topic_profile", stream)
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: {"private_profiles": transport.profiles()},
+        runtime_root=transport.runtime_root, runtime_controller=runtime,
+        private_conversations=transport)
+    service._poll_profile("notes-app", stop)
+    assert len(callbacks) == 1
+    return callbacks[0]
+
+
+def _listener_background_stop_journey(fixture, monkeypatch, failure, *, owner=False):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from test_chat_completed_background_stop import BackgroundWire, _completed_with_later_answer
+    from test_lark_private_conversations import connect, finish_group_turn
+    from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+    import loopx.extensions.lark.private_conversations as private
+
+    if owner:
+        store, runtime, provider, transport = connect(fixture)
+        root = provider.event("notes-app", "background-root", "Start bounded background work")
+        transport.admit("notes-app", root)
+        first = finish_group_turn(runtime, transport, message=root["content"])
+        sid = first["session_id"]
+        wire = BackgroundWire(runtime.adapters[sid].session,
+            store.load_turn(sid, first["turn_id"])["upstream_turn_id"], monkeypatch)
+        later = provider.event("notes-app", "later-answer", "Keep the corrected filename")
+        transport.admit("notes-app", later)
+        finish_group_turn(runtime, transport, message=later["content"])
+    else:
+        store, runtime, provider, transport, root, first, wire = _completed_with_later_answer(fixture, monkeypatch)
+    def event(name, text):
+        return (provider.event("notes-app", name, text) if owner else
+                provider.topic(name, text, root=root["message_id"]))
+    sid = first["session_id"]
+    completed = {row["turn_id"]: store.load_turn(sid, row["turn_id"])
+                 for row in transport.core.pending() if row.get("turn_id")}
+    admit = _listener_private_admitter(transport, runtime, monkeypatch)
+    stop = event("deferred-background-stop", "/stop")
+    service, worker = None, None
+    entered, release, duplicate_started = threading.Event(), threading.Event(), threading.Event()
+    callers = ThreadPoolExecutor(max_workers=2)
+    try:
+        wire.calls.clear()
+        if failure == "transport-journal":
+            write = private._atomic_write_json
+            def interrupted(path, value):
+                if path.parent == transport.root and value.get("status") == "captured" and value.get("session_id"):
+                    raise OSError("transport journal interrupted after Core freeze")
+                write(path, value)
+            with monkeypatch.context() as patch:
+                patch.setattr(private, "_atomic_write_json", interrupted)
+                with pytest.raises(OSError, match="after Core freeze"):
+                    admit("notes-app", stop)
+        else:
+            assert admit("notes-app", stop)["status"] == "command_recorded"
+        frozen = next(r for r in transport.core.pending() if r["command"] == "stop")
+        assert frozen["status"] == "prepared" and frozen["target_recorded"]
+        assert json.loads((transport.root / f"{frozen['request_ref']}.json").read_text())["status"] == "captured"
+        assert set(frozen["background_turn_ids"]) == set(completed)
+        assert not wire.calls and wire.children["owned"].poll() is None
+        if failure and failure != "transport-journal":
+            if failure == "identity":
+                provider.bot_ready = False
+            else:
+                wire.failure = failure
+            # Existing recovery retains the exact pending request on native
+            # failure. It must neither report success nor select another Turn.
+            transport.reconcile()
+            pending = transport.core.read_request(frozen["request_ref"])
+            assert pending["status"] == "prepared"
+            assert first["turn_id"] in pending["background_turn_ids"]
+            assert set(pending["background_turn_ids"]) <= set(frozen["background_turn_ids"])
+            assert wire.children["owned"].poll() is None
+            assert not any("停止" in text for _, text in provider.writes)
+            provider.bot_ready = True
+        # Reopen the journal owner as after a service restart. No new queue,
+        # reconstructed target or replacement model request is supplied.
+        transport.core = ChatExternalConversations(runtime)
+        wire.failure = None
+        write = wire.session._write
+        def delayed(packet):
+            if packet["method"] == "thread/backgroundTerminals/list" and not release.is_set():
+                # Block inside the native RPC, with its adapter lock held.
+                # New admission must persist without waiting for native IO.
+                entered.set()
+                assert release.wait(10)
+            return write(packet)
+        monkeypatch.setattr(wire.session, "_write", delayed)
+        service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {},
+            runtime_root=transport.runtime_root, runtime_controller=runtime,
+            private_conversations=transport)
+        worker = threading.Thread(target=service._reconcile_private)
+        worker.start()
+        assert entered.wait(5)
+        def duplicate():
+            duplicate_started.set()
+            return transport.core.admit(**{key: frozen[key] for key in
+                ["binding_id", "source", "request_ref", "message", "command", "attachments", "origin"]})
+        repeated = callers.submit(duplicate)
+        assert duplicate_started.wait(2)
+        newer_event = event("newer-during-background-stop", "wait for interrupt")
+        accepted = callers.submit(admit, "notes-app", newer_event)
+        assert accepted.result(timeout=5)["status"] == "durably_accepted"
+        newer = next(r for r in transport.core.pending() if r["message"] == newer_event["content"])
+        assert newer["session_id"] == sid
+        assert store.load_turn(sid, newer["turn_id"])["status"] in {"queued", "starting", "running"}
+        assert newer["turn_id"] not in frozen["background_turn_ids"]
+        assert not release.is_set() and not repeated.done()
+        assert wire.children["owned"].poll() is None
+        assert not any("停止" in text for _, text in provider.writes)
+        release.set()
+        assert repeated.result(timeout=10)["status"] == "command_completed"
+        _wait_for_native_turn(store, sid, newer["turn_id"])
+        newer_native = store.load_turn(sid, newer["turn_id"])["upstream_turn_id"]
+        deadline = time.monotonic() + 10
+        while True:
+            record = json.loads((transport.root / f"{frozen['request_ref']}.json").read_text())
+            if record["status"] == "delivered":
+                break
+            assert time.monotonic() < deadline, record
+            time.sleep(.01)
+        service._closed.set()
+        worker.join(10)
+        assert not worker.is_alive()
+        recovered = transport.core.read_request(frozen["request_ref"])
+        assert recovered["status"] == "command_completed"
+        assert recovered["background_turn_ids"] == [first["turn_id"]]
+        assert recovered["session_id"] == sid and recovered["turn_id"] is None
+        assert wire.children["owned"].poll() is not None and wire.children["unowned"].poll() is None
+        assert store.load_turn(sid, newer["turn_id"])["status"] == "running"
+        assert not any(method == "turn/interrupt" and params["turnId"] == newer_native
+                       for method, params in wire.calls)
+        assert all(store.load_turn(sid, key) == value for key, value in completed.items())
+        replies = list(provider.writes)
+        assert sum("停止" in text for _, text in replies) == 1
+        terminal = dict(record["deliveries"]["terminal"])
+        stop_reply = ("notes-app", terminal["text"])
+        assert provider.writes.count(stop_reply) == 1
+        if not owner:
+            assert any(topic == root["message_id"] and "停止" in text for _, topic, text in provider.topic_writes)
+        terminations = [call for call in wire.calls if call[0].endswith("/terminate")]
+        admit("notes-app", stop)
+        transport.reconcile()
+        # The newly admitted Turn may emit its own first progress now. Only
+        # the original stop's frozen reply/effect must remain unchanged.
+        assert provider.writes.count(stop_reply) == 1
+        assert json.loads((transport.root / f"{frozen['request_ref']}.json").read_text())["deliveries"]["terminal"] == terminal
+        assert [call for call in wire.calls if call[0].endswith("/terminate")] == terminations
+    finally:
+        release.set()
+        callers.shutdown(wait=True)
+        if service:
+            service._closed.set()
+        if worker:
+            worker.join(10)
+        wire.close()
+        runtime.close()
+
+
+@pytest.mark.parametrize("failure", [None, "thread/items/list", "thread/backgroundTerminals/terminate", "transport-journal", "identity"])
+def test_listener_background_stop_freezes_then_accepts_new_native_work_before_recovery(ordinary, monkeypatch, failure):  # noqa: F811
+    _listener_background_stop_journey(ordinary, monkeypatch, failure)
+
+
+def test_private_listener_background_stop_keeps_new_native_work_unblocked(ordinary, monkeypatch):  # noqa: F811
+    _listener_background_stop_journey(ordinary, monkeypatch, None, owner=True)
+
+
+def test_listener_active_stop_keeps_immediate_exact_interruption(ordinary, monkeypatch):  # noqa: F811
+    from test_lark_private_conversations import connect_group
+    import loopx.capabilities.native_chat.codex_background_control as background
+
+    store, runtime, provider, transport = connect_group(ordinary)
+    root = provider.topic("active-listener-stop", "wait for interrupt")
+    admit = _listener_private_admitter(transport, runtime, monkeypatch)
+    try:
+        admit("notes-app", root)
+        first = transport.core.pending()[0]
+        _wait_for_native_turn(store, first["session_id"], first["turn_id"])
+        monkeypatch.setattr(background, "completed_turn_ids", lambda *_: pytest.fail("active stop cannot wait on history"))
+        stop = provider.topic("stop-active-listener", "/stop", root=root["message_id"])
+        assert admit("notes-app", stop)["status"] == "command_recorded"
+        row = next(r for r in transport.core.pending() if r["command"] == "stop")
+        assert row["status"] == "command_completed" and row["turn_id"] == first["turn_id"]
+        assert runtime.wait_for_turn(session_id=first["session_id"], turn_id=first["turn_id"], timeout_sec=10)["status"] == "interrupted"
+    finally:
+        runtime.close()
+
+
 def test_binding_observation_is_opt_in_fresh_and_never_part_of_the_context(ordinary):  # noqa: F811
     store, runtime, contexts, _, _, _, _ = ordinary
     observation = {"transport_ref": "notes-app", "provider_ref": "c" * 24,
@@ -53,6 +257,113 @@ def test_binding_observation_is_opt_in_fresh_and_never_part_of_the_context(ordin
         bindings.resolve(**source, include_observation=True)
     assert bindings.path.read_bytes() == before and not store.list_sessions()
     runtime.close()
+
+
+@pytest.mark.parametrize("group", [False, True])
+@pytest.mark.parametrize("change", ["revoke", "replace", "unrelated"])
+def test_binding_change_while_identity_is_observed_uses_current_grant(ordinary, monkeypatch, group, change):  # noqa: F811
+    from test_lark_private_conversations import connect, connect_group
+    from loopx.extensions.lark.conversation_identity import lark_private_source
+
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    bindings = transport.bindings
+    binding = transport._binding("notes-app")
+    event = provider.topic("grant-observation", "Read project") if group else provider.event("notes-app", "grant-observation", "Read project")
+    source = lark_private_source(provider_ref=binding["provider_ref"], event=event)
+    observe, armed = bindings.observe, True
+
+    def changed(profile, **kwargs):
+        nonlocal armed
+        result = observe(profile, **kwargs)
+        if armed:
+            armed = False
+            if change == "revoke":
+                bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+            else:
+                target = "steward-app" if change == "unrelated" else "notes-app"
+                if change == "replace":
+                    provider.profile_apps[target] = "cli_replaced_app"
+                bindings.configure(transport_ref=target, project_ref=binding["project_ref"],
+                    executor_endpoint_id="codex", audience="group" if group else None,
+                    group_refs=binding.get("group_refs"), available_group_refs=binding.get("group_refs"))
+        return result
+
+    monkeypatch.setattr(bindings, "observe", changed)
+    try:
+        if change == "unrelated":
+            selected = bindings.resolve(binding_id=binding["binding_id"], **source)
+            assert selected["binding"] == binding
+        else:
+            with pytest.raises(ValueError, match="binding|identity|authorized"):
+                bindings.resolve(binding_id=binding["binding_id"], **source)
+            assert not any(row["enabled"] and row["binding_id"] == binding["binding_id"]
+                           for row in bindings.read()["bindings"])
+        assert not store.list_sessions() and not provider.writes
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_prepared_stop_recovery_waits_for_route_fence_before_its_identity_probe(ordinary, monkeypatch, revoke):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from test_chat_completed_background_stop import _completed_with_later_answer
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, provider, transport, root, first, wire = _completed_with_later_answer(ordinary, monkeypatch)
+    stop = provider.topic("fenced-recovery-stop", "/stop", root=root["message_id"])
+    transport.admit("notes-app", stop, defer_background_stop=True)
+    frozen = next(row for row in transport.core.pending() if row["command"] == "stop")
+    assert frozen["status"] == "prepared" and frozen["target_recorded"]
+    fence = transport.core.root / "source-fences" / f"{frozen['binding_id']}.{frozen['source']['source_ref']}.json"
+    started, observed = threading.Event(), threading.Event()
+    observe, finish = transport.bindings.observe, transport.core._finish_background_stop
+    before_native = []
+
+    def observing(*args, **kwargs):
+        observed.set()
+        return observe(*args, **kwargs)
+
+    def finishing(*args, **kwargs):
+        before_native.append(sum("auth" in call for call in provider.calls))
+        return finish(*args, **kwargs)
+
+    def recover():
+        started.set()
+        transport.core.recover(request_ref=frozen["request_ref"])
+
+    monkeypatch.setattr(transport.bindings, "observe", observing)
+    monkeypatch.setattr(transport.core, "_finish_background_stop", finishing)
+    provider.calls.clear()
+    writes_before = list(provider.writes)
+    receipts = {turn_id: store.load_turn(first["session_id"], turn_id)
+                for turn_id in frozen["background_turn_ids"]}
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with exclusive_file_lock(fence, operation="hold_original_source_route"):
+                future = pool.submit(recover)
+                assert started.wait(5)
+                assert not observed.wait(.1), "A pre-fence probe cannot authorize prepared recovery"
+                if revoke:
+                    transport.bindings.disconnect(frozen["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            future.result(timeout=10)
+        current = transport.core.read_request(frozen["request_ref"])
+        if revoke:
+            assert current["status"] == "prepared" and current["background_turn_ids"] == frozen["background_turn_ids"]
+            assert not before_native and wire.children["owned"].poll() is None
+            assert provider.writes == writes_before
+        else:
+            assert before_native == [1], "The fenced admission already owns the fresh identity proof"
+            assert current["status"] == "command_completed" and current["background_turn_ids"] == [first["turn_id"]]
+            assert wire.children["owned"].poll() is not None
+            transport.reconcile()
+            assert sum("停止" in text for _, text in provider.writes) == 1
+        assert wire.children["unowned"].poll() is None
+        assert all(store.load_turn(first["session_id"], turn_id) == receipt
+                   for turn_id, receipt in receipts.items())
+    finally:
+        wire.close()
+        runtime.close()
 
 
 @pytest.mark.parametrize("resumed", [False, True])

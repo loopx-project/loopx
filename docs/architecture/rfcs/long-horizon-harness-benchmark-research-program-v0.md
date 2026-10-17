@@ -514,6 +514,8 @@ semantic source of truth.
 
 #### Evidence-based episode evaluation (proposed refinement)
 
+The opt-in [trajectory assessment producer](../../reference/trajectory-assessment.md) defines the operational metric vector, fixed-denominator sidecar and Codex execution boundary. This producer slice does not close packaged-product or independent scientific qualification.
+
 A flat native score can coexist with useful information, an executed method change,
 or expensive activity that did not reduce uncertainty. Keep those observations
 separate. A trajectory judge or research graph must not replace benchmark-native

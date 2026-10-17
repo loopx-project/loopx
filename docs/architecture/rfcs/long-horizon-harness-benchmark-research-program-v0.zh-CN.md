@@ -426,6 +426,8 @@ prose similarity 与 keyword matching 不能成为 semantic truth source。
 
 #### 基于证据的研究片段评估（拟议细化）
 
+可选的[轨迹分析 producer](../../reference/trajectory-assessment.md)将指标向量、固定分母的侧车与 Codex 执行边界具体化。本切片不代表打包产品旅程或独立科学校准已经完成。
+
 原生分数不变时，可能已有有用信息、实际方法变化，也可能只是昂贵活动。分别呈现这些观察；
 轨迹评估器或研究图不能替代原生结果、完整性、机制保真或比较资格。
 

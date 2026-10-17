@@ -1466,3 +1466,11 @@ for source archaeology only.
 Immutable experiment snapshots follow the canonical
 [archive placement rules](../../../benchmark/README.md#archive-placement),
 which permit explicitly identified, inert snapshots in `benchmark/`.
+
+## Evidence-bound trajectory analysis
+
+The opt-in [trajectory assessment producer](../../../docs/reference/trajectory-assessment.md)
+uses a declared evidence pack to produce source-linked, uncalibrated episode
+assessments. Preview is read-only; explicit execution invokes the local Codex
+account. It does not run benchmark solvers, alter scores or write Explore facts.
+The packaged Goal-view analysis journey remains a separate integration acceptance.

@@ -63,10 +63,7 @@ class WarmStart:
                 or source["goal_id"] == self.goal_id or source["agent_id"] == self.agent_id
                 or hashlib.sha256(self.config.read_bytes()).hexdigest() != native["config_sha256"]):
             raise ValueError("Warm start paths, configuration or destination lineage differ")
-        roots = [c for c in metadata["worker_file_snapshot"]["components"]
-                 if c["source_path"] == workspace]
-        if len(roots) != 1 or not (self.root / "components" / roots[0]["id"]).is_dir():
-            raise ValueError("Warm start requires one complete captured workspace")
+        _workspace_component(self.root, metadata, Path(workspace))
         _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
         context = metadata["research_context"]
         context_path = self.root / "components" / context["component_id"] / context["member_path"]
@@ -114,6 +111,29 @@ class WarmStart:
 # Provider-owned data locations; selecting a component never grants permission
 # to restore a home, executable installation, registry or runtime authority.
 _RESEARCH_ROOTS = (Path("/tmp"), Path("/home/workspace"))
+
+
+def _workspace_component(unit: Path, metadata: dict, workspace: Path) -> Path:
+    """Locate the task subtree inside one verified captured file root.
+
+    Capture may seal a parent directory. Only the native workspace is restored;
+    siblings remain inert unless independently selected as research data.
+    Both preflight and materialization use this transport resolution.
+    """
+    matches = []
+    for entry in metadata["worker_file_snapshot"]["components"]:
+        root = Path(entry["source_path"])
+        if workspace.is_relative_to(root):
+            if (not root.is_absolute() or ".." in root.parts or str(root) != entry["source_path"]
+                    or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", entry["id"])):
+                raise ValueError("Captured workspace root must have a canonical path and component ID")
+            matches.append(unit / "components" / entry["id"] / workspace.relative_to(root))
+    if len(matches) != 1:
+        raise ValueError("Warm start requires one complete captured workspace")
+    source = matches[0]
+    if not source.is_dir() or source.resolve() != source:
+        raise ValueError("Captured workspace must be a physical directory inside its component")
+    return source
 
 
 def _research_components(unit: Path, metadata: dict, workspace: Path, selected) -> list[tuple[str, Path, Path]]:
@@ -184,11 +204,7 @@ def restore_workspace(declaration: dict, workspace: Path):
             or unit.is_relative_to(workspace) or Path(_SRC).is_relative_to(workspace)
             or Path(_CODEX_HOME).is_relative_to(workspace)):
         raise ValueError("Checkpoint workspace overlaps the receiver's isolated control paths")
-    roots = [c for c in metadata["worker_file_snapshot"]["components"]
-             if c["source_path"] == str(workspace)]
-    if len(roots) != 1:
-        raise ValueError("Checkpoint must declare exactly one full workspace")
-    source = unit / "components" / roots[0]["id"]
+    source = _workspace_component(unit, metadata, workspace)
     # Reserve the original task-image directory rather than merging stale image
     # files into the captured research state. A partial attempt fails closed.
     original = workspace.with_name(workspace.name + ".before-checkpoint")

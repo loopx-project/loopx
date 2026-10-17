@@ -109,6 +109,45 @@ not raw session logs. The full-screen viewer bundles only the two explicit
 live LoopX state, local status feeds, private registries, raw logs, or write
 APIs.
 
+## Time Machine
+
+`/lab/time-machine/` is a read-only, decision-first public experience. Choose
+for an Agent, see the actual recorded outcome, then optionally inspect the
+original finding or browse each capture. The existing homepage research
+collection discovers it. English is the default; `?lang=zh` selects Chinese,
+and `?case=graph` or `?case=ad` opens another episode. Back/forward navigation
+restores the episode. Choices live only in page memory; reloading resets them.
+Both choices reveal the same historical outcome. They trigger no model,
+installation, restore, live Goal operation or simulated counterfactual.
+
+The three scenes distinguish a Portfolio local/native reversal, a scoped Graph
+finding with unproven native benefit, and an Ad screening/fresh-sample reversal.
+These are solver-authored diagnostic observations, not independent replications,
+countable benchmark results or evidence of a LoopX performance gain. The original
+status and text remain visible, including uncertainty. The record slider reads
+one original event in append order; it is not a historical-state projection.
+There are no inferred dependencies or causal links.
+
+The 76/134/105 events are byte-identical public fixtures from
+[the fixed research-history source](https://github.com/loopx-project/loopx/tree/44c7af3db271ab1991428d3ff1991ca922434eff/apps/presentation/dashboard/src/data/fixtures),
+selected against the
+[immutable public archive](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/tree/c858f51021dc1c1cf08263f9c04b692a5e29b40b).
+The browser verifies the capture SHA-256 before enabling a choice. A missing,
+changed or malformed capture clears the displayed records and offers retry;
+old content is never relabeled as another case. No raw native session is bundled.
+The existing Explore v0 owner defines record semantics; the local TS reader
+only checks the pinned artifact shape and renders its text. No shared vocabulary,
+capability or provider is introduced. The route loads separately from the home
+page and the static build includes the English question and archive link.
+
+Run `node --test scripts/time-machine.test.mjs` for capture integrity, negative
+cases and verbatim order checks, then `npm run build` and the ordinary SEO smoke.
+The packaged browser journey must also cover choices/results/original text,
+locale/case/history/reload, keyboard and narrow screens, plus a missing or
+changed capture and successful retry. Build at both `/` and `/loopx/` to qualify
+asset and navigation bases. Removing the route and its research entry reverts
+the experience without touching Explore state or live Agents.
+
 ## Search publication
 
 `npm run build` compiles the browser app and prerenders the homepage and the
