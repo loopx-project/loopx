@@ -3,6 +3,9 @@ import { constants, type Dirent } from "node:fs";
 import {createHash} from "node:crypto";
 import { open, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import {execFile} from "node:child_process";
+import {promisify} from "node:util";
+import {fileURLToPath} from "node:url";
 
 import {
   settlementIdentityFromPlan,
@@ -24,6 +27,7 @@ import {
   parseTurnJournalGoalBinding,
 } from "./turn_journal.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 interface JournalEvidence {
   turn_key: string;
@@ -67,8 +71,9 @@ async function journalSnapshot(path: string): Promise<{value: JsonObject; sha256
 }
 
 /** Call while source preparation owns Goal maintenance. The existing journal
- * interpreter decides terminal/uncertain effects. This closes only Turn
- * history, never physical Host drain, provider absence or external outboxes.
+ * interpreter decides terminal/uncertain effects. Actual process readback is a
+ * separate requirement: a terminal journal cannot certify its Host exited.
+ * This does not cover Hosts outside Turn execution or external effect owners.
  */
 export async function readGoalTurnHistoryForTransfer(root: string, goalId: string): Promise<JsonObject> {
   const directory = join(root, "goals", goalId, "turns");
@@ -89,12 +94,49 @@ export async function readGoalTurnHistoryForTransfer(root: string, goalId: strin
     if (typeof agent !== "string" || !agent) journalConflict("Transfer source Turn has no original owner");
     const observed = interpretTurnJournal({schema_version: "loopx_turn_journal_interpretation_request_v0",
       journal, goal_id: goalId, agent_id: agent, turn_key: key});
-    turns.push({turn_key: key, journal_sha256: sha256,
+    turns.push({turn_key: key, journal_sha256: sha256, host_attempt_count: journal.host_attempt_count ?? null,
       closed: observed.journal_consistent && ["committed", "stopped"].includes(observed.journal_status) &&
         observed.recovery_decision.action === "return_existing",
       recorded_effects: observed.recorded_effects, violations: observed.violations});
   }
-  return {closed: turns.every(row => row.closed === true), turns, sha256: canonicalAuthoritySha256(turns)};
+  let hosts: JsonObject[] = [];
+  if (turns.length || entries.some(entry => entry.name.endsWith(".hosts"))) {
+    const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON;
+    if (!python || !isAbsolute(python) || python.includes("\0")) journalConflict("Host drain requires the source-selected process owner adapter");
+    try {
+      const result = await promisify(execFile)(python, ["-m", "loopx.control_plane.turn_driver.turn_host_process", root, goalId], {
+        env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../../", import.meta.url))},
+        timeout: 30_000, maxBuffer: 16 * 1024 * 1024,
+      });
+      const rows: unknown = JSON.parse(result.stdout);
+      if (!Array.isArray(rows)) journalConflict("Invalid Host process readback");
+      hosts = rows.map(row => requireJsonObject(row, "original Host process observation"));
+    } catch { journalConflict("Host process readback is unavailable; recover the original Host before transfer"); }
+  }
+  const addresses = new Set<string>();
+  for (const host of hosts) {
+    const turn = turns.find(row => row.turn_key === host.turn_key);
+    const key = `${String(host.turn_key)}:${String(host.attempt)}`;
+    if (!turn || !Number.isSafeInteger(host.attempt) || Number(host.attempt) < 1 || addresses.has(key) ||
+        !Number.isSafeInteger(turn.host_attempt_count) || Number(host.attempt) > Number(turn.host_attempt_count) ||
+        typeof host.drain !== "string" || [host.record_sha256, host.supervisor_sha256].some(
+          value => value !== null && (typeof value !== "string" || !BARE_SHA256_PATTERN.test(value)))) {
+      journalConflict("Host process evidence has no matching original Turn attempt; reconcile its owner");
+    }
+    addresses.add(key);
+  }
+  const turnHostsClosed = turns.every(turn => {
+    const count = turn.host_attempt_count;
+    const recorded = turn.recorded_effects as JsonObject;
+    const actual = hosts.filter(host => host.turn_key === turn.turn_key);
+    // The journal owner may prove no attempt, but a missing attempt counter
+    // beside a recorded invocation is historical uncertainty, never absence.
+    if ((count === null || count === 0) && recorded.host_invoked === false) return actual.length === 0;
+    return Number.isSafeInteger(count) && Number(count) > 0 && actual.length === count &&
+      actual.every(host => host.record_sha256 !== null && ["drained", "not_launched"].includes(String(host.drain)));
+  });
+  const facts = {turns, hosts, turn_hosts_closed: turnHostsClosed};
+  return {...facts, closed: turns.every(row => row.closed === true), sha256: canonicalAuthoritySha256(facts)};
 }
 
 function observedCapabilities(envelope: JsonObject): string[] {

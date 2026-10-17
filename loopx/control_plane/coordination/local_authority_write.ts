@@ -3,6 +3,8 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {loadLegacyCoordinationWriterFence, PLANNED_TRANSFER_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
 import {requireShadowPrimaryWriteAllowed, shadowMaintenanceLockPath, withShadowMaintenanceLock} from "./shadow_management.ts";
+import {requireLocalAuthorityRuntimeRoot} from "./local_authority_provider.ts";
+import {hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 
 // File-v0 still verifies and republishes its retained history on each write.
 // Give a competing canonical writer a bounded wait for that real critical
@@ -74,6 +76,16 @@ export async function withGoalRuntimeWriter<T>(root: string, goalId: string,
     }
     return write();
   }, borrowedMaintenance);
+}
+
+/** The caller owns this exact maintenance lock while publishing Host/session
+ * IO. Transport never supplies a policy boolean or chooses a different fence. */
+export async function checkGoalRuntimeWrite(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "maintenance_lock"])) {
+    throw new EffectRuntimeConflictError("Runtime write check requires its owning maintenance witness");
+  }
+  return withGoalRuntimeWriter(requireLocalAuthorityRuntimeRoot(value.runtime_root),
+    requireAuthorityStoreId(value.goal_id, "runtime Goal"), async () => ({allowed: true}), value.maintenance_lock);
 }
 
 /** Call only while holding the Goal maintenance lock. */

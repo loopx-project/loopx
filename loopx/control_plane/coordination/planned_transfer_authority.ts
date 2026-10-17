@@ -133,7 +133,8 @@ async function registeredSourcePreview(context: JsonObject, originalFence: JsonO
     original_writer_fence_sha256: canonicalAuthoritySha256(originalFence), provider,
     provider_revision: head.provider_revision, cursor: head.cursor, source_store_identity: storeIdentity,
     retained_leases: retainedLeases, turn_history: turnHistory, quota_history: quotaHistory,
-    ready_for_authority_preparation: retainedLeases.length === 0 && turnHistory.closed === true && quotaHistory.closed === true,
+    ready_for_authority_preparation: retainedLeases.length === 0 && turnHistory.closed === true &&
+      turnHistory.turn_hosts_closed === true && quotaHistory.closed === true,
     host_drain_qualified: false, portable_artifact_qualified: false, execution_authority_granted: false};
   return {...facts, preview_sha256: canonicalAuthoritySha256(facts)};
 }
@@ -211,6 +212,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     }
     const turnHistory = await readGoalTurnHistoryForTransfer(root, goal);
     if (turnHistory.closed !== true) reject("Source Turn effects are not closed; settle or recover their original operations before preparing transfer");
+    if (turnHistory.turn_hosts_closed !== true) reject("Source Turn Hosts are not proven drained; recover their original process supervision before preparing transfer");
     const quotaHistory = await readGoalQuotaHistoryForTransfer(root, goal);
     if (quotaHistory.closed !== true) reject("Source quota effects are not closed; recover the original debit or void before preparing transfer");
     const pendingPath = join(directory, "preparation.json");

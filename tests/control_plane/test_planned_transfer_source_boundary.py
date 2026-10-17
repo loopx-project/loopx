@@ -12,6 +12,9 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -33,6 +36,10 @@ from loopx.paths import global_registry_path
 from loopx.control_plane.turn_driver.journal_store import write_turn_journal_checkpoint
 from loopx.control_plane.quota.spend_commit import record_quota_slot_spend_from_preview, replay_quota_spend_by_effect_ref
 from tests.control_plane.test_quota_spend_commit_runtime import _preview as quota_preview
+from loopx.control_plane.turn_driver.turn_host_process import turn_host_process_scope
+from loopx.control_plane.turn_driver.host_process_transport import run_host_process
+from loopx.control_plane.turn_driver.codex_sessions import _session_path, _store_codex_cli_session, _discard_codex_cli_session
+from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 
 
 def _original_turn(goal: str, todo: str) -> dict:
@@ -43,6 +50,34 @@ def _original_turn(goal: str, todo: str) -> dict:
             "transaction": {"turn_key": key, "settlement_plan": {"schema_version": "quota_settlement_plan_v1",
                 "identity": {"schema_version": "quota_settlement_identity_v0", "goal_id": goal, "agent_id": "agent-a",
                     "todo_id": todo, "turn_instance_id": key, "effect_id": f"{goal}:agent-a:{todo}:{key}"}}}}}
+
+
+@contextmanager
+def _running_turn_host(runtime: Path, project: Path, journal: dict):
+    """An owned real group, including a child that ignores graceful stop."""
+    ready = threading.Event()
+    release = project / "finish-original-host"
+    command = "\n".join([
+        "import subprocess,sys,time;from pathlib import Path",
+        "subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",
+        "print('ready',flush=True)",
+        "while not Path(sys.argv[1]).exists(): time.sleep(.01)",
+    ])
+
+    def launch():
+        with turn_host_process_scope(runtime, goal_id="report", turn_key=journal["turn_key"], attempt=1):
+            return run_host_process([sys.executable, "-c", command, str(release)], project=project,
+                input_text="", timeout_seconds=30, on_stdout=lambda _text: ready.set())
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(launch)
+        try:
+            assert ready.wait(10), "the original real Host did not start"
+            yield
+        finally:
+            release.touch()
+            observed = future.result(timeout=15)
+            assert observed["outcome"] == "exited"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -228,9 +263,11 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         assert preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move") == preview
 
         # The real journal/checkpoint and quota facades serialize against the
-        # preparation owner. Terminal metadata is not physical Host drain; no
-        # model or Host is run by this synthetic boundary fixture.
+        # preparation owner. Terminal metadata is not physical Host drain. An
+        # actual supervised synthetic command supplies that separate evidence;
+        # no model or external service is invoked.
         journal = _original_turn("report", todo)
+        journal["host_attempt_count"] = 1
         journal_path = runtime / "goals/report/turns" / ("a" * 64 + ".json")
         write_turn_journal_checkpoint(journal_path, journal)
         active_turn = preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move")
@@ -239,12 +276,22 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         with pytest.raises(EffectRuntimeRemoteError, match="Turn effects are not closed"):
             prepare_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move",
                 expected_preview_sha256=active_turn["preview_sha256"])
-        phases = ["host_execute", "typed_result", "validation", "durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"]
-        for count in (2, 3, 4, 5, 7):
-            journal["completed_phases"] = phases[:count]
-            if count == 7:
-                journal["status"] = "committed"
-            write_turn_journal_checkpoint(journal_path, journal)
+        with _running_turn_host(runtime, project, journal):
+            phases = ["host_execute", "typed_result", "validation", "durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"]
+            for count in (2, 3, 4, 5, 7):
+                journal["completed_phases"] = phases[:count]
+                if count == 7:
+                    journal["status"] = "committed"
+                write_turn_journal_checkpoint(journal_path, journal)
+            # Deliberately contradictory cross-owner timing: even a terminal
+            # journal must not make this actually running group disappear.
+            terminal_preview = preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move")
+            assert terminal_preview["turn_history"]["closed"] is True
+            assert terminal_preview["turn_history"]["turn_hosts_closed"] is False
+            assert terminal_preview["turn_history"]["hosts"][0]["drain"] == "draining"
+            with pytest.raises(EffectRuntimeRemoteError, match="Hosts are not proven drained"):
+                prepare_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move",
+                    expected_preview_sha256=terminal_preview["preview_sha256"])
         with pytest.raises(EffectRuntimeRemoteError, match="preview changed"):
             prepare_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move",
                 expected_preview_sha256=preview["preview_sha256"])
@@ -259,6 +306,12 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         preview = preview_registered_goal_transfer(registry_path=registry, goal_id="report", operation_id="prepared-move")
         assert preview["turn_history"]["closed"] is True and preview["quota_history"]["closed"] is True
         assert len(preview["quota_history"]["receipts"]) == 1
+        assert preview["turn_history"]["turn_hosts_closed"] is True
+        lineage = {"goal_id": "report", "agent_id": "agent-a", "todo_id": todo}
+        warm_admission = FirstPartyHostGoalAdmission.for_plan(registry_path=registry, goal_id="report", planned_goal_ref=None)
+        _store_codex_cli_session(runtime, lineage=lineage, session_id="original-source-context")
+        session_path = _session_path(runtime, lineage)
+        original_session = session_path.read_bytes()
         assert json.loads(legacy_coordination_writer_fence_path(runtime_root=runtime, goal_id="report").read_text()) == original_fence
         request = {"runtime_root": str(runtime), "goal_id": "report", "operation_id": "prepared-move",
             "expected_provider_revision": released["provider_revision"],
@@ -306,6 +359,21 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
                 "--execute", expected_code=1)
             assert "prepared for transfer" in refused_resume["error"]
             assert registry.read_bytes() == frozen_registry and journal_path.read_bytes() == frozen_journal
+            for callback in (
+                warm_admission.require_current,
+                lambda: warm_admission.accept_result(lambda: pytest.fail("prepared source result must not be accepted")),
+                lambda: _store_codex_cli_session(runtime, lineage=lineage, session_id="late-source-context"),
+                lambda: _discard_codex_cli_session(runtime, lineage=lineage),
+            ):
+                with pytest.raises(EffectRuntimeRemoteError, match="prepared for transfer"):
+                    callback()
+            assert session_path.read_bytes() == original_session
+            marker = project / f"late-host-{cold}"
+            with turn_host_process_scope(runtime, goal_id="report", turn_key=journal["turn_key"], attempt=2):
+                with pytest.raises(EffectRuntimeRemoteError, match="prepared for transfer"):
+                    run_host_process([sys.executable, "-c", "from pathlib import Path;import sys;Path(sys.argv[1]).touch()", str(marker)],
+                        project=project, input_text="", timeout_seconds=5)
+            assert not marker.exists()
             assert Path(debit["index_path"]).read_bytes() == frozen_index
         for cold in (False, True):
             if cold:

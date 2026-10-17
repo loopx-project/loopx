@@ -3,6 +3,9 @@ import {mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, writeFile} from
 import {createHash} from "node:crypto";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
+import {execFile} from "node:child_process";
+import {promisify} from "node:util";
+import {fileURLToPath} from "node:url";
 import test, {type TestContext} from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {prepareAuthorityForPlannedTransfer as prepare} from "../../loopx/control_plane/coordination/planned_transfer_authority.ts";
@@ -249,7 +252,7 @@ function quotaRequest(root: string): JsonObject {
 for (const provider of ["file", "sqlite"] as const) {
   test(`${provider}: a live or uncertain original Turn holds preparation; closed history stays frozen`, async t => {
     const f = await fixture(t, provider), path = join(f.root, "goals/goal-a/turns", `${"a".repeat(64)}.json`);
-    const journal = originalTurn();
+    const journal: JsonObject = {...originalTurn(), host_attempt_count: 1};
     await commitTurnJournal({path, journal});
     const before = await readFile(path), head = await f.store.loadAuthority();
     assert.equal((await readGoalTurnHistoryForTransfer(f.root, "goal-a")).closed, false);
@@ -263,6 +266,20 @@ for (const provider of ["file", "sqlite"] as const) {
     }
     const closed = await readGoalTurnHistoryForTransfer(f.root, "goal-a");
     assert.equal(closed.closed, true);
+    assert.equal(closed.turn_hosts_closed, false, "terminal settlement cannot replace missing process evidence");
+    await assert.rejects(prepare(f.request), /Hosts are not proven drained/);
+    // Exercise the actual existing supervisor, without a model or fabricated
+    // finished record. Its positive process-group readback closes this attempt.
+    await promisify(execFile)(process.env.LOOPX_EFFECT_RUNTIME_PYTHON!, ["-c", [
+      "import sys;from pathlib import Path",
+      "from loopx.control_plane.turn_driver.turn_host_process import turn_host_process_scope",
+      "from loopx.control_plane.turn_driver.host_process_transport import run_host_process",
+      "with turn_host_process_scope(Path(sys.argv[1]),goal_id='goal-a',turn_key='sha256:'+'a'*64,attempt=1):",
+      " run_host_process([sys.executable,'-c','print(42)'],project=Path(sys.argv[1]),input_text='',timeout_seconds=5)",
+    ].join("\n"), f.root], {env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../", import.meta.url))}});
+    const drained = await readGoalTurnHistoryForTransfer(f.root, "goal-a");
+    assert.equal(drained.turn_hosts_closed, true);
+    assert.equal((drained.hosts as JsonObject[])[0].drain, "drained");
     const prepared = await prepare(f.request), frozen = await readFile(path);
     assert.equal(prepared.host_drain_qualified, false, "terminal history cannot certify a physical Host or an external outbox");
     await assert.rejects(commitTurnJournal({path, journal}), /prepared for transfer/);
@@ -270,8 +287,15 @@ for (const provider of ["file", "sqlite"] as const) {
     await assert.rejects(commitTurnJournal({path: nextPath, journal: originalTurn("goal-a", "b")}), /prepared for transfer/);
     assert.deepEqual(await readFile(path), frozen);
     await assert.rejects(readFile(nextPath), {code: "ENOENT"});
-    assert.deepEqual(await readGoalTurnHistoryForTransfer(f.root, "goal-a"), closed);
+    assert.deepEqual(await readGoalTurnHistoryForTransfer(f.root, "goal-a"), drained);
     assert.deepEqual(await prepare(f.request), prepared);
+    const record = join(f.root, "goals/goal-a/turns", `${"a".repeat(64)}.hosts/attempt-1.json`);
+    const retainedRecord = join(f.root, "retained-original-host.json");
+    await rename(record, retainedRecord);
+    await assert.rejects(prepare(f.request), /Hosts are not proven drained/);
+    await assert.rejects(readFile(record), {code: "ENOENT"});
+    await rename(retainedRecord, record);
+    assert.deepEqual(await prepare(f.request), prepared, "only the retained original process evidence recovers this operation");
     const sibling = join(f.root, "goals/other-goal/turns", `${"c".repeat(64)}.json`);
     assert.equal((await commitTurnJournal({path: sibling, journal: originalTurn("other-goal", "c")})).appended, true);
   });
