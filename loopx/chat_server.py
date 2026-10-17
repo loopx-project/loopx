@@ -1081,16 +1081,20 @@ class ChatRequestHandler(
             if not goal_id:
                 raise ValueError("goal_id is required")
             self._registry_and_goal(goal_id)
+            from .control_plane.goals.planned_transfer_io import read_goal_transfer_workspace_target
+
+            target = read_goal_transfer_workspace_target(registry_path=self.server.registry_path, goal_id=goal_id)
+            registry_path = Path(target["registry_path"]) if target is not None else self.server.registry_path
             if apply:
                 payload = apply_todo_review_preview(
-                    registry_path=self.server.registry_path,
+                    registry_path=registry_path,
                     goal_id=goal_id,
                     text=text,
                     preview_id=str(body.get("preview_id") or ""),
                 )
             else:
                 payload = build_todo_review_preview(
-                    registry_path=self.server.registry_path,
+                    registry_path=registry_path,
                     goal_id=goal_id,
                     text=text,
                 )

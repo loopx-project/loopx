@@ -108,3 +108,104 @@ def test_ordinary_goal_without_transfer_keeps_its_existing_lifecycle_owner(sourc
         server.shutdown()
         thread.join(5)
         server.server_close()
+
+
+def _task_detail(server, todo_id):
+    connection = http.client.HTTPConnection(*server.server_address, timeout=90)
+    try:
+        connection.request("GET", f"/api/chat/todo/detail?goal_id=report&todo_id={todo_id}")
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+    finally:
+        connection.close()
+
+
+def _task_preview(service, kind, key, **parameters):
+    if kind == "todo.update":
+        parameters.setdefault("agent_id", "agent-a")
+    return service.preview({"action_kind": kind, "summary": "Review original work",
+        "normalized_parameters": {"goal_id": "report", **parameters},
+        "context": {"kind": "goal", "goal_id": "report"}, "idempotency_key": key})
+
+
+def test_original_task_entry_reads_edits_and_creates_at_current_target(source, tmp_path, monkeypatch):
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    _goal_document(source, absolute=True)
+    service = ChatActionService(store=ChatActionStore(tmp_path / "actions"), registry_path=source["registry"])
+    old_edit = _task_preview(service, "todo.update", "old-edit", todo_id=source["todo"],
+        operation="edit", text="An unconfirmed source edit")
+    old_create = _task_preview(service, "todo.create", "old-create", text="An unconfirmed source task")
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    prepared = source["cli"]("goal-transfer", "prepare-local", "--goal-id", "report",
+        "--operation-id", "move-a", "--destination-root", str(destination), "--execute")
+    server, thread, call = _status_server(source)
+    try:
+        assert call({"action": "confirm", "goal_id": "report", "operation_id": "move-a",
+            "preview_sha256": prepared["prepared_cutover"]["preview_sha256"]})[0] == 200
+        source_before = read_canonical_todos_if_promoted(runtime_root=source["runtime"], goal_id="report")
+        source_files = source["registry"].read_bytes(), source["fence"].read_bytes()
+        assert service.apply(old_edit["proposal_id"])["proposal"]["status"] == "stale"
+        assert service.apply(old_create["proposal_id"])["proposal"]["status"] == "stale"
+        status, detail = _task_detail(server, source["todo"])
+        assert status == 200 and detail["text"] == "[P1] Write the input sum to report.txt"
+        text = detail["text"] + ". Preserve all original input and independently check 21."
+        edit = _task_preview(service, "todo.update", "target-edit", todo_id=source["todo"],
+            operation="edit", text=text, review_basis=detail["review_basis"])
+        save_checkpoint = service.store.save_checkpoint
+        def lose_reply(*args, **kwargs):
+            raise OSError("Synthetic response loss after the canonical edit")
+        monkeypatch.setattr(service.store, "save_checkpoint", lose_reply)
+        with pytest.raises(OSError, match="response loss"):
+            service.apply(edit["proposal_id"])
+        committed = read_canonical_todos_if_promoted(runtime_root=destination / "runtime", goal_id="report")
+        monkeypatch.setattr(service.store, "save_checkpoint", save_checkpoint)
+        applied = service.apply(edit["proposal_id"])["proposal"]
+        assert applied["status"] == "applied"
+        assert service.apply(edit["proposal_id"])["proposal"] == applied
+        assert committed["provider_revision"] == read_canonical_todos_if_promoted(
+            runtime_root=destination / "runtime", goal_id="report")["provider_revision"]
+        status, saved = _task_detail(server, source["todo"])
+        assert status == 200 and saved["text"] == text
+        assert saved["review_basis"] != detail["review_basis"]
+        with pytest.raises(ValueError, match="changed"):
+            _task_preview(service, "todo.update", "stale-read", todo_id=source["todo"],
+                operation="edit", text="Obsolete intent", review_basis=detail["review_basis"])
+        create = _task_preview(service, "todo.create", "target-create", text="Review the completed original report")
+        created = service.apply(create["proposal_id"])["proposal"]
+        assert created["status"] == "applied"
+        assert service.apply(create["proposal_id"])["proposal"] == created
+        new_id = created["receipt"]["resource_ids"]["todo_id"]
+        assert _task_detail(server, new_id)[1]["text"] == "[P1] Review the completed original report"
+        pause = _task_preview(service, "todo.update", "target-pause", todo_id=source["todo"],
+            operation="block", note="Wait for the independent report review")
+        assert service.apply(pause["proposal_id"])["proposal"]["status"] == "applied"
+        assert _task_detail(server, source["todo"])[1]["status"] == "blocked"
+        resume = _task_preview(service, "todo.update", "target-resume", todo_id=source["todo"],
+            operation="edit", status="open", note="Resume the original report")
+        assert service.apply(resume["proposal_id"])["proposal"]["status"] == "applied"
+        assert _task_detail(server, source["todo"])[1]["status"] == "open"
+        # An execution request must refuse before creating a task in either
+        # store while the session/runtime continuation owner is unavailable.
+        with pytest.raises(ValueError, match="execution.*transfer"):
+            _task_preview(service, "todo.create", "target-start", text="Do not partially create this task",
+                agent_id="agent-a", start_execution=True)
+        target_registry = destination / "workspace/.loopx/registry.json"
+        retained = target_registry.with_suffix(".retained")
+        target_registry.rename(retained)
+        try:
+            assert _task_detail(server, source["todo"])[0] >= 400
+            with pytest.raises((EffectRuntimeRemoteError, ValueError, OSError)):
+                _task_preview(service, "todo.create", "unavailable-task", text="Never fall back to the source")
+        finally:
+            retained.rename(target_registry)
+        assert _task_detail(server, source["todo"])[1]["text"] == text
+        target = read_canonical_todos_if_promoted(runtime_root=destination / "runtime", goal_id="report")
+        assert {row["todo_id"] for row in target["todos"]} == {source["todo"], new_id}
+        assert source_before == read_canonical_todos_if_promoted(runtime_root=source["runtime"], goal_id="report")
+        assert source_files == (source["registry"].read_bytes(), source["fence"].read_bytes())
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()

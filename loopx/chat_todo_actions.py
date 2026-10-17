@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
 
 from .control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
@@ -24,11 +26,20 @@ def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:
 class ChatTodoActionMixin:
     """Keep Todo preview/apply parity separate from general orchestration."""
 
+    def _todo_registry(self, goal_id: str, *, start_execution: bool = False) -> Path:
+        from .control_plane.goals.planned_transfer_io import read_goal_transfer_workspace_target
+
+        target = read_goal_transfer_workspace_target(registry_path=self.registry_path, goal_id=goal_id)
+        if target is not None and start_execution:
+            raise ValueError("Task execution from this entry is unavailable after transfer; create without starting execution.")
+        return Path(target["registry_path"]) if target is not None else self.registry_path
+
     def _run_todo_update(
         self, parameters: dict[str, Any], *, dry_run: bool,
         basis: dict[str, Any] | None = None, operation_id: str | None = None,
     ) -> dict[str, Any]:
         goal_id = str(parameters["goal_id"])
+        registry_path = self._todo_registry(goal_id)
         operation = str(parameters.get("operation") or "edit")
         if parameters.get("review_basis") is not None and parameters["review_basis"] != basis:
             raise ValueError("The Task source changed. Reload its complete requirements before saving.")
@@ -40,7 +51,7 @@ class ChatTodoActionMixin:
         if operation == "complete" and (basis is None or
                 basis.get("schema_version") == "loopx_chat_canonical_terminal_basis_v0"):
             return complete_goal_todo(
-                registry_path=self.registry_path,
+                registry_path=registry_path,
                 goal_id=goal_id,
                 todo_id=str(parameters["todo_id"]),
                 note=parameters.get("note"),
@@ -60,7 +71,7 @@ class ChatTodoActionMixin:
         elif operation == "defer":
             status = "deferred"
         return update_goal_todo(
-            registry_path=self.registry_path,
+            registry_path=registry_path,
             goal_id=goal_id,
             todo_id=str(parameters["todo_id"]),
             text=parameters.get("text"),
@@ -137,14 +148,22 @@ class ChatTodoActionMixin:
 
     def _canonical_update_basis(
         self, goal_id: str, *, completion_todo_id: str | None = None,
-        decision: bool = False,
+        decision: bool = False, registry_path: Path | None = None,
     ) -> dict[str, Any] | None:
-        registry_sha256 = self._registry_fingerprint()
+        # Only the Task entrypoint passes its admitted current registry. Gate
+        # and Monitor owners retain their own original routing and semantics.
+        registry_path = registry_path or self.registry_path
+
+        def fingerprint() -> str:
+            return (self._registry_fingerprint() if registry_path == self.registry_path else
+                    hashlib.sha256(registry_path.read_bytes()).hexdigest())
+
+        registry_sha256 = fingerprint()
         authority = read_canonical_todos_if_promoted(
-            runtime_root=effective_runtime_root(self.registry_path, None),
+            runtime_root=effective_runtime_root(registry_path, None),
             goal_id=goal_id, include_leases=True,
         )
-        if self._registry_fingerprint() != registry_sha256:
+        if fingerprint() != registry_sha256:
             raise ValueError("Todo authority registration changed while reading; retry")
         if authority is None:
             return None

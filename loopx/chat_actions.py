@@ -1276,7 +1276,7 @@ class ChatActionService(
             permission = "protected"
         elif action_kind == "todo.create":
             canonical_preview = build_todo_review_preview(
-                registry_path=self.registry_path,
+                registry_path=self._todo_registry(normalized["goal_id"], start_execution=normalized.get("start_execution", False)),
                 goal_id=normalized["goal_id"],
                 text=normalized["text"],
                 priority=normalized.get("priority"),
@@ -1323,6 +1323,7 @@ class ChatActionService(
         elif action_kind in {"todo.update", "monitor.update"}:
             if normalized.get("operation") != "run_now":
                 canonical_update_basis = self._canonical_update_basis(normalized["goal_id"],
+                    registry_path=self._todo_registry(normalized["goal_id"]) if action_kind == "todo.update" else None,
                     completion_todo_id=normalized["todo_id"] if normalized.get("operation") in {"complete", "stop"} else None)
             if action_kind == "todo.update" or normalized.get("operation") != "run_now":
                 run = self._run_todo_update if action_kind == "todo.update" else self._run_monitor_update
@@ -1560,6 +1561,8 @@ class ChatActionService(
                 },
             )
         if action_kind == "todo.create":
+            registry_path = self._todo_registry(str(parameters["goal_id"]),
+                start_execution=parameters.get("start_execution", False))
             checkpoint = proposal.get("checkpoint")
             steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else {}
             steps = steps if isinstance(steps, dict) else {}
@@ -1574,7 +1577,7 @@ class ChatActionService(
                 )
             else:
                 current = build_todo_review_preview(
-                    registry_path=self.registry_path,
+                    registry_path=registry_path,
                     goal_id=str(parameters["goal_id"]),
                     text=str(parameters["text"]),
                     priority=parameters.get("priority"),
@@ -1588,7 +1591,7 @@ class ChatActionService(
                     )
                     return {"proposal": stale, "turn": None}
                 applied = apply_todo_review_preview(
-                    registry_path=self.registry_path,
+                    registry_path=registry_path,
                     goal_id=str(parameters["goal_id"]),
                     text=str(parameters["text"]),
                     priority=parameters.get("priority"),
@@ -1607,7 +1610,7 @@ class ChatActionService(
             agent_id = parameters.get("agent_id")
             if agent_id and not isinstance(steps.get("todo_assigned"), dict):
                 update_goal_todo(
-                    registry_path=self.registry_path,
+                    registry_path=registry_path,
                     goal_id=str(parameters["goal_id"]),
                     todo_id=todo_id,
                     claimed_by=str(agent_id),
