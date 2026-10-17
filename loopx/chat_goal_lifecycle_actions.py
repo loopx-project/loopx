@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .control_plane.goals.activation import GoalActivationState, goal_activation_state
@@ -14,6 +15,12 @@ GOAL_LIFECYCLE_SOURCE_BASIS_SCHEMA_VERSION = "loopx_goal_lifecycle_source_basis_
 
 class ChatGoalLifecycleActionMixin:
     """Keep Goal activation policy separate from general action orchestration."""
+
+    def _goal_lifecycle_registry(self, goal_id: str) -> Path:
+        from .control_plane.goals.planned_transfer_io import read_goal_transfer_workspace_target
+
+        target = read_goal_transfer_workspace_target(registry_path=self.registry_path, goal_id=goal_id)
+        return Path(target["registry_path"]) if target is not None else self.registry_path
 
     def _goal_lifecycle_preview(
         self,
@@ -49,7 +56,7 @@ class ChatGoalLifecycleActionMixin:
             else GoalActivationState.ACTIVE
         )
         preview = set_goal_activation_state(
-            registry_path=self.registry_path,
+            registry_path=self._goal_lifecycle_registry(str(parameters["goal_id"])),
             goal_id=str(parameters["goal_id"]),
             state=target_state,
             reason=parameters.get("reason"),
@@ -227,7 +234,7 @@ class ChatGoalLifecycleActionMixin:
         )
         expected_fingerprint = str(proposal.get("expected_state_fingerprint") or "")
         current = set_goal_activation_state(
-            registry_path=self.registry_path,
+            registry_path=self._goal_lifecycle_registry(goal_id),
             goal_id=goal_id,
             state=target_state,
             reason=parameters.get("reason"),
@@ -260,7 +267,7 @@ class ChatGoalLifecycleActionMixin:
             )
             return {"proposal": stale, "turn": None}
         result = set_goal_activation_state(
-            registry_path=self.registry_path,
+            registry_path=self._goal_lifecycle_registry(goal_id),
             goal_id=goal_id,
             state=target_state,
             reason=parameters.get("reason"),

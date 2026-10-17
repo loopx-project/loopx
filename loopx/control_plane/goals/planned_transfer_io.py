@@ -109,6 +109,28 @@ def _destination_activation(target: dict[str, Any], *, state: str,
         actor_kind="owner" if execute else None, execute=execute)
 
 
+def read_goal_transfer_workspace_target(*, registry_path: Path, goal_id: str) -> dict[str, Any] | None:
+    """Private first-party workspace route, never an executor/CLI redirection.
+
+    Existing orphan handling still owns an unavailable original registry. A
+    present transfer whose target cannot be verified must never fall back.
+    The typed transfer owner alone decides whether a destination was admitted.
+    """
+    from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
+
+    try:
+        route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+    except (OSError, ValueError):
+        # Source lookup has not established any transfer. Preserve the existing
+        # lifecycle owner's explicit orphan-stop refusal/recovery rules. Native
+        # cutover/target proof below is deliberately outside this fallback.
+        return None
+    return effect_runtime_result("coordination.planned_transfer.workspace_target", {
+        "registry_path": route["source_registry"], "runtime_root": route["source_runtime_root"],
+        "goal_id": goal_id,
+    }, timeout=60.0, retry_safe=True)["target"]
+
+
 def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
     """Shared Settings/CLI transport; the native owner discovers preparation."""
     result = _read_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)

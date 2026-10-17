@@ -25,6 +25,7 @@ from .control_plane.effect_runtime import (
     EffectRuntimeStartupError,
     effect_runtime_request_scope,
 )
+from .control_plane.goals.activation import goal_activation_state
 from .control_plane.runtime.public_safety import (
     public_safe_compact_text,
     validate_public_safe_value,
@@ -52,12 +53,13 @@ from .status_server import (
 from .control_plane.todos.list_readback import list_goal_todos
 
 
-def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
-    runtime_root = server.runtime_root_override
+def _goal_task_map(server: Any, goal_id: str, *, registry_path: Path | None = None,
+    runtime_root: str | Path | None = None) -> dict[str, Any] | None:
+    runtime_root = runtime_root if registry_path is not None else server.runtime_root_override
     source_read_at = now_utc_iso()
     try:
         listed = list_goal_todos(
-            registry_path=server.registry_path,
+            registry_path=registry_path if registry_path is not None else server.registry_path,
             goal_id=goal_id,
             runtime_root_arg=str(runtime_root) if runtime_root else None,
         )
@@ -227,14 +229,31 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     )
                     self._send_json(directory)
                     return
+            status_registry = self.server.registry_path
+            status_runtime = self.server.runtime_root_override
+            transfer_target = None
+            if goal_id:
+                from .control_plane.goals.planned_transfer_io import read_goal_transfer_workspace_target
+
+                transfer_target = read_goal_transfer_workspace_target(registry_path=status_registry, goal_id=goal_id)
+                if transfer_target is not None:
+                    status_registry = Path(transfer_target["registry_path"])
+                    status_runtime = transfer_target["runtime_root"]
+                    if activation_state_filter is None:
+                        # The old entry's discovery metadata still names the
+                        # source. Select the existing stopped archive read when
+                        # the admitted target is stopped, retaining its work.
+                        target_goal = next(goal for goal in registry_goals(load_registry(status_registry))
+                            if str(goal.get("id")) == goal_id)
+                        activation_state_filter = goal_activation_state(target_goal)
             projection = collect_status(
-                registry_path=self.server.registry_path,
+                registry_path=status_registry,
                 # The Chat service already starts on an absent registry as an
                 # empty workspace (serve_chat); its status reports the same
                 # fact as a warning, so a fresh install is not a failed source.
                 allow_missing_registry=True,
-                runtime_root_override=self.server.runtime_root_override,
-                scan_roots=self.server.scan_roots,
+                runtime_root_override=status_runtime,
+                scan_roots=[] if transfer_target else self.server.scan_roots,
                 limit=self.server.limit,
                 goal_id=goal_id,
                 include_public_boundary_scan=False,
@@ -280,7 +299,8 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                              if row.get("goal_id") == goal_id), {})
                 goal = next((row for row in projection.get("run_history", {}).get("goals", [])
                              if row.get("id") == goal_id), {})
-                goal_map = _goal_task_map(self.server, goal_id)
+                goal_map = _goal_task_map(self.server, goal_id,
+                    registry_path=status_registry, runtime_root=status_runtime)
                 observed_at = now_utc_iso()
                 components = [item.get("task_graph_projection"), goal_map, goal.get("acceptance_observation")]
                 upstream = [value for value in [projection.get("projection_envelope"),
@@ -312,6 +332,7 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                 self.server.registry_path,
                 *self.server.scan_roots,
                 self.server.runtime_root,
+                *([status_registry, status_registry.parent.parent, Path(status_runtime)] if transfer_target else []),
             ]
             projection = json.loads(
                 redact_local_paths(

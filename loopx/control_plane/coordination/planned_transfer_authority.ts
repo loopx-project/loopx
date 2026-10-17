@@ -231,6 +231,25 @@ export async function visitRegisteredTransferSource<T>(value: JsonObject, reques
     }));
 }
 
+/** First-party workspace reads may follow only the existing local cutover
+ * proof. This read neither grants writer admission nor redirects executors.
+ * Ordinary fences need no transfer snapshot or authority-history read. */
+export async function readGoalTransferWorkspaceTarget(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "registry_path"])) reject("Workspace transfer read requires its registered source");
+  const root = requireLocalAuthorityRuntimeRoot(value.runtime_root);
+  const goal = requireAuthorityStoreId(value.goal_id, "Goal id");
+  const fence = await loadLegacyCoordinationWriterFence(root, goal);
+  if (fence.status === "missing") return {target: null};
+  if (fence.status !== "loaded") reject("Current workspace writer boundary is unavailable");
+  if (fence.fence.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || fence.fence.role !== "source") return {target: null};
+  const snapshot = await readGoalTransferSnapshot(String(value.registry_path), goal);
+  const context = requireJsonObject(snapshot.source_context, "workspace source context");
+  if (context.runtime_root !== root) reject("Workspace source runtime changed");
+  const view = await inspectRegisteredGoalTransfer({runtime_root: root, goal_id: goal,
+    source_context: context, registry_witness: snapshot.registry_witness});
+  return {target: view._local_activation_target ?? null};
+}
+
 /** The caller-facing continuation view. This local vocabulary describes this
  * Goal's actual preparation and its remaining continuation gap; it is not a
  * replacement lifecycle, provider decision or execution grant. Full native
