@@ -98,6 +98,8 @@ export function visionAuthoringContract(): JsonObject {
       },
     },
     authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit. " +
+      "For todo_delta, use retain:todo_<id> for existing work; supported verbs are activate, create, reopen, resume and retain. " +
+      "Replace todo_<id> with a verified Todo ID after normal authoring/readback. Entries record plans, not Todo mutations, claims or execution authority. " +
       "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
       "checkpoint-context is only for recovery after the original committed Turn writeback; " +
       "follow its returned same-Turn recovery action, not a fresh-turn preflight.",
