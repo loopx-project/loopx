@@ -70,10 +70,10 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
       ? (zh ? "无法核对本次来源；已显示的值仅为上次读回。" : "The source could not be refreshed. Displayed values are from the last readback.")
       : (zh ? "所选来源暂不可读，未显示其他范围的结果。" : "The selected source could not be read. No result from another scope is shown.")} {error}</p> : null}
     {p ? <>
-      <p className="research-progress-scope">{p.title} · {number(p.episode_count)} {zh ? "个固定研究片段" : "fixed episodes"} · {p.selection.exhaustive ? (zh ? "仅覆盖声明范围" : "Declared scope only") : (zh ? "目的抽样，不代表全程" : "Purposive sample, not the whole run")}</p>
+      <p className="research-progress-scope">{p.title} · {number(p.episode_count)} {zh ? "个选定研究片段" : "selected episodes"} · {p.selection.exhaustive ? (zh ? "仅覆盖声明范围" : "Declared scope only") : p.selection.population_episodes == null ? (zh ? "定向抽样，全程覆盖未知" : "Purposive sample; whole-run coverage unknown") : (zh ? "定向抽样，不代表全程" : "Purposive sample, not the whole run")}</p>
       {p.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史分析：来源或方法已变化，不能当作当前判断。" : "Historical analysis: the source or method changed; these are not current judgments."}</p> : null}
       {result ? <div className="research-process-counts">
-        <p>{zh ? "分析器逐项判读 · 未校准。数字为“是 / 适用片段”，未知仍在分母中；展开任一项看理由与证据。" : "Uncalibrated analyzer judgments. Counts are yes / eligible episodes, including unknowns in the denominator. Expand a metric for reasons and evidence."}</p>
+        <p>{zh ? "分析器判读未校准，仅限所选片段；范围外或未捕获的工作未纳入。数字为“是 / 适用片段”，未知仍在分母中；展开看依据。" : "Uncalibrated judgments of selected episodes only; work outside this scope or not captured is excluded. Counts are yes / eligible episodes, including unknowns. Expand for evidence."}</p>
         <div className="research-effect-metrics" key={p.pack_id}>
           {TRAJECTORY_METRICS.map(metric => {
             const label = metricCopy[metric], row = result.metrics.find(item => item.metric === metric);
