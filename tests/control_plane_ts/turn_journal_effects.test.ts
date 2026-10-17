@@ -172,6 +172,30 @@ test("journal checkpoint retry is idempotent and operation-scoped", async () => 
   });
 });
 
+test("one caller settlement cannot allocate two canonical journals concurrently", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "loopx-ts-original-turn-"));
+  try {
+    const snapshots = ["a", "b"].map(digit => {
+      const key = `sha256:${digit.repeat(64)}`;
+      const value = journal("in_progress", [], "fixture-agent", key);
+      const transaction = (value.plan as Record<string, unknown>).transaction as Record<string, unknown>;
+      transaction.turn_instance_id = "stable-caller-turn";
+      Object.assign((transaction.settlement_plan as Record<string, unknown>).identity as object,
+        {turn_instance_id: "stable-caller-turn", effect_id: effectId("fixture-agent", "stable-caller-turn")});
+      return {value, path: join(directory, "goals", "fixture-goal", "turns", `${digit.repeat(64)}.json`)};
+    });
+    const results = await Promise.allSettled(snapshots.map(({value, path}) => commitTurnJournal({path, journal: value})));
+    assert.equal(results.filter(row => row.status === "fulfilled").length, 1);
+    const denied = results.find(row => row.status === "rejected") as PromiseRejectedResult;
+    assert.match(String(denied.reason), /Original settlement already belongs to Turn/);
+    const first = results.findIndex(row => row.status === "fulfilled");
+    assert.equal((await commitTurnJournal({path: snapshots[first]!.path, journal: snapshots[first]!.value})).replayed, true);
+    await assert.rejects(readFile(snapshots[1 - first]!.path), {code: "ENOENT"});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test("contradictory settlement binding cannot create or replace a durable journal", async () => {
   await withJournalPath(async (path) => {
     const valid = journal();

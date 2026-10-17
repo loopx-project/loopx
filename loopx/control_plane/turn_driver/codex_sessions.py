@@ -20,6 +20,7 @@ from ..projects.registry_codec import (
 )
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .driver import selected_turn_todo, session_identity_fields
+from .turn_host_process import goal_runtime_write
 
 CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
 MANAGED_CLI_SESSION_SCHEMA_VERSION = "loopx_managed_cli_session_v1"
@@ -290,60 +291,61 @@ def _write_codex_cli_session(
     if not normalized_session_id:
         raise ValueError("Codex CLI returned an invalid session id")
     path = _session_path(runtime_root, lineage, session_scope)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        if hasattr(os, "fchmod"):
-            os.fchmod(descriptor, 0o600)
-        handle = os.fdopen(descriptor, "w", encoding="utf-8")
-        descriptor = -1
-        with handle:
-            payload: dict[str, Any] = {
-                "schema_version": schema,
-                **lineage,
-                "host": host,
-                "session_id": normalized_session_id,
-            }
-            if session_scope != "todo":
-                payload["session_scope"] = session_scope
-            if session_profile_digest is not None:
-                payload["session_profile_digest"] = session_profile_digest
-            if goal_ref is not None:
-                payload["goal_ref"] = dict(goal_ref)
-            if checkpoint_artifact_sha256 is not None:
-                payload["checkpoint_artifact_sha256"] = checkpoint_artifact_sha256
-            if checkpoint_artifact_root is not None:
-                payload["checkpoint_artifact_root"] = checkpoint_artifact_root
-            if checkpoint_context_refresh is not None:
-                payload["checkpoint_context_refresh"] = checkpoint_context_refresh
-            if operation_profile_digest is not None:
-                payload["operation_transport"] = (
-                    "dsh-native-operation-tools-v0" if host == "dsh"
-                    else "app-server-operation-tools-v0"
+    with goal_runtime_write(runtime_root, lineage["goal_id"]):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, 0o600)
+            handle = os.fdopen(descriptor, "w", encoding="utf-8")
+            descriptor = -1
+            with handle:
+                payload: dict[str, Any] = {
+                    "schema_version": schema,
+                    **lineage,
+                    "host": host,
+                    "session_id": normalized_session_id,
+                }
+                if session_scope != "todo":
+                    payload["session_scope"] = session_scope
+                if session_profile_digest is not None:
+                    payload["session_profile_digest"] = session_profile_digest
+                if goal_ref is not None:
+                    payload["goal_ref"] = dict(goal_ref)
+                if checkpoint_artifact_sha256 is not None:
+                    payload["checkpoint_artifact_sha256"] = checkpoint_artifact_sha256
+                if checkpoint_artifact_root is not None:
+                    payload["checkpoint_artifact_root"] = checkpoint_artifact_root
+                if checkpoint_context_refresh is not None:
+                    payload["checkpoint_context_refresh"] = checkpoint_context_refresh
+                if operation_profile_digest is not None:
+                    payload["operation_transport"] = (
+                        "dsh-native-operation-tools-v0" if host == "dsh"
+                        else "app-server-operation-tools-v0"
+                    )
+                    payload["operation_profile_digest"] = operation_profile_digest
+                    payload["operation_model"] = operation_model
+                    payload["operation_reasoning_effort"] = operation_reasoning_effort
+                json.dump(
+                    payload,
+                    handle,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
                 )
-                payload["operation_profile_digest"] = operation_profile_digest
-                payload["operation_model"] = operation_model
-                payload["operation_reasoning_effort"] = operation_reasoning_effort
-            json.dump(
-                payload,
-                handle,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            handle.write("\n")
-            if checkpoint_artifact_sha256 is not None:
-                handle.flush()
-                os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        path.chmod(0o600)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        temporary.unlink(missing_ok=True)
+                handle.write("\n")
+                if checkpoint_artifact_sha256 is not None:
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            path.chmod(0o600)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary.unlink(missing_ok=True)
 
 
 def _discard_codex_cli_session(
@@ -353,7 +355,7 @@ def _discard_codex_cli_session(
     session_scope: str = "todo",
 ) -> None:
     path = _session_path(runtime_root, lineage, session_scope)
-    with exclusive_file_lock(path):
+    with exclusive_file_lock(path), goal_runtime_write(runtime_root, lineage["goal_id"]):
         path.unlink(missing_ok=True)
 
 

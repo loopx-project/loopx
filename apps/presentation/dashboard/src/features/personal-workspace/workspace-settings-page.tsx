@@ -14,6 +14,7 @@ import { GoalStorageSettings } from "./goal-storage-settings";
 import { AutomationCadenceSettings } from "./automation-cadence-settings";
 import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { ConfigurationBackupSettings } from "./configuration-backup-settings";
+import { GoalTransferSettings } from "./goal-transfer-settings";
 import { OperatorCredentialSettings } from "./operator-credential-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
@@ -254,6 +255,7 @@ export function WorkspaceSettingsPage({
               <GoalAcceptanceContractSection goalId={selectedGoal.goalId} current canManage management copy={goalAcceptanceContractCopy[locale]} />
         </div> : null}
         {tab === "capabilities" && (capabilityScope === "machine" || capabilityGoalId) ? <ConfigurationBackupSettings key={`${capabilityScope}:${capabilityGoalId}`} goalId={capabilityScope === "goal" ? capabilityGoalId : null} /> : null}
+        {tab === "capabilities" && capabilityScope === "goal" && capabilityGoalId ? <GoalTransferSettings key={`transfer:${capabilityGoalId}`} goalId={capabilityGoalId} /> : null}
         {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}
 
         {tab === "appearance" ? (

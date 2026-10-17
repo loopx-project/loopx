@@ -80,6 +80,7 @@ FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
 SUPPORT_CONTROL_COMMANDS = {
+    "goal-transfer",
     "research-checkpoint",
     "configuration-backup",
     "automation-prompts",
@@ -111,6 +112,8 @@ def register_support_control_commands(
     register_research_checkpoint(subparsers, add_subcommand_format)
     from .configuration_backup import register_configuration_backup
     register_configuration_backup(subparsers, add_subcommand_format)
+    from .support_control_transfer import register_goal_transfer
+    register_goal_transfer(subparsers, add_subcommand_format)
     register_heartbeat_control_commands(subparsers, add_subcommand_format)
 
     register_supervisor_control_commands(subparsers, add_subcommand_format)
@@ -244,6 +247,11 @@ def handle_support_control_command(
     if args.command == "configuration-backup":
         from .configuration_backup import handle_configuration_backup
         return handle_configuration_backup(args, registry_path=registry_path,
+            print_payload=print_payload, output_format=output_format)
+
+    if args.command == "goal-transfer":
+        from .support_control_transfer import handle_goal_transfer
+        return handle_goal_transfer(args, registry_path=registry_path,
             print_payload=print_payload, output_format=output_format)
 
     if args.command == "research-checkpoint":

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,15 @@ def _write_host_process_record(path: Path, record: dict[str, Any]) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(record, handle, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        if hasattr(os, "O_DIRECTORY"):
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
     finally:
         Path(temporary).unlink(missing_ok=True)
 
@@ -232,7 +241,7 @@ def run_host_process(
     command = list(argv)
     if sys.platform == "win32":
         command = [sys.executable, "-c", _WINDOWS_COMMAND_RELAY, *command]
-    request = {
+    request: dict[str, Any] = {
         "argv": command,
         "cwd": str(project),
         "input": input_text,
@@ -262,6 +271,15 @@ def run_host_process(
         record_path = host_process_supervisor_record(record_path)
         supervises = HOST_PROCESS_SUPERVISES_NESTED_HOST
         supervision = "leased"
+    from .turn_host_process import current_turn_host_process
+
+    turn_process = current_turn_host_process()
+    record_paths = [record_path] if record_path is not None else []
+    if turn_process is not None:
+        if delegated_lease is not None:
+            raise ValueError("A Turn Host scope cannot supervise a second delegated CLI")
+        if turn_process.record_path not in record_paths:
+            record_paths.append(turn_process.record_path)
     with subprocess.Popen(
         [
             _node_executable(),
@@ -279,31 +297,36 @@ def run_host_process(
         env=bridge_environment,
     ) as proc:
         assert proc.stdin is not None and proc.stdout is not None
-        result = None
+        result: dict[str, Any] | None = None
         record = None
         try:
-            if record_path is not None:
-                # Written before the request, so no Host exists that the record
-                # does not name; a record that cannot be written launches nothing.
-                record = {"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
-                          "host": lock_holder_host_label(), "owner_pid": os.getpid(),
-                          "supervises": supervises, "supervision": supervision, "bridge_pid": proc.pid,
-                          "phase": "launching", "process_group": None}
-                if supervises == HOST_PROCESS_SUPERVISES_NESTED_HOST:
-                    # Positive evidence for a CLI that exits before starting its
-                    # Host. Missing evidence must never mean "not launched".
-                    # Both writes precede the request that can start the CLI.
-                    _write_host_process_record(Path(record_value), {
-                        "schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
-                        "host": lock_holder_host_label(), "owner_pid": os.getpid(),
-                        "supervises": HOST_PROCESS_SUPERVISES_HOST, "supervision": "leased",
-                        "phase": HOST_PROCESS_NOT_LAUNCHED, "process_group": None,
-                    })
-                _write_host_process_record(record_path, record)
-            proc.stdin.write(
-                json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n"
-            )
-            proc.stdin.flush()
+            # Maintenance serializes only this bounded launch publication with
+            # source preparation. Never hold it while the Host runs: nested
+            # canonical writes and result callbacks take the same owner lock.
+            with turn_process.admit_launch() if turn_process is not None else nullcontext():
+                if record_paths:
+                    # Written before the request, so no Host exists that the record
+                    # does not name; a record that cannot be written launches nothing.
+                    record = {"schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+                              "host": lock_holder_host_label(), "owner_pid": os.getpid(),
+                              "supervises": supervises, "supervision": supervision, "bridge_pid": proc.pid,
+                              "phase": "launching", "process_group": None}
+                    if supervises == HOST_PROCESS_SUPERVISES_NESTED_HOST:
+                        # Positive evidence for a CLI that exits before starting its
+                        # Host. Missing evidence must never mean "not launched".
+                        # Both writes precede the request that can start the CLI.
+                        _write_host_process_record(Path(record_value), {
+                            "schema_version": HOST_PROCESS_RECORD_SCHEMA_VERSION,
+                            "host": lock_holder_host_label(), "owner_pid": os.getpid(),
+                            "supervises": HOST_PROCESS_SUPERVISES_HOST, "supervision": "leased",
+                            "phase": HOST_PROCESS_NOT_LAUNCHED, "process_group": None,
+                        })
+                    for path in record_paths:
+                        _write_host_process_record(path, record)
+                proc.stdin.write(
+                    json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n"
+                )
+                proc.stdin.flush()
             for line in proc.stdout:
                 event = json.loads(line)
                 kind = event.get("kind")
@@ -312,7 +335,8 @@ def run_host_process(
                         group = event.get("process_group")
                         record.update(phase="spawned", host_pid=event["pid"],
                                       process_group=group if isinstance(group, int) else None)
-                        _write_host_process_record(record_path, record)
+                        for path in record_paths:
+                            _write_host_process_record(path, record)
                 elif kind in {"stdout", "stderr"} and isinstance(event.get("text"), str):
                     consume = on_stdout if kind == "stdout" else on_stderr
                     if consume is not None:
@@ -342,7 +366,8 @@ def run_host_process(
         if record is not None and result is not None and proc.returncode == 0:
             # The supervisor returned only after cleaning its group; the group is still re-read.
             record["phase"] = "finished"
-            _write_host_process_record(record_path, record)
+            for path in record_paths:
+                _write_host_process_record(path, record)
         if proc.returncode != 0 or result is None:
             raise RuntimeError("Managed Host process supervision returned no result")
         return result

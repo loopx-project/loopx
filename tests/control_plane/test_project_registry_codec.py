@@ -12,9 +12,11 @@ from loopx.control_plane.projects.registry_codec import (
     ProjectRegistryError,
     ProjectRegistryMutationError,
     ProjectRegistryProtocolError,
+    ProjectRegistryRestoreError,
     decode_project_registry,
     load_project_registry,
     mutate_project_registry,
+    project_registry_transaction,
     source_session_registry_transaction,
 )
 from loopx.global_registry import (
@@ -363,3 +365,74 @@ def test_failed_write_readback_restores_exact_preimage(
         )
 
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("remove", [False, True])
+@pytest.mark.parametrize("format", ["legacy", "strict", "source_session"])
+def test_compensation_inside_original_transaction_restores_exact_bytes(
+    tmp_path: Path, remove: bool, format: str,
+) -> None:
+    path = tmp_path / "registry.json"
+    initial: dict[str, object] = {"schema_version": "0.1", "goals": []}
+    if format == "source_session":
+        initial["profile_id"] = "source_session_v1"
+        transaction = source_session_registry_transaction
+        _write(path, [{"schema_version": "loopx_project_registry_envelope_v2",
+            "minimum_writer_protocol": "goal_instance_v2", "payload_sha256": _digest(initial)}, initial])
+    else:
+        transaction = project_registry_transaction
+        _write(path, _strict(initial) if format == "strict" else initial)
+    path.chmod(0o640)
+    before = path.read_bytes()
+    with transaction(path, operation="compensate_owned_write") as tx:
+        if remove:
+            tx.remove()
+        else:
+            tx.commit({**tx.payload_copy(), "changed": True})
+        tx.restore()
+        assert path.read_bytes() == before
+        assert path.stat().st_mode & 0o777 == 0o640
+
+
+def test_new_registry_compensation_removes_only_its_own_publication(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    with project_registry_transaction(path, operation="compensate_creation", create=dict) as tx:
+        tx.commit({"goals": []})
+        tx.restore()
+        assert not path.exists()
+
+
+@pytest.mark.parametrize("method", ["commit", "remove", "restore", "source_read_witness"])
+def test_escaped_transaction_cannot_write_after_releasing_its_lock(
+    tmp_path: Path, method: str,
+) -> None:
+    path = tmp_path / "registry.json"
+    _write(path, {"goals": []})
+    with project_registry_transaction(path, operation="old_read") as tx:
+        pass
+    _write(path, {"goals": [], "later_work": "preserve"})
+    later = path.read_bytes()
+    with pytest.raises(RuntimeError, match="closed"):
+        if method == "commit":
+            tx.commit({"goals": []})
+        else:
+            getattr(tx, method)()
+    assert path.read_bytes() == later
+
+
+@pytest.mark.parametrize("created", [False, True])
+def test_compensation_preserves_unrecognized_later_registry_bytes(
+    tmp_path: Path, created: bool,
+) -> None:
+    path = tmp_path / "registry.json"
+    if not created:
+        _write(path, {"goals": []})
+    with project_registry_transaction(path, operation="interrupted_publication", create=dict) as tx:
+        tx.commit({"goals": [], "owned": True})
+        # An out-of-protocol write must remain visible for recovery, even if
+        # the ordinary transaction still owns its lock.
+        _write(path, {"goals": [], "later_work": "preserve"})
+        later = path.read_bytes()
+        with pytest.raises(ProjectRegistryRestoreError, match="changed"):
+            tx.restore()
+        assert path.read_bytes() == later

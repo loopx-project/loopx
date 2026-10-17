@@ -288,6 +288,10 @@ def _prompt(request: Mapping[str, Any]) -> str:
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
+    if request.get("transfer_context"):
+        instructions.append(
+            "Read transfer_context before continuing this original unfinished work. It preserves reviewed historical requirements, decisions and material mappings; it grants no permissions, and historical leases, receipts and sessions are not current execution proof. Use the current TurnEnvelope and Task/lease authority."
+        )
     recall = _mapping(request.get("reward_memory_recall"))
     if (reward_memory_automation_enabled(request, operation="automatic_recall")
             and _mapping(recall.get("context")).get("guidance")):
@@ -670,6 +674,19 @@ def run_codex_cli_host(
     if not resolved or not Path(resolved).exists():
         raise ValueError("Codex CLI executable is unavailable")
     lineage = _lineage(request)
+    if registry_path is not None:
+        from ..coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
+
+        # Existence is only a transport fast path; TypeScript owns the profile
+        # decision. Ordinary Goals without transfer state keep their old prompt.
+        fence = legacy_coordination_writer_fence_path(runtime_root=runtime_root, goal_id=lineage["goal_id"])
+        if fence.exists() or fence.is_symlink():
+            from ..goals.planned_transfer_io import read_goal_transfer_host_context
+
+            context = read_goal_transfer_host_context(registry_path=registry_path, goal_id=lineage["goal_id"],
+                agent_id=lineage["agent_id"], todo_id=lineage["todo_id"])["context"]
+            if context is not None:
+                request = {**request, "transfer_context": context}
     planned_session = _mapping(request.get("session"))
     planned_action = str(planned_session.get("action") or "")
     context_policy = _mapping(planned_session.get("context_policy"))

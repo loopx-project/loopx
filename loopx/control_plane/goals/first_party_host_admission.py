@@ -19,10 +19,10 @@ from ..projects.registry_codec import (
 from ..effect_program import TurnProviderStepKind
 from .activation import goal_activation_state
 from .source_session_registry_state import (
-    exact_goal_ref,
     guard_path,
     require_goal_id,
 )
+from .goal_ref_validation import exact_goal_ref
 from .source_session_turn_effects import (
     JournalPersist,
     SourceTurnEffect,
@@ -236,6 +236,7 @@ class FirstPartyHostGoalAdmission:
     goal_id: str
     planned_goal_ref: object | None
     source_profile: bool
+    runtime_root: Path | None = None
 
     @classmethod
     def for_plan(
@@ -248,16 +249,23 @@ class FirstPartyHostGoalAdmission:
         requested_registry = registry_path.expanduser().resolve()
         require_goal_id(goal_id)
         source_profile = planned_goal_ref is not None
+        runtime_root = None
         if not source_profile and requested_registry.is_file():
-            source_profile = (
-                load_project_registry(requested_registry).get("profile_id")
-                == SOURCE_SESSION_PROFILE_ID
-            )
+            registry = load_project_registry(requested_registry)
+            source_profile = registry.get("profile_id") == SOURCE_SESSION_PROFILE_ID
+            if not source_profile and isinstance(registry.get("common_runtime_root"), str):
+                from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
+
+                route = resolve_goal_source_runtime_route(
+                    registry_path=requested_registry, goal_id=goal_id, registry=registry,
+                )
+                runtime_root = Path(route["source_runtime_root"])
         return cls(
             registry_path=requested_registry,
             goal_id=goal_id,
             planned_goal_ref=planned_goal_ref,
             source_profile=source_profile,
+            runtime_root=runtime_root,
         )
 
     @property
@@ -299,6 +307,7 @@ class FirstPartyHostGoalAdmission:
         initialize_state: Callable[[dict[str, str]], T] | None = None,
     ) -> T | None:
         if not self.source_profile:
+            self.require_current()
             state = read_state()
             return state
         with exclusive_cross_runtime_file_lock(
@@ -323,6 +332,10 @@ class FirstPartyHostGoalAdmission:
 
     def require_current(self) -> None:
         if not self.source_profile:
+            if self.runtime_root is not None:
+                from ..turn_driver.turn_host_process import require_goal_runtime_current
+
+                require_goal_runtime_current(self.runtime_root, self.goal_id)
             return
         with exclusive_cross_runtime_file_lock(
             guard_path(self.registry_path, self.goal_id),
@@ -335,6 +348,9 @@ class FirstPartyHostGoalAdmission:
         """Keep a source-session side effect inside its planned Goal lifetime."""
 
         if not self.source_profile:
+            # The actual canonical writer owns its mutation lock. Holding it
+            # across this arbitrary callback would deadlock nested native IO.
+            self.require_current()
             yield
             return
         with exclusive_cross_runtime_file_lock(
@@ -397,6 +413,7 @@ class FirstPartyHostGoalAdmission:
 
     def accept_result(self, commit_result: Callable[[], T]) -> T:
         if not self.source_profile:
+            self.require_current()
             return commit_result()
         with exclusive_cross_runtime_file_lock(
             guard_path(self.registry_path, self.goal_id),

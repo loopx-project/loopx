@@ -5,6 +5,7 @@ from collections.abc import Callable
 from . import codex_attached_api as attached_api
 from . import workspace_preferences_api as preferences_api
 from . import configuration_backup_api as backup_api
+from . import goal_transfer_api as transfer_api
 from . import state_recovery_api as recovery_api
 from . import goal_ownership_api as ownership_api
 from . import goal_amendment_api as amendment_api
@@ -34,6 +35,7 @@ class ChatConfigurationRequestMixin(
     machine_api.MachineConfigurationRequestMixin,
     operator_api.OperatorProviderRequestMixin,
     backup_api.ConfigurationBackupRequestMixin,
+    transfer_api.GoalTransferRequestMixin,
     recovery_api.StateRecoveryRequestMixin,
 ):
     """Expose machine and Goal configuration through one route registry."""
@@ -59,6 +61,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            transfer_api.GOAL_TRANSFER_PATH: self._goal_transfer,
             context_api.DECISION_CONTEXT_PATH: self._decision_context_request,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_send,
             attached_api.CODEX_ATTACHED_OPEN_PATH: self._codex_attached_open,

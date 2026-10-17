@@ -16,6 +16,8 @@ def write_turn_repair_update(
     note: str,
     evidence: str,
     agent_id: str | None,
+    task_lease_idempotency_key: str | None = None,
+    task_lease_expected_version: int | None = None,
 ) -> None:
     """Record one repair-required Todo note under the effective runtime root.
 
@@ -36,6 +38,8 @@ def write_turn_repair_update(
         project=None,
         dry_run=False,
         runtime_root_arg=runtime_root_arg,
+        task_lease_idempotency_key=task_lease_idempotency_key,
+        task_lease_expected_version=task_lease_expected_version,
     )
 
 
@@ -51,6 +55,8 @@ def write_turn_validated_completion(
     agent_id: str | None,
     completion_delivery_workspace: Mapping[str, Any] | None = None,
     completion_validation_workspace_path: Path | None = None,
+    task_lease_idempotency_key: str | None = None,
+    task_lease_expected_version: int | None = None,
 ) -> dict[str, Any]:
     """Complete one validated Todo under the effective runtime root."""
 
@@ -63,6 +69,8 @@ def write_turn_validated_completion(
         completion_identity_source="turn_settlement",
         completion_delivery_workspace=completion_delivery_workspace,
         completion_validation_workspace_path=completion_validation_workspace_path,
+        task_lease_idempotency_key=task_lease_idempotency_key,
+        task_lease_expected_version=task_lease_expected_version,
         evidence=evidence,
         note=note,
         agent_id=agent_id,

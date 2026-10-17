@@ -191,6 +191,10 @@ def register_turn_commands(
         execution_mode_choices=["isolated-headless"],
         default_execution_mode="isolated-headless",
     )
+    run_once.add_argument("--task-lease-idempotency-key",
+        help="Caller-held current lease proof for canonical Task completion; retained by this original Turn, never inferred from a lease read.")
+    run_once.add_argument("--task-lease-expected-version", type=int,
+        help="Current version paired with --task-lease-idempotency-key. Native terminal ownership revalidates it at completion.")
     run_once.add_argument("--project", required=True)
     run_once.add_argument(
         "--automation-id",

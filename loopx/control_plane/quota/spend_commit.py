@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ...file_lock import exclusive_cross_runtime_file_lock
+from ...file_lock import cross_runtime_lock_witness, exclusive_cross_runtime_file_lock
 from ..coordination.shadow_management import (
     runtime_artifact_lock_target,
     shadow_maintenance_lock_target,
@@ -50,6 +50,7 @@ def _quota_spend_commit_request(
     expected_index_digest: str | None,
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
+    maintenance_lock: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     # Import lazily because runtime loads history, whose quota compatibility
     # surface re-exports this module during package initialization.
@@ -86,6 +87,8 @@ def _quota_spend_commit_request(
         request["goal_ref"] = dict(goal_ref)
     if source_admission is not None:
         request["source_admission"] = dict(source_admission)
+    if maintenance_lock is not None:
+        request["maintenance_lock"] = dict(maintenance_lock)
     return request
 
 
@@ -99,6 +102,7 @@ def _quota_spend_commit_result(
     expected_index_digest: str | None,
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
+    maintenance_lock: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     params = _quota_spend_commit_request(
         preview,
@@ -109,6 +113,7 @@ def _quota_spend_commit_result(
         expected_index_digest=expected_index_digest,
         goal_ref=goal_ref,
         source_admission=source_admission,
+        maintenance_lock=maintenance_lock,
     )
     try:
         result = effect_runtime_result("quota.spend.commit", params)
@@ -263,6 +268,7 @@ def record_quota_slot_spend_from_preview(
                 expected_index_digest=expected_index_digest,
                 goal_ref=goal_ref,
                 source_admission=source_admission,
+                maintenance_lock=cross_runtime_lock_witness(maintenance_target),
             )
 
         with exclusive_cross_runtime_file_lock(
