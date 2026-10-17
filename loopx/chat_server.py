@@ -67,6 +67,7 @@ from .control_plane.status.ssh_host_catalog import (
     SSH_HOST_CATALOG_PATH,
     ssh_host_catalog_payload,
 )
+from .presentation.room_work_api import ROOM_WORK_PATH
 from .chat_lark_api import (
     LarkChatRequestMixin,
     build_goal_repository_contexts as build_goal_repository_contexts,
@@ -1562,6 +1563,7 @@ class ChatRequestHandler(
             CHAT_LARK_APPS_PATH: self._lark_apps,
             CHAT_LARK_CHATS_PATH: self._lark_chats,
             CHAT_LARK_CONNECTIONS_PATH: self._lark_connections,
+            ROOM_WORK_PATH: self._room_work,
             PRIVATE_CONVERSATIONS_PATH: self._private_conversations,
             CHAT_GOAL_CHANNEL_TARGETS_PATH: self._goal_channel_targets,
             **self._configuration_get_routes(),
@@ -1617,6 +1619,7 @@ class ChatRequestHandler(
             CHAT_GOAL_CHANNEL_CONFIGURE_PATH: self._goal_channel_configure,
             CHAT_LARK_APP_SETUPS_PATH: self._lark_setup_start,
             CHAT_LARK_CONNECTIONS_PATH: self._lark_connect,
+            ROOM_WORK_PATH: lambda: self._room_work(claim=True),
             PRIVATE_CONVERSATIONS_PATH: self._private_conversation_connect,
             PRIVATE_CONVERSATIONS_PATH + "/agent-targets": self._private_conversation_agent_target,
             PRIVATE_CONVERSATIONS_PATH + "/owner-notifications": self._private_conversation_owner_notifications,

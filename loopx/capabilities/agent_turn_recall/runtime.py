@@ -226,6 +226,7 @@ def run_configured_agent_turn_recall(
     execute: bool,
     session_ref: str | None = None,
     force_refresh: bool = False,
+    reconcile_pending_ingests: bool = True,
     observed_at: str | None = None,
     provider: ContextProvider | None = None,
 ) -> dict[str, Any]:
@@ -243,7 +244,7 @@ def run_configured_agent_turn_recall(
             status=experiment_status,
         )
     reconciliation: dict[str, Any] | None = None
-    if execute and config["automation"]["automatic_ingest"] is True:
+    if execute and reconcile_pending_ingests and config["automation"]["automatic_ingest"] is True:
         from ..reward_memory.outcome_lifecycle import (
             reconcile_pending_turn_outcome_ingests_fail_open,
         )

@@ -1,0 +1,11 @@
+/* Scoped to the existing connection dialog; shared theme tokens own presentation. */
+.personal-room-work p, .personal-room-work dd { overflow-wrap: anywhere; }
+.personal-room-work { color: var(--pw-text); background: var(--pw-card); }
+.personal-room-work dd { margin-inline-start: 0; }
+.personal-room-work footer { flex-wrap: wrap; }
+
+.personal-room-work .personal-room-work-boundary { color: var(--pw-muted); font-size: var(--text-caption); }
+.personal-room-work .personal-room-work-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.personal-room-work-counts dt { color: var(--pw-muted); font-size: var(--text-caption); }
+.personal-room-work .personal-room-work-counts dd { font-size: var(--text-heading); line-height: var(--leading-heading); font-variant-numeric: tabular-nums; }
+.personal-room-work header button { min-height: 44px; min-width: 44px; }

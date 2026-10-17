@@ -12,7 +12,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import {settlementIdentity, type SettlementIdentity} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { jsonObject } from "../runtime_decode.ts";
+import { jsonObject, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import type {ReceiptBoundReplayPhase} from "./settlement_phase.ts";
 
@@ -20,6 +20,26 @@ const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
 const REPLAN_OBLIGATION_ID_PATTERN = /^replan-[a-f0-9]{16}$/;
 /** Public diagnostic preserved from the retired Python identity rule. */
 const IDENTITY_CONFLICT_CODE = "heartbeat_receipt_identity_conflict";
+
+/** Wire outcomes of a successfully persisted native guard, including binding
+ * an earlier discovery receipt. Consumers still verify its current binding. */
+const COMMITTED_RECEIPT_STATUSES = ["committed", "upgraded", "replayed"] as const;
+
+export function committedHeartbeatReceiptForTodo(
+  value: unknown, goalId: string, agentId: string, turnId: string, todoId: string,
+): JsonObject {
+  const receipt = requireJsonObject(value, "heartbeat receipt");
+  requireStringLiteral(receipt.status, COMMITTED_RECEIPT_STATUSES, "heartbeat receipt status");
+  requireNonEmptyString(receipt.event_id, "heartbeat receipt event id");
+  const binding = requireJsonObject(receipt.settlement_identity, "heartbeat settlement identity");
+  const identity = settlementIdentity({goal_id: goalId, agent_id: agentId,
+    todo_id: todoId, turn_instance_id: turnId});
+  if (receipt.turn_instance_id !== turnId || binding.goal_id !== goalId || binding.agent_id !== agentId ||
+      binding.turn_instance_id !== turnId || binding.todo_id !== todoId || binding.effect_id !== identity.effect_id) {
+    throw receiptIdentityConflict("heartbeat receipt does not bind this Goal, Agent, Todo and Turn");
+  }
+  return receipt;
+}
 
 function receiptIdentityConflict(message: string): EffectRuntimeRequestError {
   return new EffectRuntimeRequestError(message, IDENTITY_CONFLICT_CODE);

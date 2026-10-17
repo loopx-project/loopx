@@ -75,8 +75,12 @@ export const stewardModelSettingsScenario = {
       await page.screenshot({ path: resolve(outputDir, "steward-model-settings-mobile.png"), fullPage: false, animations: "disabled" });
       await page.getByRole("button", { name: "返回工作区", exact: true }).click();
       await modelControl.waitFor();
-      if (!await modelControl.evaluate(element => element === document.activeElement)) {
-        throw new Error("Closing settings did not return keyboard focus to the model control");
+      try {
+        // The owner restores focus on its next animation frame, after the
+        // control becomes visible. Wait for that exact focused element.
+        await modelControl.and(page.locator(":focus")).waitFor({ state: "visible", timeout: 5_000 });
+      } catch (error) {
+        throw new Error("Closing settings did not return keyboard focus to the model control", { cause: error });
       }
       if (!(await modelControl.innerText()).includes("gpt-6-sol")) {
         throw new Error("A saved default was falsely shown as an adopted model");

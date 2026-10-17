@@ -231,6 +231,32 @@ def register_goal_channel_commands(
         _add_common_args,
     )
 
+    work = sub.add_parser("work", help="Publish canonical room orientation or claim through the local Agent CLI.")
+    work_sub = work.add_subparsers(dest="goal_channel_work_command", required=True)
+    for work_command in ("project", "claim", "offer", "revoke", "resume"):
+        work_parser = work_sub.add_parser(work_command)
+        add_subcommand_format(work_parser)
+        _add_common_args(work_parser)
+        work_parser.add_argument("--agent-id", required=True)
+        work_parser.add_argument("--execute", action="store_true")
+        if work_command in {"claim", "offer"}:
+            work_parser.add_argument("--todo-id", required=True)
+            work_parser.add_argument("--expected-revision", required=True)
+            work_parser.add_argument("--idempotency-key", required=True)
+        if work_command == "offer":
+            work_parser.add_argument("--principal", action="append", required=True)
+            work_parser.add_argument("--expires-at", required=True)
+        if work_command == "revoke":
+            work_parser.add_argument("--request-id", required=True)
+        if work_command == "resume":
+            work_parser.add_argument("--turn-instance-id", required=True)
+            work_parser.add_argument("--available-capability", action="append", dest="available_capabilities",
+                help="Current host capability; repeat as for quota should-run. Saved packets do not grant it.")
+            work_parser.add_argument("--quota-decision-json", required=True,
+                help="Exact admitted quota packet saved in local private state.")
+            work_parser.add_argument("--artifact-ref", action="append",
+                help="Carry only this reference if accepted by the current scoped recall; repeat up to eight.")
+
     register_goal_channel_runtime_commands(sub, add_subcommand_format)
 
 
@@ -430,6 +456,8 @@ def _quota_packet(
     runtime_root_arg: str | None,
     goal_id: str,
     agent_id: str | None,
+    turn_instance_id: str | None = None,
+    available_capabilities: list[str] | None = None,
 ) -> dict[str, Any]:
     project_root = registry_project_root(registry_path)
     status = collect_status(
@@ -439,11 +467,30 @@ def _quota_packet(
         limit=20,
         goal_id=goal_id,
     )
+    binding: dict[str, Any] = {}
+    receipt = None
+    if turn_instance_id is not None:
+        from ..control_plane.quota.heartbeat_receipt import (
+            find_heartbeat_receipt, heartbeat_receipt_settlement_todo_id, heartbeat_receipt_view,
+        )
+        root = resolve_runtime_root(load_registry(registry_path), runtime_root_arg, registry_path=registry_path)
+        receipt = find_heartbeat_receipt(root, goal_id=goal_id, agent_id=agent_id,
+            turn_instance_id=turn_instance_id)
+        todo_id = heartbeat_receipt_settlement_todo_id(receipt) if receipt else None
+        if not todo_id:
+            raise ValueError("resume requires the original native Todo-bound receipt")
+        binding = {"receipt_bound_todo_id": todo_id, "turn_instance_id": turn_instance_id,
+            "runtime_root": root, "receipt_bound_guard_recorded_at": receipt.get("recorded_at")}
     packet = build_quota_should_run(
         status,
         goal_id=goal_id,
         agent_id=agent_id,
+        available_capabilities=(available_capabilities or []) if turn_instance_id else available_capabilities,
+        **binding,
     )
+    if receipt is not None:
+        packet["heartbeat_receipt"] = heartbeat_receipt_view(receipt,
+            turn_instance_id=turn_instance_id, status="replayed")
     # Transport adapter: retain the complete same-read Todo projection only
     # for this notification. Quota's 180-character hot path stays unchanged;
     # the shared TS presentation owner checks identity/version/lifecycle.
@@ -470,6 +517,47 @@ def handle_goal_channel_command(
         runtime_root_arg,
         registry_path=registry_path,
     )
+    if command == "work":
+        from ..extensions.lark.goal_channel_work import run_goal_channel_work
+
+        assert goal_id is not None
+        _, source_registry_path, work_binding_path, source_runtime_root = _source_context(
+            registry=registry, registry_path=registry_path, goal_id=goal_id,
+            binding_path_arg=getattr(args, "binding_path", None))
+        if args.goal_channel_work_command == "resume":
+            from ..capabilities.agent_turn_recall.cli import load_turn_quota_decision
+            from ..extensions.lark.room_resume import run_room_resume
+
+            payload = run_room_resume(registry_path=source_registry_path, authority_root=source_runtime_root,
+                broker_root=runtime_root, binding_path=work_binding_path, target_path=_target_path(args, runtime_root),
+                goal_id=goal_id, actor_id=args.agent_id, turn_instance_id=args.turn_instance_id,
+                quota_decision=load_turn_quota_decision(args.quota_decision_json), execute=execute,
+                artifact_refs=args.artifact_ref,
+                read_current_quota=lambda: _quota_packet(registry_path=source_registry_path,
+                    runtime_root_arg=str(source_runtime_root), goal_id=goal_id, agent_id=args.agent_id,
+                    turn_instance_id=args.turn_instance_id,
+                    available_capabilities=getattr(args, "available_capabilities", None)))
+        elif args.goal_channel_work_command in {"offer", "revoke"}:
+            from ..extensions.lark.room_claim import run_room_claim_offer
+
+            payload = run_room_claim_offer(registry_path=source_registry_path,
+                authority_root=source_runtime_root, broker_root=runtime_root,
+                binding_path=work_binding_path, target_path=_target_path(args, runtime_root),
+                goal_id=goal_id, actor_id=args.agent_id, command=args.goal_channel_work_command,
+                execute=execute, todo_id=getattr(args, "todo_id", None),
+                expected_revision=getattr(args, "expected_revision", None),
+                idempotency_key=getattr(args, "idempotency_key", None),
+                principals=getattr(args, "principal", None), expires_at=getattr(args, "expires_at", None),
+                request_id=getattr(args, "request_id", None))
+        else:
+            payload = run_goal_channel_work(registry_path=source_registry_path,
+                runtime_root=source_runtime_root, binding_path=work_binding_path,
+                target_path=_target_path(args, runtime_root), goal_id=goal_id, actor_id=args.agent_id,
+                command=args.goal_channel_work_command, execute=execute,
+                todo_id=getattr(args, "todo_id", None), expected_revision=getattr(args, "expected_revision", None),
+                idempotency_key=getattr(args, "idempotency_key", None), invoked_registry_path=registry_path)
+        print_payload(payload, output_format(args), render_goal_channel_markdown)
+        return 0 if payload.get("ok") else 1
     if command == "runtime":
         assert goal_id is not None
         source_registry, source_registry_path, _, _ = _source_context(
@@ -792,6 +880,9 @@ def render_goal_channel_markdown(payload: dict[str, object]) -> str:
         f"- external_write_performed: `{payload.get('external_write_performed')}`",
         f"- readback_verified: `{payload.get('readback_verified')}`",
     ]
+    if payload.get("operation") in {"work_project", "work_claim"}:
+        from ..control_plane.projection_envelope_facts import render_projection_envelope_markdown
+        lines.extend(render_projection_envelope_markdown(payload.get("projection_envelope")))
     if payload.get("blocker"):
         lines.append(f"- blocker: `{payload.get('blocker')}`")
     lines.extend(["", str(payload.get("public_summary") or "")])

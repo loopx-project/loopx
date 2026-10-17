@@ -284,6 +284,77 @@ Measure outcome quality rather than message volume:
 - false acceptance or rejection of controlled transitions;
 - verified goal outcomes produced after handoff.
 
+## Current Delivery Checkpoint
+
+Task [#5198](https://github.com/loopx-project/loopx/issues/5198) tracks composition.
+The first proposed implementation stage is the
+[canonical room-work Agent CLI](../../reference/goal-channel-room-work.md): compact
+actor-scoped orientation, revision-guarded claim, historical acceptance plus
+current ownership, scoped IM claim-button offers/callbacks and existing verified
+Goal Channel delivery/readback. It
+reuses promoted File/SQLite authority and the typed Todo owner; it does not
+replace the shared-service or provisioning owners.
+
+The claim callback retains its original offer binding witness through member
+and card reads into the existing locked claim check. Retargeting during either
+provider read rejects before canonical ownership or an acceptance receipt changes.
+Its original broker/source registry witnesses now also survive those reads and
+the native claim handoff. The existing cross-runtime source guards serialize
+registry administration with the canonical commit. Real File/SQLite regressions
+check unchanged full state and exact receipts after pre-commit route replacement;
+these bounded checks do not qualify independent hosts or native provider IO.
+
+The proposed packaged workspace companion enters through the existing Lark
+connection. It reads canonical room orientation, explicitly claims through the
+same owner and reads historical acceptance, current ownership and message
+delivery separately. Its HTTP adapter derives the actor from the current
+connection and pins the preview's binding/source scope. An uncertain request
+survives page reload only as an original retry tuple; the browser gains no
+independent work or execution authority. Packaged browser and real File/SQLite
+HTTP checks retain synthetic connection/provider transport and independent CLI
+readback. These local results do not qualify native room rendering, an installed
+App, independently authenticated hosts or live OpenViking.
+
+The private `work resume` path composes existing scoped Turn Recall with fresh
+channel identity, canonical projection and quota observations. It skips memory
+ingest, rechecks scope and state after retrieval, discards context on changes,
+and carries only explicitly requested scoped record-artifact references covered
+by current verified recall receipts. It does not send private context to a room
+or accept/renew work. Source-session exact-instance profiles and arbitrary
+external artifact targets remain outside this local qualification stage.
+
+The local continuation retains the native persisted Todo/Turn binding across
+discovery, `upgraded` and `replayed` guard outcomes. Current capability input is
+re-evaluated instead of inherited from a saved quota packet. Room orientation
+uses the existing projection envelope owner for registry, connection and
+canonical-source read facts; its HTTP, CLI and packaged consumers disclose old,
+unreadable or incomplete scope before presenting current ownership. A claim
+replay rereads those sources without renewing the historical receipt. These
+local owner integrations still require exact-head installation and regression
+qualification; they do not close the live or independent-host acceptance.
+
+Validation uses synthetic Lark transport with disposable real local stores.
+Independent source CLI processes with separate TS runtimes compete for one
+File/SQLite claim; a fresh process replays its exact receipt, and direct CLI
+readback verifies current ownership. These local clients use trusted registered
+Agent identities; independently authenticated remote hosts remain unqualified.
+Real non-production room qualification, independent hosts,
+daemon reconnect, native callback qualification, external artifact-target access and scoped live
+OpenViking retrieval remain unqualified. Design acceptance, a proposed PR and
+synthetic checks do not close those requirements or authorize promotion.
+
+The legacy-profile local stage can be qualified without enabling source-session
+business effects. Here, legacy-profile describes Goal identity compatibility;
+it does not restore retired ownership modes or unpromoted Markdown writers.
+Normal claims retain the canonical owner's current policy and admission, and
+this facade neither migrates that policy nor supplies execution lease proof.
+Exact GoalRef support must first qualify the existing shared
+authority head/receipt owner, retirement and caller/writer fences under the
+[Goal-instance contract](goal-instance-identity-and-orphan-recovery-v0.md).
+That later profile boundary does not expand this composition stage into a
+parallel authority migration. Existing claim wires reject explicit unqualified
+GoalRef intent before provider or historical-receipt access.
+
 ## Open Questions
 
 1. Which LoopX projection fields are stable enough for the first public

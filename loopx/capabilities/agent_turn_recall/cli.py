@@ -100,7 +100,7 @@ def _receipt_path(repo: Path, goal_id: str, agent_id: str) -> Path:
     )
 
 
-def _quota_decision(path_value: str) -> dict[str, Any]:
+def load_turn_quota_decision(path_value: str) -> dict[str, Any]:
     try:
         if path_value == "-":
             payload = json.load(sys.stdin)
@@ -206,7 +206,7 @@ def handle_agent_turn_recall_command(
             }
         else:
             identity = _identity_scope(config)
-            quota_decision = _quota_decision(args.quota_decision_json)
+            quota_decision = load_turn_quota_decision(args.quota_decision_json)
             _validate_quota_identity(
                 quota_decision,
                 goal_id=args.goal_id,
