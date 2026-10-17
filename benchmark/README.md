@@ -632,6 +632,17 @@ staging directory instead of ambient temporary storage. If that filesystem fills
 capture still fails and runs its existing reader/barrier cleanup without publishing an
 outer artifact; it does not retry on another volume or substitute a later point.
 
+The controller checks its original shared deadline during download progress, tar
+header and file reads, safety filtering and permission restoration, including
+standalone SQLite companions, the held request and the phase file. It retains
+HTTP read timeouts instead of using Docker's process-stream reader, which disables
+them. These checks are cooperative between IO operations, not preemption of a
+blocked filesystem call or a new allowance per member. On expiry the daemon reader
+closes before this operation's writer cleanup; no native point or outer artifact
+is published from the expired export. Safe extraction still rejects the complete
+invalid inventory before writing member payloads, uses Python's data filter and
+restores ordinary source modes without owners or special permission bits.
+
 The container must initially be running and unpaused. Cancellation, failed file
 reads, rejected native capture and a lost pause response attempt to release only
 this operation's barrier. Failure to resume the worker is reported and publishes
