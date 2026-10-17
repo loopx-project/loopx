@@ -673,7 +673,7 @@ def test_hook_keeps_decided_requests_open_until_receiver_returns_conclusion(
     assert not dispatch["failures"]
     assert dispatch["required_reads"][0]["ordering"] == "before_work"
     assert "manager-inbox read" in dispatch["required_reads"][0]["command"]
-    assert turn["message"] not in json.dumps(dispatch)
+    assert turn["message"] not in json.dumps(dispatch["results"])
     assert dispatch["results"][0]["agent_read_required"]
     acknowledge(
         root,
@@ -695,9 +695,9 @@ def test_hook_keeps_decided_requests_open_until_receiver_returns_conclusion(
         "Current evidence supports retaining the existing experiment; no plan change.",
     )
     assert not pending(root, "research", "worker")["items"]
-    assert not dispatch_turn_start_hooks(
-        [turn_start_hook(root, registry, "research", "worker")]
-    )["required_reads"]
+    after = dispatch_turn_start_hooks([turn_start_hook(root, registry, "research", "worker")])
+    assert after["required_reads"]
+    assert after["contexts"][0]["content"]["unfinished_delegations"]["items"][0]["step"] == "await_return_delivery"
     assert deliver(root, registry, session=session, turn=turn, request=request)[
         "replayed"
     ]

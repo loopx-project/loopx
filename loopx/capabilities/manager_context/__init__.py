@@ -216,8 +216,16 @@ def turn_start_hook(
         TURN_START_HOOK_RESULT_SCHEMA_VERSION,
     )
 
+    snapshot = None
+
     def produce():
+        nonlocal snapshot
         try:
+            from ...control_plane.collaboration.turn_context_observation import read_delegation_turn_context
+
+            snapshot = read_delegation_turn_context(runtime_root, registry_path, goal_id, agent_id,
+                read_command=command)
+            agenda = snapshot["unfinished_delegations"]
             with collaboration_goal_scope(
                 registry_path,
                 goal_id=goal_id,
@@ -230,10 +238,12 @@ def turn_start_hook(
                     scope=goal_scope,
                 )
             count = (
-                len(inbox["items"])
-                + len(inbox.get("peer_returns", {}).get("items", []))
+                max(len(inbox["items"]), agenda["incoming_count"])
+                + max(len(inbox.get("peer_returns", {}).get("items", [])), agenda["outgoing_count"])
                 + len(inbox.get("operation_handoffs", []))
             )
+            incomplete = not agenda["scan_complete"]
+            count += int(incomplete)
             status, error = ("observed" if count else "empty"), None
         except (OSError, ValueError):
             count, status, error = 0, "unavailable", "manager_context_unreadable"
@@ -274,6 +284,7 @@ def turn_start_hook(
         requested_read_scope=("owner_private_context_inbox",),
         requested_write_scope=(),
         producer=produce,
+        context_reader=lambda: snapshot,
         required_read={
             "kind": "operator_inbox",
             "command": command,

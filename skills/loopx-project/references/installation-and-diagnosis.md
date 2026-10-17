@@ -10,9 +10,15 @@ bundle and its runtime as well as the CLI. `loopx doctor` exposes
 still does not prove which App process is running. Upgrade the App and its
 bundled runtime together, then restart and verify the App, CLI and service
 source revisions. Never claim a desktop upgrade from CLI/HTTP checks alone:
-current App builds ask before replacing a different CLI runtime (update the
-App, or align the CLI to the App's bundled runtime), while an older build can
-still replace a separately upgraded CLI with its bundle.
+current App builds automatically select the newest qualified runtime they can
+establish from Core package versions and source ancestry, retaining a provably
+newer runtime without a version-selection round. Unknown ancestry is not proof
+of freshness; same-installation fallback follows its existing ownership rules.
+When the bundle is needed, the App prepares an App-owned snapshot rather than
+replacing the user's uv/pip/pipx CLI. Inspect the installed App's actual version
+and readback: older builds may still require pairing or replace a separately
+upgraded CLI. Upgrade that App rather than downgrade a newer CLI to match its
+older bundle. Keep explicit developer runtime pins and their diagnostics intact.
 Keep SSH host verification separate; a host without an App needs no App install.
 
 ## Preflight

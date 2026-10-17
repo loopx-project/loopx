@@ -650,6 +650,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.request.amendment_readback", lazyHandler(() => import("./collaboration/request_control.ts"), ({requestAmendmentReadback}) => requestAmendmentReadback)],
     ["goal.amendment.request_receipt", lazyHandler(() => import("./goals/goal_amendment_authority.ts"), ({projectRequestAmendmentReceipt}) => projectRequestAmendmentReceipt)],
     ["collaboration.inbox.inspect_receipts", lazyHandler(() => import("./collaboration/inbox_receipts.ts"), ({inspectCollaborationInboxReceipts}) => inspectCollaborationInboxReceipts)],
+    ["collaboration.inbox.turn_items", lazyHandler(() => import("./collaboration/turn_context.ts"), ({projectDelegationTurnItems}) => projectDelegationTurnItems)],
+    ["collaboration.inbox.turn_context", lazyHandler(() => import("./collaboration/turn_context.ts"), ({projectDelegationTurnContext}) => projectDelegationTurnContext)],
     ["collaboration.inbox.receiver_followthrough", lazyHandler(() => import("./collaboration/inbox_receipts.ts"), ({projectReceiverFollowthrough}) => projectReceiverFollowthrough)],
     ["collaboration.result.plan_publication", lazyHandler(() => import("./collaboration/result_publication.ts"), ({planCollaborationResult}) => planCollaborationResult)],
     ["collaboration.result.attachment_refs", lazyHandler(() => import("./collaboration/result_publication.ts"), ({resultAttachmentRefs}) => resultAttachmentRefs)],

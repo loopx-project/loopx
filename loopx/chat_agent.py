@@ -536,6 +536,8 @@ def _turn_prompt(
             "Read applicable skills and reuse unchanged instruction reads; stop unrelated discovery when the requested facts have sufficient evidence. "
             "Inspect the implementation when documentation is insufficient, conflicts with the selected version, or the operator requests source verification. "
             "Answer directly with the needed version and source references. Explicit requests to change or execute project work still follow their existing authorized workflow. "
+            "When advising which tools or workflows to use, explain the decision-relevant setup and maintenance effort, recurring execution or scheduling costs, and limits. "
+            "Ground these tradeoffs in available evidence; state material unknowns rather than inventing prices or savings. "
             if not execution_mode else ""
         )
         + (

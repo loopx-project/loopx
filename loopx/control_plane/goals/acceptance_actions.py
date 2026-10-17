@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any, TypedDict
 from uuid import uuid4
 
-from ...chat_action_store import ActionConflictError, ChatActionStore
+from ...chat_action_store import (
+    ActionConflictError,
+    ChatActionStore,
+    normalize_idempotency_key,
+)
 from ...file_lock import exclusive_file_lock
 from .acceptance import (
     configure_goal_acceptance, inspect_goal_acceptance, public_goal_acceptance,
@@ -71,6 +75,10 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
         return {**public_goal_acceptance(preview), "prepared": False, "executed": False}
     service = ChatActionService(store=ChatActionStore(root / "chat" / "actions"),
                                 registry_path=registry_path)
+    # The store persists and binds the canonical token. Look up that same token
+    # so a re-sent request with surrounding whitespace is recovered as the
+    # accepted intent instead of becoming a conflicting new preview.
+    operation_id = normalize_idempotency_key(operation_id)
     parameters = service._normalize("goal.acceptance.check", {
         "goal_id": goal_id, "document": document, "prepared_by": agent_id})
     proposal = _saved_check(service.store, parameters, operation_id)

@@ -27,9 +27,39 @@ export function verdictLabel(metric: TrajectoryMetric, verdict: AssessmentVerdic
   return verdict === "yes" ? (zh ? "有依据" : "Supported") : (zh ? "未建立" : "Not established");
 }
 
+// Format the native owner's existing projection, without deriving a gain,
+// deciding adoption, or borrowing values from another pack.
+function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["native_outcomes"]; zh: boolean; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+  const outcomes = native?.projection;
+  if (!native || !outcomes) return <p className="research-native-empty">{zh ? "原生测量：尚无同范围捕获；分析器判读不能补成实际收益。" : "Native measurements: no capture for this scope. Analyzer judgments cannot supply realized utility."}</p>;
+  const historical = native.applicability === "historical";
+  const points = [["initial", "首次提交", "Initial submission"], ["best_valid", "窗口内最佳有效值", "Best valid in capture"], ["retained", "原生保留结果", "Native retained result"], ["final_valid", "最后有效提交", "Final valid submission"]] as const;
+  return <section className="research-native-results" aria-label={zh ? "原生测量" : "Native measurements"}>
+    <h4>{historical ? (zh ? "历史原生测量" : "Historical native measurements") : (zh ? "原生测量" : "Native measurements")}</h4>
+    {historical ? <p className="research-progress-warning" role="status">{zh ? "来源已变化或不可读；以下仅为历史捕获，当前结果未核验。" : "The source changed or is unavailable. These are historical captures; current results are unverified."}</p> : null}
+    <p>{outcomes.metric.name} · {outcomes.metric.unit} · {outcomes.metric.higher_is_better ? (zh ? "越高越好" : "higher is better") : (zh ? "越低越好" : "lower is better")} · {outcomes.valid_count} / {outcomes.sample_count} {zh ? "项有效结果" : "valid results"}</p>
+    <p>{outcomes.complete ? (zh ? "声明为完整前缀" : "Declared complete prefix") : (zh ? "部分窗口，起点未知" : "Partial window; initial unknown")} · <time dateTime={outcomes.start}>{outcomes.start}</time> — <time dateTime={outcomes.end}>{outcomes.end}</time></p>
+    <dl className="research-native-values">{points.map(([key, cn, en]) => {
+      const point = outcomes[key];
+      return <div key={key} data-native-point={key}><dt>{zh ? cn : en}</dt><dd>{point ? <>
+        <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)} aria-label={`${zh ? cn : en}: ${String(point.value)} · ${zh ? "查看原始证据" : "Read original evidence"}`}><strong>{String(point.value)}</strong><ArrowUpRight size={13} aria-hidden/></button>
+        <small>{zh ? "提交" : "Submission"} {point.submission_index}</small>
+      </> : <span>{zh ? "— 未知，不记零" : "— Unknown, not zero"}</span>}</dd></div>;
+    })}</dl>
+    <p>{zh ? "最佳只限上述窗口；原生保留与最后提交可能不同。检验过收益、采用了证据及原目标达成各需各自证据，不能由这些数值推断。" : "Best is limited to this capture; retained and final submissions can differ. Utility testing, evidence adoption and original-objective success each need their own evidence."}</p>
+    <details className="research-native-basis"><summary>{zh ? "测量来源与限制" : "Measurement sources and limits"}</summary>
+      <p>{native.artifact}<br/><code>{native.artifact_sha256}</code></p>
+      <dl>{points.map(([key, cn, en]) => {
+        const point = outcomes[key];
+        return point ? <div key={key}><dt>{zh ? cn : en}</dt><dd><code>{point.candidate_ref}</code><br/>{zh ? "提交" : "Submitted"}: {point.submitted_at}<br/>{zh ? "收到结果" : "Result received"}: {point.observed_at}</dd></div> : null;
+      })}</dl>
+      <ul>{outcomes.limitations.map((line, i) => <li key={i}>{line}</li>)}</ul>
+    </details>
+  </section>;
+}
+
 export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelect, onCitation}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; error: string; zh: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
   const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
-  const native = p?.native_outcomes, outcomes = native?.projection;
   const number = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumFractionDigits: 1}).format(n);
   const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 0}).format(n);
   const duration = (s: number) => `${number(s / 60)} ${zh ? "分钟" : "min"}`;
@@ -70,21 +100,12 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
         </div>
         <p>{zh ? "六项分别判断，不合成总分、成功率或原生收益。" : "Six separate judgments, not a total score, success rate or native utility."}</p>
       </div> : <p className="research-effect-empty" role="status">{zh ? "此范围尚无分析器判读。已有用量不能替代效果；按需深度分析后在此展示。" : "No analyzer judgments exist for this scope. Usage is not effectiveness; requested deep analysis will appear here."}</p>}
+      <NativeResults native={p.native_outcomes} zh={zh} onCitation={onCitation}/>
       <details className="research-progress-basis"><summary>{zh ? "来源、方法与覆盖" : "Sources, method and coverage"}</summary><dl>
         <dt>{zh ? "题目 / 运行" : "Case / run"}</dt><dd>{p.scope.case_id}<br/>{p.scope.run_id}</dd><dt>{zh ? "证据窗口" : "Evidence window"}</dt><dd>{p.scope.window}</dd><dt>{zh ? "取样规则" : "Selection rule"}</dt><dd>{p.selection.rule}</dd>
         <dt>{zh ? "总体研究片段数" : "Population of episodes"}</dt><dd>{p.selection.population_episodes == null ? (zh ? "未知" : "Unknown") : number(p.selection.population_episodes)}</dd>
         {result ? <><dt>{zh ? "分析方法" : "Analysis method"}</dt><dd>{result.method_version} · {zh ? "Agent 判读未校准" : "Uncalibrated Agent judgment"}</dd><dt>{zh ? "结果标识" : "Result key"}</dt><dd><code>{result.analysis_key}</code></dd><dt>{zh ? "分析限制" : "Limitations"}</dt><dd>{result.limitations.map((line, i) => <p key={i}>{line}</p>)}</dd></> : null}
         <dt>{zh ? "来源版本" : "Source revision"}</dt><dd><code>{p.scope.revision}</code></dd>
-        <dt>{zh ? "原生结果" : "Native outcomes"}</dt><dd>{outcomes ? <>
-          <p>{outcomes.metric.name} · {outcomes.metric.unit} · {outcomes.metric.higher_is_better ? (zh ? "越高越好" : "higher is better") : (zh ? "越低越好" : "lower is better")}</p>
-          <p>{outcomes.start} — {outcomes.end} · {outcomes.complete ? (zh ? "声明为完整前缀" : "Declared complete prefix") : (zh ? "部分窗口，起点未知" : "Partial window; initial unknown")} · {outcomes.valid_count} / {outcomes.sample_count} {zh ? "项有效结果" : "valid results"}</p>
-          <dl>{([ ["initial", "首次提交", "Initial submission"], ["best_valid", "窗口内最佳有效值", "Best valid in capture"], ["retained", "原生保留结果", "Native retained result"], ["final_valid", "最后有效提交", "Final valid submission"] ] as const).map(([key, cn, en]) => {
-            const point = outcomes[key];
-            return <div key={key}><dt>{zh ? cn : en}</dt><dd>{point ? <>{String(point.value)} · {point.candidate_ref} <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{zh ? "查看原始证据" : "Read original evidence"}</button></> : (zh ? "— 未知，不记零" : "— Unknown, not zero")}</dd></div>;
-          })}</dl>
-          {native?.applicability === "historical" ? <p role="status">{zh ? "原生来源已变化或不可读；仅保留历史捕获，当前结果未核验。" : "Native source changed or is unavailable; retained historical capture, current results unverified."}</p> : null}
-          <p>{zh ? "原生测量与分析器判断分开。有效性和保留选择来自提供方，不认证研究因果收益；用量窗口独立，不补算达标成本或全程账单。" : "Native measurements are separate from analyzer judgments. Validity and retention are provider-recorded, not causal benefit. Usage has its own window; threshold and total-study costs are not inferred."}</p>
-        </> : (zh ? "— 尚无同范围的原生结果捕获；不能从分析器判断或用量补算。" : "— No native capture for this scope; analyzer judgments and usage cannot supply it.")}</dd>
       </dl></details>
       <details className="research-usage"><summary>{zh ? "用量与成本" : "Usage and cost"}{usage ? ` · ${zh ? "捕获跨度" : "Captured elapsed"} ${duration(usage.elapsed_seconds)}` : ` · ${zh ? "尚无完整用量捕获" : "No complete usage capture"}`}{measured?.applicability === "historical" ? (zh ? " · 历史捕获" : " · Historical capture") : ""}</summary>
         <p>{zh ? "只读捕获，窗口可能与以上判读片段及下方 Explore 历史不同。" : "Read-only capture; its window can differ from the judgments above and Explore history below."}</p>

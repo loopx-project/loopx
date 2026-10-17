@@ -472,3 +472,31 @@ def test_source_correction_aborts_unknown_effect_and_next_revision_can_continue(
     old = goal_call(f, tmp_path, capsys, "commit", commit, operation_id="old-effect", execute=True)[1]
     assert old["effect"]["outcome"] == "aborted"
     assert len(goal_call(f, tmp_path, capsys, "inspect", agent=None)[1]["intent"]["created_todo_ids"]) == 1
+
+
+def test_turn_agenda_follows_current_request_revision_and_cancellation(source_goal):
+    from loopx.capabilities.manager_context.roundtrip import report
+    from loopx.control_plane.collaboration.turn_context_observation import read_delegation_turn_context
+
+    f = source_goal
+    rid = _request(f)["request_id"]
+    acknowledge(f["runtime"], f["ref"]["goal_id"], "agent-a", rid, "adopt", "Inspect original version",
+        registry=f["registry"], caller_goal_ref=f["ref"])
+    report(f["runtime"], f["ref"]["goal_id"], "agent-a", rid, "conclusion", "Original findings",
+        registry=f["registry"], caller_goal_ref=f["ref"])
+    before = _control(f, rid, "inspect")["view"]
+    revised = _control(f, rid, "revise", {"operation_id": "agenda-revision", **_basis(before),
+        "brief": {**BRIEF, "purpose": "Inspect the corrected current contract"}, "reason": "Updated input"})["view"]
+
+    def agenda(agent):
+        return read_delegation_turn_context(f["runtime"], f["registry"], f["ref"]["goal_id"], agent)["unfinished_delegations"]
+
+    current = agenda("agent-a")["items"][0]
+    assert current["request_id"] == rid and current["request_revision"] == 2
+    assert current["purpose"] == "Inspect the corrected current contract"
+    assert current["step"] == "assess_request"
+    assert "returns" not in current  # The old answer does not settle revised work.
+    assert agenda("agent-b")["items"][0]["step"] == "await_peer_result"
+    _control(f, rid, "cancel", {"operation_id": "agenda-cancel", **_basis(revised), "reason": "Stop current request"})
+    assert agenda("agent-a")["items"] == []
+    assert agenda("agent-b")["items"] == []
