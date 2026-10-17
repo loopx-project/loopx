@@ -23,6 +23,12 @@ from loopx.control_plane.runtime.status_projection_cache import (
     write_status_projection_cache,
 )
 from loopx.control_plane.runtime.time import now_utc, utc_isoformat
+from loopx.control_plane.scheduler.state import (
+    APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    CODEX_APP_SURFACE,
+    LEGACY_CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+    scheduler_state_path,
+)
 from loopx.presentation.renderers.quota_markdown import render_quota_should_run_markdown
 from loopx.presentation.renderers.status_markdown import render_status_markdown
 from loopx.quota import build_quota_should_run
@@ -464,6 +470,90 @@ def test_real_cli_quota_should_run_emits_the_projection_envelope(
     assert payload["projection_envelope"]["projection"] == "quota_should_run"
     assert payload["projection_envelope"]["coverage"]["included_count"] == 1
     assert payload["projection_envelope"]["upstream"][0]["projection"] == "status"
+
+
+def test_real_cli_quota_should_run_discloses_unreadable_scheduler_state(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+
+    registry_path = _registry(tmp_path, ("goal-a",))
+    runtime_root = tmp_path / "runtime"
+    agent_id = "reader-a"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    registry["goals"][0]["coordination"] = {
+        "agent_model": "peer_v1",
+        "registered_agents": [agent_id],
+    }
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    command = [
+        sys.executable,
+        "-m",
+        "loopx.cli",
+        "--format",
+        "json",
+        "--registry",
+        str(registry_path),
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_heartbeat",
+        "--goal-id",
+        "goal-a",
+        "--agent-id",
+        agent_id,
+    ]
+
+    def run_cli() -> dict:
+        completed = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        return json.loads(completed.stdout)
+
+    missing = _sources(run_cli()["projection_envelope"])["app_scheduler_state"]
+    assert missing["read_status"] == "read"
+    assert missing["status"] == "fresh"
+
+    paths = [
+        scheduler_state_path(
+            runtime_root,
+            goal_id="goal-a",
+            agent_id=agent_id,
+            surface=CODEX_APP_SURFACE,
+            state_key=state_key,
+        )
+        for state_key in (
+            APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+            LEGACY_CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+        )
+    ]
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{truncated", encoding="utf-8")
+
+    corrupt_payload = run_cli()
+    corrupt = _sources(corrupt_payload["projection_envelope"])[
+        "app_scheduler_state"
+    ]
+    assert corrupt["read_status"] == "unreadable"
+    assert corrupt["status"] == "unreadable"
+    assert corrupt_payload["projection_envelope"]["alert"] is True
+
+    for path in paths:
+        path.unlink()
+    recovered_payload = run_cli()
+    recovered = _sources(recovered_payload["projection_envelope"])[
+        "app_scheduler_state"
+    ]
+    assert recovered["read_status"] == "read"
+    assert recovered["status"] == "fresh"
+    assert recovered_payload["projection_envelope"]["alert"] is False
 
 
 def _cache_args(registry_path: Path) -> dict:
