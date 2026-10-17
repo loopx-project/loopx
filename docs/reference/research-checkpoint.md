@@ -108,6 +108,21 @@ loopx --registry DEST_REGISTRY --runtime-root DEST_RUNTIME --format json \
   --lease-key CURRENT_LEASE_KEY --lease-version CURRENT_LEASE_VERSION --execute
 ```
 
+The native fork above qualifies the preserved guest paths, not relocation to an
+arbitrary physical `CODEX_HOME` or workspace. In the pinned paginated native
+store, retained session indexes still name absolute rollout paths. Supplying a
+different rollout path to the native fork API does not qualify that relocation;
+its stale-path check can reject the copied index. Forking by thread id can also
+require the original rollout path in that index. Do not rewrite the provider's
+SQLite/history or alias an active source home to bypass that boundary.
+
+For ordinary migration to different paths, retain this native point as history
+and use a separately qualified, reviewed continuation context through the
+current Goal/session/Todo owners. That composition must preserve the original
+work and obtain fresh destination admission; it is not implemented merely by
+creating a fresh conversation. The fixed-path native profile remains available
+without making it the only allowed design for the planned Agent-transfer journey.
+
 The existing continuation owner prepares/adopts a complete context reference.
 Explore knowledge seeds the fresh Goal with preserved counterevidence, topology,
 authorship, timestamps and checkpoint provenance. Ordered-prefix recovery rejects
@@ -140,3 +155,7 @@ counterexample, accept a current typed review, execute a complete tool experimen
 and settle it. The joined qualification recipe in `benchmark/README.md` also
 runs this Core case. It validates mechanics and isolation; real-model decisions,
 long-run reliability and net score/cost improvements require separate evidence.
+The relocated-path case instead verifies an actionable refusal before creating
+the destination native home or session binding, with the original point and
+unfinished destination Task preserved. It does not certify portable native
+session reconstruction or complete Agent migration.
