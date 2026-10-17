@@ -24,7 +24,7 @@ TURN = "turn-periodic-successor-review"
 ROOT = Path(loopx.__file__).resolve().parents[1]
 
 
-def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, later_vision: bool = False, future_monitor: bool = True, initial_todos: list[dict] | None = None):
+def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, later_vision: bool = False, future_monitor: bool = True, initial_todos: list[dict] | None = None, handoff_mode: str = "soft_claim"):
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime = tmp_path / "project", tmp_path / "runtime"
@@ -67,7 +67,7 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT, "different-agent"]},
     }]}))
     initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, todos=initial_todos or [], handoff_mode="soft_claim", leases=[],
+        goal_id=GOAL, todos=initial_todos or [], handoff_mode=handoff_mode, leases=[],
     ), state_path=state, provider=provider)
 
     def call(*args: str, expected_code: int = 0) -> dict:

@@ -832,8 +832,8 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
                 assert secret not in json.dumps(requests)
         if case == "warm_preparation":
             assert "previous Host deadline has passed" in json.dumps(requests[1])
-            assert "Earlier Host deadlines" in json.dumps(requests[2])
-            assert "No additional time or authority" in json.dumps(requests[2])
+            assert _PREPARATION_TASK in json.dumps(requests[2])
+            assert "Earlier Host deadlines" not in json.dumps(requests[2])
         assert "Retained candidate 7 verified" in result.stdout
         retained = native_session_checkpoint(env, admitted["session_id"], timeout=20)
         assert retained["metadata"]["turn_ids"][:-1] == native["metadata"]["turn_ids"]
