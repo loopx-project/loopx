@@ -13,7 +13,9 @@ import {PREPARATION_SCHEMA, decodePlannedTransferMaterial, type ProtectedGoalMat
 import {inspectTransferFile, requirePhysicalTransferPath, withVerifiedTransferContainer,
   validatePlannedTransferRecipient, writeTransferContainer, type TransferContainerFile} from "./planned_transfer_container.ts";
 
-const PAYLOAD_SCHEMA = "loopx_planned_transfer_payload_v0";
+import {decodeGoalTransferHistory, goalTransferHistoryInputs, type ProtectedGoalTransferHistory} from "./planned_transfer_history.ts";
+
+const PAYLOAD_SCHEMA = "loopx_planned_transfer_payload_v1";
 function reject(message: string): never { throw new EffectRuntimeConflictError(message); }
 function same(a: unknown, b: unknown): boolean { return canonicalAuthorityBytes(a).equals(canonicalAuthorityBytes(b)); }
 function beneath(root: string, path: string): boolean {
@@ -26,7 +28,7 @@ function version(value: unknown): string {
 }
 export interface VerifiedGoalTransferPayload {
   preparation: JsonObject; context: JsonObject; archive: string; artifactSha256: string;
-  materials: ProtectedGoalMaterial[]; sourceVersion: string;
+  materials: ProtectedGoalMaterial[]; sourceVersion: string; runtimeHistory: ProtectedGoalTransferHistory;
 }
 
 /** Called only within source preparation's maintenance/context locks, after its
@@ -68,9 +70,11 @@ export async function writeProtectedGoalTransfer(reviewed: Awaited<ReturnType<ty
   const archive = String(preparation.archive);
   const metadata = {schema_version: PAYLOAD_SCHEMA, source_package_version: reviewed.sourceVersion,
     source_preparation: preparation, source_context: context, materials: reviewed.materials};
+  const history = decodeGoalTransferHistory(preparation.runtime_history);
+  const runtimeFiles = await goalTransferHistoryInputs(history);
   const result = await writeTransferContainer(reviewed.destination, reviewed.recipient, metadata,
-    [{path: archive, ...await inspectTransferFile(archive)}, ...reviewed.files], keyRecordPath);
-  return {...result, material_count: reviewed.materials.length, privacy_certified: false,
+    [{path: archive, ...await inspectTransferFile(archive)}, ...reviewed.files, ...runtimeFiles], keyRecordPath);
+  return {...result, material_count: reviewed.materials.length, runtime_history_file_count: runtimeFiles.length, privacy_certified: false,
     host_drain_qualified: false, portable_migration_qualified: false};
 }
 
@@ -100,7 +104,9 @@ export async function withVerifiedGoalTransferPayload<T>(value: JsonObject,
     const archive = verified.files.get("00000001")!;
     const summary = await verifyAuthorityArchive(archive);
     if (!same({...summary}, preparation.authority_archive) || summary.goal_id !== goal.id) reject("Protected transfer differs from its prepared original authority");
-    if (!Array.isArray(data.materials) || data.materials.length !== verified.members.length - 1) reject("Protected transfer material inventory differs");
+    const history = decodeGoalTransferHistory(preparation.runtime_history);
+    if (history.goal_id !== goal.id || history.source_runtime_root !== context.runtime_root ||
+        !Array.isArray(data.materials) || data.materials.length + history.files.length !== verified.members.length - 1) reject("Protected transfer material or runtime inventory differs");
     const materials: ProtectedGoalMaterial[] = [], seen = new Set<string>();
     for (const [index, rawMaterial] of data.materials.entries()) {
       const material = decodePlannedTransferMaterial(rawMaterial, index), member = verified.members[index + 1]!;
@@ -108,6 +114,12 @@ export async function withVerifiedGoalTransferPayload<T>(value: JsonObject,
       seen.add(material.source_relative_path);
       materials.push({...material, path: verified.files.get(member.id)!});
     }
-    return consume({preparation, context, archive, materials, artifactSha256: verified.envelopeSha256, sourceVersion: targetVersion});
+    const runtimeFiles = history.files.map((file, index) => {
+      const member = verified.members[index + materials.length + 1]!;
+      if (member.sha256 !== file.sha256 || member.bytes !== file.bytes) reject("Protected runtime history content differs");
+      return {path: verified.files.get(member.id)!, sha256: member.sha256, bytes: member.bytes};
+    });
+    return consume({preparation, context, archive, materials, artifactSha256: verified.envelopeSha256, sourceVersion: targetVersion,
+      runtimeHistory: {manifest: history, files: runtimeFiles}});
   });
 }

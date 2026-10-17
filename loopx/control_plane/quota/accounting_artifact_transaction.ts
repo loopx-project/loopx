@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { access, lstat, readFile, readdir, realpath } from "node:fs/promises";
+import {constants} from "node:fs";
+import { access, lstat, open, readFile, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -899,29 +900,56 @@ async function ensureReceiptArtifacts(
  * A prepared or incomplete debit/void must finish through its existing owner
  * before transfer; directory emptiness is not an external-effect certificate.
  */
-export async function readGoalQuotaHistoryForTransfer(root: string, goalId: string): Promise<JsonObject> {
-  const runs = join(root, "goals", goalId, "runs"), index = join(runs, "index.jsonl");
-  try {
-    if (await realpath(runs) !== runs) throw new EffectRuntimeRequestError("Transfer quota history contains a linked ancestor");
-  } catch (error) { if (!isNodeErrorCode(error, "ENOENT")) throw error; }
-  await rejectSymlinkPath(index, "transfer quota index");
-  const indexBytes = await readOptionalBytes(index), records = parseQuotaAccountingIndex(indexBytes?.toString("utf8") ?? null);
+export async function readGoalQuotaHistoryForTransfer(root: string, goalId: string, retainedRoot = root): Promise<JsonObject> {
+  // Receipt bodies keep their original absolute addresses. A retained snapshot
+  // is read only at the caller's private carrier root; no source path is opened
+  // or rewritten, and this does not install a target accounting/admission grant.
+  const originalRuns = join(root, "goals", goalId, "runs");
+  const runs = join(retainedRoot, "goals", goalId, "runs"), index = join(runs, "index.jsonl");
+  const files = new Map<string, JsonObject>();
+  const snapshot = async (path: string): Promise<Buffer | null> => {
+    await rejectSymlinkPath(path, "transfer quota history");
+    let handle;
+    try { handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+    catch (error) { if (isNodeErrorCode(error, "ENOENT")) return null; throw error; }
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.size > 128 * 1024 * 1024 || await realpath(path) !== path) {
+        throw new EffectRuntimeRequestError("Transfer quota history requires bounded physical regular files");
+      }
+      const bytes = await handle.readFile();
+      if (bytes.length > 128 * 1024 * 1024) throw new EffectRuntimeRequestError("Transfer quota history exceeds its local capacity");
+      const suffix = path.slice(join(retainedRoot, "goals", goalId).length + 1);
+      const fact = {relative_path: suffix, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length};
+      const prior = files.get(suffix);
+      if (prior && canonicalJson(prior) !== canonicalJson(fact)) throw new EffectRuntimeRequestError("Transfer quota history changed during capture");
+      files.set(suffix, fact);
+      return bytes;
+    } finally { await handle.close(); }
+  };
+  const text = (bytes: Buffer | null) => bytes === null ? null : new TextDecoder("utf-8", {fatal: true}).decode(bytes);
+  const indexBytes = await snapshot(index), records = parseQuotaAccountingIndex(text(indexBytes));
   const receipts: JsonObject[] = [];
   const seen = new Set<string>();
   for (const kind of ["spend", "void"] as const) {
     const contract = contractFor(kind), directory = join(runs, ".transactions", contract.transactionDirectory);
     await rejectSymlinkPath(directory, "transfer quota transactions");
     let entries: string[];
-    try { entries = await readdir(directory); }
-    catch (error) { if (isNodeErrorCode(error, "ENOENT")) entries = []; else throw error; }
+    try {
+      if (await realpath(directory) !== directory) throw new EffectRuntimeRequestError("Transfer quota transactions contain a linked ancestor");
+      entries = await readdir(directory);
+    } catch (error) { if (isNodeErrorCode(error, "ENOENT")) entries = []; else throw error; }
     for (const name of entries.sort()) {
       if (!/^[a-f0-9]{24}\.json$/u.test(name)) throw new EffectRuntimeRequestError("Transfer quota transaction has an unattributable address");
-      const path = join(directory, name);
-      await rejectSymlinkPath(path, "transfer quota receipt");
-      const receipt = await readReceipt(contract, path, runs);
-      if (!receipt || receipt.record.goal_id !== goalId || path !== transactionPath(contract, runs, receipt.effect_id)) throw new EffectRuntimeRequestError("Transfer quota receipt identity is unavailable");
+      const path = join(directory, name), raw = text(await snapshot(path));
+      if (raw === null) throw new EffectRuntimeRequestError("Transfer quota receipt is unavailable");
+      const receipt = receiptObject(contract, JSON.parse(raw));
+      // Reuse the transaction owner's complete identity/path/GoalRef checks.
+      validateReceiptPaths(contract, originalRuns, receipt);
+      if (receipt.record.goal_id !== goalId || path !== transactionPath(contract, runs, receipt.effect_id)) throw new EffectRuntimeRequestError("Transfer quota receipt identity is unavailable");
       const resolution = resolveQuotaAccountingEffect(kind, records, receipt.effect_id, receipt.goal_ref ?? null);
-      const body = await readOptionalText(receipt.json_path), markdown = await readOptionalText(receipt.markdown_path);
+      const body = text(await snapshot(join(runs, basename(receipt.json_path))));
+      const markdown = text(await snapshot(join(runs, basename(receipt.markdown_path))));
       let bodyMatches = false;
       if (body !== null) {
         try { bodyMatches = canonicalJson(JSON.parse(body)) === canonicalJson(receipt.record); }
@@ -942,7 +970,8 @@ export async function readGoalQuotaHistoryForTransfer(root: string, goalId: stri
     }
   }
   const facts = {closed: receipts.every(row => row.closed === true), receipts,
-    index_sha256: indexBytes === null ? null : sha256Bytes(indexBytes)};
+    index_sha256: indexBytes === null ? null : sha256Bytes(indexBytes),
+    files: [...files.values()].sort((a, b) => String(a.relative_path) < String(b.relative_path) ? -1 : 1)};
   return {...facts, sha256: canonicalAuthoritySha256(facts)};
 }
 

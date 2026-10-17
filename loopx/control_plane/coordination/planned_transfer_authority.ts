@@ -28,6 +28,7 @@ import {newGoalCreationBinding} from "./new_goal_initialization.ts";
 import {readPromotionReceipt} from "./promotion_receipt.ts";
 import {NEW_GOAL_WRITER_FENCE_SCHEMA} from "./legacy_writer_fence.ts";
 import {readGoalTurnHistoryForTransfer} from "../turn_driver/turn_journal_query.ts";
+import {goalTransferHistory} from "../goals/planned_transfer_history.ts";
 import {readGoalQuotaHistoryForTransfer} from "../quota/accounting_artifact_transaction.ts";
 
 export {PREPARATION_SCHEMA} from "../goals/planned_transfer.ts";
@@ -215,6 +216,9 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
     if (turnHistory.turn_hosts_closed !== true) reject("Source Turn Hosts are not proven drained; recover their original process supervision before preparing transfer");
     const quotaHistory = await readGoalQuotaHistoryForTransfer(root, goal);
     if (quotaHistory.closed !== true) reject("Source quota effects are not closed; recover the original debit or void before preparing transfer");
+    // Validate the new carrier's addresses and per-file bounds before
+    // changing the original writer fence.
+    const runtimeHistory = goalTransferHistory(root, goal, turnHistory, quotaHistory);
     const pendingPath = join(directory, "preparation.json");
     const pending = await optionalJson(pendingPath);
     const facts = {schema_version: PREPARATION_SCHEMA, request,
@@ -265,6 +269,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
         captured.projection_sha256 !== facts.source_projection_sha256) reject("Transfer archive differs from its prepared source");
     const result: JsonObject = {schema_version: PREPARATION_SCHEMA, operation_id: operation, goal_id: goal,
       authority_write_fenced: true, authority_archive: {...captured}, archive,
+      runtime_history: runtimeHistory,
       ...(context ? {source_context_sha256: canonicalAuthoritySha256(context)} : {}),
       ...(registered ? {original_registration_verified: true} : {}),
       host_drain_qualified: false, portable_artifact_qualified: false, execution_authority_granted: false};

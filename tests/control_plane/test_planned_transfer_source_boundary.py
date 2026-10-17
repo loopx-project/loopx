@@ -27,6 +27,7 @@ from loopx.control_plane.goals.planned_transfer_io import (
     prepare_registered_goal_transfer, preview_registered_goal_transfer,
     preview_protected_goal_transfer, preview_protected_goal_transfer_target,
     read_goal_transfer_context, stage_protected_goal_transfer,
+    inspect_staged_goal_transfer_history,
 )
 from loopx.control_plane.projects.registry_codec import load_project_registry, project_registry_transaction
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -418,6 +419,13 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         assert export_registered_goal_transfer(registry_path=global_registry, goal_id="report", operation_id="prepared-move",
             expected_preview_sha256=preview["preview_sha256"], recipient=recipient, destination=bundle,
             materials=[(project / "input.txt", material_hash)]) == exported
+        runtime_files = {
+            row["relative_path"]: (runtime / "goals/report" / row["relative_path"]).read_bytes()
+            for owner in (preview["turn_history"], preview["quota_history"]) for row in owner["files"]
+        }
+        assert journal_path.relative_to(runtime / "goals/report").as_posix() in runtime_files
+        assert "runs/index.jsonl" in runtime_files
+        assert len([name for name in runtime_files if "/quota-spend/" in name]) == 1
         incoming = tmp_path / "target-local-container"
         shutil.copytree(bundle, incoming)
         shutil.rmtree(bundle)
@@ -436,6 +444,8 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
         assert observed["goal_id"] == "report" and observed["display_name"] == "Current original Goal"
         assert observed["original_authority"] == prepared["authority_archive"]
         assert observed["execution_authority_granted"] is False
+        assert observed["original_runtime_history"]["turn_history"] == preview["turn_history"]
+        assert observed["original_runtime_history"]["quota_history"] == preview["quota_history"]
         assert observed["materials"] == [{"id": "00000002", "source_relative_path": "input.txt", "sha256": material_hash, "bytes": 6}]
         with pytest.raises(EffectRuntimeRemoteError, match="same source and destination package version"):
             effect_runtime_result("coordination.planned_transfer.preview_protected", {
@@ -510,6 +520,28 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             assert staged["execution_authority_granted"] is False
             assert staged["target_is_active"] is False and staged["fresh_admission_required"] is True
             assert staged["authority_readback"]["status"] == "matched"
+            assert staged["runtime_history_readback_verified"] is True
+            history_root = Path(staged["original_runtime_history_root"])
+            history_goal = history_root / "goals/report"
+            assert {path.relative_to(history_goal).as_posix(): path.read_bytes()
+                    for path in history_goal.rglob("*") if path.is_file()} == runtime_files
+            assert not (target_runtime / "goals/report/runs/index.jsonl").exists()
+            assert not (target_runtime / "goals/report/turns").exists()
+            assert not list(history_root.rglob("*.hosts"))
+            history_request = dict(runtime_root=target_runtime, goal_id="report", operation_id="prepared-move")
+            readback = inspect_staged_goal_transfer_history(**history_request)
+            assert readback["quota_history"] == preview["quota_history"]
+            assert readback["turn_history"] == {key: preview["turn_history"][key] for key in ("turns", "files", "closed")}
+            assert readback["historical_only"] is True
+            assert readback["runtime_accounting_adopted"] is False
+            assert readback["execution_authority_granted"] is False
+            # Exercise the ordinary original quota replay reader over these
+            # retained bytes with the original source unavailable. It must not
+            # debit, repair receipts, or try to open their old source paths.
+            original_replay = replay_quota_spend_by_effect_ref(history_root, goal_id="report",
+                effect_ref=debit["effect_id"], agent_id="agent-a", read_only=True)
+            assert original_replay["ok"] is True and original_replay["appended"] is False
+            assert original_replay["idempotent_replay"] is True
             assert staged["material_readback_verified"] is True and staged["original_material_count"] == 1
             assert staged["workspace_materials_readback_verified"] is True
             assert target_input.read_bytes() == b"6\n7\n8\n"
@@ -572,6 +604,22 @@ def test_stop_withdrawal_and_exact_release_have_distinct_authority(
             current_preview = preview_protected_goal_transfer_target(**target_request)
             assert current_preview["resuming_original_operation"] is True
             assert current_preview["reviewed_preview_sha256"] == request["expected_workspace_preview_sha256"]
+            retained_journal = history_goal / journal_path.relative_to(runtime / "goals/report")
+            original_journal = retained_journal.read_bytes()
+            retained_journal.write_bytes(original_journal + b"\n")
+            with pytest.raises(EffectRuntimeRemoteError, match="runtime history changed"):
+                inspect_staged_goal_transfer_history(**history_request)
+            with pytest.raises(EffectRuntimeRemoteError, match="runtime history changed"):
+                stage_protected_goal_transfer(**request)
+            assert retained_journal.read_bytes() == original_journal + b"\n"
+            assert target_registry.read_bytes() == original_registry
+            retained_journal.write_bytes(original_journal)
+            retained_journal.unlink()
+            with pytest.raises(EffectRuntimeRemoteError, match="runtime history is missing"):
+                stage_protected_goal_transfer(**request)
+            assert not retained_journal.exists()
+            retained_journal.write_bytes(original_journal)
+            assert inspect_staged_goal_transfer_history(**history_request) == readback
             target_input.write_bytes(b"Later workspace result must survive")
             with pytest.raises(EffectRuntimeRemoteError, match="workspace material changed or is occupied"):
                 stage_protected_goal_transfer(**request)

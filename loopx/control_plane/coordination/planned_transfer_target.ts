@@ -13,7 +13,7 @@ import {withVerifiedGoalTransferPayload, type VerifiedGoalTransferPayload} from 
 import {readGoalTransferWorkspaceReview, retainGoalTransferWorkspace, reviewGoalTransferWorkspace,
   verifyGoalTransferWorkspaceReview} from "../goals/planned_transfer_workspace.ts";
 import {inspectTransferFile, requirePhysicalTransferPath} from "../goals/planned_transfer_container.ts";
-import {canonicalAuthorityBytes, canonicalAuthoritySha256, hasExactAuthorityKeys} from "./authority_store_codec.ts";
+import {canonicalAuthorityBytes, canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {verifyAuthorityArchive, restoreAuthorityArchive} from "./authority_archive.ts";
 import {auditAuthorityArchive} from "./authority_archive_audit.ts";
 import {FileAuthorityStore} from "./file_authority_store.ts";
@@ -22,6 +22,7 @@ import {localAuthorityProviderPaths, publishLocalAuthoritySelection} from "./loc
 import {engageLegacyCoordinationWriterFenceUnderLocks, loadLegacyCoordinationWriterFence,
   PLANNED_TRANSFER_WRITER_FENCE_SCHEMA, type PlannedTransferWriterFence} from "./legacy_writer_fence.ts";
 import {readShadowManagementState, shadowManagementDirectory, withShadowMaintenanceLock} from "./shadow_management.ts";
+import {decodeGoalTransferHistory, inspectGoalTransferHistory, readGoalTransferHistoryJson, retainGoalTransferHistory, type ProtectedGoalTransferHistory} from "../goals/planned_transfer_history.ts";
 import {PREPARATION_SCHEMA} from "./planned_transfer_authority.ts";
 import {legacyCoordinationTodoLockPath} from "./legacy_writer_lock_paths.ts";
 
@@ -61,6 +62,7 @@ function protectedStageInput(value: JsonObject, payload: VerifiedGoalTransferPay
   return {source_preparation: payload.preparation, source_context: payload.context, archive: payload.archive,
     target: value.target, destination_registry: value.destination_registry, registry_witness: value.registry_witness,
     execute: true, protected_transport: {artifact_sha256: payload.artifactSha256, materials: payload.materials},
+    runtime_history: payload.runtimeHistory,
     ...(Object.hasOwn(value, "workspace_mapping") ? {workspace_mapping: value.workspace_mapping,
       expected_workspace_preview_sha256: value.expected_workspace_preview_sha256} : {})};
 }
@@ -135,6 +137,7 @@ export async function previewProtectedGoalTransfer(value: JsonObject): Promise<J
     return {schema_version: "loopx_planned_transfer_protected_preview_v0", artifact_sha256: payload.artifactSha256,
       goal_id: goal.id, display_name: goal.display_name ?? goal.id, source_package_version: payload.sourceVersion,
       original_authority: payload.preparation.authority_archive,
+      original_runtime_history: payload.runtimeHistory.manifest,
       materials: payload.materials.map(({path: _path, ...row}) => row),
       protected_transport_verified: true, privacy_certified: false, host_drain_qualified: false,
       portable_migration_qualified: false, execution_authority_granted: false, credential_adoption_performed: false};
@@ -156,14 +159,28 @@ export async function stageProtectedGoalTransfer(value: JsonObject): Promise<Jso
  * publication leaves a stopped destination that the same operation can recover. */
 export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promise<JsonObject> {
   const protectedInput = value.protected_transport;
+  const runtimeInput = value.runtime_history;
   const workspaceRequested = Object.hasOwn(value, "workspace_mapping");
   if (!hasExactAuthorityKeys(value, ["source_preparation", "source_context", "archive", "target", "destination_registry", "registry_witness", "execute",
       ...(protectedInput === undefined ? [] : ["protected_transport"]),
+      ...(runtimeInput === undefined ? [] : ["runtime_history"]),
       ...(workspaceRequested ? ["workspace_mapping", "expected_workspace_preview_sha256"] : [])]) ||
       value.execute !== true || typeof value.archive !== "string") reject("Explicit complete Goal transfer staging is required");
   const prepared = requireJsonObject(value.source_preparation, "prepared original authority");
   if (prepared.schema_version !== PREPARATION_SCHEMA || prepared.authority_write_fenced !== true ||
       prepared.execution_authority_granted !== false) reject("An original source authority preparation is required");
+  let history: ProtectedGoalTransferHistory | undefined;
+  if (runtimeInput !== undefined) {
+    const raw = requireJsonObject(runtimeInput, "authenticated runtime history");
+    if (protectedInput === undefined || !hasExactAuthorityKeys(raw, ["manifest", "files"]) || !Array.isArray(raw.files) ||
+        !same(raw.manifest, prepared.runtime_history)) reject("Original runtime history differs from its prepared source");
+    history = {manifest: decodeGoalTransferHistory(raw.manifest), files: raw.files.map(value => {
+      const file = requireJsonObject(value, "authenticated runtime file");
+      if (!hasExactAuthorityKeys(file, ["path", "sha256", "bytes"]) || typeof file.path !== "string" ||
+          typeof file.sha256 !== "string" || typeof file.bytes !== "number") reject("Invalid authenticated runtime content");
+      return {path: file.path, sha256: file.sha256, bytes: file.bytes};
+    })};
+  }
   const summary = requireJsonObject(prepared.authority_archive, "prepared authority summary");
   const plan = planPreparedGoalStage({operation_id: prepared.operation_id, source_context: value.source_context,
     archive_sha256: summary.archive_sha256, target: value.target, destination_registry: value.destination_registry,
@@ -232,6 +249,7 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     if (!pending && (originalState || originalContext)) reject("Destination Goal material is occupied; retain its original owner");
     if ((originalState && !originalState.equals(Buffer.from(String(plan.context.state_text)))) ||
         (originalContext && !same(JSON.parse(originalContext.toString("utf8")), plan.context))) reject("Destination Goal material is occupied or changed");
+    if (history) await retainGoalTransferHistory(directory, history, pending !== null, completed !== null, false);
     await retainProtectedMaterials(plan, pending !== null, completed !== null, false);
     if (plan.workspaceMaterials) {
       const review = await reviewGoalTransferWorkspace(plan.workspaceMaterials, plan.protectedArtifact!.sha256, target, witness);
@@ -259,9 +277,13 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     const audit = await auditAuthorityArchive(value.archive as string, store, archive.archive_sha256);
     if (audit.status !== "matched") reject("Complete original authority/receipt readback did not match");
     await publishLocalAuthoritySelection(root, plan.goalId, target.provider as "file" | "sqlite", identity.store_identity);
+    const historyReadback = history ? await retainGoalTransferHistory(directory, history, true, completed !== null, true) : null;
     const result = {schema_version: "loopx_planned_transfer_target_stage_v0", operation_id: plan.operationId, goal_id: plan.goalId,
       identity_sha256: canonicalAuthoritySha256(plan.identity), original_authority: {...archive}, authority_readback: audit,
       target_store_identity: identity.store_identity, target_provider: target.provider,
+      ...(historyReadback ? {runtime_history_sha256: historyReadback.history_sha256,
+        original_runtime_history_root: join(directory, "runtime-history"), runtime_history_readback_verified: true,
+        runtime_accounting_adopted: false} : {}),
       target_is_active: false, fresh_admission_required: true, execution_authority_granted: false,
       ...(plan.protectedArtifact ? {artifact_sha256: plan.protectedArtifact.sha256,
         original_material_count: plan.protectedArtifact.materials.length, material_readback_verified: true,
@@ -272,4 +294,22 @@ export async function stageAuthorityForPlannedTransfer(value: JsonObject): Promi
     return {...result, destination_registry: stagedGoalRegistry(value.destination_registry as JsonObject, plan, root),
       original_context_path: plan.contextPath};
   }))));
+}
+
+/** Read back the retained original operation after restart, without reopening
+ * its source or inferring an empty live target index means no prior debit. */
+export async function inspectStagedGoalTransferHistory(value: JsonObject): Promise<JsonObject> {
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id"])) reject("Original staged transfer identity is required");
+  const root = await requirePhysicalTransferPath(value.runtime_root);
+  const operation = requireAuthorityStoreId(value.operation_id, "original transfer operation");
+  const goalId = requireAuthorityStoreId(value.goal_id, "original transfer Goal");
+  if (!goalId || /[\\/\0]/u.test(goalId) || goalId === "." || goalId === "..") reject("Original transfer Goal is required");
+  const directory = join(shadowManagementDirectory(root, goalId), "planned-transfer-targets", canonicalAuthoritySha256(operation));
+  await requirePhysicalTransferPath(directory);
+  const receipt = await readGoalTransferHistoryJson(join(directory, "receipt.json"));
+  if (receipt.goal_id !== goalId || receipt.operation_id !== operation || receipt.runtime_history_readback_verified !== true ||
+      receipt.original_runtime_history_root !== join(directory, "runtime-history")) reject("Original staged runtime history is unavailable");
+  const manifest = decodeGoalTransferHistory(await readGoalTransferHistoryJson(join(directory, "runtime-history", "manifest.json")));
+  if (manifest.goal_id !== goalId || canonicalAuthoritySha256(manifest) !== receipt.runtime_history_sha256) reject("Original staged runtime history identity changed");
+  return inspectGoalTransferHistory(join(directory, "runtime-history"), manifest);
 }

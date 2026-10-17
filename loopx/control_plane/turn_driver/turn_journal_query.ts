@@ -58,7 +58,7 @@ function journalConflict(message: string): never {
   throw new EffectRuntimeConflictError(message, "journal_readback_conflict");
 }
 
-async function journalSnapshot(path: string): Promise<{value: JsonObject; sha256: string}> {
+async function journalSnapshot(path: string): Promise<{value: JsonObject; sha256: string; bytes: number}> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
@@ -66,16 +66,15 @@ async function journalSnapshot(path: string): Promise<{value: JsonObject; sha256
     let value: JsonObject;
     try { value = requireJsonObject(JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(bytes)), "Turn journal"); }
     catch { journalConflict("Turn journal history is unreadable; reconcile it before retrying"); }
-    return {value, sha256: createHash("sha256").update(bytes).digest("hex")};
+    return {value, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length};
   } finally { await handle.close(); }
 }
 
-/** Call while source preparation owns Goal maintenance. The existing journal
- * interpreter decides terminal/uncertain effects. Actual process readback is a
- * separate requirement: a terminal journal cannot certify its Host exited.
- * This does not cover Hosts outside Turn execution or external effect owners.
+/** Interpret original journal content without process observation. Source
+ * preparation owns maintenance; target readback uses its immutable carrier.
+ * Actual process drain belongs to the source-only composition below.
  */
-export async function readGoalTurnHistoryForTransfer(root: string, goalId: string): Promise<JsonObject> {
+export async function readGoalTurnJournalsForTransfer(root: string, goalId: string): Promise<JsonObject> {
   const directory = join(root, "goals", goalId, "turns");
   let entries: Dirent[];
   try {
@@ -83,11 +82,12 @@ export async function readGoalTurnHistoryForTransfer(root: string, goalId: strin
     entries = await readdir(directory, {withFileTypes: true});
   }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") entries = []; else throw error; }
-  const turns: JsonObject[] = [];
+  const turns: JsonObject[] = [], files: JsonObject[] = [];
   for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     if (!entry.name.endsWith(".json")) continue;
     if (!/^[a-f0-9]{64}\.json$/u.test(entry.name) || !entry.isFile()) journalConflict("Transfer source has an unattributable Turn journal; reconcile its owning operation");
-    const {value: journal, sha256} = await journalSnapshot(join(directory, entry.name));
+    const {value: journal, sha256, bytes} = await journalSnapshot(join(directory, entry.name));
+    files.push({relative_path: `turns/${entry.name}`, sha256, bytes});
     const key = `sha256:${entry.name.slice(0, -5)}`;
     const envelope = jsonObject(jsonObject(journal.plan)?.turn_envelope);
     const agent = envelope?.agent_id;
@@ -99,7 +99,20 @@ export async function readGoalTurnHistoryForTransfer(root: string, goalId: strin
         observed.recovery_decision.action === "return_existing",
       recorded_effects: observed.recorded_effects, violations: observed.violations});
   }
+  return {turns, files, closed: turns.every(row => row.closed === true)};
+}
+
+/** Actual source-only Host observation. Retained target history is interpreted
+ * by the journal owner above; it never probes a copied PID on another machine. */
+export async function readGoalTurnHistoryForTransfer(root: string, goalId: string): Promise<JsonObject> {
+  const observed = await readGoalTurnJournalsForTransfer(root, goalId);
+  const turns = observed.turns as JsonObject[];
   let hosts: JsonObject[] = [];
+  // Also enumerate an otherwise orphan .hosts directory. Missing journal
+  // files must not turn known process evidence into an empty inventory.
+  let entries: Dirent[];
+  try { entries = await readdir(join(root, "goals", goalId, "turns"), {withFileTypes: true}); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") entries = []; else throw error; }
   if (turns.length || entries.some(entry => entry.name.endsWith(".hosts"))) {
     const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON;
     if (!python || !isAbsolute(python) || python.includes("\0")) journalConflict("Host drain requires the source-selected process owner adapter");
@@ -135,7 +148,7 @@ export async function readGoalTurnHistoryForTransfer(root: string, goalId: strin
     return Number.isSafeInteger(count) && Number(count) > 0 && actual.length === count &&
       actual.every(host => host.record_sha256 !== null && ["drained", "not_launched"].includes(String(host.drain)));
   });
-  const facts = {turns, hosts, turn_hosts_closed: turnHostsClosed};
+  const facts = {turns, files: observed.files, hosts, turn_hosts_closed: turnHostsClosed};
   return {...facts, closed: turns.every(row => row.closed === true), sha256: canonicalAuthoritySha256(facts)};
 }
 
