@@ -39,6 +39,7 @@ export const conversationActivityScenario = {
         await page.locator(".personal-message-work-current").getByText("Agent 正在执行命令", { exact: true }).waitFor();
         return api.turnRequests.at(-1);
       };
+      assert.equal(await page.getByRole("button", { name: "恢复未确认的追加指令", exact: true }).count(), 0, "A new conversation has no recovery control");
       const turn = await send("请检查当前任务状态，并说明下一步。");
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await page.clock.install();
@@ -58,58 +59,83 @@ export const conversationActivityScenario = {
       assert.equal(await pending.locator(".personal-message-elapsed").textContent(), elapsedBefore);
       await page.clock.resume();
       const adjustments = [];
-      const composerAdjustments = [];
+      let legacyMigrationAttempts = 0;
+      let rejectHistoryRead = false;
+      let rejectedHistoryReads = 0;
+      await page.route("**/api/chat/sessions?*", route => {
+        const target = new URL(route.request().url());
+        if (rejectHistoryRead && target.searchParams.get("channel_id") === "manager") {
+          rejectHistoryRead = false;
+          rejectedHistoryReads += 1;
+          return route.fulfill({ status: 503, json: { error: "History temporarily unavailable" } });
+        }
+        return route.fallback();
+      });
       await page.route("**/steer", async route => {
         const body = route.request().postDataJSON();
         const [sessionId, turnId] = new URL(route.request().url()).pathname.match(/sessions\/([^/]+)\/turns\/([^/]+)\/steer/).slice(1);
-        if (body.message === "保留完整结论。") {
-          composerAdjustments.push(body);
-          if (composerAdjustments.length === 1) return route.fulfill({ status: 409, json: { ok: false, error: "主输入框指令未确认" } });
-          return route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: turnId, client_ingress_id: body.client_ingress_id, status: "delivered", created: true } });
-        }
         adjustments.push(body);
+        if (body.message === "先检查最新证据，再继续。" && legacyMigrationAttempts++ === 0)
+          return route.fulfill({ status: 409, json: { ok: false, error: "原回合指令未确认" } });
         if (adjustments.length === 1) return route.fulfill({ status: 409, json: { ok: false, error: "执行器暂时未确认接收，草稿已保留。" } });
         if (adjustments.length === 3) return route.fulfill({ status: 409, json: { ok: false, error: "执行器暂时不可用。", error_code: "live_steering_session_not_attached", delivery_state: "not_delivered" } });
+        if (adjustments.length !== 2) {
+          const rows = page.__loopxRuntime.messages.get(sessionId);
+          const messageId = `instruction:${body.client_ingress_id}`;
+          if (!rows.some(row => row.message_id === messageId)) rows.push({
+            message_id: messageId, turn_id: turnId, role: "user", text: body.message,
+            created_at: await page.evaluate(() => new Date().toISOString()),
+          });
+          if (adjustments.length === 4) rejectHistoryRead = true;
+        }
         return route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: adjustments.length === 2 ? "wrong-turn" : turnId, client_ingress_id: body.client_ingress_id, status: "delivered", created: true } });
       });
+      const composer = page.getByLabel("向 LoopX 发送消息");
+      const submit = page.getByRole("button", { name: "发送", exact: true });
+      const feedback = page.locator(".personal-action-feedback");
       await pending.getByRole("button", { name: "调整本轮", exact: true }).click();
-      await pending.getByLabel("追加给本轮的指令").fill("先核对依赖，再继续当前任务。");
-      await pending.getByRole("button", { name: "发送调整", exact: true }).click();
-      await pending.getByRole("alert").filter({ hasText: "暂时未确认" }).waitFor();
-      assert.equal(await pending.getByLabel("追加给本轮的指令").inputValue(), "先核对依赖，再继续当前任务。");
-      await page.getByLabel("向 LoopX 发送消息").fill("保留完整结论。");
-      await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.getByRole("status").filter({ hasText: "主输入框指令未确认" }).waitFor();
+      assert.equal(await composer.evaluate(node => node === document.activeElement), true, "Adjust focuses the shared composer");
+      assert.equal(await page.locator("textarea:visible").count(), 1, "Only one editable conversation input is visible");
+      assert.equal(await page.locator(".personal-message-steer").count(), 0, "No inline adjustment form remains");
+      assert.equal(await composer.getAttribute("placeholder"), "输入消息…");
+      await composer.fill("先核对依赖，再继续当前任务。");
+      await page.screenshot({ path: resolve(outputDir, "conversation-composer-unified-desktop.png"), animations: "disabled" });
+      await composer.press("Meta+Enter");
+      await feedback.filter({ hasText: "暂时未确认" }).waitFor();
+      assert.equal(await composer.inputValue(), "先核对依赖，再继续当前任务。");
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
-      await tray.getByLabel("追加给本轮的指令").waitFor({ timeout: 5000 });
-      assert.equal(await tray.getByLabel("追加给本轮的指令").inputValue(), "先核对依赖，再继续当前任务。", "uncertain adjustment survives a view switch");
+      assert.equal(await composer.inputValue(), "先核对依赖，再继续当前任务。", "The same draft survives switching to the overview");
+      await tray.getByRole("button", { name: "调整本轮", exact: true }).click();
+      assert.equal(await composer.evaluate(node => node === document.activeElement), true, "Overview activity focuses the same input");
+      assert.equal(await tray.locator("textarea").count(), 0);
       await tray.getByRole("button", { name: "查看完整对话", exact: true }).click();
-      await pending.getByRole("button", { name: "发送调整", exact: true }).click();
-      await pending.getByRole("alert").filter({ hasText: "回执不匹配" }).waitFor();
+      await submit.click();
+      await feedback.filter({ hasText: "回执不匹配" }).waitFor();
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      await pending.getByLabel("追加给本轮的指令").waitFor();
-      assert.equal(await pending.getByLabel("追加给本轮的指令").inputValue(), "先核对依赖，再继续当前任务。", "reload retains the uncertain adjustment");
-      assert.equal(adjustments.length, 2, "restoration never resends an adjustment");
-      assert.equal(api.turnRequests.length, 1, "restoration never starts work");
-      assert.equal(await page.getByLabel("向 LoopX 发送消息").inputValue(), "保留完整结论。", "composer and inline drafts coexist");
-      await page.getByRole("button", { name: "发送", exact: true }).click();
-      await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
-      assert.equal(composerAdjustments[1].client_ingress_id, composerAdjustments[0].client_ingress_id, "inline writes preserve the composer's retry identity");
+      await pending.getByRole("button", { name: "调整本轮", exact: true }).waitFor();
+      assert.equal(await composer.inputValue(), "先核对依赖，再继续当前任务。", "Reload retains the uncertain adjustment in the one composer");
+      assert.equal(adjustments.length, 2, "Restoration never resends an adjustment");
+      assert.equal(api.turnRequests.length, 1, "Restoration never starts work");
       await page.screenshot({ path: resolve(outputDir, "conversation-steering-draft.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
-      await pending.getByLabel("追加给本轮的指令").scrollIntoViewIfNeeded();
-      assert.ok(await pending.evaluate(node => node.scrollWidth <= node.clientWidth + 1), "steering draft fits mobile width");
+      await composer.scrollIntoViewIfNeeded();
+      assert.ok(await page.locator(".personal-composer-wrap").evaluate(node => node.scrollWidth <= node.clientWidth + 1), "Shared composer fits mobile width");
       await page.screenshot({ path: resolve(outputDir, "conversation-steering-mobile.png"), animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
-      await pending.getByRole("button", { name: "发送调整", exact: true }).click();
-      await pending.getByRole("alert").filter({ hasText: "本次未送达" }).waitFor();
-      assert.equal(await pending.getByLabel("追加给本轮的指令").inputValue(), "先核对依赖，再继续当前任务。");
-      await pending.getByRole("button", { name: "发送调整", exact: true }).focus();
-      await page.keyboard.press("Enter");
-      await pending.getByText("执行器已接收本轮追加指令。", { exact: true }).waitFor();
-      assert.equal(new Set(adjustments.slice(0, 3).map(row => row.client_ingress_id)).size, 1, "uncertain retries retain ingress identity");
-      assert.notEqual(adjustments[3].client_ingress_id, adjustments[0].client_ingress_id, "confirmed rejection starts a safe new ingress");
+      await submit.click();
+      await feedback.filter({ hasText: "执行器暂时不可用" }).waitFor();
+      assert.equal(await composer.inputValue(), "先核对依赖，再继续当前任务。");
+      await composer.press("Meta+Enter");
+      await feedback.filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
+      assert.equal(await composer.inputValue(), "", "Only the accepted draft clears");
+      await page.getByRole("button", { name: "重试读取", exact: true }).waitFor({ timeout: 5000 });
+      assert.equal(rejectedHistoryReads, 1, "Confirmed delivery can outlive a failed history read");
+      await page.getByRole("button", { name: "重试读取", exact: true }).click();
+      await page.locator(".personal-message.is-user").filter({ hasText: "先核对依赖" }).waitFor();
+      assert.equal(adjustments.length, 4, "History recovery reads the stored instruction without sending it again");
+      assert.equal(new Set(adjustments.slice(0, 3).map(row => row.client_ingress_id)).size, 1, "Uncertain retries retain ingress identity");
+      assert.notEqual(adjustments[3].client_ingress_id, adjustments[0].client_ingress_id, "Confirmed rejection starts a safe new ingress");
       assert.equal(api.turnRequests.length, 1, "steering never starts another turn");
       assert.equal(streams.size, 1, "steering keeps the original output stream");
       assert.equal(await page.locator(".personal-message.is-user").filter({ hasText: "先核对依赖" }).count(), 1);
@@ -171,7 +197,7 @@ export const conversationActivityScenario = {
       const next = await send("继续完成这项检查。");
       assert.equal(next.sessionId, turn.sessionId, "continue uses the same conversation");
       await page.getByRole("button", { name: "调整本轮", exact: true }).click();
-      await page.getByLabel("追加给本轮的指令").fill("保留我的未发送草稿。");
+      await composer.fill("保留我的未发送草稿。");
       await page.route("**/interrupt", async route => {
         const response = streams.get(`/events/${next.sessionId}/${next.turnId}`);
         const answer = "检查完成，下一步已列出。";
@@ -184,12 +210,12 @@ export const conversationActivityScenario = {
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("检查完成，下一步已列出。", { exact: true }).waitFor();
       assert.equal(await page.getByRole("button", { name: "中断本轮", exact: true }).count(), 0);
-      assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "保留我的未发送草稿。");
-      assert.equal(await page.getByRole("button", { name: "发送调整", exact: true }).isDisabled(), true);
+      assert.equal(await composer.inputValue(), "保留我的未发送草稿。");
+      assert.equal(await submit.isEnabled(), true, "An unsent draft becomes an explicit follow-up after completion");
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "保留我的未发送草稿。", "finished turn retains the unsent draft across unmount");
-      assert.equal(await page.getByRole("button", { name: "发送调整", exact: true }).isDisabled(), true, "finished draft cannot steer another turn");
+      assert.equal(await composer.inputValue(), "保留我的未发送草稿。", "finished turn retains the unsent draft across unmount");
+      assert.equal(adjustments.length, 4, "Completion never dispatches the retained draft");
       await page.unroute("**/interrupt");
 
       // The same interaction is present in Goal Chat, through the same timeline.
@@ -197,43 +223,56 @@ export const conversationActivityScenario = {
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       const goalTurn = await send("请检查这个 Goal 的当前状态。");
       await page.getByRole("button", { name: "调整本轮", exact: true }).click();
-      assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "", "another conversation never inherits the old draft");
+      assert.equal(await composer.inputValue(), "", "another conversation never inherits the old draft");
+      await page.evaluate(({sessionId, turnId}) => {
+        const legacyKey = JSON.stringify(["inline", sessionId, turnId]);
+        const rows = JSON.parse(sessionStorage.getItem("loopx-pw-composer-steering") ?? "[]");
+        rows.push([legacyKey, {sessionId, turnId, text: "旧版保留的原回合草稿。", id: "legacy-exact-ingress"}]);
+        sessionStorage.setItem("loopx-pw-composer-steering", JSON.stringify(rows));
+      }, goalTurn);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      await page.waitForFunction(() => document.querySelector("#personal-conversation-composer")?.value === "旧版保留的原回合草稿。");
+      assert.equal(adjustments.length, 4, "Migrating an old draft never dispatches it");
+      const migrated = await page.evaluate(() => JSON.parse(sessionStorage.getItem("loopx-pw-composer-steering"))
+        .filter(([, request]) => request.id === "legacy-exact-ingress"));
+      assert.equal(migrated.length, 1, "One retry owner remains after durable migration");
+      assert.equal(migrated[0][1].turnId, goalTurn.turnId);
+      assert.ok(!migrated[0][0].startsWith("["), "The request moved into the conversation composer key");
+      await submit.click();
+      await feedback.filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
+      assert.equal(adjustments.at(-1).client_ingress_id, "legacy-exact-ingress");
+      await composer.fill("");
       await page.evaluate(() => { window.sessionStorage.setItem = () => { throw new Error("storage unavailable"); }; });
-      await page.getByLabel("追加给本轮的指令").fill("先检查最新证据。");
+      await composer.fill("先检查最新证据。");
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "任务", exact: true }).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      assert.equal(await page.getByLabel("追加给本轮的指令").inputValue(), "先检查最新证据。", "blocked storage preserves drafts within this page");
+      assert.equal(await composer.inputValue(), "先检查最新证据。", "Blocked storage preserves the page draft across views");
       const dispatchedBeforeStorageFailure = adjustments.length;
-      await page.getByRole("button", { name: "发送调整", exact: true }).click();
-      await page.getByText("调整尚未发送：浏览器存储无法保存重试信息。草稿仍保留在本页，请恢复存储后重试。", {exact: true}).waitFor();
-      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "Storage failure cannot dispatch inline steering");
-      const goalComposer = page.getByRole("textbox", { name: /发送消息|Send message/ });
-      await goalComposer.fill("输入框中的独立调整。");
-      await goalComposer.press("Enter");
-      await page.locator(".personal-action-feedback").filter({hasText: "调整尚未发送"}).waitFor();
-      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "The composer uses the same pre-dispatch persistence guard");
-      assert.equal(await goalComposer.inputValue(), "输入框中的独立调整。", "The refused composer draft stays editable");
+      await composer.press("Meta+Enter");
+      await feedback.filter({ hasText: "调整尚未发送" }).waitFor();
+      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "Storage failure cannot dispatch steering");
+      assert.equal(await composer.inputValue(), "先检查最新证据。");
       await page.screenshot({path: resolve(outputDir, "conversation-steering-storage-unavailable.png"), animations: "disabled"});
-      await goalComposer.fill("");
       await page.evaluate(() => { delete window.sessionStorage.setItem; });
-      await page.getByLabel("追加给本轮的指令").fill("先检查最新证据，再继续。");
-      const durableInline = await page.evaluate(() => JSON.parse(sessionStorage.getItem("loopx-pw-composer-steering"))
-        .find(([, request]) => request.text === "先检查最新证据，再继续。")[1]);
+      await composer.fill("先检查最新证据，再继续。");
+      await composer.press("Meta+Enter");
+      await feedback.filter({ hasText: "原回合指令未确认" }).waitFor();
+      const durableRequest = adjustments.at(-1);
       await page.evaluate(() => { window.sessionStorage.setItem = () => { throw new Error("QuotaExceededError"); }; });
-      await goalComposer.fill("另一个尚未保存的调整。");
-      await goalComposer.press("Enter");
-      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "A new composer identity still requires persistence");
-      await page.getByRole("button", { name: "发送调整", exact: true }).click();
-      await page.locator(".personal-message")
-        .filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) })
-        .getByRole("status").filter({ hasText: "执行器已接收本轮追加指令。" }).waitFor();
-      assert.equal(adjustments.at(-1).client_ingress_id, durableInline.id, "Unsaved composer draft cannot block the durable inline identity");
-      assert.equal(await goalComposer.inputValue(), "另一个尚未保存的调整。");
+      await composer.fill("另一个尚未保存的调整。");
+      await submit.click();
+      await feedback.filter({ hasText: "上条投递尚未确认" }).waitFor();
+      assert.equal(adjustments.length, dispatchedBeforeStorageFailure + 1, "A changed draft cannot replace an uncertain request");
+      await composer.fill("先检查最新证据，再继续。");
+      await submit.click();
+      await feedback.filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
+      assert.equal(adjustments.at(-1).client_ingress_id, durableRequest.client_ingress_id, "A storage failure cannot replace an existing durable retry identity");
       await page.evaluate(() => { delete window.sessionStorage.setItem; });
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor();
       assert.deepEqual(api.interrupts.at(-1), { sessionId: goalTurn.sessionId, turnId: goalTurn.turnId });
-      return { coverageEntries: context.coverageEntries, note: "Shared steward/Goal activity and steering: view/reload recovery without automatic dispatch, coexisting composer identity, blocked storage, terminal draft isolation, interruption and completion races." };
+      return { coverageEntries: context.coverageEntries, note: "Shared steward/Goal activity and steering: view/reload recovery without automatic dispatch, one composer, blocked storage, terminal draft isolation, interruption and completion races." };
     } finally {
       for (const response of streams.values()) response.destroy();
       server.closeAllConnections();

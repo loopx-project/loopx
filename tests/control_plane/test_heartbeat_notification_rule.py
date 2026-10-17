@@ -110,6 +110,32 @@ def test_all_heartbeat_modes_scope_no_spend_to_observation() -> None:
         assert "After committed writeback: same-turn checkpoint-context" in body
 
 
+def test_todo_closeout_does_not_invent_successors_or_skip_turn_settlement(tmp_path) -> None:
+    # A completed Todo and an external wait are distinct from Goal termination.
+    # Even the captured-envelope carrier must defer to the admitted current plan.
+    variants = [{mode: True} for mode in ("full", "compact", "brief", "thin")]
+    variants.append({"thin": True, "turn_envelope": True,
+                     "decision_output_root": tmp_path,
+                     "turn_instance_id": "fixture-closeout-turn"})
+    for variant in variants:
+        body = build_heartbeat_prompt(
+            goal_id="closeout-fixture", agent_id="worker-a",
+            registered_agents=["worker-a"], runtime_profile="codex_app_heartbeat",
+            **variant,
+        )["task_body"]
+        assert "Todo done" in body and ("settle the Turn" in body or "≠" in body)
+        assert "no invented successor" in body
+        assert "settlement_plan" in body
+        assert "projected monitor/continuation" in body
+        assert "keep open" in body or "Wait=open" in body
+        assert "no wait spend" in body.lower()
+        assert "continue only admitted work" in body or "admitted P1/P2" in body
+        for stale in ("Done -> successor first", "Done->successor",
+                      "open + monitor_changed + successor", "wait->monitor+successor/work",
+                      "no-follow-up completion"):
+            assert stale not in body
+
+
 def test_generic_task_bodies_follow_user_language_without_forcing_chinese() -> None:
     kwargs = dict(
         goal_id="fixture-goal",
@@ -178,9 +204,12 @@ def test_language_policy_preserves_blocker_and_native_goal_continuation() -> Non
     assert "must_attempt_work=true` requires work even with" in compact
 
     brief = " ".join(render_brief_heartbeat_task_body(**kwargs).split())
-    assert "exact identity/effect order" in brief
-    assert "External wait: open + monitor_changed + successor" in brief
-    assert "Finish only on terminal no-follow-up" in brief
+    assert "settlement_plan.ordered_steps" in brief
+    assert "preserve exact identities/effect ids and actual outcomes" in brief
+    assert "Wait: keep open; follow projected monitor/continuation" in brief
+    assert "continue only admitted work" in brief
+    assert "No wait spend" in brief
+    assert "Finish Goal only on terminal no-follow-up" in brief
 
     for renderer in (
         render_visible_goal_task_body,

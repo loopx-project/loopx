@@ -2,14 +2,15 @@
 
 
 DEFAULT_MATERIAL_QUEUE_RULE = "Do not consume the learning material queue unless the user explicitly asks."
-DEFAULT_PERMISSION_RULE = "Do not ask for permissions when the current host session is already trusted."
+DEFAULT_PERMISSION_RULE = "Reuse existing authorization for the current action; ask only for missing necessary authority."
 OPERATOR_LANGUAGE_RULE = "Language=user; fallback=English; mix only if asked/scoped-bilingual."
 OPERATOR_LANGUAGE_RULE_THIN = "Lang=user; default=en; mix=asked/scoped."
 SCOPE_BOUNDED_WORK_RULE = (
     "Read agent_channel.work_context and required_reads (or envelope) before work. "
     "Size by task/evidence/risk within authority/budget, not ops/files/wakes; "
     "calls/writeback ≠ completion. Correct locally; obey projected replan/stop, "
-    "never wake counts."
+    "never wake counts. Continue through integration, negative cases and readback "
+    "while feasible; preserve evidence and next action for recovery/resume."
 )
 
 USER_TODO_FINAL_MESSAGE_RULE = (
@@ -85,9 +86,10 @@ RUNTIME_EXECUTION_ROUTING_RULE = (
     "Normal turns use CLI `interaction_contract`; " + RUNTIME_REPAIR_ROUTING_RULE
 )
 HOST_LOOP_SAFETY_RULE = (
-    "Follow user authority and repository rules. Protect credentials/private material; "
+    "Follow user authority and repository rules. "
+    "Protect credentials/private material; "
     "publish public-safe evidence. Destructive Git/production requires explicit authorization. "
-    "Gate only the affected path; continue independent allowed work."
+    "Gate only the affected path; continue independent allowed work. " + DEFAULT_PERMISSION_RULE
 )
 HEARTBEAT_TURN_BOOTSTRAP_RULE = (
     "Per wake, replace `<current_time_iso>` once. Run assignment and guard as separate "
@@ -95,18 +97,20 @@ HEARTBEAT_TURN_BOOTSTRAP_RULE = (
 )
 HOST_LOOP_QUOTA_DISPATCH_RULE = (
     "Quota: use selection_command when required; "
-    "re-enter as instructed, do/verify authorized work, then follow "
-    "next_cli_actions for writeback/spend."
+    "re-enter as instructed, do/verify authorized work. "
+    "Settle with current settlement_plan.ordered_steps, else next_cli_actions; "
+    "preserve exact identities/effect ids and actual outcomes. Never reconstruct "
+    "static refresh/spend; ambiguous effects need readback/recovery, not blind retry."
 )
 HOST_LOOP_TODO_CLOSEOUT_RULE = (
-    "Done -> successor first; final -> accountable refresh, spend, then "
-    "no-follow-up completion. External wait -> keep open; bind "
-    "`monitor_changed:<monitor>` plus an independent successor, rerun quota, "
-    "and work it before quiet return; no wait spend."
+    "Todo done does not settle the Turn. Complete it under its original declaration "
+    "and current lease; no invented successor or --no-follow-up. Then follow the "
+    "current settlement plan. External wait: keep open; follow projected "
+    "monitor/continuation; continue only admitted work. No wait spend."
 )
 HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE = (
-    "Done->successor; final->refresh/spend/no-follow-up; ext-wait->open+"
-    "`monitor_changed:<monitor>`+successor, rerun/work it, no spend."
+    "Todo done≠Turn settled; no invented successor/--no-follow-up. Wait: keep open; "
+    "follow projected monitor/continuation; continue only admitted work. No wait spend."
 )
 CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE = (
     "\n\nNative Codex `/goal` owns blocked state. Recheck quota at the "

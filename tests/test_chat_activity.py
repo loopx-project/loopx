@@ -190,21 +190,22 @@ for raw in sys.stdin:
         session.close()
 
 
-def test_reasoning_streams_throttled_and_prefers_the_model_summary():
+def test_reasoning_streams_only_explicit_public_summaries():
     clock = _Clock()
     steps = CodexActivitySteps(clock=clock)
     assert steps.started({"type": "reasoning", "id": "rs_1", "summary": [], "content": []}) == {
         "id": "rs_1", "kind": "reasoning", "state": "running", "title": ""}
     assert steps.reasoning_delta("rs_1", "Checking", summary=False, index=0) is None, "No single-token flash"
     clock.now += REASONING_UPDATE_INTERVAL_SEC
-    first = steps.reasoning_delta("rs_1", " the owner", summary=False, index=0)
-    assert (first["title"], first["detail"]) == ("Checking the owner", "Checking the owner")
+    assert steps.reasoning_delta("rs_1", " the owner", summary=False, index=0) is None
+    assert not steps._reasoning, "Raw reasoning must not be retained for later fallback"
     assert steps.reasoning_delta("rs_1", " list.\nThen compare. Done.", summary=False, index=0) is None
     steps.reasoning_delta("rs_1", "**Owner check**\n\nComparing release owners.", summary=True, index=0)
     clock.now += 2
     done = steps.completed({"type": "reasoning", "id": "rs_1", "summary": [], "content": []})
     assert (done["state"], done["title"], done["duration_ms"]) == ("completed", "Owner check", 3500)
     assert done["detail"] == "**Owner check**\n\nComparing release owners."
+    assert done["reasoning_summary"] is True
 
 
 def test_reasoning_without_exposed_text_is_a_timed_step_only():
@@ -258,7 +259,7 @@ def test_quoted_credentials_are_masked_in_every_visible_text(value):
     steps = CodexActivitySteps()
     text = "curl " + value + " https://example.test/notes"
     command = steps.started(_command(text, [{"type": "search", "query": text}]))
-    thought = steps.completed({"type": "reasoning", "id": "r", "content": [text]})
+    thought = steps.completed({"type": "reasoning", "id": "r", "summary": [text]})
     for step in (command, thought):
         assert all(part not in step[field] for part in ("example ", "value") for field in ("title", "detail"))
         assert "***" in step["title"] and "***" in step["detail"]

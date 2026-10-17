@@ -5,8 +5,7 @@ import { useWorkspaceI18n } from "./i18n";
 import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
-import { discoverAgentModelOptions, type AgentModelDiscovery } from "../../data/chat";
-import { useEffect, useState } from "react";
+import { ChatModelMenu } from "./chat-model-menu";
 
 export function ChannelHeader({
   agents,
@@ -23,6 +22,7 @@ export function ChannelHeader({
   allWorkOpen,
   onOpenManagerChat,
   onOpenManagerSettings,
+  onOpenConversationSettings,
   onOpenWorkspace,
   onRefresh,
   onRequestGoalLifecycle,
@@ -30,12 +30,15 @@ export function ChannelHeader({
   onSelectGoalTab,
   onSelectAgent,
   onSelectAgentModel,
+  onSelectAgentReasoningEffort,
   onReturnManagerHome,
   refreshState,
   readOnlySourceLabel,
   resumeReviewed,
   selectedAgentId,
   selectedAgentModelId,
+  selectedAgentModelReadback,
+  selectedAgentReasoningEffort,
   selectedGoal,
   selectedGoalTab,
   workspaceGrantLabel,
@@ -57,6 +60,7 @@ export function ChannelHeader({
   allWorkOpen?: boolean;
   onOpenManagerChat?: () => void;
   onOpenManagerSettings?: () => void;
+  onOpenConversationSettings?: () => void;
   onOpenWorkspace?: () => void;
   onRefresh?: () => void;
   /** Absent when the selected source does not authorize Goal lifecycle changes. */
@@ -65,6 +69,7 @@ export function ChannelHeader({
   onSelectGoalTab: (tab: WorkspaceGoalTab) => void;
   onSelectAgent: (agentId: string) => void;
   onSelectAgentModel?: (modelId: string) => void;
+  onSelectAgentReasoningEffort?: (effort: string) => void;
   onReturnManagerHome?: () => void;
   refreshState?: "idle" | "loading" | "done" | "error";
   readOnlySourceLabel?: string;
@@ -72,41 +77,14 @@ export function ChannelHeader({
   resumeReviewed?: boolean;
   selectedAgentId: string;
   selectedAgentModelId?: string;
+  selectedAgentModelReadback?: import("../../data/chat").ChatSessionSummary;
+  selectedAgentReasoningEffort?: string;
   selectedGoal: WorkspaceGoal | null;
   selectedGoalTab: WorkspaceGoalTab;
 }) {
   const { locale, t } = useWorkspaceI18n();
-  const [modelDiscovery, setModelDiscovery] = useState<AgentModelDiscovery | null>(null);
-  const [modelDiscoveryState, setModelDiscoveryState] = useState<"idle" | "loading" | "error">("idle");
-  useEffect(() => {
-    if (readOnlySourceLabel || agentWorkActive) return;
-    const controller = new AbortController();
-    setModelDiscovery(null);
-    setModelDiscoveryState("loading");
-    void discoverAgentModelOptions(selectedAgentId, controller.signal)
-      .then((result) => { if (!controller.signal.aborted) { setModelDiscovery(result); setModelDiscoveryState("idle"); } })
-      .catch(() => { if (!controller.signal.aborted) setModelDiscoveryState("error"); });
-    return () => controller.abort();
-  }, [readOnlySourceLabel, selectedAgentId, agentWorkActive]);
-  const model = modelDiscovery?.model;
-  const selectedModel = selectedAgentModelId === undefined ? model?.selected || model?.options[0]?.value || "" : selectedAgentModelId;
-  const modelControl = model && model.options.length ? (
-    <WorkspaceSelect
-      ariaLabel={locale === "zh-CN" ? "选择模型" : "Select model"}
-      className="personal-agent-select personal-model-select"
-      onChange={(value) => onSelectAgentModel?.(value)}
-      options={[
-        ...(!selectedModel ? [{ disabled: true, label: locale === "zh-CN" ? "当前模型未知" : "Current model unknown", value: "" }] : []),
-        ...(selectedModel && !model.options.some((option) => option.value === selectedModel)
-          ? [{ disabled: true, label: `${locale === "zh-CN" ? "当前模型" : "Current model"}: ${selectedModel}`, value: selectedModel }] : []),
-        ...model.options.map((option) => ({ label: option.label, value: option.value })),
-      ]}
-      prefixLabel={locale === "zh-CN" ? "模型" : "Model"}
-      value={selectedModel}
-    />
-  ) : selectedAgentModelId === "" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "当前模型未知" : "Current model unknown"}</small>
-    : modelDiscoveryState === "loading" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "正在读取模型…" : "Reading models…"}</small>
-    : modelDiscoveryState === "error" ? <small className="personal-model-discovery">{locale === "zh-CN" ? "无法读取模型" : "Models unavailable"}</small> : null;
+  const statusOnly = selectedAgentId === "status-only";
+  const ordinaryConversation = Boolean(selectedGoal || workspaceGrantLabel);
   // The chip reports the selected executor, whose credential pays for it, and
   // the resolved model, so an executor and a model that disagree are visible
   // instead of arriving as one silent configuration.
@@ -184,15 +162,27 @@ export function ChannelHeader({
             className="personal-agent-select"
             icon={<Bot size={16} />}
             onChange={onSelectAgent}
-            options={agents.map((agent) => ({
+            options={[
+              ...(statusOnly ? [{ value: "", label: locale === "zh-CN" ? "选择执行器" : "Choose executor", disabled: true }] : []),
+              ...agents.filter((agent) => agent.agentId !== "status-only").map((agent) => ({
               disabled: !agent.available,
               label: `${agent.label}${agent.available ? "" : ` · ${t("header.agentUnavailable")}`}`,
               value: agent.agentId,
-            }))}
-            prefixLabel={t("header.chatRuntime")}
-            value={selectedAgentId}
+            }))]}
+            prefixLabel={selectedGoal ? (locale === "zh-CN" ? "执行器" : "Executor") : t("header.chatRuntime")}
+            value={statusOnly ? "" : selectedAgentId}
     />
-    {modelControl}
+    {agents.some((agent) => agent.agentId === "status-only") ? <button type="button" className="personal-icon-button personal-status-mode"
+      aria-pressed={statusOnly} aria-label={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`} title={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`}
+      onClick={() => statusOnly ? onSelectAgent(agents.find((agent) => agent.agentId !== "status-only" && agent.available)?.agentId ?? "status-only") : onSelectAgent("status-only")}>
+      <Eye size={16} />{statusOnly ? t("header.statusOnlyAgent") : null}
+    </button> : null}
+    {!statusOnly ? <ChatModelMenu key={`${selectedGoal?.goalId ?? workspaceGrantLabel ?? "steward"}:${selectedAgentId}`}
+      agentId={selectedAgentId} goalId={selectedGoal?.goalId} ordinary={ordinaryConversation}
+      model={selectedAgentModelId} effort={selectedAgentReasoningEffort} readback={selectedAgentModelReadback}
+      onModel={onSelectAgentModel} onEffort={onSelectAgentReasoningEffort}/> : null}
+    {selectedGoal && onOpenConversationSettings ? <button className="personal-icon-button" onClick={onOpenConversationSettings}
+      aria-label={locale === "zh-CN" ? "对话与模型设置" : "Conversation and model settings"} type="button"><SlidersHorizontal size={16}/></button> : null}
   </>;
 
   const executionChipClass = managerExecutionUnavailable

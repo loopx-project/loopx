@@ -298,9 +298,9 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            "small": {"json": 3_400, "markdown": 5_250},
-            "crowded": {"json": 3_400, "markdown": 5_250},
-            "multi_agent": {"json": 3_400, "markdown": 5_250},
+            "small": {"json": 3_900, "markdown": 5_800},
+            "crowded": {"json": 3_900, "markdown": 5_800},
+            "multi_agent": {"json": 3_900, "markdown": 5_800},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},

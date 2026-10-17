@@ -485,7 +485,7 @@ def _turn_prompt(
         "You are the execution agent for a confirmed LoopX Task. Work only from the project root. "
         "Execute the operator task now. Inspect the repository, edit files, and run focused validation as needed. "
         "Use the existing branch and worktree. Commit or push only when the operator task explicitly requests it. "
-        "Keep changes bounded to the confirmed Task and stop at any permission, identity, or destructive-operation gate. "
+        "Keep changes bounded to the confirmed Task; do not cross a permission, identity, or destructive-operation gate. "
         if execution_mode
         else "You are the project assistant inside LoopX Chat. Execute the owner's explicit workspace requests using the project's AGENTS.md and applicable skills. "
         if project_work
@@ -553,10 +553,13 @@ def _turn_prompt(
             "For a Todo proposal include goal_id from the verified Goal directory alongside kind='todo', text, priority and rationale. "
             "If the intended Goal is unresolved, resolve it from authorized context or ask one focused question; never infer a durable target from whichever Goal the UI happens to show. "
             "A Todo preview is not a recorded task; the host supplies its actual confirmation route. Do not invent a command or claim the write occurred. "
-            if not project_work else ""
+            if not project_work and not execution_mode else ""
         )
         + protected_action_contract
         + (
+        "For this confirmed Task, keep proposals=[], goal_draft=null and context_handoff=null. "
+        "Complete the authorized Task here; do not replace it with a new Goal, delegation or configuration preview. "
+        if execution_mode else
         "Resolve the request from this conversation and authorized project context. Use applicable skills and permitted tools to read sources and complete the requested work. "
         "Batch independent reads or commands when useful; preserve dependent validation and project authority gates. "
         "Verify the requested source coverage before claiming completion. When the answer depends on a figure, screenshot or chart, inspect its actual pixels with a permitted image/browser tool; captions, OCR and SVG source alone are incomplete visual evidence. "
@@ -598,13 +601,14 @@ def _turn_prompt(
         "A complete draft goes directly to the existing typed creation preview with one explicit apply. Do not ask the user to confirm the same intent in prose first; optional edits remain available. No new authorization or second executor follows from a draft. "
         )
         + (WORK_RESULT_VERIFICATION_INSTRUCTION
-           if project_work or direct_work else "Never claim the change has been written without a verified control-plane receipt. ")
+           if execution_mode or project_work or direct_work else "Never claim the change has been written without a verified control-plane receipt. ")
         +
-        "If you encounter an identity, approval, or host-tool gate, stop and describe it in gate. "
+        "For an identity, approval, or host-tool gate, stop only actions that depend on the missing authority or tool and describe the unresolved gate in gate. "
+        "Continue independent authorized work while honoring explicit user and host stops. End the request only when no independent authorized work remains or such a stop applies; never claim the gated action completed. "
         "Reply in Chinese unless the operator asks for another language. Keep proposals bounded and reviewable. "
         "Do not expose chain-of-thought, tool narration, intended steps, or scratch work. "
         "First write the complete operator-facing answer as safe Markdown text. Give a simple question a direct sourced answer; for a complex task, lead with the judgment and then explain the material evidence, comparisons, decisions and limitations at useful depth. "
-        "Use short sentences or lines so the answer can stream. Avoid gratuitous headings, boilerplate, raw ID inventories and more than five actionable items. "
+        "Use short sentences or lines so the answer can stream. Avoid gratuitous headings, boilerplate and raw ID inventories. Preserve all requested results; group related items without imposing an arbitrary item limit. "
         "Do not emit executable HTML. The complete answer must stay in this conversation, even when a separate report artifact also exists. "
         "Then append exactly one machine-readable envelope with message set to the empty string: the transport reuses the visible answer before the opening tag. Do not repeat the answer in JSON. This envelope is hidden protocol metadata and is required even for ordinary questions or exact-wording replies; user formatting instructions govern the visible answer, not omission of this metadata. "
         "protected_action must be null or an object shaped as "
@@ -634,7 +638,10 @@ class CodexChatAgentSession:
     permissions_profile: str | None = None
     project_context: dict[str, str] | None = None
     model: str | None = None
+    resolved_model: str | None = None
     reasoning_effort: str | None = None
+    resolved_reasoning_effort: str | None = None
+    service_tier: str | None = None
     response_timeout_sec: float = 30.0
     idle_timeout_sec: float = 180.0
     hard_timeout_sec: float | None = 900.0
@@ -980,7 +987,16 @@ class CodexChatAgentSession:
                     "Codex did not apply the requested conversation reasoning effort."
                 )
             session.model = thread_result.get("model") or model
+            session.resolved_model = thread_result.get("model")
             session.reasoning_effort = thread_result.get("reasoningEffort") or reasoning_effort
+            session.resolved_reasoning_effort = thread_result.get("reasoningEffort")
+            session.service_tier = thread_result.get("serviceTier")
+            requested_tier = (host_config or {}).get("service_tier")
+            # Native Fast mode may report its equivalent API tier, priority.
+            if requested_tier and session.service_tier not in {None, requested_tier} and not (
+                requested_tier == "fast" and session.service_tier == "priority"
+            ):
+                raise session._runtime_error(f"Codex did not apply the requested conversation service tier (reported {session.service_tier}).")
             session.thread_id = _extract_id(thread_result, "thread", "threadId")
             if permissions_profile:
                 active = thread_result.get("activePermissionProfile")

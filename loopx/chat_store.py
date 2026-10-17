@@ -22,6 +22,9 @@ from .chat import (
 from .capabilities.steward_executor.allocation import (
     normalize_manager_executor_allocation,
 )
+from .capabilities.native_chat.model_settings import (
+    MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id, normalize_session_model_settings,
+)
 from .chat_event_cache import ChatEventCache
 from .chat_ingress import ChatIngressStore
 from .control_plane.chat_turn_acceptance import (
@@ -48,7 +51,6 @@ SESSION_QUEUE_MAX_PENDING = 20
 SESSION_QUEUE_TTL_SECONDS = 3600
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
-_AGENT_MODEL_ID_MAX_LENGTH = 160
 
 
 def utc_now() -> str:
@@ -66,19 +68,6 @@ def _opaque_id(value: Any, *, field: str) -> str:
     token = str(value or "").strip()
     if not _OPAQUE_ID.fullmatch(token):
         raise ValueError(f"{field} must be a compact opaque id")
-    return token
-
-
-def normalize_agent_model_id(value: Any) -> str:
-    """Keep a provider model value without applying file-name rules.
-
-    ACP option values are protocol strings rather than LoopX entity IDs. They
-    are persisted in JSON only, so retain a bounded printable value while
-    rejecting controls that would make logs or projections unsafe.
-    """
-    token = str(value or "")
-    if not token.strip() or len(token) > _AGENT_MODEL_ID_MAX_LENGTH or any(ord(character) < 32 for character in token):
-        raise ValueError("agent_model_id must be a bounded model value")
     return token
 
 
@@ -271,6 +260,11 @@ class ChatSessionStore(ChatIngressStore):
         project_context: dict[str, Any] | None = None,
         steward_context: dict[str, Any] | None = None,
         agent_model_id: str | None = None,
+        requested_agent_model_id: str | None | object = _MODEL_SELECTION_UNSET,
+        requested_agent_reasoning_effort: str | None | object = _MODEL_SELECTION_UNSET,
+        codex_chat_configuration: dict[str, Any] | None = None,
+        agent_reasoning_effort: str | None = None,
+        agent_service_tier: str | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         token = _opaque_id(session_id or uuid.uuid4().hex, field="session_id")
@@ -318,7 +312,15 @@ class ChatSessionStore(ChatIngressStore):
             field="executor_endpoint_id",
         )
         normalized_adapter_kind = _opaque_id(adapter_kind, field="adapter_kind")
-        normalized_agent_model_id = normalize_agent_model_id(agent_model_id) if agent_model_id else None
+        model_settings = normalize_session_model_settings(
+            model=agent_model_id, effort=agent_reasoning_effort, tier=agent_service_tier,
+            requested_model=requested_agent_model_id, requested_effort=requested_agent_reasoning_effort,
+        )
+        if codex_chat_configuration is not None:
+            from .capabilities.native_chat.machine_defaults import normalize_codex_chat_defaults
+            if agent_id != "codex" or normalized_mode != CHAT_SESSION_MODE_MANAGED:
+                raise ValueError("Codex defaults require a managed Codex Session")
+            codex_chat_configuration = normalize_codex_chat_defaults(codex_chat_configuration)
         normalized_upstream_thread_id = _upstream_id(upstream_thread_id)
         normalized_upstream_mode = _opaque_id(upstream_mode, field="upstream_mode")
         normalized_channel_id = _opaque_id(
@@ -345,7 +347,8 @@ class ChatSessionStore(ChatIngressStore):
                 else {}
             ),
             "agent_id": normalized_agent_id,
-            "agent_model_id": normalized_agent_model_id,
+            **model_settings,
+            **({"codex_chat_configuration": codex_chat_configuration} if codex_chat_configuration is not None else {}),
             "executor_endpoint_id": normalized_executor_endpoint_id,
             "adapter_kind": normalized_adapter_kind,
             "upstream_thread_id": normalized_upstream_thread_id,
@@ -405,6 +408,7 @@ class ChatSessionStore(ChatIngressStore):
                     "manager_runtime_tool_classes",
                     "manager_executor_allocation",
                     "agent_model_id",
+                    "agent_reasoning_effort", "agent_service_tier",
                     "goal_id",
                 }
                 unknown = set(changes) - allowed
@@ -427,6 +431,9 @@ class ChatSessionStore(ChatIngressStore):
                     changes["upstream_thread_id"] = _upstream_id(changes["upstream_thread_id"])
                 if "agent_model_id" in changes:
                     changes["agent_model_id"] = normalize_agent_model_id(changes["agent_model_id"]) if changes["agent_model_id"] else None
+                for key in ("agent_reasoning_effort", "agent_service_tier"):
+                    if key in changes:
+                        changes[key] = normalize_agent_model_id(changes[key]) if changes[key] else None
                 if "upstream_mode" in changes:
                     changes["upstream_mode"] = _opaque_id(changes["upstream_mode"], field="upstream_mode")
                 if "manager_authorization_scope_id" in changes:
@@ -1934,6 +1941,7 @@ class ChatSessionStore(ChatIngressStore):
             for key in (
                 "session_id", "goal_id", "agent_id", "adapter_kind", "status",
                 "agent_model_id",
+                "agent_reasoning_effort", "agent_service_tier",
                 "active_turn_id", "last_error_code", "created_at", "updated_at", "last_activity_at",
             )
         } | {

@@ -58,3 +58,27 @@ def test_release_scoped_skill_display_metadata_is_in_distribution(skill_id):
     data_files = package["tool"]["setuptools"]["data-files"]
     assert f"skills/{skill_id}/agents/openai.yaml" in data_files[
         f"share/loopx/skills/{skill_id}/agents"]
+
+
+@pytest.mark.parametrize("skill_id", ("loopx-project", "loopx-pr-review"))
+def test_workflow_skill_local_links_remain_inside_the_distributed_skill(skill_id):
+    """Installed skills cannot rely on repository-relative AGENTS/docs files."""
+    import tomllib
+
+    skill_root = (REPO_ROOT / "skills" / skill_id).resolve()
+    package = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    data_files = package["tool"]["setuptools"]["data-files"]
+    linked_resources = set()
+    for document in skill_root.rglob("*.md"):
+        for destination in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document.read_text(encoding="utf-8")):
+            if "://" in destination or destination.startswith("#"):
+                continue
+            resource = (document.parent / destination.split("#", 1)[0]).resolve()
+            assert resource.is_relative_to(skill_root), (document, destination)
+            assert resource.is_file(), (document, destination)
+            relative = resource.relative_to(REPO_ROOT).as_posix()
+            target_dir = "share/loopx/" + resource.parent.relative_to(REPO_ROOT).as_posix()
+            assert relative in data_files[target_dir], (document, destination)
+            linked_resources.add(resource)
+    if skill_id == "loopx-project":
+        assert linked_resources == set((skill_root / "references").glob("*.md"))

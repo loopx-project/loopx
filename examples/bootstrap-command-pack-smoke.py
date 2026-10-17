@@ -904,26 +904,31 @@ def test_skill_slash_fallback_contract() -> None:
     pr_review_skill_text = (REPO_ROOT / "skills" / "loopx-pr-review" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    start_path = REPO_ROOT / "skills/loopx-project/references/start-and-connect.md"
+    assert "before its operation" in " ".join(skill_text.split())
+    assert "references/start-and-connect.md" in skill_text
+    start_text = start_path.read_text(encoding="utf-8")
+    start_normalized = " ".join(start_text.split())
     normalized = " ".join(skill_text.split())
     pr_review_normalized = " ".join(pr_review_skill_text.split())
 
     assert "## Slash Command Fallback" in skill_text
     assert "`/loopx`" in skill_text
     assert "`/loopx <goal text>`" in skill_text
-    assert "loopx bootstrap-command-pack --project ." in skill_text
+    assert "loopx bootstrap-command-pack --project ." in start_text
     assert "loopx start-goal --guided --project ." in skill_text
-    assert "canonical_project_alias" in skill_text
+    assert "canonical_project_alias" in start_text
     assert (
         "`start-goal --project` keeps the requested project route" in skill_text
     )
-    assert "Lower-level diagnostic command packs" in normalized
+    assert "Lower-level diagnostic command packs" in start_normalized
     assert '--goal-text "<GOAL_TEXT>"' in skill_text
     assert "bare `/loopx` read-only command" in skill_text
     assert "explicit goal-start intent" in normalized
     assert "planner order plus `todo add` write order" in normalized
     assert "do not silently downgrade `/loopx <goal text>`" in normalized
     assert "`/loopx-global-summary`" in skill_text
-    assert "Legacy `/loop-global-*` forms" in normalized
+    assert "Legacy `/loop-global-*` forms" in start_normalized
     assert "loopx slash-commands" in skill_text
     assert "not project bootstrap commands" in normalized
     assert "`/loopx-pr-review`" in skill_text

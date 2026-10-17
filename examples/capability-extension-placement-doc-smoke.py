@@ -10,17 +10,17 @@ GUIDE = (ROOT / "docs" / "reference" / "extensions.md").read_text(encoding="utf-
 
 for anchor in (
     "## Capability And Extension Placement",
-    "loopx/capabilities/<capability>/",
-    "loopx/extensions/",
-    "packages/<package-id>/",
+    "docs/reference/extensions.md#placement-decision-for-agents",
     "capability id, provider id",
-    "name public capabilities after caller outcomes",
+    "Name public capabilities after caller outcomes",
 ):
     assert anchor in AGENTS, anchor
 
 for anchor in (
     "## Placement Decision For Agents",
     "## Repository Layout",
+    "loopx/capabilities/<capability-id>/",
+    "loopx/extensions/",
     "packages/<package-id>/",
     "There is intentionally no",
     "What user outcome and caller-visible contract is being added or changed?",

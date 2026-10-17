@@ -624,7 +624,10 @@ def test_credential_fields_withheld_and_oversize_gap_is_not_silent(
         )
 
 
-def test_native_tool_text_blocks_are_readable_and_content_pages_are_lossless(tmp_path):
+@pytest.mark.parametrize("block_type", ["text", "input_text", "output_text"])
+def test_native_tool_text_blocks_are_readable_and_content_pages_are_lossless(
+    tmp_path, block_type
+):
     path = tmp_path / "history.jsonl"
     text = "🧭验证\n" * 7000
     append_record(
@@ -633,8 +636,8 @@ def test_native_tool_text_blocks_are_readable_and_content_pages_are_lossless(tmp
         {
             "type": "custom_tool_call_output",
             "output": [
-                {"type": "text", "text": text},
-                {"type": "text", "text": "Complete result"},
+                {"type": block_type, "text": text},
+                {"type": block_type, "text": "Complete result"},
             ],
         },
     )
@@ -651,7 +654,7 @@ def test_native_tool_text_blocks_are_readable_and_content_pages_are_lossless(tmp
     assert row["text"] + remaining["text"] == text + "\nComplete result"
     # Unknown blocks or extra metadata must not disappear in text normalization.
     output = [
-        {"type": "text", "text": "visible", "annotations": ["source"]},
+        {"type": block_type, "text": "visible", "annotations": ["source"]},
         {"type": "image", "description": "unrendered"},
     ]
     append_record(
@@ -663,10 +666,97 @@ def test_native_tool_text_blocks_are_readable_and_content_pages_are_lossless(tmp
         "response_item",
         {
             "type": "custom_tool_call_output",
-            "output": [{"type": "text", "text": "api_key=sk-" + "a" * 40}],
+            "output": [{"type": block_type, "text": "api_key=sk-" + "a" * 40}],
         },
     )
     assert history.read_messages(path)["messages"][-1]["redacted"] is True
+
+
+def test_saved_shell_exit_codes_survive_folding_and_long_content(tmp_path):
+    path = tmp_path / "history.jsonl"
+    shell = {"output": "🧭结果\n" * 7000, "exit_code": 1, "wall_time_seconds": 0.25}
+    output = [
+        {"type": "input_text", "text": "Source commentary stays visible"},
+        {"type": "input_text", "text": json.dumps(shell, ensure_ascii=False)},
+        {
+            "type": "input_text",
+            "text": json.dumps({**shell, "output": "ok", "exit_code": 0}),
+        },
+    ]
+    append_record(
+        path, "response_item", {"type": "custom_tool_call_output", "output": output}
+    )
+    page = history.read_messages(path)
+    row = page["messages"][0]
+    expected = "\n".join(part["text"] for part in output)
+    assert row["text"] == expected[: history.CONTENT_CHARS]
+    assert row["truncated"] is True
+    assert row["tool_exit_codes"] == [1, 0]
+    text = row["text"]
+    while len(text) < len(expected):
+        detail = history.read_content(
+            path,
+            entry_id=int(row["id"]),
+            offset=len(text),
+            expected_source=page["source_ref"],
+            content_ref=row["content_ref"],
+        )
+        text += detail["text"]
+    assert text == expected
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "Exit code 1 appears in an explanation, not a recorded result",
+        '{"exit_code": 1}',
+        '{"output": "no duration", "exit_code": 1}',
+        '{"output": "invalid", "wall_time_seconds": 0.1, "exit_code": true}',
+        '{"output": "still running", "wall_time_seconds": 0.1, "exit_code": null}',
+        [
+            {
+                "type": "input_text",
+                "text": '{"output": "hidden metadata", "wall_time_seconds": 0.1, "exit_code": 1}',
+                "annotations": [],
+            }
+        ],
+    ],
+)
+def test_unknown_or_unfinished_tool_output_is_not_a_recorded_exit_code(
+    tmp_path, output
+):
+    path = tmp_path / "history.jsonl"
+    append_record(
+        path, "response_item", {"type": "custom_tool_call_output", "output": output}
+    )
+    assert "tool_exit_codes" not in history.read_messages(path)["messages"][0]
+
+
+def test_exit_code_observation_never_comes_from_inputs_or_withheld_content(tmp_path):
+    path = tmp_path / "history.jsonl"
+    shell = json.dumps(
+        {"output": "api_key=synthetic-value", "exit_code": 1, "wall_time_seconds": 0.1}
+    )
+    append_record(
+        path, "response_item", {"type": "custom_tool_call_output", "output": shell}
+    )
+    append_record(
+        path,
+        "response_item",
+        {"type": "function_call", "name": "check", "arguments": shell},
+    )
+    rows = history.read_messages(path)["messages"]
+    assert all(row["redacted"] and "tool_exit_codes" not in row for row in rows)
+    append_record(
+        path,
+        "response_item",
+        {
+            "type": "function_call",
+            "name": "check",
+            "arguments": shell.replace("api_key=synthetic-value", "expected"),
+        },
+    )
+    assert "tool_exit_codes" not in history.read_messages(path)["messages"][-1]
 
 
 def live_snapshot(*, revision=1, text="Checking the original work"):

@@ -12,6 +12,7 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string; 
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
+    codex_chat: {displayName: "Codex Goal conversation defaults", description: "Choose the native Codex profile, model, speed tier and reasoning effort for new Goal conversations. Existing conversations keep their original history. This does not start or reconfigure an active Agent Loop, worker or steward."},
     decision_context: {displayName: "Find evidence", description: "Find advisory evidence with a temporary private profile. OpenViking and BM25 are retrieval implementations; this page does not save a binding or enable automatic memory."},
     content_ops: {displayName: "Reference styles", description: "Retrieve source styles from an existing private catalog and prepare attributed outlines. No source or material-store writes."},
     goal_storage: { displayName: "New Goal authority", description: "New Goals default to canonical SQLite with hard leases. Choose storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
@@ -80,6 +81,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
   },
   "zh-CN": {
+    codex_chat: {displayName: "Codex Goal 对话默认值", description: "分别选择 Codex 配置来源、模型、速度档和推理强度，作用于本机的新 Goal 对话。已有对话保留原历史；不会启动或重配正在运行的 Agent Loop、工作 Agent 或管家。"},
     decision_context: {displayName: "资料召回", description: "通过临时私有配置查找参考证据。OpenViking、BM25 是检索实现；本页不保存绑定，也不启用自动记忆。"},
     content_ops: {displayName: "素材与风格", description: "从原有私有目录检索表达结构，准备带来源署名的提纲；不执行来源或素材库写入。"},
     goal_storage: { displayName: "新 Goal 的权威存储", description: "新 Goal 默认使用 canonical SQLite 与 hard lease；可选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
@@ -242,6 +244,17 @@ export function localizeCapability(
 }
 
 export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capabilityId?: string): FieldCopy {
+  if (capabilityId === "codex_chat") return {...fieldCopy[locale], ...(locale === "zh-CN" ? {
+    codex_profile: {label: "Codex 配置来源", description: "选择已有本机配置，例如 codex-gpt。账户和凭据留在原目录，不复制；留空继承服务配置。"},
+    model: {label: "对话模型", description: "例如 gpt-6.1-sol；留空继承所选 Codex 配置的模型。"},
+    reasoning_effort: {label: "推理强度", description: "例如 high；与模型和速度档分别设置。"},
+    service_tier: {label: "速度档", description: "例如 fast；由原生执行器校验可用性，不保证每次请求均获加速。"},
+  } : {
+    codex_profile: {label: "Codex configuration profile", description: "Existing local configuration, for example codex-gpt. Credentials remain in their original home. Blank inherits the service profile."},
+    model: {label: "Conversation model", description: "For example gpt-6.1-sol; blank inherits the selected Codex profile."},
+    reasoning_effort: {label: "Reasoning effort", description: "For example high; independent of the model and speed tier."},
+    service_tier: {label: "Speed tier", description: "For example fast; the native executor validates support. Acceleration is not guaranteed for every request."},
+  })};
   if (capabilityId === "reward_memory") return {...fieldCopy[locale], agent_id: locale === "zh-CN" ? {
     label: "独立绑定的 Agent", description: "选择已注册的 Agent；留空编辑共享绑定。", options: {"": "共享绑定"},
   } : { label: "Independent Agent binding", description: "Select a registered Agent; leave blank for the shared binding.", options: {"": "Shared binding"} }};

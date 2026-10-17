@@ -13,13 +13,14 @@ function assert(condition: unknown, message: string): asserts condition {
 const source = {
   index: 1, todo_id: "todo_gate_one", done: false, status: "open", text: "Review change",
   task_class: "user_gate", note: "The chosen direction needs review", evidence: "review:bounded-check",
-  blocks_agent: "worker-one", unblocks_todo_id: "todo_target",
+  created_by: "request-author", blocks_agent: "worker-one", unblocks_todo_id: "todo_target",
   decision_scope: { schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: "route-one" },
 };
 // Production Zod parse must preserve the public projection facts before mapping.
 const details = attentionDetails(todoItemSchema.parse(source));
 assert(details.reason === source.note && details.evidence === source.evidence, "reason/evidence survived schema");
 assert(details.blocksAgent === "worker-one" && details.unblocksTodoId === "todo_target", "exact relationships survive schema");
+assert(details.createdBy === "request-author" && details.boundAgent === null, "request provenance is not inferred from the recipient");
 assert(details.decisionScope?.scopeKey === "route-one", "scope survives schema");
 assert(details.interaction === "decision", "typed user gate is decision");
 const row: WorkspaceAttention = { blocking: true, goalId: "goal-one", todoId: "todo_gate_one", sourceId: "source-a", text: source.text, details };
@@ -96,16 +97,21 @@ assert(longModel.userTodos[0]?.details?.evidence === source.evidence, "App decis
 const markup = renderToStaticMarkup(createElement(WorkspaceI18nProvider, null, createElement(AttentionDetailCard, { item: longModel.userTodos[0] })));
 assert(markup.includes("Publish version 2.0 to stable only after acceptance."), "rendered App detail contains object beyond compact label");
 assert(markup.includes(source.evidence), "rendered App detail contains evidence");
+assert(markup.includes("Agent request-author") && markup.includes("Agent worker-one"), "creator and reply recipient are visible without diagnostics");
+const unknownCreator = renderToStaticMarkup(createElement(WorkspaceI18nProvider, null,
+  createElement(AttentionDetailCard, { item: {...row, details: attentionDetails({...source, created_by: null})} })));
+assert(unknownCreator.includes("Requesting Agent not recorded") && !unknownCreator.includes("From Agent worker-one"), "legacy rows do not invent the creator from blocks_agent");
 
 // Exercise the actual compact project_asset -> same QueueItem.user_todos join,
 // not a fixture that already supplies a complete body to attentionDetails.
 const canonical = todoItemSchema.parse({...source, role: "user", task_class: "user_action",
   updated_at: "2026-10-01T06:00:00Z", text: longRequest,
   note: "Only a learning review; expires at 2026-10-01T07:00:00Z."});
-const compact = todoItemSchema.parse({...canonical, text: `${longRequest.slice(0, 217)}...`, note: null, evidence: null});
+const compact = todoItemSchema.parse({...canonical, text: `${longRequest.slice(0, 217)}...`, note: null, evidence: null, created_by: null});
 const joined = attentionDetailsFromSnapshot(compact, [canonical], row.goalId);
 assert(joined.requestText === longRequest && joined.reason === canonical.note && joined.evidence === canonical.evidence, "same revision restores full display content");
 assert(joined.interaction === "user_action" && joined.lifecycle === "open", "enrichment cannot reclassify a user action as a gate");
+assert(joined.createdBy === "request-author", "same-snapshot content includes canonical author provenance");
 const joinedMarkup = renderToStaticMarkup(createElement(WorkspaceI18nProvider, null,
   createElement(AttentionDetailCard, {item: {...row, text: compact.text, details: joined}})));
 assert(joinedMarkup.includes("Publish version 2.0 to stable only after acceptance.")
@@ -118,6 +124,7 @@ for (const candidates of [[], [canonical, canonical], [{...canonical, goal_id: "
   const rejected = attentionDetailsFromSnapshot(compact, candidates, row.goalId);
   assert(rejected.requestText === null && rejected.reason === null, "missing/conflicting details remain summary-only");
   assert(rejected.lifecycle === "open" && rejected.interaction === "user_action", "failed enrichment preserves selected lifecycle and authority");
+  assert(rejected.createdBy === null, "a failed join cannot import another snapshot's creator");
 }
 const authoritySource = {...canonical, blocks_agent: "different-agent", decision_scope: {kind: "trade", granularity: "goal", scope_key: "different"}};
 const displayOnly = attentionDetailsFromSnapshot(compact, [authoritySource], row.goalId);

@@ -525,6 +525,7 @@ PROJECT_ASSET_TODO_DISPLAY_FIELDS = (
     "target_capabilities",
     "decision_scope",
     "required_decision_scopes",
+    "created_by",
     "claimed_by",
     "bound_agent",
     "goal_bound",

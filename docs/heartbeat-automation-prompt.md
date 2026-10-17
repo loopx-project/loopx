@@ -54,20 +54,20 @@ automation contract.
 
 ### Native Goal bootstrap and live execution instructions
 
-Brief automation now uses the same fully qualified notification/execution rule
+Full, compact and brief automation use the same fully qualified notification/execution rule
 as thin, including `heartbeat_recommendation.agent_must_attempt` and
-`execution_obligation.must_attempt_work`. Brief no longer embeds a second
+`execution_obligation.must_attempt_work`. None embeds a second
 static refresh/spend sequence: after validated work it follows the current
 `interaction_contract.cli_channel.settlement_plan.ordered_steps`, or current
 `next_cli_actions` when there is no plan. Generator command fields remain for
 compatibility, not as a stale fallback. Todo acceptance alone is not Turn
-settlement or terminal vision closure. The brief budget is 4,300 characters.
+settlement or terminal vision closure. The brief base budget is 4,800 characters; reward-memory headroom remains separate.
 
-Brief 与 thin 共用完整执行义务路径；这次有意移除 brief 固定结算配方，而不是
+Brief 与 thin 共用完整执行义务路径；full、compact、brief 均移除固定结算配方，而不是
 删除结算义务。真实 App preflight、registry scope、完整 guard 和静态安全规则
 均保留；结算顺序与身份以本轮动态 contract 为准，vision replan 不由历史成功清账。
 
-New supported host activations use `heartbeat-prompt --bootstrap`: a saved
+First-connect messages and supported host activations use `heartbeat-prompt --bootstrap`: a saved
 loader requests the installed rules rather than freezing a long execution body.
 The loader and automation bootstrap share rendering and successful-response
 checks. Registry-derived state is resolved at load time; explicitly supplied
@@ -104,11 +104,15 @@ the variable available to argument expansion in Bash/zsh. Reuse the same value
 on retries. Native Goal entry remains host-specific and does not inherit this
 heartbeat bootstrap.
 
-Thin's presentation regression ceiling is 3,200 characters; compact is 6,700.
-The stop/readback repair adds 117/127 characters respectively; the supported
-320-character scope and compact scoped fixtures retain their full obligations. These are measured regression budgets, not external host
-limits or execution quota. Keep admission, continuation, scope and authority
-instructions readable rather than abbreviating them to fit a historical number.
+Thin's presentation regression ceiling is 3,600 characters; compact remains
+6,700. The same 320-character scope plus observed-capability fixture grew from
+3,172 to 3,577 normalized characters: explicit reuse of existing action authority,
+continued integration/negative-case/readback work, recovery evidence and exact
+current settlement are retained rather than abbreviated away. This is a measured
+presentation allowance, not an external host limit, execution quota or permission
+increase. The supported registry-profile brief fixture grows from 4,447 to 4,638; its
+base ceiling is 4,800 rather than 4,600. Reward-memory headroom remains separately feature-scoped. Larger custom
+inputs can still exceed a presentation budget and must be measured as supplied.
 Peer workspace and claim/lease requirements come from the current quota contract
 and repository rules; registration alone does not impose an independent worktree.
 Repository-specific worktree requirements still apply.
@@ -359,8 +363,7 @@ command atomically records the migration once, and later quota checks do not
 project it again. A registry without `coordination.registered_agents` must first
 register the peer identity before a scoped prompt can be generated.
 
-If even the compact body is too heavy for an installed automation, generate the
-brief body:
+To inspect a smaller execution body for debugging, generate the brief body:
 
 ```bash
 loopx heartbeat-prompt \
@@ -368,7 +371,8 @@ loopx heartbeat-prompt \
   --brief
 ```
 
-Use the brief body only when the target agent has LoopX CLI access. It is
+This is an execution/audit view, not the persistent automation prompt.
+Use it only when the target agent has LoopX CLI access. It is
 intentionally small and treats the compact/full lifecycle contract like a
 skill-style interface that the agent fetches when quota says real work can run
 or when an edge branch is ambiguous.
@@ -419,250 +423,42 @@ loopx-canary heartbeat-prompt \
 
 ## Template
 
-Replace the placeholders before installing the automation:
+Generate the persistent prompt from the installed runtime:
 
-- `<ACTIVE_GOAL_STATE_PATH>`: optional override for a detached state file. For
-  connected goals, omit it and let the CLI resolve the registry goal
-  `state_file`.
-- `<GOAL_ID>`: the stable LoopX goal id.
-- `<MATERIAL_QUEUE_RULE>`: optional project-specific rule such as "do not
-  consume the learning material queue unless the user explicitly asks."
-
-```text
-Advance the goal described in <ACTIVE_GOAL_STATE_PATH>.
-
-Before spending delivery compute, first make the LoopX CLI reachable in
-this automation shell, then run the quota guard:
-
-export PATH="$HOME/.local/bin:$PATH"
-install_script="$HOME/loopx/scripts/install-local.sh"
-if ! command -v loopx >/dev/null 2>&1; then
-  if [ -x "$install_script" ]; then
-    "$install_script"
-    export PATH="$HOME/.local/bin:$PATH"
-  else
-    echo "loopx is not on PATH; clone the LoopX repo and run scripts/install-local.sh" >&2
-    exit 1
-  fi
-fi
-loopx doctor >/dev/null
-loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID> --runtime-profile codex_app_heartbeat --turn-instance-id "${LOOPX_TURN:?}"
-
-If that preflight still fails, do not do implementation work, adapter work,
-file edits, research, project exploration, or quota spend in this turn. Return
-a quiet heartbeat DONT_NOTIFY response with the exact preflight failure reason.
-
-If the result says should_run=false:
-
-- If the payload says state=operator_gate, treat the gate as a user/controller
-  interaction, not as a silent skip. Read gate_prompt, operator_question,
-  recommended_action, next_handoff_condition, missing_gates,
-  user_todo_summary, and agent_todo_summary from the payload. If the same
-  unresolved gate has not already been asked in the recent visible thread,
-  return heartbeat NOTIFY with
-  one concise question in the user's language that lists the gate and the
-  expected reply format. Treat `interaction_contract.user_channel.notify` as the final
-  notification signal. When it is `NOTIFY`, name concrete projected
-  `actions`, todos, or questions even when `action_required=false`,
-  `user_todo_summary.open_count=0`, and `non_blocking=true`; non-blocking means
-  the agent may continue independent work, not that the user action is silent.
-  Never say only "owner gate". If required user-facing items are not projected,
-  say "specific user Todo is not projected; repair LoopX state projection" in
-  the user's language; never say "no new user action" for this case. Only when `notify=DONT_NOTIFY`,
-  `action_required=false`, and `open_count=0` may the heartbeat say
-  "no user action required" in the user's language or stay quiet. Do not execute agent_command, adapter
-  work, write-control, production actions, or the gated path while asking.
-- If the payload says notify_user_on_open_todo=true, treat the existing open
-  user_todo_summary as a blocker-push opportunity, not as a silent skip. This
-  is especially important for state=focus_wait, state=waiting, and
-  waiting_on=external_evidence, where a short user/owner answer can unlock a
-  quiet project or stop meaningless repeated polling. If the payload explicitly
-  includes open_todo_notification_policy=repeat_until_resolved, return
-  heartbeat NOTIFY until the user todo is done, deferred, or replaced. When
-  user_gate_notification_cooldown.notification_suppressed=true, preserve the
-  pending gate but return quiet DONT_NOTIFY until its bounded reminder window
-  or a material gate/host change. Otherwise, if the same blocker ask has not already been surfaced in
-  the recent visible thread, return heartbeat NOTIFY with one concise ask in
-  the user's language listing at most three first_open_items, the open_todo_notify_reason, and
-  the expected reply format: done, defer/not now, or a new evidence
-  link/date/conclusion. Do not do implementation work, adapter work, file
-  edits, research, project exploration, or quota spend for that blocker-push
-  turn. If the same non-monitor blocker was already surfaced recently, return a
-  quiet DONT_NOTIFY skip reason and do not append quota spend.
-- If the payload also says safe_bypass_allowed=true and the same gate has
-  already been surfaced, the gate blocks only the gated delivery path. You may
-  still read the active state and do exactly one bounded safe-bypass step from
-  the Priority Stack, such as read-only steering analysis, documentation, or
-  another P0/P1 item that does not depend on that gate. If you do a safe-bypass
-  step, validate it, write back progress/critic/next action, refresh accountable
-  progress, append exactly one spend event, and report compactly. If
-  `interaction_contract.user_channel.notify=NOTIFY` or
-  `user_todo_summary.open_count > 0`, include the projected user actions or
-  todos concretely and do not say there is "no new user action". If
-  agent_todo_summary.open_count > 0, the report should also name the first safe
-  agent todo it can execute next. If no useful
-  safe-bypass step exists, report the pending gate compactly instead of doing
-  work.
-- Give each heartbeat a stable turn id by copying its `<current_time_iso>` into
-  `LOOPX_TURN`; reuse that id for guard retries in the same
-  heartbeat. `quota should-run` commits one idempotent receipt for every turn.
-  If effective_action=monitor_quiet_skip, that same guard idempotently appends
-  the no-spend stall observation and returns the follow-up decision. Do not
-  append a second manual monitor poll. If it remains monitor-only, return quiet
-  DONT_NOTIFY: no delivery edits and no spend. Keep the automation active:
-  unchanged monitor-only receipts are not self-stop signals. If the guard
-  reports autonomous_replan_required or another hard replan contract, follow
-  that contract.
-- If waiting_on=external_evidence or state=waiting, and this automation is
-  explicitly a monitor, run at most one bounded read-only observation poll using
-  project-approved status/log/metric/marker surfaces named in active state,
-  recommended_action, or goal_boundary.next_probe. Unchanged evidence: quiet
-  DONT_NOTIFY, no edits, no spend. New eval/fail/complete/blocker/approval/CI/
-  deploy/data evidence: report, write back only allowed canonical
-  state/board/ledger, add todos if needed, then spend once after validation.
-  Still do not launch/stop/restart/sync/design code or mutate production unless
-  should_run=true or the user explicitly authorizes it.
-- Otherwise, do not do implementation work, adapter work, file edits, research,
-  or project exploration in this turn. Return a quiet heartbeat DONT_NOTIFY
-  response with the skip reason.
-
-If the result says should_run=true:
-
-1. Read the active state, Priority Stack, recent progress, and critic.
-   When you inspect current LoopX routing, use the current status queue:
-   attention_queue.items and each item's project_asset are authoritative for
-   owner, gate, waiting party, and next action. If project_asset is absent or
-   legacy/raw fallback, raw queue fields are not owner/gate/stop authority.
-   Treat run_history.latest_runs as evidence and drill-down only; it may be
-   limited by status command limits or filters, so do not decide whether a gate
-   is pending or approved from latest runs alone. Also inspect goal_boundary and
-   guard user_todo_summary. Stop for an open user/owner todo only when it belongs
-   to this goal's guard payload or current project asset and blocks the selected
-   path; then use the blocker-push pattern above. Dependency or sibling-goal
-   todos found in `attention_queue.items` should be recorded as dependency
-   blockers; they must not consume the whole eligible turn; choose a
-   gate-independent P0/P1/P2 candidate for this goal when one exists.
-   If `effective_action=outcome_floor_recovery` or
-   `recovery_delivery_allowed=true` or
-   `safe_bypass_kind=outcome_floor_recovery`, produce the required
-   ranker/cross-domain evidence artifact named by `must_advance`, or write back
-   the concrete blocker. Do not fall through to ordinary delivery, surface
-   propagation, or synthetic-only chains.
-   Also read execution_obligation and heartbeat_recommendation from the quota
-   payload before inventing local automation behavior.
-   heartbeat_recommendation.notify is only the user-notification policy, not an
-   execution gate. If execution_obligation.must_attempt_work=true, attempt one
-   bounded segment even when notify=DONT_NOTIFY; a quiet no-op requires
-   execution_obligation.must_attempt_work=false and no
-   notify_user_on_open_todo=true blocker-push notification, such as a verified
-   mapped_noop_if_unchanged turn. If heartbeat_recommendation says
-   recommended_mode=run_first_read_only_map,
-   run exactly its command as a real read-only map, not another dry-run, then
-   validate/save the read_only_project_map result, refresh accountable progress,
-   append exactly one heartbeat spend, sync state if needed, and NOTIFY. If it says
-   recommended_mode=mapped_noop_if_unchanged with stop_if_unchanged=true, and
-   you find no new user instruction, owner evidence, agent todo, stale source,
-   or safe handoff, return quiet `DONT_NOTIFY`: do not run, edit, or spend.
-   Check `delivery_batch_scale`, `delivery_outcome`,
-   `post_handoff_outcome_gap_streak`, and `handoff_delivery_contract`; for
-   repeated-small or surface-only loops, obey the contract.
-2. Run a short steering audit when new evidence or a projected review warrants
-   changing the selected work; compare relevant alternatives without a fixed
-   candidate count. If the same topic has consumed several recent delivery slices, apply
-   a continuation check and state why continuing still wins; keep compute quota
-   separate from focus quota; record any losing high-value candidate that should
-   not be forgotten. Include a product bottleneck lens: ask whether the core
-   goal is currently bottlenecked by user experience, agent capability,
-   evidence quality, adapter readiness, or priority-rule gaps, and promote one
-   concrete bottleneck candidate when it should outrank the nearest local TODO.
-   Plan/top todo/route changes need todo/Next Action writeback or
-   no-writeback rationale.
-3. Run the no-progress self-repair check against current evidence. Obey
-   `autonomous_replan_obligation`, `replan_action_packet` and
-   `execution_obligation.must_attempt_work` from the guard. Preserve ongoing
-   valid work; retry only after reconciling ambiguous effects. Repair the affected
-   path first; broader changes require current goal/path/dependency/acceptance
-   evidence. A due review can retain the path. At the next review check actual
-   adoption and outcomes, not just the plan. Wake counts do not authorize replan
-   or self-pause; stopping follows explicit instructions or the current Core/host
-   boundary, with original settlement still owed. Future-monitor liveness
-   receipts do not establish stalled work; Core owns eligible stall detection.
-4. Choose scope-bounded work toward a verifiable result. Size by task, evidence
-   and risk, not calls, files or wake cadence. Related implementation, research,
-   tests, docs and writeback may form one coherent effort; a focused correction
-   can also be sufficient. One operation/writeback is not a stop condition;
-   obey budgets, explicit stops, settlement and replan requirements.
-5. Execute that scoped work. Stay inside goal_boundary when present and keep
-   public/private boundaries intact. Public-safe repo publication is not an
-   operator gate by itself: for routine public project work, commit, push, and PR
-   creation may proceed autonomously after validation and a clean public/private
-   boundary scan. Stop and surface a user/controller gate only for private or
-   company-internal material, credentials, destructive git operations,
-   production actions, or repository rules that explicitly require review.
-6. Run validation proportionate to the change and risk.
-7. Write back changed files, validation, critic, and next action to the active
-   state. If a user/owner todo appears, do not hide it in prose:
-   `loopx todo add --goal-id <GOAL_ID> --role user --task-class user_gate --blocks-agent <agent-id>`
-   or `loopx todo add --goal-id <GOAL_ID> --role user --task-class user_action`.
-
-   Use `--role agent` for project-agent follow-up work.
-   For non-trivial feature slices, complete the current todo only after adding
-   a successor todo, or include a compact no-follow-up rationale.
-   If the selected advancement Todo now has only an external lifecycle wait,
-   keep it open and bind `resume_when=monitor_changed:<monitor-todo-id>` with an
-   independent runnable successor before any quiet return. Rerun quota and
-   continue the successor; do not spend quota for the wait transition.
-   For the full field contract, see `docs/project-agent-todo-contract.md` in
-   the LoopX checkout.
-8. After validation and other writeback complete, record this turn's accountable
-   delivery before spending:
-
-   loopx refresh-state --goal-id <GOAL_ID> \
-     --classification <PUBLIC_SAFE_PROGRESS_CLASSIFICATION> \
-     --delivery-batch-scale <ACTUAL_DELIVERY_BATCH_SCALE> \
-     --delivery-outcome <ACTUAL_DELIVERY_OUTCOME>
-
-   Replace all three placeholders with values proven by this validated turn.
-   Never default or upgrade smaller/preparatory work to
-   `multi_surface` / `outcome_progress`.
-   This refresh is the causal delivery record consumed by `quota spend-slot`.
-   A plain state-only refresh is quota-neutral and cannot replace it. Then, for
-   a minute-based heartbeat, spend one slot:
-
-   loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute
-
-   Run it exactly once as rendered; no pipe/filter/retry. If spend output is
-   ambiguous, verify with read-only quota status; never rerun.
-
-   If the automation reserves a coarser fixed interval, set `--slots` to the
-   number of scheduler minutes consumed by that completed turn.
-
-   Do not append spend for quiet should_run=false skips, preflight failures,
-   pure dry-run previews, or duplicate accounting attempts. If
-   should_run=false but safe_bypass_allowed=true and you actually completed a
-   bounded safe-bypass step, append this same spend event once after
-   validation/writeback.
-
-9. If the dashboard or controller needs a state-only update after
-   spend, run:
-
-   loopx refresh-state --goal-id <GOAL_ID>
-
-   Do not emit another accountable progress refresh after spend; that would
-   create a new unspent delivery record.
-
-10. Return a compact final report. Use heartbeat NOTIFY only for meaningful
-    user visibility, such as a committed artifact, a user gate, a real blocker,
-    or the automation self-stop. Otherwise use DONT_NOTIFY.
-
-<MATERIAL_QUEUE_RULE>
-Do not ask for permissions when the current Codex session is already trusted.
+```bash
+loopx --format json heartbeat-prompt --bootstrap --thin --codex-app \
+  --goal-id <GOAL_ID> --agent-id <AGENT_ID>
 ```
+
+Read the successful result and install its `task_body` through the authorized
+host automation API, preserving the existing automation identity, schedule and
+notification preference. Read back the saved prompt and status before claiming
+activation. Omit `--agent-id` only for a goal with no registered peer requirement.
+For native Goal hosts, use their actual `--runtime-profile` instead of `--codex-app`.
+
+Optional `--active-state`, material and permission overrides bind only explicitly
+selected policy. Connected goals normally resolve state from the current registry.
+Do not hand-copy a generated execution body, Turn id, settlement command or project
+policy into this persistent template. The loader fetches those current instructions
+on every entry; an unsuccessful/incomplete read authorizes neither work nor spend.
 
 ## Minimal User-Facing Form
 
+Keep the visible objective short, for example “Advance this Goal within its
+current authority and acceptance criteria.” Set the generated host-specific
+loader as the execution entrypoint. The visible objective is not an alternative
+quota, authorization or settlement contract.
+
+The old hand-written full and minimal templates duplicated runtime rules and
+could direct a stale refresh/spend or reuse the wrong host binding. They are
+replaced by the generator above. Existing saved prompts need the ordinary
+[upgrade/readback flow](reference/automation-prompt-upgrades.md); editing this
+document does not migrate active automations or pinned benchmark runs.
+
+### Host Scheduling And Stop Readback
+
 When creating a heartbeat in Codex App, keep the visible instruction short and
-put the lifecycle in the automation task body. The default onboarding cadence
+use the generated bootstrap loader as the automation task body. The default onboarding cadence
 starts at 3 minutes; after the first guard, follow
 `quota should-run.scheduler_hint` to back off long waits and stop external loops
 after a final quota/replan check confirms repeated unchanged polls. App-hosted
@@ -695,7 +491,7 @@ observed host cadence. When the desired RRULE is already applied, skip
 `automation_update`; if `stateful_backoff.ack_needed=true`, run the bound ack
 hint directly, otherwise do nothing. For the uniquely matched current heartbeat,
 `quota should-run` reconciles the installed RRULE with the ACK ledger; a
-`host_observation.status=drift_detected` result reopens `apply_needed`:
+`host_observation.status=drift_detected` result reopens `apply_needed`.
 
 If `automation_update` is unavailable in the session and
 `scheduler_hint.app_automation.fallback_hint.available=true`, run the bound
@@ -711,73 +507,6 @@ explicitly conflicting identity still fails closed. When the automation id
 could not be resolved,
 `fallback_hint.available=false` and the pasteable heartbeat gate is the correct
 stop - never guess an automation id.
-
-```text
-Create a heartbeat automation starting at 3 minutes for the current thread;
-then apply `quota should-run.scheduler_hint`: update RRULE only when
-`apply_needed=true`, trying once per hint and turn; ack with the provided
-`ack_hint.cli_args` only after the host update succeeds, or run the provided
-`failure_hint.cli_args` once if that update fails or times out. If
-`automation_update` is unavailable and `fallback_hint.available=true`, run the
-provided `fallback_hint.cli_args` once instead; if it is unavailable, surface
-the pasteable heartbeat gate.
-
-Task:
-Advance <GOAL_ID> using <ACTIVE_GOAL_STATE_PATH>. Before any delivery work,
-export `$HOME/.local/bin` onto PATH and run `loopx doctor`; if the CLI is
-still unavailable, quietly report that preflight failure and do no work. Then
-copy this trigger's `<current_time_iso>` into `LOOPX_TURN` and run
-`loopx --format json --registry "$HOME/.loopx/registry.global.json" quota should-run --goal-id <GOAL_ID> --runtime-profile codex_app_heartbeat --turn-instance-id "${LOOPX_TURN:?}"`. If it
-returns `should_run=false`, ask about operator gates with NOTIFY using
-`gate_prompt` unless the same unresolved gate was already surfaced recently. If
-the payload says `notify_user_on_open_todo=true`, ask up to three open
-`user_todo_summary` items as a blocker-push NOTIFY and do not spend quota for
-that blocker-push turn. If
-`open_todo_notification_policy=repeat_until_resolved`, repeat
-that NOTIFY until the todo is done, deferred, or replaced. If
-it returns `should_run=true` with `effective_action=outcome_floor_recovery` or
-`recovery_delivery_allowed=true`, run only the bounded evidence/blocker
-recovery before any ordinary delivery. If
-it returns `state=operator_gate` plus `safe_bypass_allowed=true`, avoid the
-gated command and do at most one independent read-only steering/analysis step
-after the gate has already been surfaced.
-If it returns `should_run=true`, first check `effective_action`, then compare candidate next actions across
-the priority stack, use `attention_queue.items` / `project_asset` as the current
-routing authority; if project_asset is absent or legacy/raw fallback, raw queue
-fields are not owner/gate/stop authority. Treat `run_history.latest_runs` only as evidence,
-read `goal_boundary`, check whether this goal's own open `user_todo_summary` is
-a blocker-push opportunity for a gate / focus_wait / external-evidence wait,
-record dependency or sibling-goal todos without letting them consume the whole
-eligible turn,
-apply a continuation check for
-repeated topics, then read `execution_obligation` and `heartbeat_recommendation`:
-when `execution_obligation.must_attempt_work=true`, do one bounded progress
-segment even if `heartbeat_recommendation.notify=DONT_NOTIFY`; quiet no-op
-requires
-`execution_obligation.must_attempt_work=false` and no
-`notify_user_on_open_todo=true` blocker-push notification. Run
-`recommended_mode=run_first_read_only_map` as one real read-only map and spend
-once after validation; for `recommended_mode=mapped_noop_if_unchanged`, return a
-quiet no-op without another dry-run, file edit, or quota spend when no new
-instruction/evidence/todo/stale source/safe handoff exists. Check
-`delivery_batch_scale`, `delivery_outcome`,
-`post_handoff_outcome_gap_streak`, and `handoff_delivery_contract`; for
-repeated-small or surface-only loops, obey the contract. Then obey any
-machine-readable `autonomous_replan_obligation` or
-`execution_obligation.must_attempt_work=true`; follow the projected repair/replan
-obligation without inventing a wake-count threshold or self-pause rule. Do one bounded verifiable progress batch when a real boundary
-exists: implementation, validation, docs, and state writeback may belong in the
-same batch. Do not stop at the first tiny substep when the validation/writeback
-boundary is already clear. Validate it, write back changed files / validation /
-critic / next action; for non-trivial feature slices, create a successor todo
-or write a compact no-follow-up rationale; append one accountable
-`refresh-state --delivery-outcome outcome_progress`, then exactly one
-`loopx --format json --registry "$HOME/.loopx/registry.global.json" quota spend-slot --goal-id <GOAL_ID> --todo-id <SELECTED_TODO_ID> --slots 1 --source heartbeat --execute`
-event for the completed turn; run it as rendered, without pipes or filters,
-and never rerun it. Only an optional state-only refresh belongs after spend.
-Use `--slots 1` for minute-based heartbeats; for coarser intervals, spend the
-scheduler minutes consumed by that turn.
-```
 
 ## Agent Checklist
 
@@ -796,10 +525,17 @@ For every automatic heartbeat turn, the agent-facing checklist is:
    todos visible but do no delivery edits and no spend until material evidence
    changes or the guard exposes `autonomous_replan_required` /
    `execution_obligation.must_attempt_work=true`.
-3. If `notify_user_on_open_todo=true`, ask up to three open user todos as a
-   blocker-push notification and do not spend quota for that blocker-push turn.
-   If `open_todo_notification_policy=repeat_until_resolved`, repeat the
-   notification until the todo is done, deferred, or replaced. If
+3. For `notify_user_on_open_todo=true`, follow the current
+   `interaction_contract.user_channel` for the concrete notice and cooldown.
+   This notification flag does not decide delivery or accounting:
+   `interaction_contract.agent_channel` owns admitted work, and
+   `interaction_contract.cli_channel` owns its settlement. A pure
+   `user_todo_blocker_push` lane with no admitted work does no delivery or spend;
+   `bounded_delivery_with_user_notice` or an admitted safe bypass still requires
+   its work and current settlement. If
+   `open_todo_notification_policy=repeat_until_resolved`, repeat the concrete
+   notice only while the current user channel returns `NOTIFY`, until the todo
+   is done, deferred, or replaced. If
    `user_gate_notification_cooldown.notification_suppressed=true`, keep the gate
    pending but return quiet `DONT_NOTIFY` until its bounded reminder window or
    a material gate/host change. Otherwise,
@@ -822,8 +558,8 @@ For every automatic heartbeat turn, the agent-facing checklist is:
    `heartbeat_recommendation.notify` is not an execution gate. If
    `must_attempt_work=true`, do one bounded progress batch or segment even
    when `notify=DONT_NOTIFY`; quiet no-op only when
-   `must_attempt_work=false` and no `notify_user_on_open_todo=true`
-   blocker-push notification is pending.
+   `must_attempt_work=false` and the current
+   `interaction_contract.user_channel.notify=DONT_NOTIFY`.
    Then follow `heartbeat_recommendation`: first connected read-only goals should run
    one real `read-only-map`, while already mapped unchanged goals should return
    a quiet no-op without another dry-run or quota spend.
@@ -834,16 +570,20 @@ For every automatic heartbeat turn, the agent-facing checklist is:
     first; widen only on relevant evidence and check subsequent adoption/results.
     A due review may keep the route. Wake counts grant no replan or self-pause
     authority; explicit/Core/host stops and original settlement still apply.
-12. Ordinary completion links a successor before settlement. Final no-follow-up
-    completion happens only after the accountable refresh and matching spend receipt.
+12. Complete the Todo under its original declaration and current lease; do not
+    invent a successor or `--no-follow-up`. Todo completion does not settle the
+    Turn: follow its current ordered settlement, then read back continuation or
+    terminal Goal completion. A real follow-up reuses the existing successor.
 13. Plans/top todos/route changes need LoopX todo / Next Action
    writeback or a no-writeback rationale.
-14. Treat routine public commit, push, and PR creation as autonomous after clean
-   validation and a public/private boundary scan; stop for private/company
-   material, credentials, destructive git, production actions, or repo rules
-   that explicitly require review.
-15. Work bounded when `should_run=true`; a coherent implementation/test/doc/state
-    batch is preferred over a tiny substep when scope and validation are clear.
+14. Reuse existing action-specific authority for public-safe commit, push and PR
+    creation after validation and boundary checks. Gate missing authority only
+    on the affected path; protect private evidence and credentials. Destructive
+    Git, production and explicit repository review gates retain their authority.
+15. Continue authorized work through implementation, integration, negative cases
+    and readback while feasible. Preserve evidence, remaining gaps and the next
+    action for recovery; a tool call or writeback does not complete the Goal.
+    Obey explicit user, Core and host stops and preserve owed settlement.
 16. Validate before reporting.
 17. After validation/writeback, follow the current typed settlement plan. An
     exact committed receipt-bound monitor poll already closes that Turn with no
