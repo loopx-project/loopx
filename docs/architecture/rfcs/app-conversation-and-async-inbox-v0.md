@@ -170,6 +170,11 @@ later answer. Core freezes the original Session and canonical candidate Turn
 identities in the existing request journal **before** native inventory or
 transport resume can fail. Native observation may only narrow that frozen set;
 a retry cannot add later completed/active Turns or switch to a newer Session.
+Completed-command discovery reads the exact native thread's complete paginated
+item inventory once, retaining only command ownership for the frozen candidates.
+This avoids a separate inventory round trip for each historical Turn. Missing or
+conflicting item ownership and incomplete pagination remain unconfirmed; the
+existing exact-Turn cancellation and independent terminal readback still run.
 The existing Lark listener returns after this durable freeze; its existing reply
 workers recover the prepared request to observe and cancel native background
 commands. Prepared recovery uses admission's fresh authority check inside both

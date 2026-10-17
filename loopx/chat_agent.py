@@ -1364,12 +1364,41 @@ class CodexChatAgentSession:
 
     def background_turn_ids(self, turn_ids: list[str]) -> list[str]:
         """Observe live terminals owned by the supplied canonical native Turns."""
+        candidates = list(dict.fromkeys(turn_ids))
+        if not candidates:
+            return []
         deadline = time.monotonic() + self.response_timeout_sec
         live_items = {terminal["itemId"] for terminal in self._background_terminals(deadline)}
         if not live_items:
             return []
-        return [turn_id for turn_id in dict.fromkeys(turn_ids)
-                if live_items & self._command_item_ids(turn_id, deadline)]
+        # The native endpoint can return all items in this exact thread. Scan
+        # its complete pagination once instead of one round trip per historical
+        # Turn; newer/foreign Turns never enter the frozen candidate set.
+        owners: dict[str, str] = {}
+        commands: dict[str, set[str]] = {turn_id: set() for turn_id in candidates}
+        for entry in self._control_items("thread/items/list", {}, deadline):
+            turn_id, item = entry.get("turnId"), entry.get("item")
+            if not isinstance(turn_id, str) or not turn_id or not isinstance(item, dict):
+                raise self._runtime_error("Codex returned an unbound thread item.")
+            if item.get("type") == "commandExecution":
+                item_id = item.get("id")
+                if not isinstance(item_id, str) or not item_id:
+                    raise self._runtime_error("Codex returned an unbound command item.")
+                if item_id in owners and owners[item_id] != turn_id:
+                    raise self._runtime_error("Codex returned conflicting command ownership.")
+                owners[item_id] = turn_id
+                if turn_id in commands:
+                    commands[turn_id].add(item_id)
+        # RPC dispatch can observe command events omitted by native history.
+        # Keep their existing exact thread/Turn proof, within this observation.
+        with self._command_items_lock:
+            for turn_id, items in commands.items():
+                for item_id in self._command_items.get(turn_id, set()):
+                    if item_id in owners and owners[item_id] != turn_id:
+                        raise self._runtime_error("Codex returned conflicting command ownership.")
+                    owners[item_id] = turn_id
+                    items.add(item_id)
+        return [turn_id for turn_id in candidates if live_items & commands[turn_id]]
 
     def _command_item_ids(self, turn_id: str, deadline: float) -> set[str]:
         with self._command_items_lock:

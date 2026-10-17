@@ -32,7 +32,7 @@ class BackgroundWire:
             elif method == "thread/items/list":
                 result = {"data": [{"turnId": turn_id, "item": {
                     "type": "commandExecution", "id": "owned-command", "status": "completed"}}]
-                    if params["turnId"] == turn_id else []}
+                    if params.get("turnId") in (None, turn_id) else []}
             elif method == "thread/turns/list":
                 result = {"data": [{"id": turn_id, "status": "completed"}]}
             elif method == "thread/backgroundTerminals/terminate":
@@ -54,7 +54,7 @@ class BackgroundWire:
             child.wait(timeout=5)
 
 
-def _completed_with_later_answer(fixture, monkeypatch):
+def _completed_with_later_answer(fixture, monkeypatch, *, history_size=2):
     store, runtime, provider, transport = connect_group(fixture)
     root = provider.topic("background-root", "Start bounded background work")
     assert transport.admit("notes-app", root)["status"] == "durably_accepted"
@@ -62,11 +62,49 @@ def _completed_with_later_answer(fixture, monkeypatch):
     sid, tid = first["session_id"], first["turn_id"]
     native_id = store.load_turn(sid, tid)["upstream_turn_id"]
     wire = BackgroundWire(runtime.adapters[sid].session, native_id, monkeypatch)
-    later = provider.topic("later-answer", "Keep the corrected filename", root=root["message_id"])
-    assert transport.admit("notes-app", later)["status"] == "durably_accepted"
-    finish_group_turn(runtime, transport, message=later["content"])
+    for index in range(history_size - 1):
+        later = provider.topic(f"later-answer-{index}", f"Keep the corrected filename {index}", root=root["message_id"])
+        assert transport.admit("notes-app", later)["status"] == "durably_accepted"
+        finish_group_turn(runtime, transport, message=later["content"])
     assert store.load_session(sid)["active_turn_id"] is None
     return store, runtime, provider, transport, root, first, wire
+
+
+def test_long_completed_history_stop_reaches_original_provider_with_one_thread_scan(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport, root, first, wire = _completed_with_later_answer(
+        ordinary, monkeypatch, history_size=23)
+    from loopx.capabilities.native_chat.codex_background_control import completed_turn_ids
+
+    sid = first["session_id"]
+    frozen = completed_turn_ids(runtime, sid)
+    before = {turn: store.load_turn(sid, turn) for turn in frozen}
+    assert len(frozen) == 23
+    wire.calls.clear()
+    stop = provider.topic("long-history-stop", "/stop", root=root["message_id"])
+    try:
+        # Exercise the listener's durable admission and existing reply worker
+        # boundary, not only the inventory helper or a replacement controller.
+        assert transport.admit("notes-app", stop, defer_background_stop=True)["status"] == "command_recorded"
+        row = next(r for r in transport.core.pending() if r["command"] == "stop")
+        assert row["status"] == "prepared" and set(row["background_turn_ids"]) == set(frozen)
+        assert not wire.calls and wire.children["owned"].poll() is None
+        transport.reconcile()
+        delivered = transport.core.read_request(row["request_ref"])
+        assert delivered["status"] == "command_completed" and delivered["delivery_verified"]
+        assert delivered["background_turn_ids"] == [first["turn_id"]]
+        assert wire.children["owned"].poll() is not None and wire.children["unowned"].poll() is None
+        assert all(store.load_turn(sid, turn) == original for turn, original in before.items())
+        reads = [params for method, params in wire.calls if method == "thread/items/list"]
+        assert len([params for params in reads if "turnId" not in params]) == 1
+        assert len(reads) == 2  # Discovery plus fresh exact-Turn cancellation proof.
+        assert sum(topic == root["message_id"] and "停止" in text
+                   for _, topic, text in provider.topic_writes) == 1
+        calls, writes = list(wire.calls), list(provider.writes)
+        transport.reconcile()
+        assert wire.calls == calls and provider.writes == writes
+    finally:
+        wire.close()
+        runtime.close()
 
 
 def test_idle_topic_stop_finds_earlier_completed_commands_and_keeps_receipts_and_peers(ordinary, monkeypatch):  # noqa: F811
@@ -249,9 +287,12 @@ def test_first_inventory_failure_cannot_expand_retried_stop(ordinary, monkeypatc
                 result = {"data": [{"id": key, "status": "interrupted" if key in interrupted_native
                                    else "inProgress" if value["status"] in {"running", "interrupting"}
                                    else value["status"]} for key, value in turns.items()]}
-            elif method == "thread/items/list" and params["turnId"] == newer_native:
+            elif method == "thread/items/list" and params.get("turnId") in (None, newer_native):
                 result = {"data": [{"turnId": newer_native, "item": {
                     "type": "commandExecution", "id": "future-command", "status": "completed"}}]}
+                if "turnId" not in params:
+                    result["data"].append({"turnId": native, "item": {
+                        "type": "commandExecution", "id": "owned-command", "status": "completed"}})
             else:
                 if method == "turn/interrupt":
                     interrupted_native.add(params["turnId"])
