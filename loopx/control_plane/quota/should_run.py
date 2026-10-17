@@ -186,9 +186,30 @@ def _attach_quota_should_run_envelope(
     return payload
 
 
-def _record_app_scheduler_state_source(
-    payload: Mapping[str, Any],
-    status_payload: Mapping[str, Any],
+def _app_scheduler_state_read_observer(
+    direct_sources: dict[str, dict[str, Any]],
+) -> Callable[[Mapping[str, Any]], None]:
+    def record(readback: Mapping[str, Any]) -> None:
+        previous = direct_sources.get("app_scheduler_state", {})
+        unreadable_count = int(previous.get("unreadable_count") or 0)
+        if readback.get("read_status") == "unreadable":
+            unreadable_count += 1
+        item_count = max(
+            int(previous.get("item_count") or 0),
+            1 if isinstance(readback.get("state"), Mapping) else 0,
+        )
+        direct_sources["app_scheduler_state"] = source_fact(
+            "app_scheduler_state",
+            read_status="unreadable" if unreadable_count else "read",
+            last_read_at=now_utc_iso(),
+            item_count=item_count,
+            unreadable_count=unreadable_count,
+        )
+
+    return record
+
+
+def _record_unread_app_scheduler_state_source(
     resolved_scheduler_context: SchedulerExecutionContextResolution,
     direct_sources: dict[str, dict[str, Any]],
 ) -> None:
@@ -197,19 +218,12 @@ def _record_app_scheduler_state_source(
         resolved_scheduler_context.ok
         and context is not None
         and context.app_automation_applicable
+        and "app_scheduler_state" not in direct_sources
     ):
         return
-    identity = payload.get("agent_identity")
-    agent_id = (
-        str(identity.get("agent_id") or "").strip()
-        if isinstance(identity, Mapping)
-        else ""
-    )
-    read = bool(status_payload.get("runtime_root") and agent_id)
     direct_sources["app_scheduler_state"] = source_fact(
         "app_scheduler_state",
-        read_status="read" if read else "not_read",
-        last_read_at=now_utc_iso() if read else None,
+        read_status="not_read",
     )
 
 
@@ -591,10 +605,11 @@ def build_quota_should_run(
             include_agent_todo_detail=include_agent_todo_detail,
             runtime_root=runtime_root,
             goal_ref=goal_ref,
+            scheduler_state_read_observer=_app_scheduler_state_read_observer(
+                direct_sources
+            ),
         )
-        _record_app_scheduler_state_source(
-            payload,
-            status_payload,
+        _record_unread_app_scheduler_state_source(
             resolved_scheduler_context,
             direct_sources,
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,7 @@ CODEX_APP_STATEFUL_BACKOFF_STATE_KEY = (
     LEGACY_CODEX_APP_STATEFUL_BACKOFF_STATE_KEY
 )
 CODEX_APP_SURFACE = "codex_app"
+SchedulerStateReadObserver = Callable[[Mapping[str, Any]], None]
 
 
 def _operation_result(operation: str, **params: Any) -> Any:
@@ -285,6 +286,7 @@ def load_scheduler_state(
     agent_id: str | None,
     surface: str = CODEX_APP_SURFACE,
     state_key: str = CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+    read_observer: SchedulerStateReadObserver | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id:
         return None
@@ -300,6 +302,10 @@ def load_scheduler_state(
     state = result.get("state")
     if state is not None and not isinstance(state, dict):
         raise RuntimeError("TypeScript loaded scheduler state must be an object or null")
+    if result.get("read_status") not in {"read", "unreadable"}:
+        raise RuntimeError("TypeScript scheduler state read status is invalid")
+    if read_observer is not None:
+        read_observer(result)
     return state
 
 
@@ -309,6 +315,7 @@ def load_app_automation_scheduler_state(
     goal_id: str,
     agent_id: str | None,
     surface: str,
+    read_observer: SchedulerStateReadObserver | None = None,
 ) -> dict[str, Any] | None:
     current = load_scheduler_state(
         runtime_root,
@@ -316,6 +323,7 @@ def load_app_automation_scheduler_state(
         agent_id=agent_id,
         surface=surface,
         state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+        read_observer=read_observer,
     )
     if current is not None or surface != CODEX_APP_SURFACE:
         return current
@@ -328,6 +336,7 @@ def load_app_automation_scheduler_state(
         agent_id=agent_id,
         surface=surface,
         state_key=LEGACY_CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
+        read_observer=read_observer,
     )
 
 
