@@ -159,7 +159,7 @@ def test_preparation_builds_an_independent_original_execution_repository(source:
 
 
 
-@pytest.mark.parametrize("fault", ["changed_input", "missing_document", "wrong_repository", "source_tracked_change", "source_document_change", "unreviewed_file"])
+@pytest.mark.parametrize("fault", ["changed_input", "missing_document", "wrong_repository", "source_tracked_change", "source_document_change", "unreviewed_file", "changed_index", "source_index", "source_working_file"])
 def test_changed_execution_workspace_retains_source_cancel(source: dict, tmp_path: Path, fault: str):
     _goal_document(source)
     target, prepared = _prepared(source, tmp_path)
@@ -174,6 +174,11 @@ def test_changed_execution_workspace_retains_source_cancel(source: dict, tmp_pat
         (source["project"] / "requirements/GOAL.md").write_text("Later source requirements remain on source\n")
     elif fault == "unreviewed_file":
         (worktree / "AGENTS.md").write_text("Unreviewed instructions remain outside the cutover\n")
+    elif fault in ("changed_index", "source_index"):
+        actual = worktree if fault == "changed_index" else source["project"].parent / "agent"
+        subprocess.run(["git", "-C", str(actual), "rm", "--cached", "-q", "input.txt"], check=True)
+    elif fault == "source_working_file":
+        (source["project"].parent / "agent/report.txt").write_text("Later unfinished source output\n")
     else:
         subprocess.run(["git", "-C", str(worktree), "remote", "set-url", "origin", "https://example.org/other/repository.git"], check=True)
     server, thread, call = _http(source)
@@ -202,7 +207,7 @@ def test_changed_execution_workspace_retains_source_cancel(source: dict, tmp_pat
         server.server_close()
 
 
-@pytest.mark.parametrize("fault", ["dirty", "wrong_repository", "tracked_link", "agent_dirty", "agent_branch", "agent_untracked", "agent_ignored", "unknown_workspace"])
+@pytest.mark.parametrize("fault", ["dirty", "wrong_repository", "tracked_link", "unknown_workspace"])
 def test_code_repository_dependencies_refuse_before_stopping_source(source: dict, tmp_path: Path, fault: str):
     project = source["project"]
     if fault == "dirty":
@@ -213,19 +218,7 @@ def test_code_repository_dependencies_refuse_before_stopping_source(source: dict
         source["cli"]("todo", "add", "--goal-id", "report", "--role", "agent", "--claimed-by", "agent-a",
             "--text", "Unstarted code work needs its own source workspace decision", "--task-repository", "git:example.org/fixtures/agent-transfer",
             "--required-write-scope", "report.txt", "--operation-id", "no-source-workspace")
-    elif fault.startswith("agent_"):
-        agent_workspace = project.parent / "agent"
-        if fault in ("agent_untracked", "agent_ignored"):
-            (agent_workspace / "report.txt").write_text("Unfinished original Agent work\n")
-            if fault == "agent_ignored":
-                with (project / ".git/info/exclude").open("a") as ignored:
-                    ignored.write("\nreport.txt\n")
-        else:
-            (agent_workspace / "input.txt").write_text("Unfinished original Agent edits\n")
-            if fault == "agent_branch":
-                subprocess.run(["git", "-C", str(agent_workspace), "add", "input.txt"], check=True)
-                subprocess.run(["git", "-C", str(agent_workspace), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.org",
-                    "commit", "-qm", "Unmerged original Agent work"], check=True)
+
     else:
         (project / "linked").symlink_to("input.txt")
         subprocess.run(["git", "-C", str(project), "add", "linked"], check=True)
@@ -237,6 +230,99 @@ def test_code_repository_dependencies_refuse_before_stopping_source(source: dict
         "--destination-root", str(destination), "--material", str(project / "input.txt"), "--execute", expected_code=1)
     assert result["ok"] is False and not destination.exists()
     assert before == (source["fence"].read_bytes(), source["registry"].read_bytes())
+
+
+@pytest.mark.parametrize("fault", ["symlink", "hardlink", "intent_to_add", "assume_unchanged", "conflicted_index"])
+def test_unsupported_actual_working_state_is_held_before_fencing(source: dict, tmp_path: Path, fault: str):
+    agent = source["project"].parent / "agent"
+    if fault == "symlink":
+        (agent / "report.txt").symlink_to("input.txt")
+    elif fault == "hardlink":
+        (agent / "report.txt").hardlink_to(agent / "input.txt")
+    elif fault == "intent_to_add":
+        (agent / "report.txt").write_text("Intent to add remains a distinct index state\n")
+        subprocess.run(["git", "-C", str(agent), "add", "-N", "report.txt"], check=True)
+    elif fault == "assume_unchanged":
+        subprocess.run(["git", "-C", str(agent), "update-index", "--assume-unchanged", "input.txt"], check=True)
+    else:
+        blob = subprocess.run(["git", "-C", str(agent), "rev-parse", "HEAD:input.txt"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "-C", str(agent), "update-index", "--index-info"],
+            input=f"0 {'0' * 40}\tinput.txt\n100644 {blob} 1\tinput.txt\n100644 {blob} 2\tinput.txt\n",
+            text=True, check=True)
+    original = source["fence"].read_bytes(), source["registry"].read_bytes()
+    destination = tmp_path / "unsupported-working-state"
+    response = source["cli"]("goal-transfer", "prepare-local", "--goal-id", "report", "--operation-id", OPERATION,
+        "--destination-root", str(destination), "--material", str(source["project"] / "input.txt"), "--execute", expected_code=1)
+    assert response["ok"] is False and not destination.exists()
+    assert original == (source["fence"].read_bytes(), source["registry"].read_bytes())
+
+
+def test_preparation_preserves_actual_agent_branch_index_and_unfinished_files(source: dict, tmp_path: Path):
+    """The source Agent's unfinished tree, not a clean default checkout, continues."""
+    _goal_document(source)
+    agent = source["project"].parent / "agent"
+
+    def git(*args: str) -> bytes:
+        return subprocess.run(["git", "-C", str(agent), *args], capture_output=True, check=True).stdout
+
+    for name in ("staged.txt", "deleted.txt", "removed.txt"):
+        (agent / name).write_text("Original branch content\n")
+    git("add", "staged.txt", "deleted.txt", "removed.txt")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.org", "commit", "-qm", "Unmerged Agent branch")
+    revision = git("rev-parse", "HEAD").strip()
+    (agent / "staged.txt").write_text("Staged original change\n")
+    (agent / "added.txt").write_text("New staged content\n")
+    git("add", "staged.txt", "added.txt")
+    (agent / "staged.txt").write_text("Later unstaged change\n")
+    (agent / "deleted.txt").unlink()
+    git("rm", "-q", "removed.txt")
+    (agent / "input.txt").write_text("5\n7\n9\n")
+    (agent / "notes-原工作.txt").write_bytes(b"Untracked original bytes\x00\xff")
+    (agent / "report.txt").write_text("Unfinished output\n")
+    (source["project"] / ".git/info/exclude").write_text("report.txt\nprivate-cache/\n")
+    (agent / "private-cache").mkdir()
+    (agent / "private-cache/key").write_text("Ignored outside the Task scope\n")
+    before = {name: git(*args) for name, args in {
+        "head": ("rev-parse", "HEAD"), "index": ("ls-files", "--stage", "-z"),
+        "staged": ("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"),
+        "working": ("diff", "--binary", "--no-ext-diff", "--no-textconv"),
+    }.items()}
+    target, prepared = _prepared(source, tmp_path)
+    review = prepared["prepared_cutover"]
+    source["cli"]("goal-transfer", "confirm", "--goal-id", "report", "--operation-id", OPERATION,
+        "--expected-preview-sha256", review["preview_sha256"], "--execute")
+    context = target["cli"]("goal-transfer", "context", "--goal-id", "report",
+        "--agent-id", "agent-a", "--todo-id", source["todo"])["context"]
+    worktree = Path(context["execution_workspace"])
+    assert (worktree / "input.txt").read_bytes() == b"5\n7\n9\n"
+    actual_input = next(row for row in context["execution_materials"] if row["relative_path"] == "input.txt")
+    canonical_input = next(row for row in context["materials"] if row["relative_path"] == "input.txt")
+    assert actual_input["sha256"] != canonical_input["sha256"]
+    assert actual_input["task_workspace_relative_path"] == "input.txt"
+    assert (target["project"] / "input.txt").read_bytes() == b"6\n7\n8\n"
+    assert (worktree / "staged.txt").read_bytes() == b"Later unstaged change\n"
+    assert (worktree / "added.txt").read_bytes() == b"New staged content\n"
+    assert (worktree / "notes-原工作.txt").read_bytes() == b"Untracked original bytes\x00\xff"
+    assert (worktree / "report.txt").read_bytes() == b"Unfinished output\n"
+    assert not (worktree / "deleted.txt").exists() and not (worktree / "removed.txt").exists()
+    assert not (worktree / "private-cache").exists()
+    for name, args in {"head": ("rev-parse", "HEAD"), "index": ("ls-files", "--stage", "-z"),
+        "staged": ("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"),
+        "working": ("diff", "--binary", "--no-ext-diff", "--no-textconv")}.items():
+        assert git(*args) == before[name], "preparation must not modify the source"
+        observed = subprocess.run(["git", "-C", str(worktree), *args], capture_output=True, check=True).stdout
+        assert observed == before[name], name
+    source["project"].rename(tmp_path / "offline-source")
+    source["runtime"].rename(tmp_path / "offline-runtime")
+    assert subprocess.run(["git", "-C", str(worktree), "show", revision.decode() + "^:input.txt"],
+        capture_output=True, check=True).stdout == b"6\n7\n8\n"
+    lease = target["cli"]("task-lease", "acquire", "--goal-id", "report", "--todo-id", source["todo"],
+        "--owner", "agent-a", "--idempotency-key", "continue-unfinished-tree", "--write-scope", "report.txt",
+        "--write-worktree", str(worktree))["lease"]
+    assert lease["lease_epoch"] > 1
+    target["cli"]("task-lease", "release", "--goal-id", "report", "--todo-id", source["todo"], "--owner", "agent-a",
+        "--idempotency-key", lease["idempotency_key"], "--expected-version", str(lease["version"]))
 
 
 def _prepared(source: dict, root: Path) -> tuple[dict, dict]:

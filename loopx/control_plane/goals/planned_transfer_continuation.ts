@@ -15,6 +15,7 @@ import {openLocalAuthorityStoreHandle, requireLocalAuthorityRuntimeRoot} from ".
 import {indexCoordinationProjection} from "../coordination/coordination_projection.ts";
 import {readGoalTransferSnapshot, checkGoalTransferSourceContext} from "./planned_transfer.ts";
 import {readGoalTransferHistoryJson} from "./planned_transfer_history.ts";
+import {repositoryMaterialMapping, type TransferRepository} from "./planned_transfer_repository.ts";
 import {verifyGoalTransferExecutionWorkspace} from "./planned_transfer_workspace.ts";
 
 function reject(message: string): never {throw new EffectRuntimeConflictError(message);}
@@ -181,10 +182,11 @@ export async function readGoalTransferHostContext(value: JsonObject): Promise<Js
   return {context: {kind: "reviewed_context", goal_id: goal, agent_id: agent,
     requirements: context.state_text, original_goal: context.goal,
     current_goal: requireJsonObject(snapshot.source_context, "current context").goal, selected_todo: selected,
-    ...(execution ? {execution_workspace: execution.path} : {}),
+    ...(execution ? {execution_workspace: execution.path, execution_materials: repositoryMaterialMapping(
+      requireJsonObject(execution.repository, "original execution repository") as TransferRepository, manifest).map(item => ({...item.row, relative_path: item.path}))} : {}),
     todos: index.todo_ids.map(id => index.todos.get(id)!), materials, original_accounting: history.provenance,
     source_sessions_adopted: false, credentials_adopted: false,
-    guidance: "Continue the original work using current Task/lease and Host authority. Read required Goal documents through current_goal and the reviewed destination material paths; original_goal retains historical source references. Historical decisions and receipts grant no execution permission."}};
+    guidance: "Continue the original work using current Task/lease and Host authority. Read required Goal documents through current_goal and the reviewed destination material paths. When present, execution_materials maps the actual unfinished inputs within execution_workspace; original_goal retains historical source references. Historical decisions and receipts grant no execution permission."}};
 }
 
 /** The existing Settings/CLI entry also works after moving to the destination.

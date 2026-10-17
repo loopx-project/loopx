@@ -366,7 +366,7 @@ export async function prepareAuthorityForPlannedTransfer(value: JsonObject): Pro
         head, identity.store_identity, goal, operation);
       if (value.registered_source_preview_sha256 !== preview.preview_sha256) reject("Reviewed transfer source preview changed; review the current source without executing it");
     }
-    const protectedInputs = protectedExport ? await reviewProtectedGoalTransferInputs(value.protected_transport, context!, value.source_package_version) : undefined;
+    const protectedInputs = protectedExport ? await reviewProtectedGoalTransferInputs(value.protected_transport, context!, value.source_package_version, head.head) : undefined;
     await mkdir(directory, {recursive: true, mode: 0o700});
     await retain(pendingPath, preparation);
     await preparePlannedTransferWriterFenceUnderLock(root, goal, priorFence, sourcePreparationFence(goal, operation, preparation));

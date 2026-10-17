@@ -5,8 +5,9 @@ import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {planGoalTransferWorkspace, readGoalTransferWorkspaceReview, retainGoalTransferWorkspace,
   reviewGoalTransferWorkspace, verifyGoalTransferWorkspaceReview} from "../../loopx/control_plane/goals/planned_transfer_workspace.ts";
+import {decodePlannedTransferMaterial} from "../../loopx/control_plane/goals/planned_transfer.ts";
 import {inspectTransferFile} from "../../loopx/control_plane/goals/planned_transfer_container.ts";
-import {reviewProtectedGoalTransferInputs} from "../../loopx/control_plane/goals/planned_transfer_payload.ts";
+import {reviewProtectedGoalTransferInputs, reviewGoalTransferMaterialInputs} from "../../loopx/control_plane/goals/planned_transfer_payload.ts";
 
 async function fixture(t: TestContext) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "loopx-workspace-transfer-")));
@@ -104,4 +105,23 @@ test("unsupported source platform refuses before recipient validation or prepara
   Object.defineProperty(process, "platform", {...original, value: "win32"});
   try { await assert.rejects(reviewProtectedGoalTransferInputs({}, {}, "test"), /POSIX profile before preparation/); }
   finally { Object.defineProperty(process, "platform", original); }
+});
+
+
+test("working-input mapping cannot nominate another source or enter control metadata", async t => {
+  const f = await fixture(t); await mkdir(f.project); await mkdir(f.runtime);
+  const context = {goal: {id: "original", repo: f.project}, runtime_root: f.runtime,
+    registry_path: join(f.project, ".loopx/registry.json")};
+  await assert.rejects(reviewGoalTransferMaterialInputs([{path: f.source, sha256: f.material.sha256}], context), /original Goal or its recorded Task workspace/);
+  const path = join(f.project, "input.txt"); await writeFile(path, "Canonical input");
+  const input = {path, ...await inspectTransferFile(path)};
+  await assert.rejects(reviewGoalTransferMaterialInputs([input], context), /reviewed content digest/);
+  const reviewed = await reviewGoalTransferMaterialInputs([{path, sha256: input.sha256}], context);
+  assert.equal(reviewed.materials.length, 1);
+  assert.deepEqual(Object.keys(reviewed.materials[0]!).sort(), ["bytes", "id", "sha256", "source_relative_path"]);
+  const legacy = {...f.material}; delete (legacy as Partial<typeof legacy>).path;
+  assert.deepEqual(decodePlannedTransferMaterial(legacy, 0), legacy);
+  for (const relative of ["../escape", "/elsewhere", ".git/config", ".loopx/registry.json", "data//input"]) {
+    assert.throws(() => decodePlannedTransferMaterial({...legacy, task_workspace_relative_path: relative}, 0), /Task workspace material path/);
+  }
 });

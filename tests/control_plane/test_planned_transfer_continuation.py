@@ -49,15 +49,24 @@ def test_reviewed_context_admits_a_new_runtime_without_copying_a_session(source:
     assert "Produce report.txt from input.txt" in context["context"]["requirements"]
 
 
+@pytest.mark.parametrize("working_state", ["clean", "unfinished"])
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="requires the isolated real Codex fixture")
-def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reexecution(source: dict, tmp_path: Path, monkeypatch):
+def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reexecution(source: dict, tmp_path: Path, monkeypatch, working_state: str):
     from tests.control_plane.codex_checkpoint_fixture import real_native_source
 
     _goal_document(source, absolute=True)
+    if working_state == "unfinished":
+        actual = source["project"].parent / "agent"
+        (actual / "branch-context.txt").write_text("Continue this unmerged original branch\n")
+        subprocess.run(["git", "-C", str(actual), "add", "branch-context.txt"], check=True)
+        subprocess.run(["git", "-C", str(actual), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.org",
+            "commit", "-qm", "Original unmerged context"], check=True)
+        (actual / "input.txt").write_text("5\n7\n9\n")
+        (actual / "report.txt").write_text("Original unfinished output\n")
     # Original accepted context and its relation survive; no replacement Todo
     # is invented after transfer. Expected 21 is fixed before any model output.
     accepted = source["cli"]("todo", "add", "--goal-id", "report", "--role", "user", "--task-class", "user_action",
-        "--text", "Accept exactly 21 from the unchanged three input values", "--operation-id", "original-criteria")["todo_id"]
+        "--text", "Accept exactly 21 from the original three work values", "--operation-id", "original-criteria")["todo_id"]
     source["cli"]("todo", "complete", "--goal-id", "report", "--role", "user", "--todo-id", accepted,
         "--agent-id", "agent-a", "--evidence", "input.txt", "--successor-todo-id", source["todo"])
     source["cli"]("todo", "archive-completed", "--goal-id", "report", "--role", "user", "--max-active-done", "0", "--execute")
@@ -82,6 +91,9 @@ def test_real_fresh_native_turn_finishes_original_work_and_recovers_without_reex
         "--write-worktree", str(worktree))["lease"]
     assert lease["lease_epoch"] > 1 and lease["idempotency_key"] != "original-work"
     script = "from pathlib import Path; assert 'produce exactly 21' in Path('requirements/GOAL.md').read_text(); p=Path('report.txt'); assert not p.exists(); p.write_text(str(sum(map(int,Path('input.txt').read_text().split())))+'\\n')"
+    if working_state == "unfinished":
+        assert (worktree / "report.txt").read_bytes() == b"Original unfinished output\n"
+        script = script.replace("assert not p.exists()", "assert p.read_text() == 'Original unfinished output\\n'; assert 'unmerged original branch' in Path('branch-context.txt').read_text()")
     requests = []
 
     def response(body, number, message):

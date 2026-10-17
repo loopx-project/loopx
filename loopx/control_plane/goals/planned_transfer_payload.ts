@@ -13,6 +13,7 @@ import {PREPARATION_SCHEMA, decodePlannedTransferMaterial, type ProtectedGoalMat
 import {inspectTransferFile, requirePhysicalTransferPath, withVerifiedTransferContainer,
   validatePlannedTransferRecipient, writeTransferContainer, type TransferContainerFile} from "./planned_transfer_container.ts";
 
+import {goalTransferMaterialPath, locateGoalTransferAgentWorkspace} from "./planned_transfer_repository.ts";
 import {decodeGoalTransferHistory, goalTransferHistoryInputs, type ProtectedGoalTransferHistory} from "./planned_transfer_history.ts";
 
 const PAYLOAD_SCHEMA = "loopx_planned_transfer_payload_v1";
@@ -35,7 +36,7 @@ export interface VerifiedGoalTransferPayload {
  * original registry, native revision, complete archive and source fence check.
  * Materials are an explicit reviewed selection, not a completeness/privacy
  * certification. No machine root, registry inventory or Git metadata is swept. */
-export async function reviewProtectedGoalTransferInputs(raw: unknown, context: JsonObject, packageVersion: unknown) {
+export async function reviewProtectedGoalTransferInputs(raw: unknown, context: JsonObject, packageVersion: unknown, projection?: JsonObject) {
   if (process.platform === "win32") reject("Protected source transfer requires the local POSIX profile before preparation");
   const transport = requireJsonObject(raw, "protected transfer request");
   if (!hasExactAuthorityKeys(transport, ["destination", "recipient", "materials"]) || !Array.isArray(transport.materials)) {
@@ -43,31 +44,32 @@ export async function reviewProtectedGoalTransferInputs(raw: unknown, context: J
   }
   const recipient = validatePlannedTransferRecipient(transport.recipient);
   const destination = await requirePhysicalTransferPath(transport.destination), sourceVersion = version(packageVersion);
-  return {recipient, destination, sourceVersion, ...await reviewGoalTransferMaterialInputs(transport.materials, context)};
+  return {recipient, destination, sourceVersion, ...await reviewGoalTransferMaterialInputs(transport.materials, context, projection)};
 }
 
 /** The Agent's explicit workspace selection is checked before preparation and
  * again under the source owner's export locks. This is not a credential scan
  * or a claim that every dependency has been selected. */
-export async function reviewGoalTransferMaterialInputs(raw: unknown, context: JsonObject) {
+export async function reviewGoalTransferMaterialInputs(raw: unknown, context: JsonObject, projection?: JsonObject) {
   if (!Array.isArray(raw)) reject("Review an explicit workspace material selection");
   const goal = requireJsonObject(context.goal, "original Goal");
   const project = await requirePhysicalTransferPath(goal.repo), runtime = await requirePhysicalTransferPath(context.runtime_root);
   const registry = await requirePhysicalTransferPath(context.registry_path);
   const files: TransferContainerFile[] = [];
   const materials: JsonObject[] = [], seen = new Set<string>();
+  const outside = raw.some(item => !beneath(project, String(requireJsonObject(item, "reviewed Goal material").path)));
+  const workspace = outside && projection ? (await locateGoalTransferAgentWorkspace(goal, projection))?.path ?? null : null;
   for (const [index, rawMaterial] of raw.entries()) {
     const material = requireJsonObject(rawMaterial, "reviewed Goal material");
     if (!hasExactAuthorityKeys(material, ["path", "sha256"]) || !BARE_SHA256_PATTERN.test(String(material.sha256))) reject("Goal material requires its reviewed content digest");
-    const path = await requirePhysicalTransferPath(material.path), suffix = relative(project, path);
-    if (!beneath(project, path) || path === project || beneath(runtime, path) || path === registry ||
-        beneath(join(project, ".git"), path) || seen.has(path)) reject("Transfer material must be unique workspace input outside runtime, registry and Git metadata");
+    const path = await requirePhysicalTransferPath(material.path), suffix = goalTransferMaterialPath(project, workspace, path);
+    if (beneath(runtime, path) || path === registry || seen.has(suffix)) reject("Transfer material must be unique workspace input outside runtime, registry and Git metadata");
     if ((await lstat(path)).nlink !== 1) reject("Transfer material must not alias another file through a hard link");
     const facts = await inspectTransferFile(path);
     if (facts.sha256 !== material.sha256) reject("Reviewed Goal material changed; review its current bytes before exporting");
-    seen.add(path); files.push({path, ...facts});
+    seen.add(suffix); files.push({path, ...facts});
     materials.push({id: (index + 2).toString(16).padStart(8, "0"), source_relative_path: suffix,
-      ...facts});
+      ...(!beneath(project, path) ? {task_workspace_relative_path: relative(workspace!, path)} : {}), ...facts});
   }
   return {files, materials};
 }

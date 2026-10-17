@@ -24,7 +24,7 @@ export const PREPARATION_SCHEMA = "loopx_planned_transfer_authority_preparation_
 const executeFile = promisify(execFile);
 
 export interface PlannedTransferMaterialIdentity extends JsonObject {
-  id: string; source_relative_path: string; sha256: string; bytes: number;
+  id: string; source_relative_path: string; sha256: string; bytes: number; task_workspace_relative_path?: string;
 }
 export interface ProtectedGoalMaterial extends PlannedTransferMaterialIdentity {path: string}
 
@@ -33,11 +33,14 @@ export interface ProtectedGoalMaterial extends PlannedTransferMaterialIdentity {
  * The custody reader separately bounds and verifies the actual file bytes. */
 export function decodePlannedTransferMaterial(raw: unknown, index: number): PlannedTransferMaterialIdentity {
   const row = requireJsonObject(raw, "original Goal material");
-  if (!hasExactAuthorityKeys(row, ["id", "source_relative_path", "sha256", "bytes"]) ||
+  if (!hasExactAuthorityKeys(row, ["id", "source_relative_path", "sha256", "bytes", ...(row.task_workspace_relative_path !== undefined ? ["task_workspace_relative_path"] : [])]) ||
       row.id !== (index + 2).toString(16).padStart(8, "0") || !BARE_SHA256_PATTERN.test(String(row.sha256)) ||
       typeof row.bytes !== "number" || !Number.isSafeInteger(row.bytes) || row.bytes < 0 ||
       typeof row.source_relative_path !== "string" || !row.source_relative_path || row.source_relative_path.startsWith("/") ||
       row.source_relative_path.includes("\0") || row.source_relative_path.split("/").some(part => part === "" || part === "." || part === "..")) reject("Original Goal material identity is invalid");
+  if (row.task_workspace_relative_path !== undefined && (typeof row.task_workspace_relative_path !== "string" ||
+      !row.task_workspace_relative_path || row.task_workspace_relative_path.startsWith("/") || row.task_workspace_relative_path.includes("\0") ||
+      row.task_workspace_relative_path.split("/").some(part => !part || [".", "..", ".git", ".loopx"].includes(part)))) reject("Original Task workspace material path is invalid");
   return row as PlannedTransferMaterialIdentity;
 }
 
