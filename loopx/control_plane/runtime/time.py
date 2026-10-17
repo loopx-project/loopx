@@ -78,11 +78,11 @@ def parse_timestamp(value: Any) -> datetime | None:
         parsed = datetime.fromisoformat(
             stable_text.replace("Z", "+00:00").replace("z", "+00:00")
         )
-    except ValueError:
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
         return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def chronology_key(value: Any) -> tuple[int, datetime, str]:
