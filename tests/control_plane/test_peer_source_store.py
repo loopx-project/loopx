@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from types import SimpleNamespace
 
 import pytest
@@ -45,7 +47,7 @@ def source_request(tmp_path, monkeypatch, *, provider="file", colocated=False):
     store = ChatSessionStore(root if colocated else tmp_path / "chat-host")
     session = store.create_session(
         goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
-        upstream_thread_id="synthetic-host", channel_id="manager.external.fixture",
+        upstream_thread_id="synthetic-host", channel_id="manager.external." + "a" * 24,
     )
     turn, _ = store.create_turn(session["session_id"], client_turn_id="source-request",
                                message="Review this correction and return the evidence.", origin="lark")
@@ -337,3 +339,87 @@ def test_source_session_recovery_preserves_goal_ref_and_rejects_new_instance(tmp
     with pytest.raises(ValueError, match="instance"):
         forward(root, registry, receipt, operation="new-instance")
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
+@pytest.mark.parametrize("entrypoint", ["handoff", "peer"])
+@pytest.mark.parametrize("order", ["revoke_first", "publish_first"])
+def test_context_revocation_orders_inbox_publication(tmp_path, monkeypatch, provider, entrypoint, order):
+    from loopx.capabilities import manager_context
+    from loopx.control_plane.collaboration import peers
+
+    root, registry, store, session, turn, receipt = source_request(tmp_path, monkeypatch, provider=provider)
+    adapter = manager_context if entrypoint == "handoff" else peers
+    publication_entered, release_publication = threading.Event(), threading.Event()
+    original_plan = adapter.plan_request_publication
+
+    def publication_plan(*args, **kwargs):
+        plan = original_plan(*args, **kwargs)
+        publication_entered.set()
+        assert release_publication.wait(5), "test did not release inbox publication"
+        return plan
+
+    def publish():
+        if entrypoint == "peer":
+            return forward(root, registry, receipt)
+        return manager_context.deliver(
+            root, registry, session=session, turn=turn,
+            request={"goal_id": "goal-a", "agent_id": "reviewer"}, source_store=store,
+        )
+
+    def revoke():
+        return manager_context.configure_delivery_target(
+            root, registry, channel=session["channel_id"], goal_id="goal-a",
+            agent_id="reviewer", grant=False, execute=True,
+        )
+
+    def records():
+        return {p.relative_to(_root(root)): p.read_bytes()
+                for folder in ("entries", "peer-operations", "roundtrips")
+                for p in (_root(root) / folder).rglob("*.json")}
+
+    before = records()
+    if order == "revoke_first":
+        assert revoke()["readback_verified"]
+        with pytest.raises(ValueError, match="not authorized"):
+            publish()
+        assert records() == before
+        assert not read_inbox(root, registry, "goal-a", "reviewer")["items"]
+        return
+
+    monkeypatch.setattr(adapter, "plan_request_publication", publication_plan)
+    revoke_entered = threading.Event()
+
+    def concurrent_revoke():
+        revoke_entered.set()
+        return revoke()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        publishing = executor.submit(publish)
+        try:
+            assert publication_entered.wait(5)
+            revoking = executor.submit(concurrent_revoke)
+            assert revoke_entered.wait(5)
+            # Revocation may not report completion across an admitted commit.
+            # The timeout only bounds the blocked-call observation; events
+            # determine when the real publication can continue.
+            with pytest.raises(FutureTimeout):
+                revoking.result(timeout=0.2)
+        finally:
+            release_publication.set()
+        published = publishing.result(timeout=5)
+        revoked = revoking.result(timeout=5)
+    assert published["status"] == "delivered" and revoked["readback_verified"]
+    received = read_inbox(root, registry, "goal-a", "reviewer")["items"]
+    assert len(received) == 1 and received[0]["request_id"] == published["request_id"]
+    if entrypoint == "peer":
+        assert received[0]["parent_request_id"] == receipt["request_id"]
+        assert received[0]["inherited_context"]["message"] == turn["message"]
+    else:
+        assert received[0]["message"] == turn["message"]
+    # A committed receipt remains historical evidence, never a replay grant.
+    committed = records()
+    with pytest.raises(ValueError, match="not authorized"):
+        publish()
+    assert records() == committed
+    assert not (root / "chat").exists()

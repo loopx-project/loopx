@@ -10,6 +10,7 @@ import hashlib
 import os
 import re
 import stat
+from contextlib import nullcontext
 from pathlib import Path
 
 from .inbox import (
@@ -33,6 +34,7 @@ from .goal_instance_scope import (
     goal_accepts_collaboration,
 )
 from ...agent_registry import registered_agent_ids_for_goal
+from ...file_lock import exclusive_file_lock
 from ...thread_agent_binding import resolve_thread_agent_binding
 from ..projects.registry_codec import load_project_registry
 from ..runtime.file_paths import windows_extended_path
@@ -90,7 +92,12 @@ def request(
     if source_agent_id == target_agent_id:
         raise ValueError("a peer request requires a different receiving Agent")
     operation_id = require_operation_id(operation_id)
-    with collaboration_goal_scope(
+    # An inherited source grant must remain current until its request is stored.
+    # Take the policy fence before Goal/request locks, as the source writer does.
+    with (
+        exclusive_file_lock((_root(root) / "policy.json").with_suffix(".lock"))
+        if parent_request_id else nullcontext()
+    ), collaboration_goal_scope(
         registry,
         goal_id=goal_id,
         agents=(source_agent_id, target_agent_id),
