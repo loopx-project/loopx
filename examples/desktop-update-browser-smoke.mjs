@@ -106,7 +106,7 @@ try {
     return await nativeActionSettled;
   });
   await page.addInitScript(() => {
-    localStorage.setItem("loopx-pw-locale", "zh-CN");
+    if (!localStorage.getItem("loopx-pw-locale")) localStorage.setItem("loopx-pw-locale", "zh-CN");
     window.__TAURI__ = { core: { invoke: (...args) => window.nativeInvoke(...args) } };
   });
   await page.goto(`${origin}/chat/?statusUrl=/status.json`);
@@ -243,6 +243,37 @@ try {
     assert.equal(calls.length, beforeRead, "reading a failure must not repeat recovery effects");
   }
 
+  // Ordinary startup and Forget reconnect services without installing updates.
+  // Readback must not invent an installation effect from those shared phases.
+  for (const [locale, update, connecting] of [
+    ["zh-CN", "更新 LoopX", "正在连接…"],
+    ["en", "Update LoopX", "Connecting…"],
+  ]) {
+    const beforeRead = calls.length;
+    await page.evaluate((value) => localStorage.setItem("loopx-pw-locale", value), locale);
+    nativeState = { phase: "ready", details: {} };
+    await page.reload();
+    await page.getByRole("button", { name: update, exact: true }).click();
+    const statusText = await page.locator(".personal-update-panel").getByRole("status").innerText();
+    await page.screenshot({ path: resolve(output, `update-ready-${locale}.png`) });
+    assert.doesNotMatch(statusText, /更新完成|update completed/i, "ready alone is not evidence of an update");
+    nativeState = { phase: "connecting", details: {} };
+    await page.reload();
+    await page.getByRole("button", { name: connecting, exact: true }).click();
+    assert.doesNotMatch(await page.locator(".personal-update-panel").getByRole("status").innerText(), /更新后|updated services/i);
+    assert.equal(calls.length, beforeRead, "reading startup phases must not request an update");
+  }
+  await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
+  nativeState = { phase: "ready", details: {} };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.getByRole("button", { name: "打开 Goal 导航", exact: true }).click();
+  await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
+  assert.equal(await page.locator(".personal-update-panel").getByRole("status").isVisible(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.screenshot({ path: resolve(output, "update-ready-mobile.png") });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
   // The native owner decides whether Repair can maintain this installation.
   // The workspace consumes that projection rather than inferring from a path.
   nativeState = { phase: "ready", details: {} };
@@ -254,7 +285,7 @@ try {
   await page.getByText(/当前 App 无法重装运行时/).waitFor();
   const beforeForget = calls.length;
   await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).click();
-  await page.getByText("正在连接更新后的服务…", { exact: true }).waitFor();
+  await page.getByText("正在连接本地服务…", { exact: true }).waitFor();
   assert.deepEqual(calls.slice(beforeForget).map((call) => call.args.action), ["forget_runtime_selection"]);
   await nativeActionSettled;
   await page.getByRole("button", { name: "清除记住的运行时选择", exact: true }).waitFor({ state: "hidden" });

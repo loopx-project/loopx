@@ -16,6 +16,7 @@ from ...control_plane.runtime.validation_command import (
     run_caller_validation as _run_caller_validation,
     require_validation_passed as _require_passed,
 )
+from ...extensions.process_runtime import remove_owned_tree
 
 
 ISSUE_FIX_ACCEPTANCE_LOOP_SCHEMA_VERSION = "issue_fix_acceptance_loop_v0"
@@ -256,9 +257,16 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
 
 
 def _remove_temporary_git_workspace(workspace: Path) -> None:
+    """Drop this packet's own temporary repository, read-only objects included.
+
+    Git marks every loose object read-only, which Windows refuses to unlink, so
+    the retry below only ever helped a transient lock; the host attribute is
+    cleared by the shared owner before each attempt.
+    """
+
     for attempt in range(5):
         try:
-            shutil.rmtree(workspace)
+            remove_owned_tree(workspace)
             return
         except OSError:
             if attempt == 4:
