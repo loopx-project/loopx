@@ -25,7 +25,10 @@ export const goalShowcaseScenario = {
       await openShowcaseGoal(page);
       const overview = page.locator(".goal-overview");
       assert.equal(await overview.getByRole("alert").count(), 0, "The showcase state has no region failure");
-      assert.match(await page.locator(".goal-overview-objective").innerText(), /ledger API/);
+      const declaredObjective = overview.getByTestId("goal-declared-objective");
+      assert.equal(await declaredObjective.innerText(), "Move legacy billing exports onto the ledger service.");
+      assert.match(await overview.locator(".delivery-acceptance-contract .goal-overview-objective").innerText(), /ledger API/,
+        "Optional acceptance keeps its own objective beside the Goal's recorded direction");
       assert.match(await page.locator(".goal-overview-progress").innerText(), /2\/4/);
       assert.ok(await progressIsReadable(page), "The short criterion count fits on one line, rather than being squeezed by its meter");
       assert.equal(await page.locator(".goal-criteria-meter i").count(), 4, "The meter has one segment per criterion");
@@ -66,6 +69,8 @@ export const goalShowcaseScenario = {
       for (const value of observed) {
         assert.ok(["23/28", "24/29"].includes(value), `The refresh invented an intermediate count: ${value}`);
       }
+      assert.equal(await declaredObjective.innerText(), "Move legacy billing exports onto the ledger service.",
+        "Progress refresh does not replace the Goal's recorded objective");
       await page.waitForTimeout(700);
       const cost = await page.getByTestId("goal-vitals").locator(".goal-vital").nth(4).locator(".goal-vital-value").innerText();
       assert.equal(cost, "$25.40", "Cost displays the exact observation");

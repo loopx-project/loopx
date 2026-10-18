@@ -88,16 +88,19 @@ export const firstGoalHomeScenario = {
       const failedBanner = page.locator(".personal-system-health-banner");
       assert.match(await failedBanner.innerText(), /状态来源读取失败/, "The failure is shown in owner language");
       assert.match(await failedBanner.innerText(), /最近一次读取失败：/);
-      const headerStatus = page.locator(".personal-channel-title, header").first();
+      const refreshFeedback = page.locator(".personal-refresh-control").getByRole("status");
       await page.locator("small", { hasText: "刷新失败" }).first().waitFor({ state: "visible", timeout: 10_000 });
-      assert.equal(await page.locator("small", { hasText: "刚刚更新" }).count(), 0, "A failed refresh never reports an update");
-      void headerStatus;
+      assert.equal(await refreshFeedback.textContent(), "", "A failed refresh never announces an update");
       await page.screenshot({ path: resolve(outputDir, "first-goal-home-source-failed.png"), animations: "disabled" });
       api.statusFailure = null;
-      await sourceRetry.click();
+      // Success is announced in the accessible status region. Observe the
+      // transient announcement from the retry, alongside the restored board.
+      await Promise.all([
+        refreshFeedback.filter({ hasText: "刚刚更新" }).waitFor({ state: "attached", timeout: 10_000 }),
+        sourceRetry.click(),
+      ]);
       await firstGoal.waitFor({ state: "visible", timeout: 15_000 });
       assert.equal(await page.locator(".personal-system-health-banner").count(), 0, "A repaired source clears the failure");
-      await page.locator("small", { hasText: "刚刚更新" }).first().waitFor({ state: "visible", timeout: 10_000 });
 
       // English copy and the phone composition.
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));

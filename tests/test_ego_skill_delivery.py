@@ -9,8 +9,8 @@ import sys
 
 import pytest
 
-from loopx import ego_skill_delivery as delivery
 from loopx.workflow_skill_install import workflow_skill_install
+from loopx.workflow_skills import ego_delivery as delivery
 
 
 @pytest.fixture

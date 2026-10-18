@@ -64,7 +64,9 @@ If the bundle is newer, or no selected CLI qualifies, the App prepares its
 bundled snapshot in its own data directory through the existing installer.
 This updates the CLI used by the App without replacing uv/pip/pipx's command or
 editing the user's shell profile. An optional failed upgrade retains a qualified
-previous runtime. Core's installation-only doctor qualifies non-editable wheel
+previous runtime. Every discovered CLI must answer Core's installation-only
+doctor successfully, including managed releases: a surviving `release.json`
+cannot qualify a broken executable. Core also qualifies non-editable wheel
 fingerprints: a local reuse fence, not publisher or source attestation. Older
 CLIs without that readback can use the automatic App-owned fallback.
 

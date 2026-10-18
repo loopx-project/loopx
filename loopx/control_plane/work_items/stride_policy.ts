@@ -55,7 +55,7 @@ export function stridePlanningGuidance(value: unknown): string[] {
     "Missing or refuted evidence is not a universal route ban. Preserve the best qualified artifact and original priorities. " +
     "Declare minimum evidence, a testable prediction, adoption criterion and full marginal cost including control and validation; review actual adoption, quality and cost next. Verify must resolve a named grow-or-switch question, not repeat an unchanged check. " +
     "Carry the next_probe into existing executable Todo work, reusing an unfinished experiment when it still answers the question. " +
-    "Use the existing agent_vision.todo_delta action:todo_id entries to identify that work after its normal authoring/readback; do not invent IDs or add a planning-only Todo. " +
+    "Use agent_vision.todo_delta entries such as retain:todo_<id> to identify that work after its normal authoring/readback; do not invent IDs or add a planning-only Todo. " +
     "Read planned_work and subsequent observations before crediting the previous decision. A negative experiment may finish its Todo while the broader goal remains open. " +
     "Keep a candidate experiment separate from the best retained artifact: authorized evaluation may be informative before replacement is justified. " +
     "Use the live stride_control contract for agent_vision.stride_decision. This controls proposal completeness, not execution, " +

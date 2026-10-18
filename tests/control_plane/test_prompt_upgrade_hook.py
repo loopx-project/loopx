@@ -140,8 +140,9 @@ def test_partial_reconciliation_preserves_other_pending_entries(tmp_path, monkey
 @pytest.mark.parametrize("route_source", ["quota_cli_invocation", "loopx_turn_run_once"])
 def test_upgrade_read_projection_preserves_work_authority(tmp_path, monkeypatch, route_source):
     home, path, database, registry, root, _, desired, _ = _deferred(tmp_path, monkeypatch)
-    monkeypatch.setattr("loopx.control_plane.scheduler.scheduler_hint.now_utc",
-        lambda: datetime(2026, 1, 1, tzinfo=timezone.utc))
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr("loopx.control_plane.scheduler.scheduler_hint.now_utc", lambda: now)
+    monkeypatch.setattr("loopx.control_plane.runtime.time.now_utc", lambda: now)
     status = quota_status_payload(goal_id="fixture-goal", status="active", recommended_action="Advance the selected work",
         coordination={"registered_agents": ["agent-a"]},
         agent_todo_items=[{"todo_id": "todo_ordinary_work", "index": 1,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from loopx.control_plane.quota.should_run import (
     build_quota_should_run as bounded_build_quota_should_run,
 )
@@ -40,7 +42,11 @@ def test_absent_boundary_keeps_delivery_and_capability_decisions() -> None:
         assert not (packet.get("delivery_workspace") or {}).get("allowed_write_scopes")
 
 
-def test_facade_builds_through_bounded_should_run_module() -> None:
+def test_facade_builds_through_bounded_should_run_module(monkeypatch) -> None:
+    # Compare both entrypoints at one observation instant; all freshness and
+    # authority fields remain part of the exact parity assertion below.
+    monkeypatch.setattr("loopx.control_plane.runtime.time.now_utc",
+        lambda: datetime(2026, 1, 1, tzinfo=timezone.utc))
     todo_text = "[P1] Advance the bounded slice."
     payload = quota_status_payload(
         goal_id=GOAL_ID,
