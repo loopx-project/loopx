@@ -704,7 +704,7 @@ writer 工作。
 
 | 既有里程碑／优先级 | 下一独立可评审结果 | 验收与后续 |
 | --- | --- | --- |
-| 计划内 Agent 迁移 · P0 产品细化提案 | 用户准备可联系的源端，把一个有真实内容的 Goal 及其负责 Agent 搬到明确的正常安装本地 profile，并从发起产品入口继续未完成工作 | 按[已准备的迁移旅程](complete-state-recovery-v0.zh-CN.md#planned-agent-transfer)交付必要上下文/材料、目标准入、过期源排除及原操作失败恢复。所选 profile 的实际依赖和可携产物保护须合格；不等待全部云/平台 profile，不把备份检查、TS 删行或 D2 默认资格当用户结果。这是下一交付提案，不代表迁移已实现或授予激活。 |
+| Agent 协助迁移 · P0 有界打磨 | 在已有备份/导出、校验、隔离恢复和重绑原子能力上修复实证缺口，配合可复制 prompt，由用户的 Agent 协调迁移 | 按[Agent 协助路径](complete-state-recovery-v0.zh-CN.md#planned-agent-transfer)复用当前 owner 和受支持的上下文采用，证明真实原子往返及拒绝边界。不要求专用迁移 executor、Host 唤醒、会话/UI 或自动回传系统。备份校验不等于迁移完成，目标 Agent 仍须验证有用的原工作；M2/M3 灾难恢复、D2 与发布权限分别保留。 |
 | T4/C1 + D1 · P1，伴随 | 冻结最终 main 源码及正常安装的 CLI／App／受影响本地 Host 升级旅程，包含 #6597 重启恢复 | 比较完整 active／archive、claim、lease epoch、原 receipt 和后写；覆盖过期未释放租约、旧 preview／proof、provider 不可用、中断 apply，拒绝时状态不变；通过审核迁移退出且保留新写。既有安装修复证据先核对源码／caller 适用性再复用。 |
 | 完整恢复 M2 → M3 · P1 | 为一个受支持本地 profile 声明捕获一致性，再从不可用来源恢复一个 Goal 并继续未完成工作 | 复用 manifest／registry／Goal／provider／session／effect owner；演练前冻结 decision-owner 矩阵和 RPO/RTO，对账 pending effect 与目标身份。M1 检查仍隔离无执行权；M3 须 owner 准入、受保护重复操作为零、hold 可见，并在发起产品入口返回独立验收的结果。 |
 | Goal lifetime M2–M5／#5206 · 仅涉及的 P1 依赖 | 补齐所选 profile 剩余旧／warm writer 和 effect drain fence，再做其孤儿恢复／退役同名重建旅程 | 删除源码 writer 不排除已安装 1.x 二进制或缓存 executor。旧 A 不得写入、投递、扣额或结算同名 B；B 和无关工作仍推进。profile 的必要 owner 行通过前保持 activation hold；不重建已交付 codec／source-session 事务。 |
