@@ -185,12 +185,15 @@ export function removeStatusSource(catalog: StatusSourceCatalog, sourceIdToRemov
 export function statusSourceForUrl(catalog: StatusSourceCatalog, statusUrl: string, baseHref: string) {
   if (!statusUrl.trim()) return localStatusSource;
   const resolved = resolveFrontstageOpsStatusUrl(statusUrl, baseHref);
-  if (resolved.source?.isRelative) return localStatusSource;
   let normalized = statusUrl.trim();
   try {
     normalized = new URL(normalized, baseHref).toString();
   } catch {
     return null;
+  }
+  if (resolved.source?.isRelative) {
+    return catalog.sources.find((source) => source.kind === "runtime" && source.statusUrl === normalized)
+      ?? localStatusSource;
   }
   return catalog.sources.find((source) => source.statusUrl === normalized) ?? null;
 }

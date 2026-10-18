@@ -24,6 +24,8 @@ These are read transports, not connected execution Goals or a second registry.
 The native status and complete validated Explore history stay scoped to the
 physical source, including identical Goal ids in different containers. An
 unavailable container fails visibly without replacement; refreshing retries.
+Switching prepared readers clears source-local question and analysis selections;
+Back restores the previous reader's URL and its own selection.
 All mutation endpoints are denied. A read-only source does not imply an
 analysis pack, model execution, adoption or validated benefit; analysis remains
 unavailable until its existing owner binds the appropriate source pack.
