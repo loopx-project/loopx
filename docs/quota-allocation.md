@@ -1503,8 +1503,19 @@ That hint is not a delivery permission. It is the cross-runtime wait policy:
 `run_now` keeps the active cadence for required work; `backoff_waiting_for_user`
 slows Codex App and stops CLI/Claude loops after repeated unchanged polls;
 `backoff_until_reassigned` handles peer reassignment waits without dropping
-agent-to-agent handoff cadence too quickly;
-`backoff_until_material_transition` handles monitor-only quiet polls; and
+agent-to-agent handoff cadence too quickly.
+
+`backoff_until_state_change` also keeps a verified, automatically resumable
+`resume_at` successor alive through quiet rechecks. The scheduler bounds its
+backoff by the remaining scheduled wait, subject to host cadence floors, and
+does not apply the ordinary three-unchanged-poll stop to this clock-backed wait.
+This requires the current agent's exact pending successor and an unbound Turn;
+missing or invalid clock evidence, another agent's claim, and manual/dependency
+waits retain their existing supervision. A fresh due-time guard still owns
+admission; keeping the host alive grants no model wake, quota spend, new time
+budget or permission. Explicit stop, pause and user gates still take precedence.
+
+`backoff_until_material_transition` handles monitor-only quiet polls, and
 `backoff_until_fresh_evidence` handles mapped or post-handoff no-op waits.
 `preserve_current_schedule` handles `heartbeat_settled_skip`: settlement closes
 one Turn, not the Goal or its remaining Todos. Replay keeps the installed host

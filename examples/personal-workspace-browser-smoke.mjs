@@ -19,6 +19,7 @@ import {goalSuggestionsLiveScenario} from "./personal-workspace-browser/goal-sug
 import { replanCadenceScenario } from "./personal-workspace-browser/replan-cadence.mjs";
 import {nativeChildActivityScenario} from "./personal-workspace-browser/native-child-activity.mjs";
 import {privateStewardScopeScenario} from "./personal-workspace-browser/private-steward-scope.mjs";
+import {goalHierarchyScenario} from "./personal-workspace-browser/goal-hierarchy.mjs";
 import {configurationBackupScenario} from "./personal-workspace-browser/configuration-backup.mjs";
 import {attentionUserActionScenario} from "./personal-workspace-browser/attention-user-action.mjs";
 import {prReviewAgentOrderScenario} from "./personal-workspace-browser/pr-review-agent-order.mjs";
@@ -109,6 +110,7 @@ scenarioCatalog.push(performanceDiagnosisScenario);
 scenarioCatalog.push(blockedNoticeSettingsScenario);
 scenarioCatalog.push(nativeChildActivityScenario);
 scenarioCatalog.push(privateStewardScopeScenario);
+scenarioCatalog.push(goalHierarchyScenario);
 scenarioCatalog.push(externalEvidenceReadbackScenario);
 scenarioCatalog.push(configurationBackupScenario);
 scenarioCatalog.push(exploreCompositionOwnerScenario);

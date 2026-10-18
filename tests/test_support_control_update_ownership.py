@@ -52,7 +52,15 @@ def test_owner_module_exposes_both_halves() -> None:
 
 
 def test_owner_module_owns_exactly_its_group() -> None:
-    assert update_module.UPDATE_CONTROL_COMMANDS == set(UPDATE_COMMANDS)
+    assert update_module.UPDATE_CONTROL_COMMANDS == {*UPDATE_COMMANDS, "upgrade"}
+
+
+def test_upgrade_reuses_update_owner_and_parser() -> None:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+    update_module.register_update_command(subparsers, lambda _parser: None)
+    assert subparsers.choices["upgrade"] is subparsers.choices["update"]
+    assert "upgrade" in support_control.SUPPORT_CONTROL_COMMANDS
 
 
 def test_dispatch_ignores_other_commands() -> None:

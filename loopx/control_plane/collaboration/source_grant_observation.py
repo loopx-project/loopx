@@ -19,16 +19,20 @@ POLICY_SCHEMA = "loopx_manager_context_policy_v1"
 
 
 def external_source_policy(runtime_root: Path, session: dict[str, Any], turn: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """One provider provenance check for context and explicit execution grants."""
+    """Observe host provenance for the shared typed source-policy owner."""
     ingress = _read(_root(runtime_root) / "ingress" /
                     (_hash([session["session_id"], turn["client_turn_id"]]) + ".json"))
-    if (ingress["channel"] != session.get("channel_id")
-            or ingress["message_digest"] != _hash(turn.get("message"))
-            or turn.get("origin") not in {"lark", "external"}):
-        raise ValueError("source mismatch")
-    if turn.get("origin") == "external" and not conversation_scope(
-            session, origin="external").get("bound_steward"):
-        raise ValueError("source mismatch")
+    try:
+        effect_runtime_result("collaboration.source.ingress", {
+            "session": {key: session.get(key) for key in ("session_id", "goal_id", "channel_id", "steward_context")},
+            "turn": {"client_turn_id": turn.get("client_turn_id"), "origin": turn.get("origin"),
+                     "message_digest": _hash(turn.get("message"))},
+            "ingress": {key: ingress[key] for key in ("session_id", "client_turn_id", "channel", "message_digest",
+                                                      "sender_id", "source_id", "origin") if key in ingress},
+        })
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
     policy = _read(_root(runtime_root) / "policy.json")
     if policy.get("schema_version") != POLICY_SCHEMA:
         raise ValueError("invalid policy")

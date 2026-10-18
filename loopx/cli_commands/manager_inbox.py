@@ -69,7 +69,7 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--local-delivery-scope", choices=("all_registered", "selected"))
     parser.add_argument("--sender-id", help="For configuring a new delivery source: its independently verified sender.")
     parser.add_argument("--execute", action="store_true")
-    parser.add_argument("--request-id")
+    parser.add_argument("--request-id", help="For read: inspect this exact current or concluded request instead of the pending inbox.")
     parser.add_argument(
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )
@@ -237,14 +237,17 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             )
         elif args.manager_inbox_action == "read":
             from ..control_plane.collaboration.peers import read_inbox
+            request_id = getattr(args, "request_id", None)
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
-                                workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor)
+                                workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor,
+                                request_id=request_id)
             result["instruction"] += " " + collaboration_answer_instruction()
-            result["followthrough"] += (
-                " CLI: record assessment with manager-inbox acknowledge; optionally associate existing work "
-                "with manager-inbox link. Return audience-ready results with manager-inbox report "
-                "--phase conclusion --reply-text; use --phase decision for meaningful interim news."
-            )
+            if request_id is None:
+                result["followthrough"] += (
+                    " CLI: record assessment with manager-inbox acknowledge; optionally associate existing work "
+                    "with manager-inbox link. Return audience-ready results with manager-inbox report "
+                    "--phase conclusion --reply-text; use --phase decision for meaningful interim news."
+                )
             if any(item.get("request_revision") is not None for item in result.get("items", [])):
                 result["followthrough"] += (
                     " When request_revision is supplied, acknowledge with --request-revision and --request-digest, "

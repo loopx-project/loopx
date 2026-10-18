@@ -8,6 +8,7 @@ import {
   localStatusSource,
   projectedStatusSourceForUrl,
   removeStatusSource,
+  runtimeStatusSourceCatalog,
   saveStatusSourceCatalog,
   statusSourceCatalogStorageKey,
   statusSourceForUrl,
@@ -123,5 +124,23 @@ assert("command" in configuredDraft, "a configured Host and valid local port pro
 equal(configuredDraft.command, "ssh -N -L 8876:127.0.0.1:8766 remote-lab", "the UI generates one exact OpenSSH command");
 equal(configuredDraft.statusUrl, "http://127.0.0.1:8876/status.json", "the selected Host maps to the loopback-only status source");
 assert("error" in configuredSshTunnelDraft("remote-lab", "22"), "privileged local ports fail closed");
+
+const runtimeUrl = "http://127.0.0.1:19801/status.json";
+const runtimeEntries = [
+  {id: "retained", label: "Retained", status_url: runtimeUrl},
+  {id: "fresh", label: "Fresh", status_url: "http://127.0.0.1:19802/status.json"},
+];
+const runtimes = runtimeStatusSourceCatalog(runtimeEntries, runtimeUrl, baseHref);
+assert(runtimes, "an owner-prepared catalog recognizes its current source");
+assert(runtimes.sources.every((s) => s.readOnly && s.kind === "runtime" && !s.hostAlias), "runtime readers never acquire SSH or execution authority");
+equal(statusSourceForUrl(runtimes, "/status.json", "http://127.0.0.1:19801/chat/")?.id, "retained", "a relative entry on the prepared runtime stays scoped and read-only");
+equal(activeStatusSourceForUrl(runtimes, runtimeEntries[1].status_url, runtimeUrl, baseHref).id, "fresh", "a failed or pending same-Goal source selection does not bounce to the loaded runtime");
+equal(runtimeStatusSourceCatalog(undefined, runtimeUrl, baseHref), null, "existing services need no runtime catalog");
+equal(runtimeStatusSourceCatalog(runtimeEntries, "http://127.0.0.1:19803/status.json", baseHref), null, "an unrelated service cannot replace source choices");
+equal(runtimeStatusSourceCatalog([...runtimeEntries, runtimeEntries[0]], runtimeUrl, baseHref), null, "duplicate runtime ids or URLs fail closed");
+equal(runtimeStatusSourceCatalog([{...runtimeEntries[0], status_url: "https://external.example/status.json"}], runtimeUrl, baseHref), null, "runtime readers remain loopback-only");
+const runtimeStorage = new MemoryStorage();
+saveStatusSourceCatalog(runtimeStorage, runtimes);
+equal(loadStatusSourceCatalog(runtimeStorage, baseHref).sources.length, 1, "ephemeral runtime choices are not persisted as execution or SSH configuration");
 
 console.log("status source catalog smoke: ok");

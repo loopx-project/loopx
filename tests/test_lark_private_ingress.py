@@ -260,13 +260,16 @@ def test_native_connection_readback_keeps_capture_and_provider_health_separate(s
 
 def test_page_budget_or_cancellation_never_advances_complete_coverage(source_monitor):
     f = source_monitor
+    f.pages[0]["data"]["messages"] = [owner_source()]
     f.monitor.observe()
-    f.clock[0] += 60
+    f.clock[0] += 2 * 86400
     f.calls.clear()
     f.pages[:] = [{"ok": True, "data": {"messages": [], "has_more": True, "page_token": f"page-{n}"}}
                  for n in range(20)]
     assert f.monitor.observe() == []
     assert len(f.calls) == 20 and f.monitor.health(f.binding["binding_id"])["last_complete_at"] == 1095.0
+    assert f.monitor.health(f.binding["binding_id"])["status"] == "unavailable"
+    assert f.monitor.health(f.binding["binding_id"])["source_gap_count"] == 1
     before = f.monitor._path(f.binding["binding_id"]).read_bytes()
     assert f.monitor.observe(cancelled=lambda: True) == []
     assert f.monitor._path(f.binding["binding_id"]).read_bytes() == before
@@ -364,7 +367,8 @@ def test_fresh_grant_change_retains_same_source_coverage_without_replaying(sourc
     assert health["status"] == "gap" and health["last_complete_at"] == 1155.0
 
 
-def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("scenario", ["missing", "long_outage", "concurrent_observers"])
+def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary, monkeypatch, scenario):  # noqa: F811
     import http.client
     import time
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
@@ -377,21 +381,97 @@ def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary,
     finish_group_turn(runtime, transport, message="Explain this project")
     original = transport.runner
     calls = []
+    now = time.time()
+    clocks = {"first-observer": now, "second-observer": now + 120}
+    clock = [now]
+    monkeypatch.setattr("loopx.extensions.lark.private_ingress.time",
+                        SimpleNamespace(time=lambda: clocks.get(threading.current_thread().name, clock[0])))
+    first_inside, release_first, first_done, second_ready = [threading.Event() for _ in range(4)]
+    missed = provider.event("notes-app", "missed", "Synthetic missed original")
+    later = provider.event("notes-app", "later", "Synthetic live original")
+    sources = []
 
     def history(args, cwd=None, timeout=None):
         if "+chat-messages-list" not in args:
             return original(args, cwd, timeout)
         calls.append(args)
-        row = owner_source(chat_id=event["chat_id"], sender={"id": event["sender_id"], "sender_type": "user"})
+        if threading.current_thread().name == "first-observer":
+            first_inside.set()
+            assert release_first.wait(10)
+        elif threading.current_thread().name == "second-observer":
+            second_ready.set()
+            assert first_done.wait(10)
+        start = datetime.fromisoformat(args[args.index("--start") + 1]).timestamp()
+        end = datetime.fromisoformat(args[args.index("--end") + 1]).timestamp()
+        rows = [owner_source(source["message_id"], chat_id=source["chat_id"],
+                            sender={"id": source["sender_id"], "sender_type": "user"})
+                for stamp, source in sources if start <= stamp <= end]
         return {"returncode": 0, "stdout": json.dumps({"ok": True, "identity": "bot",
-            "data": {"messages": [row], "has_more": False}}), "stderr": ""}
+            "data": {"messages": rows, "has_more": False}}), "stderr": ""}
 
     transport.runner = history
-    monkeypatch.setattr(transport.core, "admit", lambda **_kw: pytest.fail("history cannot admit a Core request"))
+    core_admit = transport.core.admit
+
+    def deny_history(**_kw):
+        pytest.fail("history cannot admit a Core request")
+
+    monkeypatch.setattr(transport.core, "admit", deny_history)
     before = {p.name: p.read_bytes() for p in transport.root.glob("*.json")}
-    assert transport.ingress.observe() == ["notes-app"]
+    if scenario == "long_outage":
+        assert transport.ingress.observe() == []
+        sources.append((now + 3600, missed))
+        clock[0] += 2 * 86400
+        transport.ingress.observe()
+    elif scenario == "concurrent_observers":
+        # Both first windows are legitimate, but the later one cannot see A.
+        # Pause both reads before either receipt is committed on old code.
+        sources.extend([(now - 86400 + 30, missed), (now + 30, later)])
+        errors = []
+
+        def observe(observer, done):
+            try:
+                observer.observe()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        first = threading.Thread(target=observe, name="first-observer",
+                                 args=(transport.ingress, first_done))
+        second = threading.Thread(target=observe, name="second-observer",
+                                  args=(PrivateIngressObserver(transport), second_ready))
+        first.start()
+        try:
+            assert first_inside.wait(10)
+            second.start()
+            assert second_ready.wait(10)
+        finally:
+            release_first.set()
+            first.join(timeout=10)
+            if second.ident is not None:
+                second.join(timeout=10)
+        assert not first.is_alive() and not second.is_alive() and errors == []
+        clock[0] += 180
+        transport.ingress.observe()  # The skipped observer catches up from A's cursor.
+    else:
+        sources.append((now - 30, missed))
+        assert transport.ingress.observe() == ["notes-app"]
     assert before == {p.name: p.read_bytes() for p in transport.root.glob("*.json")}
-    assert len(calls) == 1
+    binding_id = transport.profiles()["notes-app"]["binding_id"]
+    gaps_before_capture = transport.ingress.health(binding_id)["source_gap_count"]
+    if scenario == "concurrent_observers":
+        # Only B arrives through the actual native route. An empty later source
+        # window cannot erase A or certify that its original request was captured.
+        monkeypatch.setattr(transport.core, "admit", core_admit)
+        assert transport.admit("notes-app", later)["status"] == "durably_accepted"
+        finish_group_turn(runtime, transport, message=later["content"])
+        monkeypatch.setattr(transport.core, "admit", deny_history)
+        before = {p.name: p.read_bytes() for p in transport.root.glob("*.json")}
+        sources.clear()
+        clock[0] += 60
+        transport.ingress.observe()
+        assert before == {p.name: p.read_bytes() for p in transport.root.glob("*.json")}
+    assert calls
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller, server.lark_private_conversations = store, runtime, transport
     server.verbose = False
@@ -407,7 +487,11 @@ def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary,
         packet = json.loads(response.read())
         actual = next(row for row in packet["connections"] if row["app_ref"] == "notes-app")
         assert actual["pending_count"] == 0 and actual["listener_status"] == "listening"
-        assert actual["ingress"]["status"] == "gap" and actual["ingress"]["source_gap_count"] == 1
+        assert (gaps_before_capture, actual["ingress"]["status"], actual["ingress"]["source_gap_count"]) == (
+            2 if scenario == "concurrent_observers" else 1, "gap", 1)
+        if scenario == "long_outage":
+            # HTTP must not certify the still-unscanned part of the outage.
+            assert now - 5 < actual["ingress"]["last_complete_at"] < clock[0] - 86400
     finally:
         connection.close()
         server.shutdown()

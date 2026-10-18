@@ -1601,6 +1601,22 @@ def build_scheduler_hint(
         )
 
     if arbitration.disposition == SchedulerDisposition.AGENT_SCOPE_WAIT:
+        if arbitration.scheduled_recheck_after_seconds is not None:
+            horizon = max(1, math.ceil(arbitration.scheduled_recheck_after_seconds / 60))
+            progression = sorted({min(bucket, horizon) for bucket in (10, 20, 30, 60)})
+            return builder.build(
+                action="backoff_until_state_change",
+                cadence_class="agent_scope_wait",
+                reason=(
+                    "an automatic clock-backed successor is pending; keep quiet rechecks "
+                    "until its scheduled instant, then follow fresh admission gates"
+                ),
+                codex_interval=progression[0],
+                codex_max=progression[-1],
+                cli_limit=None,
+                claude_limit=None,
+                cadence_progression_override=progression,
+            )
         return builder.build(
             action="backoff_until_reassigned",
             cadence_class="agent_scope_wait",

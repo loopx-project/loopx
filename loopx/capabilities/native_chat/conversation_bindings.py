@@ -7,6 +7,7 @@ This file stores no conversation text and creates no Goal or model thread.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 import uuid
@@ -178,7 +179,8 @@ class ChatConversationBindings:
     def resolve(self, *, binding_id: str, source_ref: str, sender_ref: str,
                 private_human_message: bool, session_context: dict[str, Any] | None = None,
                 group_ref: str | None = None, topic_ref: str | None = None,
-                group_human_message: bool = False, include_observation: bool = False) -> dict[str, Any]:
+                group_human_message: bool = False, include_observation: bool = False,
+                origin: str | None = None) -> dict[str, Any]:
         current = self.read()
         row = next((item for item in current.get("bindings", []) if item.get("binding_id") == binding_id), None)
         if row is None:
@@ -191,14 +193,9 @@ class ChatConversationBindings:
         if next((item for item in current.get("bindings", [])
                  if item.get("binding_id") == binding_id), None) != row:
             raise ValueError("conversation binding changed during identity verification")
-        registry_scope = {}
-        if row.get("goal_scope") == "all_registered":
-            registry_scope["available_goal_ids"] = self.goal_scope_ids(row)
-        selected = self._core("collaboration.conversation.bound_context", {
-            "current": current, "binding_id": binding_id, "source_ref": source_ref, "sender_ref": sender_ref,
-            "private_human_message": private_human_message, "observation": observation,
-            "available_projects": self.projects.available(),
-            **registry_scope,
+        selected = self._resolve_observed(current, row, observation, {
+            "source_ref": source_ref, "sender_ref": sender_ref, "private_human_message": private_human_message,
+            **({"origin": origin} if origin is not None else {}),
             **({"session_context": session_context} if session_context is not None else {}),
             **({"group_ref": group_ref, "topic_ref": topic_ref,
                 "group_human_message": group_human_message} if group_ref is not None or topic_ref is not None or group_human_message else {}),
@@ -207,6 +204,70 @@ class ChatConversationBindings:
         # outside the persisted context and opt-in; it is never a cached grant
         # or a substitute for the next admission/delivery owner's fresh check.
         return {**selected, "observation": observation} if include_observation else selected
+
+    def _resolve_observed(self, current, row, observation, source):
+        return self._core("collaboration.conversation.bound_context", {
+            "current": current, "binding_id": row["binding_id"], "observation": observation,
+            "available_projects": self.projects.available(), **source,
+            **({"available_goal_ids": self.goal_scope_ids(row)} if row.get("goal_scope") == "all_registered" else {}),
+        })
+
+    @contextmanager
+    def local_input(self, saved: dict[str, Any]):
+        """Observe outside the publication fence, then retain it through enqueue.
+
+        This is the existing loopback operator's continuation of a private
+        binding. Saved fields select an identity; only fresh Core checks grant it.
+        """
+        source = {"source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
+                  "private_human_message": False, "origin": "web", "session_context": saved}
+        observed = self.resolve(binding_id=saved["binding_id"], include_observation=True, **source)
+        with exclusive_file_lock(self.path, operation="admit_local_bound_input"):
+            current = self.read()
+            if next((row for row in current.get("bindings", [])
+                     if row.get("binding_id") == saved["binding_id"]), None) != observed["binding"]:
+                raise ValueError("conversation binding changed before input admission")
+            yield self._resolve_observed(current, observed["binding"], observed["observation"], source)
+
+    def local_sessions(self, binding_id: str) -> list[dict[str, Any]]:
+        """Read original targets; metadata hints never replace Core's grant.
+
+        Provider IO and store inventory stay outside the publication fence.
+        Discovery neither restores a thread nor creates a Session or Turn.
+        """
+        if self.controller is None:
+            raise ValueError("the bound conversation store is unavailable")
+        row = next((item for item in self.read()["bindings"] if item["binding_id"] == binding_id), None)
+        if row is None:
+            raise ValueError("conversation binding is no longer authorized")
+        observation = dict(self.observe(row["transport_ref"]))
+        store = self.controller.store
+        sessions: list[dict[str, Any]] = []
+        for summary in store.list_sessions():
+            session = store.load_session(summary["session_id"])
+            # Narrow the IO payload only. Core independently validates every
+            # matching context, audience and canonical Session identity.
+            if session and any(isinstance(session.get(key), dict)
+                    and session[key].get("binding_id") == binding_id
+                    for key in ("project_context", "steward_context")):
+                sessions.append(session)
+        with exclusive_file_lock(self.path, operation="read_local_bound_sessions"):
+            current = self.read()
+            if next((item for item in current["bindings"] if item["binding_id"] == binding_id), None) != row:
+                raise ValueError("conversation binding changed during identity verification")
+            result = self._core("collaboration.conversation.local_sessions", {
+                "current": current, "binding_id": binding_id, "observation": observation,
+                "available_projects": self.projects.available(),
+                "sessions": [{key: session.get(key) for key in (
+                    "session_id", "goal_id", "agent_id", "executor_endpoint_id", "channel_id",
+                    "session_mode", "status", "project_context", "steward_context")}
+                    for session in sessions],
+                **({"available_goal_ids": self.goal_scope_ids(row)} if row.get("goal_scope") == "all_registered" else {}),
+            })
+            # Build the lookup only after Core has rejected duplicate identity;
+            # an IO dictionary must not silently turn ambiguity into one target.
+            by_id = {session["session_id"]: session for session in sessions}
+            return [store.public_session(by_id[sid]) for sid in result["session_ids"]]
 
     def goal_scope_ids(self, binding: dict[str, Any]) -> list[str]:
         if binding.get("goal_scope") != "all_registered":

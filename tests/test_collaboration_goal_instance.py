@@ -115,12 +115,18 @@ def _create_source_registry(root: Path) -> Path:
 
 def _http_snapshot(root, registry, session_id):
     import http.client
+    from types import SimpleNamespace
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.verbose = False
     server.registry_path, server.runtime_root = registry, root
     server.chat_store = ChatSessionStore(root)
+    # These fixtures script Host liveness; the real HTTP/store projection below
+    # tests collaboration lifetime and receipts, not exited-process recovery.
+    server.runtime_controller = SimpleNamespace(
+        recover_exited_turn=lambda _session_id: None, close=lambda: None,
+    )
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     connection = http.client.HTTPConnection(*server.server_address, timeout=10)

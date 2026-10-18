@@ -49,6 +49,13 @@ def _history_rows(runtime_root, goal_id):
     In particular, do not expose arbitrary observation payloads or materialize
     parent links as scientific supporting evidence.
     """
+    return explore_history_rows(load_explore_result_events_strict(
+        explore_result_log_path(runtime_root, goal_id), goal_id=goal_id,
+    ))
+
+
+def explore_history_rows(events):
+    """Use the same display boundary for local and external native records."""
     fields = (
         "schema_version", "event_id", "goal_id", "event_kind", "result_id",
         "recorded_at", "title", "summary", "status", "node_kind",
@@ -57,9 +64,7 @@ def _history_rows(runtime_root, goal_id):
     )
     return [
         {key: event[key] for key in fields if key in event}
-        for event in load_explore_result_events_strict(
-            explore_result_log_path(runtime_root, goal_id), goal_id=goal_id,
-        )
+        for event in events
     ]
 
 

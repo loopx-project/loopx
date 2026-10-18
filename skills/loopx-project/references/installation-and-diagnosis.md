@@ -4,6 +4,16 @@ Read when the CLI is missing, host/runtime versions disagree, or project/registr
 
 ## Desktop Runtime
 
+For the ordinary upgrade request, prefer `loopx upgrade` (or
+`loopx upgrade --ref main` for an explicitly selected Main archive). It composes
+the existing CLI owner and native App updater, restarts the App and reads back
+both outcomes. `--dry-run` previews without mutation. An App launch alone,
+an old bundle without terminal readback, or a healthy workspace after an update
+check failure cannot qualify completion. Keep partial results and the native
+Recovery & updates error visible. For a silent older `update apply`, inspect
+its installer process before declaring a hang or starting another transaction;
+installation may still be downloading sources or building workspace assets.
+
 When asked to upgrade LoopX on a machine with the desktop App, inspect the App
 bundle and its runtime as well as the CLI. `loopx doctor` exposes
 `desktop_installation` for standard macOS install locations; a paired bundle

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { configureSourceRecipient, configureSourceScope, resolveSourceRecipients, sourceExecutionBindings } from "../../loopx/control_plane/collaboration/source_grants.ts";
+import { configureSourceRecipient, configureSourceScope, resolveSourceRecipients, sourceExecutionBindings, validateSourceIngress } from "../../loopx/control_plane/collaboration/source_grants.ts";
 
 const worker = { goal_id: "research", agent_id: "worker" };
 const peer = { goal_id: "research", agent_id: "peer" };
@@ -148,4 +148,34 @@ test("evidence reads follow current registered Goals only after explicit all-reg
   for (const invalid of [{evidence_goal_scope: "unknown"}, {evidence_goal_ids: ["*"]}, {evidence_goal_ids: null}, {evidence_goal_scope: "all_registered"}]) {
     assert.throws(() => resolveSourceEvidenceGoals({source: invalid}));
   }
+});
+
+
+test("source provenance is exact and local bound input never borrows provider lineage", () => {
+  const steward = {kind: "bound_steward", project_ref: "a".repeat(24), workspace_path: "/authorized/project",
+    audience: "bound_owner", grant: "portfolio_read", binding_id: "b".repeat(24), source_ref: "c".repeat(24),
+    provider_ref: "d".repeat(24), operator_ref: "e".repeat(24), goal_ids: []};
+  const session = {session_id: "original", goal_id: "loopx-manager", steward_context: steward,
+    channel_id: `manager.external.native.${steward.binding_id}.${steward.source_ref}`};
+  const turn = {client_turn_id: "local", origin: "web", message_digest: "digest"};
+  const ingress = {session_id: "original", client_turn_id: "local", channel: session.channel_id,
+    message_digest: "digest", sender_id: steward.operator_ref, source_id: "web:original", origin: "web"};
+  const params = {session, turn, ingress};
+  assert.deepEqual(validateSourceIngress(params), {verified: true});
+  for (const field of ["session_id", "client_turn_id", "channel", "message_digest", "sender_id", "origin"]) {
+    assert.throws(() => validateSourceIngress({...params, ingress: {...ingress, [field]: "other"}}));
+  }
+  for (const origin of ["lark", "external", "model"]) {
+    assert.throws(() => validateSourceIngress({...params, turn: {...turn, origin}}));
+  }
+  assert.throws(() => validateSourceIngress({...params, ingress: {...ingress, origin: undefined}}));
+  assert.throws(() => validateSourceIngress({...params, session: {...session, steward_context: undefined}}));
+  // Existing provider records omit origin and keep their historical shape.
+  const legacy = {...ingress, origin: undefined};
+  for (const origin of ["lark", "external"]) {
+    assert.deepEqual(validateSourceIngress({...params, turn: {...turn, origin}, ingress: legacy}), {verified: true});
+  }
+  const unbound = {...session, steward_context: undefined};
+  assert.deepEqual(validateSourceIngress({...params, session: unbound, turn: {...turn, origin: "lark"}, ingress: legacy}), {verified: true});
+  assert.throws(() => validateSourceIngress({...params, session: unbound, turn: {...turn, origin: "external"}, ingress: legacy}));
 });

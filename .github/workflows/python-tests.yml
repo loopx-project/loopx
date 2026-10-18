@@ -830,6 +830,7 @@ jobs:
           tests/control_plane/test_effect_runtime_integration.py
           tests/control_plane/test_shadow_observation_retirement.py
           tests/test_self_update_runtime_activation.py
+          tests/test_self_update_download.py
           tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
 
@@ -845,6 +846,12 @@ jobs:
           tests/canary/test_smoke_fixture_cleanup.py
           tests/extensions/test_process_runtime.py
           tests/capabilities/test_issue_fix_temporary_workspace.py
+
+      - name: Qualify mocked GitHub metadata on native Windows
+        run: python examples/content-ops-issue-fix-metadata-preview-smoke.py
+
+      - name: Qualify mocked GitHub replies on native Windows
+        run: python examples/value-connectors-github-public-probe-smoke.py
 
       - name: Qualify native Windows peer reads and long-path inputs
         run: >-

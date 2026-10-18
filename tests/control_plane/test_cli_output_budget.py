@@ -8,6 +8,7 @@ import shlex
 import shutil
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -1473,7 +1474,13 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
 
 def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Compare selectors at the same observation instant, including freshness.
+    monkeypatch.setattr(
+        "loopx.control_plane.runtime.time.now_utc",
+        lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
     with _stable_budget_fixture_root(
         tmp_path / "quota-detail-alias-scheduler"
     ) as stable_root:
@@ -1506,7 +1513,13 @@ def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
 
 def test_quota_cli_all_detail_matches_repeated_canonical_selectors(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Compare selectors at the same observation instant, including freshness.
+    monkeypatch.setattr(
+        "loopx.control_plane.runtime.time.now_utc",
+        lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
     with _stable_budget_fixture_root(tmp_path / "quota-detail-all") as stable_root:
         project, runtime, registry_path, state_file = _write_fixture(
             stable_root,

@@ -283,8 +283,11 @@ def test_default_project_host_grant_is_write_and_read_only_launch_is_enforced(or
     _, opened = request("/api/chat/sessions", {"context_kind": "project", "project_ref": projects["projects"][0]["project_ref"]})
     assert opened["goal_id"] is None
     assert runtime.adapters[opened["session_id"]].session.sandbox == "workspace-write"
-    row = json.loads(capture.read_text().splitlines()[-1])
-    assert row["method"] == "thread/start" and row["params"]["sandbox"] == "workspace-write"
+    # Native thread naming may follow startup; verify the permission-bearing
+    # request itself rather than assuming it is the last transport operation.
+    starts = [row for line in capture.read_text().splitlines()
+              if (row := json.loads(line)).get("method") == "thread/start"]
+    assert len(starts) == 1 and starts[0]["params"]["sandbox"] == "workspace-write"
     proof = {"transport_ref": "notes-app", "provider_ref": "c" * 24, "operator_ref": "d" * 24, "verified": True}
     bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=lambda _: proof)
     contexts.conversation_bindings = bindings

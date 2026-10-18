@@ -1,11 +1,60 @@
 """Host observer remains outside execution authority and never waits for HTTP."""
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import threading
 import time
 
 import pytest
 
 from loopx import usage_goal, usage_ping
+
+
+@pytest.fixture
+def usage_transport(tmp_path, monkeypatch):
+    """Own opt-in and detached children through failed assertions as well as success."""
+    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
+    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
+    popen = subprocess.Popen
+    children = []
+
+    def spawn(command, *args, **kwargs):
+        # Preserve the real detach flags, cwd, stdin and process entry point.
+        # Only replace discarded stderr in this explicitly opted-in fixture.
+        if kwargs.get("stderr") != subprocess.DEVNULL:
+            return popen(command, *args, **kwargs)
+        error = tmp_path / f"usage-child-{len(children)}.stderr"
+        with error.open("wb") as stream:
+            child = popen(command, *args, **{**kwargs, "stderr": stream})
+        children.append((child, error))
+        return child
+
+    def diagnostics():
+        return json.dumps([
+            {"returncode": child.poll(), "stderr": error.read_text(errors="replace")[-2048:]}
+            for child, error in children
+        ])
+
+    monkeypatch.setattr(subprocess, "Popen", spawn)
+    try:
+        usage_ping.control("enable")
+        yield diagnostics
+    finally:
+        try:
+            # The TS consent lock fences later descendants too. Reaping the
+            # first Python hop alone would not stop its detached Node sender.
+            usage_ping.control("disable")
+        finally:
+            for child, _ in children:
+                try:
+                    child.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=4)
 
 
 def test_telemetry_failure_cannot_replace_host_exception(tmp_path, monkeypatch):
@@ -67,15 +116,7 @@ def test_periodic_observation_does_not_need_turn_completion(tmp_path, monkeypatc
     assert str(tmp_path) not in json.dumps([row["observation"] for row in observed])
 
 
-def test_real_host_call_matches_wall_duration_through_detached_ts(tmp_path, monkeypatch):
-    import subprocess
-    import sys
-    from pathlib import Path
-    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
-    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
-    usage_ping.control("enable")
+def test_real_host_call_matches_wall_duration_through_detached_ts(tmp_path, monkeypatch, usage_transport):
     before = time.monotonic_ns()
     with usage_goal.observe_goal_execution(tmp_path / "runtime", "fixture-goal", host="generic-cli"):
         child_start = time.time_ns() // 1_000_000
@@ -93,7 +134,7 @@ def test_real_host_call_matches_wall_duration_through_detached_ts(tmp_path, monk
                 break
         time.sleep(0.03)
     else:
-        pytest.fail("real host observation did not reach detached TS")
+        pytest.fail(f"real host observation did not reach detached TS: {usage_transport()}")
     intervals = state["goals"][0]["intervals"]
     measured = sum(end - start for start, end in intervals)
     assert state["goals"][0]["measurement"] == "host_call"
@@ -156,7 +197,7 @@ def test_metadata_cannot_redirect_timing_read_outside_selected_home(tmp_path, mo
     assert usage_goal._bound_codex_session(registry, "goal", "agent") is None
 
 
-def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters: int = 0, numeric_seconds: bool = False,
+def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, usage_transport, *, header_characters: int = 0, numeric_seconds: bool = False,
                                      caller_relative_paths: bool = False):
     """Drive the real quota observer -> detached TS chain over one bound session.
 
@@ -167,19 +208,13 @@ def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters
     call does: relative to the caller, not to the detached child.
     """
     from datetime import datetime, timezone
-    from pathlib import Path
     registry, rollout = _bound_fixture(tmp_path, monkeypatch)
     if header_characters:
         rollout.write_text(json.dumps({"type": "session_meta", "payload": {
             "id": "thread-a", "base_instructions": {"text": "i" * header_characters}}}) + "\n")
-    monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
-    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
-    usage_ping.control("enable")
     cycle_path = Path(str(usage_ping.state_path()) + ".cycles")
 
-    def wait_for(predicate):
+    def wait_for(predicate, phase):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             try:
@@ -188,7 +223,7 @@ def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters
             except (OSError, ValueError):
                 pass
             time.sleep(0.03)
-        pytest.fail("detached timing did not reach TS owner")
+        pytest.fail(f"{phase}: detached timing did not reach TS owner: {usage_transport()}")
 
     now = time.time_ns() // 1_000_000
     registry_path, runtime_root = registry, tmp_path / "runtime"
@@ -203,7 +238,7 @@ def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters
                                        agent_id="agent", turn_id="turn-a", phase=phase,
                                        at=time.time_ns() // 1_000_000, host="unknown")
     publish("start")
-    wait_for(lambda: bool(json.loads(cycle_path.read_text())["cursors"]))
+    wait_for(lambda: bool(json.loads(cycle_path.read_text())["cursors"]), "binding cursor")
     if numeric_seconds:
         # Wait for binding before choosing a whole-second provider interval.
         # Slow subprocess startup must not put its start before the cursor's
@@ -219,13 +254,13 @@ def _bound_cycle_through_detached_ts(tmp_path, monkeypatch, *, header_characters
         }}) + "\n")
     publish("spend")
     goals = Path(str(usage_ping.state_path()) + ".goals")
-    wait_for(lambda: len(json.loads(goals.read_text())["goals"]) == 2)
+    wait_for(lambda: len(json.loads(goals.read_text())["goals"]) == 2, "paired observations")
     preview = usage_ping.control("status")["goal_preview"]
     return preview, cycle_path, goals, publish
 
 
-def test_real_detached_cycle_and_bound_codex_event_reach_shared_ts_aggregator(tmp_path, monkeypatch):
-    preview, cycle_path, goals, publish = _bound_cycle_through_detached_ts(tmp_path, monkeypatch)
+def test_real_detached_cycle_and_bound_codex_event_reach_shared_ts_aggregator(tmp_path, monkeypatch, usage_transport):
+    preview, cycle_path, goals, publish = _bound_cycle_through_detached_ts(tmp_path, monkeypatch, usage_transport)
     assert {row["measurement"] for row in preview["counters"]} == {"quota_cycle", "codex_turn"}
     assert all(row["host"] == "codex_app" for row in preview["counters"])
     assert "PRIVATE CONTENT" not in cycle_path.read_text() + goals.read_text()
@@ -236,17 +271,16 @@ def test_real_detached_cycle_and_bound_codex_event_reach_shared_ts_aggregator(tm
     assert not cycle_path.exists() and not goals.exists()
 
 
-def test_caller_relative_registry_and_runtime_reach_the_detached_observer(tmp_path, monkeypatch):
+def test_caller_relative_registry_and_runtime_reach_the_detached_observer(tmp_path, monkeypatch, usage_transport):
     """Leaving the caller's directory must not re-resolve the caller's own paths."""
-    preview, _, _, _ = _bound_cycle_through_detached_ts(tmp_path, monkeypatch, caller_relative_paths=True)
+    preview, _, _, _ = _bound_cycle_through_detached_ts(tmp_path, monkeypatch, usage_transport, caller_relative_paths=True)
     assert {row["measurement"] for row in preview["counters"]} == {"quota_cycle", "codex_turn"}
     assert all(row["host"] == "codex_app" for row in preview["counters"])
     usage_ping.control("disable")
 
 
-def test_provider_numeric_timing_reaches_real_detached_installation_aggregator(tmp_path, monkeypatch):
-    from pathlib import Path
-    preview, _, _, _ = _bound_cycle_through_detached_ts(tmp_path, monkeypatch, numeric_seconds=True)
+def test_provider_numeric_timing_reaches_real_detached_installation_aggregator(tmp_path, monkeypatch, usage_transport):
+    preview, _, _, _ = _bound_cycle_through_detached_ts(tmp_path, monkeypatch, usage_transport, numeric_seconds=True)
     assert {row["measurement"] for row in preview["counters"]} == {"quota_cycle", "codex_turn"}
     installation = json.loads(Path(str(usage_ping.state_path()) + ".installation").read_text())
     timed = [day for day in installation["days"] if "codex_turn" in day["intervals"]]
@@ -257,16 +291,68 @@ def test_provider_numeric_timing_reaches_real_detached_installation_aggregator(t
     usage_ping.control("disable")
 
 
-def test_bound_session_with_a_long_metadata_header_still_reaches_ts(tmp_path, monkeypatch):
+def test_bound_session_with_a_long_metadata_header_still_reaches_ts(tmp_path, monkeypatch, usage_transport):
     """Codex records base_instructions in session_meta; a long header must bind."""
     characters = 72_000
     header = json.dumps({"type": "session_meta", "payload": {
         "id": "thread-a", "base_instructions": {"text": "i" * characters}}}) + "\n"
     assert len(header) > 65536, "fixture header must exceed one fixed read"
     preview, _, _, publish = _bound_cycle_through_detached_ts(
-        tmp_path, monkeypatch, header_characters=characters)
+        tmp_path, monkeypatch, usage_transport, header_characters=characters)
     assert {row["measurement"] for row in preview["counters"]} == {"quota_cycle", "codex_turn"}
     assert all(row["host"] == "codex_app" for row in preview["counters"])
     usage_ping.control("disable")
     monkeypatch.setattr(usage_ping, "_detach", lambda *a, **k: pytest.fail("disabled observer spawned"))
     publish("start")
+
+
+def test_usage_transport_reports_real_child_exit(usage_transport):
+    usage_ping._detach({}, command=[sys.executable, "-c",
+                                   "import sys; sys.stdin.read(); sys.stderr.write('fixture child failure'); sys.exit(7)"])
+    deadline = time.monotonic() + 4
+    while time.monotonic() < deadline:
+        records = json.loads(usage_transport())
+        if records and records[0]["returncode"] is not None:
+            break
+        time.sleep(0.03)
+    assert records == [{"returncode": 7, "stderr": "fixture child failure"}]
+
+
+def test_failed_observer_test_revokes_opt_in_and_fences_late_dispatch(tmp_path):
+    """A failing assertion must not leave a valid generation for a late child."""
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    home = nested / "home"
+    home.mkdir()
+    request_file = nested / "request.json"
+    (nested / "test_failure.py").write_text('''import json
+from pathlib import Path
+from test_usage_goal import usage_transport
+from loopx import usage_ping
+
+def test_failed_assertion(tmp_path, usage_transport):
+    path = usage_ping.state_path()
+    request = {"path": str(path), "generation": json.loads(path.read_text())["generation"]}
+    Path("request.json").write_text(json.dumps(request))
+    raise AssertionError("fixture assertion failed")
+''')
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+           "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), str(Path(__file__).parents[1])])}
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "--no-cov", "--confcutdir", str(nested),
+                             "test_failure.py"], cwd=nested, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "fixture assertion failed" in result.stdout
+    request = json.loads(request_file.read_text())
+    path = Path(request["path"])
+    state = json.loads(path.read_text())
+    assert state["consent"] == "disabled"
+    assert state["generation"] != request["generation"]
+    request.update({"registry": str(nested / "unused.json"), "runtime": str(nested / "runtime"),
+                    "goal": "fixture-goal", "agent": "fixture-agent", "turn": "fixture-turn",
+                    "phase": "start", "at": time.time_ns() // 1_000_000, "host": "unknown"})
+    late = subprocess.run([sys.executable, "-m", "loopx.usage_goal"], input=json.dumps(request), env=env,
+                          capture_output=True, text=True, timeout=8)
+    assert late.returncode == 0, late.stderr
+    assert json.loads(path.read_text()) == state
+    assert not Path(str(path) + ".cycles").exists()
+    assert not Path(str(path) + ".goals").exists()
