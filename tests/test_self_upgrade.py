@@ -25,6 +25,7 @@ from loopx.self_upgrade import (
     build_upgrade_plan,
     desktop_upgrade_plan,
     finish_upgrade,
+    render_upgrade_markdown,
     _upgrade_desktop,
     _restart_app,
 )
@@ -252,6 +253,104 @@ def test_app_failure_preserves_cli_success_as_partial_result(monkeypatch):
     assert result["ok"] is False
     assert result["upgrade_complete"] is False
     assert result["changes_applied"] is True
+
+
+@pytest.mark.parametrize("prompt_status", ["current", "discovery_failed", "review_required"])
+def test_cli_only_completion_includes_prompt_adoption(prompt_status):
+    complete = prompt_status == "current"
+    recovery = {"kind": "apply_host_prompt_updates", "requires_explicit_approval": True}
+    result = finish_upgrade(
+        {
+            "ok": True,
+            "changes_applied": True,
+            "upgrade_complete": complete,
+            "execution": {"installed_runtime_identity": {"package_version": "2.0.0"}},
+            "automation_prompt_upgrade": {"status": prompt_status},
+            "desktop_upgrade": {"status": "not_installed"},
+            "recommended_action": "Review pending prompts through the App API.",
+            "next_action": recovery,
+        },
+        timeout_seconds=1,
+    )
+    assert result["ok"] is complete
+    assert result["upgrade_complete"] is complete
+    assert result["changes_applied"] is True
+    assert result["automation_prompt_upgrade"]["status"] == prompt_status
+    assert result["recommended_action"] == "Review pending prompts through the App API."
+    assert result["next_action"] == recovery
+
+
+def test_cli_only_missing_identity_never_certifies_success():
+    result = finish_upgrade(
+        {
+            "ok": True,
+            "upgrade_complete": True,
+            "changes_applied": True,
+            "desktop_upgrade": {"status": "not_installed"},
+        },
+        timeout_seconds=1,
+    )
+    assert result["ok"] is False
+    assert result["upgrade_complete"] is False
+    assert result["changes_applied"] is True
+    assert "runtime identity" in result["recommended_action"]
+
+
+def test_cli_only_discovery_failure_exit_render_and_recovery(monkeypatch, tmp_path):
+    home = tmp_path / "codex"
+    database = home / "sqlite/codex-dev.db"
+    database.parent.mkdir(parents=True)
+    database.write_bytes(b"not a SQLite database")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setattr(
+        "loopx.self_upgrade.build_upgrade_plan",
+        lambda **_kwargs: {
+            "ok": True,
+            "execute_requested": True,
+            "plan": {"apply_supported": True},
+            "desktop_upgrade": {"status": "not_installed"},
+        },
+    )
+    monkeypatch.setattr(
+        "loopx.cli_commands.support_control_update.execute_update_plan",
+        lambda payload, **_kwargs: {
+            **payload,
+            "ok": True,
+            "changes_applied": True,
+            "execution": {"installed_runtime_identity": {"package_version": "2.0.0"}},
+        },
+    )
+    parser = argparse.ArgumentParser()
+    register_update_command(parser.add_subparsers(dest="command"), lambda _parser: None)
+    args = parser.parse_args(["upgrade"])
+    args.runtime_root = str(tmp_path / "runtime")
+    outputs = []
+
+    def run():
+        return handle_update_command(
+            args,
+            registry_path=tmp_path / "registry.json",
+            registry_was_supplied=True,
+            print_payload=lambda payload, _format, renderer: outputs.append(
+                (payload, renderer(payload))
+            ),
+            output_format=lambda _args: "json",
+        )
+
+    assert run() == 1
+    failed, text = outputs[-1]
+    assert failed["upgrade_complete"] is False
+    assert failed["changes_applied"] is True
+    assert failed["automation_prompt_upgrade"]["status"] == "discovery_failed"
+    assert text.startswith("LoopX upgrade incomplete.")
+    assert failed["recommended_action"] in text
+    assert render_upgrade_markdown(failed) == text
+    # Repair only the synthetic discovery source, then retry the same command.
+    database.unlink()
+    assert run() == 0
+    recovered, text = outputs[-1]
+    assert recovered["upgrade_complete"] is True
+    assert text.startswith("LoopX upgrade completed.")
 
 
 def test_failed_cli_does_not_restart_the_app(monkeypatch):

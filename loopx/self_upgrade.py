@@ -268,6 +268,9 @@ def finish_upgrade(
         )
     desktop = payload["desktop_upgrade"]
     if desktop["status"] == "not_installed":
+        payload["ok"] = bool(
+            payload.get("ok") and payload.get("upgrade_complete", payload.get("ok"))
+        )
         return payload
     execution = payload.get("execution", {})
     runtime_ready = payload.get("ok") or (
