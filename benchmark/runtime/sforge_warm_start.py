@@ -47,6 +47,11 @@ class WarmStart:
     fresh_replan: bool = False
 
     def verify(self, workspace: str) -> dict:
+        from loopx.hosts.checkpoint_retention import checkpoint_bank_use
+        with checkpoint_bank_use(self.root):
+            return self._verify(workspace)
+
+    def _verify(self, workspace: str) -> dict:
         if type(self.fresh_replan) is not bool:
             raise ValueError("fresh_replan requires an explicit boolean context treatment")
         if (type(self.normal_cadence) is not int or not 1 <= self.normal_cadence <= 6
@@ -88,7 +93,12 @@ class WarmStart:
         return metadata
 
     async def stage(self, environment, workspace: str) -> list[str]:
-        metadata = self.verify(workspace)
+        from loopx.hosts.checkpoint_retention import checkpoint_bank_use
+        with checkpoint_bank_use(self.root):
+            return await self._stage(environment, workspace)
+
+    async def _stage(self, environment, workspace: str) -> list[str]:
+        metadata = self._verify(workspace)
         research = _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
         # Install tools first without creating the native home. Stage inert
         # participants outside the workspace so restoring its bytes cannot

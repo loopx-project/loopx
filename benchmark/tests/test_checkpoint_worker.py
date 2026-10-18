@@ -112,7 +112,8 @@ def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_
     assert (copied / "child").stat().st_mode & 0o7777 == 0o700
 
 
-@pytest.mark.parametrize("fault", [None, "source_moved", "expired", "read_race", "late_native"])
+@pytest.mark.parametrize("fault", [None, "source_moved", "expired", "read_race", "late_native",
+    "retention", "retention_default", "retention_off", "retention_pin", "retention_failure"])
 def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writer, tmp_path, monkeypatch, fault):
     from loopx.control_plane.effect_runtime import effect_runtime_result
     from benchmark.edgebench.checkpoint_worker import _archive
@@ -157,7 +158,33 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
             time.sleep(max(0, request["deadline_epoch"] + .1 - time.time()))
             return result
         monkeypatch.setattr(checkpoint_worker, "capture", late_capture)
-    supervisor = CheckpointSupervisor(files[0], tmp_path / "points")
+    policy_file = None
+    if fault in {"retention", "retention_default", "retention_off", "retention_pin", "retention_failure"}:
+        from benchmark.edgebench import checkpoint_supervisor
+        original_capture = checkpoint_supervisor.capture_worker
+        if fault in {"retention", "retention_failure"}:
+            policy_file = tmp_path / "retention.json"
+            policy_file.write_text(json.dumps(dict(strategy="uniform", keep_latest=1, keep_first=False,
+                history_slots=0, minimum_age_seconds=0, pins=[], protect_since=None)))
+        def with_old_point(*args, **kwargs):
+            old = kwargs["destination"].parent / "old"
+            effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture",
+                "components": [{"id": "code", "source_path": str(prepared)}], "destination": str(old),
+                "point_metadata": {}, "expected_source_sha256": probe["source_sha256"]})
+            os.utime(old / "checkpoint.json", (1000, 1000))
+            if fault == "retention_pin":
+                config = old.parent / ".checkpoint-retention/policy.json"
+                policy = json.loads(config.read_bytes())
+                policy["pins"] = [dict(id="old", sha256=json.loads((old / "checkpoint.json").read_bytes())["sha256"])]
+                config.write_text(json.dumps(policy))
+            if fault == "retention":
+                (old.parent / "retention-error.json").write_text('{"error_kind":"old failure"}')
+            if fault == "retention_failure":
+                policy_file.write_text("{}")
+            return original_capture(*args, **kwargs)
+        monkeypatch.setattr(checkpoint_supervisor, "capture_worker", with_old_point)
+    supervisor = CheckpointSupervisor(files[0], tmp_path / "points", retention_policy=policy_file,
+                                      retention_enabled=fault != "retention_off")
     supervisor.bind({"SFORGE_TOKEN": token})
     supervisor.start(container)
     try:
@@ -166,15 +193,31 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
     finally:
         supervisor.close()
     response = json.loads((tmp_path / "points" / (nonce + ".json")).read_bytes())
-    assert response["ok"] is (fault in {None, "read_race"})
+    assert response["ok"] is (fault in {None, "read_race", "retention", "retention_default",
+                                      "retention_off", "retention_pin", "retention_failure"})
     unit = tmp_path / "points" / nonce
-    if fault in {None, "read_race"}:
+    if fault in {None, "read_race", "retention", "retention_default", "retention_off", "retention_pin", "retention_failure"}:
         manifest = json.loads((unit / "checkpoint.json").read_bytes())
         metadata = manifest["point_metadata"]
         assert metadata["synthetic_boundary"] is True
         assert metadata["worker_file_snapshot"]["prepared_source_verified"] is True
         assert (unit / "components/code").read_text() == "retained"
         assert response["capture"]["research_point_qualified"] is False
+        if fault in {"retention", "retention_default"}:
+            assert not (tmp_path / "points/old").exists()
+            receipt = json.loads((tmp_path / "points/retention-last.json").read_bytes())
+            assert [p["id"] for p in receipt["deleted"]] == ["old"]
+            assert not (tmp_path / "points/retention-error.json").exists()
+        elif fault == "retention_pin":
+            receipt = json.loads((tmp_path / "points/retention-last.json").read_bytes())
+            assert {p["id"] for p in receipt["retained"]} == {"old", nonce} and receipt["deleted"] == []
+        elif fault == "retention_off":
+            assert (tmp_path / "points/old/checkpoint.json").exists()
+            assert not (tmp_path / "points/.checkpoint-retention").exists()
+            assert supervisor.maintenance is None
+        elif fault == "retention_failure":
+            assert (tmp_path / "points/old/checkpoint.json").exists()
+            assert (tmp_path / "points/retention-error.json").exists()
     else:
         assert not unit.exists()
         if fault != "late_native":

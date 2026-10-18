@@ -24,9 +24,11 @@ function RouteLoading() {
 
 const searchSchema = z.object({
   goalId: z.string().optional().default(""),
-  // Display scope only: malformed/unknown IDs stay unavailable instead of
-  // silently reopening all Goals. Numeric opaque IDs survive URL decoding.
-  rootGoalId: z.coerce.string().optional(),
+  // Absence alone opens all Goals. Preserve present decoded values, including
+  // empty strings/arrays, so malformed scope cannot become an unscoped visit.
+  // Numeric opaque IDs still survive the router's JSON decoding.
+  rootGoalId: z.unknown().transform(value => typeof value === "string" && value
+    ? value : JSON.stringify(value)).optional(),
   // Preserve the existing history/analysis owners' query state. They validate
   // it from the URL themselves; router decoding can produce arrays or numbers.
   research_lens: z.unknown().optional(),

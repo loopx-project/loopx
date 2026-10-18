@@ -850,6 +850,17 @@ leases this resumes unchanged work without granting execution authority; the
 worker must then acquire a fresh lease. Bundling `--note`, evidence or other
 execution edits into that command remains subject to the normal lease fence.
 
+A receipt initially admitted for `successor_replan_required` retains that
+bounded lifecycle duty on replay while the same canonical, claim-scoped resume
+condition remains ready. It must not become a quiet skip merely because the
+worker has not reopened it yet. Reopening permits ordinary same-Todo
+qualification under the original Turn identity; it neither substitutes another
+Todo nor imports a newly discovered semantic replan obligation into an explicit
+empty original guard. A later future wait, changed owner or completed
+settlement still closes this resume path. This differs from executable work
+which became deferred after admission: that existing no-execution/no-spend
+boundary remains intact, and independent work is selected under a fresh Turn.
+
 Priority remains authoritative across the resume boundary. When a ready
 current-agent or unclaimed deferred successor has strictly higher priority than
 the selected open advancement todo, quota also returns

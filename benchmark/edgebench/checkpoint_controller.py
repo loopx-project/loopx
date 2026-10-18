@@ -273,6 +273,17 @@ def _bank_import_lock(target: Path, timeout: float):
 def restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: str,
             timeout: float = 30, phase_deadline_file: Path | None = None, recover: bool = False,
             phase_extension_seconds: int = 0) -> dict:
+    from loopx.hosts.checkpoint_retention import checkpoint_bank_use
+    started = monotonic()
+    with checkpoint_bank_use(root):
+        return _restore(controller_file, root=root, expected_sha256=expected_sha256, run_id=run_id,
+                        timeout=timeout - (monotonic() - started), phase_deadline_file=phase_deadline_file,
+                        recover=recover, phase_extension_seconds=phase_extension_seconds)
+
+
+def _restore(controller_file: Path, *, root: Path, expected_sha256: str, run_id: str,
+             timeout: float, phase_deadline_file: Path | None, recover: bool,
+             phase_extension_seconds: int) -> dict:
     """Import verified inert bytes, then ask fresh native authority to admit them.
 
     An explicitly captured Host clock preserves its remaining phase duration.

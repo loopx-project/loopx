@@ -121,6 +121,19 @@ export const goalHierarchyScenario = {
       await page.goto(unavailable.href, {waitUntil: "networkidle"});
       await page.getByRole("alert").filter({hasText: "当前来源中此 Goal 范围不可用"}).waitFor();
       assert.equal(await page.locator(".personal-goal-row").count(), 0, "An invalid scope cannot silently reopen all Goals");
+      await page.setViewportSize({width: 1512, height: 982});
+      for (const invalid of ["[]", '[""]', '["research"]', "{}", ""]) {
+        unavailable.searchParams.set("rootGoalId", invalid);
+        await page.goto(unavailable.href, {waitUntil: "networkidle"});
+        await page.getByRole("alert").filter({hasText: "当前来源中此 Goal 范围不可用"}).waitFor();
+        assert.equal(await page.locator(".personal-goal-row").count(), 0, `${invalid}: decoded values cannot widen the scope`);
+        assert.equal(await page.locator(".personal-manager-greeting, .personal-composer-wrap").count(), 0);
+        await page.getByRole("button", {name: "全部 Goals", exact: true}).click();
+        await row("daily").waitFor();
+        await page.goBack({waitUntil: "networkidle"});
+        await page.getByRole("alert").filter({hasText: "当前来源中此 Goal 范围不可用"}).waitFor();
+        assert.equal(await page.locator(".personal-goal-row").count(), 0, "Back preserves an explicitly invalid scope");
+      }
       assert.equal(api.turnRequests.length, 0);
       assert.equal(api.actionApplies.length, 0);
       const readback = await (await fetch(`${owner.base}/fixture/readback`)).json();
