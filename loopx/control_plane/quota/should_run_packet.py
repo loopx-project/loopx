@@ -87,6 +87,7 @@ from ..scheduler.execution_context import (
 from ..scheduler.external_evidence_observation import (
     build_external_evidence_observation_obligation,
 )
+from ..scheduler.arbitration import SchedulerArbitration
 from ..scheduler.scheduler_hint import build_scheduler_hint
 from ..scheduler.state import (
     load_app_automation_scheduler_state,
@@ -120,7 +121,7 @@ from ..work_items.action_selection_contract import (
 )
 from ..work_items.goal_route_hint import build_goal_route_hint
 from ..work_items.interaction_contract import (
-    build_interaction_contract,
+    _build_interaction_contract_projection,
     unadmitted_action_selection,
     finalize_user_gate_notification_cooldown,
 )
@@ -196,7 +197,7 @@ def _compact_autonomous_candidate_context(
 
 
 def _scheduler_hint(
-    payload: dict[str, Any], *, include_detail: bool = False,
+    payload: dict[str, Any], *, arbitration: SchedulerArbitration | None = None, include_detail: bool = False,
     codex_app_scheduler_state: dict[str, Any] | None = None, available_capabilities: Any = None, codex_app_current_rrule: Any = None,
     codex_app_automation_id: Any = None,
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None = None,
@@ -204,7 +205,7 @@ def _scheduler_hint(
     return build_scheduler_hint(
         payload,
         user_action_required=_user_channel_action_required(payload),
-        agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
+        arbitration=arbitration,
         include_detail=include_detail,
         codex_app_scheduler_state=codex_app_scheduler_state,
         available_capabilities=available_capabilities, codex_app_current_rrule=codex_app_current_rrule,
@@ -513,27 +514,10 @@ def _resolve_agent_lane_delivery_route(
             raise RuntimeError(
                 "qualified action selection is missing its projected candidate"
             )
-        # Explicit selection freezes the eligible identity, not its settlement
-        # boundary. Ask the same typed delivery owner used by the automatic
-        # route; otherwise an open validated Task can only settle by completing.
-        candidate = prepared.requested_action_candidate
-        delivery = evaluate_delivery_route(
-            agent_id=str((prepared.agent_identity or {}).get("agent_id") or ""),
-            previous_todo_id=None, previous_delivery_outcome=None,
-            continuity_todo=None, continuity_actionable=False, continuity_capability_ready=False,
-            fallback_todo=candidate,
-            fallback_actionable=projection_todo_item_is_actionable_open(candidate),
-            fallback_capability_ready=not missing_required_capabilities(
-                candidate, available_capabilities=prepared.effective_available_capabilities),
-            preemptions=delivery_preemptions,
-        )
-        boundary = delivery.get("boundary") or {}
         return {
-            **candidate,
+            **prepared.requested_action_candidate,
             "selected_by": "agent_action_selection",
             "selection_binding": "pending_action_selection",
-            **({"delivery_boundary": boundary["delivery_boundary"]}
-               if boundary.get("delivery_boundary") == "in_flight_continuation" else {}),
         }
 
     item = prepared.item
@@ -1672,8 +1656,8 @@ def _build_quota_should_run_payload(
         resolved_scheduler_context=prepared.resolved_scheduler_context,
     )
     payload["automation_liveness"] = build_automation_liveness(payload)
-    payload["interaction_contract"] = build_interaction_contract(
-        payload,
+    payload["interaction_contract"], arbitration = _build_interaction_contract_projection(
+        payload, agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
         available_capabilities=prepared.runtime_available_capabilities,
         scheduler_execution_context=prepared.resolved_scheduler_context,
         turn_instance_id=turn_instance_id,
@@ -1681,7 +1665,7 @@ def _build_quota_should_run_payload(
         registry_path=prepared.status_payload.get("registry"),
     )
     payload["scheduler_hint"] = _scheduler_hint(
-        payload,
+        payload, arbitration=arbitration,
         include_detail=prepared.include_scheduler_detail,
         available_capabilities=prepared.runtime_available_capabilities,
         codex_app_scheduler_state=(

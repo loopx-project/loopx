@@ -37,29 +37,6 @@ export {
 
 /** A cold import pins its own source and operation; it has no shadow revision. */
 export const COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA = "loopx_cold_source_import_writer_fence_v0";
-/** Transfer write exclusion on a prepared source or an inert destination.
- * Older decoders reject this schema rather than treating retained history as a
- * fresh execution grant. The role is part of the exact persisted binding. */
-export const PLANNED_TRANSFER_WRITER_FENCE_SCHEMA = "loopx_planned_transfer_writer_fence_v0";
-/** Native Task/accounting admission after a final source decision. Host,
- * session and effect execution remain held. This is not new-Goal creation. */
-export const PLANNED_TRANSFER_TASK_FENCE_SCHEMA = "loopx_planned_transfer_task_fence_v0";
-/** A distinct, Goal-owned runtime admission. Historical Task-only fences stay
- * Task-only; older installations reject this new contract instead of widening it. */
-export const PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA = "loopx_planned_transfer_runtime_fence_v0";
-export function isPlannedTransferAdmissionFence(fence: JsonObject): boolean {
-  return fence.schema_version === PLANNED_TRANSFER_TASK_FENCE_SCHEMA ||
-    fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA;
-}
-export interface PlannedTransferWriterFence extends JsonObject {
-  schema_version: typeof PLANNED_TRANSFER_WRITER_FENCE_SCHEMA;
-  state: "engaged";
-  role: "source" | "target";
-  goal_id: string;
-  fence_id: string;
-  operation_id: string;
-  source_identity_sha256: string;
-}
 
 // Caller adapter: remediation is rendered here, never inside
 // checkLegacyCoordinationWriteAllowed, which owns only the stable typed reason
@@ -133,24 +110,6 @@ export function legacyCoordinationWriterFencePath(root: string, goalId: string):
 
 export function decodeLegacyCoordinationWriterFence(value: unknown): JsonObject {
   const fence = canonicalAuthorityObject(value, "legacy coordination writer fence");
-  if (isPlannedTransferAdmissionFence(fence)) {
-    const digestKey = fence.schema_version === PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA ? "runtime_admission_sha256" : "task_admission_sha256";
-    if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
-        ["schema_version", "state", "goal_id", "fence_id", "operation_id", "source_identity_sha256", digestKey, "store_identity"]) ||
-        !BARE_SHA256_PATTERN.test(String(fence.source_identity_sha256)) || !BARE_SHA256_PATTERN.test(String(fence[digestKey]))) {
-      throw new Error("Invalid planned transfer admission fence");
-    }
-    for (const key of ["goal_id", "fence_id", "operation_id", "store_identity"]) requireAuthorityStoreId(fence[key], key);
-    return fence;
-  }
-  if (fence.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA) {
-    if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
-        ["schema_version", "state", "goal_id", "fence_id", "operation_id", "source_identity_sha256", "role"]) ||
-        (fence.role !== "source" && fence.role !== "target") ||
-        !BARE_SHA256_PATTERN.test(String(fence.source_identity_sha256))) throw new Error("Invalid planned transfer writer fence");
-    for (const key of ["goal_id", "fence_id", "operation_id"]) requireAuthorityStoreId(fence[key], key);
-    return fence;
-  }
   if (fence.schema_version === COLD_SOURCE_IMPORT_WRITER_FENCE_SCHEMA) {
     if (fence.state !== "engaged" || !hasExactAuthorityKeys(fence,
         ["schema_version", "state", "goal_id", "fence_id", "import_operation_id", "import_plan_sha256"]) ||
@@ -222,80 +181,6 @@ export async function completeNewGoalWriterFenceUnderLocks(root: string, goalId:
     const checked = await loadLegacyCoordinationWriterFence(root, goalId);
     if (checked.status !== "loaded" || !canonicalAuthorityBytes(checked.fence).equals(canonicalAuthorityBytes(completed))) {
       throw new Error("New Goal creation completion fence readback failed");
-    }
-  });
-}
-
-/** Caller holds the Goal maintenance lock and has retained the original fence
- * and complete source identity. This transition never reopens a prepared source.
- */
-export async function preparePlannedTransferWriterFenceUnderLock(root: string, goalId: string,
-  prior: JsonObject, prepared: PlannedTransferWriterFence): Promise<void> {
-  decodeLegacyCoordinationWriterFence(prior);
-  decodeLegacyCoordinationWriterFence(prepared);
-  if (prior.goal_id !== goalId || prepared.goal_id !== goalId ||
-      prior.schema_version === PLANNED_TRANSFER_WRITER_FENCE_SCHEMA ||
-      prepared.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || prepared.role !== "source") throw new Error("Invalid transfer fence transition");
-  const path = legacyCoordinationWriterFencePath(root, goalId);
-  await withFileMutationLock(path, async () => {
-    const current = await loadLegacyCoordinationWriterFence(root, goalId);
-    if (current.status !== "loaded") throw new Error("Original source writer fence is unavailable");
-    if (canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(prepared))) return;
-    if (!canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(prior))) throw new Error("Source writer fence changed");
-    await atomicWriteJson(path, prepared);
-    const after = await loadLegacyCoordinationWriterFence(root, goalId);
-    if (after.status !== "loaded" || !canonicalAuthorityBytes(after.fence).equals(canonicalAuthorityBytes(prepared))) {
-      throw new Error("Prepared source writer fence readback failed");
-    }
-  });
-}
-
-/** Preparation-only cancellation after the Goal owner durably records its
- * decision under maintenance/source locks. Restore the exact qualified normal
- * source fence, never remove a fence or manufacture a new creation grant. */
-export async function restorePlannedTransferWriterFenceUnderLock(root: string, goalId: string,
-  prepared: PlannedTransferWriterFence, prior: JsonObject): Promise<void> {
-  decodeLegacyCoordinationWriterFence(prepared);
-  decodeLegacyCoordinationWriterFence(prior);
-  if (prepared.goal_id !== goalId || prepared.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA ||
-      prepared.role !== "source" || prior.goal_id !== goalId || prior.schema_version !== NEW_GOAL_WRITER_FENCE_SCHEMA ||
-      prior.creation_completed !== true) throw new Error("Invalid source preparation cancellation fence");
-  const path = legacyCoordinationWriterFencePath(root, goalId);
-  await withFileMutationLock(path, async () => {
-    const current = await loadLegacyCoordinationWriterFence(root, goalId);
-    if (current.status !== "loaded") throw new Error("Original source writer fence is unavailable");
-    if (canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(prior))) return;
-    if (!canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(prepared))) throw new Error("Source writer fence changed before cancellation");
-    await atomicWriteJson(path, prior);
-    const after = await loadLegacyCoordinationWriterFence(root, goalId);
-    if (after.status !== "loaded" || !canonicalAuthorityBytes(after.fence).equals(canonicalAuthorityBytes(prior))) {
-      throw new Error("Cancelled source writer fence readback failed");
-    }
-  });
-}
-
-/** The Goal cutover owner holds maintenance and has read back its registry and
- * durable admission. Only the exact stopped target may enter this lineage. */
-export async function admitPlannedTransferTaskWriterUnderLock(root: string, goalId: string,
-  prepared: JsonObject, admitted: JsonObject): Promise<void> {
-  decodeLegacyCoordinationWriterFence(prepared); decodeLegacyCoordinationWriterFence(admitted);
-  if (prepared.schema_version !== PLANNED_TRANSFER_WRITER_FENCE_SCHEMA || prepared.role !== "target" ||
-      !isPlannedTransferAdmissionFence(admitted) || prepared.goal_id !== goalId || admitted.goal_id !== goalId ||
-      prepared.operation_id !== admitted.operation_id || prepared.source_identity_sha256 !== admitted.source_identity_sha256) {
-    throw new Error("Invalid planned target admission transition");
-  }
-  const path = legacyCoordinationWriterFencePath(root, goalId);
-  await withFileMutationLock(path, async () => {
-    const current = await loadLegacyCoordinationWriterFence(root, goalId);
-    if (current.status !== "loaded") throw new Error("Prepared target writer fence is unavailable");
-    if (canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(admitted))) return;
-    if (!canonicalAuthorityBytes(current.fence).equals(canonicalAuthorityBytes(prepared))) throw new Error("Prepared target writer fence changed");
-    // Durable publication is the last step, after source-final, registry and
-    // admission readback. An interrupted earlier step remains write-closed.
-    await atomicWriteJson(path, admitted);
-    const after = await loadLegacyCoordinationWriterFence(root, goalId);
-    if (after.status !== "loaded" || !canonicalAuthorityBytes(after.fence).equals(canonicalAuthorityBytes(admitted))) {
-      throw new Error("Target admission fence readback failed");
     }
   });
 }

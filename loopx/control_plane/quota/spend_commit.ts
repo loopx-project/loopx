@@ -99,7 +99,6 @@ interface QuotaSpendCommitRequest {
   after: CompactQuotaDecision;
   resolved_agent_id: string | null;
   owner: QuotaAccountingOwner;
-  maintenance_lock?: unknown;
 }
 
 interface QuotaSpendReplayRequest {
@@ -309,7 +308,6 @@ function requestObject(value: unknown): QuotaSpendCommitRequest {
       "resolved_agent_id",
     )?.trim() ?? null,
     owner,
-    maintenance_lock: request.maintenance_lock,
   };
 }
 
@@ -853,7 +851,6 @@ export async function evaluateQuotaSpendCommit(
       expectedIndexDigest: request.expected_index_digest,
       ...(goalRef === null ? {} : { goalRef }),
       indexLockHeld,
-      maintenanceLock: request.maintenance_lock,
       prepare: ({ jsonPath, markdownPath, indexPath: lockedIndexPath }) => {
         const payload = payloadFor(
           request,

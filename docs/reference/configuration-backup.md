@@ -326,128 +326,6 @@ migration together manually.
 外部操作已完成。File/SQLite 及冷启动回归只验证这些现有边界，不代表完整迁移
 已交付；这也不是要求用户手工拼接迁移步骤。
 
-The planned-transfer implementation under development retains original indexed
-run artifacts with the closed Turn and quota history. Ordinary destination
-history and same-effect spend replay read those verified local copies, including
-original spends and voids; an empty live destination index does not erase prior
-usage. Original receipt bodies and source addresses remain unchanged. Artifact
-addresses in the read model point to the retained local copies and carry their
-original paths separately. Missing, changed, linked or unbound history holds
-instead of reporting zero usage or repairing from the old source. Unrecognized
-or missing indexed source artifacts must be reconciled before preparation.
-Existing destination accounting also rejects staging before its Goal/provider
-is published; later accounting is preserved and requires its recovery owner.
-These are historical projections while the destination remains stopped; they
-do not adopt live accounting, configuration, credentials or execution authority.
-Final cutover, destination admission and the packaged continuation journey are
-still separate, unqualified parts of this implementation.
-
-中文：开发中的计划内迁移将原索引所指的运行产物与已结算 Turn、扣额和冲销
-历史一起保留。目标普通历史和同 effect 扣额重放读取经核验的本地产物，不能
-因为目标当前索引为空就丢掉已有用量。原 receipt 正文和源地址不改写；读模型
-提供本地保留地址，并另存原地址。历史缺失、改变、链接或绑定损坏时明确拒绝，
-不回报零用量、不从旧源修补；源端不支持或缺失的索引产物须先由原 owner 处理。
-目标已有账务时，在发布 Goal/provider 前拒绝导入；后写账务保留，交原 owner 恢复。
-目标仍停止，这些历史投影不授予当前扣额、配置、凭证或执行权限；最终切换、
-目标准入及打包后的继续工作旅程尚未资格化。
-
-Registry compensation in this implementation also obeys the prepared Goal
-owner. A transaction cannot restore an old registration after releasing its
-lock or overwrite unrecognized later bytes. Ordinary compensation within the
-original transaction still restores its exact prior bytes and format. If a
-staged destination registration was published but its readback failed, a
-refused compensation preserves that stopped route and reports recovery of the
-original operation. Cold retry uses the retained operation; it does not delete
-the route, reopen the source, or admit destination execution.
-
-中文：开发中的 registry 补偿也服从原 prepared Goal owner：事务释放锁后不能用
-旧对象恢复注册信息，也不能覆盖无法识别的后写字节。原事务内的普通补偿仍恢复
-准确原字节及格式。目标停止注册已发布而读回失败时，若 owner 拒绝补偿，就保留
-停止的目标路由，明确要求恢复原 operation；冷启动重试复用它，不删除路由、
-不重开源端，也不授予目标执行权限。
-
-### Original work and prepared-source recovery (in development)
-
-The Goal's existing Settings / Capability Center includes **Move Agent** for
-original-work and preparation readback. Goal entry points preselect that Goal;
-the device entry retains device scope. The shared `goal-transfer inspect
---goal-id GOAL` reads the same native owner, full original Todo declarations
-and archive relations. It discovers a prepared operation without asking the
-user for runtime paths, registry edits or separate owner commands.
-
-When the source is already prepared, **Cancel move preparation** records its
-original cancellation and reads back the source fence in place. Cold retry and
-duplicate confirmation retain that decision; later source work is preserved.
-The CLI counterpart is `goal-transfer cancel --goal-id GOAL --operation-id
-OPERATION --execute`. A recorded cancellation whose follow-up read failed
-remains recorded; retry the read instead of treating it as an uncommitted move.
-These entries expose current holds. The complete Settings migration journey is
-still unavailable. A separate development CLI profile now coordinates a local
-cutover between a prepared source and its already staged destination. Both
-original local registry/runtime routes must remain reachable until admission:
-
-```sh
-loopx --registry .loopx/registry.json goal-transfer cutover-preview \
-  --goal-id GOAL --operation-id OPERATION \
-  --destination-registry ../destination/.loopx/registry.json
-
-# Confirm the returned exact preview_sha256 once.
-loopx --registry .loopx/registry.json goal-transfer cutover \
-  --goal-id GOAL --operation-id OPERATION \
-  --destination-registry ../destination/.loopx/registry.json \
-  --expected-preview-sha256 REVIEWED_SHA256 --execute
-```
-
-The native Goal owner verifies the original File/SQLite history, protected
-staging, mapped material bytes and single-Agent local Task configuration. Extra
-capability, parent-Goal, Host or credential bindings remain held for their
-owners. It records the source-final decision under the same lock as cancellation,
-publishes only the exact destination registration through its existing codec,
-then issues a distinct native **Task and accounting** admission. Host/session/
-effect execution remains closed; this receipt is not an Agent runtime grant.
-It never forges a new-Goal creation receipt or installs an old lease/session. The destination must acquire
-a fresh lease for the **original Todo id**. Original quota history remains the
-basis for new work and duplicate-effect lookup; old receipts are unchanged.
-
-Before source-final, cancellation can restore the unchanged source. After
-source-final, cancellation refuses: retry the **same operation and preview** to
-finish destination admission. A lost response or later destination work never
-authorizes rewriting its registry or restoring the source. Source Settings and
-`goal-transfer inspect` read current destination Todo status and evidence references after cutover;
-an unavailable destination fails the read instead of displaying a cached success.
-Source preparation binds its observed OS installation; destination Task admission
-also binds its original physical runtime. A copied receipt or recreated runtime
-does not re-admit writes.
-Provider/policy replacement and a further transfer still require their owning
-lineage qualification. This is a source-online local Task continuation profile,
-not portable cross-machine authorization or complete installed Agent migration.
-Portable custody/security, required configuration/session dependencies, automatic
-preparation, the complete Settings interaction and installed qualification remain
-open. Existing ordinary Goals and their provider defaults retain their behavior.
-
-中文：开发中的 Goal 设置 / 能力中心新增“迁移 Agent”，与 `goal-transfer inspect
---goal-id GOAL` 共用原生 owner，读取原任务全文、归档和关系及当前准备状态。
-从 Goal 进入时自动选中该 Goal；设备入口仍为设备范围。原操作由 owner 发现，
-不要求本人找 runtime 路径、修改 registry 或拼接多套命令。已准备的源端可在原处
-“取消迁移准备”，记录原取消决定并读回源写入边界；冷启动、重复确认和后写均保留。
-取消已记录但后续读取失败时，重试读取，不把已提交决定说成未发生。
-开发中的 shared CLI 另有本地 `cutover-preview` / `cutover`：对已准备的源及已暂存的
-目标预览后，用准确摘要确认一次。原生 Goal owner 对账原 File/SQLite 历史、受保护的
-暂存内容、材料映射和单 Agent 本地任务配置；额外能力、父 Goal、Host 或凭证绑定仍由
-原 owner 处理。源最终决定和取消互斥；目标经原 registry codec 读回后取得本地 Task/记账
-准入，Host/session/effect 执行仍关闭，这不是 Agent runtime 的完整准入。
-不伪造新 Goal 创建收据、不沿用旧 lease/session。目标为原 Todo 重新取得 lease；原账、
-原 effect 去重和收据保持有效。源最终决定之前可取消，之后仅同操作向前恢复；重复确认
-不覆盖目标后写。原设置和 `inspect` 从目标读取原任务状态和证据引用，目标失联则明确报错；
-引用本身不代表已在此处读取产物字节或完成原 Goal 验收。
-取得本地 runtime 准入后，同一入口可停止或恢复实际目标 Goal；当前状态摘要和原切换
-绑定由既有 owner 校验。源端仍保持停写，浏览器不能指定另一 registry；恢复不额外
-派发或重放工作。该控制不证明进行中的 Host 已退出，也不补足持续多轮迁移验收。
-源准备绑定原 OS 安装身份，目标任务准入还绑定原物理 runtime；复制收据或重建目录不获新写权限。
-此路径在准入前要求两个原本地环境均可达；不是跨机授权令牌。再次迁移和 provider/
-策略替换仍待原谱系 owner 资格。自动准备、完整设置交互、必要配置/session 依赖、
-安全封装和正常安装态资格仍未闭，不能据此宣称完整 Agent 迁移已交付。
-
 ## Full-state recovery after cold import
 
 Keep the reviewed pre-import backup as well as a new full-state backup after
@@ -762,3 +640,9 @@ Native Windows tests cover the configuration-only CLI export/verify/restore and
 local HTTP checkpoint with UTF-8 values. The packaged browser journey, full
 state backup, provider promotion, a destination machine and long-duration SQLite
 operation remain separate qualifications.
+
+## Agent-assisted migration
+
+For moving unfinished Agent work, use the [copyable migration prompt](../guides/agent-migration.md)
+to compose these existing primitives. The Agent handles discovery, path mapping,
+verification and current-owner admission; this adds no automatic migration service.

@@ -763,15 +763,28 @@ def test_manager_route_reconciliation_opens_before_atomic_binding_swap(
     assert reconciled["connector"]["session_ref"] == "new-session"
 
 
-@pytest.mark.parametrize("execute", [False, True])
+@pytest.mark.parametrize("execute, scope_failure", [(False, False), (True, False), (True, True)])
 def test_manager_connection_opens_audience_session_only_on_execute(
-    monkeypatch: Any, tmp_path: Path, execute: bool
+    monkeypatch: Any, tmp_path: Path, execute: bool, scope_failure: bool
 ) -> None:
     import loopx.chat_lark_api as api
+    import loopx.capabilities.manager_context as manager_context
     from loopx.chat_manager import manager_channel
 
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps({"goals": [{"id": "goal-alpha", "repo": str(tmp_path)}]}))
     calls: list[dict[str, Any]] = []
     opened: list[dict[str, Any]] = []
+    responses: list[tuple[dict[str, Any], int]] = []
+    refreshed: list[bool] = []
+    configure = manager_context.configure_evidence_scope
+
+    def configure_scope(*args, **kwargs):
+        if scope_failure and kwargs.get("execute"):
+            raise OSError("synthetic policy write failure")
+        return configure(*args, **kwargs)
+
+    monkeypatch.setattr(manager_context, "configure_evidence_scope", configure_scope)
     monkeypatch.setattr(
         api,
         "connect_lark_goal_topic",
@@ -781,14 +794,16 @@ def test_manager_connection_opens_audience_session_only_on_execute(
     class Handler(LarkChatRequestMixin):
         path = "/api/chat/lark/connections"
         server = SimpleNamespace(
+            registry_path=registry_path,
             chat_store=SimpleNamespace(latest_session=lambda **kwargs: None),
             runtime_controller=SimpleNamespace(
+                coordination_runtime_root=tmp_path / "runtime",
                 open_session=lambda **kwargs: (
                     opened.append(kwargs) or {"session_id": "manager-session"},
                     False,
                 )
             ),
-            lark_goal_topic_runtime=SimpleNamespace(refresh=lambda: None),
+            lark_goal_topic_runtime=SimpleNamespace(refresh=lambda: refreshed.append(True)),
         )
 
         def _require_lark_cli(self):
@@ -817,12 +832,18 @@ def test_manager_connection_opens_audience_session_only_on_execute(
             return lambda *_args: {"returncode": 0, "stdout": "{}", "stderr": ""}
 
         def _send_json(self, payload, *, status=200):
-            assert payload["ok"]
+            responses.append((payload, status))
 
         def _send_error(self, message, **kwargs):
             raise AssertionError(message)
 
     Handler()._lark_connect()
+    assert responses[0][0]["ok"] is not scope_failure
+    assert responses[0][1] == (400 if scope_failure else 200)
+    if scope_failure:
+        assert responses[0][0]["status"] == "partially_connected"
+        assert "read scope" in responses[0][0]["error"]
+    assert len(refreshed) == int(execute)
     assert calls[0]["conversation_kind"] == "manager"
     assert calls[0]["turn_trigger"] == "human_messages"
     assert calls[0]["ingress_mode"] == "session_queue"
@@ -835,3 +856,7 @@ def test_manager_connection_opens_audience_session_only_on_execute(
             provider="lark", audience="mew\0oc_public_fixture"
         )
         assert opened[0]["channel_id"] != "manager"
+
+    from loopx.capabilities.manager_context import evidence_goal_scope
+    observed = evidence_goal_scope(tmp_path / "runtime", manager_channel(provider="lark", audience="mew\0oc_public_fixture"), registry_path=registry_path)
+    assert observed == (["goal-alpha"] if execute and not scope_failure else None)

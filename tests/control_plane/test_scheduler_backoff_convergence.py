@@ -13,7 +13,7 @@ from loopx.control_plane.scheduler import scheduler_hint as scheduler_hint_modul
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
-from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint as build_scheduler_hint
 
 GOAL_ID = "scheduler-backoff-convergence"
 AGENT_ID = "codex-fixture"

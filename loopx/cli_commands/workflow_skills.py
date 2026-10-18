@@ -30,12 +30,12 @@ def register_workflow_skills_command(
     mutation.add_argument(
         "--install",
         action="store_true",
-        help="Install the packaged workflow skills and managed $loopx entry skill.",
+        help="Install workflow skills and refresh continuation guidance for an already installed Ego skill.",
     )
     mutation.add_argument(
         "--uninstall",
         action="store_true",
-        help="Remove unchanged LoopX-managed workflow skills.",
+        help="Remove unchanged LoopX-managed skills and restore any managed Ego skill to its upstream link.",
     )
     parser.add_argument(
         "--skills-dir",

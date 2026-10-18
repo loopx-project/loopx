@@ -8,7 +8,7 @@ from examples.control_plane.quota_plan_fixtures import (
 )
 from loopx.cli_commands.automation_cadence import _render_automation_cadence
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
-from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint
+from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint as build_scheduler_hint
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )

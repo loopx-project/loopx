@@ -319,6 +319,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-refresh-control.is-error small { color: var(--pw-red); }
 .personal-icon-button { display: inline-grid; flex: 0 0 36px; place-items: center; width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border: 1px solid var(--pw-line); border-radius: 10px; background: #fff; color: var(--pw-muted); cursor: pointer; }
 .personal-icon-button:hover { border-color: var(--pw-line-strong); color: var(--pw-text); }
+.personal-status-mode[aria-pressed="true"] { display: inline-flex; flex-basis: auto; justify-content: center; gap: 6px; width: auto; padding-inline: 9px; font-size: var(--text-body); line-height: var(--leading-body); white-space: nowrap; }
+.personal-status-mode > svg { flex: none; }
 .personal-channel-scroll { overflow: auto; min-width: 0; min-height: 0; padding: 22px max(26px, calc((100% - 820px) / 2)); }
 .personal-channel-scroll[data-active-goal-view="tasks"]:has(.personal-task-kanban) { padding-inline: max(26px, calc((100vw - 1240px) / 2 - 150px)); }
 .personal-channel-scroll[data-active-goal-view="tasks"]:has(.personal-task-board) { overflow: hidden; }

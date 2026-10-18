@@ -21,6 +21,21 @@ upgraded CLI. Upgrade that App rather than downgrade a newer CLI to match its
 older bundle. Keep explicit developer runtime pins and their diagnostics intact.
 Keep SSH host verification separate; a host without an App needs no App install.
 
+## Ego Host-Skill Refresh
+
+LoopX's normal host-skill upgrade/install path refreshes continuation guidance
+for an already installed Ego browser skill. Reuse the same known idle TaskSpace
+for the same authorized task without asking again merely because the previous
+round finished or handed it back. Active user intervention, explicit pauses,
+reserved control and unverified spaces retain the installed Ego skill's stop
+rules. This is host guidance, not permission to bypass Ego's ownership checks.
+After an independently authorized Ego upgrade, run `loopx workflow-skills --install`
+and read `ego_browser`: it follows the current installed Ego source, preserves
+custom edits and reports recovery steps. It does not upgrade Ego. App-private
+runtime preparation that skips host integrations stays isolated.
+Use `loopx workflow-skills --uninstall` to restore an unchanged managed Ego
+skill to its current upstream link while removing LoopX-managed workflow skills.
+
 ## Preflight
 
 Resolve the host command once before project work. On native Windows PowerShell

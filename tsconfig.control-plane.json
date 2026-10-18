@@ -38,6 +38,7 @@
     "tests/control_plane_ts/action_review_plan.test.ts",
     "tests/control_plane_ts/goal_workspace_digest.test.ts",
     "tests/control_plane_ts/interaction_contract.test.ts",
+    "tests/control_plane_ts/scheduler_arbitration.test.ts",
     "tests/control_plane_ts/runtime_decode.test.ts",
     "tests/control_plane_ts/delegation_inventory.test.ts",
     "tests/control_plane_ts/quota_run_decision.test.ts",

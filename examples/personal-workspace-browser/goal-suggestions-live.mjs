@@ -83,7 +83,8 @@ export const goalSuggestionsLiveScenario = {
       await page.screenshot({ path: resolve(outputDir, "goal-suggestions-live.png"), animations: "disabled" });
       await row.locator('button[data-suggestion="open_decisions"]').click();
       await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 10_000 });
-      await page.locator(".goal-overview").getByText(gateText).first().waitFor({ state: "visible", timeout: 10_000 });
+      await page.locator(".goal-overview-attention").getByRole("button").filter({ hasText: gateText })
+        .waitFor({ state: "visible", timeout: 10_000 });
       return { coverageEntries: await session.close(), note: "real Todo owner and status; CLI user_action stays optional, user_gate becomes the decision suggestion" };
     } catch (error) {
       if (diagnostics) process.stderr.write(diagnostics);

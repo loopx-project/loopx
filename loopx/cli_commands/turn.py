@@ -119,23 +119,11 @@ def handle_turn_command(
                 "--operation-source-route-json requires --codex-operation-tools for codex-cli or --dsh-operation-module for dsh"
             )
         decision: dict[str, Any] | None = None
-        retry_key = args.resume_turn_key if args.turn_command == "run-once" else None
-        implicit_retry = False
-        if (args.turn_command == "run-once" and not retry_key and args.turn_instance_id
-                and getattr(args, "todo_id", None)):
-            from ..control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
-
-            # Reuse the journal owner before live hooks or changed provider
-            # state can produce a different plan hash for this same request.
-            retry_key = find_loopx_turn_key_by_settlement_identity(runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
-                turn_instance_id=args.turn_instance_id, goal_ref=goal_ref)
-            implicit_retry = retry_key is not None
         # A resumed Turn already chose its transaction. New work and context
         # belong to the next Turn, not to recovery of this journal.
-        if args.turn_command == "run-once" and retry_key:
+        if args.turn_command == "run-once" and args.resume_turn_key:
             resume_requested, _session_binding = resolve_turn_resume_session_binding(args)
-            if args.turn_instance_id and not implicit_retry:
+            if args.turn_instance_id:
                 raise ValueError(
                     "--resume-turn-key cannot be combined with --turn-instance-id"
                 )
@@ -146,7 +134,7 @@ def handle_turn_command(
             payload = load_loopx_turn_plan_from_journal(
                 runtime_root,
                 goal_id=args.goal_id,
-                turn_key=retry_key,
+                turn_key=args.resume_turn_key,
             )
             raw_envelope = payload.get("turn_envelope")
             envelope = raw_envelope if isinstance(raw_envelope, dict) else {}
@@ -326,18 +314,6 @@ def handle_turn_command(
                 if isinstance(transaction, dict):
                     transaction.pop("settlement_plan", None)
         elif args.turn_command == "run-once":
-            # Opaque caller proof is private Turn input. Existing journals keep
-            # their original proof; the native terminal owner alone decides its
-            # current validity. Reading a lease never manufactures this input.
-            lease_key = args.task_lease_idempotency_key
-            lease_version = args.task_lease_expected_version
-            if lease_key is not None or lease_version is not None:
-                if not args.todo_id or not lease_key or lease_key != lease_key.strip() or lease_version is None or lease_version < 1:
-                    raise ValueError("Task completion lease proof requires an exact Todo, idempotency key and positive version")
-                proof = {"lease_idempotency_key": lease_key, "lease_expected_version": lease_version}
-                if retry_key and payload.get("completion_lease_fence") != proof:
-                    raise ValueError("Original Turn completion lease proof changed; retain its original journal")
-                payload["completion_lease_fence"] = proof
             if payload.get("route", {}).get("kind") == "capability_action_required":
                 # The normal host transaction forbids Core mutations. A
                 # capability may prepare artifacts and require authored input;

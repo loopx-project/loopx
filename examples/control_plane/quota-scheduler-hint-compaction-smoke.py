@@ -24,6 +24,10 @@ from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
 )
 from loopx.control_plane.scheduler.scheduler_hint import build_scheduler_hint  # noqa: E402
 from loopx.control_plane.quota.should_run_packet import _scheduler_hint  # noqa: E402
+from loopx.control_plane.agents.agent_scope_frontier import AgentScopeFrontierAction  # noqa: E402
+from loopx.control_plane.work_items.interaction_contract import (  # noqa: E402
+    _interaction_reads_and_arbitration,
+)
 
 
 RUNTIME_KEYS = (
@@ -81,6 +85,7 @@ def payload(*, should_run: bool, recommended_mode: str = "", user_required: bool
                 "delivery_allowed": should_run,
                 "quiet_noop_allowed": not user_required and not should_run,
             },
+            "cli_channel": {},
         },
     }
 
@@ -277,6 +282,14 @@ def assert_compact_runtime_policy_complete(
 
 
 def assert_compact_scheduler(name: str, source_payload: dict) -> None:
+    source_payload = deepcopy(source_payload)
+    _, arbitration = _interaction_reads_and_arbitration(
+        source_payload,
+        source_payload["interaction_contract"],
+        runtime_root=None,
+        registry_path=None,
+        agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
+    )
     fixed_now = datetime(2026, 9, 12, 0, 0, tzinfo=timezone.utc)
     with patch(
         "loopx.control_plane.scheduler.scheduler_hint.now_utc",
@@ -284,15 +297,18 @@ def assert_compact_scheduler(name: str, source_payload: dict) -> None:
     ):
         compact = build_scheduler_hint(
             deepcopy(source_payload),
+            arbitration=arbitration,
             user_action_required=False,
             scheduler_execution_context=APP_SCHEDULER_CONTEXT,
         )
         wrapper = _scheduler_hint(
             deepcopy(source_payload),
+            arbitration=arbitration,
             scheduler_execution_context=APP_SCHEDULER_CONTEXT,
         )
         detailed = build_scheduler_hint(
             deepcopy(source_payload),
+            arbitration=arbitration,
             user_action_required=False,
             include_detail=True,
             scheduler_execution_context=APP_SCHEDULER_CONTEXT,

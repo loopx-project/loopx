@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,6 +39,7 @@ from loopx.capabilities.issue_fix.reviewer_notification import (  # noqa: E402
 from loopx.capabilities.issue_fix.reviewer_notification_drain import (  # noqa: E402
     drain_issue_fix_reviewer_notification_queue,
 )
+from loopx.extensions.process_runtime import remove_owned_tree  # noqa: E402
 from loopx.extensions.lark.reviewer_notification import (  # noqa: E402
     lark_reviewer_notification_sink,
 )
@@ -2095,7 +2095,7 @@ def main() -> int:
     finally:
         for attempt in range(10):
             try:
-                shutil.rmtree(path)
+                remove_owned_tree(path)
                 break
             except FileNotFoundError:
                 break

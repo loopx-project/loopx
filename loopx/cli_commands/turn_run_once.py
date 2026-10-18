@@ -271,8 +271,6 @@ def execute_turn_run_once(
                     note=str(result.get("summary") or result["classification"]),
                     evidence=f"LoopX Turn {result_kind}: {result['next_action']}",
                     agent_id=args.agent_id,
-                    task_lease_idempotency_key=(payload.get("completion_lease_fence") or {}).get("lease_idempotency_key"),
-                    task_lease_expected_version=(payload.get("completion_lease_fence") or {}).get("lease_expected_version"),
                 )
             refresh = refresh_state_run(
                 registry_path=registry_path,
@@ -288,11 +286,6 @@ def execute_turn_run_once(
                 # completion/repair, without decorating a completed or blocked task.
                 delivery_batch_scale=str(result["delivery_batch_scale"]),
                 delivery_outcome=str(result["delivery_outcome"]),
-                # Transport the native selection's signed boundary only for
-                # independently validated intermediate work. Terminal results
-                # keep the ordinary completion/semantic-closeout transaction.
-                delivery_boundary=(selected_todo.get("delivery_boundary")
-                    if result_kind == "validated_progress" else None),
                 delivery_workspace_path=delivery_workspace_path,
                 todo_id=settlement_identity.todo_id,
                 turn_instance_id=settlement_identity.turn_instance_id,
@@ -375,26 +368,24 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
-                task_lease_idempotency_key=(payload.get("completion_lease_fence") or {}).get("lease_idempotency_key"),
-                task_lease_expected_version=(payload.get("completion_lease_fence") or {}).get("lease_expected_version"),
             )
-            if completion.get("ok") is not True:
-                return {"ok": False, "appended": False,
-                    "reason": str(completion.get("reason") or "Native Todo completion was not accepted")}
             # Project the continuation the Todo lifecycle durably recorded,
             # never a host-normalized continuation. Contradictory or
             # dangling durable state fails closed before any further
             # writeback so the typed settlement sees the truthful outcome.
+            state_file = completion.get("state_file")
+            if not isinstance(state_file, str) or not state_file:
+                return {
+                    "ok": False,
+                    "appended": False,
+                    "reason": (
+                        "validated completion lifecycle did not report its "
+                        "durable Todo state file"
+                    ),
+                }
             try:
-                # Canonical completion may intentionally omit the optional
-                # Markdown projection address. Resolve this Goal's route and
-                # let the existing reader select its native provider.
-                _, state_path = resolve_todo_state_path(
-                    registry_path=registry_path, goal_id=args.goal_id,
-                    project=None, state_file=None,
-                )
                 durable_todo, existing_todo_ids = read_persisted_todo_record(
-                    state_path,
+                    Path(state_file),
                     todo_id=todo_id,
                     registry_path=registry_path,
                     goal_id=args.goal_id,

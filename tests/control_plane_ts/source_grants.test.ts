@@ -135,3 +135,17 @@ test("an Agent revocation while its Goal is disabled survives Goal restoration",
       { targets: policy === source ? [peer, worker] : [other, peer, worker] });
   }
 });
+
+test("evidence reads follow current registered Goals only after explicit all-registered configuration", async () => {
+  const {resolveSourceEvidenceGoals, configureSourceEvidenceScope} = await import("../../loopx/control_plane/collaboration/source_grants.ts");
+  assert.deepEqual(resolveSourceEvidenceGoals({source, available_goal_ids: ["research", "later"]}), {goal_scope: "selected", goal_ids: null});
+  const selected = {...source, evidence_goal_ids: ["research"]};
+  assert.deepEqual(resolveSourceEvidenceGoals({source: selected, available_goal_ids: ["research", "later"]}).goal_ids, ["research"]);
+  const next = configureSourceEvidenceScope({source: selected, goal_scope: "all_registered", goal_ids: ["research"], available_goal_ids: ["research"]});
+  assert.deepEqual(resolveSourceEvidenceGoals({source: next.source, available_goal_ids: ["research", "later"]}).goal_ids, ["later", "research"]);
+  assert.deepEqual((next.source as typeof selected).targets, selected.targets);
+  assert.deepEqual(resolveSourceEvidenceGoals({source: {...selected, evidence_goal_ids: []}, available_goal_ids: ["research"]}).goal_ids, []);
+  for (const invalid of [{evidence_goal_scope: "unknown"}, {evidence_goal_ids: ["*"]}, {evidence_goal_ids: null}, {evidence_goal_scope: "all_registered"}]) {
+    assert.throws(() => resolveSourceEvidenceGoals({source: invalid}));
+  }
+});

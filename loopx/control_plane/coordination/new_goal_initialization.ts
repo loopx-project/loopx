@@ -17,35 +17,26 @@ import {commitPromotionAndReadBack, readPromotionReceipt} from "./promotion_rece
 import {requireJsonObject} from "../runtime_decode.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 
-/** The original registration binding is also used when moving populated
- * history. Reusing it proves provenance; it does not rerun empty creation. */
-export function newGoalCreationBinding(goalId: string, operationId: string, target: JsonObject,
-  statePath: unknown, registryPath: unknown) {
-  const projection = projectCoordinationSource({schema_version: SOURCE_PROJECTION_REQUEST_SCHEMA,
-    kind: "snapshot", goal_id: goalId, handoff_mode: target.handoff_mode, todos: [], leases: [],
-    read_model_schema: TODO_DOMAIN_READ_RECORD_SCHEMA}).projection as JsonObject;
-  const identitySha = canonicalAuthoritySha256({goal_id: goalId, creation_operation_id: operationId,
-    target, state_path: statePath, registry_path: registryPath});
-  const identity = {operation_id: operationId, projection_sha256: canonicalAuthoritySha256(projection),
-    receipt: {schema_version: "loopx_new_goal_authority_creation_receipt_v0", operation_id: operationId,
-      goal_id: goalId, creation_identity_sha256: identitySha}};
-  const fence = {schema_version: NEW_GOAL_WRITER_FENCE_SCHEMA, state: "engaged", goal_id: goalId,
-    fence_id: `new-goal:${operationId}`, creation_operation_id: operationId, creation_identity_sha256: identitySha,
-    creation_completed: false};
-  return {projection, identity, fence};
-}
-
 export async function initializeNewGoalAuthority(raw: JsonObject): Promise<JsonObject> {
   const root = requireLocalAuthorityRuntimeRoot(raw.runtime_root);
   const goalId = requireAuthorityStoreId(raw.goal_id, "goal id");
   const operationId = requireAuthorityStoreId(raw.creation_operation_id, "creation operation id");
   const target = requireJsonObject(raw.target, "creation target");
   const snapshot = requireJsonObject(raw.source_snapshot, "creation source snapshot");
-  const {projection, identity, fence} = newGoalCreationBinding(goalId, operationId, target,
-    snapshot.state_path, (snapshot.registry_source as JsonObject)?.path);
+  const projection = projectCoordinationSource({schema_version: SOURCE_PROJECTION_REQUEST_SCHEMA,
+    kind: "snapshot", goal_id: goalId, handoff_mode: target.handoff_mode, todos: [], leases: [],
+    read_model_schema: TODO_DOMAIN_READ_RECORD_SCHEMA}).projection as JsonObject;
   const capturedSource = raw.projection !== undefined;
   const request: ShadowRequest = {runtime_root: root, goal_id: goalId,
     projection: capturedSource ? requireJsonObject(raw.projection, "creation source") : projection, source_snapshot: snapshot};
+  const identitySha = canonicalAuthoritySha256({goal_id: goalId, creation_operation_id: operationId,
+    target, state_path: snapshot.state_path, registry_path: (snapshot.registry_source as JsonObject)?.path});
+  const identity = {operation_id: operationId, projection_sha256: canonicalAuthoritySha256(projection),
+    receipt: {schema_version: "loopx_new_goal_authority_creation_receipt_v0", operation_id: operationId,
+      goal_id: goalId, creation_identity_sha256: identitySha}};
+  const fence = {schema_version: NEW_GOAL_WRITER_FENCE_SCHEMA, state: "engaged", goal_id: goalId,
+    fence_id: `new-goal:${operationId}`, creation_operation_id: operationId, creation_identity_sha256: identitySha,
+    creation_completed: false};
   const validateRegistration = async () => {
     // The trusted source adapter validated the existing registry codec. Bind
     // that decoded observation to its complete bytes before inspecting fields;

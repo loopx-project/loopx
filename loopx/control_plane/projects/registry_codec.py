@@ -40,7 +40,7 @@ class ProjectRegistryProtocolError(ProjectRegistryError):
 
 
 class ProjectRegistryMutationError(ProjectRegistryError):
-    """A registry replacement could not be verified."""
+    """A registry replacement could not be verified and was compensated."""
 
 
 class ProjectRegistryRestoreError(ProjectRegistryMutationError):
@@ -349,16 +349,8 @@ class ProjectRegistryTransaction:
         self._existed = existed
         self._mode = mode
         self._finished = False
-        self._closed = False
-        self._publication_bytes = document.raw_bytes if existed else None
-        self._publication_payload = copy.deepcopy(document.payload)
-
-    def _require_open(self) -> None:
-        if self._closed:
-            raise RuntimeError("project registry transaction is closed; open its current owner again")
 
     def payload_copy(self) -> dict[str, Any]:
-        self._require_open()
         return copy.deepcopy(self._document.payload)
 
     def source_read_witness(self) -> dict[str, str]:
@@ -367,14 +359,12 @@ class ProjectRegistryTransaction:
         Consumers must recheck this witness before their independent commit;
         the digest is an observation, not a registry mutation permission.
         """
-        self._require_open()
         if not self._existed or self._finished:
             raise RuntimeError("source read witness requires an open existing registry transaction")
         return {"path": str(self._path.resolve()),
                 "sha256": hashlib.sha256(self._document.raw_bytes).hexdigest()}
 
     def commit(self, payload: dict[str, Any]) -> bool:
-        self._require_open()
         if self._finished:
             raise RuntimeError("project registry transaction is already finished")
         if not isinstance(payload, dict):
@@ -384,18 +374,11 @@ class ProjectRegistryTransaction:
             self._finished = True
             return False
 
-        self._require_transfer_write(before=self._document.payload, after=payload,
-            raw_bytes=self._document.raw_bytes if self._existed else None)
-
         encoded = _encode_document(
             payload,
             format=self._document.format,
             minimum_writer_protocol=self._document.minimum_writer_protocol,
         )
-        # Compensation is authorized only for this exact attempted publication,
-        # never whatever happens to occupy the path after a failed readback.
-        self._publication_bytes = encoded
-        self._publication_payload = copy.deepcopy(payload)
         try:
             _atomic_write_bytes(self._path, encoded, mode=self._mode)
             readback = _read_document(self._path)
@@ -413,8 +396,7 @@ class ProjectRegistryTransaction:
                 self.restore()
             except Exception as restore_exc:
                 raise ProjectRegistryRestoreError(
-                    "project registry readback failed; exact-byte compensation was refused or could not verify; "
-                    "preserve current bytes and recover the original operation"
+                    "project registry readback failed and exact-byte restore failed"
                 ) from restore_exc
             raise ProjectRegistryMutationError(
                 "project registry write readback failed; exact preimage restored"
@@ -423,17 +405,12 @@ class ProjectRegistryTransaction:
         return True
 
     def remove(self) -> bool:
-        self._require_open()
         if self._finished:
             raise RuntimeError("project registry transaction is already finished")
         if not self._path.exists():
             self._finished = True
             return False
-        self._require_transfer_write(before=self._document.payload, after={},
-            raw_bytes=self._document.raw_bytes if self._existed else None)
         self._path.unlink()
-        self._publication_bytes = None
-        self._publication_payload = {}
         if self._path.exists():
             raise ProjectRegistryMutationError(
                 "project registry removal readback failed"
@@ -441,40 +418,7 @@ class ProjectRegistryTransaction:
         self._finished = True
         return True
 
-    def _require_transfer_write(self, *, before: dict[str, Any], after: dict[str, Any],
-                                raw_bytes: bytes | None) -> None:
-        # The format-preserving codec retains serialization, locking and
-        # compensation. The existing typed Goal owner decides prepared state.
-        from ..goals.planned_transfer_io import require_goal_transfer_registry_write
-
-        require_goal_transfer_registry_write(registry_path=self._path,
-            before=before, after=after, registry_witness={"path": str(self._path.resolve()),
-                "sha256": hashlib.sha256(raw_bytes).hexdigest() if raw_bytes is not None else None})
-
     def restore(self) -> None:
-        self._require_open()
-        original = self._document.raw_bytes if self._existed else None
-
-        def observed_bytes() -> bytes | None:
-            try:
-                return self._path.read_bytes()
-            except FileNotFoundError:
-                return None
-
-        current = observed_bytes()
-        if current == original:
-            self._finished = True
-            return
-        if current != self._publication_bytes:
-            raise ProjectRegistryRestoreError(
-                "project registry changed after publication; preserve later bytes and recover its original operation"
-            )
-        # Python owns byte compensation, not a second prepared-Goal policy.
-        # Use the same typed owner against the actual publication witness.
-        self._require_transfer_write(before=self._publication_payload,
-            after=self._document.payload if self._existed else {}, raw_bytes=current)
-        if observed_bytes() != current:
-            raise ProjectRegistryRestoreError("project registry changed during compensation; preserve later bytes")
         if self._existed:
             _atomic_write_bytes(
                 self._path,
@@ -521,18 +465,12 @@ def _registry_transaction(
             document = create_document()
             mode = None
         require_writer(document)
-        transaction = ProjectRegistryTransaction(
+        yield ProjectRegistryTransaction(
             expanded,
             document=document,
             existed=existed,
             mode=mode,
         )
-        try:
-            yield transaction
-        finally:
-            # A retained object is an observation, not permission to mutate
-            # after this context releases the cross-runtime registry lock.
-            transaction._closed = True
 
 
 def _created_document(

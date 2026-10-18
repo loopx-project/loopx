@@ -24,6 +24,7 @@ import loopx.chat_manager_details as details
 
 def inspector(tmp_path, scope=lambda: True):
     records = []
+    (tmp_path / "registry.json").write_text(json.dumps({"goals": [{"id": "alpha"}]}))
     tool = ManagerInspection(
         context={"snapshot_id": "fixture", "goals": [{"goal_id": "alpha"}]},
         registry_path=tmp_path / "registry.json",
@@ -291,7 +292,7 @@ def test_attention_reference_recovers_canonical_long_todo(tmp_path, monkeypatch,
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == before
 
 
-def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path):
+def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path, monkeypatch):
     tool, records = inspector(tmp_path)
     result = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "alpha"})
     assert result["unknown"] and result["matched"] is None
@@ -299,6 +300,10 @@ def test_unavailable_is_unknown_and_large_portfolio_is_disclosed(tmp_path):
     tool.context["goals"][0]["current_todos"] = {"body": "x" * 40000}
     index = manager_index(tool.context)
     assert len(json.dumps(index)) < 2000
+    # The detailed portfolio is now a fresh read, not the Turn's compact index.
+    monkeypatch.setattr("loopx.chat_manager_context.manager_turn_context", lambda *a, **kw: {
+        "goals": tool.context["goals"], "coverage": {"complete": True},
+    })
     result = tool.read(TOOL_NAME, {"view": "portfolio"})
     assert result["oversized_rows"] == [0]
     assert len(json.dumps(result)) < 2000
@@ -459,6 +464,9 @@ def test_manager_runtime_installs_tool_and_records_real_subprocess_read(
     from loopx.chat_store import ChatSessionStore
     import loopx.chat_manager_context as context
 
+    (tmp_path / "registry.json").write_text(json.dumps({"goals": [
+        {"id": "alpha", "registered_agents": ["review-worker"]}
+    ]}))
     fake = tmp_path / "fake-codex"
     fake.write_text("""#!/usr/bin/env python3
 import json, sys
@@ -498,18 +506,12 @@ for line in sys.stdin:
             "'view':'todos','goal_id':'alpha'", "'view':'agents','query':'review'").replace(
             "evidence['rows'][0]['title'] == 'Check the sample result'",
             "evidence['rows'][0]['agent_id'] == 'review-worker' and evidence['rows'][0]['execution_readiness'] == 'not_checked'"))
-        (tmp_path / "registry.json").write_text(json.dumps({"goals": [
-            {"id": "alpha", "registered_agents": ["review-worker"]}
-        ]}))
     if read_view == "agent_route":
         fake.write_text(fake.read_text().replace(
             "'view':'todos','goal_id':'alpha'",
             "'view':'agent_route','goal_id':'alpha','agent_id':'review-worker'").replace(
             "evidence['rows'][0]['title'] == 'Check the sample result'",
             "evidence['status'] == 'unavailable' and evidence['reason'] == 'no_binding' and evidence['host_delivery'] == 'not_attempted'"))
-        (tmp_path / "registry.json").write_text(json.dumps({"goals": [
-            {"id": "alpha", "registered_agents": ["review-worker"]}
-        ]}))
     if read_view == "todos_exact":
         fake.write_text(fake.read_text().replace(
             "'view':'todos','goal_id':'alpha'", "'view':'todos','goal_id':'alpha','todo_id':'todo_sample'").replace(
@@ -597,6 +599,10 @@ def test_stopped_goals_are_opt_in_but_stale_active_remains_visible(tmp_path):
     index = manager_index(tool.context)
     assert [r['goal_id'] for r in index['goals']] == ['alpha', 'unknown']
     assert index['stopped_goals_excluded'] == 1
+    tool.registry_path.write_text(json.dumps({"goals": [
+        {"id": row["goal_id"], "activation_state": row["activation_state"]}
+        for row in tool.context["goals"]
+    ]}))
     current = tool.read(TOOL_NAME, {'view': 'portfolio'})
     assert current['matched'] == 2
     history = tool.read(TOOL_NAME, {'view': 'portfolio', 'include_stopped': True})

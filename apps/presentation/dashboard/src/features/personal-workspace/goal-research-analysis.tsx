@@ -3,6 +3,7 @@ import {ArrowUpRight, LoaderCircle, RefreshCw, Sparkles, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryEpisode} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
 import {requestJson} from "../../data/chat";
+import {ContextHelp} from "./context-help";
 import "./goal-research-analysis.css";
 
 // Transport views of the existing toolkit producer, not an assessment, score,
@@ -164,20 +165,22 @@ const reasonCopy = (reason: string | null | undefined, zh: boolean) => {
 
 export function ResearchAnalysisButton({analysis: a}: {analysis: Controller}) {
   const unavailable = a.pack?.availability !== "available";
-  // The adjacent source/cost line supplies scope before this one explicit
-  // request. Cached/historical results and unavailable states are reads only.
+  // The action keeps its separate-usage consequence visible. Further method
+  // explanation is optional; cached results and unavailable states are reads.
   const readOnly = unavailable || a.pack?.result || a.pending || a.recordedRunning;
-  return <button ref={a.trigger} type="button" disabled={a.loading && !a.pack} onClick={() => readOnly ? a.show() : void a.execute(a.pack?.job?.status === "failed" || a.pack?.job?.status === "cancelled")} aria-expanded={a.location.open} title={unavailable ? reasonCopy(a.pack?.reason_code ?? a.snapshot?.catalog.reason_code, a.zh) : undefined}>
+  return <div className="research-analysis-entry"><div className="research-analysis-entry-actions"><button ref={a.trigger} type="button" disabled={a.loading && !a.pack} onClick={() => readOnly ? a.show() : void a.execute(a.pack?.job?.status === "failed" || a.pack?.job?.status === "cancelled")} aria-expanded={a.location.open} title={unavailable ? reasonCopy(a.pack?.reason_code ?? a.snapshot?.catalog.reason_code, a.zh) : undefined}>
     <Sparkles size={14} aria-hidden/>{a.pack?.result ? (a.zh ? "查看分析" : "View analysis") : a.zh ? "深度分析" : "Deep analysis"}
-  </button>;
+  </button><ContextHelp label={a.zh ? "分析说明" : "About deep analysis"}>
+    {a.pack ? <p>{a.zh ? "分析请求设置（固定）：" : "Fixed analysis request: "}{a.pack.config.model} / {a.pack.config.effort} / {a.pack.config.service_tier}</p> : null}
+    <p>{a.pack?.result ? (a.zh ? "所选范围已有分析，查看不调用 Agent。" : "An analysis exists for the selected scope. Viewing never invokes an Agent.") : (a.zh ? "点击深度分析使用本机 Codex 账户，单独产生分析用量；普通浏览不调用 Agent。" : "Deep analysis uses the local Codex account with separate analysis usage; ordinary browsing never invokes an Agent.")}</p>
+    <p>{a.zh ? "只分析已授权的固定轨迹，不改变研究历史。范围、方法与来源版本可在结果中查看。" : "Analyzes an authorized fixed trajectory without changing research history. Scope, method and source revisions remain available with the result."}</p>
+  </ContextHelp></div>{a.pack && !a.pack.result && !unavailable ? <small>{a.pack.config.model} · {a.zh ? "单独用量" : "Separate usage"}</small> : null}</div>;
 }
 
-export function ResearchAnalysisScope({analysis: a}: {analysis: Controller}) {
+export function ResearchAnalysisStatus({analysis: a}: {analysis: Controller}) {
   const p = a.pack;
   if (!p) return <p className="research-history-note">{a.loading ? (a.zh ? "正在核对可分析来源；浏览不调用 Agent。" : "Checking analysis sources. Browsing never invokes an Agent.") : reasonCopy(a.snapshot?.catalog.reason_code, a.zh)}</p>;
-  return <p className="research-history-note">{p.result ? (a.zh ? "所选范围已有分析，查看不调用 Agent。" : "An analysis exists for the selected scope. Viewing never invokes an Agent.") : <>
-    {a.zh ? "分析请求设置（固定）：" : "Fixed analysis request: "}{p.config.model} / {p.config.effort} / {p.config.service_tier} · {a.zh ? "使用本机 Codex 产生单独分析用量；浏览不调用 Agent。" : "Uses the local Codex account with separate analysis usage; browsing never invokes an Agent."}
-  </>}</p>;
+  return !p.result && p.availability !== "available" ? <p className="research-history-note">{reasonCopy(p.reason_code, a.zh)}</p> : null;
 }
 
 export function ResearchProgressSummary({analysis: a}: {analysis: Controller}) {
@@ -203,21 +206,25 @@ export function ResearchAnalysisPanel({analysis: a}: {analysis: Controller}) {
     {a.loading && !p ? <p role="status">{zh ? "正在核对可分析来源…" : "Checking authorized sources…"}</p> : null}
     {!a.loading && !p ? <p>{reasonCopy(a.snapshot?.catalog.reason_code, zh)} <button type="button" onClick={() => void a.read().catch(() => undefined)}><RefreshCw size={14} aria-hidden/>{zh ? "刷新" : "Refresh"}</button></p> : null}
     {p ? <>
-      <p className="analysis-boundary">{p.selection.exhaustive ? (zh ? "覆盖此固定分析范围；不等于覆盖全部研究。" : "Covers this fixed analysis scope, not necessarily the whole research history.") : (zh ? "目的抽样，仅此片段；不代表整场研究。" : "Purposive sample of this episode, not the whole run.")} {zh ? "下方仍显示当前研究 Goal 的已记录历史。" : "The current research Goal’s recorded history remains below."}</p>
+      <div className="analysis-scope">{p.episode_count} {zh ? "个研究片段" : "research episodes"} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}<ContextHelp label={zh ? "分析范围" : "Analysis scope"}>
+        <p>{p.selection.exhaustive ? (zh ? "覆盖此固定分析范围；不等于覆盖全部研究。" : "Covers this fixed analysis scope, not necessarily the whole research history.") : (zh ? "定向抽样，仅分析选定研究片段；范围外或未捕获的工作未纳入，不代表全程。" : "Purposive sample of selected episodes; work outside this scope or not captured is excluded. It does not represent the whole run.")}</p>
+        <p>{zh ? "正向诊断、证据采用与最终任务收益分别判断。没有综合分数，也不据此推断因果或整体研究质量。引用存在不代表模型解释已被独立核验。" : "Diagnostic value, evidence adoption and task utility are separate. There is no total score, causal claim or whole-run quality rating. Citations do not independently verify model interpretations."}</p>
+        <p>{zh ? "下方仍显示当前研究 Goal 的已记录历史。" : "The current research Goal’s recorded history remains below."}</p>
+      </ContextHelp></div>
       {!available ? <p className="analysis-warning">{reasonCopy(p.reason_code, zh)}</p> : null}
       {!result || a.pending || a.recordedRunning ? <div className="analysis-actions">
         {a.pending || a.recordedRunning ? <><p role="status">{a.pending ? <LoaderCircle size={15} aria-hidden className="analysis-spin"/> : null}{a.pending ? (zh ? "正在处理分析请求…" : "Processing analysis request…") : (zh ? "上次记录仍待分析结果；当前执行状态尚未核验。" : "The last receipt awaits a result; current execution is unverified.")}</p><button type="button" onClick={() => void a.cancel()} disabled={a.cancelPending || p.job?.cancel_requested}>{p.job?.cancel_requested ? (zh ? "已请求取消" : "Cancellation requested") : a.cancelPending ? (zh ? "正在请求取消…" : "Requesting cancellation…") : (zh ? "取消分析" : "Cancel analysis")}</button></>
           : result ? <button type="button" onClick={() => void a.read().catch(() => undefined)}><RefreshCw size={14} aria-hidden/>{zh ? "刷新结果" : "Refresh result"}</button>
-            : <button className="analysis-primary" type="button" disabled={!available} onClick={() => void a.execute(failed)}><Sparkles size={15} aria-hidden/>{failed ? (zh ? "重试分析" : "Retry analysis") : (zh ? "分析这个片段" : "Analyze this episode")}</button>}
+            : <button className="analysis-primary" type="button" disabled={!available} onClick={() => void a.execute(failed)}><Sparkles size={15} aria-hidden/>{failed ? (zh ? "重试分析" : "Retry analysis") : (zh ? "分析所选范围" : "Analyze selected scope")}</button>}
         {!result && !a.pending && !a.recordedRunning ? <small>{zh ? "使用本机 Codex 账户，单独产生分析用量；浏览不调用 Agent。" : "Uses the local Codex account with separate analysis usage. Browsing never invokes an Agent."}</small> : null}
       </div> : null}
       {failed && !a.pending ? <p className="analysis-warning" role="status">{p.job?.status === "cancelled" ? (zh ? "分析已取消，研究历史保持可读。" : "Analysis cancelled. Research history remains readable.") : (zh ? "上次分析未完成；可重试，原失败记录会保留。" : "The last analysis did not complete. Retry preserves its failure record.")}</p> : null}
       {result ? <>
-        <div className="analysis-finding"><span>{zh ? "Agent 判断 · 未校准" : "Agent interpretation · uncalibrated"}{p.applicability === "historical" ? (zh ? " · 历史结果" : " · Historical result") : ""}</span><h4>{headline}</h4><p>{zh ? "正向诊断、证据采用与最终任务收益分别判断。没有综合分数，也不据此推断因果或整体研究质量。" : "Diagnostic value, evidence adoption and task utility are separate. There is no total score, causal claim or whole-run quality rating."}</p></div>
+        <div className="analysis-finding"><span>{zh ? "Agent 判断 · 未校准" : "Agent interpretation · uncalibrated"}{p.applicability === "historical" ? (zh ? " · 历史结果" : " · Historical result") : ""}</span><h4>{headline}</h4></div>
         {p.episodes?.map(episode => <section className="analysis-episode" key={episode.id}><h4>{episode.question}</h4>
           <div className="analysis-episode-context">{(["benefit_test", "evidence_adoption"] as const).map(metric => {
             const row = result.assessments.find(item => item.episode_id === episode.id && item.metric === metric);
-            return row ? <div key={metric}><strong>{metric === "benefit_test" ? (zh ? "原目标收益的检验与缺口" : "Original-objective utility test and its gaps") : (zh ? "证据如何影响后续行动" : "How evidence informed subsequent action")}</strong><small>{zh ? "模型解释，未独立核验" : "Model interpretation, not independently verified"}</small><p>{row.reason}</p>{citationButtons(row.citations)}</div> : null;
+            return row ? <div key={metric}><strong>{metric === "benefit_test" ? (zh ? "原目标收益的检验与缺口" : "Original-objective utility test and its gaps") : (zh ? "证据如何影响后续行动" : "How evidence informed subsequent action")}</strong><p>{row.reason}</p>{citationButtons(row.citations)}</div> : null;
           })}</div>
           <details className="analysis-evidence-details"><summary>{zh ? "展开逐项判断与证据" : "Inspect individual judgments and evidence"}</summary><div className="analysis-judgments">{result.assessments.filter(row => row.episode_id === episode.id).map(row => {
           const label = metricCopy[row.metric];

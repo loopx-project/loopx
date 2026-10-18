@@ -71,7 +71,6 @@ interface QuotaVoidCommitRequest {
   expected_index_digest: string | null;
   before: JsonObject;
   owner: QuotaAccountingOwner;
-  maintenance_lock?: unknown;
 }
 
 interface QuotaVoidProjectionRequest {
@@ -210,7 +209,6 @@ function commitRequest(value: unknown): QuotaVoidCommitRequest {
       "expected_index_digest",
     ),
     before,
-    maintenance_lock: request.maintenance_lock,
     owner: parseQuotaAccountingOwner({
       goalRefValue: request.goal_ref,
       sourceAdmissionValue: request.source_admission,
@@ -810,7 +808,6 @@ async function evaluateCommit(
       expectedIndexDigest: request.expected_index_digest,
       ...(goalRef === null ? {} : { goalRef }),
       indexLockHeld,
-      maintenanceLock: request.maintenance_lock,
       prepare: async (context) =>
         await prepareArtifacts(request, fingerprint, runsDir, context),
     });

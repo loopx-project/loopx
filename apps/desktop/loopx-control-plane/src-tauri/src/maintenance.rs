@@ -401,7 +401,9 @@ pub async fn desktop_update(
         app.restart();
     }
     state.manual_failure_pending.store(false, Ordering::Release);
-    let outcome = perform(&app, &action, &channel, url).await;
+    // A user-requested check may cross a slow release-feed redirect. It is
+    // asynchronous and should not inherit the optional startup check's budget.
+    let outcome = perform(&app, &action, &channel, url, Duration::from_secs(45)).await;
     if let Err(error) = &outcome {
         state.publish_manual_failure(error, &channel);
     }
@@ -462,6 +464,7 @@ async fn perform(
     action: &str,
     channel: &str,
     url: tauri::Url,
+    check_timeout: Duration,
 ) -> Result<Value, String> {
     let state = app.state::<Maintenance>();
     if action == "forget_runtime_selection" {
@@ -483,7 +486,7 @@ async fn perform(
             })
             .endpoints(vec![url])
             .map_err(|_| "update_unavailable")?
-            .timeout(Duration::from_secs(3))
+            .timeout(check_timeout)
             .build()
             .map_err(|_| "update_unavailable")?
             .check()
@@ -849,11 +852,13 @@ fn automatic_app_update(app: &AppHandle) {
             channel,
             async {
                 let url = endpoint(channel)?;
-                let checked = perform(app, "check", channel, url.clone()).await?;
+                // Keep the optional feed lookup on the startup path bounded.
+                let checked =
+                    perform(app, "check", channel, url.clone(), Duration::from_secs(3)).await?;
                 Ok((checked["phase"] == "available").then_some(url))
             },
             |url| async move {
-                perform(app, "apply", channel, url).await?;
+                perform(app, "apply", channel, url, Duration::from_secs(3)).await?;
                 Ok(())
             },
             || app.restart(),

@@ -21,8 +21,8 @@ import external_scheduler_worker as worker  # noqa: E402
 from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     scheduler_execution_context_for_runtime_profile,
 )
-from loopx.control_plane.scheduler.scheduler_hint import (  # noqa: E402
-    build_scheduler_hint,
+from tests.control_plane.scheduler_arbitration_fixture import (  # noqa: E402
+    build_native_scheduler_hint as build_scheduler_hint,
 )
 
 

@@ -25,8 +25,9 @@ from .codex_sessions import (
     codex_cli_session_binding as codex_cli_session_binding,
     load_codex_cli_session as load_codex_cli_session,
     select_codex_cli_session,
-    codex_session_profile_after_startup,
-    prepare_codex_agent_profile,
+    codex_session_profile_digest,
+    require_codex_session_profile,
+    approved_codex_workspace_write_resume,
 )
 from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
 from .executor import (
@@ -287,10 +288,6 @@ def _prompt(request: Mapping[str, Any]) -> str:
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
-    if request.get("transfer_context"):
-        instructions.append(
-            "Read transfer_context before continuing this original unfinished work. It preserves reviewed historical requirements, decisions and material mappings; it grants no permissions, and historical leases, receipts and sessions are not current execution proof. Use the current TurnEnvelope and Task/lease authority."
-        )
     recall = _mapping(request.get("reward_memory_recall"))
     if (reward_memory_automation_enabled(request, operation="automatic_recall")
             and _mapping(recall.get("context")).get("guidance")):
@@ -673,19 +670,6 @@ def run_codex_cli_host(
     if not resolved or not Path(resolved).exists():
         raise ValueError("Codex CLI executable is unavailable")
     lineage = _lineage(request)
-    if registry_path is not None:
-        from ..coordination.legacy_writer_fence import legacy_coordination_writer_fence_path
-
-        # Existence is only a transport fast path; TypeScript owns the profile
-        # decision. Ordinary Goals without transfer state keep their old prompt.
-        fence = legacy_coordination_writer_fence_path(runtime_root=runtime_root, goal_id=lineage["goal_id"])
-        if fence.exists() or fence.is_symlink():
-            from ..goals.planned_transfer_io import read_goal_transfer_host_context
-
-            context = read_goal_transfer_host_context(registry_path=registry_path, goal_id=lineage["goal_id"],
-                agent_id=lineage["agent_id"], todo_id=lineage["todo_id"])["context"]
-            if context is not None:
-                request = {**request, "transfer_context": context}
     planned_session = _mapping(request.get("session"))
     planned_action = str(planned_session.get("action") or "")
     context_policy = _mapping(planned_session.get("context_policy"))
@@ -699,11 +683,26 @@ def run_codex_cli_host(
         runtime_root, lineage=lineage, session_scope=session_scope,
         goal_admission=goal_admission,
     )
-    profile_options, profile_config, profile_digest = (prepare_codex_agent_profile(
-        binding=binding, registry_path=registry_path, lineage=lineage,
-        project=project, codex_bin=str(resolved), model=model, reasoning_effort=reasoning_effort,
-        sandbox=sandbox, mcp_server=mcp_server,
-    ) if session_scope == "agent" else ({}, b"", None))
+    profile_digest = (codex_session_profile_digest(
+        project=project, codex_bin=str(resolved),
+        home=Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser(),
+        model=model, reasoning_effort=reasoning_effort, sandbox=sandbox, mcp_server=mcp_server,
+    ) if session_scope == "agent" else None)
+    if binding and profile_digest:
+        approved_write_resume = (
+            sandbox == "workspace-write"
+            and binding.get("session_profile_digest") == codex_session_profile_digest(
+                project=project, codex_bin=str(resolved),
+                home=Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser(),
+                model=model, reasoning_effort=reasoning_effort, sandbox="read-only",
+                mcp_server=mcp_server,
+            )
+            and approved_codex_workspace_write_resume(
+                registry_path, lineage=lineage, project=project,
+            )
+        )
+        if not approved_write_resume:
+            require_codex_session_profile(binding, profile_digest)
     if planned_action == "resume" and binding is None:
         raise RuntimeError("Codex CLI resume binding disappeared after planning")
     if planned_action == "start_new" and binding is not None:
@@ -725,8 +724,7 @@ def run_codex_cli_host(
                 lineage=lineage,
                 session_id=observed_session_id,
                 session_scope=session_scope,
-                session_profile_digest=(codex_session_profile_after_startup(
-                    profile_digest, profile_config, **profile_options) if profile_digest else None),
+                session_profile_digest=profile_digest,
                 goal_ref=exact_goal_ref,
             )
 

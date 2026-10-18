@@ -1,9 +1,36 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray } from "../runtime_decode.ts";
+import { normalizeStewardGoalScope } from "./conversation_scope.ts";
 
 type Recipient = { goal_id: string; agent_id?: string };
 type LocalDeliveryScope = "all_registered" | "selected";
+
+/** A live read grant is independent of delivery and of the bounded Turn index.
+ * Missing mode preserves historical exact lists and the connection's fallback.
+ * Only a trusted local configuration operation may select all registered Goals.
+ */
+export function resolveSourceEvidenceGoals(params: JsonObject): JsonObject {
+  const source = requireJsonObject(params.source, "source policy");
+  const mode = Object.hasOwn(source, "evidence_goal_scope") ? source.evidence_goal_scope : "selected";
+  if (mode !== "all_registered" && mode !== "selected") throw new EffectRuntimeRequestError("invalid evidence Goal scope");
+  const selected = Object.hasOwn(source, "evidence_goal_ids")
+    ? normalizeStewardGoalScope(source.evidence_goal_ids) : null;
+  return {goal_scope: mode, goal_ids: mode === "all_registered"
+    ? normalizeStewardGoalScope(params.available_goal_ids) : selected};
+}
+
+export function configureSourceEvidenceScope(params: JsonObject): JsonObject {
+  const source = requireJsonObject(params.source, "source policy");
+  const mode = params.goal_scope;
+  if (mode !== "all_registered" && mode !== "selected") throw new EffectRuntimeRequestError("invalid evidence Goal scope");
+  const ids = normalizeStewardGoalScope(params.goal_ids);
+  const available = normalizeStewardGoalScope(params.available_goal_ids);
+  if (ids.some(id => !available.includes(id))) throw new EffectRuntimeRequestError("every read Goal must be registered");
+  const next = {...source, evidence_goal_scope: mode, evidence_goal_ids: ids};
+  return {source: next, goal_scope: mode, goal_ids: mode === "all_registered" ? available : ids,
+    would_change: JSON.stringify(next) !== JSON.stringify(source)};
+}
 
 function recipients(value: unknown, label: string, exact: boolean): Recipient[] {
   if (!Array.isArray(value)) throw new EffectRuntimeRequestError(`${label} must be an array`);

@@ -80,8 +80,8 @@ export function GoalManagedResults({goalId, zh}: {goalId: string; zh: boolean}) 
 
   const artifact = selected ? managedReportArtifact(
     selected.row.content_type, selected.row.sha256, selected.read.text) : null;
-  return <section className="goal-team-results goal-managed-results" aria-label={zh ? "已验收产出" : "Accepted outputs"} aria-busy={busy}>
-    <header><div><h3>{zh ? "已验收产出" : "Accepted outputs"}</h3>
+  return <section className="goal-team-results goal-managed-results" aria-label={zh ? "已验收的团队报告" : "Accepted team reports"} aria-busy={busy}>
+    <header><div><h3>{zh ? "团队报告" : "Team reports"}</h3>
       <p>{zh ? "只有仍能通过当前验收的报告会出现在这里。" : "Only reports that still pass current acceptance appear here."}</p></div>
       <button type="button" disabled={busy} onClick={() => void load()}><RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新" : "Refresh"}</button></header>
     {busy ? <p role="status">{zh ? "正在核验报告…" : "Verifying reports…"}</p> : null}
@@ -91,12 +91,12 @@ export function GoalManagedResults({goalId, zh}: {goalId: string; zh: boolean}) 
       : `${page.unavailable_count} report(s) on this page cannot pass current verification.`}</p> : null}
     {page && !busy && !page.items.length ? <p>{page.next_cursor
       ? (zh ? "本页没有可核验的报告，可继续下一页。" : "No verifiable reports on this page; continue to the next page.")
-      : (zh ? "暂无可核验的产出。" : "No verifiable outputs yet.")}</p> : null}
+      : (zh ? "暂无可核验的团队报告。" : "No verifiable team reports yet.")}</p> : null}
     {page?.next_cursor && !page.items.length ? <button type="button" disabled={busy} onClick={() => void load(page.next_cursor!)}>
       {zh ? "下一页" : "Next page"}
     </button> : null}
     {page && page.items.length > 0 ? <div className="goal-team-results-layout">
-      <nav className="goal-team-result-list" aria-label={zh ? "选择已验收产出" : "Choose an accepted output"}>
+      <nav className="goal-team-result-list" aria-label={zh ? "选择团队报告" : "Choose a team report"}>
         {page.items.map(row => <button type="button" key={row.todo_id} disabled={busy}
           aria-pressed={selected?.row.todo_id === row.todo_id} onClick={() => void select(row)}>
           <FileText size={16} aria-hidden="true"/><span><strong>{row.title}</strong><small>{row.producer_agent_id}</small></span>

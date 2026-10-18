@@ -2,9 +2,10 @@ from __future__ import annotations
 from ..quota.blocked_transition_notice import blocked_priority_fallback_owner_reason
 from ..quota.effective_action import EffectiveAction
 from ..effect_runtime import effect_runtime_result
+import json
 import shlex
 import typing
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction, agent_scope_frontier_action as _agent_scope_frontier_action
@@ -21,6 +22,7 @@ from ..quota.spend_sources import (
     host_goal_turn_reentry_action,
     quota_spend_source_for_execution_context,
 )
+from ..scheduler.arbitration import SchedulerArbitration, _scheduler_arbitration_facts
 from ..scheduler.execution_context import (
     APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES,
     SchedulerExecutionContextResolution,
@@ -1087,10 +1089,11 @@ def _admitted_interaction_next_cli_actions(
     )
 
 
-def _interaction_required_reads(
+def _interaction_reads_and_arbitration(
     payload: dict[str, Any], contract: dict[str, Any], *,
     runtime_root: str | None, registry_path: str | None,
-) -> list[dict[str, Any]]:
+    agent_scope_frontier_actions: Collection[str],
+) -> tuple[list[dict[str, Any]], SchedulerArbitration]:
     """Transport source/admission facts to the existing typed interaction owner."""
     reads = payload.get("required_reads")
     summary = payload.get("agent_todo_summary") or {}
@@ -1098,7 +1101,8 @@ def _interaction_required_reads(
     replan = payload.get("replan_action_packet") or {}
     selected = payload.get("selected_todo") or {}
     orchestration = payload.get("task_orchestration_contract") or {}
-    result = effect_runtime_result("work_item.interaction_reads.project", {
+    projection_params = {
+        "arbitration_facts": _scheduler_arbitration_facts(contract, agent_scope_frontier_actions),
         "required_reads": [dict(item) for item in reads if isinstance(item, dict) and item.get("command")]
             if isinstance(reads, list) else [],
         "goal_id": payload.get("goal_id"),
@@ -1115,13 +1119,22 @@ def _interaction_required_reads(
         "command_prefix": selection.render_cli_command_prefix(
             runtime_root=runtime_root or payload.get("runtime_root"),
             registry_path=registry_path or payload.get("registry")),
-    })
+    }
+    # With at most three generated reads and shell-quote expansion, replies fit
+    # 16B + 8 KiB for B ASCII JSON bytes; 64 KiB inputs stay below the 2 MiB frame cap.
+    try:
+        large_local_snapshot = len(json.dumps(projection_params, ensure_ascii=True, separators=(",", ":")).encode()) > 64 * 1024
+    except (TypeError, ValueError, RecursionError, OverflowError):
+        large_local_snapshot = True
+    result = effect_runtime_result(
+        "work_item.interaction_reads.project", projection_params, large_local_snapshot=large_local_snapshot,
+    )
     projected = result.get("required_reads")
     if not isinstance(projected, list) or any(
         not isinstance(item, dict) or not item.get("command") for item in projected
     ):
         raise RuntimeError("TypeScript interaction required reads are malformed")
-    return projected
+    return projected, SchedulerArbitration.from_projection(result.get("arbitration"))
 
 
 def _interaction_spend_policy(
@@ -1704,17 +1717,18 @@ def unadmitted_action_selection(payload: dict[str, Any]) -> bool:
     )
 
 
-def build_interaction_contract(
-    payload: dict[str, Any],
+def _build_interaction_contract_projection(
+    payload: dict[str, object],
     *,
-    available_capabilities: Any = None,
+    agent_scope_frontier_actions: Collection[str],
+    available_capabilities: object = None,
     scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None,
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
-) -> InteractionContractPacket:
+) -> tuple[InteractionContractPacket, SchedulerArbitration]:
     execution_obligation = (
         payload.get("execution_obligation")
         if isinstance(payload.get("execution_obligation"), dict)
@@ -1814,11 +1828,30 @@ def build_interaction_contract(
     )
     if response_plan is not None:
         contract["response_plan"] = response_plan
-    _attach_interaction_required_reads(contract, _interaction_required_reads(
-        payload, contract, runtime_root=runtime_root, registry_path=registry_path))
+    required_reads, arbitration = _interaction_reads_and_arbitration(
+        payload, contract, runtime_root=runtime_root, registry_path=registry_path,
+        agent_scope_frontier_actions=agent_scope_frontier_actions)
+    _attach_interaction_required_reads(contract, required_reads)
     _attach_interaction_post_writeback_actions(contract, payload)
     _attach_interaction_vision_continuation_audit(contract, payload)
     _attach_interaction_vision_wait_state(contract, payload)
     if _interaction_fallback_policy_required(payload, mode=mode):
         contract["fallback_policy"] = {"do_not_cancel_on_block": True}
-    return typing.cast(InteractionContractPacket, contract)
+    return typing.cast(InteractionContractPacket, contract), arbitration
+
+
+def build_interaction_contract(
+    payload: dict[str, Any],
+    *,
+    available_capabilities: Any = None,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None = None,
+    turn_instance_id: str | None = None,
+    runtime_root: str | None = None,
+    registry_path: str | None = None,
+) -> InteractionContractPacket:
+    contract, _arbitration = _build_interaction_contract_projection(
+        payload, agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
+        available_capabilities=available_capabilities, scheduler_execution_context=scheduler_execution_context,
+        turn_instance_id=turn_instance_id, runtime_root=runtime_root, registry_path=registry_path,
+    )
+    return contract

@@ -1,5 +1,59 @@
 # Rendered public-source reading with Ego
 
+## Host skill continuation and upgrades
+
+LoopX's existing workflow-skill refresh now carries a small continuation policy
+for an **already installed** Ego browser skill. An authorized task can reuse its
+known idle TaskSpace after an ordinary finish or handoff without another chat
+confirmation. Active user intervention, explicit pauses, reserved control,
+unknown task identity and browser-owned permission/login prompts retain their
+existing stops. This is Agent guidance; it neither changes Ego's native control
+checks nor gives the public-source reader a claim/takeover tool.
+
+Normal LoopX Python-package upgrades already run `workflow-skills --install`;
+the POSIX and Windows installers use the same Ego delivery adapter. The adapter
+reads Ego's installed skill through its stable local source link, copies its API
+references and appends the scoped policy in a local host copy. It never edits
+the browser bundle, installs Ego, launches a browser, changes an MCP entry or
+expands any operation/account permission. No optional reader is enabled.
+App-private runtime preparation that explicitly skips host integrations retains
+that isolation; it is not a host-skill upgrade. Refresh the host through the
+normal LoopX install/update path above.
+
+Inspect without writing, refresh after an independently authorized Ego upgrade,
+and read back the result with the existing commands:
+
+```bash
+loopx workflow-skills --format json
+loopx workflow-skills --install --format json
+loopx workflow-skills --format json
+```
+
+The `ego_browser` result distinguishes current, refreshed, absent, preserved
+customization and unavailable-source/recovery cases. The Markdown output also
+includes its reason. A missing Ego skill does not install one. Unmanaged copies
+and locally modified managed copies are preserved with an actionable message.
+An explicit nondefault `--skills-dir` never changes a shared host entry outside
+that scope. At the default personal root, the existing shared Ego entry and its
+LoopX-managed personal-profile alias are reused rather than duplicated.
+If an Ego reinstall resets the shared entry to its pristine upstream link while
+the managed personal copy remains, refresh reconnects that known link to the
+managed copy. Custom shared aliases remain untouched; Windows rollback includes
+both affected entries.
+
+`loopx workflow-skills --uninstall` removes unchanged LoopX workflow skills and
+restores an unchanged managed Ego copy to Ego's **current** upstream link.
+Locally modified copies are preserved; an unresolved restore is reported rather
+than silently removing their policy. Publication rechecks the original entry's
+identity and contents after staging and parking it; a concurrent local edit or
+shared-alias change keeps refresh unready and preserves the original. An
+interrupted publish restores the old entry. If restoring it also fails, its
+original is retained at the reported backup path; restore that entry before retrying. Ego's own updater can reset its
+host entry, so rerun the refresh after that independently authorized upgrade;
+LoopX does not intercept or promise to modify the browser's updater.
+
+## Optional public-source reader
+
 The optional `loopx.extensions.ego_source_reader` stdio MCP adapter gives an
 existing Codex host narrow `read_public_url` and `read_public_image` tools when its model shell cannot
 reach Ego's local bootstrap. It reuses an installed Ego browser with a reserved

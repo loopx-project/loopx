@@ -649,10 +649,27 @@ class ChatLoopXMode:
             created=created, woken_at=now,
         )
 
-    def recover(self, session_id, adapter):
+    @staticmethod
+    def observe_recovery(
+        adapter: Any,
+        goal_commit: Callable[[], Any],
+    ) -> dict[str, Any]:
+        # Reject a known-stale identity before pausing the native transport.
+        # Provider reads remain outside the short commit guard.
+        with goal_commit():
+            pass
         driver = CodexGoalDriver(adapter.session)
         driver.pause()
-        self.store.update_session(session_id, native_goal=driver.compact(driver.read()))
+        return driver.compact(driver.read())
+
+    def commit_recovery(
+        self,
+        session_id: str,
+        native_goal: dict[str, Any] | None,
+    ) -> None:
+        if native_goal is None:
+            return
+        self.store.update_session(session_id, native_goal=native_goal)
         for row in self.store.loopx_ingress(session_id):
             if row["status"] == "delivering":
                 self.store.update_ingress_receipt(session_id, row["client_ingress_id"], status="uncertain")
@@ -987,16 +1004,12 @@ def handle_loopx_request(handler, session_id: str, *, apply: bool = False) -> No
     try:
         if not handler._require_loopback_origin():
             return
-        route = getattr(handler, "_goal_chat_routes", None)
-        routes = route() if route else None
-        controller = routes.for_session(session_id, execute=apply) if routes else handler.server.runtime_controller
-        store = routes.store_for(controller) if routes else controller.store
-        session = store.load_session(session_id)
+        session = handler.server.chat_store.load_session(session_id)
         if not session:
             raise ValueError("conversation unavailable")
-        service = controller.loopx_mode
+        service = handler.server.runtime_controller.loopx_mode
         if apply:
-            context = handler._session_context(session, **({"controller": controller} if route else {}))
+            context = handler._session_context(session)
             result = service.apply(session_id, handler._read_json(), work_dir=context["project"],
                                    objective=str(context["objective"] or context["title"]))
         else:
@@ -1122,18 +1135,16 @@ def pump_delegation_wakes(
     return changed
 
 
-class ChatHostWakeService:
+class DelegationWakeService:
     """Cheap local pump hosted by the existing Chat server, beside the return service."""
 
-    def __init__(self, controller, *, goal_context=None, goal_routes=None, interval=WAKE_INTERVAL_SECONDS):
+    def __init__(self, controller, *, goal_context=None, interval=WAKE_INTERVAL_SECONDS):
         self.controller = controller
         self.goal_context = goal_context
         self.interval = interval
-        self.goal_routes = goal_routes
-        self.continuation_thread = None
         self.stop = threading.Event()
         self.thread = threading.Thread(
-            target=self.run, daemon=True, name="loopx-chat-host-wakes"
+            target=self.run, daemon=True, name="loopx-delegation-wakes"
         )
 
     def start(self):
@@ -1150,19 +1161,8 @@ class ChatHostWakeService:
                 )
             except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                 _LOG.warning("Delegation wake receipts unavailable; retrying")
-            if self.goal_routes is not None and not self.stop.is_set() and (
-                    self.continuation_thread is None or not self.continuation_thread.is_alive()):
-                # Native work can take longer than one tick. Do not block
-                # conversation wakes or overlap this Host's previous dispatch.
-                self.continuation_thread = threading.Thread(
-                    target=self.goal_routes.continue_transferred_work,
-                    kwargs={"cancelled": self.stop.is_set}, daemon=True,
-                    name="loopx-reviewed-goal-continuation")
-                self.continuation_thread.start()
             self.stop.wait(self.interval)
 
     def close(self):
         self.stop.set()
         self.thread.join(timeout=3)
-        if self.continuation_thread is not None:
-            self.continuation_thread.join(timeout=3)

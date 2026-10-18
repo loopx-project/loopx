@@ -64,8 +64,13 @@ try {
   assert.deepEqual(await ordinaryEntry(), {inViewport: true, beforeWork: true, targetSize: true}, "The phone ordinary path retains the same visible decision");
   await page.screenshot({path: resolve(outputDir, "oracle-plan-mobile.png"), animations: "disabled"});
   await page.setViewportSize({width: 1512, height: 982});
-  let applyCount = 0;
-  page.on("request", req => {if (req.method() === "POST" && /\/api\/actions\/[^/]+\/apply$/.test(new URL(req.url()).pathname)) applyCount++;});
+  let applyCount = 0, commandRequests = 0;
+  page.on("request", req => {
+    if (req.method() !== "POST") return;
+    const path = new URL(req.url()).pathname;
+    if (/\/api\/actions\/[^/]+\/apply$/.test(path)) {applyCount++; commandRequests++;}
+    if (path === "/api/chat/goal-acceptance") commandRequests++;
+  });
   await adopt.focus(); await page.keyboard.press("Enter");
   await resultStatus("当前版本已核对").waitFor();
   assert.equal(applyCount, 1, "one owner action adopts and checks the prepared plan");
@@ -79,6 +84,30 @@ try {
   await panel.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "oracle-current-mobile.png"), animations: "disabled"});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  const savedWitness = read().goal_acceptance_contract.verification.results[0].oracle_evidence;
+  async function exportWitness() {
+    const effectsBefore = commandRequests, receiptBefore = read().goal_acceptance_contract.verification.operation_id;
+    const review = page.locator(".delivery-review");
+    const refreshed = page.waitForResponse(response => response.url().includes("/api/chat/delivery-review?"));
+    await review.getByRole("button", {name: "刷新快照", exact: true}).click();
+    const snapshot = await (await refreshed).json();
+    const download = page.waitForEvent("download");
+    await review.getByRole("button", {name: "导出交付快照", exact: true}).click();
+    const stream = await (await download).createReadStream();
+    let markdown = "";
+    for await (const chunk of stream) markdown += chunk.toString();
+    for (const value of [savedWitness.source_id, savedWitness.source_digest, savedWitness.checked_at,
+      ...savedWitness.input_versions.flatMap(row => [row.ref, row.sha256]),
+      ...savedWitness.output_versions.flatMap(row => [row.ref, row.sha256])]) {
+      assert.ok(markdown.includes(value), "The downloaded snapshot retains the actual owner witness");
+    }
+    const observed = snapshot.acceptance.goal_acceptance_contract.criteria[0].oracle.state;
+    if (observed !== "current") assert.ok(!markdown.includes("产物检查通过"), "Historical or stale evidence cannot be exported as current acceptance");
+    assert.equal(commandRequests, effectsBefore, "Reading and exporting cannot execute a check");
+    assert.equal(read().goal_acceptance_contract.verification.operation_id, receiptBefore);
+    return observed;
+  }
+  await exportWitness();
   const run = panel.getByRole("button", {name: "检查交付", exact: true});
   await writeFile(resolve(root, "project/result.txt"), "new version without verification");
   // Read-only observation invalidates the old green state without rerunning.
@@ -87,6 +116,7 @@ try {
   const oldOperation = read().goal_acceptance_contract.verification.operation_id;
   assert.equal(applyCount, 1);
   assert.equal(oldOperation, firstOperation, "readback does not execute a new check");
+  await exportWitness();
   await run.click();
   await resultStatus("检查失败；修复交付物后可再次检查").waitFor();
   assert.notEqual(read().goal_acceptance_contract.verification.operation_id, oldOperation);
@@ -115,7 +145,7 @@ try {
   const expected = "Failed to load resource: the server responded with a status of 409 (Conflict)";
   const at = context.errors.indexOf(expected); if (at >= 0) context.errors.splice(at, 1);
   assert.deepEqual(context.errors.filter(value => !value.includes("404")), []);
-  console.log(JSON.stringify({status: "PASS", boundary: "Packaged UI and admitted conversation tool with actual disposable SQLite/HTTP/CLI; model/tool transport is scripted, not live model or installed App evidence", checks: ["native conversation preparation without execution", "automatic prepared-plan discovery", "one contextual owner action", "no mandatory JSON/revision form", "exact native readback", "changed output clears green without execution", "failure/recovery", "advanced import rejection", "disable/default-off", "390px", "keyboard/reduced-motion"]}));
+  console.log(JSON.stringify({status: "PASS", boundary: "Packaged UI and admitted conversation tool with actual disposable SQLite/HTTP/CLI; model/tool transport is scripted, not live model or installed App evidence", checks: ["native conversation preparation without execution", "automatic prepared-plan discovery", "one contextual owner action", "no mandatory JSON/revision form", "exact native readback", "download preserves source and exact versions", "stale export retains historical witness without passing or command execution", "changed output clears green without execution", "failure/recovery", "advanced import rejection", "disable/default-off", "390px", "keyboard/reduced-motion"]}));
 } catch (error) {
   if (context?.page) {
     await mkdir(outputDir, {recursive: true});

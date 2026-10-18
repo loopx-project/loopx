@@ -1,7 +1,6 @@
 """Ordinary Goal capture entry: real SQLite/artifact owners, synthetic Host IO."""
 import json
 import os
-import shutil
 import sys
 import subprocess
 import time
@@ -19,10 +18,8 @@ from tests.control_plane.test_research_context_adoption import (
 )
 
 
-@pytest.mark.parametrize('real_host, relocated_paths', [(False, False), (True, False), (True, True)])
-def test_explicit_ordinary_goal_capture_preserves_context_without_activation(
-    tmp_path, monkeypatch, capsys, request, real_host, relocated_paths,
-):
+@pytest.mark.parametrize('real_host', [False, True])
+def test_explicit_ordinary_goal_capture_preserves_context_without_activation(tmp_path, monkeypatch, capsys, request, real_host):
     if real_host and not os.environ.get('LOOPX_NATIVE_CHECKPOINT_BIN'):
         pytest.skip('Requires an explicit real Codex binary; inference is a local deterministic provider.')
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -147,24 +144,12 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(
         # Isolated fixture only: retain the closed source home, reconstruct a
         # fresh home at the qualified provider's same fixed guest path.
         home.rename(home.with_name('preserved-source-home'))
-        if relocated_paths:
-            target_workspace = tmp_path / 'target-workspace'
-            target_workspace.mkdir()
-            shutil.copy2(code, target_workspace / code.name)
-            retained_workspace = workspace.with_name('preserved-source-workspace')
-            workspace.rename(retained_workspace)
-            code = retained_workspace / code.name
-            workspace = target_workspace
-            monkeypatch.chdir(workspace)
-            monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'target-codex-home'))
-            monkeypatch.setenv('LOOPX_PROJECT', str(workspace))
         branch_registry, branch_root = tmp_path / 'branch-registry.json', tmp_path / 'branch-runtime'
         branch_prefix = ['--format', 'json', '--registry', str(branch_registry), '--runtime-root', str(branch_root)]
-        def branch(*args, ok=True):
+        def branch(*args):
             code = main([*branch_prefix, *args])
             result = json.loads(capsys.readouterr().out)
-            assert code == (0 if ok else 1), result
-            assert result['ok'] is ok
+            assert code == 0, result
             return result
         branch('bootstrap', '--project', str(workspace), '--goal-id', 'branch', '--objective', 'Continue retained experiments.',
             '--adapter-kind', 'read_only_project_map_v0', '--adapter-status', 'connected-read-only', '--write-scope', '**', '--no-global-sync')
@@ -174,25 +159,8 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(
             '--task-class', 'advancement_task', '--text', 'Complete a retained two-candidate experiment.')['todo_id']
         common = ['--goal-id', 'branch', '--agent-id', 'branch-actor', '--project', str(workspace), '--sandbox', sandbox,
             '--root', str(destination), '--expected-sha256', sealed['sha256']]
-        admission = ['research-checkpoint', 'admit-session', *common, '--config-path', str(config), '--execute']
-        if relocated_paths:
-            held = branch(*admission, ok=False)
-            assert 'fixed guest paths' in held['error'] and held['execution_authority_granted'] is False
-            assert not Path(os.environ['CODEX_HOME']).exists() and len(model_calls) == 1
-            from loopx.control_plane.turn_driver.codex_sessions import select_codex_cli_session
-            assert select_codex_cli_session(branch_root, lineage={'goal_id': 'branch',
-                'agent_id': 'branch-actor'}, session_scope='agent') is None
-            retained_task = branch('todo', 'list', '--goal-id', 'branch', '--todo-id', current_todo)['todo']
-            assert retained_task['done'] is False and retained_task['claimed_by'] == 'branch-actor'
-            assert (destination / 'checkpoint.json').read_bytes() == original
-            assert code.read_text() == '7' and log.read_bytes() == source_bytes
-            assert not Path(metadata['native_session']['guest_workspace']).exists()
-            assert not (retained_workspace / 'complete-experiment.json').exists()
-            return  # Expected profile refusal; no destination continuation was admitted.
-        admitted = branch(*admission)
+        admitted = branch('research-checkpoint', 'admit-session', *common, '--config-path', str(config), '--execute')
         assert admitted['session_id'] != source_session and admitted['session_binding_admitted']
-        recovered = branch(*admission)
-        assert recovered['session_id'] == admitted['session_id'] and len(model_calls) == 1
         lease = branch('task-lease', 'acquire', '--goal-id', 'branch', '--todo-id', current_todo,
             '--owner', 'branch-actor', '--idempotency-key', 'branch-lease')
         revision = branch('todo', 'list', '--goal-id', 'branch', '--todo-id', current_todo)['authority_read']['provider_revision']
@@ -236,7 +204,6 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(
         _ordinary_review_and_work(branch, workspace, tmp_path, current_todo, sealed['sha256'], monkeypatch, work=work)
         assert len(model_calls) == 3
         assert code.read_text() == '7' and log.read_bytes() == source_bytes
-        assert (workspace / 'complete-experiment.json').is_file()
 
 
 def test_mutation_preview_requires_no_native_host_and_dispatches_no_operation(tmp_path, capsys):

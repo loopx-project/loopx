@@ -1,11 +1,7 @@
 /** Settlement-addressed File journal readback; observations never grant execution. */
-import { constants, type Dirent } from "node:fs";
-import {createHash} from "node:crypto";
-import { open, readdir, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import {execFile} from "node:child_process";
-import {promisify} from "node:util";
-import {fileURLToPath} from "node:url";
 
 import {
   settlementIdentityFromPlan,
@@ -26,8 +22,6 @@ import {
   interpretTurnJournal,
   parseTurnJournalGoalBinding,
 } from "./turn_journal.ts";
-import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 interface JournalEvidence {
   turn_key: string;
@@ -56,100 +50,6 @@ function decodeGoalRef(value: unknown): ExactGoalRef {
 
 function journalConflict(message: string): never {
   throw new EffectRuntimeConflictError(message, "journal_readback_conflict");
-}
-
-async function journalSnapshot(path: string): Promise<{value: JsonObject; sha256: string; bytes: number}> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
-    const bytes = await handle.readFile();
-    let value: JsonObject;
-    try { value = requireJsonObject(JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(bytes)), "Turn journal"); }
-    catch { journalConflict("Turn journal history is unreadable; reconcile it before retrying"); }
-    return {value, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length};
-  } finally { await handle.close(); }
-}
-
-/** Interpret original journal content without process observation. Source
- * preparation owns maintenance; target readback uses its immutable carrier.
- * Actual process drain belongs to the source-only composition below.
- */
-export async function readGoalTurnJournalsForTransfer(root: string, goalId: string): Promise<JsonObject> {
-  const directory = join(root, "goals", goalId, "turns");
-  let entries: Dirent[];
-  try {
-    if (await realpath(directory) !== directory) journalConflict("Transfer Turn history contains a linked ancestor");
-    entries = await readdir(directory, {withFileTypes: true});
-  }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") entries = []; else throw error; }
-  const turns: JsonObject[] = [], files: JsonObject[] = [];
-  for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
-    if (!entry.name.endsWith(".json")) continue;
-    if (!/^[a-f0-9]{64}\.json$/u.test(entry.name) || !entry.isFile()) journalConflict("Transfer source has an unattributable Turn journal; reconcile its owning operation");
-    const {value: journal, sha256, bytes} = await journalSnapshot(join(directory, entry.name));
-    files.push({relative_path: `turns/${entry.name}`, sha256, bytes});
-    const key = `sha256:${entry.name.slice(0, -5)}`;
-    const envelope = jsonObject(jsonObject(journal.plan)?.turn_envelope);
-    const agent = envelope?.agent_id;
-    if (typeof agent !== "string" || !agent) journalConflict("Transfer source Turn has no original owner");
-    const observed = interpretTurnJournal({schema_version: "loopx_turn_journal_interpretation_request_v0",
-      journal, goal_id: goalId, agent_id: agent, turn_key: key});
-    turns.push({turn_key: key, journal_sha256: sha256, host_attempt_count: journal.host_attempt_count ?? null,
-      closed: observed.journal_consistent && ["committed", "stopped"].includes(observed.journal_status) &&
-        observed.recovery_decision.action === "return_existing",
-      recorded_effects: observed.recorded_effects, violations: observed.violations});
-  }
-  return {turns, files, closed: turns.every(row => row.closed === true)};
-}
-
-/** Actual source-only Host observation. Retained target history is interpreted
- * by the journal owner above; it never probes a copied PID on another machine. */
-export async function readGoalTurnHistoryForTransfer(root: string, goalId: string): Promise<JsonObject> {
-  const observed = await readGoalTurnJournalsForTransfer(root, goalId);
-  const turns = observed.turns as JsonObject[];
-  let hosts: JsonObject[] = [];
-  // Also enumerate an otherwise orphan .hosts directory. Missing journal
-  // files must not turn known process evidence into an empty inventory.
-  let entries: Dirent[];
-  try { entries = await readdir(join(root, "goals", goalId, "turns"), {withFileTypes: true}); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") entries = []; else throw error; }
-  if (turns.length || entries.some(entry => entry.name.endsWith(".hosts"))) {
-    const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON;
-    if (!python || !isAbsolute(python) || python.includes("\0")) journalConflict("Host drain requires the source-selected process owner adapter");
-    try {
-      const result = await promisify(execFile)(python, ["-m", "loopx.control_plane.turn_driver.turn_host_process", root, goalId], {
-        env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../../", import.meta.url))},
-        timeout: 30_000, maxBuffer: 16 * 1024 * 1024,
-      });
-      const rows: unknown = JSON.parse(result.stdout);
-      if (!Array.isArray(rows)) journalConflict("Invalid Host process readback");
-      hosts = rows.map(row => requireJsonObject(row, "original Host process observation"));
-    } catch { journalConflict("Host process readback is unavailable; recover the original Host before transfer"); }
-  }
-  const addresses = new Set<string>();
-  for (const host of hosts) {
-    const turn = turns.find(row => row.turn_key === host.turn_key);
-    const key = `${String(host.turn_key)}:${String(host.attempt)}`;
-    if (!turn || !Number.isSafeInteger(host.attempt) || Number(host.attempt) < 1 || addresses.has(key) ||
-        !Number.isSafeInteger(turn.host_attempt_count) || Number(host.attempt) > Number(turn.host_attempt_count) ||
-        typeof host.drain !== "string" || [host.record_sha256, host.supervisor_sha256].some(
-          value => value !== null && (typeof value !== "string" || !BARE_SHA256_PATTERN.test(value)))) {
-      journalConflict("Host process evidence has no matching original Turn attempt; reconcile its owner");
-    }
-    addresses.add(key);
-  }
-  const turnHostsClosed = turns.every(turn => {
-    const count = turn.host_attempt_count;
-    const recorded = turn.recorded_effects as JsonObject;
-    const actual = hosts.filter(host => host.turn_key === turn.turn_key);
-    // The journal owner may prove no attempt, but a missing attempt counter
-    // beside a recorded invocation is historical uncertainty, never absence.
-    if ((count === null || count === 0) && recorded.host_invoked === false) return actual.length === 0;
-    return Number.isSafeInteger(count) && Number(count) > 0 && actual.length === count &&
-      actual.every(host => host.record_sha256 !== null && ["drained", "not_launched"].includes(String(host.drain)));
-  });
-  const facts = {turns, files: observed.files, hosts, turn_hosts_closed: turnHostsClosed};
-  return {...facts, closed: turns.every(row => row.closed === true), sha256: canonicalAuthoritySha256(facts)};
 }
 
 function observedCapabilities(envelope: JsonObject): string[] {
@@ -229,7 +129,7 @@ function evidenceForJournal(
   };
 }
 
-export async function querySettlementJournal(
+async function querySettlementJournal(
   runtimeRootValue: unknown,
   identity: BoundSettlementIdentity,
   goalRef: ExactGoalRef | null,
@@ -253,10 +153,22 @@ export async function querySettlementJournal(
   for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     if (!/^[a-f0-9]{64}\.json$/u.test(entry.name)) continue;
     if (!entry.isFile()) journalConflict("Turn journal history contains a non-regular snapshot; reconcile it before retrying");
+    let value: unknown;
     // Journals are atomic-replace files. Read one complete version without
     // creating reader lock files; do not follow a replaced symlink. This is
     // not a snapshot of the directory or proof of provider-side absence.
-    const {value} = await journalSnapshot(join(directory, entry.name));
+    const handle = await open(join(directory, entry.name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
+      try {
+        value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
+      } catch (error) {
+        if (error instanceof SyntaxError || error instanceof TypeError) journalConflict("Turn journal history is unreadable; reconcile it before retrying");
+        throw error;
+      }
+    } finally {
+      await handle.close();
+    }
     const evidence = evidenceForJournal(
       value,
       `sha256:${entry.name.slice(0, -5)}`,
@@ -277,11 +189,7 @@ export async function findTurnJournalBySettlement(params: JsonObject): Promise<{
     todo_id: requireNonEmptyString(params.todo_id, "todo_id"),
     turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
   }));
-  const goalRef = Object.hasOwn(params, "goal_ref") ? decodeGoalRef(params.goal_ref) : null;
-  if (goalRef !== null && goalRef.goalId.value !== identity.goal_id) {
-    throw new EffectRuntimeRequestError("Turn journal lookup GoalRef conflicts with its settlement identity");
-  }
-  const evidence = await querySettlementJournal(params.runtime_root, identity, goalRef);
+  const evidence = await querySettlementJournal(params.runtime_root, identity, null);
   return { turn_key: evidence?.turn_key ?? null };
 }
 

@@ -95,6 +95,39 @@ export const capabilityScopeScenario = {
       await page.screenshot({ path: resolve(outputDir, "capability-composition-mobile.png"), animations: "disabled" });
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error("Composition controls overflow the narrow viewport");
       await page.setViewportSize({ width: 1512, height: 982 });
+      // A failed sibling binding must not make an available private route look empty.
+      const memory = {enabled: true, binding_status: "unbound", effective_available: true,
+        registered_agents: ["reviewer", "writer"], enabled_agents: ["reviewer"], agent_bindings: [
+          {agent_id: "writer", binding_source: "agent", enabled: true, available: true, status: "available"},
+          {agent_id: "reviewer", binding_source: "goal", enabled: true, available: false, status: "config_invalid"},
+        ]};
+      api.goalMemoryConfigurations.set("research-monitor", memory);
+      await catalog.getByRole("button", {name: "记忆与资料", exact: true}).click();
+      const reloadMemory = () => Promise.all([
+        page.waitForResponse(response => new URL(response.url()).pathname === "/api/chat/goal-configuration" && response.request().method() === "GET"),
+        page.getByRole("button", {name: "重新读取配置", exact: true}).click(),
+      ]);
+      await reloadMemory();
+      await page.getByRole("tab", {name: "经验学习", exact: true}).click();
+      await page.getByRole("combobox", {name: "经验作用范围", exact: true}).selectOption("writer");
+      const memoryReadback = page.getByRole("region", {name: "Agent 记忆绑定读回", exact: true});
+      await memoryReadback.getByText(/独立绑定.*可用/u).waitFor();
+      await memoryReadback.scrollIntoViewIfNeeded();
+      if (await page.locator(".personal-memory-unbound").count()) throw new Error("An available Agent route is contradicted by a Goal-wide empty claim");
+      await page.screenshot({path: resolve(outputDir, "capability-memory-available-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await catalog.getByRole("button", {name: "记忆与资料", exact: true}).scrollIntoViewIfNeeded();
+      await memoryReadback.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "capability-memory-available-mobile.png"), animations: "disabled"});
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error("Memory scope overflows the narrow viewport");
+      await page.setViewportSize({width: 1512, height: 982});
+      api.goalMemoryConfigurations.set("research-monitor", {...memory, enabled: false, effective_available: false,
+        agent_bindings: memory.agent_bindings.map(row => ({...row, available: false, enabled: false, status: "disabled"}))});
+      await reloadMemory();
+      await page.locator(".personal-memory-unbound").waitFor({state: "visible"});
+      api.goalMemoryConfigurations.set("research-monitor", {...memory, effective_available: undefined, agent_bindings: []});
+      await reloadMemory();
+      await page.locator(".personal-memory-unbound").waitFor({state: "hidden"});
       await defaults.check();
       await page.getByRole("navigation", { name: "机器能力目录" }).waitFor();
       if (await page.locator(".personal-capability-preview").count()) throw new Error("A Goal preview crossed into device defaults");

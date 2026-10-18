@@ -63,9 +63,6 @@ class AttachedSessionRequestMixin:
             missing = [key for key, value in required.items() if not value]
             if missing:
                 raise ValueError(f"missing attached session fields: {', '.join(missing)}")
-            route = getattr(self, "_goal_chat_routes", None)
-            if route and route().for_goal(required["goal_id"], execute=True) is not self.server.runtime_controller:
-                raise ValueError("Attach the Host through its current destination entry; a source Host binding cannot be transferred by this request.")
             registry_path = getattr(self.server, "registry_path", None)
             if registry_path is None:
                 registry, _goal = self._registry_and_goal(required["goal_id"])
@@ -90,20 +87,7 @@ class AttachedSessionRequestMixin:
 
     def _close_session(self, session_id: str) -> None:
         try:
-            route = getattr(self, "_goal_chat_routes", None)
-            routes = route() if route else None
-            controller = routes.for_session(session_id) if routes else self.server.runtime_controller
-            if routes and controller is self.server.runtime_controller:
-                # Historical sources stay immutable, including while a move is
-                # merely prepared. A current target may close after Goal Stop.
-                routes.for_session(session_id, execute=True)
-            closed = controller.close_session(session_id)
-        except KeyError:
-            self._send_error("chat session was not found", status=404)
-            return
-        except (ValueError, OSError) as exc:
-            self._send_error(str(exc), status=409)
-            return
+            closed = self.server.runtime_controller.close_session(session_id)
         except RuntimeError as exc:
             error_code = str(exc)
             messages = {

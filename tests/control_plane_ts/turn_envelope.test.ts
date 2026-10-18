@@ -73,25 +73,6 @@ const protocolActionFields = {
   agent_action: "advance one bounded segment",
 };
 
-test("selected Todo keeps the native delivery boundary in its signed action", () => {
-  const source = payload();
-  (source.selected_todo as JsonObject).delivery_boundary = "in_flight_continuation";
-  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
-    scheduler_execution_args: ""});
-  const selected = (envelope.action as JsonObject).selected_todo as JsonObject;
-  assert.equal(selected.delivery_boundary, "in_flight_continuation");
-  assert.deepEqual(quotaActionSignatureDocument(source, protocolActionFields),
-    turnEnvelopeActionSignatureDocument(envelope));
-  const original = structuredClone(turnEnvelopeActionSignatureDocument(envelope));
-  selected.delivery_boundary = "semantic_closeout";
-  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), original);
-  delete selected.delivery_boundary;
-  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), original);
-  const ordinary = buildTurnEnvelope({payload: payload(), protocol_action_fields: protocolActionFields,
-    scheduler_execution_args: ""});
-  assert.equal(((ordinary.action as JsonObject).selected_todo as JsonObject).delivery_boundary, undefined);
-});
-
 test("vision closeout obligations survive projection and signature mutation", () => {
   const source = payload();
   const audit = {

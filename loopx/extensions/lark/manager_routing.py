@@ -234,7 +234,7 @@ def _valid_manager_binding(goal_id, binding, routing) -> bool:
 
 
 def authorized_manager_goal_ids(
-    snapshot: Mapping[str, Any], session: Mapping[str, Any], *, runtime_root: Path | None = None
+    snapshot: Mapping[str, Any], session: Mapping[str, Any], *, runtime_root: Path | None = None, registry_path: Path | None = None
 ) -> list[str]:
     """Resolve current external read authority; a session's old Goal is not a grant."""
     candidates = []
@@ -277,7 +277,7 @@ def authorized_manager_goal_ids(
         return []
     if runtime_root is not None:
         from ...capabilities.manager_context import evidence_goal_scope
-        grant = evidence_goal_scope(runtime_root, str(session.get("channel_id") or ""))
+        grant = evidence_goal_scope(runtime_root, str(session.get("channel_id") or ""), registry_path=registry_path)
         if grant is not None:
             return grant
     return [goal_id]

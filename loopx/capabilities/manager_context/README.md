@@ -357,6 +357,31 @@ path; this does not add a visible settings control or launch workers. Prompt-onl
 adapters still have no interactive discovery tool. Live multi-worker adoption and
 original-conversation completion require separate qualification.
 
+Local owner managers read all registered Goals by default. A bounded Turn index
+is a summary, not an authorization list: on-demand Todo, delivery, Agent and
+portfolio reads use the current audience scope. Portfolio pagination selects the
+permitted registry page before collecting evidence, including Goals registered
+after the initial Turn. Goal conversations remain confined to their selected
+Goal; external conversations are rechecked before and after each read.
+
+New manager connections created in Settings → Lark default to **All registered
+Goals, including new ones**. This applies to the connection's authorized audience,
+including its group members. Existing connections retain their selected read
+scope. Edit the existing connection's **Goal evidence access** to opt into the
+live registered inventory or return to its selected scope. The UI reads back the
+actual policy and preserves failures; changing this read setting does not grant
+worker execution, publishing, context delivery or SSH access.
+
+The same policy is available through the existing trusted-local CLI. Omitted
+`--read-goal-scope` preserves the selected-list behavior of existing scripts;
+an empty selected list revokes the read grant. Old lists are not automatically
+widened during installation.
+
+```sh
+loopx manager-inbox configure-read-scope --channel-id manager.external.0123456789abcdef01234567 --read-goal-scope all_registered --execute
+loopx manager-inbox configure-read-scope --channel-id manager.external.0123456789abcdef01234567 --read-goal-scope selected --read-goal-id project-a --execute
+```
+
 Routine inspection excludes Goals explicitly stopped in Core, before status
 collection and detail reads. Coverage reports how many were skipped. Stale or
 unknown progress remains eligible. An explicit historical question can discover

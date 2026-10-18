@@ -6,8 +6,6 @@ import hashlib
 import json
 import os
 import tempfile
-import tomllib
-from copy import deepcopy
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -22,7 +20,6 @@ from ..projects.registry_codec import (
 )
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .driver import selected_turn_todo, session_identity_fields
-from .turn_host_process import goal_runtime_write
 
 CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
 MANAGED_CLI_SESSION_SCHEMA_VERSION = "loopx_managed_cli_session_v1"
@@ -293,61 +290,60 @@ def _write_codex_cli_session(
     if not normalized_session_id:
         raise ValueError("Codex CLI returned an invalid session id")
     path = _session_path(runtime_root, lineage, session_scope)
-    with goal_runtime_write(runtime_root, lineage["goal_id"]):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", dir=path.parent
-        )
-        temporary = Path(temporary_name)
-        try:
-            if hasattr(os, "fchmod"):
-                os.fchmod(descriptor, 0o600)
-            handle = os.fdopen(descriptor, "w", encoding="utf-8")
-            descriptor = -1
-            with handle:
-                payload: dict[str, Any] = {
-                    "schema_version": schema,
-                    **lineage,
-                    "host": host,
-                    "session_id": normalized_session_id,
-                }
-                if session_scope != "todo":
-                    payload["session_scope"] = session_scope
-                if session_profile_digest is not None:
-                    payload["session_profile_digest"] = session_profile_digest
-                if goal_ref is not None:
-                    payload["goal_ref"] = dict(goal_ref)
-                if checkpoint_artifact_sha256 is not None:
-                    payload["checkpoint_artifact_sha256"] = checkpoint_artifact_sha256
-                if checkpoint_artifact_root is not None:
-                    payload["checkpoint_artifact_root"] = checkpoint_artifact_root
-                if checkpoint_context_refresh is not None:
-                    payload["checkpoint_context_refresh"] = checkpoint_context_refresh
-                if operation_profile_digest is not None:
-                    payload["operation_transport"] = (
-                        "dsh-native-operation-tools-v0" if host == "dsh"
-                        else "app-server-operation-tools-v0"
-                    )
-                    payload["operation_profile_digest"] = operation_profile_digest
-                    payload["operation_model"] = operation_model
-                    payload["operation_reasoning_effort"] = operation_reasoning_effort
-                json.dump(
-                    payload,
-                    handle,
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        handle = os.fdopen(descriptor, "w", encoding="utf-8")
+        descriptor = -1
+        with handle:
+            payload: dict[str, Any] = {
+                "schema_version": schema,
+                **lineage,
+                "host": host,
+                "session_id": normalized_session_id,
+            }
+            if session_scope != "todo":
+                payload["session_scope"] = session_scope
+            if session_profile_digest is not None:
+                payload["session_profile_digest"] = session_profile_digest
+            if goal_ref is not None:
+                payload["goal_ref"] = dict(goal_ref)
+            if checkpoint_artifact_sha256 is not None:
+                payload["checkpoint_artifact_sha256"] = checkpoint_artifact_sha256
+            if checkpoint_artifact_root is not None:
+                payload["checkpoint_artifact_root"] = checkpoint_artifact_root
+            if checkpoint_context_refresh is not None:
+                payload["checkpoint_context_refresh"] = checkpoint_context_refresh
+            if operation_profile_digest is not None:
+                payload["operation_transport"] = (
+                    "dsh-native-operation-tools-v0" if host == "dsh"
+                    else "app-server-operation-tools-v0"
                 )
-                handle.write("\n")
-                if checkpoint_artifact_sha256 is not None:
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            path.chmod(0o600)
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-            temporary.unlink(missing_ok=True)
+                payload["operation_profile_digest"] = operation_profile_digest
+                payload["operation_model"] = operation_model
+                payload["operation_reasoning_effort"] = operation_reasoning_effort
+            json.dump(
+                payload,
+                handle,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            handle.write("\n")
+            if checkpoint_artifact_sha256 is not None:
+                handle.flush()
+                os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def _discard_codex_cli_session(
@@ -357,7 +353,7 @@ def _discard_codex_cli_session(
     session_scope: str = "todo",
 ) -> None:
     path = _session_path(runtime_root, lineage, session_scope)
-    with exclusive_file_lock(path), goal_runtime_write(runtime_root, lineage["goal_id"]):
+    with exclusive_file_lock(path):
         path.unlink(missing_ok=True)
 
 
@@ -419,7 +415,6 @@ def codex_session_profile_digest(
     reasoning_effort: str | None = None,
     sandbox: str | None = None,
     mcp_server: Mapping[str, Any] | None = None,
-    config_bytes: bytes | None = None,
 ) -> str:
     """Bind a shared conversation to its workspace, provider home and settings."""
     config = home / "config.toml"
@@ -432,37 +427,10 @@ def codex_session_profile_digest(
         "sandbox": sandbox,
         "mcp_server": mcp_server,
         "config_digest": hashlib.sha256(
-            config_bytes if config_bytes is not None else config.read_bytes() if config.exists() else b""
+            config.read_bytes() if config.exists() else b""
         ).hexdigest(),
     }
     return hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
-
-
-def codex_session_profile_after_startup(
-    digest: str, config_before: bytes, **profile: Any,
-) -> str:
-    """Observe only Codex's first trust registration for this exact workspace.
-
-    This writes no configuration and grants no trust. All other configuration
-    changes keep the original digest so the next resume still refuses. Existing
-    bindings and the raw-config digest format remain unchanged.
-    """
-    config = profile["home"] / "config.toml"
-    try:
-        after = config.read_bytes() if config.exists() else b""
-        before_value = tomllib.loads(config_before.decode("utf-8"))
-        after_value = tomllib.loads(after.decode("utf-8"))
-        expected = deepcopy(before_value)
-        projects = expected.setdefault("projects", {})
-        project = projects.setdefault(str(profile["project"].resolve()), {})
-        if "trust_level" in project:
-            return digest
-        project["trust_level"] = "trusted"
-        if after_value != expected or digest != codex_session_profile_digest(**profile, config_bytes=config_before):
-            return digest
-        return codex_session_profile_digest(**profile, config_bytes=after)
-    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
-        return digest
 
 
 def require_codex_session_profile(binding: Mapping[str, Any], digest: str) -> None:
@@ -470,28 +438,6 @@ def require_codex_session_profile(binding: Mapping[str, Any], digest: str) -> No
         raise ValueError(
             "Codex session profile changed; explicitly select fresh or use a new runtime"
         )
-
-
-def prepare_codex_agent_profile(
-    *, binding: Mapping[str, Any] | None, registry_path: Path | None,
-    lineage: Mapping[str, str], **profile: Any,
-) -> tuple[dict[str, Any], bytes, str]:
-    """Freeze and check one provider profile before starting its process."""
-    profile["home"] = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
-    config = profile["home"] / "config.toml"
-    before = config.read_bytes() if config.exists() else b""
-    digest = codex_session_profile_digest(**profile, config_bytes=before)
-    if binding:
-        approved_write_resume = (
-            profile["sandbox"] == "workspace-write"
-            and binding.get("session_profile_digest") == codex_session_profile_digest(
-                **{**profile, "sandbox": "read-only"}, config_bytes=before)
-            and approved_codex_workspace_write_resume(
-                registry_path, lineage=lineage, project=profile["project"])
-        )
-        if not approved_write_resume:
-            require_codex_session_profile(binding, digest)
-    return profile, before, digest
 
 
 def approved_codex_workspace_write_resume(

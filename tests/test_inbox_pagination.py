@@ -1,6 +1,7 @@
 """Receiver recovery through real CLI processes and identity-bound MCP stdio."""
 
 import asyncio
+from datetime import datetime, timezone
 import hashlib
 import json
 import subprocess
@@ -77,12 +78,28 @@ def test_cli_recovers_later_context_without_concluding_deferred_requests(inbox):
     assert read_ids(root) == set(expected[:20])
     assert first.get("next_cursor"), "pending request 21 has no recovery cursor"
 
+    second_started = datetime.now(timezone.utc)
     second = cli(root, registry, "read", "--cursor", first["next_cursor"])
+    second_finished = datetime.now(timezone.utc)
     assert ids(second) == expected[20:40] and second["has_more"]
     assert second["items"][0]["brief"] == brief
     assert read_ids(root) == set(expected[:40])
     # Every CLI invocation starts a fresh process; replay never consumes a page.
-    assert cli(root, registry, "read", "--cursor", first["next_cursor"]) == second
+    replay_started = datetime.now(timezone.utc)
+    replay = cli(root, registry, "read", "--cursor", first["next_cursor"])
+    replay_finished = datetime.now(timezone.utc)
+    stable_pages = []
+    for page, started, finished in (
+        (second, second_started, second_finished),
+        (replay, replay_started, replay_finished),
+    ):
+        agenda = dict(page["unfinished_delegations"])
+        observed_at = datetime.fromisoformat(agenda.pop("observed_at"))
+        assert started <= observed_at <= finished, "Each agenda observes the current read"
+        stable_pages.append({**page, "unfinished_delegations": agenda})
+    # The agenda is freshly observed; every request, cursor and authority field
+    # still has to match. Replaying the page must not consume its requests.
+    assert stable_pages[0] == stable_pages[1]
     third = cli(root, registry, "read", "--cursor", second["next_cursor"])
     assert ids(third) == expected[40:]
     assert not third["has_more"] and third["next_cursor"] is None

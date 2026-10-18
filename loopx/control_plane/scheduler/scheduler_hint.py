@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import zlib
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -20,7 +20,6 @@ from ..todos.frontier_deadline import build_frontier_recheck_plan
 from .arbitration import (
     SchedulerArbitration,
     SchedulerDisposition,
-    build_scheduler_arbitration,
 )
 from .app_automation_compat import (
     CODEX_APP_SCHEDULER_ACK_HINT_SCHEMA_VERSION,
@@ -1296,7 +1295,7 @@ def build_scheduler_hint(
     payload: dict[str, Any],
     *,
     user_action_required: bool = False,
-    agent_scope_frontier_actions: Collection[str] = (),
+    arbitration: SchedulerArbitration | None = None,
     include_detail: bool = False,
     codex_app_scheduler_state: dict[str, Any] | None = None,
     available_capabilities: Any = None,
@@ -1440,11 +1439,8 @@ def build_scheduler_hint(
         if isinstance(capability_gate.get("available"), list)
         else []
     )
-    agent_scope_action_set = {str(value) for value in agent_scope_frontier_actions}
-    arbitration = build_scheduler_arbitration(
-        payload,
-        agent_scope_frontier_actions=agent_scope_action_set,
-    )
+    if arbitration is None:
+        raise ValueError("scheduler arbitration must come from the interaction projection")
     automatic_cadence_wait = _automatic_cadence_wait_eligibility(payload)
     if (
         automatic_cadence_wait is not None

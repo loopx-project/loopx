@@ -46,7 +46,7 @@ from ..scheduler.execution_context import (
 )
 from ..todos.write_hint import build_todo_write_hint
 from ..work_items.interaction_contract import (
-    build_interaction_contract,
+    _build_interaction_contract_projection,
 )
 from .effect_program import (
     ReceiptBoundMonitorPhase,
@@ -449,8 +449,8 @@ def build_quota_paused_should_run_payload(
         resolved_scheduler_context=resolved_scheduler_context,
     )
     payload["automation_liveness"] = build_automation_liveness(payload)
-    payload["interaction_contract"] = build_interaction_contract(
-        payload,
+    payload["interaction_contract"], arbitration = _build_interaction_contract_projection(
+        payload, agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
         available_capabilities=None,
         scheduler_execution_context=resolved_scheduler_context,
         runtime_root=(
@@ -462,7 +462,7 @@ def build_quota_paused_should_run_payload(
         ),
     )
     payload["scheduler_hint"] = _scheduler_hint(
-        payload,
+        payload, arbitration=arbitration,
         include_detail=include_scheduler_detail,
         available_capabilities=None,
         codex_app_current_rrule=codex_app_current_rrule,

@@ -4,7 +4,6 @@ Snapshots keep concurrent completions from shifting page boundaries. They are
 short-lived and server-local, never a second source of Todo authority.
 """
 from collections import OrderedDict
-from pathlib import Path
 import json
 from secrets import token_urlsafe
 from threading import Lock
@@ -120,16 +119,6 @@ class CompletedTodoPages:
 
 
 class CompletedTodoRequestMixin:
-    def _current_goal_result_route(self, goal_id):
-        from .control_plane.goals.planned_transfer_io import read_goal_transfer_workspace_target
-
-        runtime_root = self._goal_result_scope(goal_id)
-        if runtime_root is None:
-            return None
-        target = read_goal_transfer_workspace_target(registry_path=self.server.registry_path, goal_id=goal_id)
-        return ((Path(target["registry_path"]), Path(target["runtime_root"])) if target is not None else
-                (self.server.registry_path, runtime_root))
-
     def _goal_result_scope(self, goal_id):
         if not is_loopback_host(str(self.server.server_address[0])):
             self._send_error("Goal results require a loopback LoopX Chat server.", status=403)
@@ -147,16 +136,15 @@ class CompletedTodoRequestMixin:
         goal_id = query.get("goal_id", [""])[0]
         cursor = query.get("cursor", [""])[0]
         try:
-            route = self._current_goal_result_route(goal_id)
-            if route is None:
+            runtime_root = self._goal_result_scope(goal_id)
+            if runtime_root is None:
                 return
-            registry_path, runtime_root = route
             page = self.server.completed_todo_pages.page(
-                scope=("accepted_goal_results", goal_id, str(registry_path), str(runtime_root)), cursor=cursor,
+                scope=("accepted_goal_results", goal_id), cursor=cursor,
                 load=lambda: _goal_result_candidates(runtime_root=runtime_root, goal_id=goal_id),
             )
             self._send_json(_verify_goal_result_page(
-                page=page, registry_path=registry_path,
+                page=page, registry_path=self.server.registry_path,
                 runtime_root=runtime_root, goal_id=goal_id,
             ))
         except ValueError as exc:
@@ -171,12 +159,11 @@ class CompletedTodoRequestMixin:
 
         goal_id = parse_qs(urlparse(self.path).query).get("goal_id", [""])[0]
         try:
-            route = self._current_goal_result_route(goal_id)
-            if route is None:
+            runtime_root = self._goal_result_scope(goal_id)
+            if runtime_root is None:
                 return
-            registry_path, runtime_root = route
             result = read_completion_result(
-                registry_path=registry_path, runtime_root=runtime_root,
+                registry_path=self.server.registry_path, runtime_root=runtime_root,
                 goal_id=goal_id, todo_id=todo_id,
             )
             self._send_json({
@@ -200,16 +187,13 @@ class CompletedTodoRequestMixin:
         agent_id = query.get("agent_id", [""])[0]
         cursor = query.get("cursor", [""])[0]
         try:
-            route = self._current_goal_result_route(goal_id)
-            if route is None:
-                return
-            registry_path, runtime_root = route
+            self._registry_and_goal(goal_id)
 
             def load():
                 payload = list_goal_todos(
-                    registry_path=registry_path, goal_id=goal_id,
+                    registry_path=self.server.registry_path, goal_id=goal_id,
                     role="agent", status="done", read_scope="completed_history",
-                    runtime_root_arg=str(runtime_root),
+                    runtime_root_arg=self.server.runtime_root_override,
                 )
                 ordered = sorted(enumerate(payload["todos"]), key=lambda pair: (str(pair[1].get("completed_at") or ""), pair[0]), reverse=True)
                 return [
@@ -237,7 +221,7 @@ class CompletedTodoRequestMixin:
                 ]
 
             self._send_json(self.server.completed_todo_pages.page(
-                scope=(goal_id, agent_id, str(registry_path), str(runtime_root)), cursor=cursor, load=load,
+                scope=(goal_id, agent_id), cursor=cursor, load=load,
             ))
         except ValueError as exc:
             expired = str(exc) == "history_cursor_expired"

@@ -1,12 +1,10 @@
 """Loopback-only exact Task request reads over the existing Todo owner."""
 
 import hashlib
-from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .status_server import is_loopback_host
 from .control_plane.todos.list_readback import list_goal_todos
-from .control_plane.goals.planned_transfer_io import read_goal_transfer_workspace_target
 
 
 class TodoDetailRequestMixin:
@@ -24,14 +22,12 @@ class TodoDetailRequestMixin:
         try:
             if not self.server.registry_path.is_file():
                 raise OSError("Task registry is unavailable")
+            registry_digest = hashlib.sha256(self.server.registry_path.read_bytes()).hexdigest()
             self._registry_and_goal(goal_id)
-            target = read_goal_transfer_workspace_target(registry_path=self.server.registry_path, goal_id=goal_id)
-            registry_path = Path(target["registry_path"]) if target is not None else self.server.registry_path
-            registry_digest = hashlib.sha256(registry_path.read_bytes()).hexdigest()
             payload = list_goal_todos(
-                registry_path=registry_path, goal_id=goal_id,
+                registry_path=self.server.registry_path, goal_id=goal_id,
                 role="agent", todo_id=todo_id,
-                runtime_root_arg=target["runtime_root"] if target is not None else self.server.runtime_root_override,
+                runtime_root_arg=self.server.runtime_root_override,
             )
             if payload.get("ambiguous"):
                 self._send_error("The Task source is ambiguous. Refresh its Goal.", status=409)
@@ -40,7 +36,7 @@ class TodoDetailRequestMixin:
             if item is None:
                 self._send_error("The Task is no longer available in this Goal.", status=404)
                 return
-            if hashlib.sha256(registry_path.read_bytes()).hexdigest() != registry_digest:
+            if hashlib.sha256(self.server.registry_path.read_bytes()).hexdigest() != registry_digest:
                 raise OSError("Task registration changed during the read")
             authority = payload.get("authority_read") or {}
             # Echo the same canonical CAS used by the existing Chat edit owner.

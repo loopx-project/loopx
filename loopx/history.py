@@ -274,21 +274,6 @@ def _observe_run_artifacts(
             record[target] = observed[path]
 
 
-def _merge_index_record(
-    records: list[dict[str, Any]], positions: dict[tuple[str, str, str], int], item: dict[str, Any],
-) -> None:
-    key = index_identity(item)
-    item = dict(item)
-    # These are observations, never persisted index authority.
-    item.pop("json_exists", None)
-    item.pop("markdown_exists", None)
-    if key in positions:
-        records[positions[key]].update(item)
-    else:
-        positions[key] = len(records)
-        records.append(item)
-
-
 def load_index_snapshot(
     path: Path,
     *,
@@ -324,7 +309,20 @@ def load_index_snapshot(
             if not isinstance(item, dict):
                 continue
 
-            _merge_index_record(records, positions, item)
+            key = (
+                str(item.get("generated_at") or ""),
+                str(item.get("json_path") or ""),
+                str(item.get("markdown_path") or ""),
+            )
+            item = dict(item)
+            # These are observations, never persisted index authority.
+            item.pop("json_exists", None)
+            item.pop("markdown_exists", None)
+            if key in positions:
+                records[positions[key]].update(item)
+            else:
+                positions[key] = len(records)
+                records.append(item)
     if include_artifact_status:
         _observe_run_artifacts(records, artifact_root=artifact_root)
     return RunIndexSnapshot(
@@ -420,21 +418,6 @@ def collect_history(
         )
         runs = index_snapshot.records
         raw_count = index_snapshot.raw_count
-        transfer_history = None
-        if isinstance(meta.get("planned_transfer"), dict):
-            from .control_plane.goals.planned_transfer_io import read_staged_goal_transfer_runs
-
-            transferred = read_staged_goal_transfer_runs(runtime_root=runtime_root, goal_id=current_goal_id,
-                operation_id=meta["planned_transfer"]["operation_id"])
-            if transferred["live_index_sha256"] != index_snapshot.digest:
-                raise ValueError("Staged target run index changed during history readback; retry its original operation")
-            merged: list[dict[str, Any]] = []
-            positions: dict[tuple[str, str, str], int] = {}
-            for run in [*transferred["records"], *runs]:
-                _merge_index_record(merged, positions, run)
-            runs = merged
-            raw_count += transferred["raw_count"]
-            transfer_history = transferred["provenance"]
         runs = [
             run
             for _, run in sorted(
@@ -504,8 +487,6 @@ def collect_history(
             ),
             "semantic_history": goal_semantic_history_from_runs(runs),
         }
-        if transfer_history is not None:
-            goal_record["planned_transfer_history"] = transfer_history
         # Reduce the full index first. Old semantic evidence and lane windows
         # may survive outside --limit; every returned Run still needs fresh
         # flags. These references also cover the global recent_runs window.

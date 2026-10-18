@@ -122,18 +122,58 @@ function interactionConsistencyIssues(facts: InteractionConsistencyFacts) {
   return issues;
 }
 
-/** Python normalizes its legacy structural diagnostics, then asks this owner. */
-export function projectInteractionConsistencyValidation(request: JsonObject): JsonObject {
-  if (typeof request.mode !== "string") throw new EffectRuntimeRequestError("interaction consistency mode must be a string");
-  return {errors: interactionConsistencyIssues({
-    mode: request.mode,
-    user_required: requireBoolean(request.user_required, "user_required"),
-    must_attempt: requireBoolean(request.must_attempt, "must_attempt"),
-    delivery_allowed: requireBoolean(request.delivery_allowed, "delivery_allowed"),
-    quiet_noop_allowed: requireBoolean(request.quiet_noop_allowed, "quiet_noop_allowed"),
-    spend_allowed_now: requireBoolean(request.spend_allowed_now, "spend_allowed_now"),
-    spend_after_validation: requireBoolean(request.spend_after_validation, "spend_after_validation"),
-  }).map(issue => issue.code)};
+function schedulerDisposition(facts: InteractionConsistencyFacts, modes: readonly string[], noticeRetry: boolean): [string, string] {
+  const {mode, user_required, must_attempt, quiet_noop_allowed} = facts;
+  if (mode === "terminal_no_followup") return ["terminal_stop", mode];
+  if (mode === "peer_coordination_blocked") return ["peer_coordination_wait", mode];
+  if (mode === "agent_monitor_only") return ["agent_monitor_only_wait", mode];
+  if (user_required && !must_attempt && noticeRetry) return ["quiet_wait", "blocked_wait"];
+  if (user_required && !must_attempt) return ["human_gate", "interaction_blocking_user_gate"];
+  if (mode === "monitor_quiet_skip") return ["monitor_wait", "interaction_monitor_quiet_wait"];
+  if (mode === "heartbeat_settled_skip") return ["settled_replay", "interaction_heartbeat_settled_replay"];
+  if (mode === "successor_replan_required" && must_attempt) return ["active_work", "interaction_successor_replan_required"];
+  if (modes.includes(mode)) return ["agent_scope_wait", "interaction_agent_scope_wait"];
+  if (mode === "mapped_noop_if_unchanged") return ["unchanged_wait", "interaction_unchanged_wait"];
+  if (must_attempt) return ["active_work", "interaction_agent_attempt_required"];
+  return ["quiet_wait", quiet_noop_allowed ? "interaction_quiet_noop_allowed" : "interaction_delivery_not_allowed"];
+}
+
+/** Preserve accumulated structural diagnostics before shared consistency rules;
+ * malformed public contracts produce repair advice, never scheduler authority. */
+export function projectSchedulerArbitration(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "scheduler arbitration facts");
+  if (typeof request.mode !== "string") throw new EffectRuntimeRequestError("scheduler arbitration mode must be a string");
+  const mode = request.mode;
+  const user = requireJsonObject(request.user_channel, "user channel facts");
+  const agent = requireJsonObject(request.agent_channel, "agent channel facts");
+  const cli = requireJsonObject(request.cli_channel, "CLI channel facts");
+  const userPresent = requireBoolean(user.present, "user channel presence");
+  const agentPresent = requireBoolean(agent.present, "agent channel presence");
+  const modes = requireStringArray(request.agent_scope_frontier_actions, "agent scope frontier actions");
+  const errors: string[] = [];
+  if (request.schema_version !== INTERACTION_CONTRACT_SCHEMA_VERSION) errors.push("interaction_contract.schema_version_mismatch");
+  if (!mode) errors.push("interaction_contract.mode_missing");
+  if (!userPresent) errors.push("interaction_contract.user_channel_missing");
+  if (!agentPresent) errors.push("interaction_contract.agent_channel_missing");
+  const flag = (channel: JsonObject, field: string, name: string): boolean => {
+    if (typeof channel[field] === "boolean") return channel[field];
+    errors.push(`interaction_contract.${name}.${field}_must_be_boolean`);
+    return false;
+  };
+  const facts: InteractionConsistencyFacts = {
+    mode, user_required: flag(user, "action_required", "user_channel"),
+    must_attempt: flag(agent, "must_attempt", "agent_channel"),
+    delivery_allowed: flag(agent, "delivery_allowed", "agent_channel"),
+    quiet_noop_allowed: flag(agent, "quiet_noop_allowed", "agent_channel"),
+    spend_allowed_now: Object.hasOwn(cli, "spend_allowed_now") ? flag(cli, "spend_allowed_now", "cli_channel") : false,
+    spend_after_validation: Object.hasOwn(cli, "spend_after_validation") ? flag(cli, "spend_after_validation", "cli_channel") : false,
+  };
+  errors.push(...interactionConsistencyIssues(facts).map(issue => issue.code));
+  const [disposition, reason] = schedulerDisposition(facts, modes,
+    user.non_gating_notice === true && agent.wait_source === "turn_settlement");
+  return {mode, errors: [...new Set(errors)],
+    disposition: errors.length ? "consistency_repair" : disposition,
+    reason_code: errors.length ? "scheduler_interaction_contract_inconsistent" : reason};
 }
 
 function decodeUserChannel(value: unknown): UserInteractionChannel {
@@ -273,7 +313,7 @@ export function selectedWorkTodoId(packet: JsonObject): string | null {
  * list; transport projections must not independently infer requirements.
  * Python supplies registered source routing, never a second admission rule.
  */
-export function projectInteractionRequiredReads(request: JsonObject): JsonObject {
+function interactionRequiredReads(request: JsonObject): JsonObject {
   if (!Array.isArray(request.required_reads)) {
     throw new EffectRuntimeRequestError("required_reads must be an array");
   }
@@ -307,6 +347,10 @@ export function projectInteractionRequiredReads(request: JsonObject): JsonObject
   if (todoId) add(`${prefix} --format json todo list --goal-id ${goalArg} --todo-id ${shellQuote(todoId)}`,
     "selected_todo", "Read full current requirements and status/claim. Require one matching active Todo; missing, ambiguous or changed work requires a fresh guard. A summary cannot replace this read.");
   return {required_reads: reads};
+}
+
+export function projectInteractionRequiredReads(request: JsonObject): JsonObject {
+  return {...interactionRequiredReads(request), arbitration: projectSchedulerArbitration(request.arbitration_facts)};
 }
 
 /** Context routing reuses the admitted work identity; User scope remains owned

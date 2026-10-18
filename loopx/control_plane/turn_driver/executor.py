@@ -894,12 +894,8 @@ def _host_result_stage(
         if confirm_start is not None:
             confirm_start()
         from ...usage_goal import observe_goal_execution
-        from .turn_host_process import turn_host_process_scope
 
-        with turn_host_process_scope(
-            usage_runtime_root or project, goal_id=usage_goal_id,
-            turn_key=str(request["turn_key"]), attempt=journal["host_attempt_count"],
-        ), observe_goal_execution(
+        with observe_goal_execution(
             usage_runtime_root or project,
             usage_goal_id,
             host=str((plan.get("host") or {}).get("kind") or "unknown"),

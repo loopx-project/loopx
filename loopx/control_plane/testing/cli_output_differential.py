@@ -403,23 +403,6 @@ def _decision_evidence_migration_allowance(base: dict[str, Any], candidate: dict
     return dict(zip(("chars", "utf8_bytes", "lines", "compact_payload_chars"), limits))[metric]
 
 
-def _turn_delivery_boundary_migration(base: dict[str, Any], candidate: dict[str, Any], metric: Metric) -> int:
-    # Matched public fixtures add 90 JSON characters: the native boundary in
-    # the signed action and its runnable settlement command. Both are needed
-    # for validated intermediate work; do not remove either to pass a size test.
-    # Only this absent->present Turn-plan transition qualifies. Once present,
-    # normal growth limits resume; absolute ceilings and semantics stay intact.
-    path = "$.turn_envelope.action.selected_todo.delivery_boundary"
-    if (str(candidate.get("row_id", "")).startswith("surface/loopx_turn_plan/")
-            and candidate.get("format") == "json"
-            and isinstance(base.get("json_shape_paths"), list)
-            and path not in base["json_shape_paths"]
-            and path in (candidate.get("json_shape_paths") or [])
-            and metric in {"chars", "utf8_bytes", "compact_payload_chars"}):
-        return 90
-    return 0
-
-
 def _action_signature_migration(
     base: dict[str, Any], candidate: dict[str, Any]
 ) -> str | None:
@@ -907,7 +890,6 @@ def _compare_row_growth(
             ),
             _schema_migration_growth_allowance(migration, metric),
             _decision_evidence_migration_allowance(base, candidate, metric),
-            _turn_delivery_boundary_migration(base, candidate, metric),
             projection_allowance.get(metric, 0),
             fence_allowance.get(metric, 0),
             authoring_allowance.get(metric, 0),

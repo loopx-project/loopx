@@ -1,10 +1,11 @@
 import {useEffect, useId, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
 import {ArrowLeft, Circle, FlaskConical, GitBranch, RefreshCw} from "lucide-react";
-import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisScope, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
+import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
+import {ContextHelp} from "./context-help";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 
@@ -167,19 +168,22 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
   const choose = (id: string, focus = true) => select({nodes: id ? [id] : [], day: null}, focus);
   if (!busy && !error && !read.events.length && !analysis.pack && !analysis.snapshot?.catalog.packs.length) return null;
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
-    <header className="research-history-heading"><div><h2>{copy.title}</h2>
-      <p>{copy.scope}{value?.startAt ? <> · {copy.time} <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null}</p></div>
+    <header className="research-history-heading"><div><div className="research-history-title"><h2>{copy.title}</h2><ContextHelp label={zh ? "历史范围与读图说明" : "History scope and reading guide"}>
+      <p>{copy.scope} · {copy.time}{zh ? "。" : ". "}{copy.coverage}{zh ? "。" : "."}</p><p>{copy.interpretation}{zh ? "。" : "."}</p>
+      {lens === "graph" ? <p>{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。未关联问题按首次记录 UTC 日期收纳。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress. Unlinked questions are collected by first-record UTC date."}</p> : null}
+      <p>{zh ? "合拢仅为避免遮挡，不表示关联或因果；选择一次可读全部原始记录与依据。" : "Nearby points group to avoid overlap, without implying a relationship or causality. Select once to read every original record and source."}</p>
+    </ContextHelp></div>
+      <p className="research-history-coverage" role="status">{copy.scope}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
+        : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
+          : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p></div>
       <div className="research-history-controls">
         {selection.nodes.length || selection.day !== null ? <button type="button" onClick={() => {choose("", false); graph.current?.focus();}}><ArrowLeft size={14} aria-hidden/>{copy.all}</button> : null}
         <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div>
         <ResearchAnalysisButton analysis={analysis}/>
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
-    <p className="research-history-coverage" role="status">{busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
-      : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-        : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`} · {copy.coverage}</p>
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
-    <ResearchAnalysisScope analysis={analysis}/>
+    <ResearchAnalysisStatus analysis={analysis}/>
     <ResearchProgressSummary analysis={analysis}/>
     <ResearchAnalysisPanel analysis={analysis}/>
     {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
@@ -224,7 +228,6 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
         <h3>{selected.latest.title}</h3><p>{selected.latest.summary || (zh ? "此节点尚无详细说明。" : "No detail was recorded for this node.")}</p>
         {selected.latest.blocked_reason ? <p className="research-history-error">{selected.latest.blocked_reason}</p> : null}
         <h4>{copy.evidence}</h4>
-        <p className="research-history-note">{copy.interpretation}</p>
         {selected.findings.length ? selected.findings.map(findingElement) : <p>{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p>}
         <h4>{copy.versions}</h4>{selected.latest.evidence_refs.length ? selected.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>) : <p>{zh ? "产物版本与来源引用未记录。" : "Artifact version and source references were not recorded."}</p>}
         <h4>{copy.links}</h4><ul>{value.edges.filter(edge => edge.from_node === selected.id || edge.to_node === selected.id).map(edge => <li key={edge.event_id}>{positions.get(edge.from_node)?.node.latest.title ?? (zh ? "来源节点未记录" : "Source node not recorded")} → {relationLabel(edge.edge_type)} → {positions.get(edge.to_node)?.node.latest.title ?? (zh ? "目标节点未记录" : "Target node not recorded")}{edge.summary ? ` — ${edge.summary}` : ""}</li>)}</ul>
@@ -233,8 +236,6 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
       </div> : null}
       {selectedMembers?.length ? <div className="research-history-detail" ref={detail} role="region" aria-label={selectedGroup ? (zh ? "按日期收纳的未关联问题" : "Unlinked questions by date") : (zh ? "相邻研究项的全部记录" : "All records for nearby research items")} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); choose("", false); graph.current?.focus();}}}>
         <h3>{selectedGroup ? `${selectedGroup.day || copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
-        <p className="research-history-note">{selectedGroup ? (zh ? "这里只按首次记录日期收纳，不推断共同路线或因果。每个问题的记录与依据保留如下。" : "Grouped only by first recorded date, without inferring a shared route or causality. Every question and its evidence remains below.") : (zh ? "这些点在当前宽度下互相遮挡，合拢后一次展开。每项研究的原始时间、结论与依据完整保留；合拢不表示关联或因果。" : "These points would overlap at the current width and open together. Every original time, finding and source remains; grouping implies no relationship or cause.")}</p>
-        <p className="research-history-note">{copy.interpretation}</p>
         {selectedMembers.map(node => <article className="research-history-group-member" key={node.id} data-research-node={node.id}><h4>{node.latest.title}</h4><p>{stateLabel(node.latest.status)} · {node.latest.summary}</p>{node.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
           {node.findings.map(findingElement)}
           {updateRecords(node.revisions)}
@@ -246,8 +247,6 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
     {value?.missingLinks.length ? <p className="research-history-note">{copy.missing} · {value.missingLinks.length}</p> : null}
     {value?.unknownTimeCount ? <p className="research-history-note">{copy.unknown} · {value.unknownTimeCount}</p> : null}
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
-    {value?.nodes.length ? <p className="research-history-note">{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress."}</p> : null}
-    {grouped.groups.length ? <p className="research-history-note">{zh ? "未关联问题按首次记录日期收纳；每组可一次展开，不遗漏更早或更晚的记录。" : "Unlinked questions are collected by first recorded date. Open a group once to read every member and version."}</p> : null}
     {value?.events.length ? <details className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
       {recordsOpen ? <><ol className="research-history-records">{value.events.slice(0, recordLimit).map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{event.title} · {stateLabel(event.status)}{event.summary ? ` — ${event.summary}` : ""}</span>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>
         {recordLimit < value.events.length ? <button type="button" onClick={() => setRecordLimit(n => n + 50)}>{zh ? "继续展开记录" : "Show more records"} · {Math.min(recordLimit, value.events.length)} / {value.events.length}</button> : null}</> : null}

@@ -9,7 +9,8 @@ from loopx.control_plane.quota.should_run import build_quota_should_run
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from loopx.presentation.renderers.quota_markdown import render_quota_should_run_markdown
 from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
-from loopx.control_plane.scheduler.arbitration import SchedulerDisposition, build_scheduler_arbitration
+from loopx.control_plane.scheduler.arbitration import SchedulerDisposition
+from tests.control_plane.scheduler_arbitration_fixture import project_native_arbitration
 from loopx.control_plane.effect_program import interpret_quota_should_run_packet
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
@@ -46,20 +47,6 @@ def test_settled_replay_preserves_schedule_without_new_host_effects(profile, obs
         assert hint["goal_runtime_continuation"]["disposition"] == "continue_now"
 
 
-@pytest.mark.parametrize("channel,field", [("agent_channel", "must_attempt"),
-                                         ("agent_channel", "delivery_allowed"),
-                                         ("user_channel", "action_required")])
-def test_settled_contract_cannot_carry_open_execution(channel, field):
-    payload = build_quota_should_run(
-        quota_status_payload(goal_id="settled-fixture", status="active", recommended_action="Continue"),
-        goal_id="settled-fixture", receipt_bound_replay_phase=ReceiptBoundReplayPhase.SETTLED,
-    )
-    payload["interaction_contract"][channel][field] = True
-    result = build_scheduler_arbitration(payload)
-    assert result.disposition is SchedulerDisposition.CONSISTENCY_REPAIR
-    assert "interaction_contract.settled_conflicts_with_open_action" in result.errors
-
-
 @pytest.mark.parametrize("mode", ["heartbeat_settled_skip", "terminal_no_followup",
                                   "peer_coordination_blocked", "agent_monitor_only"])
 def test_closed_contract_cannot_reopen_work_through_typed_consumers(mode):
@@ -70,7 +57,7 @@ def test_closed_contract_cannot_reopen_work_through_typed_consumers(mode):
     contract = payload["interaction_contract"]
     contract["mode"] = mode
     contract["agent_channel"].update(must_attempt=True, delivery_allowed=True, quiet_noop_allowed=False)
-    assert build_scheduler_arbitration(payload).disposition is SchedulerDisposition.CONSISTENCY_REPAIR
+    assert project_native_arbitration(payload).disposition is SchedulerDisposition.CONSISTENCY_REPAIR
     with pytest.raises(EffectRuntimeRejected, match="conflicts with"):
         interpret_quota_should_run_packet(payload)
     with pytest.raises(EffectRuntimeRejected, match="conflicts with"):
@@ -98,7 +85,7 @@ def test_closed_contract_cannot_authorize_another_spend(mode, error_code, spend_
     contract["mode"] = mode
     contract["agent_channel"]["quiet_noop_allowed"] = mode != "heartbeat_settled_skip"
     contract["cli_channel"][spend_field] = True
-    result = build_scheduler_arbitration(payload)
+    result = project_native_arbitration(payload)
     assert result.disposition is SchedulerDisposition.CONSISTENCY_REPAIR
     assert error_code in result.errors
     with pytest.raises(EffectRuntimeRejected, match="conflicts with"):

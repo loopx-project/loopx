@@ -4,8 +4,7 @@ import { realpathSync } from "node:fs";
 import { lstat, mkdir, open, readFile, readdir, rename } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { JsonObject } from "../effect_program.ts";
-import { atomicWriteJson, withFileMutationLock, claimFileMutationLock,
-  mutationLockOwner, releaseFileMutationLockClaim } from "../effect_runtime_io.ts";
+import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import {
   canonicalAuthorityBytes, canonicalAuthorityObject, canonicalAuthoritySha256,
   hasExactAuthorityKeys, isAuthorityJsonObject, requireAuthorityStoreId,
@@ -97,29 +96,9 @@ export function shadowMaintenanceLockPath(root: string, goal: string): string {
 export function shadowManagementStatePath(root: string, goal: string): string {
   return join(shadowManagementDirectory(root, goal), "state.json");
 }
-export async function withShadowMaintenanceLock<T>(root: string, goal: string, operation: () => Promise<T>,
-  borrowed?: unknown): Promise<T> {
-  const target = shadowMaintenanceLockPath(root, goal);
-  if (borrowed !== undefined) {
-    // The Python IO owner keeps its surrounding transaction. Claim this exact
-    // live token, never discover or adopt whichever process happens to hold M.
-    if (!isAuthorityJsonObject(borrowed) || borrowed.target !== target ||
-        typeof borrowed.token !== "string" || !borrowed.token ||
-        typeof borrowed.pid !== "number" || !Number.isSafeInteger(borrowed.pid) || borrowed.pid <= 0) {
-      throw new ShadowManagementError("shadow_maintenance_lock_invalid");
-    }
-    const claim = await claimFileMutationLock(target, borrowed.token);
-    if (!claim) throw new ShadowManagementError("shadow_maintenance_lock_expired");
-    try {
-      const owner = await mutationLockOwner(target);
-      if (owner?.pid !== borrowed.pid || owner.token !== borrowed.token) {
-        throw new ShadowManagementError("shadow_maintenance_lock_expired");
-      }
-      return await operation();
-    } finally { await releaseFileMutationLockClaim(claim); }
-  }
+export async function withShadowMaintenanceLock<T>(root: string, goal: string, operation: () => Promise<T>): Promise<T> {
   await makeDirectoryDurable(shadowManagementDirectory(root, goal));
-  return await withFileMutationLock(target, operation);
+  return await withFileMutationLock(shadowMaintenanceLockPath(root, goal), operation);
 }
 function exact(value: unknown, fields: string[]): value is JsonObject {
   return isAuthorityJsonObject(value) && hasExactAuthorityKeys(value, fields);

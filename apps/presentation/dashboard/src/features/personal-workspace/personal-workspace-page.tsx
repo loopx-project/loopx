@@ -344,7 +344,7 @@ function GoalOutputsView({
   return (
     <>
       <section className="personal-object-list personal-files-list" data-testid="personal-goal-outputs">
-        <header><strong>{t("files.title")}</strong>{!teamConfigured && !localResults ? <span>{items.length}</span> : null}</header>
+        <header><strong>{t("files.title")}</strong>{!teamConfigured ? <span>{items.length}</span> : null}</header>
         {reportState?.loading ? (
           <p className="personal-object-list-state" role="status"><RefreshCw className="is-spinning" size={14} />{t("files.loadingReports")}</p>
         ) : null}
@@ -1973,7 +1973,7 @@ export function PersonalWorkspacePage({
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
         callbacks.onGoalDeleted?.(applied.goalId);
       }
-      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve" || applied.actionKind === "todo.update" || applied.actionKind === "todo.create") {
+      if (applied.actionKind === "goal.lifecycle" || applied.actionKind === "gate.resolve" || applied.actionKind === "todo.update") {
         void reconcileStatus(applied.goalId ? [applied.goalId] : undefined);
       }
       return applied;

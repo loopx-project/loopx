@@ -439,7 +439,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
             {!jsonValid ? <span className="personal-machine-validation" role="alert">{t("capabilities.jsonInvalid")}</span> : null}
           </label>}
         </> : null}
-        {selected.capability_id === "reward_memory" && selected.current?.binding_status === "unbound" ? <p className="personal-memory-unbound" role="status">{locale === "zh-CN" ? "当前没有启用的经验配置。" : "No experience configuration is currently enabled."}</p> : null}
+        {selected.capability_id === "reward_memory" && selected.current?.effective_available === false ? <p className="personal-memory-unbound" role="status">{locale === "zh-CN" ? "此 Goal 当前没有可用的经验配置。" : "No usable experience configuration is available in this Goal."}</p> : null}
         {selected.capability_id === "reward_memory" && Array.isArray(selected.current?.agent_bindings) && selected.current.agent_bindings.length > 0 ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "Agent 记忆绑定读回" : "Agent memory binding readback"}>
           <h3>{locale === "zh-CN" ? "Agent 经验配置" : "Agent experience configuration"}</h3>
           {(selected.current.agent_bindings as Record<string, unknown>[]).map((binding) => <p key={String(binding.agent_id)}>

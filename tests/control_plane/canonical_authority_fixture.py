@@ -11,15 +11,12 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-import loopx
-
 
 def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection: dict, *, state_path: Path, provider: str = "file") -> dict:
-    # Native fixtures must use the same Core as this Python interpreter, both
-    # in a source checkout and in an ordinary noneditable package installation.
-    module = Path(loopx.__file__).resolve().parent / "control_plane/coordination/file_authority_store.ts"
-    fence_module = module.with_name("legacy_writer_fence.ts")
-    codec_module = module.with_name("authority_store_codec.ts")
+    repository = Path(__file__).resolve().parents[2]
+    module = repository / "loopx/control_plane/coordination/file_authority_store.ts"
+    fence_module = repository / "loopx/control_plane/coordination/legacy_writer_fence.ts"
+    codec_module = repository / "loopx/control_plane/coordination/authority_store_codec.ts"
     script = (
         f"import {{FileAuthorityStore}} from {json.dumps(module.as_uri())};"
         f"import {{selectLocalSqliteAuthority,openLocalAuthorityStore}} from {json.dumps((module.parent / 'local_authority_provider.ts').as_uri())};"

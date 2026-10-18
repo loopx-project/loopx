@@ -73,21 +73,6 @@ tree 相同；后续 main 同步与自动合并结果相同，并包含 #6597 �
 源端可用的迁移与原源不可用的灾难恢复分别资格化；这里不授予任何一方 activation，
 也不声称迁移已经实现。
 
-候选 [#6769](https://github.com/loopx-project/loopx/pull/6769) 已把原任务审阅过的本地
-续办与既有 Goal 验收、完成结果 owner 接通：同一次迁移确认可继续未完成工作，
-再从原 Goal 的产出读取验收通过的实际文件，不新增结果库或第二个决策源。
-[有界 profile 与证据限制](../../reference/research-checkpoint.md#admit-a-fresh-session-and-adopt-context)
-包括 HTTP 进程在目标准入后、结果验收后退出时，从原入口重试同一操作；已验收工作
-不重跑、不重扣。显式准备选项已让同一次确认可授权既有本地 Chat Host 唤醒服务，
-在等待解除或服务重开后续办；原生准入冻结首次确认的启动窗口，journal 与 dispatch lock
-保留原轮次预算及执行／扣额唯一性。旧准备不增加后台 caller，停止、到期或未结算工作
-保留原 hold。真实 File/SQLite 与原生进程使用本地固定响应验证。原 Goal 预算配置现与
-原账本一起保留，暂停或额度耗尽仍有效；新工作在领取租约或启动 Host 前取得当前原生
-选择结论，拒绝保持原样。未知配置和未审阅漂移仍 hold，不新增 quota 解释器或采用凭证。
-此有界 profile 仍未完成其余必要配置／凭证重绑、完整源 Host/effect drain、可携交付、真实模型及完整
-120 秒旅程。候选尚未合入或取得发布资格。C1/T4、D2/D3 保持开放，不再派生重复
-writer 删除或另建结果存储的任务。
-
 1. 在冻结的最终 main 源码和正常安装的 CLI／App／受影响 Host 上收尾 T4/C1、
    D1 采用：完整数据、新旧 proof、原操作重试、中断、后写及可逆迁移。剩余 transport
    按真实 caller 判断；native 进程内接管时删除废弃跨界，不新增逐字段 bridge。
@@ -882,6 +867,19 @@ Turn 的区分，以及无持久授权的恢复合同由 `agents/capability_gate
 argv；同一 interaction packet 复用结果，重入投影本身在健康路径不增加 runtime 调用。修正行为是：显式
 选择前，可执行的低优先级推荐不能隐藏受阻任务的真实能力验证；验证成功在原 Turn 重入，
 失败后仍可显式选择其他工作。已提交 receipt 的 Todo 不变。
+
+调度仲裁现在与 required-read 投影在 `work_items/interaction_contract.ts` 内组合。
+结构诊断、共享一致性检查和 disposition 选择由同一个原生 owner 负责。Quota 消费私有
+`{required_reads, arbitration}` 结果，不增加公共 contract 字段。Python 选择规则与独立
+consistency RPC 已删除。后续 cooldown 与 recovery 构造仍返回 dict，并丢弃未消费的
+仲裁；它们不覆盖 scheduler hint 较早的决策。完整 fact 的 compact ASCII JSON
+不超过 64 KiB 时使用 inline 通道。原 reads 透传、最多三条生成 read、shell 引号展开和
+有界诊断给出 `16B + 8 KiB` 保守结果上界；B 为完整 compact ASCII JSON 的字节数。
+当 `B <= 64 KiB` 时，该上界低于 2 MiB。
+更大的 fact 继续走既有私有快照，不截断数据。2 MiB wire 与 64 MiB snapshot 上限不变。
+Python 暂留 scalar/Mapping codec、
+Enum/dataclass 结果适配、调度 cadence 和 Host IO，直到对应 consumer 迁移。
+这不代表整个 scheduler 或正式安装采用已完成。
 
 `agents/capability_memory.ts` 现在持有本机 Agent 运行时能力声明、校验与幂等合并，
 复用现有文件锁及 durable JSON writer；`capability_gate.ts` 统一 Goal、Agent、本次

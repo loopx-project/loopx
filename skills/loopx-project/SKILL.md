@@ -46,7 +46,7 @@ before its operation; ordinary admitted work does not load every procedure.
 | Operation | Required procedure |
 | --- | --- |
 | `/loopx` goal-start, connect, identity binding or scope changes | [Start and connect](references/start-and-connect.md) |
-| Missing CLI, desktop upgrade, runtime drift, diagnosis or registry recovery | [Installation and diagnosis](references/installation-and-diagnosis.md) |
+| Missing CLI, desktop upgrade, runtime drift, Ego host-skill refresh, diagnosis or registry recovery | [Installation and diagnosis](references/installation-and-diagnosis.md) |
 | Set up or repair autonomous execution, missing/contradictory contract, state-only delivery writeback | [Autonomous execution and settlement](references/autonomous-execution.md) |
 | Create, recover or change a recurring heartbeat or host loop | [Heartbeat hosts](references/heartbeat-hosts.md) |
 | Relay a review packet, record a human reward or run separately authorized child work | [Handoff and feedback](references/handoff-and-feedback.md) |

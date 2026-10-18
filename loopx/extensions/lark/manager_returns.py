@@ -27,7 +27,7 @@ def _resolve_return(
     snapshot = snapshot_provider()
     # Validate live binding/session independently of the worker's target Goal.
     # Delegation grants permit only this request's audience-ready reply.
-    if not authorized_manager_goal_ids(snapshot, session, runtime_root=root):
+    if not authorized_manager_goal_ids(snapshot, session, runtime_root=root, registry_path=registry):
         raise ReturnResolutionBlocked(
             "return_authorization_unavailable",
             "manager connection no longer authorized",

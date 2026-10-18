@@ -314,6 +314,63 @@ class ManagerInspection:
         from .ssh_evidence import sources
         return sources(self.runtime_root, self.channel_id, self.owner_scope, self.ssh_config_path)
 
+    def _registered_goals(self) -> list[dict[str, Any]]:
+        from ...history import decode_registry_snapshot
+        inventory = decode_registry_snapshot(self.registry_path, self.registry_path.read_bytes())["goals"]
+        if not isinstance(inventory, list) or any(not isinstance(g, dict) or not isinstance(g.get("id"), str) for g in inventory):
+            raise ValueError("Goal inventory is unreadable")
+        return inventory
+
+    def _goal_scope(self) -> list[str] | None:
+        ids = (self.discovery_scope() if self.discovery_scope else
+               None if self.owner_scope and self.context.get("scope") == "owner_global" else
+               [r["goal_id"] for r in self.context.get("goals", [])])
+        if ids is None:
+            if not (self.owner_scope and self.context.get("scope") == "owner_global"):
+                raise ValueError("current audience scope unavailable")
+        elif not isinstance(ids, list) or any(not isinstance(g, str) for g in ids):
+            raise ValueError("invalid audience scope")
+        return ids
+
+    def _portfolio(self, ids, goal_id, include_stopped, offset, limit):
+        from ...control_plane.goals.activation import goal_activation_state
+        from ...chat_manager_context import manager_turn_context
+        try:
+            inventory = self._registered_goals()
+            permitted = sorted({g["id"] for g in inventory if ids is None or g["id"] in ids})
+            if goal_id is not None:
+                permitted = [goal_id] if goal_id in permitted else []
+            elif not include_stopped:
+                stopped = set()
+                for g in inventory:
+                    if g["id"] not in permitted:
+                        continue
+                    try:
+                        if goal_activation_state(g).value == "stopped":
+                            stopped.add(g["id"])
+                    except ValueError:
+                        pass  # Unknown activation stays visible as a source gap.
+                permitted = [gid for gid in permitted if gid not in stopped]
+            selected = permitted[offset:offset + limit]
+            context = manager_turn_context(
+                self.registry_path,
+                {"channel_id": self.channel_id or ("manager" if self.owner_scope else "manager.external.inspection")},
+                self.runtime_root, authorized_goal_ids=ids, requested_goal_ids=selected,
+                include_stopped=include_stopped or goal_id is not None, include_details=False,
+            ) if selected else {"goals": [], "coverage": {"complete": True}}
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            return {"ok": False, "view": "portfolio", "error": "goal_inventory_unavailable"}
+        page = context.get("goals", [])
+        end = offset + len(selected)
+        return {"ok": True, "view": "portfolio", "goal_id": goal_id, "rows": page,
+                "offset": offset, "included": len(page), "matched": len(permitted),
+                "next_offset": end if end < len(permitted) else None,
+                "source": {"source": "goal_portfolio", "snapshot_id": context.get("snapshot_id"),
+                           "coverage": context.get("coverage")},
+                "unknown": bool(context.get("warnings")) or len(page) != len(selected),
+                "initial_snapshot_id": self.context.get("snapshot_id"),
+                "source_id": "local", "source_host": "local"}
+
     def read(self, tool: str, arguments: Any) -> dict[str, Any]:
         if tool not in {TOOL_NAME, CONTEXT_TOOL_NAME} or not isinstance(arguments, dict):
             return {"ok": False, "error": "unsupported_read_tool"}
@@ -359,19 +416,14 @@ class ManagerInspection:
                                  **({"runner": self.remote_runner} if self.remote_runner else {}))
             self.record(result)
             return result
+        try:
+            ids = self._goal_scope()
+        except ValueError:
+            return {"ok": False, "error": "authorization_changed"}
+        if goal_id is not None and ids is not None and goal_id not in ids:
+            return {"ok": False, "error": "goal_outside_available_scope"}
         if view in {"agents", "agent_route"}:
-            # The current audience scope is independent of bounded portfolio
-            # collection and the sender's narrower context-delivery grants.
-            ids = (self.discovery_scope() if self.discovery_scope else
-                   None if self.owner_scope and self.context.get("scope") == "owner_global" else
-                   [r["goal_id"] for r in self.context.get("goals", [])])
-            if ids is None and not (self.owner_scope and self.context.get("scope") == "owner_global"):
-                return {"ok": False, "error": "authorization_changed"}
-            if ids is not None and (not isinstance(ids, list) or any(not isinstance(g, str) for g in ids)):
-                return {"ok": False, "error": "authorization_changed"}
             if goal_id is not None:
-                if ids is not None and goal_id not in ids:
-                    return {"ok": False, "error": "goal_outside_available_scope"}
                 ids = [goal_id]
             if view == "agent_route":
                 from ...control_plane.collaboration.peer_host_route import resolve_peer_host_route
@@ -392,24 +444,23 @@ class ManagerInspection:
                 return {"ok": False, "error": "authorization_changed"}
             self.record(result)
             return result
-        goals = {r["goal_id"]: r for r in self.context.get("goals", [])}
-        if (goal_id is not None and goal_id not in goals) or (
-            view not in {"portfolio", "handoffs"} and not goal_id
-        ):
+        if view not in {"portfolio", "handoffs"} and not goal_id:
             return {"ok": False, "error": "goal_outside_available_scope"}
-        if not self.scope_valid():
-            return {"ok": False, "error": "authorization_changed"}
+        if view != "portfolio":
+            if ids is None:
+                try:
+                    ids = [g["id"] for g in self._registered_goals()]
+                except (OSError, ValueError, KeyError, TypeError):
+                    return {"ok": False, "error": "goal_inventory_unavailable"}
+            if goal_id is not None and goal_id not in ids:
+                return {"ok": False, "error": "goal_outside_available_scope"}
+        portfolio_unknown = False
         if view == "portfolio":
-            rows = list(goals.values()) if goal_id is None else [goals[goal_id]]
-            if goal_id is None and not include_stopped:
-                rows = [r for r in rows if r.get("activation_state") != "stopped"]
-            source = {
-                "source": "goal_portfolio",
-                "snapshot_id": self.context.get("snapshot_id"),
-                "coverage": self.context.get("coverage"),
-            }
-            page = rows[offset : offset + limit]
-            matched = len(rows)
+            result = self._portfolio(ids, goal_id, include_stopped, offset, limit)
+            if not result.get("ok"):
+                return result
+            page, source, matched = result["rows"], result["source"], result["matched"]
+            portfolio_unknown = result["unknown"]
         elif view == "handoffs":
             from .tracking import query
 
@@ -417,7 +468,7 @@ class ManagerInspection:
                 source = query(
                     self.runtime_root,
                     self.registry_path,
-                    goal_ids=[goal_id] if goal_id else list(goals),
+                    goal_ids=[goal_id] if goal_id else ids,
                     owner_scope=self.owner_scope,
                     channel_id=self.channel_id,
                     request_id=arguments.get("request_id"),
@@ -489,7 +540,7 @@ class ManagerInspection:
             "next_offset": end
             if isinstance(matched, int) and page and end < matched
             else None,
-            "unknown": matched is None
+            "unknown": matched is None or portfolio_unknown
             or (
                 view == "handoffs"
                 and (
