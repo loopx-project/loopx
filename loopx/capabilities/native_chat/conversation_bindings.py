@@ -350,11 +350,18 @@ class ChatConversationBindings:
 
     def change_agent_target(self, *, binding_id: str, expected_revision: int,
                             session_id: str | None = None, target_ref: str | None = None) -> dict[str, Any]:
+        row = next((item for item in self.read()["bindings"] if item["binding_id"] == binding_id), None)
+        if row is None:
+            raise ValueError("conversation binding is no longer authorized")
+        # Provider IO must not prevent disconnect from publishing revocation.
+        # Recheck the exact binding under its fence before using this observation.
+        observation = self.observe(row["transport_ref"])
         with exclusive_file_lock(self.path, operation="configure_conversation_agent_target"):
             current = self.read()
-            row = next(item for item in current["bindings"] if item["binding_id"] == binding_id)
+            if next((item for item in current["bindings"] if item["binding_id"] == binding_id), None) != row:
+                raise ValueError("conversation binding changed during identity verification")
             params = {"current": current, "expected_revision": expected_revision, "binding_id": binding_id,
-                      "observation": self.observe(row["transport_ref"]), "available_projects": self.projects.available()}
+                      "observation": observation, "available_projects": self.projects.available()}
             if session_id is not None:
                 observed = self.agent_observation(session_id)
                 target = {key: observed["session"].get(key) for key in ["session_id", "goal_id", "goal_instance_id",
