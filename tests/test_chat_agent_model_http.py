@@ -123,7 +123,9 @@ def test_http_replay_withholds_legacy_raw_reasoning_without_rewriting_history(tm
     server = chat_server.ChatHTTPServer(("127.0.0.1", 0), chat_server.ChatRequestHandler)
     server.verbose = False
     server.chat_store = store
-    server.runtime_controller = SimpleNamespace(close=lambda: None)
+    # A completed replay has no exited execution to recover. Keep the HTTP
+    # fixture's terminal recovery hook aligned with the real controller.
+    server.runtime_controller = SimpleNamespace(close=lambda: None, recover_exited_turn=lambda *_: None)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)

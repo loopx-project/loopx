@@ -57,27 +57,38 @@ class CodexAppServerAdapter:
         retry_timeout = bool(resume_thread_id)
         while True:
             try:
-                return cls(
-                    CodexChatAgentSession.start(
-                        codex_bin=codex_bin,
-                        work_dir=work_dir,
-                        goal_id=goal_id,
-                        objective=objective,
-                        response_timeout_sec=startup_timeout_sec,
-                        idle_timeout_sec=idle_timeout_sec,
-                        hard_timeout_sec=hard_timeout_sec,
-                        execution_mode=execution_mode,
-                        runtime_profile=runtime_profile,
-                        sandbox=sandbox,
-                        project_context=project_context,
-                        resume_thread_id=resume_thread_id,
-                        codex_home=codex_home,
-                        model=model,
-                        reasoning_effort=reasoning_effort,
-                        host_config={"service_tier": service_tier} if service_tier else None,
-                        dynamic_tools=dynamic_tools,
-                    )
+                session = CodexChatAgentSession.start(
+                    codex_bin=codex_bin,
+                    work_dir=work_dir,
+                    goal_id=goal_id,
+                    objective=objective,
+                    response_timeout_sec=startup_timeout_sec,
+                    idle_timeout_sec=idle_timeout_sec,
+                    hard_timeout_sec=hard_timeout_sec,
+                    execution_mode=execution_mode,
+                    runtime_profile=runtime_profile,
+                    sandbox=sandbox,
+                    project_context=project_context,
+                    resume_thread_id=resume_thread_id,
+                    codex_home=codex_home,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                    host_config={"service_tier": service_tier} if service_tier else None,
+                    dynamic_tools=dynamic_tools,
                 )
+                if not resume_thread_id:
+                    try:
+                        # A native thread/start id alone is not durable until
+                        # its first Turn. Naming this new managed conversation
+                        # materializes the empty thread before Core stores its
+                        # binding, without sending a model request.
+                        session._request("thread/name/set", {
+                            "threadId": session.thread_id, "name": "LoopX Chat",
+                        })
+                    except Exception:
+                        session.close()
+                        raise
+                return cls(session)
             except CodexChatTimeoutError as exc:
                 if not retry_timeout or exc.error_code != "response_timeout":
                     raise
