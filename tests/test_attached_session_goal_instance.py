@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,7 +16,11 @@ from loopx.attached_session import (
 )
 from loopx.chat_agent import CodexChatAgentError
 from loopx.cli import main
-from loopx.chat_runtime import ChatRuntimeController
+from loopx.chat_runtime import (
+    CODEX_GOAL_CHAT_MODE,
+    ChatRuntimeController,
+    CodexAppServerAdapter,
+)
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.goals.source_session_recreation import (
     RecreateGoalRequest,
@@ -25,6 +30,7 @@ from loopx.control_plane.goals.source_session_registration import (
     FreshSourceSessionRegistration,
     register_fresh_source_session_project,
 )
+from loopx.control_plane.goals.source_session_registry_state import guard_path
 from loopx.control_plane.projects.registry_codec import load_project_registry
 
 
@@ -226,6 +232,103 @@ def _chat_business_state(store: ChatSessionStore) -> dict[str, bytes]:
     }
 
 
+class _NativeRecoverySession:
+    def __init__(
+        self,
+        *,
+        block_second_read: bool,
+        read_entered: threading.Event,
+        release_read: threading.Event,
+    ) -> None:
+        self.thread_id = "native-thread"
+        self.resolved_model = None
+        self.resolved_reasoning_effort = None
+        self.service_tier = None
+        self.goal = {
+            "threadId": self.thread_id,
+            "status": "paused",
+            "tokenBudget": 1000,
+            "tokensUsed": 500,
+            "timeUsedSeconds": 10,
+        }
+        self.block_second_read = block_second_read
+        self.read_entered = read_entered
+        self.release_read = release_read
+        self.read_count = 0
+        self.closed = threading.Event()
+
+    def _request(
+        self,
+        method: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        assert params["threadId"] == self.thread_id
+        if method == "thread/goal/get":
+            self.read_count += 1
+            if self.block_second_read and self.read_count == 2:
+                self.read_entered.set()
+                if not self.release_read.wait(timeout=2):
+                    raise TimeoutError("native Goal read was not released")
+            return {"goal": self.goal.copy()}
+        if method == "thread/goal/set":
+            self.goal.update(params)
+            return {"goal": self.goal.copy()}
+        raise AssertionError(f"unexpected native Goal method: {method}")
+
+    @staticmethod
+    def _runtime_error(message: str) -> RuntimeError:
+        return RuntimeError(message)
+
+    @staticmethod
+    def interrupt(*_args: object) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed.set()
+
+
+def _native_managed_session(
+    store: ChatSessionStore,
+    *,
+    goal_instance_id: str,
+    accepted_turn: bool,
+) -> tuple[str, str | None]:
+    session = store.create_session(
+        goal_id=GOAL_ID,
+        goal_instance_id=goal_instance_id,
+        agent_id=AGENT_ID,
+        adapter_kind="codex_app_server",
+        upstream_thread_id="native-thread",
+        upstream_mode=CODEX_GOAL_CHAT_MODE,
+    )
+    session_id = str(session["session_id"])
+    store.update_session(
+        session_id,
+        native_goal={"status": "active", "tokenBudget": 1000, "tokensUsed": 400},
+    )
+    store.create_ingress_receipt(
+        session_id,
+        client_ingress_id="recovering-ingress",
+        mode="loopx_queue",
+        message="retain this delivery state",
+    )
+    store.update_ingress_receipt(
+        session_id,
+        "recovering-ingress",
+        status="delivering",
+        active_turn_id="native-turn",
+    )
+    if not accepted_turn:
+        return session_id, None
+    turn, created = store.create_turn(
+        session_id,
+        client_turn_id="accepted-native-resume",
+        message="continue the accepted request",
+    )
+    assert created and turn["status"] == "queued"
+    return session_id, str(turn["turn_id"])
+
+
 def test_recreated_goal_cannot_reuse_or_claim_from_attached_session(
     tmp_path: Path,
 ) -> None:
@@ -350,6 +453,341 @@ def test_stale_attached_enqueue_is_rejected_without_mutation(
 
     assert store.load_session(session_a) == before
     assert store.turn_for_client(session_a, "late") is None
+
+
+def test_stale_managed_resume_rejects_accepted_turn_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_path, _runtime_root, store, instance_a = _register(tmp_path)
+    session = store.create_session(
+        goal_id=GOAL_ID,
+        goal_instance_id=instance_a,
+        agent_id=AGENT_ID,
+        adapter_kind="managed-test",
+        upstream_thread_id="managed-thread",
+    )
+    session_id = str(session["session_id"])
+    turn, created = store.create_turn(
+        session_id,
+        client_turn_id="accepted-before-recreation",
+        message="must remain in the retired Goal lifetime",
+    )
+    assert created and turn["status"] == "queued"
+    _recreate(registry_path, instance_a)
+
+    runtime = ChatRuntimeController(
+        store=store,
+        codex_bin="missing-codex",
+        registry_path=registry_path,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_start_adapter",
+        lambda **_kwargs: pytest.fail("stale Turn must not reach its adapter"),
+    )
+    before = _chat_business_state(store)
+
+    with pytest.raises(ValueError, match="stale_goal_instance"):
+        runtime.resume_session(
+            session_id=session_id,
+            work_dir=tmp_path,
+            objective="Ship the release.",
+        )
+
+    assert _chat_business_state(store) == before
+    assert runtime.adapters == {}
+
+
+def test_legacy_managed_resume_does_not_create_goal_lifetime_lock(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / "legacy-project" / "registry.json"
+    registry_path.parent.mkdir()
+    registry_path.write_text(
+        json.dumps({"goals": [{"id": GOAL_ID}]}),
+        encoding="utf-8",
+    )
+    store = ChatSessionStore(tmp_path / "legacy-runtime")
+    session = store.create_session(
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        adapter_kind="managed-test",
+        upstream_thread_id="managed-thread",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(
+        store=store,
+        codex_bin="missing-codex",
+        registry_path=registry_path,
+    )
+    runtime.adapters[session_id] = SimpleNamespace(
+        upstream_thread_id="managed-thread",
+        healthcheck=lambda: True,
+        close_session=lambda: None,
+    )
+    lifetime_directory = guard_path(registry_path, GOAL_ID).parent
+
+    restored = runtime.resume_session(
+        session_id=session_id,
+        work_dir=tmp_path,
+        objective="Ship the release.",
+    )
+
+    assert restored["status"] == "ready"
+    assert not lifetime_directory.exists()
+
+
+def test_exact_managed_resume_fails_when_registry_disappears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_path, _runtime_root, store, instance_a = _register(tmp_path)
+    session = store.create_session(
+        goal_id=GOAL_ID,
+        goal_instance_id=instance_a,
+        agent_id=AGENT_ID,
+        adapter_kind="managed-test",
+        upstream_thread_id="managed-thread",
+    )
+    registry_path.unlink()
+    runtime = ChatRuntimeController(
+        store=store,
+        codex_bin="missing-codex",
+        registry_path=registry_path,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_start_adapter",
+        lambda **_kwargs: pytest.fail("provider start must remain fenced"),
+    )
+
+    with pytest.raises(FileNotFoundError):
+        runtime.resume_session(
+            session_id=str(session["session_id"]),
+            work_dir=tmp_path,
+            objective="Ship the release.",
+        )
+
+
+def test_managed_resume_rechecks_goal_lifetime_after_adapter_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_path, _runtime_root, store, instance_a = _register(tmp_path)
+    session = store.create_session(
+        goal_id=GOAL_ID,
+        goal_instance_id=instance_a,
+        agent_id=AGENT_ID,
+        adapter_kind="managed-test",
+        upstream_thread_id="managed-thread",
+    )
+    session_id = str(session["session_id"])
+    runtime = ChatRuntimeController(
+        store=store,
+        codex_bin="missing-codex",
+        registry_path=registry_path,
+    )
+    adapter_starting = threading.Event()
+    release_adapter = threading.Event()
+    recreation_finished = threading.Event()
+    resumed: list[dict[str, object]] = []
+    recreated: list[str] = []
+    errors: list[BaseException] = []
+    adapter_closed = threading.Event()
+
+    def start_adapter(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        adapter_starting.set()
+        if not release_adapter.wait(timeout=2):
+            raise TimeoutError("managed adapter start was not released")
+        return SimpleNamespace(
+            upstream_thread_id="managed-thread",
+            close_session=adapter_closed.set,
+        )
+
+    monkeypatch.setattr(runtime, "_start_adapter", start_adapter)
+
+    def resume() -> None:
+        try:
+            resumed.append(
+                runtime.resume_session(
+                    session_id=session_id,
+                    work_dir=tmp_path,
+                    objective="Ship the release.",
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    def recreate() -> None:
+        try:
+            recreated.append(_recreate(registry_path, instance_a))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            recreation_finished.set()
+
+    resume_thread = threading.Thread(target=resume)
+    recreate_thread = threading.Thread(target=recreate)
+    resume_thread.start()
+    assert adapter_starting.wait(timeout=2)
+    recreate_thread.start()
+    try:
+        assert recreation_finished.wait(timeout=2)
+        before_release = _chat_business_state(store)
+    finally:
+        release_adapter.set()
+    resume_thread.join(timeout=2)
+    recreate_thread.join(timeout=2)
+
+    assert not resume_thread.is_alive()
+    assert not recreate_thread.is_alive()
+    assert resumed == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], ValueError)
+    assert "stale_goal_instance" in str(errors[0])
+    assert recreated[0] != instance_a
+    assert _chat_business_state(store) == before_release
+    assert adapter_closed.is_set()
+    assert runtime.adapters == {}
+
+
+@pytest.mark.parametrize("accepted_turn", [False, True], ids=["idle", "accepted"])
+@pytest.mark.parametrize(
+    "race_point",
+    ["adapter_start", "native_read"],
+)
+def test_native_managed_resume_rechecks_before_local_recovery_writeback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    accepted_turn: bool,
+    race_point: str,
+) -> None:
+    registry_path, _runtime_root, store, instance_a = _register(tmp_path)
+    session_id, _turn_id = _native_managed_session(
+        store,
+        goal_instance_id=instance_a,
+        accepted_turn=accepted_turn,
+    )
+    runtime = ChatRuntimeController(
+        store=store,
+        codex_bin="missing-codex",
+        registry_path=registry_path,
+    )
+    external_wait = threading.Event()
+    release_external = threading.Event()
+    native_session = _NativeRecoverySession(
+        block_second_read=race_point == "native_read",
+        read_entered=external_wait,
+        release_read=release_external,
+    )
+    adapter = CodexAppServerAdapter(native_session)  # type: ignore[arg-type]
+
+    def start_adapter(*_args: object, **_kwargs: object) -> CodexAppServerAdapter:
+        if race_point == "adapter_start":
+            external_wait.set()
+            if not release_external.wait(timeout=2):
+                raise TimeoutError("managed adapter start was not released")
+        return adapter
+
+    monkeypatch.setattr(runtime, "_start_adapter", start_adapter)
+    resumed: list[dict[str, object]] = []
+    resume_errors: list[BaseException] = []
+    recreated: list[str] = []
+    recreation_errors: list[BaseException] = []
+    recreation_finished = threading.Event()
+
+    def resume() -> None:
+        try:
+            resumed.append(
+                runtime.resume_session(
+                    session_id=session_id,
+                    work_dir=tmp_path,
+                    objective="Ship the release.",
+                )
+            )
+        except BaseException as exc:
+            resume_errors.append(exc)
+
+    def recreate() -> None:
+        try:
+            recreated.append(_recreate(registry_path, instance_a))
+        except BaseException as exc:
+            recreation_errors.append(exc)
+        finally:
+            recreation_finished.set()
+
+    resume_thread = threading.Thread(target=resume)
+    recreate_thread = threading.Thread(target=recreate)
+    resume_thread.start()
+    assert external_wait.wait(timeout=2)
+    recreate_thread.start()
+    try:
+        assert recreation_finished.wait(timeout=2)
+        before_release = _chat_business_state(store)
+    finally:
+        release_external.set()
+    resume_thread.join(timeout=2)
+    recreate_thread.join(timeout=2)
+
+    assert not resume_thread.is_alive()
+    assert not recreate_thread.is_alive()
+    assert resumed == []
+    assert recreation_errors == []
+    assert recreated[0] != instance_a
+    assert len(resume_errors) == 1
+    assert isinstance(resume_errors[0], ValueError)
+    assert "stale_goal_instance" in str(resume_errors[0])
+    assert _chat_business_state(store) == before_release
+    ingress = store.loopx_ingress(session_id)
+    assert ingress[0]["status"] == "delivering"
+    assert native_session.read_count == (
+        0 if race_point == "adapter_start" else 2
+    )
+    assert native_session.closed.is_set()
+    assert runtime.adapters == {}
+
+
+def test_native_managed_resume_commits_recovery_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_path, _runtime_root, store, instance_a = _register(tmp_path)
+    session_id, _turn_id = _native_managed_session(
+        store,
+        goal_instance_id=instance_a,
+        accepted_turn=False,
+    )
+    runtime = ChatRuntimeController(
+        store=store,
+        codex_bin="missing-codex",
+        registry_path=registry_path,
+    )
+    native_session = _NativeRecoverySession(
+        block_second_read=False,
+        read_entered=threading.Event(),
+        release_read=threading.Event(),
+    )
+    adapter = CodexAppServerAdapter(native_session)  # type: ignore[arg-type]
+    monkeypatch.setattr(runtime, "_start_adapter", lambda **_kwargs: adapter)
+
+    restored = runtime.resume_session(
+        session_id=session_id,
+        work_dir=tmp_path,
+        objective="Ship the release.",
+    )
+
+    assert restored["status"] == "ready"
+    assert restored["native_goal"] == {
+        "status": "paused",
+        "tokenBudget": 1000,
+        "tokensUsed": 500,
+        "timeUsedSeconds": 10,
+    }
+    assert store.loopx_ingress(session_id)[0]["status"] == "uncertain"
+    assert runtime.adapters[session_id] is adapter
+    assert not native_session.closed.is_set()
+    runtime.close()
 
 
 @pytest.mark.parametrize(

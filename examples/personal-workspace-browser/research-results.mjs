@@ -120,7 +120,11 @@ export const researchResultsScenario = {
       await page.getByRole("button", {name: "Files", exact: true}).click();
       const english = page.getByRole("region", {name: "Research results", exact: true});
       await english.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
-      assert.match(await english.textContent(), /counterevidence and open questions/);
+      mode = "disabled";
+      await english.getByRole("button", {name: "Refresh", exact: true}).click();
+      await english.getByText("No readable public research results for this Goal yet.", {exact: true}).waitFor();
+      assert.equal(await english.getByText("123456789.1234567891 SYN", {exact: true}).count(), 0);
+      assert.equal(api.turnRequests.length, 0, "Localized research refresh must not invoke a model");
       return {note: `Packaged results consume Goal-scoped public research, preserve uncertainty, and clear stale/disabled/wrong-Goal contents; ${nativeUrl ? "real isolated Core publication/HTTP, scripted Goal directory and corruption cases" : "scripted API fixture"}`,
         projectionSha256: projection.payload_sha256, coverageEntries: await context.close()};
     } finally {if (!page.isClosed()) await context.close();}

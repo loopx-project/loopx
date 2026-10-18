@@ -1018,9 +1018,14 @@ export function App() {
                 );
               })}
             </div>
-            <a className="resource-inline-link" href={`${basePath}developers/projections/`}>
-              {copy.explore.developer} <ArrowRight size={15} />
-            </a>
+            <nav className="resource-inline-links" aria-label={language === "zh" ? "继续探索" : "Explore further"}>
+              <a className="resource-inline-link" href={`${basePath}developers/projections/`}>
+                {copy.explore.developer} <ArrowRight size={15} />
+              </a>
+              <a className="resource-inline-link" href={`${basePath}lab/delegation/${language === "zh" ? "?lang=zh" : ""}`}>
+                {language === "zh" ? "交互练习：要求改了，结果呢？" : "Interactive case: the request changed. Did the result?"} <ArrowRight size={15} />
+              </a>
+            </nav>
           </section>
         </Reveal>
 
