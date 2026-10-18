@@ -1581,6 +1581,65 @@ class ChatRuntimeController:
                     session_id, turn_id, "server_restarted", SERVER_RESTARTED_MESSAGE,
                     status="failed", expected_statuses={"starting", "running", "interrupting"},
                 )
+            else:
+                # An earlier recovery may have persisted the exact failed result
+                # and then lost its event, message or claim write. The typed
+                # owner rejects `failed`, so only this narrow completion may
+                # finish that result; it never reopens or replays the Turn.
+                self._complete_recovered_terminalization(
+                    session_id, turn_id, session, turn,
+                )
+
+    def _complete_recovered_terminalization(
+        self,
+        session_id: str,
+        turn_id: str,
+        session: dict[str, Any] | None,
+        turn: dict[str, Any] | None,
+    ) -> None:
+        """Idempotently finish a recovery that already persisted `failed`.
+
+        `_fail_turn` writes the state first and then the terminal event, error
+        message and claim release. A transient store error in those follow-up
+        writes leaves the exact recovery result partially applied, and the
+        typed owner no longer admits the Turn. Repair only that exact result.
+        """
+        if (
+            session is None
+            or turn is None
+            or session.get("session_mode") != CHAT_SESSION_MODE_MANAGED
+            or turn.get("status") != "failed"
+            or turn.get("error_code") != "server_restarted"
+        ):
+            return
+        message = SERVER_RESTARTED_MESSAGE
+        if not any(
+            event.get("kind") == "turn.failed"
+            and (event.get("payload") or {}).get("error_code") == "server_restarted"
+            for event in self.store.events_after(session_id, turn_id, None)
+        ):
+            self.store.append_event(
+                session_id,
+                turn_id,
+                kind="turn.failed",
+                payload={"error_code": "server_restarted", "message": message},
+            )
+        if not any(
+            item.get("turn_id") == turn_id
+            and item.get("role") == "error"
+            and item.get("text") == message
+            for item in self.store.messages(session_id)
+        ):
+            self.store.append_message(
+                session_id, role="error", text=message, turn_id=turn_id,
+            )
+        if session.get("active_turn_id") == turn_id:
+            self.store.release_active_turn(
+                session_id,
+                turn_id,
+                last_activity_at=str(turn.get("completed_at") or utc_now()),
+                last_error_code="server_restarted",
+            )
 
     def _run_turn(
         self,

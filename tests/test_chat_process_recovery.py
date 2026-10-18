@@ -233,6 +233,7 @@ def test_http_reconnect_or_followup_releases_dead_execution(ordinary, read_event
     # the native supervisor replaced the exited Chat service.
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root, server.registry_path = store.root.parent, None
     server.verbose = False
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
@@ -336,6 +337,92 @@ def test_failed_recovery_preserves_execution_proof_for_http_retry(ordinary, monk
         events = store.events_after(sid, tid, None)
         assert sum(row["kind"] == "turn.failed" for row in events) == 1
         assert any(row["payload"].get("delta") == "Saved partial answer." for row in events)
+        calls = [json.loads(row) for row in capture.read_text().splitlines()]
+        assert sum(row.get("method") == "turn/start" for row in calls) == 1
+    finally:
+        if child.is_alive():
+            child.kill()
+        child.join(5)
+        server.shutdown()
+        server.server_close()
+        serving.join(2)
+        runtime.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "method"),
+    [
+        ("event_write", "append_event"),
+        ("message_write", "append_message"),
+        ("claim_release", "release_active_turn"),
+    ],
+)
+def test_partial_terminalization_finishes_on_the_next_read(ordinary, monkeypatch, failure_stage, method):  # noqa: F811
+    store, runtime, contexts, request, capture, fake, workspace = ordinary
+    code, opened = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": contexts.available()[0]["project_ref"],
+    })
+    assert code == 201
+    sid = opened["session_id"]
+    turn, _ = store.create_turn(sid, client_turn_id="original", message="Keep this request.")
+    tid = turn["turn_id"]
+    child = start_worker(store.root.parent, sid, tid, workspace=workspace, codex_bin=fake)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root, server.registry_path = store.root.parent, None
+    server.verbose = False
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    try:
+        child.kill()
+        child.join(5)
+        original = getattr(store, method)
+        attempts = {"count": 0}
+
+        def temporary_failure(*args, **kwargs):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise OSError("Temporary terminal write failure")
+            return original(*args, **kwargs)
+
+        with monkeypatch.context() as fault:
+            fault.setattr(store, method, temporary_failure)
+            with pytest.raises(OSError):
+                runtime.recover_exited_turn(sid, tid)
+        # The state was persisted as failed before the follow-up write failed.
+        assert store.load_turn(sid, tid)["status"] == "failed"
+        assert store.load_turn(sid, tid)["error_code"] == "server_restarted"
+        host, port = server.server_address
+        with urllib.request.urlopen(
+            f"http://{host}:{port}/api/chat/sessions/{sid}", timeout=5,
+        ) as response:
+            snapshot = json.load(response)
+        assert snapshot["session"]["active_turn_id"] is None
+        events = store.events_after(sid, tid, None)
+        assert sum(row["kind"] == "turn.failed" for row in events) == 1, failure_stage
+        assert any(row["payload"].get("delta") == "Saved partial answer." for row in events)
+        assert sum(
+            row.get("role") == "error" and row.get("turn_id") == tid
+            for row in store.messages(sid)
+        ) == 1, failure_stage
+        # Repeated reads and recovery must not append another terminal record.
+        with urllib.request.urlopen(
+            f"http://{host}:{port}/api/chat/sessions/{sid}/turns/{tid}/events", timeout=5,
+        ) as response:
+            assert "server_restarted" in response.read().decode()
+        runtime.recover_exited_turn(sid, tid)
+        assert sum(row["kind"] == "turn.failed" for row in store.events_after(sid, tid, None)) == 1
+        assert sum(
+            row.get("role") == "error" and row.get("turn_id") == tid
+            for row in store.messages(sid)
+        ) == 1
+        code, followup = request(f"/api/chat/sessions/{sid}/turns", {
+            "client_turn_id": "followup", "message": "Continue here.",
+        })
+        assert code == 202, followup
+        assert runtime.wait_for_turn(
+            session_id=sid, turn_id=followup["turn_id"], timeout_sec=10,
+        )["status"] == "completed"
         calls = [json.loads(row) for row in capture.read_text().splitlines()]
         assert sum(row.get("method") == "turn/start" for row in calls) == 1
     finally:

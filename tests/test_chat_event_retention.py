@@ -105,11 +105,17 @@ def test_event_flush_retry_after_durable_fsync_keeps_distinct_identical_events(
 
     from http.client import HTTPConnection
     from threading import Thread
+    from types import SimpleNamespace
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.verbose = False
     server.chat_store = store
+    # This retention test builds a bare server; the events entry point asks the
+    # runtime owner to reconcile a dead worker, which is covered separately.
+    server.runtime_controller = SimpleNamespace(
+        recover_exited_turn=lambda *args: None, close=lambda: None,
+    )
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     connection = HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
