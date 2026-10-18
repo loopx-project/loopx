@@ -101,7 +101,11 @@ admission freezes the first-confirmation start window; journals and dispatch
 locks retain the original Turn budget and once-only execution. Old reviews gain
 no background caller; stopped, expired or unsettled work retains its hold.
 Real File/SQLite and native-process checks use deterministic local responses.
-This bounded service profile leaves necessary configuration/credential rebinding,
+Original Goal budget settings now travel with their original accounting: a
+configured pause or exhausted allowance stays effective, and fresh native
+selection refusal precedes lease acquisition or Host dispatch. Unknown policy
+fields and unreviewed drift remain held; no new quota interpreter or credential
+adoption is introduced. This bounded profile leaves remaining configuration/credential rebinding,
 full source Host/effect drain, portable delivery, live-model behavior and the full
 120-second journey open. The candidate is not merged or release-qualified. Keep C1/T4
 and D2/D3 open rather than derive another writer-deletion or result-store task.

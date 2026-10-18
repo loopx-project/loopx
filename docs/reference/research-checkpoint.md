@@ -329,6 +329,19 @@ and unsettled-effect refusal. The packaged App displays this authorization befor
 its one confirmation and reads the accepted original Task afterward. This is a
 bounded local-service profile, not unattended execution beyond its reviewed window.
 
+The reviewed local profile also preserves the original Goal's declared quota
+configuration, including its retained legacy compute alias, alongside the
+original accounting receipts. Moving work does not restore a default allowance,
+reset a pause or count cached `spent_slots` as accounting. The existing quota
+owner still interprets the policy and retained ledger. A fresh confirmation
+checks current native Task admission before acquiring a work lease; paused or
+exhausted work retains the exact selection refusal without launching the Host,
+creating a failed Turn or spending again. The transfer can be recorded while
+execution remains refused. Unknown budget fields hold before source preparation;
+later unreviewed budget drift cannot reuse the old continuation grant. This is
+one necessary configuration boundary, not adoption of optional capability or
+machine credentials.
+
 ![Explicit local Host continuation in the normal packaged App](assets/agent-transfer-host-service-confirmation.png)
 
 ![Accepted original result after the reviewed move](assets/agent-transfer-host-service-result.png)
@@ -342,7 +355,7 @@ bounded local-service profile, not unattended execution beyond its reviewed wind
 The original confirmation replays without executing tools again. Normal
 noneditable-package qualification uses deterministic local model responses and
 synthetic inputs. The explicit local-service continuation above is separate from
-live-model behavior, necessary configuration/credential rebinding, full source
+live-model behavior, remaining configuration/credential rebinding, full source
 Host/effect drain, portable delivery and the complete installed migration/120-second
 qualification. Those remain open.
 
@@ -479,6 +492,12 @@ activation、任务归属、quota 与租约；两个服务共享原 dispatch loc
 未结算 effect 拒绝等反例。正常打包界面显示授权并由一次确认完成原任务；这只是有界本地
 服务 profile，真实模型、必要配置／凭证重绑、完整源 Host/effect drain、可携交付及完整
 120 秒旅程仍待验收。
+本地审阅 profile 同时保留原 Goal 声明的 quota 配置及历史 compute 别名，并沿原扣费／
+撤销回执读取实际用量；迁移不重置默认额度或暂停，也不把配置缓存中的 `spent_slots`
+当作账本。首次续办在领取工作租约前检查当前原生 Task 准入；暂停／额度耗尽保留准确的
+选择拒绝，不启动 Host、不创建失败 Turn、不重扣。迁移已记录与执行仍被拒绝分别读回。
+未知预算字段在源端准备前拒绝，后续未审阅的预算漂移不能复用旧续办授权。这只补齐一项
+必要配置边界，仍不采用任意可选能力或机器凭证。
 仅通过 argv 传参的迁移桥接会关闭 CLI 子进程的 stdin，避免独立验收消费宿主的
 终端／长期输入管道并等待 EOF。Host 协议和结果仍走独立输入通道，其它 caller 的
 验收输入兼容性、原校验命令和原超时不变。界面显示本次推进的实际等待／重规划等
