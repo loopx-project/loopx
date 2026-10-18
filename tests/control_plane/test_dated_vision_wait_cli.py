@@ -209,3 +209,124 @@ def test_bound_monitor_keeps_exact_turn_and_agent_fences(tmp_path, isolated_effe
     assert rc == 0, after
     assert after["effective_action"] != "unsettled_host_turn_recovery"
     assert after["interaction_contract"]["agent_channel"]["must_attempt"] is False
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_blocked_replan_closes_without_debit_and_retains_scheduled_work(
+    tmp_path, isolated_effect, monkeypatch, provider,
+):
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    registry, runtime, state = fixture(tmp_path)
+    with state.open("a", encoding="utf-8") as output:
+        output.write(
+            "\n- [ ] [P1-monitor] Observe the existing public source.\n"
+            f"  <!-- loopx:todo todo_id=todo_review_source status=open claimed_by={AGENT} "
+            "task_class=continuous_monitor action_kind=observe target_key=public-source "
+            "cadence=30m next_due_at=2099-01-01T00:00:00Z "
+            "consecutive_no_change=8 max_no_change_before_replan=5 result_hash=source-v1 -->\n"
+        )
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    rc, before = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
+    assert rc == 0, before
+    initialize_canonical_authority(
+        runtime, GOAL,
+        build_todo_runtime_shadow_projection(goal_id=GOAL, handoff_mode="soft_claim", todos=before["todos"]),
+        state_path=state, provider=provider,
+    )
+    turn = "blocked-source-review"
+    rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+                    "--agent-id", AGENT, "--turn-instance-id", turn)
+    assert rc == 0, guard
+    assert guard["effective_action"] == "autonomous_replan_required"
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    obligation = identity["replan_obligation_id"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    assert "todo_id" not in identity
+    vision = {
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "todo_delta": [f"retain:{TODO}"],
+        "vision_patch": {"acceptance_summary": "The scheduled delivery remains unqualified.",
+                         "advancement_policy": "as_needed",
+                         "replan_trigger_summary": "Retain the pending scheduled work and original acceptance."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The source streak needs review.",
+                       "observed_reality": "The canonical delivery still waits at its original deadline.",
+                       "retained": ["The original unfinished delivery and source observation."],
+                       "evidence_refs": ["evidence:canonical-scheduled-work"]},
+    }
+    control = guard["replan_action_packet"].get("stride_control")
+    if control:
+        vision["stride_decision"] = {
+            "schema_version": "stride_decision_v2", "strategy_version": "evidence_conditioned_v1",
+            "reference_context_id": control["reference_context_id"],
+            "reference_obligation_id": obligation, "basis": "uncertain_evidence", "action": "verify",
+            "axes": {axis: {"plan": "Verify the existing delivery when its source is ready.",
+                            "reason": "A pending dependency does not justify duplicate execution."}
+                     for axis in ("work_slice", "route_distance", "validation_scope")},
+            "next_probe": {"scope": "The original scheduled delivery.",
+                           "prediction": "Resume only after its original condition is ready.",
+                           "adoption_criterion": "Current source and original acceptance qualify execution.",
+                           "cost_bound": "No source poll or repeated work before the deadline.",
+                           "minimum_evidence": "Canonical resume readback and applicable source evidence."},
+        }
+    packet = tmp_path / "review.json"
+    packet.write_text(json.dumps(vision), encoding="utf-8")
+    refresh_args = (
+        "refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--replan-obligation-id", obligation, "--turn-instance-id", turn,
+        "--classification", "blocked_source_review", "--progress-scope", "agent_lane",
+        "--delivery-batch-scale", "single_surface", "--delivery-boundary", "semantic_closeout",
+        "--delivery-outcome", "outcome_gap", "--progress-result-class", "blocked",
+        "--progress-blocker-id", "source-not-ready", "--progress-evidence-id", "evidence:canonical-scheduled-work",
+        "--agent-vision-json", str(packet),
+    )
+    unchanged_state = state.read_bytes()
+    for flag, value in (("--turn-instance-id", "unadmitted-turn"), ("--agent-id", "foreign-agent")):
+        wrong = list(refresh_args)
+        wrong[wrong.index(flag) + 1] = value
+        rc, refused = cli(registry, runtime, *wrong)
+        assert rc == 1, refused
+        assert refused["ok"] is False and not refused.get("appended"), refused
+        assert state.read_bytes() == unchanged_state
+    rc, refreshed = cli(registry, runtime, *refresh_args)
+    assert rc == 0, refreshed
+    assert refreshed["settlement_identity"] == identity
+    assert refreshed["settlement_progress"]["state"] == "settled", refreshed["settlement_progress"]
+    assert refreshed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+    rc, replay = cli(registry, runtime, *refresh_args)
+    assert rc == 0 and replay["appended"] is False, replay
+    assert replay["settlement_progress"]["state"] == "settled"
+    rc, spent = cli(registry, runtime, "quota", "spend-slot", "--execute", "--goal-id", GOAL,
+                    "--agent-id", AGENT, "--replan-obligation-id", obligation, "--turn-instance-id", turn)
+    assert rc == 0 and spent["appended"] is False, spent
+    rc, settled = cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+                      "--agent-id", AGENT, "--turn-instance-id", turn)
+    assert rc == 0 and settled["effective_action"] == "heartbeat_settled_skip", settled
+    rc, later = cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+                    "--agent-id", AGENT, "--turn-instance-id", "after-blocked-review")
+    assert rc == 0, later
+    assert later["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    rc, after = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
+    assert rc == 0, after
+    for original in before["todos"]:
+        current = next(row for row in after["todos"] if row["todo_id"] == original["todo_id"])
+        for field in ("status", "text", "claimed_by", "resume_when", "consecutive_no_change",
+                      "result_hash", "material_change_generation", "next_due_at"):
+            assert current.get(field) == original.get(field)
+    runs = [json.loads(line) for line in (runtime / f"goals/{GOAL}/runs/index.jsonl").read_text().splitlines()]
+    assert not any(run.get("quota_event") for run in runs)
+    # A quiet guard may record host liveness under a historical monitor-run
+    # classification. Only a committed poll is an observation of the source.
+    events = [json.loads(line) for line in (runtime / f"goals/{GOAL}/rollout-event-log.jsonl").read_text().splitlines()]
+    assert not any(event.get("event_kind") in ("quota_monitor_poll", "quota_spend") for event in events)
+    rc, added = cli(registry, runtime, "todo", "add", "--goal-id", GOAL, "--role", "agent",
+                    "--claimed-by", AGENT, "--text", "Validate independent public evidence.",
+                    "--task-class", "advancement_task", "--action-kind", "validate", "--execute")
+    assert rc == 0 and added["added"] is True, added
+    rc, independent = cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+                          "--agent-id", AGENT, "--turn-instance-id", "independent-after-review")
+    assert rc == 0, independent
+    assert independent["selected_todo"]["todo_id"] == added["todo_id"]
+    assert independent["interaction_contract"]["agent_channel"]["must_attempt"] is True

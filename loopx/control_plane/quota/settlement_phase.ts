@@ -1,6 +1,7 @@
 import type { SettlementIdentity } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
 import { isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
+import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
 
 /** Historical entry point for blocked no-spend qualification: an advancement
  * retry/causal wait or a canonical Monitor unavailable attempt. The latter
@@ -18,6 +19,38 @@ export function isBoundedBlockedRetry(value: unknown, todoId: string | null): bo
   const due = Date.parse(retry.due_at);
   const delay = (due - observed) / 1000;
   return Number.isFinite(delay) && delay >= 60 && delay <= 30 * 60;
+}
+
+/** The replan owner has already qualified the blocker/path and its evidence.
+ * Verify that exact observation and semantic checkpoint, rather than inventing
+ * a Todo binding or retry clock for this administrative no-debit closeout.
+ * The caller must verify the guard and durable writeback receipts first. */
+export function isAcceptedBlockedReplanWriteback(
+  value: unknown, identity: SettlementIdentity, selectedObligation: unknown,
+): boolean {
+  const run = jsonObject(value), ack = jsonObject(run?.autonomous_replan_ack);
+  const delta = jsonObject(ack?.semantic_delta), progress = jsonObject(run?.progress_observation);
+  const checkpoint = jsonObject(run?.vision_checkpoint);
+  const outcomes = delta?.outcomes, satisfying = delta?.satisfying_outcomes;
+  return identity.binding_kind === "autonomous_replan" && identity.replan_obligation_id !== null
+    && selectedObligation === identity.replan_obligation_id
+    && !!run && run.goal_id === identity.goal_id && run.agent_id === identity.agent_id
+    && run.turn_instance_id === identity.turn_instance_id && run.replan_obligation_id === identity.replan_obligation_id
+    && run.delivery_outcome === "outcome_gap"
+    && isTurnScopedSettlementOutcome(run.delivery_outcome, progress, identity.replan_obligation_id)
+    && ack?.schema_version === "autonomous_replan_ack_v0" && ack.recorded === true
+    && delta?.schema_version === "replan_semantic_delta_v0" && delta.accepted === true
+    && delta.obligation_id === identity.replan_obligation_id
+    && typeof progress?.fingerprint === "string" && progress.fingerprint.length > 0
+    && delta.observation_fingerprint === progress.fingerprint
+    && Array.isArray(outcomes) && Array.isArray(satisfying) && satisfying.some(outcome =>
+      outcomes.includes(outcome) && (outcome === "new_concrete_blocker" || outcome === "fresh_vision_path_outcome"))
+    && checkpoint?.schema_version === "vision_checkpoint_v0" && checkpoint.agent_id === identity.agent_id
+    && checkpoint.satisfied === true && checkpoint.delivery_boundary === "semantic_closeout"
+    && Array.isArray(checkpoint.triggers) && checkpoint.triggers.some(value => {
+      const trigger = jsonObject(value);
+      return trigger?.kind === "material_delivery_outcome" && trigger.delivery_outcome === "outcome_gap";
+    });
 }
 
 /** A service-qualified capability duty can retire its exact admitted Turn.
