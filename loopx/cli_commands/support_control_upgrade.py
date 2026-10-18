@@ -18,8 +18,8 @@ from typing import Any
 import uuid
 from collections.abc import Callable
 
-from .desktop_installation import desktop_installation_status
-from .self_update import UpdateAction, build_update_plan, collect_doctor
+from ..desktop_installation import desktop_installation_status
+from ..self_update import UpdateAction, build_update_plan, collect_doctor
 
 APP_IDENTIFIER = "io.loopx.control-plane"
 
@@ -318,7 +318,7 @@ def finish_upgrade(
 
 
 def render_upgrade_markdown(payload: dict[str, Any]) -> str:
-    from .self_update import render_update_plan_markdown
+    from ..self_update import render_update_plan_markdown
 
     desktop = payload.get("desktop_upgrade", {})
     if not payload.get("execute_requested"):

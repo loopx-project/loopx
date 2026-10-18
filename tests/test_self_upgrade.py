@@ -20,8 +20,8 @@ from loopx.self_update import (
     _installed_readback,
     render_update_plan_markdown,
 )
-from loopx.self_update_progress import UpdateProgress
-from loopx.self_upgrade import (
+from loopx.cli_commands.support_control_update_progress import UpdateProgress
+from loopx.cli_commands.support_control_upgrade import (
     build_upgrade_plan,
     desktop_upgrade_plan,
     finish_upgrade,
@@ -33,7 +33,7 @@ from loopx.self_upgrade import (
 
 def test_app_restart_keeps_an_explicit_terminal_runtime_pin(monkeypatch):
     monkeypatch.setenv("LOOPX_BIN", "/synthetic/pinned/loopx")
-    with mock.patch("loopx.self_upgrade.subprocess.run") as run:
+    with mock.patch("loopx.cli_commands.support_control_upgrade.subprocess.run") as run:
         _restart_app(Path("/synthetic/LoopX.app"), "a" * 32, "main", 60)
     quit_command = run.call_args_list[0].args[0]
     launch_command = run.call_args_list[1].args[0]
@@ -86,7 +86,7 @@ def snapshot_doctor(ref: str = "main") -> dict:
 def test_upgrade_preserves_archive_channel_and_never_installs_an_absent_app(
     monkeypatch,
 ):
-    monkeypatch.setattr("loopx.self_upgrade._applications", lambda: ())
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._applications", lambda: ())
     monkeypatch.delenv("LOOPX_REF", raising=False)
     monkeypatch.delenv("LOOPX_REPO", raising=False)
     for ref in ("main", "stable", "a" * 40):
@@ -99,7 +99,7 @@ def test_upgrade_preserves_archive_channel_and_never_installs_an_absent_app(
 
 
 def test_package_manager_ref_override_is_rejected_before_mutation(monkeypatch):
-    monkeypatch.setattr("loopx.self_upgrade._applications", lambda: ())
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._applications", lambda: ())
     doctor = {
         "package": {
             "install_kind": "python_distribution",
@@ -115,7 +115,7 @@ def test_package_manager_ref_override_is_rejected_before_mutation(monkeypatch):
 def test_multiple_apps_block_the_whole_plan_before_cli_mutation(monkeypatch, tmp_path):
     first = app_fixture(tmp_path / "system")
     second = app_fixture(tmp_path / "user")
-    monkeypatch.setattr("loopx.self_upgrade._applications", lambda: (first, second))
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._applications", lambda: (first, second))
     result = build_upgrade_plan(doctor_payload=snapshot_doctor())
     assert result["desktop_upgrade"]["status"] == "ambiguous_installation"
     assert result["plan"]["apply_supported"] is False
@@ -137,7 +137,7 @@ def test_bare_upgrade_applies_while_bare_update_stays_read_only(
         seen.append(kwargs["action"])
         return {"ok": True, "plan": {"apply_supported": False}}
 
-    monkeypatch.setattr("loopx.self_upgrade.build_upgrade_plan", plan)
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade.build_upgrade_plan", plan)
     monkeypatch.setattr(
         "loopx.cli_commands.support_control_update.build_update_plan", plan
     )
@@ -157,8 +157,8 @@ def test_app_success_requires_a_matching_request_and_native_service_readback(
     app = app_fixture(tmp_path)
     directory = tmp_path / "receipts"
     directory.mkdir()
-    monkeypatch.setattr("loopx.self_upgrade._applications", lambda: (app,))
-    monkeypatch.setattr("loopx.self_upgrade._receipt_directory", lambda: directory)
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._applications", lambda: (app,))
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._receipt_directory", lambda: directory)
     plan = desktop_upgrade_plan(None)
 
     def restart(_app, request_id, channel, _timeout):
@@ -180,7 +180,7 @@ def test_app_success_requires_a_matching_request_and_native_service_readback(
             )
         )
 
-    monkeypatch.setattr("loopx.self_upgrade._restart_app", restart)
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._restart_app", restart)
     result = _upgrade_desktop(plan, 1)
     assert result["ok"] is True
     # A selected CLI may be newer than the bundled Core; equality is not required.
@@ -205,8 +205,8 @@ def test_unknown_or_stale_app_readback_never_certifies_success(
     app = app_fixture(tmp_path)
     directory = tmp_path / "receipts"
     directory.mkdir()
-    monkeypatch.setattr("loopx.self_upgrade._applications", lambda: (app,))
-    monkeypatch.setattr("loopx.self_upgrade._receipt_directory", lambda: directory)
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._applications", lambda: (app,))
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._receipt_directory", lambda: directory)
 
     def restart(_app, request_id, channel, _timeout):
         (directory / f"{request_id}.json").write_text(
@@ -225,7 +225,7 @@ def test_unknown_or_stale_app_readback_never_certifies_success(
             )
         )
 
-    monkeypatch.setattr("loopx.self_upgrade._restart_app", restart)
+    monkeypatch.setattr("loopx.cli_commands.support_control_upgrade._restart_app", restart)
     result = _upgrade_desktop(desktop_upgrade_plan(None), 0.01)
     assert result["ok"] is False
     assert result["status"] == "readback_timeout"
@@ -233,7 +233,7 @@ def test_unknown_or_stale_app_readback_never_certifies_success(
 
 def test_app_failure_preserves_cli_success_as_partial_result(monkeypatch):
     monkeypatch.setattr(
-        "loopx.self_upgrade._upgrade_desktop",
+        "loopx.cli_commands.support_control_upgrade._upgrade_desktop",
         lambda *_args: {
             "ok": False,
             "status": "failed",
@@ -303,7 +303,7 @@ def test_cli_only_discovery_failure_exit_render_and_recovery(monkeypatch, tmp_pa
     database.write_bytes(b"not a SQLite database")
     monkeypatch.setenv("CODEX_HOME", str(home))
     monkeypatch.setattr(
-        "loopx.self_upgrade.build_upgrade_plan",
+        "loopx.cli_commands.support_control_upgrade.build_upgrade_plan",
         lambda **_kwargs: {
             "ok": True,
             "execute_requested": True,
@@ -354,7 +354,7 @@ def test_cli_only_discovery_failure_exit_render_and_recovery(monkeypatch, tmp_pa
 
 
 def test_failed_cli_does_not_restart_the_app(monkeypatch):
-    with mock.patch("loopx.self_upgrade._upgrade_desktop") as restart:
+    with mock.patch("loopx.cli_commands.support_control_upgrade._upgrade_desktop") as restart:
         result = finish_upgrade(
             {"ok": False, "desktop_upgrade": {"status": "planned"}}, timeout_seconds=1
         )

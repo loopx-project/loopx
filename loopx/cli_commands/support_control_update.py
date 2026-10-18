@@ -129,7 +129,7 @@ def handle_update_command(
 
     update_action = UpdateAction.PLAN
     upgrade = args.command == "upgrade"
-    from ..self_update_progress import UpdateProgress
+    from .support_control_update_progress import UpdateProgress
 
     progress = UpdateProgress(output_format(args) != "json")
     try:
@@ -169,7 +169,7 @@ def handle_update_command(
                     )
                 doctor_payload = loaded_doctor
             if upgrade:
-                from ..self_upgrade import build_upgrade_plan
+                from .support_control_upgrade import build_upgrade_plan
 
                 payload = build_upgrade_plan(
                     repo=args.repo, ref=args.ref, archive_url=args.archive_url,
@@ -211,7 +211,7 @@ def handle_update_command(
                     ),
                 )
                 if upgrade:
-                    from ..self_upgrade import finish_upgrade
+                    from .support_control_upgrade import finish_upgrade
 
                     payload = finish_upgrade(payload, timeout_seconds=args.timeout_seconds, progress=progress.report)
     except Exception as exc:
@@ -231,7 +231,7 @@ def handle_update_command(
         progress.stop()
     renderer = render_update_plan_markdown
     if upgrade:
-        from ..self_upgrade import render_upgrade_markdown
+        from .support_control_upgrade import render_upgrade_markdown
 
         renderer = render_upgrade_markdown
     print_payload(payload, output_format(args), renderer)
