@@ -25,6 +25,14 @@ def contract() -> dict:
         "cli_channel": {"spend_allowed_now": False, "spend_after_validation": False}}
 
 
+@pytest.mark.parametrize("invalid", [True, False, 0, -1, 1.5, "1800", []])
+def test_scheduled_recheck_codec_rejects_nonpositive_or_coerced_seconds(invalid):
+    with pytest.raises(TypeError, match="scheduled recheck"):
+        SchedulerArbitration.from_projection({"mode": "agent_scope_wait", "errors": [],
+            "disposition": "agent_scope_wait", "reason_code": "interaction_agent_scope_wait",
+            "scheduled_recheck_after_seconds": invalid})
+
+
 def encoded_size(value: dict) -> int:
     return len(json.dumps(value, separators=(",", ":")).encode())
 

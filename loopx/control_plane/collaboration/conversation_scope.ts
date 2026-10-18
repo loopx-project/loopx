@@ -121,13 +121,14 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
           && channel === `project.${context.project_ref}`) {
         return {kind: "project_workspace", goal_ids: [], private_conversation: true};
       }
-      if (context.audience !== "local_owner" && (input.origin === undefined || input.origin === "lark" || input.origin === "external")
+      if (context.audience !== "local_owner" && (input.origin === undefined || input.origin === "lark" || input.origin === "external"
+          || input.origin === "web" && context.audience === "bound_owner")
           && channel === `project.external.${context.binding_id}.${context.source_ref}`) {
         return {kind: "project_workspace", goal_ids: [], private_conversation: false};
       }
     } catch { /* Incomplete host identity grants no context. */ }
   }
-  if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark" || input.origin === "external")) {
+  if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark" || input.origin === "external" || input.origin === "web")) {
     try {
       const selected = stewardConversationIdentity({context: input.steward_context});
       if (channel === selected.channel_id) {

@@ -926,7 +926,11 @@ export function PersonalWorkspacePage({
   statusSourceControl,
   serviceNotice,
   workspaceConversations,
+  rootGoalId,
+  onChangeGoalRoot,
 }: {
+  rootGoalId?: string;
+  onChangeGoalRoot?: (goalId: string | null) => void;
   workspaceConversations?: WorkspaceConversationDirectory;
   /** The bound Session's mode queues a message sent while its Turn runs. */
   conversationQueuesFollowUps?: boolean;
@@ -1151,6 +1155,7 @@ export function PersonalWorkspacePage({
     [workspaceGoals],
   );
   const selectedGoal = workspaceGoals.find((goal) => goal.goalId === selectedGoalId) ?? null;
+  const rootUnavailable = Boolean(rootGoalId && !selectedGoal);
   function openSettings(target: Extract<WorkspaceDrawerSelection, { kind: "settings" }>, returnToModel = false) {
     settingsReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settingsFromModelMenuRef.current = returnToModel;
@@ -2669,6 +2674,7 @@ export function PersonalWorkspacePage({
           <div>
           <ChannelHeader
             agents={agents}
+            scopeUnavailable={rootUnavailable}
             agentWorkActive={agentWorkActive}
             conversationScope={workspaceConversations && (workspaceConversations.projects?.length || workspaceConversations.readFailed || selectedWorkspaceRef) ? {
               onChange: (value) => {
@@ -2745,6 +2751,7 @@ export function PersonalWorkspacePage({
               followConversationRef.current = nearBottom;
               setShowLatestMessage(!nearBottom);
             }}>
+            {!rootUnavailable ? <>
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && callbacks.onSelectWorkAgent ? <section className="attached-agent-conversations"><button type="button" className="attached-conversation-entry" onClick={() => callbacks.onSelectWorkAgent?.("")}>{locale === "zh-CN" ? "Agent 工作记录" : "Agent work conversations"}</button></section> : null}
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
               key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
@@ -2783,7 +2790,7 @@ export function PersonalWorkspacePage({
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     board={taskBoard(!settingsOpen && selectedGoalTab === "overview")} results={goalResults(!settingsOpen && selectedGoalTab === "overview")}
-                    historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,
+                    historyRefreshRevision={historyRefreshRevision} readSourceUrl={statusSourceControl?.activeSource.kind === "runtime" && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error" ? statusSourceControl.activeSource.statusUrl : undefined} proposals={proposals} onPreview={createPreview} />,
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}
@@ -2822,8 +2829,9 @@ export function PersonalWorkspacePage({
                   : undefined}
                 onOpenGoalEvidence={(goalId) => { selectGoal(goalId, "chat"); }} />
             )}
+            </> : null}
           </div>
-          <div className="personal-composer-wrap" hidden={agentWorkActive}>
+          {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive}>
             {!readOnly && actionReadback.isError ? <div className="personal-history-notice" role="status" data-testid="personal-action-readback-error">
               <span>{t("proposal.readbackUnavailable")}</span><button type="button" disabled={actionReadback.isFetching}
                 onClick={() => void actionReadback.refetch()}>{t("proposal.readbackRetry")}</button>
@@ -2990,18 +2998,20 @@ export function PersonalWorkspacePage({
               : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
             </> : null}
             </>}
-          </div>
+          </div> : null}
         </div>
       )}
       sidebar={(
         <GoalSidebar
-          key={statusSourceControl?.activeSource.statusUrl ?? "/status.json"}
+          key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${rootGoalId ?? ""}`}
+          rootGoalId={rootGoalId}
+          onChangeGoalRoot={onChangeGoalRoot}
           attentionCount={managerNeedsYouCount}
           goals={workspaceGoals}
           goalArchiveLoadState={goalArchiveLoadState}
           goalLifecycleOperations={callbacks.onExecuteGoalLifecycle ? ["stop", "resume"] : undefined}
           lifecycleBusyGoalIds={lifecycleBusyGoalIds}
-          onRequestGoalCreate={readOnly ? undefined : requestGoalCreate}
+          onRequestGoalCreate={readOnly || rootGoalId ? undefined : requestGoalCreate}
           onRequestGoalLifecycle={readOnly && !callbacks.onExecuteGoalLifecycle
             ? undefined
             : (goal, operation) => void requestGoalLifecycle(goal, operation)}

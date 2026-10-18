@@ -599,7 +599,7 @@ assert.match(
 // state, not empty lanes, and health issues are owner-language sentences.
 assert.match(model, /kind: "no_goals"/, "The home carries a typed first-Goal classification");
 assert.match(dashboard, /const onboarding: WorkspaceHomeOnboarding \| undefined = isHealthy/, "Only a healthy source classifies as a first-Goal workspace");
-assert.match(dashboard, /if \(!sourceError\) return loadedModel;[\s\S]*?onboarding: undefined,[\s\S]*?retryable: true,/, "A failed current read withdraws the first-Goal state and shows a retryable failure");
+assert.match(dashboard, /if \(!sourceError\) return \w+;[\s\S]*?onboarding: undefined,[\s\S]*?retryable: true,/, "A failed current read withdraws the first-Goal state and shows a retryable failure");
 assert.match(dashboard, /onRefresh=\{async \(readScope = "all"\) => \{[\s\S]*?rejectOnError: true[\s\S]*?return \{ ok: false, error: formatStatusError\(error\) \}/, "A refresh reports its failure to the page instead of swallowing it");
 assert.match(page, /if \(result && result\.ok === false\) \{\n\s*setRefreshState\("error"\);/, "The header reports a failed refresh and never an update");
 assert.doesNotMatch(dashboard, /payload\.ok === false|契约检查未通过|系统健康关注点/, "Health issues are localized owner language, not protocol fragments");

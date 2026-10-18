@@ -19,7 +19,7 @@ def project_native_arbitration(
         "delivery_allowed": False, "selection_required": False,
         "has_replan": False, "settlement_only": False,
         "arbitration_facts": _scheduler_arbitration_facts(
-            payload.get("interaction_contract"), agent_scope_frontier_actions,
+            payload.get("interaction_contract"), agent_scope_frontier_actions, payload=payload,
         ),
     })
     return SchedulerArbitration.from_projection(result["arbitration"])

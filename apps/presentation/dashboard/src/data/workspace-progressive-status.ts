@@ -15,6 +15,7 @@ const directorySchema = z.object({
   registry_revision: z.string(),
   goals: z.array(z.object({
     id: z.string(),
+    parent_goal_id: z.string().nullable().optional().catch(null),
     display_name: z.string(),
     activation_state: z.enum(["active", "stopped"]),
     registry_member: z.literal(true),
@@ -52,6 +53,7 @@ export function reusableGoalSnapshots(
     const snapshot = previous.snapshots[goal.id];
     if (!earlier || !snapshot || invalidated.has(goal.id)) return [];
     if (earlier.display_name !== goal.display_name
+      || earlier.parent_goal_id !== goal.parent_goal_id
       || earlier.activation_state !== goal.activation_state) return [];
     return [[goal.id, snapshot]];
   }));

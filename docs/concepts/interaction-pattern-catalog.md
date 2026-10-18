@@ -1211,7 +1211,7 @@ main blocker or keeps following a stale local-only benchmark staging todo.
 **Trigger**
 
 - a typed machine-configuration namespace is about to change; the built-in
-  namespaces are `change_quality_qualification`, `goal_storage`,
+  namespaces are `change_quality_qualification`, `codex_chat`, `goal_storage`,
   `manager_runtime`, `periodic_report`, `pull_request_review`,
   `steward_executor`, and `todo_replan_cadence`. The public catalog returned by
   `loopx machine-config describe` is authoritative, so this inventory has to stay
@@ -1221,6 +1221,12 @@ main blocker or keeps following a stale local-only benchmark staging todo.
   It does not promote existing Goals or migrate their data, and existing Goals
   keep the selection they were created with; see
   `docs/reference/local-authority-provider-selection.md`;
+- `codex_chat` carries the native Codex profile alias, model, reasoning effort,
+  and service tier for new ordinary Goal conversations. Existing conversations
+  keep their identity and history. It does not configure the steward, an
+  attached Agent, or a LoopX Agent Loop, and it grants no permissions and
+  stores no credentials; see
+  `docs/integrations/session-runtime-control-plane-adapter.md#projection-boundary`;
 - `pull_request_review` carries `review_order` (`forward` by default, or
   `reverse`) and Goal-owned `agent_orders` for registered Agent overrides.
   Commands resolve explicit direction, Agent, Goal, then machine; reverse inverts

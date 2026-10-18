@@ -42,7 +42,10 @@ def _listener_private_admitter(transport, runtime, monkeypatch):
         return {"status": "stopped"}
     monkeypatch.setattr(goal_topic_runtime, "stream_lark_goal_topic_profile", stream)
     service = LarkGoalTopicRuntimeService(
-        snapshot_provider=lambda: {"private_profiles": transport.profiles()},
+        # Capture one listener callback. Remove its synthetic profile when the
+        # stream stops, so the real finally/refresh path cannot start replacement
+        # consumers that outlive this helper and race later tests.
+        snapshot_provider=lambda: {} if stop.is_set() else {"private_profiles": transport.profiles()},
         runtime_root=transport.runtime_root, runtime_controller=runtime,
         private_conversations=transport)
     service._poll_profile("notes-app", stop)

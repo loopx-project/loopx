@@ -26,8 +26,8 @@ const selectedFromUrl = (goal: string): Selection => {
 
 /** An effect-free history consumer. Its source is Explore, not raw sessions or
  * a judge. All recorded updates survive; unsupported analysis stays unavailable. */
-export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {goalId: string; active: boolean; zh: boolean; refreshRevision?: number}) {
-  const analysis = useResearchAnalysis(goalId, active, zh);
+export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, readSourceUrl}: {goalId: string; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string}) {
+  const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
   const [read, setRead] = useState<Read>({events: [], total: null, complete: false});
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -107,7 +107,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
         let cursor = "";
         do {
           const query = new URLSearchParams({goal_id: goalId, view: "history", ...(cursor ? {cursor} : {})});
-          const page = parseExploreHistoryPage(await requestJson<unknown>(`/api/chat/explore-results?${query}`, {signal: controller.signal}), goalId);
+          const page = parseExploreHistoryPage(await requestJson<unknown>(readSourceUrl ? new URL(`/api/chat/explore-results?${query}`, readSourceUrl).toString() : `/api/chat/explore-results?${query}`, {signal: controller.signal}), goalId);
           if (total !== -1 && total !== page.total) throw new Error("Explore history snapshot changed");
           total = page.total; events.push(...page.items);
           if (events.length > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
@@ -129,7 +129,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0}: {
       } finally {if (current) setBusy(false);}
     })();
     return () => {current = false; controller.abort();};
-  }, [goalId, active, revision, refreshRevision]);
+  }, [goalId, active, revision, refreshRevision, readSourceUrl]);
   const history = useMemo(() => {
     try {return {value: projectExploreHistory(read.events, goalId), error: ""};}
     catch (failure) {return {value: null, error: String(failure)};}

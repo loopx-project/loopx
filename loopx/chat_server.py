@@ -825,21 +825,30 @@ class ChatRequestHandler(
         except (ValueError, TypeError, OverflowError) as exc:
             self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
             return
+        bound = session.get("steward_context") or session.get("project_context") or {}
+        bound_input = bound.get("audience") in {"bound_owner", "bound_group"}
         try:
-            context = self._session_context(session)
-            runtime_objective = str(context["objective"] or context["title"])
+            # Bound local input resolves its context in the source admission
+            # owner, once, outside the grant fence. Do not repeat provider IO
+            # here or pass an unverified saved workspace as caller authority.
+            context = None if bound_input else self._session_context(session)
+            runtime_objective = str(context["objective"] or context["title"]) if context else ""
         except (ValueError, KeyError) as exc:
             # No Turn has been admitted when its owning context cannot resolve.
             self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
             return
         try:
-            if body.get("delivery") == "queue":
+            # Existing private bound Sessions share their canonical queue after
+            # fresh local-source admission. The body cannot assert an origin,
+            # provider principal or a broader local-owner conversation scope.
+            if body.get("delivery") == "queue" or bound_input:
                 turn, created = self.server.runtime_controller.enqueue_turn(
                     session_id=session_id, client_turn_id=client_turn_id,
                     message=message, attachments=attachments,
-                    work_dir=cast(Path, context["project"]), objective=runtime_objective, origin="web",
+                    work_dir=cast(Path, context["project"]) if context else None, objective=runtime_objective, origin="web",
                 )
             else:
+                assert context is not None
                 turn, created = self.server.runtime_controller.submit_turn(
                     session_id=session_id, client_turn_id=client_turn_id,
                     message=message, attachments=attachments,
@@ -909,6 +918,10 @@ class ChatRequestHandler(
         except KeyError:
             self._send_error("chat session was not found", status=404, session_invalidated=True)
             return
+        except ValueError as exc:
+            self._send_error(str(exc), **({"delivery_state": "not_delivered", "turn_replay_safe": True}
+                                          if bound_input else {}))
+            return
         except Exception as exc:  # noqa: BLE001 - compact local validation error.
             self._send_error(str(exc))
             return
@@ -933,7 +946,23 @@ class ChatRequestHandler(
             self._send_error("chat session was not found", status=404)
 
     def _list_sessions(self) -> None:
-        query = parse_qs(urlparse(self.path).query)
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        if "conversation_binding_id" in query:
+            if set(query) != {"conversation_binding_id"} or len(query["conversation_binding_id"]) != 1 or not query["conversation_binding_id"][0]:
+                return self._send_error("select one exact conversation binding without other Session filters", status=400)
+            bindings = self.server.runtime_controller.project_contexts.conversation_bindings
+            try:
+                if bindings is None:
+                    raise ValueError("conversation bindings unavailable")
+                sessions = bindings.local_sessions(query["conversation_binding_id"][0])
+            except (ValueError, OSError, KeyError):
+                # A failed provider/store read may contain private diagnostics.
+                # Refuse this selector; never fall back to an unfiltered list.
+                return self._send_error("Original private conversation is unavailable; verify its App, owner and workspace binding.", status=409)
+            # Older services ignore this new query. A matching selector in the
+            # response lets callers reject their ordinary, unfiltered result.
+            return self._send_json({"ok": True, "schema_version": "loopx_chat_session_list_v1",
+                                    "conversation_binding_id": query["conversation_binding_id"][0], "sessions": sessions})
         goal_id = _compact_text((query.get("goal_id") or [""])[0], limit=160) or None
         agent_id = _compact_text((query.get("agent_id") or [""])[0], limit=80) or None
         channel_id = _compact_text((query.get("channel_id") or [""])[0], limit=160) or None

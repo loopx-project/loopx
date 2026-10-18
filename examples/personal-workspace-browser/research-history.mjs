@@ -56,8 +56,9 @@ function analysisReadback(selected = "a") {
   return snapshot;
 }
 
-async function startHistoryOwner(fixture) {
-  const child = spawn(resolveTestPython(), ["-u", "examples/personal-workspace-browser/research-history-backend.py", ...(fixture ? ["--fixture", fixture] : [])],
+export async function startHistoryOwner(fixture) {
+  const fixtures = Array.isArray(fixture) ? fixture : fixture ? [fixture] : [];
+  const child = spawn(resolveTestPython(), ["-u", "examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path])],
     {cwd: repoRoot, env: {...process.env, LOOPX_USAGE_PING: "0"}, stdio: ["ignore", "pipe", "pipe"]});
   let diagnostic = "";
   child.stderr.on("data", chunk => {diagnostic = (diagnostic + chunk).slice(-4000);});

@@ -8,6 +8,7 @@ from .chat import redact_local_paths
 from .control_plane.goals.activation import goal_activation_state
 from .control_plane.status.collection import registry_activation_revision
 from .registry import registry_goals
+from .control_plane.presentation.goal_metadata import goal_parent_fields
 
 
 def workspace_goal_directory(
@@ -24,6 +25,7 @@ def workspace_goal_directory(
         goals.append(
             {
                 "id": goal_id,
+                **goal_parent_fields(goal),
                 "display_name": title[:200],
                 "activation_state": goal_activation_state(goal).value,
                 "registry_member": True,

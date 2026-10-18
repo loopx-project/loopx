@@ -4,6 +4,7 @@ from typing import Any, Callable, Optional
 
 from ...boundary_authority import checkpointed_boundary_authority_summary
 from ...orchestration import compact_orchestration_policy
+from ..presentation.goal_metadata import goal_parent_fields
 from .run_context_retention import (
     compact_goal_semantic_history,
     latest_runs_with_agent_context,
@@ -92,6 +93,7 @@ def build_run_history(
         goals.append(
             {
                 "id": goal.get("id"),
+                **goal_parent_fields(goal),
                 "activation_state": goal.get("activation_state") or "active",
                 "registry_goal_digest": goal.get("registry_goal_digest"),
                 "display_name": goal.get("display_name"),

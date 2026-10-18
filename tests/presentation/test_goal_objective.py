@@ -33,6 +33,7 @@ def objective_source(tmp_path, monkeypatch, request):
     runtime = tmp_path / "runtime"
     goal = {
         "id": "research",
+        "parent_goal_id": "research-root",
         "display_name": "A different display title",
         "repo": str(tmp_path),
         "state_file": "state.md",
@@ -101,10 +102,18 @@ def test_real_status_http_keeps_an_empty_goals_declared_objective(objective_sour
         payload = json.loads(response.read())
         connection.close()
         assert response.status == 200, payload
+        assert payload["run_history"]["goals"][0]["parent_goal_id"] == "research-root"
         assert (
             payload["run_history"]["goals"][0]["goal_objective"]
             == "Answer the original research question."
         )
+        connection = http.client.HTTPConnection(*server.server_address, timeout=45)
+        connection.request("GET", "/status.json?view=workspace-directory")
+        response = connection.getresponse()
+        directory = json.loads(response.read())
+        connection.close()
+        assert response.status == 200, directory
+        assert directory["goals"][0]["parent_goal_id"] == "research-root"
         assert (registry.read_bytes(), state.read_bytes()) == before
     finally:
         server.shutdown()
