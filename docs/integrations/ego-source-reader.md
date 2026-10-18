@@ -5,7 +5,14 @@
 LoopX's existing workflow-skill refresh now carries a small continuation policy
 for an **already installed** Ego browser skill. An authorized task can reuse its
 known idle TaskSpace after an ordinary finish or handoff without another chat
-confirmation. Active user intervention, explicit pauses, reserved control,
+confirmation. If the Agent’s recorded successful `finish({ keep: [] })` closed
+that space, and the current inventory confirms its id is absent, later browser
+work within the same authorization can create one replacement and reuse its
+initial Page. A missing space without that closure evidence, a refused claim or
+a stuck/failed space cannot use this exception. Keep one active space, record
+its identity and finish once per space lifetime.
+
+Active user intervention, explicit pauses, reserved control,
 unknown task identity and browser-owned permission/login prompts retain their
 existing stops. This is Agent guidance; it neither changes Ego's native control
 checks nor gives the public-source reader a claim/takeover tool.

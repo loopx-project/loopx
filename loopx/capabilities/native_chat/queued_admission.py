@@ -15,10 +15,12 @@ def enqueue_turn(controller, *, session_id: str, client_turn_id: str, message: s
     if session is None or session.get("status") == "closed":
         raise KeyError("chat session was not found")
     bound = session.get("steward_context") or session.get("project_context") or {}
-    if origin == "web" and bound.get("audience") in {"bound_owner", "bound_group"}:
+    if bound.get("audience") in {"bound_owner", "bound_group"}:
         if external_agent_target is not None:
             raise ValueError("Agent target requires its original attached Session")
-        return _enqueue_local_bound(controller, session, client_turn_id, message, attachments)
+        if origin != "web" and work_dir is None:
+            raise ValueError("the conversation's runtime context is required")
+        return _enqueue_bound(controller, session, client_turn_id, message, attachments, origin)
     if work_dir is None:
         raise ValueError("the conversation's runtime context is required")
     if session.get("steward_context") is not None:
@@ -61,13 +63,13 @@ def enqueue_turn(controller, *, session_id: str, client_turn_id: str, message: s
     return turn, created
 
 
-def _enqueue_local_bound(controller, session, client_turn_id, message, attachments):
+def _enqueue_bound(controller, session, client_turn_id, message, attachments, origin):
     contexts = controller.project_contexts
     bindings = contexts.conversation_bindings
     if bindings is None:
         raise ValueError("bound conversation authority is unavailable")
     saved = session.get("steward_context") or session["project_context"]
-    with bindings.local_input(saved) as selected:
+    with bindings.input_context(saved, origin=origin) as selected:
         fresh = controller.store.load_session(session["session_id"])
         if fresh is None or fresh.get("status") == "closed":
             raise KeyError("chat session was not found")
@@ -78,11 +80,11 @@ def _enqueue_local_bound(controller, session, client_turn_id, message, attachmen
         if fresh.get("project_context") is not None:
             project_context_policy.validate_project_executor_scope(str(fresh["agent_id"]),
                 fresh["project_context"], controller.capabilities)
-        else:
+        elif origin == "web":
             bindings.ensure_delivery_scope(selected)
             _record_local_ingress(controller.coordination_runtime_root, fresh, client_turn_id, message)
         turn, created = controller.store.create_queued_turn(session["session_id"],
-            client_turn_id=client_turn_id, message=message, attachments=attachments, origin="web")
+            client_turn_id=client_turn_id, message=message, attachments=attachments, origin=origin)
     # Dispatch after releasing the publication fence. The worker independently
     # rechecks current scope before effects, including revocation after enqueue.
     controller.resume_session_queue(session_id=session["session_id"],

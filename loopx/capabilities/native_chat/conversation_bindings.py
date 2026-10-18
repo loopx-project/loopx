@@ -213,16 +213,21 @@ class ChatConversationBindings:
         })
 
     @contextmanager
-    def local_input(self, saved: dict[str, Any]):
+    def input_context(self, saved: dict[str, Any], *, origin: str):
         """Observe outside the publication fence, then retain it through enqueue.
 
-        This is the existing loopback operator's continuation of a private
-        binding. Saved fields select an identity; only fresh Core checks grant it.
+        Saved fields select an identity; fresh Core checks grant it. Local Web
+        continuation keeps its actual origin and never becomes a provider event.
         """
-        source = {"source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
-                  "private_human_message": False, "origin": "web", "session_context": saved}
+        if origin == "web":
+            source = {"source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
+                      "private_human_message": False, "origin": "web", "session_context": saved}
+        elif origin in {"lark", "external"}:
+            source = self._session_source(saved)
+        else:
+            raise ValueError("unsupported bound conversation input origin")
         observed = self.resolve(binding_id=saved["binding_id"], include_observation=True, **source)
-        with exclusive_file_lock(self.path, operation="admit_local_bound_input"):
+        with exclusive_file_lock(self.path, operation="admit_bound_input"):
             current = self.read()
             if next((row for row in current.get("bindings", [])
                      if row.get("binding_id") == saved["binding_id"]), None) != observed["binding"]:
@@ -301,14 +306,17 @@ class ChatConversationBindings:
             channel=selected["channel_id"], local_delivery_scope=binding["goal_scope"],
             sender_id=binding["operator_ref"], execute=execute, if_absent=if_absent)
 
-    def session_context(self, saved: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _session_source(saved: dict[str, Any]) -> dict[str, Any]:
         if saved.get("audience") == "bound_group":
-            return self.resolve(binding_id=saved["binding_id"], source_ref=saved["source_ref"],
-                sender_ref=saved["operator_ref"], private_human_message=False,
-                group_ref=saved["group_ref"], topic_ref=saved["topic_ref"], group_human_message=True,
-                session_context=saved)
-        return self.resolve(binding_id=saved["binding_id"], source_ref=saved["source_ref"],
-                            sender_ref=saved["operator_ref"], private_human_message=True, session_context=saved)
+            return {"source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
+                    "private_human_message": False, "group_ref": saved["group_ref"],
+                    "topic_ref": saved["topic_ref"], "group_human_message": True, "session_context": saved}
+        return {"source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
+                "private_human_message": True, "session_context": saved}
+
+    def session_context(self, saved: dict[str, Any]) -> dict[str, Any]:
+        return self.resolve(binding_id=saved["binding_id"], **self._session_source(saved))
 
     def manager_runtime_owner(self, saved: dict[str, Any], channel_id: str) -> bool:
         """Fresh Core audience proof; saved Session text is never authority."""
@@ -390,11 +398,18 @@ class ChatConversationBindings:
 
     def change_agent_target(self, *, binding_id: str, expected_revision: int,
                             session_id: str | None = None, target_ref: str | None = None) -> dict[str, Any]:
+        row = next((item for item in self.read()["bindings"] if item["binding_id"] == binding_id), None)
+        if row is None:
+            raise ValueError("conversation binding is no longer authorized")
+        # Provider IO must not prevent disconnect from publishing revocation.
+        # Recheck the exact binding under its fence before using this observation.
+        observation = self.observe(row["transport_ref"])
         with exclusive_file_lock(self.path, operation="configure_conversation_agent_target"):
             current = self.read()
-            row = next(item for item in current["bindings"] if item["binding_id"] == binding_id)
+            if next((item for item in current["bindings"] if item["binding_id"] == binding_id), None) != row:
+                raise ValueError("conversation binding changed during identity verification")
             params = {"current": current, "expected_revision": expected_revision, "binding_id": binding_id,
-                      "observation": self.observe(row["transport_ref"]), "available_projects": self.projects.available()}
+                      "observation": observation, "available_projects": self.projects.available()}
             if session_id is not None:
                 observed = self.agent_observation(session_id)
                 target = {key: observed["session"].get(key) for key in ["session_id", "goal_id", "goal_instance_id",
