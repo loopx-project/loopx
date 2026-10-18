@@ -1,3 +1,4 @@
+import {LOOP_DISPOSITIONS} from "../../../../../loopx/control_plane/turn_driver/turn_contract_generated.js";
 import type {OracleEvidence} from "./goal-acceptance-observation";
 import type {GoalTransferHoldCode} from "../../../../../loopx/control_plane/goals/planned_transfer_contract.js";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
@@ -49,7 +50,8 @@ const goalTransferViewSchema = z.object({
     target_activation_state: z.enum(["active", "stopped"]).optional()}).optional(),
   prepared_cutover: z.object({operation_id: z.string(), preview_sha256: z.string(), destination_name: z.string(),
     continue_work: z.object({todo_id: z.string(), agent_id: z.string(), host: z.literal("codex-cli"),
-      sandbox: z.literal("workspace-write"), validation_workspace: z.literal("reviewed_working_tree"), validation_sha256: z.string()}).optional()}).optional(),
+      sandbox: z.literal("workspace-write"), validation_workspace: z.literal("reviewed_working_tree"), validation_sha256: z.string(),
+      continuation_budget: z.object({max_turns: z.number().int().positive(), timeout_seconds: z.number().int().positive()}).optional()}).optional()}).optional(),
   prepared_cutover_unavailable: z.boolean().optional(),
   destination_control: z.object({operation: z.enum(["stop", "resume"]), expected_state_fingerprint: z.string()}).optional(),
   destination_control_unavailable: z.boolean().optional(),
@@ -76,7 +78,8 @@ export async function cancelGoalTransfer(goalId: string, operationId: string) {
 export async function confirmGoalTransfer(goalId: string, review: NonNullable<GoalTransferView["prepared_cutover"]>) {
   return z.object({ok: z.literal(true), recorded: z.literal(true), operation_id: z.string(),
     readback: goalTransferViewSchema.nullable(),
-    execution: z.object({ok: z.boolean(), reason_code: z.string().nullable()}).optional()}).parse(await requestJson<unknown>("/api/chat/goal-transfer", {
+    execution: z.object({ok: z.boolean(), reason_code: z.string().nullable(),
+      loop_disposition: z.enum(LOOP_DISPOSITIONS).optional()}).optional()}).parse(await requestJson<unknown>("/api/chat/goal-transfer", {
       method: "POST", body: JSON.stringify({action: "confirm", goal_id: goalId,
         operation_id: review.operation_id, preview_sha256: review.preview_sha256}),
     }));

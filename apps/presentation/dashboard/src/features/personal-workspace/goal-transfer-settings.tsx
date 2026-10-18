@@ -3,6 +3,8 @@ import {cancelGoalTransfer, confirmGoalTransfer, controlGoalTransfer, inspectGoa
 import {useWorkspaceI18n} from "./i18n";
 import "./goal-transfer-settings.css";
 
+type ExecutionDisposition = NonNullable<Awaited<ReturnType<typeof confirmGoalTransfer>>["execution"]>["loop_disposition"];
+
 type TransferAction = "read" | "cancel" | "confirm" | "stop" | "resume";
 
 /** The Agent prepares the existing local owners; this entry confirms only the
@@ -17,6 +19,14 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
   const [cancelled, setCancelled] = useState<boolean | null>(null);
   const [cutoverRecorded, setCutoverRecorded] = useState(false);
   const [executionAccepted, setExecutionAccepted] = useState<boolean | null>(null);
+  const [executionDisposition, setExecutionDisposition] = useState<ExecutionDisposition>();
+  const dispositionLabels: Record<NonNullable<ExecutionDisposition>, string> = zh ? {
+    run_now: "可继续", capability_action_required: "先处理能力要求", wait: "等待当前准入",
+    stop: "已停止", user_action_required: "需要本人处理当前事项", repair: "需要恢复", replan: "需要重新规划", terminal: "已结束",
+  } : {
+    run_now: "Ready", capability_action_required: "Capability action required", wait: "Waiting for admission",
+    stop: "Stopped", user_action_required: "Owner action required", repair: "Recovery required", replan: "Replan required", terminal: "Ended",
+  };
   const inFlight = useRef(false);
   const holds: Record<GoalTransferView["holds"][number]["code"], string> = {
     retained_leases: zh ? "仍有未释放的任务租约，需由原任务结算。" : "Original tasks still hold unreleased leases.",
@@ -29,7 +39,7 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
   async function perform(action: TransferAction = "read") {
     if (inFlight.current) return;
     inFlight.current = true; setBusy(true); setPendingAction(action); setError("");
-    if (action === "read") setView(null);
+    if (action === "read") {setView(null); setExecutionDisposition(undefined);}
     try {
       if ((action === "stop" || action === "resume") && view?.operation_id && view.destination_control?.operation === action) {
         const result = await controlGoalTransfer(goalId, view.operation_id, view.destination_control);
@@ -40,7 +50,10 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
       if (action === "confirm" && view?.prepared_cutover) {
         const result = await confirmGoalTransfer(goalId, view.prepared_cutover);
         setCutoverRecorded(true); setView(result.readback);
-        if (result.execution) setExecutionAccepted(result.execution.ok);
+        if (result.execution) {
+          setExecutionAccepted(result.execution.ok);
+          setExecutionDisposition(result.execution.loop_disposition);
+        }
         if (!result.readback) setError(zh ? "切换已接受，请读取当前状态以恢复结果。" : "The switch was accepted. Read current status to recover the result.");
         return;
       }
@@ -76,6 +89,11 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
     {executionAccepted !== null ? <p role={executionAccepted ? "status" : "alert"}>{executionAccepted
       ? (zh ? "续办请求已处理；下方为原任务的当前状态和独立验收结果。" : "The continuation request was processed. Its original task's current state and independent checks appear below.")
       : (zh ? "切换已接受，本次续办请求需要恢复。请以下方原任务的当前状态为准；恢复本次切换不会重复已记录的工作或扣额。" : "The switch was accepted. This continuation request needs recovery; read the original task's current status below. Resume this move without repeating recorded work or debits.")}</p> : null}
+    {executionDisposition && executionDisposition !== "run_now" && executionDisposition !== "terminal" ? <p role="status">
+      {zh ? "本次推进：" : "This continuation: "}{dispositionLabels[executionDisposition]}{zh ? "。" : ". "}
+      {zh ? "原任务当前状态见下方。重复确认只恢复原轮次，不重置已审阅的轮次上限，也不创建后台定时器。"
+        : "Read the original Task's current state below. Repeating confirmation only recovers its original Turns; it does not reset the reviewed Turn limit or create a background timer."}
+    </p> : null}
     {view ? <>
       <p>{view.local_cutover ? (view.local_cutover.target_activation_state === "stopped"
         ? (zh ? "目标 Goal 已停止，仍可查看原任务结果。恢复该 Goal 后才可继续执行。" : "The destination Goal is stopped. Original work remains readable; resume that Goal before continuing execution.")
@@ -122,6 +140,9 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
           ? (zh ? `确认后，${view.prepared_cutover.continue_work.agent_id} 使用目标环境当前的 Codex 登录，在目标工作区继续原任务并运行原验收。不会安装源环境凭证。`
             : `Confirm to let ${view.prepared_cutover.continue_work.agent_id} continue the original task in its destination workspace with the destination's current Codex login and original independent checks. Source credentials are not installed.`)
           : (zh ? "确认后，目标环境取得新的执行准入并保留原任务。尚未配置自动续办，仍需在目标环境启动执行。" : "Confirm to admit the destination and retain its original tasks. Automatic continuation is not configured; start execution in the destination environment.")}</p> : null}
+        {!view.local_cutover && view.prepared_cutover.continue_work?.continuation_budget ? <p>{zh
+          ? `本次最多自动推进 ${view.prepared_cutover.continue_work.continuation_budget.max_turns} 轮，新轮启动窗口 ${view.prepared_cutover.continue_work.continuation_budget.timeout_seconds} 秒；每轮重新检查准入。当前轮次沿原超时完成验收和结算。等待、停止或需要恢复时结束本次推进，不创建后台定时器。`
+          : `This request continues for at most ${view.prepared_cutover.continue_work.continuation_budget.max_turns} Turns with a ${view.prepared_cutover.continue_work.continuation_budget.timeout_seconds}-second window for starting further Turns, checking admission each time. Current validation and settlement retain their own timeouts. Waiting, stopping or recovery ends this request; no background timer is created.`}</p> : null}
         <button className="personal-primary-action" disabled={busy} type="button" onClick={() => void perform("confirm")}>
           {view.local_cutover ? (zh ? "恢复本次切换" : "Resume this move") : (zh ? "确认切换" : "Confirm local move")}
         </button>

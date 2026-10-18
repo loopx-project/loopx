@@ -307,7 +307,9 @@ def confirm_registered_goal_transfer(*, registry_path: Path, goal_id: str, opera
         # The accepted cutover remains recorded even if the current Host cannot
         # finish. The same native Turn journal owns recovery, never a new job.
         try:
-            execution = _continue_transferred_work(registry_path=Path(review["target_registry_path"]),
+            from .planned_transfer_execution import continue_transferred_work
+
+            execution = continue_transferred_work(registry_path=Path(review["target_registry_path"]),
                 goal_id=goal_id, operation_id=operation_id, codex_bin=codex_bin, codex_home=codex_home)
         except Exception:
             execution = {"ok": False, "reason_code": "original_work_continuation_unavailable"}
@@ -318,84 +320,6 @@ def confirm_registered_goal_transfer(*, registry_path: Path, goal_id: str, opera
         readback = None
     return {"ok": True, "goal_id": goal_id, "recorded": True, "operation_id": operation_id, "readback": readback,
         **({"execution": execution} if execution is not None else {})}
-
-
-def _continue_transferred_work(*, registry_path: Path, goal_id: str, operation_id: str,
-    codex_bin: str | None, codex_home: Path | None) -> dict[str, Any]:
-    """IO-only composition of the native plan, lease, Turn and validator owners.
-
-    The mutex coordinates callers, not completion state. Exact replay belongs
-    exclusively to the existing Turn journal; no Chat Session or job ledger is
-    synthesized and no historic session/credential binding becomes a grant.
-    """
-    import os
-    import subprocess
-    import sys
-    from ...file_lock import exclusive_cross_runtime_file_lock
-    from ..turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
-
-    context = read_goal_transfer_context(registry_path=registry_path, goal_id=goal_id)
-    runtime = Path(context["source_context"]["runtime_root"])
-    plan = effect_runtime_result("coordination.planned_transfer.execution_plan", {
-        "runtime_root": str(runtime), "goal_id": goal_id, "operation_id": operation_id,
-    }, retry_safe=True)["plan"]
-    if plan is None:
-        return {"ok": False, "reason_code": "original_work_not_prepared"}
-    project = Path(plan["project"])
-    env = dict(os.environ)
-    if codex_home is not None:
-        env["CODEX_HOME"] = str(codex_home)
-    prefix = [sys.executable, "-I", "-m", "loopx.cli", "--format", "json",
-        "--registry", str(registry_path), "--runtime-root", str(runtime)]
-
-    def invoke(*arguments: str) -> dict[str, Any]:
-        run = subprocess.run([*prefix, *arguments], cwd=project, env=env,
-            capture_output=True, text=True, encoding="utf-8", errors="strict", check=False)
-        return json.loads(run.stdout)
-
-    identity = {key: plan[key] for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id")}
-    key = plan["turn_instance_id"]
-    with exclusive_cross_runtime_file_lock(runtime / "goals" / goal_id / "turns" / f"{key}.dispatch",
-            operation="planned_transfer_original_work"):
-        original = find_loopx_turn_key_by_settlement_identity(runtime, **identity)
-        lease = None
-        if original is None:
-            args = ["task-lease", "acquire", "--goal-id", goal_id, "--todo-id", plan["todo_id"],
-                "--owner", plan["agent_id"], "--idempotency-key", key, "--write-worktree", str(project),
-                "--ttl-seconds", "600"]
-            for scope in plan["write_scopes"]:
-                args += ["--write-scope", scope]
-            acquired = invoke(*args)
-            if not acquired.get("ok"):
-                return {"ok": False, **identity, "reason_code": "original_task_lease_unavailable"}
-            lease = acquired["lease"]
-        args = ["turn", "run-once", "--goal-id", goal_id, "--agent-id", plan["agent_id"],
-            "--todo-id", plan["todo_id"], "--turn-instance-id", key, "--project", str(project),
-            "--host", plan["host"], "--codex-bin", codex_bin or env.get("CODEX_BIN", "codex"),
-            "--codex-sandbox", plan["sandbox"], "--session-scope", "agent",
-            "--validation-command-json", json.dumps(plan["validation_argv"]),
-            "--timeout-seconds", "90", "--no-global-sync", "--execute"]
-        if lease is not None:
-            args += ["--task-lease-idempotency-key", lease["idempotency_key"],
-                "--task-lease-expected-version", str(lease["version"])]
-        if plan["validation_timeout_seconds"] is not None:
-            args += ["--validation-timeout-seconds", str(plan["validation_timeout_seconds"])]
-        for capability in plan["available_capabilities"]:
-            args += ["--available-capability", capability]
-        result = invoke(*args)
-        # A pending settlement keeps its proof for original-Turn recovery.
-        # Only a successful settled Turn may release still-active work; normal
-        # canonical completion has already retired its lease atomically.
-        if lease is not None and result.get("ok") is True:
-            current = invoke("task-lease", "inspect", "--goal-id", goal_id, "--todo-id", plan["todo_id"])
-            held = current.get("lease")
-            if isinstance(held, dict) and held.get("status") == "active" and held.get("idempotency_key") == key:
-                released = invoke("task-lease", "release", "--goal-id", goal_id, "--todo-id", plan["todo_id"],
-                    "--owner", plan["agent_id"], "--idempotency-key", key, "--expected-version", str(held["version"]))
-                if not released.get("ok"):
-                    raise ValueError("Original execution lease requires its owning recovery")
-        return {"ok": result.get("ok") is True, **identity,
-            "reason_code": None if result.get("ok") else str(result.get("error_code") or "original_work_turn_requires_recovery")}
 
 
 def read_goal_transfer_host_context(*, registry_path: Path, goal_id: str,

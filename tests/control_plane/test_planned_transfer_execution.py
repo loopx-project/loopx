@@ -239,12 +239,12 @@ def test_missing_original_validation_content_refuses_before_fence(source, tmp_pa
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="requires the isolated real Codex fixture")
-def test_original_task_continues_across_native_turns_with_stage_and_final_checks(source, tmp_path, monkeypatch):
-    """A settled progress Turn is not Task completion or a second-Turn wake.
+@pytest.mark.parametrize("continuation_outcome", ["complete", "bad_final", "stopped", "budget", "budget_race"])
+def test_original_task_continues_across_native_turns_with_stage_and_final_checks(source, tmp_path, monkeypatch, continuation_outcome):
+    """One reviewed move continues across independently settled native Turns.
 
-    The next explicit invocation uses the ordinary Turn owner, a fresh lease
-    and the destination Agent's existing native thread. The original validator
-    distinguishes its predeclared stage from terminal acceptance.
+    No second operator invocation launches the final Turn. The same original
+    validator distinguishes stage progress from independent final acceptance.
     """
     from loopx.control_plane.goals.planned_transfer_io import inspect_registered_goal_transfer
     from tests.control_plane.codex_checkpoint_fixture import real_native_source
@@ -268,7 +268,28 @@ def test_original_task_continues_across_native_turns_with_stage_and_final_checks
     (actual / "input.txt").write_text("5\n7\n9\n")
     (actual / "report.txt").write_text("unfinished\n")
     destination, prepared = _prepare(source, tmp_path)
-    requests = []
+    requests, native_bindings = [], []
+    from loopx.control_plane.goals import planned_transfer_execution as execution
+    from loopx.control_plane.goals.planned_transfer_io import control_transferred_goal
+
+    if continuation_outcome in ("budget", "budget_race"):
+        ticks = iter(([0, 0, 91] if continuation_outcome == "budget" else [0, 0, 0, 91]) * 4)
+        monkeypatch.setattr(execution, "monotonic", lambda: next(ticks))
+    if continuation_outcome == "stopped":
+        native_effect = execution.effect_runtime_result
+        reads = 0
+
+        def stop_before_next_plan(method, value, **kwargs):
+            nonlocal reads
+            if method == "coordination.planned_transfer.execution_plan":
+                reads += 1
+                if reads == 2:
+                    control = inspect_registered_goal_transfer(registry_path=source["registry"], goal_id="report")["destination_control"]
+                    assert control_transferred_goal(registry_path=source["registry"], goal_id="report", operation_id="move-a",
+                        operation="stop", expected_state_fingerprint=control["expected_state_fingerprint"])["ok"]
+            return native_effect(method, value, **kwargs)
+
+        monkeypatch.setattr(execution, "effect_runtime_result", stop_before_next_plan)
 
     def response(body, number, message):
         if number == 1:
@@ -283,12 +304,17 @@ def test_original_task_continues_across_native_turns_with_stage_and_final_checks
         request = requests[-1]
         assert request["transfer_context"]["selected_todo"]["todo_id"] == source["todo"]
         if number in (2, 4):
+            if number == 4:
+                native_bindings.append(select_codex_cli_session(destination / "runtime",
+                    lineage={"goal_id": "report", "agent_id": "agent-a"}, session_scope="agent")["session_id"])
             script = ("from pathlib import Path; "
                 + ("assert Path('report.txt').read_text()=='unfinished\\n'; "
                    "Path('report.txt').write_text(str(sum(map(int,Path('input.txt').read_text().split()[:2])))+'\\n')"
                    if number == 2 else
                    "assert Path('report.txt').read_text()=='12\\n'; "
                    "Path('report.txt').write_text(str(sum(map(int,Path('input.txt').read_text().split())))+'\\n')"))
+            if number == 4 and continuation_outcome == "bad_final":
+                script = script.replace("str(sum(map(int,Path('input.txt').read_text().split())))", "'20'")
             return {"type": "function_call", "id": f"fc_report_{number}", "call_id": f"call_report_{number}",
                 "name": "exec_command", "arguments": json.dumps({
                     "cmd": shlex.quote(sys.executable) + " -c " + shlex.quote(script), "max_output_tokens": 1000})}
@@ -310,19 +336,56 @@ def test_original_task_continues_across_native_turns_with_stage_and_final_checks
         try:
             confirm = {"action": "confirm", "goal_id": "report", "operation_id": "move-a",
                 "preview_sha256": prepared["prepared_cutover"]["preview_sha256"]}
-            status, first = call(confirm)
-            assert status == 200 and first["execution"]["ok"] is True, first
+            # The real App/CLI parent may have an open terminal or input pipe.
+            # This argv-only bridge must neither wait for nor consume it.
+            incoming, writer = os.pipe()
+            saved_stdin = os.dup(0)
+            try:
+                os.dup2(incoming, 0)
+                os.write(writer, b"caller-owned input")
+                status, first = call(confirm)
+                os.set_blocking(incoming, False)
+                assert os.read(incoming, 100) == b"caller-owned input"
+            finally:
+                os.dup2(saved_stdin, 0)
+                os.close(saved_stdin)
+                os.close(incoming)
+                os.close(writer)
+            assert status == 200 and first["recorded"] is True, first
+            if continuation_outcome != "complete":
+                expected_calls = 5 if continuation_outcome == "bad_final" else 3
+                expected_value = b"20\n" if continuation_outcome == "bad_final" else b"12\n"
+                assert len(calls) == expected_calls
+                assert (destination / "agent-workspace/report.txt").read_bytes() == expected_value
+                assert first["readback"]["work"]["todos"][0]["done"] is False
+                assert collect_history(registry_path=destination / "workspace/.loopx/registry.json",
+                    runtime_root=destination / "runtime", goal_id="report", limit=50)["goals"][0]["quota"]["spent_slots"] == 2
+                call(confirm)
+                assert len(calls) == expected_calls
+                if continuation_outcome == "stopped":
+                    current = inspect_registered_goal_transfer(registry_path=source["registry"], goal_id="report")
+                    assert current["local_cutover"]["target_activation_state"] == "stopped"
+                    assert control_transferred_goal(registry_path=source["registry"], goal_id="report", operation_id="move-a",
+                        operation="resume", expected_state_fingerprint=current["destination_control"]["expected_state_fingerprint"])["ok"]
+                    resumed = call(confirm)[1]
+                    assert resumed["execution"]["ok"] is True
+                    assert resumed["readback"]["work"]["todos"][0]["done"] is True
+                    assert len(calls) == 5
+                assert (actual / "report.txt").read_bytes() == b"unfinished\n"
+                return
+            assert first["execution"]["ok"] is True, first
             pending = next(row for row in first["readback"]["work"]["todos"] if row["todo_id"] == source["todo"])
-            assert pending["status"] == "open" and pending["done"] is False
+            assert pending["status"] == "done" and pending["done"] is True
             target = destination / "agent-workspace"
-            assert (target / "report.txt").read_bytes() == b"12\n"
+            assert (target / "report.txt").read_bytes() == b"21\n"
             before = source["registry"].read_bytes(), source["fence"].read_bytes()
             lineage = {"goal_id": "report", "agent_id": "agent-a", "todo_id": source["todo"]}
             binding = select_codex_cli_session(destination / "runtime", lineage=lineage, session_scope="agent")
             assert binding["session_id"] not in ("original-context", unused)
-            assert len(calls) == 3
+            assert native_bindings == [binding["session_id"]]
+            assert len(calls) == 5
             assert call(confirm)[1]["execution"] == first["execution"]
-            assert len(calls) == 3 and (target / "report.txt").read_bytes() == b"12\n"
+            assert len(calls) == 5 and (target / "report.txt").read_bytes() == b"21\n"
             prefix = [sys.executable, "-I", "-m", "loopx.cli", "--format", "json", "--registry",
                 str(destination / "workspace/.loopx/registry.json"), "--runtime-root", str(destination / "runtime")]
 
@@ -334,25 +397,9 @@ def test_original_task_continues_across_native_turns_with_stage_and_final_checks
             def spent():
                 return invoke("history", "--goal-id", "report", "--limit", "50")["goals"][0]["quota"]["spent_slots"]
 
-            assert spent() == 2  # one source debit, one independently checked stage
-            lease = invoke("task-lease", "acquire", "--goal-id", "report", "--todo-id", source["todo"],
-                "--owner", "agent-a", "--idempotency-key", "finish-original-task", "--write-scope", "report.txt",
-                "--write-worktree", str(target), "--ttl-seconds", "600")["lease"]
-            args = ["turn", "run-once", "--goal-id", "report", "--agent-id", "agent-a", "--todo-id", source["todo"],
-                "--turn-instance-id", "finish-original-task", "--project", str(target), "--host", "codex-cli",
-                "--codex-bin", env["CODEX_BIN"], "--codex-sandbox", "workspace-write", "--session-scope", "agent",
-                "--validation-command-json", json.dumps(validator), "--timeout-seconds", "90", "--no-global-sync",
-                "--task-lease-idempotency-key", lease["idempotency_key"],
-                "--task-lease-expected-version", str(lease["version"]), "--execute"]
-            for capability in ("filesystem_read", "filesystem_write", "shell"):
-                args += ["--available-capability", capability]
-            second = invoke(*args)
-            assert second["ok"] is True and second["result_kind"] == "validated_completion", second
+            assert spent() == 3  # original source + checked stage + checked completion
             assert len(calls) == 5 and len(requests) == 2
             assert requests[0]["turn_key"] != requests[1]["turn_key"]
-            current_binding = select_codex_cli_session(destination / "runtime", lineage=lineage, session_scope="agent")
-            assert current_binding["session_id"] == binding["session_id"]
-            assert (target / "report.txt").read_bytes() == b"21\n" and spent() == 3
             work = inspect_registered_goal_transfer(registry_path=source["registry"], goal_id="report")["work"]
             completed = next(row for row in work["todos"] if row["todo_id"] == source["todo"])
             assert completed["done"] is True
@@ -381,7 +428,6 @@ def test_original_task_continues_across_native_turns_with_stage_and_final_checks
                 assert completed[field] == original[field]
             # Replaying either original operation cannot rerun tools or debit.
             restart_effect_runtime(wait_for_exit=True)
-            assert invoke(*args)["ok"] is True
             assert call(confirm)[1]["execution"] == first["execution"]
             assert len(calls) == 5 and spent() == 3
             assert before == (source["registry"].read_bytes(), source["fence"].read_bytes())

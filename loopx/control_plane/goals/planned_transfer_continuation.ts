@@ -99,7 +99,8 @@ export async function planTransferOriginalWork(original: JsonObject, projection:
     reject("Automatic continuation requires the original Task's independent argv validation declaration");
   }
   return {todo_id: todoId, agent_id: agents[0], host: "codex-cli", sandbox: "workspace-write", validation_workspace: "reviewed_working_tree",
-    validation_sha256: canonicalAuthoritySha256(declaration.value)};
+    validation_sha256: canonicalAuthoritySha256(declaration.value),
+    continuation_budget: {max_turns: 10, timeout_seconds: 90}};
 }
 
 /** Read the admitted operation and the current Task; downstream owners still
@@ -116,6 +117,12 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
   const continuation = requireJsonObject(decision.continuation, "original continuation");
   if (!continuation.continue_work) return {plan: null};
   const work = requireJsonObject(continuation.continue_work, "reviewed original work");
+  const budget = requireJsonObject(work.continuation_budget ?? {max_turns: 1, timeout_seconds: 90}, "original continuation budget");
+  if (!hasExactAuthorityKeys(budget, ["max_turns", "timeout_seconds"]) ||
+      !Number.isInteger(budget.max_turns) || Number(budget.max_turns) < 1 || Number(budget.max_turns) > 10 ||
+      !Number.isInteger(budget.timeout_seconds) || Number(budget.timeout_seconds) < 1 || Number(budget.timeout_seconds) > 90) {
+    reject("Original continuation requires its reviewed bounded execution budget");
+  }
   const {snapshot, materials} = await readReviewedTransferContext(admission, "readback");
   const execution = requireJsonObject(continuation.execution_workspace, "original execution workspace");
   await verifyGoalTransferExecutionWorkspace(execution, materials, false);
@@ -135,6 +142,9 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
     write_scopes: task.required_write_scopes, available_capabilities: [...LOCAL_TRANSFER_CAPABILITIES],
     validation_argv: declaration.value.validation_command_argv,
     validation_timeout_seconds: declaration.value.validation_timeout_seconds,
+    // Historical reviews promised only one dispatch; a later code update must
+    // not silently expand an already confirmed execution budget.
+    continuation_budget: budget,
     activation_state: snapshot.activation_state}};
 }
 
