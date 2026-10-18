@@ -263,6 +263,14 @@ secret. Updater signing does not provide Apple notarization. It also does not
 change Goal authority, grant capabilities, or stop running agents on behalf of
 the user. Services may briefly disconnect during reconciliation.
 
+The optional startup feed check has a three-second deadline so an unavailable
+update server does not delay opening the workspace. A manual **Check for updates**
+allows 45 seconds for the same official feed, including redirects; the panel
+keeps showing its checking state while the existing workspace remains readable.
+A timeout remains an explicit retryable error, never a claim that the App is
+current. The separate 30-second download/signature-verification deadline and
+installation/recovery boundaries are unchanged.
+
 Published macOS preview artifacts use ad-hoc code signing to verify bundle
 integrity without requiring an Apple Developer account. They are not signed
 with a Developer ID and are not notarized, so macOS may require the operator
