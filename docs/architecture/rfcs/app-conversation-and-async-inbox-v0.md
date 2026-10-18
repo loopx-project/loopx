@@ -1070,6 +1070,13 @@ The private receipt retains every previously observed gap; absence from a later
 window does not close it. Group topics and other providers retain their own
 coverage contracts.
 
+After an outage, bounded one-day windows continue from the last complete cursor;
+catch-up cannot certify an unscanned interval. A per-binding receipt lock covers
+the read, provider query and write. Regression coverage uses a real native
+binding, Core and connection HTTP endpoint with synthetic provider history and
+host execution: a two-day outage still exposes its missed source, and admitting
+only the later source after interleaved observations cannot erase an earlier gap.
+
 The existing connection API and Lark settings show source coverage separately
 from live-listener readiness and pending execution. Its `ingress` observation
 uses `unobserved`, `verified`, `gap` and `unavailable`, with timestamps and counts,
