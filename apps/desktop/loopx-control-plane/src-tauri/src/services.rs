@@ -1043,21 +1043,6 @@ fn resolve_executable_path(executable: &str, search_path: Option<&OsStr>) -> Opt
     None
 }
 
-fn runtime_identity_from_manifest(manifest: &serde_json::Value) -> Option<serde_json::Value> {
-    let release_id = manifest.get("release_id")?.as_str()?;
-    let package_version = manifest.get("package")?.get("version")?.as_str()?;
-    let source_revision = manifest
-        .get("source")
-        .and_then(|source| source.get("git_commit"))
-        .and_then(serde_json::Value::as_str);
-    Some(serde_json::json!({
-        "schema_version": "loopx_runtime_identity_v1",
-        "package_version": package_version,
-        "release_id": release_id,
-        "source_revision": source_revision,
-    }))
-}
-
 pub(crate) fn runtime_identity_for_executable(executable: &str) -> Option<serde_json::Value> {
     runtime_identity_for_executable_with_path(executable, env::var_os("PATH").as_deref())
 }
@@ -1068,16 +1053,9 @@ fn runtime_identity_for_executable_with_path(
 ) -> Option<serde_json::Value> {
     let resolved = resolve_executable_path(executable, search_path)?;
     let canonical = fs::canonicalize(resolved).ok()?;
-    let release_root = canonical.parent()?.parent()?;
-    if let Ok(manifest) = fs::read_to_string(Path::new(release_root).join("release.json")) {
-        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&manifest) {
-            if let Some(identity) = runtime_identity_from_manifest(&payload) {
-                return Some(identity);
-            }
-        }
-    }
     // Core owns package qualification and hashing. Do not recreate RECORD,
     // editable-install or byte-fingerprint rules inside the native shell.
+    // A surviving release manifest cannot prove its executable still works.
     let mut command = Command::new(canonical);
     configure_runtime_environment(&mut command);
     command.args(["--format", "json", "doctor", "--installation-only"]);
@@ -1094,20 +1072,26 @@ fn identity_from_installation_doctor(payload: &serde_json::Value) -> Option<serd
         return None;
     }
     let identity = payload.get("service_runtime_identity")?;
+    let release = identity["release_id"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty());
     if identity["schema_version"] != "loopx_runtime_identity_v1"
         || !identity["package_version"].is_string()
-        || !is_owned_package_identity(identity)
+        || !(release || is_owned_package_identity(identity))
     {
         return None;
     }
     // This shape is shared with the HTTP startup fence, not source attestation.
-    Some(serde_json::json!({
+    let mut observed = serde_json::json!({
         "schema_version": identity["schema_version"],
         "package_version": identity["package_version"],
         "release_id": identity["release_id"],
         "source_revision": identity["source_revision"],
-        "package_fingerprint": identity["package_fingerprint"],
-    }))
+    });
+    if !release {
+        observed["package_fingerprint"] = identity["package_fingerprint"].clone();
+    }
+    Some(observed)
 }
 
 pub(crate) fn is_owned_package_identity(identity: &serde_json::Value) -> bool {
@@ -1481,22 +1465,55 @@ mod tests {
     }
 
     #[test]
-    fn manifest_runtime_identity_is_public_and_exact() {
-        let manifest = serde_json::json!({
-            "release_id": "20260821T164921Z",
-            "package": {"version": "0.5.1"},
-            "source": {"git_commit": "62647e2e299d"},
-        });
-
-        assert_eq!(
-            runtime_identity_from_manifest(&manifest),
-            Some(serde_json::json!({
+    fn qualified_release_identity_is_public_and_exact() {
+        let identity = serde_json::json!({
                 "schema_version": "loopx_runtime_identity_v1",
                 "package_version": "0.5.1",
                 "release_id": "20260821T164921Z",
                 "source_revision": "62647e2e299d",
-            }))
-        );
+                "path": "PRIVATE",
+        });
+        let qualified = serde_json::json!({"ok":true,"scope":"installation_only",
+            "service_runtime_identity":identity});
+        let observed = identity_from_installation_doctor(&qualified).unwrap();
+        assert_eq!(observed["release_id"], identity["release_id"]);
+        assert_eq!(observed["source_revision"], identity["source_revision"]);
+        assert_eq!(observed.as_object().unwrap().len(), 4);
+        assert!(observed.get("path").is_none());
+        let mut rejected = qualified.clone();
+        rejected["ok"] = serde_json::json!(false);
+        assert!(identity_from_installation_doctor(&rejected).is_none());
+        rejected = qualified.clone();
+        rejected["service_runtime_identity"]["release_id"] = serde_json::json!("");
+        assert!(identity_from_installation_doctor(&rejected).is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn release_metadata_cannot_qualify_a_broken_or_unready_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let scripts = root.path().join("scripts");
+        fs::create_dir(&scripts).unwrap();
+        let executable = scripts.join("loopx");
+        fs::write(
+            root.path().join("release.json"),
+            r#"{"release_id":"cached-release","package":{"version":"99.0.0"},"source":{"git_commit":"cached-revision"}}"#,
+        )
+        .unwrap();
+        for response in [
+            "exit 1",
+            "printf 'not JSON'",
+            "printf '%s' '{\"ok\":false,\"scope\":\"installation_only\"}'",
+        ] {
+            fs::write(&executable, format!("#!/bin/sh\n{response}\n")).unwrap();
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(
+                runtime_identity_for_executable_with_path("loopx", Some(scripts.as_os_str()))
+                    .is_none(),
+                "a cached manifest must not override failed executable qualification: {response}"
+            );
+        }
     }
 
     #[test]
@@ -1519,19 +1536,16 @@ mod tests {
         )
         .expect("fixture release manifest");
 
+        assert_eq!(
+            resolve_executable_path("loopx", Some(scripts_dir.as_os_str())),
+            Some(scripts_dir.join(executable_name))
+        );
+        // A path and manifest still do not make this non-executable fixture usable.
         let identity =
             runtime_identity_for_executable_with_path("loopx", Some(scripts_dir.as_os_str()));
         fs::remove_dir_all(&release_root).expect("remove runtime identity fixture");
 
-        assert_eq!(
-            identity,
-            Some(serde_json::json!({
-                "schema_version": "loopx_runtime_identity_v1",
-                "package_version": "0.5.1",
-                "release_id": "path-release",
-                "source_revision": "path-revision",
-            }))
-        );
+        assert!(identity.is_none());
     }
 
     #[test]
