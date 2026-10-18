@@ -117,6 +117,9 @@ export const goalHierarchyScenario = {
       assert.equal(await page.getByTestId("personal-first-goal").count(), 0);
       assert.equal(await page.locator(".personal-manager-greeting, .personal-composer-wrap").count(), 0,
         "An unavailable research root must not open an unrelated steward conversation");
+      assert.equal(await page.getByRole("navigation", {name: "管家视图", exact: true}).count(), 0,
+        "An unavailable research root cannot offer unrelated steward navigation");
+      assert.notEqual(await page.locator(".personal-channel-title h1").textContent(), "LoopX 管家");
       unavailable.searchParams.set("rootGoalId", "../missing");
       await page.goto(unavailable.href, {waitUntil: "networkidle"});
       await page.getByRole("alert").filter({hasText: "当前来源中此 Goal 范围不可用"}).waitFor();
@@ -128,6 +131,8 @@ export const goalHierarchyScenario = {
         await page.getByRole("alert").filter({hasText: "当前来源中此 Goal 范围不可用"}).waitFor();
         assert.equal(await page.locator(".personal-goal-row").count(), 0, `${invalid}: decoded values cannot widen the scope`);
         assert.equal(await page.locator(".personal-manager-greeting, .personal-composer-wrap").count(), 0);
+        assert.equal(await page.getByRole("navigation", {name: "管家视图", exact: true}).count(), 0);
+        assert.notEqual(await page.locator(".personal-channel-title h1").textContent(), "LoopX 管家");
         await page.getByRole("button", {name: "全部 Goals", exact: true}).click();
         await row("daily").waitFor();
         await page.goBack({waitUntil: "networkidle"});

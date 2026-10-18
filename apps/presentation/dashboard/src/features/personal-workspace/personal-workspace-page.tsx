@@ -2674,6 +2674,7 @@ export function PersonalWorkspacePage({
           <div>
           <ChannelHeader
             agents={agents}
+            scopeUnavailable={rootUnavailable}
             agentWorkActive={agentWorkActive}
             conversationScope={workspaceConversations && (workspaceConversations.projects?.length || workspaceConversations.readFailed || selectedWorkspaceRef) ? {
               onChange: (value) => {
