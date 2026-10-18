@@ -24,6 +24,18 @@ function RouteLoading() {
 
 const searchSchema = z.object({
   goalId: z.string().optional().default(""),
+  // Display scope only: malformed/unknown IDs stay unavailable instead of
+  // silently reopening all Goals. Numeric opaque IDs survive URL decoding.
+  rootGoalId: z.coerce.string().optional(),
+  // Preserve the existing history/analysis owners' query state. They validate
+  // it from the URL themselves; router decoding can produce arrays or numbers.
+  research_lens: z.unknown().optional(),
+  research_goal: z.unknown().optional(),
+  research_node: z.unknown().optional(),
+  research_group: z.unknown().optional(),
+  research_pack: z.unknown().optional(),
+  research_analysis: z.unknown().optional(),
+  research_analysis_goal: z.unknown().optional(),
   // Stable Goal/Agent working conversation; empty string opens the directory.
   workAgent: z.string().regex(/^[A-Za-z0-9._:-]{0,200}$/).optional().catch(undefined),
   todo: z.string().regex(/^[A-Za-z0-9._:-]{1,200}$/).optional().catch(undefined),

@@ -4,6 +4,7 @@ import { conversationReturnSessions, conversationPendingReturnSessions, reconcil
 import { readConversationReturns, readTaskSessions } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
+import { goalSubtree } from "../features/personal-workspace/goal-hierarchy";
 import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, attentionDetailsFromSnapshot, sourceAttention } from "../features/personal-workspace/attention-details";
@@ -451,6 +452,7 @@ function buildAgentManagementRows(
 type PersonalGoalState = "需修复" | "等你" | "等待条件" | "已安排" | "已完成" | "安静运行" | "已停止";
 
 type PersonalGoalItem = {
+  parentGoalId?: string | null;
   acceptanceObservation?: GoalAcceptanceObservation | null;
   loadState?: "loading" | "error";
   loadError?: WorkspaceLoadError;
@@ -1089,6 +1091,7 @@ function buildPersonalHomeModel(
       } : undefined,
       acceptanceObservation: goal.acceptance_observation,
       goalId: goal.id,
+      parentGoalId: goal.parent_goal_id,
       latestActivity: row.latestRun?.generated_at ?? "",
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,
@@ -1229,8 +1232,10 @@ function PersonalGoalHome({
   payload,
   progress,
   rows,
-  selectedGoalId,
-  selectedWorkspaceRef,
+  selectedGoalId: requestedGoalId,
+  selectedWorkspaceRef: requestedWorkspaceRef,
+  rootGoalId,
+  onChangeGoalRoot,
   statusSourceControl,
   theme,
 }: {
@@ -1248,6 +1253,8 @@ function PersonalGoalHome({
   onSelectGoal: (goalId: string, view?: WorkspaceGoalTab) => void;
   onSelectWorkspace: (projectRef: string | null) => void;
   selectedWorkspaceRef: string | null;
+  rootGoalId?: string;
+  onChangeGoalRoot: (goalId: string | null) => void;
   onReconcileStatus: (options?: { invalidateGoalIds?: string[] }) => void | Promise<void>;
   onRefresh: (scope?: WorkspaceReadScope) => Promise<WorkspaceRefreshResult>;
   onBackgroundRefresh?: () => void | Promise<void>;
@@ -1259,7 +1266,8 @@ function PersonalGoalHome({
   statusSourceControl: StatusSourceControl;
   theme: "light" | "dark";
 }) {
-  const readOnly = statusSourceControl.activeSource.readOnly;
+  const readOnly = statusSourceControl.activeSource.readOnly
+    || Boolean(rootGoalId && !rows.some(row => row.goal.id === rootGoalId));
   const remoteGoalLifecycleHost = statusSourceControl.activeSource.kind === "ssh_tunnel"
     ? statusSourceControl.activeSource.hostAlias
     : undefined;
@@ -1314,23 +1322,41 @@ function PersonalGoalHome({
       },
     };
   }, [payload, rows, progress, goalSubagentConfigurationEnabled, t]);
+  const scopedModel = useMemo<PersonalHomeModel>(() => {
+    if (!rootGoalId) return loadedModel;
+    const goals = goalSubtree(loadedModel.goals, rootGoalId);
+    const included = new Set(goals.map(goal => goal.goalId));
+    const userTodos = loadedModel.userTodos.filter(item => included.has(item.goalId));
+    return {
+      ...loadedModel, goals, userTodos, visibleUserTodos: userTodos.slice(0, 5), onboarding: undefined,
+      // These count projected owner-attention rows, never parent completion or
+      // an aggregate benchmark score. Each Goal retains its own acceptance.
+      openUserTodoCount: userTodos.length, blockingTodoCount: userTodos.filter(item => item.blocking).length,
+      attentionHistory: loadedModel.attentionHistory?.filter(item => included.has(item.goalId)),
+      goalNotifications: loadedModel.goalNotifications?.filter(item => included.has(item.goalId)),
+      workers: loadedModel.workers?.filter(item => item.currentTodoGoalId && included.has(item.currentTodoGoalId)),
+    };
+  }, [loadedModel, rootGoalId]);
   // A retained payload is not a current fact once the source's latest read
   // failed: the first-Goal invitation is withdrawn and the failure is shown
   // with a retry, instead of an empty workspace that claims to be updated.
   const model = useMemo<PersonalHomeModel>(() => {
-    if (!sourceError) return loadedModel;
+    if (!sourceError) return scopedModel;
     return {
-      ...loadedModel,
+      ...scopedModel,
       onboarding: undefined,
       systemHealth: {
         ok: false, retryable: true,
         summary: t("home.health.sourceUnreadable"),
         issues: [t("home.health.sourceUnreadableDetail", { error: sourceError })],
         freshnessWarning: null,
-        diagnostics: loadedModel.systemHealth?.diagnostics ?? [],
+        diagnostics: scopedModel.systemHealth?.diagnostics ?? [],
       },
     };
-  }, [sourceError, loadedModel, t]);
+  }, [sourceError, scopedModel, t]);
+  const selectedGoalId = rootGoalId && !model.goals.some(goal => goal.goalId === requestedGoalId)
+    ? rootGoalId : requestedGoalId;
+  const selectedWorkspaceRef = rootGoalId ? null : requestedWorkspaceRef;
   // A workspace conversation has no Goal, so no Goal projection may apply to it.
   const selectedGoal = selectedWorkspaceRef ? null : model.goals.find((goal) => goal.goalId === selectedGoalId) ?? null;
   const workspaceProjects = useChatProjects(readOnly);
@@ -3115,6 +3141,8 @@ function PersonalGoalHome({
         conversationSupportsSteering={steeringSessionIds.has(runtimeBindings[contextId]?.sessionId ?? "")}
         conversationHistoryState={conversationHistory}
         model={workspaceModel}
+        rootGoalId={rootGoalId}
+        onChangeGoalRoot={onChangeGoalRoot}
         researchApi={researchUrls?.indexUrl && researchUrls.detailUrl ? {
           indexUrl: researchUrls.indexUrl, detailUrl: researchUrls.detailUrl,
           goals: selectedPayload.run_history.goals,
@@ -3125,7 +3153,9 @@ function PersonalGoalHome({
         selectedAgentModelReadback={agentModelReadbacks[agentModelSelectionKey(contextId, selectedAgent.agentId)]}
         selectedAgentReasoningEffort={selectedAgentEfforts[agentModelSelectionKey(contextId, selectedAgent.agentId)]}
         selectedGoalId={selectedGoal?.goalId ?? null}
-        serviceNotice={executionDiscoveryError
+        serviceNotice={rootGoalId && !model.goals.some(goal => goal.goalId === rootGoalId)
+          ? <p className="personal-service-notice" role="alert">{t("sidebar.rootUnavailable")} <button type="button" onClick={() => void onRefresh()}>{t("sidebar.retryStopped")}</button></p>
+          : executionDiscoveryError
           ? <p className="personal-service-notice" role="status">{t(executionDiscoveryError === "partial" ? "runs.discoveryPartial" : "runs.discoveryOffline")}</p>
           : null}
         statusSourceControl={statusSourceControl && executionDiscoveryError === "offline" && statusSourceControl.connectionState === "connected"
@@ -3612,6 +3642,9 @@ export function DashboardPage() {
 
   return (
     <PersonalGoalHome
+      rootGoalId={search.rootGoalId}
+      onChangeGoalRoot={rootGoalId => void navigate({search: current => ({...current,
+        rootGoalId: rootGoalId ?? undefined, goalId: rootGoalId ?? ("goalId" in current ? current.goalId : ""), workspace: undefined})})}
       goalArchiveLoadState={goalArchiveLoadState}
       sourceError={loadError}
       selectedTodoId={search.todo ?? null}

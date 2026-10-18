@@ -3,7 +3,7 @@ import { decodeGoalOrder, goalOrderStorageKey, moveGoal, orderedGoals } from "./
 import type { WorkspaceGoal } from "./personal-workspace-model";
 
 // The sidebar is keyed by source, so neither gestures nor preferences cross machines.
-export function useGoalOrder(goals: WorkspaceGoal[], source: string) {
+export function useGoalOrder(goals: WorkspaceGoal[], source: string, canMove = (_from: string, _to: string) => true) {
   const key = goalOrderStorageKey(source);
   const [order, setOrder] = useState(() => {
     try { return decodeGoalOrder(localStorage.getItem(key)); } catch { return []; }
@@ -68,6 +68,7 @@ export function useGoalOrder(goals: WorkspaceGoal[], source: string) {
   const sorted = orderedGoals(goals, order);
   const visible = sorted.map((goal) => goal.goalId);
   function move(from: string, to: string, after: boolean) {
+    if (!canMove(from, to)) return;
     const current = orderRef.current;
     const next = moveGoal(current, visible, from, to, after);
     if (next === current) return;
@@ -85,7 +86,8 @@ export function useGoalOrder(goals: WorkspaceGoal[], source: string) {
   return {
     sorted, target, saveFailed, lastMoved, move,
     moveBy(id: string, delta: -1 | 1) {
-      const neighbor = sorted[visible.indexOf(id) + delta];
+      const siblings = sorted.filter(goal => canMove(id, goal.goalId));
+      const neighbor = siblings[siblings.findIndex(goal => goal.goalId === id) + delta];
       if (neighbor) move(id, neighbor.goalId, delta === 1);
     },
     pointerProps: (id: string) => ({
@@ -105,7 +107,7 @@ export function useGoalOrder(goals: WorkspaceGoal[], source: string) {
         const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-reorder-goal]");
         const list = event.currentTarget.closest(".personal-goal-list");
         const targetId = row?.dataset.reorderGoal;
-        if (!row || !targetId || !list?.contains(row) || targetId === current.id) { setTarget(null); return; }
+        if (!row || !targetId || !list?.contains(row) || targetId === current.id || !canMove(current.id, targetId)) { setTarget(null); return; }
         const bounds = row.getBoundingClientRect();
         setTarget({ id: targetId, after: event.clientY > bounds.top + bounds.height / 2 });
       },
