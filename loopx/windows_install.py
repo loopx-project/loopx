@@ -343,7 +343,7 @@ def _copy_path(source: Path, target: Path) -> None:
 
 
 def _skill_mutation_paths(skills_dir: Path) -> list[Path]:
-    from .ego_skill_delivery import ego_skill_mutation_paths
+    from .workflow_skills.ego_delivery import ego_skill_mutation_paths
 
     codex_home = skills_dir.parent
     paths = {
@@ -427,7 +427,7 @@ def _restore_paths(
 def _install_skills(
     release_root: Path, skills_dir: Path, installed_at: str
 ) -> list[str]:
-    from .ego_skill_delivery import reconcile_ego_browser_skill
+    from .workflow_skills.ego_delivery import reconcile_ego_browser_skill
 
     skills_dir.mkdir(parents=True, exist_ok=True)
     installed_ids: list[str] = []

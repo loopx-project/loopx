@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { deliveryReviewMarkdown, parseDeliveryReview } from "../node_modules/.cache/delivery-review/data/delivery-review.js";
 import { deliveryReviewCopy } from "../node_modules/.cache/delivery-review/features/personal-workspace/delivery-review-copy.js";
-import { acceptance, contract, snapshot, verifiedContract } from "./goal-acceptance-contract-fixture.mjs";
+import { acceptance, contract, oracleContract, snapshot, verifiedContract } from "./goal-acceptance-contract-fixture.mjs";
 
 const withContract = value => ({ ...snapshot, acceptance: { ...acceptance, goal_acceptance_contract: value } });
 const before = structuredClone(contract);
@@ -16,6 +16,7 @@ for (const copy of Object.values(deliveryReviewCopy)) {
     const parsed = parseDeliveryReview(source, snapshot.goal_id);
     assert.deepEqual(parsed.acceptance.goal_acceptance_contract, source.acceptance.goal_acceptance_contract);
     const markdown = deliveryReviewMarkdown(parsed, copy);
+    assert.ok(markdown.includes(`- recovery: ${contract.criteria[0].description}\n`), "Ordinary criterion export retains its existing shape");
     for (const text of [copy.contract.boundary, contract.objective, contract.digest, `${copy.contract.revision}: 7`,
       `${copy.contract.source}: release-demo`, copy.contract.taskState.ready, copy.contract.taskState.stale,
       copy.contract.notApplicable, copy.contract.verificationState[status]]) {
@@ -33,6 +34,28 @@ for (const copy of Object.values(deliveryReviewCopy)) {
   const empty = parseDeliveryReview(withContract({ ...contract, criteria: [], tasks: [] }), snapshot.goal_id);
   assert.ok(deliveryReviewMarkdown(empty, copy).includes(copy.contract.noTasks));
   assert.ok(deliveryReviewMarkdown(empty, copy).includes(copy.contract.noCriteria));
+  for (const [state, expected] of Object.entries({current: "accepted", stale: "stale", failed: "failed", recorded: "unverified", unavailable: "unverified", unverified: "unverified"})) {
+    const value = oracleContract(state), original = structuredClone(value);
+    const markdown = deliveryReviewMarkdown(parseDeliveryReview(withContract(value), snapshot.goal_id), copy);
+    for (const evidence of ["recovery-checker", "d".repeat(64), "2026-09-01T01:02:03Z", "expected.txt", "e".repeat(64), "recovery.txt", "f".repeat(64)]) {
+      assert.ok(markdown.includes(evidence), `Downloaded checks must preserve their actual source and tested versions: ${evidence}`);
+    }
+    assert.ok(markdown.includes(copy.contract.verificationState[expected]));
+    if (expected !== "accepted") assert.ok(!markdown.includes(copy.contract.verificationState.accepted), "A retained pass is not a current pass");
+    assert.deepEqual(value, original, "Export cannot update current authority or historical receipts");
+  }
+  const missing = oracleContract("unavailable");
+  delete missing.verification.results[0].oracle_evidence;
+  const markdown = deliveryReviewMarkdown(parseDeliveryReview(withContract(missing), snapshot.goal_id), copy);
+  assert.ok(!markdown.includes("2026-09-01T01:02:03Z") && !markdown.includes("f".repeat(64)), "Missing execution evidence cannot acquire invented time or versions");
+  assert.ok(!markdown.includes(copy.contract.verificationState.accepted));
+  const replaced = oracleContract("stale");
+  replaced.criteria[0].oracle.source_id = "replacement-checker";
+  replaced.criteria[0].oracle.source_digest = "1".repeat(64);
+  const changed = deliveryReviewMarkdown(parseDeliveryReview(withContract(replaced), snapshot.goal_id), copy);
+  const [currentBasis, retainedWitness] = changed.split(`### ${copy.contract.receipt}`);
+  assert.ok(currentBasis.includes("replacement-checker") && currentBasis.includes("1".repeat(64)));
+  assert.ok(retainedWitness.includes("recovery-checker") && retainedWitness.includes("d".repeat(64)), "A new checker cannot rewrite the saved witness's source");
 }
 for (const mutation of [
   { ...contract, enabled: "true" }, { ...contract, revision: "7" }, { ...contract, revision: 1.5 },

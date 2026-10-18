@@ -185,6 +185,35 @@ def test_long_history_keeps_evidence_beyond_rpc_limit() -> None:
     assert trigger["oldest_counted_generated_at"] == rows[-1]["generated_at"]
 
 
+def test_streak_codec_carries_one_clock_for_all_monitor_facts(monkeypatch) -> None:
+    from datetime import datetime, timezone
+    from loopx.control_plane.work_items import replan_history_codec as codec
+
+    calls, clocks = [], []
+    observed = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+    def clock():
+        clocks.append(True)
+        return observed
+
+    def capture(method, params):
+        calls.append((method, params))
+        return {"schema_version": "replan_history_result_v0", "trigger": None}
+
+    monkeypatch.setattr(codec, "now_utc", clock)
+    monkeypatch.setattr(codec, "effect_runtime_result", capture)
+    items = [{"todo_id": f"todo_monitor_{i}", "claimed_by": AGENT,
+              "consecutive_no_change": "8", "expires_at": "2030-01-01T00:00:00Z"}
+             for i in range(8)]
+    codec.project_replan_history(operation="monitor_streak", agent_todos={"monitor_open_items": items})
+    assert clocks == [True]
+    assert len(calls) == 1 and calls[0][0] == "work_item.replan_history.project"
+    params = calls[0][1]
+    assert params["observed_at"] == observed.timestamp()
+    assert len(params["todos"]["monitors"]) == 8
+    assert all(row["expires_at"] == params["observed_at"] for row in params["todos"]["monitors"])
+
+
 def test_snapshot_transport_is_private_compact_and_always_removed(monkeypatch) -> None:
     import json
     import os

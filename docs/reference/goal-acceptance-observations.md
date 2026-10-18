@@ -614,6 +614,20 @@ bytes. Delegation evidence includes the checker only when the acceptance owner
 observed it current and its tested outputs cover that execution's exact outputs.
 Requester adoption remains a separate record.
 
+**Export the evidence.** The existing **Delivery & evidence → Export delivery
+snapshot** action includes each oracle criterion's observed state and the saved
+checker's source identity, digest, UTC check time and exact input/output versions.
+The witness remains under the historical check record when files change or
+current observations are unavailable. It cannot turn a recorded or stale check
+into current acceptance. Downloading reads the snapshot; it does not execute a
+checker. Missing witness fields stay missing. Ordinary criteria and disabled
+contracts retain their existing export format.
+
+**导出依据。** 现有「交付与依据 → 导出交付快照」保留检查器来源、摘要、实际检查时间
+及输入／输出版本，并分别显示条件的观测状态与历史检查记录。文件变化或当前观测缺失时，
+旧依据仍可回看，但不表示当前通过；下载不会重跑检查，也不会补造缺失的回执。
+普通条件与停用合同保留原有导出格式。
+
 The same local-owner journey is available through the existing CLI:
 
 ```sh

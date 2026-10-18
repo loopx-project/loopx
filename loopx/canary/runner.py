@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
-from ..extensions.process_runtime import terminate_process_tree
+from ..extensions.process_runtime import remove_owned_tree, terminate_process_tree
 from .planner import (
     REPO_ROOT,
     build_catalog_canary_plan,
@@ -288,6 +287,17 @@ def _retire_fixture_runtimes(root: Path, *, timeout: float = 15) -> None:
                 raise RuntimeError(f"managed runtime still exiting: {path.name}")
 
 
+def _remove_fixture_root(root: Path) -> None:
+    """Stop every managed runtime in an owned smoke root, then remove the root.
+
+    The root belongs to one check and holds host fixtures, git object stores
+    included, so removal tolerates the read-only attributes a host leaves behind.
+    A failure still raises, and the caller retains the tree for diagnosis.
+    """
+    _retire_fixture_runtimes(root)
+    remove_owned_tree(root)
+
+
 def _run_check(
     check: dict[str, Any],
     *,
@@ -347,8 +357,7 @@ def _run_check(
                 )
         finally:
             try:
-                _retire_fixture_runtimes(root)
-                shutil.rmtree(root)
+                _remove_fixture_root(root)
             except (OSError, RuntimeError, ValueError) as error:
                 # Retain the owned namespace if shutdown cannot be proved.
                 # Do not mask the check with unconditional second deletion.

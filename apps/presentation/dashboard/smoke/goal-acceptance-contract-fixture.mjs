@@ -28,6 +28,19 @@ export function verifiedContract(status) {
     },
   };
 }
+export function oracleContract(state = "current") {
+  const value = structuredClone(verifiedContract("accepted"));
+  value.criteria[0].oracle = {
+    kind: "owner_pinned_oracle", source_id: "recovery-checker", source_digest: "d".repeat(64),
+    input_refs: ["expected.txt"], output_refs: ["recovery.txt"], state,
+  };
+  value.verification.results[0].oracle_evidence = {
+    source_id: "recovery-checker", source_digest: "d".repeat(64), checked_at: "2026-09-01T01:02:03Z",
+    input_versions: [{ref: "expected.txt", sha256: "e".repeat(64)}],
+    output_versions: [{ref: "recovery.txt", sha256: "f".repeat(64)}],
+  };
+  return value;
+}
 export const snapshot = {
   ok: true, goal_id: "release-demo", observed_at: "2026-09-01T00:00:00Z", acceptance,
   graph: {

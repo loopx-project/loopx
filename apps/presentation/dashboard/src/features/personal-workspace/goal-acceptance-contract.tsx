@@ -88,7 +88,7 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
     {notice ? <p role="status">{notice}</p> : null}</>;
   const readOnly = !canManage;
   const criterionText = (item: typeof criteria[number]) => item.oracle
-    ? ({current: zh ? "当前版本已核对" : "Current versions checked", recorded: zh ? "历史结果，当前版本未核对" : "Recorded; current versions not checked", stale: zh ? "来源或版本已变化，请重新检查" : "Source or versions changed; check again", failed: zh ? "检查失败；修复交付物后可再次检查" : "Checks failed; repair the delivery before checking again", unverified: zh ? "尚未检查" : "Not checked", unavailable: zh ? "证据不可用" : "Evidence unavailable"})[fresh ? item.oracle.state : "recorded"]
+    ? copy.oracleState[fresh ? item.oracle.state : "recorded"]
     : fresh ? copy.verificationState[item.state] : copy.retained;
   const advancedConfiguration = management || enabled ? <details className="delivery-check-advanced"><summary>{zh ? "高级配置与诊断" : "Advanced configuration and diagnostics"}</summary>
         <p>{copy.guidance}</p>

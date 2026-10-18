@@ -64,7 +64,9 @@ If the bundle is newer, or no selected CLI qualifies, the App prepares its
 bundled snapshot in its own data directory through the existing installer.
 This updates the CLI used by the App without replacing uv/pip/pipx's command or
 editing the user's shell profile. An optional failed upgrade retains a qualified
-previous runtime. Core's installation-only doctor qualifies non-editable wheel
+previous runtime. Every discovered CLI must answer Core's installation-only
+doctor successfully, including managed releases: a surviving `release.json`
+cannot qualify a broken executable. Core also qualifies non-editable wheel
 fingerprints: a local reuse fence, not publisher or source attestation. Older
 CLIs without that readback can use the automatic App-owned fallback.
 
@@ -262,6 +264,14 @@ release secret; the App embeds the public key. PR validation has no signing
 secret. Updater signing does not provide Apple notarization. It also does not
 change Goal authority, grant capabilities, or stop running agents on behalf of
 the user. Services may briefly disconnect during reconciliation.
+
+The optional startup feed check has a three-second deadline so an unavailable
+update server cannot hold workspace startup indefinitely. A manual **Check for updates**
+allows 45 seconds for the same official feed, including redirects; the panel
+keeps showing its checking state while the existing workspace remains readable.
+A timeout remains an explicit retryable error, never a claim that the App is
+current. The separate 30-second download/signature-verification deadline and
+installation/recovery boundaries are unchanged.
 
 Published macOS preview artifacts use ad-hoc code signing to verify bundle
 integrity without requiring an Apple Developer account. They are not signed

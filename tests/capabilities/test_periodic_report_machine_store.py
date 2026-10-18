@@ -403,6 +403,7 @@ def test_canonical_machine_config_cli_uses_the_same_store_and_projection(
     assert catalog["schema_version"] == "machine_configuration_catalog_v0"
     assert [item["namespace"] for item in catalog["namespaces"]] == [
         "change_quality_qualification",
+        "codex_chat",
         "goal_storage",
         "manager_runtime",
         "periodic_report",

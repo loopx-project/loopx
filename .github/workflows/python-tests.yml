@@ -825,6 +825,16 @@ jobs:
       - name: Check Windows collaboration lock sidecars
         run: python -m pytest -q --basetemp .t tests/test_collaboration_sidecar_scan.py
 
+      - name: Qualify the read-only fixture teardown on native Windows
+        # Windows refuses to unlink a read-only file and git marks every loose
+        # object read-only, so these suites fail on the pre-fix teardown with
+        # PermissionError [WinError 5] and cannot discriminate on POSIX.
+        run: >-
+          python -m pytest -q
+          tests/canary/test_smoke_fixture_cleanup.py
+          tests/extensions/test_process_runtime.py
+          tests/capabilities/test_issue_fix_temporary_workspace.py
+
       - name: Qualify native Windows peer reads and long-path inputs
         run: >-
           python -m pytest -q
