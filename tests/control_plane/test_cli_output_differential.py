@@ -61,6 +61,27 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
     }
 
 
+def test_turn_delivery_boundary_growth_is_measured_one_time_and_surface_scoped():
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    path = "$.turn_envelope.action.selected_todo.delivery_boundary"
+    base = _row(row_id="surface/loopx_turn_plan/small/json", chars=1000,
+        utf8_bytes=1000, lines=20, compact_payload_chars=800)
+    candidate = {**base, "json_shape_paths": [*base["json_shape_paths"], path],
+        "chars": 1090, "utf8_bytes": 1090, "compact_payload_chars": 890}
+    assert not _compare_row(base, candidate)["failures"]
+    for old, new in [
+        ({**base, "json_shape_paths": candidate["json_shape_paths"]}, candidate),
+        ({key: value for key, value in base.items() if key != "json_shape_paths"}, candidate),
+        (base, {**candidate, "json_shape_paths": base["json_shape_paths"]}),
+        ({**base, "row_id": "surface/status/small/json"},
+         {**candidate, "row_id": "surface/status/small/json"}),
+    ]:
+        assert _compare_row(old, new)["failures"]
+    for metric in ("chars", "compact_payload_chars"):
+        assert _compare_row(base, {**candidate, metric: candidate[metric] + 1})["failures"]
+
+
 @pytest.mark.parametrize("surface,output_format,feature,growth", [
     ("start_goal_guided", "json", "complete_todo_readback", (948, 6, 894)),
     ("start_goal_guided_command_pack_detail", "markdown", "complete_todo_readback", (436, 2, 0)),

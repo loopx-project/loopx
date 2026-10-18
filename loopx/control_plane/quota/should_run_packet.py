@@ -513,10 +513,27 @@ def _resolve_agent_lane_delivery_route(
             raise RuntimeError(
                 "qualified action selection is missing its projected candidate"
             )
+        # Explicit selection freezes the eligible identity, not its settlement
+        # boundary. Ask the same typed delivery owner used by the automatic
+        # route; otherwise an open validated Task can only settle by completing.
+        candidate = prepared.requested_action_candidate
+        delivery = evaluate_delivery_route(
+            agent_id=str((prepared.agent_identity or {}).get("agent_id") or ""),
+            previous_todo_id=None, previous_delivery_outcome=None,
+            continuity_todo=None, continuity_actionable=False, continuity_capability_ready=False,
+            fallback_todo=candidate,
+            fallback_actionable=projection_todo_item_is_actionable_open(candidate),
+            fallback_capability_ready=not missing_required_capabilities(
+                candidate, available_capabilities=prepared.effective_available_capabilities),
+            preemptions=delivery_preemptions,
+        )
+        boundary = delivery.get("boundary") or {}
         return {
-            **prepared.requested_action_candidate,
+            **candidate,
             "selected_by": "agent_action_selection",
             "selection_binding": "pending_action_selection",
+            **({"delivery_boundary": boundary["delivery_boundary"]}
+               if boundary.get("delivery_boundary") == "in_flight_continuation" else {}),
         }
 
     item = prepared.item

@@ -213,7 +213,7 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
     "todo_id", "priority", "status", "task_class", "action_kind",
     "task_repository", "continuation_policy", "claimed_by", "bound_agent",
     "goal_bound", "blocks_agent", "unblocks_todo_id", "next_due_at",
-    "expires_at", "selected_by", "confidence",
+    "expires_at", "selected_by", "confidence", "delivery_boundary",
   ]) {
     if (source[field] !== null && source[field] !== undefined) compact[field] = source[field];
   }

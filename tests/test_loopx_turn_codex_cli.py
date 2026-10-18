@@ -137,6 +137,9 @@ import sys
 import time
 
 args = sys.argv[1:]
+if os.environ.get("FAKE_CODEX_CONFIG_APPEND") and "resume" not in args:
+    config = pathlib.Path(os.environ["CODEX_HOME"]) / "config.toml"
+    config.write_text(config.read_text() + os.environ["FAKE_CODEX_CONFIG_APPEND"])
 prompt = sys.stdin.read()
 log = pathlib.Path(os.environ["FAKE_CODEX_LOG"])
 with log.open("a", encoding="utf-8") as handle:
@@ -560,6 +563,46 @@ def test_agent_resume_rejects_changed_profile_before_launch(tmp_path, monkeypatc
     with pytest.raises(ValueError, match="profile changed"):
         run_codex_cli_host(request, model="another-model", **options)
     assert len(log.read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize("change", ["current_trust", "other_trust", "untrusted", "provider", "trust_and_model", "extra_project_setting"])
+def test_agent_resume_observes_only_current_workspace_bootstrap_trust(tmp_path, monkeypatch, change):
+    executable, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    config = home / "config.toml"
+    config.write_text('model="fixture"\n')
+    workspace = str(tmp_path.resolve())
+    suffix = f'\n[projects.{json.dumps(workspace)}]\ntrust_level="trusted"\n'
+    if change == "other_trust":
+        suffix = f'\n[projects.{json.dumps(str(tmp_path / "other"))}]\ntrust_level="trusted"\n'
+    elif change == "untrusted":
+        suffix = suffix.replace('="trusted"', '="untrusted"')
+    elif change == "provider":
+        suffix = 'model_provider="different"\n'
+    elif change == "trust_and_model":
+        suffix = 'model_provider="different"\n' + suffix
+    elif change == "extra_project_setting":
+        suffix += 'model="different"\n'
+    monkeypatch.setenv("FAKE_CODEX_CONFIG_APPEND", suffix)
+    request = _request()
+    request["session"]["context_policy"] = {"mode": "resume", "binding_scope": "agent"}
+    options = dict(runtime_root=tmp_path / "runtime", project=tmp_path, codex_bin=str(executable))
+    run_codex_cli_host(request, **options)
+    after_start = config.read_bytes()
+    request["session"]["action"] = "resume"
+    if change == "current_trust":
+        run_codex_cli_host(request, **options)
+        assert len(log.read_text().splitlines()) == 2
+        assert "session-fixture-0001" in json.loads(log.read_text().splitlines()[1])
+        # A later configuration edit still invalidates this exact binding.
+        config.write_bytes(after_start + b'\n[features]\nplugins=true\n')
+    with pytest.raises(ValueError, match="profile changed"):
+        run_codex_cli_host(request, **options)
+    assert config.read_bytes() == (after_start + b'\n[features]\nplugins=true\n' if change == "current_trust" else after_start)
+    assert len(log.read_text().splitlines()) == (2 if change == "current_trust" else 1)
 
 
 def _write_resume_registry(path, project, *, scopes, expired=False, active=True):

@@ -288,6 +288,11 @@ def execute_turn_run_once(
                 # completion/repair, without decorating a completed or blocked task.
                 delivery_batch_scale=str(result["delivery_batch_scale"]),
                 delivery_outcome=str(result["delivery_outcome"]),
+                # Transport the native selection's signed boundary only for
+                # independently validated intermediate work. Terminal results
+                # keep the ordinary completion/semantic-closeout transaction.
+                delivery_boundary=(selected_todo.get("delivery_boundary")
+                    if result_kind == "validated_progress" else None),
                 delivery_workspace_path=delivery_workspace_path,
                 todo_id=settlement_identity.todo_id,
                 turn_instance_id=settlement_identity.turn_instance_id,

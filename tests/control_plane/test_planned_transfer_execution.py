@@ -6,6 +6,7 @@ use a real Codex process with deterministic local inference, never a paid model.
 from __future__ import annotations
 
 import json
+import http.client
 import os
 import shlex
 import subprocess
@@ -235,3 +236,157 @@ def test_missing_original_validation_content_refuses_before_fence(source, tmp_pa
         "--destination-root", str(destination), "--continue-todo-id", source["todo"], "--execute", expected_code=1)
     assert result["ok"] is False and before == (source["fence"].read_bytes(), source["registry"].read_bytes())
     assert list(destination.iterdir()) == []
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="requires the isolated real Codex fixture")
+def test_original_task_continues_across_native_turns_with_stage_and_final_checks(source, tmp_path, monkeypatch):
+    """A settled progress Turn is not Task completion or a second-Turn wake.
+
+    The next explicit invocation uses the ordinary Turn owner, a fresh lease
+    and the destination Agent's existing native thread. The original validator
+    distinguishes its predeclared stage from terminal acceptance.
+    """
+    from loopx.control_plane.goals.planned_transfer_io import inspect_registered_goal_transfer
+    from tests.control_plane.codex_checkpoint_fixture import real_native_source
+
+    _goal_document(source, absolute=True)
+    # The Task's validator is declared before moving or executing any work.
+    validator = [sys.executable, "-c", "import json,sys; from pathlib import Path; "
+        "r=json.loads(sys.stdin.read() or '{}'); "
+        "assert Path('report.txt').read_bytes()==(b'12\\n' if r.get('result_kind')=='validated_progress' else b'21\\n')"]
+    lease = source["acquire"]("declare-staged-checks")["lease"]
+    original = source["cli"]("todo", "list", "--goal-id", "report", "--todo-id", source["todo"])
+    source["cli"]("todo", "update", "--goal-id", "report", "--todo-id", source["todo"],
+        "--agent-id", "agent-a", "--update-operation-id", "staged-independent-validator",
+        "--update-expected-provider-revision", original["authority_read"]["provider_revision"],
+        "--validation-command-json", json.dumps(validator),
+        "--task-lease-idempotency-key", lease["idempotency_key"],
+        "--task-lease-expected-version", str(lease["version"]), "--execute")
+    source["release"](lease)
+    original = source["cli"]("todo", "list", "--goal-id", "report", "--todo-id", source["todo"])["todo"]
+    actual = source["project"].parent / "agent"
+    (actual / "input.txt").write_text("5\n7\n9\n")
+    (actual / "report.txt").write_text("unfinished\n")
+    destination, prepared = _prepare(source, tmp_path)
+    requests = []
+
+    def response(body, number, message):
+        if number == 1:
+            return message
+        for item in body.get("input", []):
+            for part in item.get("content", []) if isinstance(item, dict) else []:
+                text = part.get("text", "") if isinstance(part, dict) else ""
+                if "Turn request:\n" in text:
+                    candidate = json.loads(text.split("Turn request:\n", 1)[1])
+                    if not any(previous["turn_key"] == candidate["turn_key"] for previous in requests):
+                        requests.append(candidate)
+        request = requests[-1]
+        assert request["transfer_context"]["selected_todo"]["todo_id"] == source["todo"]
+        if number in (2, 4):
+            script = ("from pathlib import Path; "
+                + ("assert Path('report.txt').read_text()=='unfinished\\n'; "
+                   "Path('report.txt').write_text(str(sum(map(int,Path('input.txt').read_text().split()[:2])))+'\\n')"
+                   if number == 2 else
+                   "assert Path('report.txt').read_text()=='12\\n'; "
+                   "Path('report.txt').write_text(str(sum(map(int,Path('input.txt').read_text().split())))+'\\n')"))
+            return {"type": "function_call", "id": f"fc_report_{number}", "call_id": f"call_report_{number}",
+                "name": "exec_command", "arguments": json.dumps({
+                    "cmd": shlex.quote(sys.executable) + " -c " + shlex.quote(script), "max_output_tokens": 1000})}
+        result = {"schema_version": "loopx_turn_result_v0", "turn_key": request["turn_key"],
+            "result_kind": "validated_progress" if number == 3 else "validated_completion",
+            "completed_phases": ["host_execute", "typed_result"], "classification": "original_report_stage",
+            "recommended_action": "Continue the original Task until its independent final check passes.",
+            "next_action": "Sum the remaining input and independently accept 21.",
+            "delivery_batch_scale": "implementation", "delivery_outcome": "outcome_progress",
+            "vision_unchanged_reason": "Original stage12 and independent terminal21 criteria remain unchanged.",
+            "path_delta_mode": "unchanged", "agent_vision_json": "", "summary": "Original report advanced."}
+        return {**message, "content": [{"type": "output_text", "text": json.dumps(result)}]}
+
+    with real_native_source(tmp_path / "native", os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"], actual,
+            close_source=True, response_builder=response, sandbox="workspace-write") as (env, unused, _, calls):
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        server, thread, call = _http(source)
+        try:
+            confirm = {"action": "confirm", "goal_id": "report", "operation_id": "move-a",
+                "preview_sha256": prepared["prepared_cutover"]["preview_sha256"]}
+            status, first = call(confirm)
+            assert status == 200 and first["execution"]["ok"] is True, first
+            pending = next(row for row in first["readback"]["work"]["todos"] if row["todo_id"] == source["todo"])
+            assert pending["status"] == "open" and pending["done"] is False
+            target = destination / "agent-workspace"
+            assert (target / "report.txt").read_bytes() == b"12\n"
+            before = source["registry"].read_bytes(), source["fence"].read_bytes()
+            lineage = {"goal_id": "report", "agent_id": "agent-a", "todo_id": source["todo"]}
+            binding = select_codex_cli_session(destination / "runtime", lineage=lineage, session_scope="agent")
+            assert binding["session_id"] not in ("original-context", unused)
+            assert len(calls) == 3
+            assert call(confirm)[1]["execution"] == first["execution"]
+            assert len(calls) == 3 and (target / "report.txt").read_bytes() == b"12\n"
+            prefix = [sys.executable, "-I", "-m", "loopx.cli", "--format", "json", "--registry",
+                str(destination / "workspace/.loopx/registry.json"), "--runtime-root", str(destination / "runtime")]
+
+            def invoke(*args):
+                run = subprocess.run([*prefix, *args], cwd=target, capture_output=True, text=True, timeout=120)
+                assert run.returncode == 0, run.stdout + run.stderr
+                return json.loads(run.stdout)
+
+            def spent():
+                return invoke("history", "--goal-id", "report", "--limit", "50")["goals"][0]["quota"]["spent_slots"]
+
+            assert spent() == 2  # one source debit, one independently checked stage
+            lease = invoke("task-lease", "acquire", "--goal-id", "report", "--todo-id", source["todo"],
+                "--owner", "agent-a", "--idempotency-key", "finish-original-task", "--write-scope", "report.txt",
+                "--write-worktree", str(target), "--ttl-seconds", "600")["lease"]
+            args = ["turn", "run-once", "--goal-id", "report", "--agent-id", "agent-a", "--todo-id", source["todo"],
+                "--turn-instance-id", "finish-original-task", "--project", str(target), "--host", "codex-cli",
+                "--codex-bin", env["CODEX_BIN"], "--codex-sandbox", "workspace-write", "--session-scope", "agent",
+                "--validation-command-json", json.dumps(validator), "--timeout-seconds", "90", "--no-global-sync",
+                "--task-lease-idempotency-key", lease["idempotency_key"],
+                "--task-lease-expected-version", str(lease["version"]), "--execute"]
+            for capability in ("filesystem_read", "filesystem_write", "shell"):
+                args += ["--available-capability", capability]
+            second = invoke(*args)
+            assert second["ok"] is True and second["result_kind"] == "validated_completion", second
+            assert len(calls) == 5 and len(requests) == 2
+            assert requests[0]["turn_key"] != requests[1]["turn_key"]
+            current_binding = select_codex_cli_session(destination / "runtime", lineage=lineage, session_scope="agent")
+            assert current_binding["session_id"] == binding["session_id"]
+            assert (target / "report.txt").read_bytes() == b"21\n" and spent() == 3
+            work = inspect_registered_goal_transfer(registry_path=source["registry"], goal_id="report")["work"]
+            completed = next(row for row in work["todos"] if row["todo_id"] == source["todo"])
+            assert completed["done"] is True
+            def completed_history():
+                connection = http.client.HTTPConnection(*server.server_address, timeout=30)
+                connection.request("GET", "/api/chat/completed-todos?goal_id=report")
+                response = connection.getresponse()
+                history = json.loads(response.read())
+                connection.close()
+                return response.status, history
+
+            status, history = completed_history()
+            assert status == 200 and history["total"] == 1
+            assert history["items"][0]["todo_id"] == source["todo"]
+            assert history["items"][0]["done"] is True
+            target_registry = destination / "workspace/.loopx/registry.json"
+            retained = target_registry.with_suffix(".offline")
+            target_registry.rename(retained)
+            try:
+                status, unavailable = completed_history()
+                assert status >= 400 and unavailable["ok"] is False
+            finally:
+                retained.rename(target_registry)
+            assert completed_history()[1]["items"] == history["items"]
+            for field in ("text", "claimed_by", "required_write_scopes", "task_repository", "completion_validation_sha256"):
+                assert completed[field] == original[field]
+            # Replaying either original operation cannot rerun tools or debit.
+            restart_effect_runtime(wait_for_exit=True)
+            assert invoke(*args)["ok"] is True
+            assert call(confirm)[1]["execution"] == first["execution"]
+            assert len(calls) == 5 and spent() == 3
+            assert before == (source["registry"].read_bytes(), source["fence"].read_bytes())
+            assert (actual / "report.txt").read_bytes() == b"unfinished\n"
+        finally:
+            server.shutdown()
+            thread.join(5)
+            server.server_close()

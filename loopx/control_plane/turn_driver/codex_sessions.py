@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import tempfile
+import tomllib
+from copy import deepcopy
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -417,6 +419,7 @@ def codex_session_profile_digest(
     reasoning_effort: str | None = None,
     sandbox: str | None = None,
     mcp_server: Mapping[str, Any] | None = None,
+    config_bytes: bytes | None = None,
 ) -> str:
     """Bind a shared conversation to its workspace, provider home and settings."""
     config = home / "config.toml"
@@ -429,10 +432,37 @@ def codex_session_profile_digest(
         "sandbox": sandbox,
         "mcp_server": mcp_server,
         "config_digest": hashlib.sha256(
-            config.read_bytes() if config.exists() else b""
+            config_bytes if config_bytes is not None else config.read_bytes() if config.exists() else b""
         ).hexdigest(),
     }
     return hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
+
+
+def codex_session_profile_after_startup(
+    digest: str, config_before: bytes, **profile: Any,
+) -> str:
+    """Observe only Codex's first trust registration for this exact workspace.
+
+    This writes no configuration and grants no trust. All other configuration
+    changes keep the original digest so the next resume still refuses. Existing
+    bindings and the raw-config digest format remain unchanged.
+    """
+    config = profile["home"] / "config.toml"
+    try:
+        after = config.read_bytes() if config.exists() else b""
+        before_value = tomllib.loads(config_before.decode("utf-8"))
+        after_value = tomllib.loads(after.decode("utf-8"))
+        expected = deepcopy(before_value)
+        projects = expected.setdefault("projects", {})
+        project = projects.setdefault(str(profile["project"].resolve()), {})
+        if "trust_level" in project:
+            return digest
+        project["trust_level"] = "trusted"
+        if after_value != expected or digest != codex_session_profile_digest(**profile, config_bytes=config_before):
+            return digest
+        return codex_session_profile_digest(**profile, config_bytes=after)
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+        return digest
 
 
 def require_codex_session_profile(binding: Mapping[str, Any], digest: str) -> None:
@@ -440,6 +470,28 @@ def require_codex_session_profile(binding: Mapping[str, Any], digest: str) -> No
         raise ValueError(
             "Codex session profile changed; explicitly select fresh or use a new runtime"
         )
+
+
+def prepare_codex_agent_profile(
+    *, binding: Mapping[str, Any] | None, registry_path: Path | None,
+    lineage: Mapping[str, str], **profile: Any,
+) -> tuple[dict[str, Any], bytes, str]:
+    """Freeze and check one provider profile before starting its process."""
+    profile["home"] = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
+    config = profile["home"] / "config.toml"
+    before = config.read_bytes() if config.exists() else b""
+    digest = codex_session_profile_digest(**profile, config_bytes=before)
+    if binding:
+        approved_write_resume = (
+            profile["sandbox"] == "workspace-write"
+            and binding.get("session_profile_digest") == codex_session_profile_digest(
+                **{**profile, "sandbox": "read-only"}, config_bytes=before)
+            and approved_codex_workspace_write_resume(
+                registry_path, lineage=lineage, project=profile["project"])
+        )
+        if not approved_write_resume:
+            require_codex_session_profile(binding, digest)
+    return profile, before, digest
 
 
 def approved_codex_workspace_write_resume(
