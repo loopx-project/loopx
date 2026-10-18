@@ -218,6 +218,33 @@ recovers the same native Turn; already recorded work and debits are not repeated
 settlement retains its existing lease proof; its owner may still hold recovery.
 A successful request does not itself prove Task completion.
 
+The initial confirmation may instead settle independently checked intermediate
+progress while the same original Task stays open. Explicit Todo selection now
+uses the existing typed delivery-boundary owner, and the signed Turn envelope
+retains that boundary through progress writeback. This does not waive terminal
+validation: the later completion still uses the original Task's independent
+acceptance. A subsequent explicit governed Turn obtains a fresh lease and can
+resume the responsible Agent's destination-native thread. Retrying confirmation
+recovers its first Turn; it does not request or wake this later Turn.
+The original App's completed-Task history and accepted-result reads use the same
+verified destination; cached pages from another source cannot become target
+history. A disconnected destination refuses instead of presenting old results.
+
+Codex can register the current workspace as trusted in its local configuration
+during the first process startup. The shared-session adapter observes only that
+exact first registration when recording the resulting profile. It writes no
+trust setting. Another workspace, extra project settings, untrusted state or
+provider/model/sandbox changes retain the original profile fence; later profile
+changes still refuse resume. Existing binding and digest formats are preserved.
+
+The isolated File/SQLite qualification carries one original Task through two
+actual Codex processes, a declared intermediate check and independent final
+acceptance, with one resumed native thread and one debit per settled Turn.
+Both original operations replay without executing tools again. Normal
+noneditable-package qualification uses deterministic local model responses and
+synthetic inputs; it is not live-model, automatic sustained scheduling or the
+complete installed migration/120-second qualification.
+
 Distinct source workspaces, unknown mappings, links/submodules, conflicted or
 special index states, and dirty canonical checkouts still hold before preparation.
 These holds do not complete the full profile. Automatic continuation is limited
@@ -326,6 +353,17 @@ remain unqualified.
 验证只读状态对话及 Host 不可用路径，未进行模型推理，不宣称真实 Codex Host 验收。
 审批与监控、删除及原任务持续执行仍未完成；旧 CLI 与执行器不自动重定向，完整安装
 迁移及 120 秒验收仍未通过。
+
+另有隔离 File/SQLite 实测覆盖同一个原任务的两轮真实 Codex 进程：第一轮经预先声明
+的阶段检查后结算，任务仍未完成；下一次显式执行取得新租约，续接目标端同一个原生
+线程，再经原任务独立终验完成。每轮只扣一次，重复确认或重试不重复工具调用。显式
+任务选择复用现有类型化交付边界，签名 TurnEnvelope 保留该边界；最终验收规则不放宽。
+首次启动仅观察 Codex 对当前工作区新增的信任登记，不代写配置；其它工作区、额外
+项目设置、非信任状态及 provider/model/sandbox 等变化仍受原配置摘要约束。正常非
+editable 包使用本地固定模型响应，不调用付费模型。后一轮仍由现有执行入口显式启动，
+重复迁移确认只恢复原轮次；自动持续调度、真实模型及完整 120 秒旅程仍待验收。
+原 App 的已完成任务和验收结果也读取同一经核验目标；旧来源分页不能变成目标历史，
+目标断开时拒绝读取，不展示旧源结果。
 
 ![Original Task requirements saved through the admitted local destination in the normal packaged App](assets/agent-transfer-task-edit.png)
 
