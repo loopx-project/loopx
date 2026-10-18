@@ -40,6 +40,7 @@ def write_bytes_atomic(
     preserve_mode: bool = False,
     directory_mode: int | None = None,
     fsync_directory: bool = False,
+    replace_retry_seconds: float = 0,
 ) -> None:
     """Replace one file with `payload` through a same-directory temp file.
 
@@ -69,7 +70,17 @@ def write_bytes_atomic(
             os.fsync(handle.fileno())
         if mode is not None:
             os.chmod(temporary, mode)
-        os.replace(temporary, destination)
+        deadline = time.monotonic() + replace_retry_seconds
+        while True:
+            try:
+                os.replace(temporary, destination)
+                break
+            except OSError as error:
+                remaining = deadline - time.monotonic()
+                if (os.name != "nt" or getattr(error, "winerror", None) != 5
+                        or remaining <= 0):
+                    raise
+                time.sleep(min(0.05, remaining))
         if fsync_directory and os.name == "posix":
             directory_fd = os.open(
                 destination.parent,
@@ -91,6 +102,7 @@ def write_json_atomic(
     preserve_mode: bool = False,
     directory_mode: int | None = None,
     fsync_directory: bool = False,
+    replace_retry_seconds: float = 0,
     indent: int | None = 2,
     sort_keys: bool = False,
     separators: tuple[str, str] | None = None,
@@ -116,6 +128,7 @@ def write_json_atomic(
         preserve_mode=preserve_mode,
         directory_mode=directory_mode,
         fsync_directory=fsync_directory,
+        replace_retry_seconds=replace_retry_seconds,
     )
 
 

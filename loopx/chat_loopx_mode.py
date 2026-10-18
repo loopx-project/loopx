@@ -414,6 +414,25 @@ class ChatLoopXMode:
                         )
                     ):
                         raise ValueError("execution operation identity conflict")
+                    if (existing.get("status") == "queued"
+                            and mode.get("enabled") is True
+                            and mode.get("paused") is not True):
+                        # Acceptance is not dispatch. Re-enter the existing
+                        # typed owner with the exact stored request after a
+                        # failed start write; never reconstruct a new Turn.
+                        if not goal_accepts_collaboration(self._goal(session)):
+                            raise ValueError("Goal is stopped or unavailable")
+                        self._execution(session, prior_settings)
+                        self.controller.submit_turn(
+                            session_id=session_id,
+                            client_turn_id=operation_id,
+                            message=existing["message"],
+                            attachments=[],
+                            work_dir=work_dir,
+                            objective=objective,
+                            loopx_execution=True,
+                            loopx_request=prior_request,
+                        )
                     return {**self.snapshot(session_id), "turn_id": existing["turn_id"]}
             if operation in {"pause", "exit"}:
                 effect_runtime_result(

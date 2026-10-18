@@ -293,11 +293,15 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
     const todo = requireJsonObject(request.todo, "completion Todo");
     // Managed journals store the raw Turn id; interactive callers store its
     // scoped effect id. Preserve history only for this already committed result.
-    const managedReplay = todo.status === "done" && todo.todo_id === identity.todo_id &&
-      todo.claimed_by === identity.agent_id && todo.completion_turn_key === identity.turn_instance_id;
-    const key = managedReplay ? identity.turn_instance_id : identity.effect_id;
+    const originalReplay = todo.status === "done" && todo.todo_id === identity.todo_id &&
+      todo.claimed_by === identity.agent_id &&
+      (todo.completion_turn_key === identity.turn_instance_id || todo.completion_turn_key === identity.effect_id);
+    const key = originalReplay ? String(todo.completion_turn_key) : identity.effect_id;
     const candidate = jsonObject(request.candidate);
     const unchanged = candidate !== null &&
+      // A done projection cannot prove a supplied lease matches the original
+      // request. Keep that proof with the canonical receipt owner after release.
+      candidate.task_lease_idempotency_key == null && candidate.task_lease_expected_version == null &&
       ["evidence", "note", "reason"].every(field => candidate[field] == null || candidate[field] === todo[field]) &&
       ["result_file", "next_agent_todo", "next_user_todo", "next_claimed_by", "next_task_class",
         "next_action_kind", "next_task_repository", "next_required_capabilities", "next_continuation_policy",
@@ -306,7 +310,7 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
       (candidate.successor_todo_ids == null || (Array.isArray(candidate.successor_todo_ids) && candidate.successor_todo_ids.length === 0)) &&
       candidate.clear_claim !== true && candidate.self_merged !== true &&
       (candidate.role == null || candidate.role === todo.role);
-    if (managedReplay && unchanged) {
+    if (originalReplay && unchanged) {
       const fence = evaluateTodoCompletionFence(decodeTodoCompletionFenceRequest({
         schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA, projection_source: "materialized",
         todo, goal_id: identity.goal_id, todo_id: identity.todo_id,

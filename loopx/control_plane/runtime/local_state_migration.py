@@ -106,14 +106,14 @@ def _write_registry(path: Path, payload: dict[str, Any]) -> None:
     _require_unlinked_directory_chain(path.parent, label="migration write")
     if _is_redirected_path(path):
         raise ValueError(f"migration write is a symlink or junction: {path}")
-    descriptor, name = tempfile.mkstemp(prefix=".loopx-migration-", dir=path.parent.parent)
+    descriptor, name = tempfile.mkstemp(prefix=".loopx-migration-", dir=windows_extended_path(path.parent.parent))
     temporary = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(_registry_bytes(payload))
             stream.flush()
             os.fsync(stream.fileno())
-        temporary.replace(path)
+        temporary.replace(windows_extended_path(path))
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -221,7 +221,7 @@ def _rewrite_registry(
         source, target = route
         declared = Path(str(goal["state_file"])).expanduser()
         goal["state_file"] = (
-            str(target) if declared.is_absolute() else str(DEFAULT_PROJECT_GOALS / target.parent.name / target.name)
+            str(target) if declared.is_absolute() else (DEFAULT_PROJECT_GOALS / target.parent.name / target.name).as_posix()
         )
     return updated
 
@@ -318,7 +318,7 @@ def _copy(source: Path, target: Path) -> None:
     if _is_redirected_path(source):
         raise ValueError(f"migration source is a symlink or junction: {source}")
     _require_backup_path(target.parent)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    windows_extended_path(target.parent).mkdir(parents=True, exist_ok=True)
     _require_backup_path(target.parent)
     if target.exists() or _is_redirected_path(target):
         raise FileExistsError(f"backup snapshot target already exists: {target}")
@@ -348,7 +348,7 @@ def _write_verified_backup(plan: dict[str, Any]) -> None:
     backup = Path(plan["backup_dir"])
     entries = plan["entries"]
     _require_backup_path(backup, must_be_absent=True)
-    backup.mkdir(mode=0o700, parents=True, exist_ok=False)
+    windows_extended_path(backup).mkdir(mode=0o700, parents=True, exist_ok=False)
     _require_backup_path(backup)
     try:
         for index, entry in enumerate(entries):
@@ -365,7 +365,7 @@ def _write_verified_backup(plan: dict[str, Any]) -> None:
             if _digest(copied) != entry["digest"]:
                 raise ValueError(f"backup verification failed for {original}")
         _require_backup_path(backup)
-        (backup / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        windows_extended_path(backup / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except Exception:
         # Keep any partial backup for inspection. No authoritative state moved.
         raise
@@ -394,7 +394,7 @@ def _verify_migrated_state(plan: dict[str, Any], writes: _MigrationWrites) -> No
             if legacy.exists() or _is_redirected_path(legacy):
                 raise ValueError(f"legacy authority reappeared during migration: {legacy}")
     before_runtime = backup / "snapshot" / "0"
-    before_children = {child.name for child in before_runtime.iterdir()}
+    before_children = {child.name for child in windows_extended_path(before_runtime).iterdir()}
     after_children = {child.name for child in target.iterdir()}
     if before_children != after_children:
         raise ValueError("runtime files changed during migration")
@@ -551,7 +551,7 @@ def _read_recovery_receipt(receipt_path: Path) -> dict[str, Any]:
     _require_backup_path(receipt_path.parent)
     if _is_redirected_path(receipt_path):
         raise ValueError(f"backup receipt is a symlink or junction: {receipt_path}")
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt = json.loads(windows_extended_path(receipt_path).read_text(encoding="utf-8"))
     if (
         not isinstance(receipt, dict)
         or receipt.get("schema_version") != LOCAL_STATE_MIGRATION_SCHEMA
@@ -563,7 +563,7 @@ def _read_recovery_receipt(receipt_path: Path) -> dict[str, Any]:
     plan_path = backup / "plan.json"
     if _is_redirected_path(plan_path):
         raise ValueError("migration backup plan is redirected")
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan = json.loads(windows_extended_path(plan_path).read_text(encoding="utf-8"))
     entries = receipt.get("entries")
     if not isinstance(entries, list) or not isinstance(plan, dict):
         raise ValueError("migration receipt has no entries")
@@ -588,9 +588,9 @@ def _read_recovery_receipt(receipt_path: Path) -> dict[str, Any]:
 
 def _require_unchanged_runtime(receipt: dict[str, Any], active: Path) -> None:
     before = Path(receipt["backup_dir"]) / "snapshot" / "0"
-    if {child.name for child in before.iterdir()} != {child.name for child in active.iterdir()}:
+    if {child.name for child in windows_extended_path(before).iterdir()} != {child.name for child in active.iterdir()}:
         raise ValueError(f"migrated state changed; automatic rollback is unsafe: {active}")
-    for child in before.iterdir():
+    for child in windows_extended_path(before).iterdir():
         current = active / child.name
         if child.name != GLOBAL_REGISTRY_FILENAME:
             if _digest(current) != _digest(child):
@@ -659,11 +659,11 @@ def _restore_snapshot_file(snapshot: Path, destination: Path, *, expected_digest
     if _digest(snapshot) != expected_digest:
         raise ValueError(f"migration backup changed: {snapshot}")
     before = _digest(destination)
-    descriptor, name = tempfile.mkstemp(prefix=".loopx-rollback-", dir=destination.parent.parent)
+    descriptor, name = tempfile.mkstemp(prefix=".loopx-rollback-", dir=windows_extended_path(destination.parent.parent))
     os.close(descriptor)
     temporary = Path(name)
     try:
-        shutil.copy2(snapshot, temporary)
+        shutil.copy2(windows_extended_path(snapshot), temporary)
         if _digest(temporary) != expected_digest or _digest(snapshot) != expected_digest:
             raise ValueError(f"registry recovery copy changed: {snapshot}")
         with temporary.open("r+b") as stream:
@@ -673,7 +673,7 @@ def _restore_snapshot_file(snapshot: Path, destination: Path, *, expected_digest
             raise ValueError("registry recovery destination is redirected")
         if _digest(destination) != before:
             raise ValueError(f"registry changed during recovery: {destination}")
-        temporary.replace(destination)
+        temporary.replace(windows_extended_path(destination))
     finally:
         temporary.unlink(missing_ok=True)
 

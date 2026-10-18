@@ -101,14 +101,18 @@ def test_start_is_explicit_and_replays_original_request_even_after_settings_chan
     assert not calls and not service.snapshot(sid)["enabled"]
     first = apply(mode, "start")
     second = apply(mode, "start")
-    assert first["turn_id"] == second["turn_id"] and len(calls) == 1
+    # The fixture only accepts a queued Turn. Its retry re-enters acceptance,
+    # while a real worker's single-flight guard prevents duplicate dispatch.
+    assert first["turn_id"] == second["turn_id"] and len(calls) == 2
+    assert calls[0] == calls[1]
+    assert len(service.store.messages(sid)) == 1
     with pytest.raises(ValueError, match="identity conflict"):
         apply(mode, "resume")
     with pytest.raises(ValueError, match="identity conflict"):
         apply(mode, "start", settings={**settings, "token_budget": 20000})
     with pytest.raises(Exception, match="current conversation turn"):
         apply(mode, "start", operation_id="another-run")
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_unfinished_goal_pins_identity_and_configuration_digest(mode):

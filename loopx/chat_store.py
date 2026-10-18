@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 from typing import Any
 import uuid
 from weakref import WeakValueDictionary
@@ -133,6 +134,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any], *, preserve_mode: bo
         directory_mode=0o700,
         separators=(",", ":"),
         indent=None,
+        replace_retry_seconds=0.5,
     )
 
 

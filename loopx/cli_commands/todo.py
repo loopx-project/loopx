@@ -687,6 +687,7 @@ def handle_todo_command(
                         "next_task_class", "next_action_kind", "next_task_repository",
                         "next_required_capabilities", "next_continuation_policy", "self_merged", "dry_run",
                         "next_excluded_agents", "next_user_task_class", "decision_outcome", "role",
+                        "task_lease_idempotency_key", "task_lease_expected_version",
                     )} | {"no_followup": bool(args.no_follow_up)},
                 )
                 completion_turn_key = original_completion["completion_turn_key"]

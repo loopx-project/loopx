@@ -17,7 +17,7 @@ from loopx.control_plane.turn_driver.host_failure import BuiltInHostError
 from tests.test_goal_mode_mcp_settlement import _write_fixture, _control, GOAL_ID, AGENT_ID, _run_cli
 
 
-def _fixture(provider, tmp_path, monkeypatch):
+def _fixture(provider, tmp_path, monkeypatch, *, validation_command_json=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = _write_fixture(tmp_path)
     doc = json.loads(registry.read_text())
@@ -29,7 +29,7 @@ def _fixture(provider, tmp_path, monkeypatch):
     assert rc == 0, baseline
     todo = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role='agent',
         text='Verify one candidate.', task_class='advancement_task', claimed_by=AGENT_ID,
-        continuation_policy='same_agent_non_delivery')
+        continuation_policy='same_agent_non_delivery', validation_command_json=validation_command_json)
     if provider != 'legacy':
         todos = parse_active_state_todos(state.read_text(encoding='utf-8'))['agent_todos']['items']
         initialize_canonical_authority(tmp_path / 'runtime', GOAL_ID,
