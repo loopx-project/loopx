@@ -170,7 +170,11 @@ Inspect the private external manifest with
 isolated restore, independently hash each listed regular member and compare its
 byte count. The list excludes the self-containing `manifest.json`, directories
 and tar links; retain the existing whole-archive checksum for their integrity
-and inspect link destinations separately. Earlier backups may lack this list;
+and inspect link destinations separately.
+The inert verifier accepts producer-generated hard links only to an earlier
+regular member inside the archive. It recreates that link after verified file
+extraction with private permissions. Missing, forward, chained, symlink and
+escaping targets remain refused; links never resolve against the live source. Earlier backups may lack this list;
 its absence does not grant migration qualification or erase their recovery
 support. A failed or short source read leaves an earlier backup intact.
 

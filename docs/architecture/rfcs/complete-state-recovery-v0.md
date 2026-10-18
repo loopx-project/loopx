@@ -65,69 +65,41 @@ behavior and starts no recovery or activation.
 
 <a id="planned-agent-transfer"></a>
 
-### Planned agent transfer: proposed product refinement
+### Planned Agent migration: existing primitives plus an Agent prompt
 
-The ordinary user request is **move my Agent to another environment and continue
-its unfinished work**. Preparing that move while the source is reachable can be
-prioritized before disaster recovery. This proposed delivery refinement reuses
-the owners below; it does not rename M1 inspection as migration, relax M2/M3's
-accepted disaster-recovery gates, or claim a working transfer today.
+The user outcome is **move my Agent to another environment and continue its
+unfinished work**. The initial delivery composes existing atomic capabilities
+with a [copyable Agent migration prompt](../../guides/agent-migration.md).
+The user's Agent coordinates the steps; a dedicated transfer executor,
+background Host wake, migration conversation/UI or automatic result-return
+system is not a prerequisite.
 
-Start with one populated local Goal and its responsible Agent on a declared
-packaged POSIX File/SQLite profile. Establish that profile's required owners and
-source-stop support, then deliver this whole journey through the existing
-Settings/Capability Center and shared CLI/backend:
+The Agent inventories complete Goal/Task data, relationships, required materials,
+configuration and supported context. It quiesces the source through existing
+owners, privately exports and verifies the required data, restores into an empty
+isolated destination, maps paths and rebinds reviewed settings. Destination
+credentials are authenticated separately. Current Goal/Task/session and
+claim/lease admission remain with their existing owners; copied records never
+supply execution authority. Unknown effects are reconciled by their original
+operation identity. Keep the source and rollback copy until the switch is
+verified, with no concurrent source/destination execution.
 
-1. Prepare the source, its complete requirements and required materials; let
-   their owners settle or visibly hold in-flight work and establish quiescence.
-2. Produce a separately reviewed portable artifact. The raw private backup is
-   not that artifact: apply the encryption/credential-custody decision below,
-   preserve content and history, and identify dependencies that need rebind.
-3. On the destination, preview paths, Goal/Agent identity mapping, dependencies,
-   compatibility, missing context and work outside the captured boundary. The
-   Agent prepares these facts; users do not edit registries or stitch owner
-   commands together. Ask only for missing consequential choices or credentials.
-4. Confirm the prepared cutover once. Existing Goal, authority, session, lease,
-   quota and effect owners must admit the destination and exclude stale source
-   execution. A copied Host/session id or released lease is not that admission.
-5. Continue a task left unfinished before transfer; independently accept its
-   result and read it back from the initiating product entry. Preserve later
-   writes, and expose interruption/retry/rollback there as part of the journey.
-
-The transferred work includes Goal intent/constraints, full active and archived
-Todos and relations, Agent role and necessary decision context, required
-artifacts/materials and capability configuration. Use a supported Host export
-or reviewed continuation context; do not claim that copying a third-party
-session database resumes that session. Identity continuity versus a new lifetime
-must be explicit in the Goal owner's plan; historical receipt bodies stay
-unaltered and do not become fresh execution proof. Unknown external effects
-hold with their original operation identity instead of being redispatched.
-
-The implementation boundary is the **prepared transfer through destination
-continuation**, including its product entry and real failure/recovery path.
-Select repairs by a demonstrated break in that journey. Do not schedule a
-manifest-field series first or require every cloud/platform profile and D2's
-ten-day default qualification before delivering the first supported transfer.
-The selected profile still needs all of its actual dependencies and safety
-gates; an unused provider needs owner-confirmed absence, not an exclude flag.
-
-Current pieces and the remaining integration are concrete:
-
-| Existing owner / entry | Reuse and remaining work |
+| Existing owner / entry | Bounded contribution |
 | --- | --- |
-| `backup-state`, configuration backup and authority archive | Reuse actual content export, safe extraction and original-receipt audit. Build the portable transfer composition over them; an inert destination is not a registered, executable Goal. |
-| `migrate-state` | Legacy Goal Harness copy only. Its preview and execution both reject canonical source/target authority through the existing fence owner; it is not a modern Agent transfer shortcut. |
-| Goal/session/Host and Task/lease owners | Prepare destination bindings and executable Task declarations through their actual lifecycle. Retain old lineage, reject stale executors, and rebind supported sessions; metadata copying cannot repair or mint a grant. |
-| Settings/Capability Center and CLI | One prepared operation with preview, confirmation, visible holds, same-operation retry and continued-work readback. Do not expose eight independent owner runbooks as the ordinary user workflow. |
+| `backup-state`, configuration backup and authority archive | Reuse export, integrity checks, isolated restore and original-receipt readback; fix reproduced producer/consumer gaps in these owners. A readable checkpoint is not activation. |
+| Supported checkpoint/context and Goal/Task/session/lease owners | Reuse supported context adoption and current destination admission. Otherwise provide a complete handoff and explicitly identify a fresh conversation; do not promise arbitrary Host continuation. |
+| Existing CLI and Settings/Capability Center | Keep each primitive usable through its current entry. Let the Agent compose the commands rather than asking the user to stitch owner runbooks together. |
 
-Before the drill, freeze the supported profile, data/effect disposition and
-targets for elapsed time, required user input, navigation and recovery effort.
-Use two isolated packaged environments with completed and unfinished work plus
-real required materials. Cover stale/changed source, damaged input, missing
-materials, occupied destination, interruption and duplicate confirmation;
-protected duplicate operations must remain zero. A successful planned transfer
-does not qualify unavailable-source M3 recovery. This refinement adds no
-activation, credential-transfer, paid experiment or release authorization.
+Each primitive refinement needs a real export/verify/restore or rebinding
+counterexample, focused positive and refusal cases, and evidence that source and
+occupied destinations remain intact. Keep repairs independently reviewable;
+do not grow a new orchestrator to qualify a primitive. A completed migration
+still requires the destination Agent to perform and verify useful original
+work, not just report a successful backup. The prompt and primitive checks alone
+do not claim that this end-to-end migration has been exercised.
+
+This route preserves the accepted M2/M3 disaster-recovery gates below. It grants
+no activation, credential transfer, paid execution or release authority.
 
 ### First supported user outcome
 
