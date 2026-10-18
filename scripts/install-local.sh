@@ -471,7 +471,7 @@ from loopx.skill_install_readback import (
     write_skill_install_readback,
 )
 from loopx.slash_command_install import materialize_loopx_entry_skill
-from loopx.ego_skill_delivery import reconcile_ego_browser_skill
+from loopx.workflow_skills.ego_delivery import reconcile_ego_browser_skill
 
 result = materialize_loopx_entry_skill(
     skills_dir=Path(os.environ["LOOPX_SKILL_INSTALL_DIR"]),
@@ -551,7 +551,7 @@ from pathlib import Path
 
 from loopx.skill_install_readback import SKILL_INSTALL_READBACK_FILENAME
 from loopx.slash_command_install import materialize_loopx_entry_skill
-from loopx.ego_skill_delivery import reconcile_ego_browser_skill
+from loopx.workflow_skills.ego_delivery import reconcile_ego_browser_skill
 
 ego = reconcile_ego_browser_skill(skills_dir=Path(os.environ["LOOPX_SKILL_INSTALL_DIR"]))
 if not ego["ok"]:
