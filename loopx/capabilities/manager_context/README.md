@@ -691,6 +691,24 @@ loopx manager-inbox request --goal-id allocation --agent-id builder \
   --brief-file review.json --parent-request-id <received-request-id>
 ```
 
+To inspect an original source by its saved request identity, including a concluded
+request, use the same registered Goal and receiving Agent:
+
+```sh
+loopx manager-inbox read --goal-id allocation --agent-id builder --request-id <received-request-id>
+```
+
+`--request-id` now selects that exact request instead of being silently ignored.
+It retains the full current brief, original ancestry and typed receipt state;
+reading a conclusion does not reopen its work or repeat its result. The read
+records only that request's receipt and does not deliver unrelated peer results.
+An unknown identity, another recipient or Goal lifetime fails without falling
+back to a pending page. Exact reads cannot use inbox cursors. Omit the option for
+the existing paged pending inbox, peer results and operation handoffs. These are
+trusted local inspection commands, not new source grants or execution authority.
+App/project dispatch, receiver adoption and original-conversation return retain
+their separate existing entrypoints and acceptance.
+
 In App and Goal conversations, the existing read tools expose the same bounded
 local observation without shell access: search `view=agents`, then read
 `{"view":"agent_route","goal_id":"allocation","agent_id":"reviewer"}` through

@@ -145,6 +145,30 @@ def plan_request_publication(request, *, entry, operation=None):
         raise ValueError(str(exc)) from exc
 
 
+def _inbox_item(row: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    """Present the existing typed receipt state without changing its lifecycle."""
+    item = {**row, "inbox_state": state["kind"]}
+    item.pop("request_control", None)
+    if state.get("request_control_view") is not None:
+        view = state["request_control_view"]
+        item.update(original_brief=row["brief"], brief=view["brief"], request_control_view=view,
+            request_revision=view["revision"], request_revision_digest=view["revision_digest"])
+        item["source_request"] = {"request_id": row["request_id"], "request_revision": view["revision"],
+            "request_digest": view["revision_digest"]}
+    item["recorded_decision"] = state["recorded_decision"]
+    if state["recorded_decision"] is not None:
+        item["receiver_decision_recorded"] = True
+        item["next_action"] = "Review this request's recorded decision and linked work before returning its actual result. A recorded adoption is not a completed task; preserve the current owner and do not reprioritize unrelated work."
+    if state["warnings"]:
+        item["warnings"] = state["warnings"]
+        item["next_action"] = "Receiver receipt readback is unavailable or conflicting; recover the original receipt before continuing this request. Do not repeat the decision, result or execution. Other requests can continue."
+    elif state["kind"] == "settled":
+        item["next_action"] = "Inspect the concluded request as historical source. Reading it does not reopen work, repeat its result or grant execution authority."
+    elif state.get("request_control_view") is not None:
+        item["next_action"] = state["request_control_view"]["receiver_instruction"]
+    return item
+
+
 def pending(
     runtime_root: Path,
     goal_id: str,
@@ -152,8 +176,28 @@ def pending(
     *,
     cursor: str | None = None,
     operation_cursor: str | None = None,
+    request_id: str | None = None,
     scope: CollaborationGoalScope | None = None,
 ) -> dict:
+    if request_id is not None:
+        if cursor is not None or operation_cursor is not None:
+            raise ValueError("an exact request read cannot use inbox cursors")
+        try:
+            row = _entry(runtime_root, goal_id, agent_id, request_id, scope=scope)
+        except FileNotFoundError as exc:
+            raise ValueError("context request not found for this Goal and Agent") from exc
+        if row.get("schema_version") != (EXACT_ENTRY_SCHEMA if scope is not None and scope.exact else ENTRY_SCHEMA):
+            raise ValueError("context inbox scope mismatch")
+        if scope is not None:
+            from .goal_instance_scope import decide_collaboration_lifecycle
+
+            lifecycle = decide_collaboration_lifecycle(scope, operation="inbox_observe", record=row)
+            if lifecycle.get("kind") == "omit":
+                raise ValueError("context request is unavailable in this Goal lifetime")
+        state = _pending_receipt_states(runtime_root, [row])[0]
+        return {"ok": True, "request_id": request_id, "items": [_inbox_item(row, state)],
+            "has_more": False, "next_cursor": None,
+            "instruction": REQUEST_TRIAGE_INSTRUCTION + " This is an exact source read, including concluded requests; it does not reopen their work."}
     cursor_scope = _hash(
         (
             [
@@ -206,24 +250,7 @@ def pending(
                 )
                 if lifecycle.get("kind") == "omit":
                     continue
-            item = {**row, "inbox_state": state["kind"]}
-            item.pop("request_control", None)
-            if state.get("request_control_view") is not None:
-                view = state["request_control_view"]
-                item.update(original_brief=row["brief"], brief=view["brief"], request_control_view=view,
-                    request_revision=view["revision"], request_revision_digest=view["revision_digest"])
-                item["source_request"] = {"request_id": row["request_id"], "request_revision": view["revision"],
-                    "request_digest": view["revision_digest"]}
-            item["recorded_decision"] = state["recorded_decision"]
-            if state["recorded_decision"] is not None:
-                item["receiver_decision_recorded"] = True
-                item["next_action"] = "Review this request's recorded decision and linked work before returning its actual result. A recorded adoption is not a completed task; preserve the current owner and do not reprioritize unrelated work."
-            if state["warnings"]:
-                item["warnings"] = state["warnings"]
-                item["next_action"] = "Receiver receipt readback is unavailable or conflicting; recover the original receipt before continuing this request. Do not repeat the decision, result or execution. Other requests can continue."
-            elif state.get("request_control_view") is not None:
-                item["next_action"] = state["request_control_view"]["receiver_instruction"]
-            items.append(item)
+            items.append(_inbox_item(row, state))
             if len(items) == 21:
                 break
         batch.clear()
