@@ -223,9 +223,18 @@ progress while the same original Task stays open. Explicit Todo selection now
 uses the existing typed delivery-boundary owner, and the signed Turn envelope
 retains that boundary through progress writeback. This does not waive terminal
 validation: the later completion still uses the original Task's independent
-acceptance. A subsequent explicit governed Turn obtains a fresh lease and can
-resume the responsible Agent's destination-native thread. Retrying confirmation
-recovers its first Turn; it does not request or wake this later Turn.
+acceptance. New reviews freeze a continuation budget of at most ten Turns and
+a 90-second window for starting further Turns. The same confirmation asks the
+existing Turn Loop Controller whether a fresh signed plan may continue this
+original Task, obtains a new lease, and resumes the destination-native Agent
+thread. A running Turn's validation and settlement keep their owning timeouts;
+this dispatch window is not the full migration's elapsed-time qualification.
+Waiting, stopping, replan, an exhausted budget or a failed original validator
+ends this request. No background timer is installed. Previously admitted
+decisions without this budget retain a single dispatch. Retrying confirmation
+recovers the exact original chain
+from native journals, including a completed descendant; it cannot start another
+chain or rerun settled tools. A resumed destination can recover this same move.
 The original App's completed-Task history and accepted-result reads use the same
 verified destination; cached pages from another source cannot become target
 history. A disconnected destination refuses instead of presenting old results.
@@ -240,9 +249,27 @@ changes still refuse resume. Existing binding and digest formats are preserved.
 The isolated File/SQLite qualification carries one original Task through two
 actual Codex processes, a declared intermediate check and independent final
 acceptance, with one resumed native thread and one debit per settled Turn.
-Both original operations replay without executing tools again. Normal
+The argv-only transfer bridge closes its CLI child's stdin. A terminal or
+long-lived App input pipe must not be consumed by an independent validator or
+leave final writeback waiting for EOF. Host protocol/result input keeps its own
+explicit channel; other callers retain the validation runner's inherited-input
+contract, the original validator and its declared timeout.
+
+The normal packaged App shows the reviewed request bounds before confirmation
+and the original Task's independent acceptance afterward. With an already
+admitted single-Turn decision, the upgraded App instead shows that replanning
+is required; it retains the original incomplete Task and recorded Turn. A
+disconnected destination refuses readback, then recovers the same accepted
+result when the destination returns, without another model call or debit.
+
+![Reviewed bounded continuation in the normal packaged App](assets/agent-transfer-bounded-confirmation.png)
+
+![Original Task independently accepted after automatic continuation in the normal packaged App](assets/agent-transfer-bounded-result.png)
+
+The original confirmation replays without executing tools again. Normal
 noneditable-package qualification uses deterministic local model responses and
-synthetic inputs; it is not live-model, automatic sustained scheduling or the
+synthetic inputs. Bounded continuation inside this request is separate from
+persistent wake after waiting or service exit, live-model behavior and the
 complete installed migration/120-second qualification.
 
 Distinct source workspaces, unknown mappings, links/submodules, conflicted or
@@ -355,13 +382,22 @@ remain unqualified.
 迁移及 120 秒验收仍未通过。
 
 另有隔离 File/SQLite 实测覆盖同一个原任务的两轮真实 Codex 进程：第一轮经预先声明
-的阶段检查后结算，任务仍未完成；下一次显式执行取得新租约，续接目标端同一个原生
-线程，再经原任务独立终验完成。每轮只扣一次，重复确认或重试不重复工具调用。显式
+的阶段检查后结算，任务仍未完成；同一次确认通过既有 Turn Loop Controller 及新签名
+计划决定下一轮，新租约续接目标端同一个原生线程，再经原任务独立终验完成。每轮
+只扣一次，重复确认沿原生 journal 恢复同一轮次链，完成后也不重复工具调用。显式
 任务选择复用现有类型化交付边界，签名 TurnEnvelope 保留该边界；最终验收规则不放宽。
 首次启动仅观察 Codex 对当前工作区新增的信任登记，不代写配置；其它工作区、额外
 项目设置、非信任状态及 provider/model/sandbox 等变化仍受原配置摘要约束。正常非
-editable 包使用本地固定模型响应，不调用付费模型。后一轮仍由现有执行入口显式启动，
-重复迁移确认只恢复原轮次；自动持续调度、真实模型及完整 120 秒旅程仍待验收。
+editable 包使用本地固定模型响应，不调用付费模型。新准备的审阅冻结最多十轮、
+90 秒的新轮启动窗口；当前轮次的终验与结算沿原超时处理，不冒充全旅程耗时门。
+等待、停止、重规划、预算耗尽或终验失败时结束本次推进，不安装后台定时器。
+已准入的历史决定若未带此预算，仍只有单轮预算；升级界面会提示需要重新规划，
+保留原任务和已记录的轮次。目标恢复后可恢复同一次迁移；跨等待或服务退出后的持续唤醒、
+真实模型及完整 120 秒旅程仍待验收。
+仅通过 argv 传参的迁移桥接会关闭 CLI 子进程的 stdin，避免独立验收消费宿主的
+终端／长期输入管道并等待 EOF。Host 协议和结果仍走独立输入通道，其它 caller 的
+验收输入兼容性、原校验命令和原超时不变。界面显示本次推进的实际等待／重规划等
+状态；重复确认不会重置已审阅的轮次上限。
 原 App 的已完成任务和验收结果也读取同一经核验目标；旧来源分页不能变成目标历史，
 目标断开时拒绝读取，不展示旧源结果。
 
