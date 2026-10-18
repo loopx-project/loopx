@@ -98,7 +98,7 @@ export const goalWorkspaceM2Scenario = {
       // fallback direction button only exists without a contract or plan.
       const inspection = page.locator(".goal-overview .delivery-check-inspection");
       const criteria = inspection.locator(".goal-overview-criteria");
-      await page.locator(".goal-overview-objective").waitFor({state:"visible"});
+      await page.locator(".goal-overview .delivery-acceptance-contract .goal-overview-objective").waitFor({state:"visible"});
       await criteria.waitFor({state:"hidden"});
       const summary = inspection.locator(":scope > summary");
       await summary.focus(); await page.keyboard.press("Enter");

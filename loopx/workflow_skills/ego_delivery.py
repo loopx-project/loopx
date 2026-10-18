@@ -14,8 +14,8 @@ import shutil
 import tempfile
 from typing import Any
 
-from . import __version__
-from .file_lock import exclusive_file_lock
+from .. import __version__
+from ..file_lock import exclusive_file_lock
 
 
 _MARKER = ".loopx-ego-skill.json"

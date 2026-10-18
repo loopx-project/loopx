@@ -266,6 +266,19 @@ other's active vision.
 
 ### Decision followthrough in replan context
 
+Identify planned work in `agent_vision.todo_delta` with a supported action prefix:
+for example, `retain:todo_<id>` for an existing Todo. The supported verbs are
+`activate`, `create`, `reopen`, `resume` and `retain`; replace `todo_<id>` with the
+verified ID after ordinary Todo authoring/readback. These entries record intent;
+they do not create, claim or authorize work. Historical descriptive entries remain
+readable but create no work links; the literal prefix `action:` is not supported.
+
+在 `agent_vision.todo_delta` 中使用具体动作关联计划工作，例如用
+`retain:todo_<id>` 保留已有 Todo；支持 `activate`、`create`、`reopen`、`resume`
+和 `retain`。先完成普通 Todo 写入/读回，再替换真实 ID。这些条目只记录计划，
+不创建、认领或授权任务。历史描述文本仍可读取，但不会形成工作关联；
+`action:` 不是可用动作前缀。
+
 With `evidence_conditioned_v1` enabled, when the captured history contains a prior
 accepted evidence-linked Vision path,
 `replan_context.decision_followthrough` returns that path with the later recorded

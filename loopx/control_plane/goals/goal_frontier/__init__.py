@@ -62,6 +62,7 @@ from .acceptance import (
     acceptance_gaps_from_held_goal_binding,
 )
 from ...work_items.replan_semantics_codec import project_replan_semantics
+from ...work_items.replan_history_codec import project_replan_history
 from .ack_policy import (
     attach_rejected_replan_feedback,
     autonomous_replan_ack_satisfies_obligation,
@@ -652,7 +653,7 @@ def _monitor_no_change_streak_trigger(
     if not isinstance(monitor_items, list):
         return None
 
-    stalled: list[tuple[int, str, dict[str, Any]]] = []
+    eligible = []
     for item in monitor_items:
         if not isinstance(item, dict):
             continue
@@ -665,33 +666,17 @@ def _monitor_no_change_streak_trigger(
         claimed_by = agent_scope_item_claimed_by(item)
         if agent_id and claimed_by != agent_id:
             continue
-        no_change_count = safe_non_negative_int(item.get("consecutive_no_change"))
-        if no_change_count < MONITOR_NO_CHANGE_STREAK_THRESHOLD:
-            continue
-        target_key = str(
-            item.get("target_key") or item.get("todo_id") or "monitor"
-        ).strip()
-        stalled.append((no_change_count, target_key, item))
-    if not stalled:
+        eligible.append(item)
+    if not eligible:
         return None
-
-    no_change_count, target_key, monitor = min(
-        stalled,
-        key=lambda entry: (-entry[0], entry[1]),
+    # The enclosing frontier already established that no advancement is
+    # selectable. Keep its eligibility facts, but share count/expiry/winner
+    # selection and the existing public trigger with the typed replan owner.
+    return project_replan_history(
+        operation="frontier_monitor_streak", agent_id=agent_id,
+        agent_todos={"monitor_open_items": eligible},
+        streak_threshold=MONITOR_NO_CHANGE_STREAK_THRESHOLD,
     )
-    return {
-        "kind": MONITOR_NO_CHANGE_STREAK_TRIGGER,
-        "section": "agent_todo_summary.monitor_open_items",
-        "text": (
-            f"monitor {target_key} recorded {no_change_count} consecutive "
-            "unchanged polls without selectable advancement"
-        ),
-        "todo_id": monitor.get("todo_id"),
-        "monitor_target_id": target_key,
-        "run_count": no_change_count,
-        "threshold": MONITOR_NO_CHANGE_STREAK_THRESHOLD,
-        "agent_id": agent_id,
-    }
 
 
 def _frontier_advancement_counts(
