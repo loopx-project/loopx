@@ -193,6 +193,40 @@ this is execution by the responsible Agent, rather than an owner Goal Chat
 assuming that role. Without this option, confirmation retains its existing
 admission/readback behavior and launches no Host.
 
+When the original Task has owner-bound Goal acceptance, its Agent can add
+`--continue-result-file report.txt` to this same preparation. The reviewed
+relative output, original Task scopes and acceptance revision/digest enter the
+same confirmation; users do not supply a destination path or run a separate
+result-publication command. Missing acceptance, an out-of-scope output or an
+unsafe path refuses before source preparation. Earlier reviews without a result
+selection retain their original behavior.
+
+At terminal completion, the existing Task and Goal validators check the original
+pending workspace through the native transfer owner. Only after both pass does
+the canonical completion-result owner bind the exact UTF-8 bytes to that Task,
+Agent and acceptance basis. Its existing `.txt`/`.md`/`.json` and 1..128000-byte
+limits apply. The original Goal's outputs show the actual accepted content,
+without another filesystem lookup. Failed acceptance publishes no result;
+linked output paths, mismatched workspaces and corrupted stored bytes refuse.
+Readback recovery and repeated confirmation never rerun completed tools or
+debit the original operation twice. This is the existing local result provider,
+not a general attachment store or qualification of arbitrary historical result
+objects in a portable package.
+
+中文：原任务已有 owner 绑定的 Goal 验收时，Agent 可在同一次准备中选定
+`--continue-result-file report.txt`。相对文件名、原任务范围和原验收版本随同一次
+迁移确认审阅；用户不必另找目标目录或执行结果发布命令。缺少验收绑定、超出任务
+范围或不安全路径会在冻结源环境前拒绝。完成时复用原任务与 Goal 的独立验证，
+全部通过后由既有结果 owner 保存准确字节并绑定原 Task、Agent 与验收依据，再从
+原 Goal 的产出页面读取实际内容。沿用 `.txt`/`.md`/`.json`、UTF-8 及
+1..128000 字节边界；错误结果不入库，链接重定向、工作区不符或存储损坏明确拒绝。
+恢复读回和重复确认不重跑工具、不重复扣费。未选结果文件的历史审阅保持原行为；
+这不等于通用附件迁移或历史结果对象的可携包验收。
+
+![Accepted original Task bytes read through the original Goal in the normal packaged App](assets/agent-transfer-accepted-result.png)
+
+![Corrupted stored bytes withdraw the accepted result instead of retaining stale content](assets/agent-transfer-result-unavailable.png)
+
 Canonical Todos retain validation commitments rather than private command argv.
 Preparation now captures those selected private declarations inside the encrypted
 history and restores them through the existing validation store. Missing or

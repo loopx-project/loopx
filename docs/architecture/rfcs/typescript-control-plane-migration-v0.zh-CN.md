@@ -73,6 +73,15 @@ tree 相同；后续 main 同步与自动合并结果相同，并包含 #6597 �
 源端可用的迁移与原源不可用的灾难恢复分别资格化；这里不授予任何一方 activation，
 也不声称迁移已经实现。
 
+候选 [#6769](https://github.com/loopx-project/loopx/pull/6769) 已把原任务审阅过的本地
+续办与既有 Goal 验收、完成结果 owner 接通：同一次迁移确认可继续未完成工作，
+再从原 Goal 的产出读取验收通过的实际文件，不新增结果库或第二个决策源。
+[有界 profile 与证据限制](../../reference/research-checkpoint.md#admit-a-fresh-session-and-adopt-context)
+区分真实 File/SQLite、使用本地固定响应的原生进程验证，与尚未验收的负责 Host
+持续唤醒、必要配置／凭证重绑、完整源 effect drain、可携交付及完整 120 秒旅程。
+这些仍开放；候选尚未合入或取得发布资格。C1/T4、D2/D3 保持开放，不再派生重复
+writer 删除或另建结果存储的任务。
+
 1. 在冻结的最终 main 源码和正常安装的 CLI／App／受影响 Host 上收尾 T4/C1、
    D1 采用：完整数据、新旧 proof、原操作重试、中断、后写及可逆迁移。剩余 transport
    按真实 caller 判断；native 进程内接管时删除废弃跨界，不新增逐字段 bridge。

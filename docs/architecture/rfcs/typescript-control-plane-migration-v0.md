@@ -88,6 +88,17 @@ capture-field series as a substitute. Source-available transfer and unavailable-
 source disaster recovery keep distinct qualification. This does not authorize
 either activation or claim that a transfer is implemented.
 
+Candidate [#6769](https://github.com/loopx-project/loopx/pull/6769) now composes
+the original Task's reviewed local continuation with its existing Goal-acceptance
+and completion-result owners. One move confirmation can continue the unfinished
+work and return its accepted file through the original Goal outputs; it adds no
+result store or second decision owner. [The bounded profile and evidence limits](../../reference/research-checkpoint.md#admit-a-fresh-session-and-adopt-context)
+separate real File/SQLite and native-process checks using deterministic local
+responses from persistent Host wake, necessary configuration/credential rebinding,
+full source-effect drain, portable delivery and the full 120-second journey.
+Those remain open; this candidate is not merged or release-qualified. Keep C1/T4
+and D2/D3 open rather than derive another writer-deletion or result-store task.
+
 1. Close T4/C1 and D1 adoption on pinned final-main source and normal installed
    CLI/App/affected Host entrypoints: complete data, fresh and stale proofs,
    original-operation retry, interruption, later writes and reversible migration.
