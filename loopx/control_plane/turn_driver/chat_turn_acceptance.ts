@@ -284,6 +284,22 @@ export function mayContinueChatTurn(input: JsonObject): { allowed: boolean } {
   };
 }
 
+/** Only a positively observed dead local executor may be recovered on read.
+ * Missing local adapters or lost HTTP connections are not execution evidence. */
+export function mayRecoverChatTurn(input: JsonObject): { allowed: boolean } {
+  const session = decodeSession(input.session);
+  const turn = decodeActiveTurn(input.turn);
+  const managed = requireBoolean(input.managed, "managed");
+  const ownerDead = requireBoolean(input.owner_dead, "owner_dead");
+  return {
+    allowed: managed && ownerDead && session !== null && turn !== null
+      && session.status !== "closed"
+      && session.activeTurnId === turn.turnId
+      && (turn.status === "starting" || turn.status === "running"
+        || turn.status === "interrupting"),
+  };
+}
+
 function decodeAcceptance(value: unknown): AcceptanceCapsuleFacts | null {
   if (value === null || value === undefined) return null;
   const acceptance = requireJsonObject(value, "matching_turn.acceptance");

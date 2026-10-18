@@ -6,8 +6,27 @@ import {
   CHAT_TURN_ACCEPTANCE_CAPSULE_SCHEMA,
   CHAT_TURN_ACCEPTANCE_REQUEST_SCHEMA,
   mayContinueChatTurn,
+  mayRecoverChatTurn,
   planChatTurnAcceptance,
 } from "../../loopx/control_plane/turn_driver/chat_turn_acceptance.ts";
+
+test("recovery requires a dead managed executor and the same nonterminal claim", () => {
+  const session = {status: "busy", active_turn_id: "turn-one"};
+  const facts = {session, managed: true, owner_dead: true};
+  for (const status of ["starting", "running", "interrupting"]) {
+    assert.equal(mayRecoverChatTurn({...facts, turn: {turn_id: "turn-one", status}}).allowed, true);
+  }
+  const turn = {turn_id: "turn-one", status: "running"};
+  for (const change of [{managed: false}, {owner_dead: false}, {turn: null},
+    {session: null}, {session: {...session, status: "closed"}},
+    {session: {...session, active_turn_id: "turn-two"}}]) {
+    assert.equal(mayRecoverChatTurn({...facts, turn, ...change}).allowed, false);
+  }
+  for (const status of ["queued", "completing", "completed", "interrupted", "timed_out", "failed"]) {
+    assert.equal(mayRecoverChatTurn({...facts, turn: {...turn, status}}).allowed, false);
+  }
+  assert.throws(() => mayRecoverChatTurn({session, turn, managed: true}));
+});
 
 test("only a still-active started Turn may continue after a delayed read", () => {
   const session = {status: "busy", active_turn_id: "turn-one"};
