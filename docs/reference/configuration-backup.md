@@ -479,8 +479,9 @@ and 16 MiB total extended metadata. Paths have at most 64 components, 1,024
 characters and 255 UTF-8 bytes per component; JSON nesting is bounded at 64.
 Owner inspection permits 128 Goals, 128 SQLite files and 20,000 committed
 transactions per Goal. Overflow refuses publication rather than truncating a
-required inventory. Internal symlinks remain inert; escaping/cyclic links,
-hard links, sparse or special files and normalized name collisions reject.
+required inventory. Internal symlinks and hard links to earlier regular members
+remain inert; escaping/cyclic links, other hard-link targets, sparse or special
+files and normalized name collisions reject.
 
 Archive parsing never loads restored code. Database/domain inspection runs in a
 disposable verifier with a 90-second deadline and a 512 MiB V8 heap ceiling.
