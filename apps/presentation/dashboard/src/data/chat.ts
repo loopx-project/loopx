@@ -2519,6 +2519,9 @@ const privateConversationSchema = z.object({
   goal_scope: z.enum(["all_registered", "selected"]).nullable().optional(),
   audience: z.enum(["owner", "group"]).default("owner"), group_count: z.number().int().default(0),
   pending_count: z.number().int(), recovery_count: z.number().int(),
+  ingress: z.object({status: z.enum(["unobserved", "verified", "gap", "unavailable"]),
+    last_checked_at: z.number().nullable(), last_complete_at: z.number().nullable(),
+    source_gap_count: z.number().int().nonnegative(), without_reply_count: z.number().int().nonnegative()}).optional(),
   owner_attention: z.discriminatedUnion("available", [
     z.object({available: z.literal(true), enabled: z.boolean(), revision: z.number().int(),
       last_checked_at: z.number().nullable(), error_code: z.string().nullable(),

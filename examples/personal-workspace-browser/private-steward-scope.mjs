@@ -61,10 +61,26 @@ export const privateStewardScopeScenario = {
       await page.getByTestId("personal-goal-home").waitFor();
       await settings();
       await panel.getByText("LoopX 管家 · 全部已注册工作 · 150 个 Goal", {exact: true}).waitFor();
+      // The same populated settings journey must distinguish a ready stream
+      // from source coverage. Neither a gap nor failed observation is empty.
+      row.ingress = {status: "gap", last_checked_at: 1000, last_complete_at: 995,
+        source_gap_count: 1, without_reply_count: 1};
+      await page.reload(); await page.getByTestId("personal-goal-home").waitFor(); await settings();
+      await panel.getByRole("alert").filter({hasText: "1 条原消息缺少收件记录"}).waitFor();
+      await panel.getByText("待处理或回复：0", {exact: true}).waitFor();
+      await page.screenshot({path: resolve(outputDir, "private-ingress-gap-desktop.png"), animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});
       await panel.scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "private-steward-scope-mobile.png"), animations: "disabled"});
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("Scope readback overflows");
+      row.ingress.status = "unavailable";
+      await page.reload(); await page.getByTestId("personal-goal-home").waitFor(); await settings();
+      await panel.getByRole("alert").filter({hasText: "原消息核对暂不可用"}).waitFor();
+      await page.screenshot({path: resolve(outputDir, "private-ingress-unavailable-mobile.png"), animations: "disabled"});
+      row.ingress = {...row.ingress, status: "verified", source_gap_count: 0, without_reply_count: 0};
+      await page.reload(); await page.getByTestId("personal-goal-home").waitFor(); await settings();
+      await panel.getByRole("status").filter({hasText: "原消息已核对"}).waitFor();
+      if (await panel.getByRole("alert").count() || writes.length !== 2) throw new Error("Source readback must clear stale warnings without creating another write");
       const expectedErrors = context.errors.filter(error => error === "Failed to load resource: the server responded with a status of 500 (Internal Server Error)");
       if (expectedErrors.length !== 1 || context.errors.length !== 1) throw new Error(context.errors.join(" | "));
       return {coverageEntries: await context.close(), note: "Failed scope publication retains selected scope and allows keyboard retry; success clears the failure and survives reload; desktop/mobile, synthetic API paired with native backend fault regressions"};

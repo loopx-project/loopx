@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { goalAcceptanceDisplayStatus, goalAcceptanceObservationSchema, type GoalAcceptanceContract } from "./goal-acceptance-observation.js";
+import { goalAcceptanceDisplayStatus, goalAcceptanceObservationSchema, projectGoalAcceptanceCriteria, type GoalAcceptanceContract } from "./goal-acceptance-observation.js";
 
 // Consumer validation only; freshness and coverage remain kernel decisions.
 const projectionEnvelopeSchema = z.object({
@@ -140,9 +140,11 @@ export function reviewNodeColumn(node: ReviewNode) {
 type EnabledContract = Extract<GoalAcceptanceContract, { enabled: true }>;
 type ContractExportLabels = Record<"title" | "boundary" | "scope" | "selectedWork" | "allWork" | "source" | "revision" | "digest" | "objective" | "criteria"
   | "nonGoals" | "tasks" | "verification" | "unknown" | "noTasks" | "noCriteria" | "notApplicable"
-  | "heldTasks" | "receipt" | "receiptNote" | "operation" | "verificationScope" | "allCriteria" | "passed" | "failed" | "exitCode", string> & {
+  | "heldTasks" | "receipt" | "receiptNote" | "operation" | "verificationScope" | "allCriteria" | "passed" | "failed" | "exitCode"
+  | "oracleChecker" | "oracleSourceDigest" | "oracleCheckedAt" | "oracleInputVersions" | "oracleOutputVersions", string> & {
   taskState: Record<EnabledContract["tasks"][number]["state"], string>;
   verificationState: Record<EnabledContract["status"], string>;
+  oracleState: Record<NonNullable<EnabledContract["criteria"][number]["oracle"]>["state"], string>;
 };
 export type ReviewExportLabels = {
   contract: ContractExportLabels;
@@ -229,7 +231,11 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
       "", `### ${copy.objective}`, line(contract.objective || copy.unknown), "", `### ${copy.criteria}`);
     if (contract.non_goals.length) rows.push(`${copy.nonGoals}: ${line(contract.non_goals.join("; "))}`);
     if (!contract.criteria.length) rows.push(copy.noCriteria);
-    for (const criterion of contract.criteria) rows.push(`- ${line(criterion.id)}: ${line(criterion.description)}`);
+    for (const criterion of projectGoalAcceptanceCriteria(contract)) {
+      rows.push(`- ${line(criterion.id)}: ${line(criterion.description)}${criterion.oracle ? ` · ${copy.verificationState[criterion.state]}` : ""}`);
+      if (criterion.oracle) rows.push(`  ${copy.oracleChecker}: ${line(criterion.oracle.source_id)} · ${copy.oracleState[criterion.oracle.state]}`,
+        `  ${copy.oracleSourceDigest}: ${line(criterion.oracle.source_digest)}`);
+    }
     rows.push("", `### ${copy.tasks}`);
     if (!contract.tasks.length) rows.push(copy.noTasks);
     for (const task of contract.tasks) {
@@ -247,7 +253,20 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
       rows.push(copy.receiptNote, `${copy.operation}: ${line(receipt.operation_id)}`,
         `${copy.revision}: ${receipt.contract_revision}`, `${copy.digest}: ${line(receipt.contract_digest)}`,
         `${copy.verificationScope}: ${line(receipt.todo_id ?? copy.allCriteria)}`);
-      for (const result of receipt.results) rows.push(`- ${line(result.criterion_id)}: ${result.passed ? copy.passed : copy.failed}; ${copy.exitCode}: ${result.exit_code ?? copy.unknown}`);
+      for (const result of receipt.results) {
+        rows.push(`- ${line(result.criterion_id)}: ${result.passed ? copy.passed : copy.failed}; ${copy.exitCode}: ${result.exit_code ?? copy.unknown}`);
+        // The saved witness belongs to this historical result. Its hashes and
+        // timestamp never upgrade the current criterion observation above.
+        const evidence = result.oracle_evidence;
+        if (!evidence) continue;
+        rows.push(`  ${copy.oracleChecker}: ${line(evidence.source_id)}`,
+          `  ${copy.oracleSourceDigest}: ${line(evidence.source_digest)}`,
+          `  ${copy.oracleCheckedAt}: ${line(evidence.checked_at)}`);
+        for (const [label, versions] of [[copy.oracleInputVersions, evidence.input_versions], [copy.oracleOutputVersions, evidence.output_versions]] as const) {
+          rows.push(`  ${label}:`);
+          for (const version of versions) rows.push(`  - ${line(version.ref)}: ${line(version.sha256)}`);
+        }
+      }
     }
   }
   return rows.join("\n") + "\n";

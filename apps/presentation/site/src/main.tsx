@@ -7,6 +7,7 @@ import "./styles.css";
 import "./swe-marathon-brief.css";
 import "./lhtb-brief.css";
 import "./time-machine/time-machine.css";
+import "./delegation-lab/delegation-lab.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("LoopX homepage root is missing");
@@ -17,10 +18,13 @@ const isSweMarathonBrief = pathSegments.slice(-2).join("/") === "benchmarks/swe-
 const isLhtbBrief = pathSegments.slice(-2).join("/") === "benchmarks/lhtb";
 const isTimeMachine = pathSegments.slice(-2).join("/") === "lab/time-machine";
 const TimeMachine = lazy(() => import("./time-machine/TimeMachine"));
+const isDelegationLab = pathSegments.slice(-2).join("/") === "lab/delegation";
+const DelegationLab = lazy(() => import("./delegation-lab/DelegationLab"));
 
 createRoot(rootElement).render(
   <StrictMode>
-    {isTimeMachine ? <Suspense fallback={<p role="status">Loading / 正在读取…</p>}><TimeMachine /></Suspense>
+    {isDelegationLab ? <Suspense fallback={<p role="status">Loading / 正在读取…</p>}><DelegationLab /></Suspense>
+      : isTimeMachine ? <Suspense fallback={<p role="status">Loading / 正在读取…</p>}><TimeMachine /></Suspense>
       : isSweMarathonBrief ? <SweMarathonBrief /> : isLhtbBrief ? <LhtbBrief /> : <App />}
   </StrictMode>,
 );

@@ -103,6 +103,17 @@ export function PrivateConversationPanel() {
       {row.audience === "group" ? <p>{zh ? `群话题助手 · 已授权 ${row.group_count} 个群 · 独立工作区隔离` : `Group topic assistant · ${row.group_count} authorized groups · Isolated workspace`}</p> : null}
       <p>{row.executor_endpoint_id} · {zh ? "监听状态" : "Listener"}: {listenerLabel(row.listener_status)}</p>
       <p>{zh ? `待处理或回复：${row.pending_count}` : `Pending execution or reply: ${row.pending_count}`}</p>
+      {row.ingress ? <p role={row.ingress.status === "gap" || row.ingress.status === "unavailable" ? "alert" : "status"}>
+        {row.ingress.status === "gap"
+          ? (zh ? `${row.ingress.source_gap_count} 条原消息缺少收件记录，需核对；历史任务不会自动重放。`
+            : `${row.ingress.source_gap_count} source messages lack receipt records and need reconciliation. Historical tasks are not replayed.`)
+          : row.ingress.status === "unavailable"
+            ? (zh ? "原消息核对暂不可用；监听就绪不代表完整收件。" : "Source reconciliation is unavailable; a live connection does not prove complete receipt.")
+            : row.ingress.status === "verified" && row.ingress.last_complete_at !== null
+              ? (zh ? `原消息已核对 · ${new Date(row.ingress.last_complete_at * 1000).toLocaleTimeString(locale)}`
+                : `Sources reconciled · ${new Date(row.ingress.last_complete_at * 1000).toLocaleTimeString(locale)}`)
+              : (zh ? "原消息核对待运行。" : "Source reconciliation has not run yet.")}
+      </p> : null}
       {row.context_kind === "steward" && row.audience === "owner" ? <div>
         {row.owner_attention?.available ? <>
           <label style={{display: "flex", alignItems: "center", gap: 8, minHeight: 44}}><input type="checkbox" style={{width: "auto", margin: 0, flexShrink: 0}} checked={row.owner_attention.enabled} disabled={busy}
