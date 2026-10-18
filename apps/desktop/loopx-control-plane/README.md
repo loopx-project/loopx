@@ -264,7 +264,7 @@ change Goal authority, grant capabilities, or stop running agents on behalf of
 the user. Services may briefly disconnect during reconciliation.
 
 The optional startup feed check has a three-second deadline so an unavailable
-update server does not delay opening the workspace. A manual **Check for updates**
+update server cannot hold workspace startup indefinitely. A manual **Check for updates**
 allows 45 seconds for the same official feed, including redirects; the panel
 keeps showing its checking state while the existing workspace remains readable.
 A timeout remains an explicit retryable error, never a claim that the App is
