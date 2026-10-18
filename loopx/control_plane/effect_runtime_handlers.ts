@@ -450,6 +450,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.ownership_observation", lazyHandler(() => import("./coordination/ownership_observation.ts"), ({projectOwnershipObservation}) => projectOwnershipObservation)],
     ["coordination.local_authority.ownership_observation", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({observeLocalCoordinationOwnership}) => observeLocalCoordinationOwnership)],
     ["coordination.local_authority.todo_snapshot_page", lazyHandler(() => import("./coordination/canonical_snapshot_page.ts"), ({readCanonicalSnapshotPage}) => readCanonicalSnapshotPage)],
+    ["coordination.local_authority.todo_snapshot", lazyHandler(() => import("./coordination/canonical_snapshot_page.ts"), ({readCanonicalSnapshot}) => readCanonicalSnapshot)],
     ["coordination.local_authority.todo_list", lazyHandler(() => import("./coordination/local_authority_read.ts"), ({listLocalCoordinationTodos}) => listLocalCoordinationTodos)],
     [
       "coordination.local_authority.legacy_writer_fence.engage",

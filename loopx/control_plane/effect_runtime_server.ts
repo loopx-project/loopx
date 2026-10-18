@@ -31,6 +31,7 @@ const LOCAL_SNAPSHOT_METHODS = new Set([
   "collaboration.delegation.inventory_page",
   "benchmark.trajectory.codex-usage",
   "coordination.local_authority.todo_source",
+  "coordination.local_authority.todo_snapshot",
   "todo.context.page",
   "work_item.context.project",
   "work_item.interaction_reads.project",

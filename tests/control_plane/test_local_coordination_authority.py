@@ -150,7 +150,9 @@ def test_engaged_fence_reads_typescript_provider_result(
     _engage_fence(tmp_path)
     calls: list[tuple[str, float]] = []
 
-    def _read(method: str, _params: object, *, timeout: float) -> dict[str, object]:
+    def _read(method: str, _params: object, *, timeout: float,
+              large_local_snapshot: bool) -> dict[str, object]:
+        assert large_local_snapshot is True
         calls.append((method, timeout))
         return single_snapshot_page({
             "status": "loaded",
@@ -173,7 +175,7 @@ def test_engaged_fence_reads_typescript_provider_result(
     )
     assert result is not None
     assert result["todos"][0]["todo_id"] == "todo_a"
-    assert calls == [("coordination.local_authority.todo_snapshot_page", 15.0)]
+    assert calls == [("coordination.local_authority.todo_snapshot", 15.0)]
 
 
 def test_promoted_claim_adapter_invokes_typescript_without_markdown_fallback(
@@ -1485,12 +1487,12 @@ Continue provider-first delivery.
     # The extra bounded crossing admits/replays before resolving private argv.
     assert terminal_phases == ["resolve_validation", "execute_validation", "applied"]
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_snapshot_page",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_snapshot",
     ]
     successor_id = completed["generated_successor_todo_ids"][0]
 
@@ -1511,10 +1513,10 @@ Continue provider-first delivery.
     assert superseded["superseded"] is True
     assert superseded["projection_delivery"] == "delivered"
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_snapshot_page",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_snapshot",
     ]
 
     canonical = read_canonical_todos_if_promoted(
@@ -1542,10 +1544,10 @@ Continue provider-first delivery.
     assert archived["moved_count"] == 2
     assert archived["projection_delivery"] == "delivered"
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_archive",
-        "coordination.local_authority.todo_snapshot_page",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_archive_ack",
     ]
     canonical_after_archive = read_canonical_todos_if_promoted(
@@ -1575,10 +1577,10 @@ Continue provider-first delivery.
         assert no_change["moved_count"] == 0
         assert no_change["provider_revision"] == archive_revision
         assert runtime_calls == [
-            "coordination.local_authority.todo_snapshot_page",
+            "coordination.local_authority.todo_snapshot",
             "coordination.local_authority.todo_archive",
-            "coordination.local_authority.todo_snapshot_page",
-            "coordination.local_authority.todo_snapshot_page",
+            "coordination.local_authority.todo_snapshot",
+            "coordination.local_authority.todo_snapshot",
         ]
         unchanged = read_canonical_todos_if_promoted(
             runtime_root=runtime_root,
@@ -2009,7 +2011,7 @@ def test_promoted_terminal_retry_reuses_receipt_after_projection_crash(
     with pytest.raises(OSError, match="projection delivery crash"):
         complete_goal_todo(**request)
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
     ]
 
@@ -2022,12 +2024,12 @@ def test_promoted_terminal_retry_reuses_receipt_after_projection_crash(
     assert replay["provider_status"] == "replayed"
     assert replay["idempotent_replay"] is True
     assert runtime_calls == [
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
         "coordination.local_authority.todo_terminal",
-        "coordination.local_authority.todo_snapshot_page",
-        "coordination.local_authority.todo_snapshot_page",
+        "coordination.local_authority.todo_snapshot",
+        "coordination.local_authority.todo_snapshot",
     ]
     canonical = read_canonical_todos_if_promoted(
         runtime_root=runtime_root, goal_id="goal-a"

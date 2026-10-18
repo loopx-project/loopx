@@ -2,6 +2,7 @@
  * provider revision, never permission to combine independently current heads. */
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
+import {MAX_LOCAL_SNAPSHOT_BYTES} from "../effect_runtime_snapshot.ts";
 import {projectGoalAcceptanceWorkGuards} from "../goals/acceptance_contract.ts";
 import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/projection_delivery.ts";
 import {authorityStoreSourceAuthority, type AuthorityStore} from "./authority_store.ts";
@@ -16,6 +17,9 @@ export {CANONICAL_SNAPSHOT_PAGE_REQUEST, CANONICAL_SNAPSHOT_PAGE_RESULT};
 // Leave room for the RPC envelope below the unchanged 2 MiB transport limit.
 export const CANONICAL_SNAPSHOT_PAGE_BYTES = 1792 * 1024;
 export const CANONICAL_SNAPSHOT_PAGE_ITEMS = 4096;
+// The private file already has a 64 MiB transport ceiling. Reserve the entire
+// 2 MiB request ceiling for its response envelope (including the request id).
+export const CANONICAL_SNAPSHOT_LOCAL_BYTES = MAX_LOCAL_SNAPSHOT_BYTES - 2 * 1024 * 1024;
 interface Snapshot extends JsonObject {
   goal_id: string; store_identity: string; provider_revision: string; cursor: string;
   query_sha256: string; todo_count: number; lease_count: number;
@@ -58,7 +62,8 @@ function decodePosition(value: unknown): Position | null {
 
 /** Exported for provider conformance, using the same store contract as the
  * shipped local entrypoint. No test-only pagination implementation is used. */
-export async function readCanonicalSnapshotFromStore(value: unknown, store: AuthorityStore): Promise<JsonObject> {
+export async function readCanonicalSnapshotFromStore(value: unknown, store: AuthorityStore,
+  completeBytes = 0): Promise<JsonObject> {
   const input = requireJsonObject(value, "canonical snapshot request");
   check(hasExactAuthorityKeys(input, ["schema_version", "runtime_root", "goal_id", "include_leases", "projection_readback", "after"]) &&
     input.schema_version === CANONICAL_SNAPSHOT_PAGE_REQUEST && typeof input.include_leases === "boolean",
@@ -100,15 +105,11 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
   check(observedIdentity.status === "available" && observedIdentity.store_identity === identity.store_identity,
     "canonical_snapshot_changed", "store incarnation changed while loading the snapshot");
   const todoStart = after?.todo_offset ?? 0, leaseStart = after?.lease_offset ?? 0;
-  const todoIds = projection.todo_ids.slice(todoStart, todoStart + CANONICAL_SNAPSHOT_PAGE_ITEMS);
-  const leaseIds = leases?.lease_todo_ids.slice(leaseStart, leaseStart + CANONICAL_SNAPSHOT_PAGE_ITEMS - todoIds.length) ?? [];
-  const guards = acceptance.enabled === true ? projectGoalAcceptanceWorkGuards(head.head, goal, todoIds) : {};
   const metadata = {todo_read_model: readModel,
     ...(acceptance.enabled === true ? {goal_acceptance_contract: acceptance} : {}),
     ...(leases === null ? {} : {handoff_mode: head.head.handoff_mode ?? "legacy"}),
     ...(readback === null ? {} : {projection_readback: confirmProjectionReadback(readback, head.provider_revision)})};
-  function page(size: number): JsonObject {
-    const chosenTodos = todoIds.slice(0, size), chosenLeases = leaseIds.slice(0, Math.max(0, size - todoIds.length));
+  function result(chosenTodos: readonly string[], chosenLeases: readonly string[], guards: JsonObject): JsonObject {
     const todoEnd = todoStart + chosenTodos.length, leaseEnd = leaseStart + chosenLeases.length;
     return {...base, status: "page", snapshot, metadata,
       todos: chosenTodos.map(id => projection.todos.get(id)!),
@@ -119,6 +120,24 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
         {snapshot, todo_offset: todoEnd, lease_offset: leaseEnd}};
   }
   const bytes = (result: JsonObject) => Buffer.byteLength(JSON.stringify(result), "utf8");
+  // Only a new complete read may use the explicit private-file entrypoint.
+  // Reuse this same admission, metadata and identity; never cache a provider
+  // head between RPCs or substitute the older unguarded todo_list endpoint.
+  let completeGuards: JsonObject | null = null;
+  if (after === null && completeBytes > 0) {
+    completeGuards = acceptance.enabled === true
+      ? projectGoalAcceptanceWorkGuards(head.head, goal, projection.todo_ids) : {};
+    const complete = result(projection.todo_ids, leases?.lease_todo_ids ?? [], completeGuards);
+    if (bytes(complete) <= Math.min(completeBytes, CANONICAL_SNAPSHOT_LOCAL_BYTES)) return complete;
+  }
+  // A snapshot beyond the private-file capacity still uses the original page
+  // bounds and continuation checks. No lost oversized response or retry occurs.
+  const todoIds = projection.todo_ids.slice(todoStart, todoStart + CANONICAL_SNAPSHOT_PAGE_ITEMS);
+  const leaseIds = leases?.lease_todo_ids.slice(leaseStart, leaseStart + CANONICAL_SNAPSHOT_PAGE_ITEMS - todoIds.length) ?? [];
+  const guards = completeGuards ?? (acceptance.enabled === true
+    ? projectGoalAcceptanceWorkGuards(head.head, goal, todoIds) : {});
+  const page = (size: number) => result(todoIds.slice(0, size),
+    leaseIds.slice(0, Math.max(0, size - todoIds.length)), guards);
   const available = todoIds.length + leaseIds.length;
   const complete = page(available);
   if (bytes(complete) <= CANONICAL_SNAPSHOT_PAGE_BYTES) return complete;
@@ -136,17 +155,24 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
 /** Read-only RPC owner. A failed page never supplies a partial success or a
  * legacy fallback; the client must discard any earlier pages of that read. */
 export async function readCanonicalSnapshotPage(value: unknown,
-  dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+  dependencies: LocalAuthorityProviderDependencies = {}, completeBytes = 0): Promise<JsonObject> {
   try {
     const input = requireJsonObject(value, "canonical snapshot request");
     const root = requireLocalAuthorityRuntimeRoot(input.runtime_root);
     const goal = requireAuthorityStoreId(input.goal_id, "goal id");
     const store = await openRuntimeAuthorityStore(root, goal, dependencies, {existingOnly: true});
-    return await readCanonicalSnapshotFromStore(input, store);
+    return await readCanonicalSnapshotFromStore(input, store, completeBytes);
   } catch (error) {
     return {schema_version: CANONICAL_SNAPSHOT_PAGE_RESULT, status: "failed",
       reason_code: error instanceof SnapshotReadError ? error.code : "canonical_snapshot_request_invalid",
       reason: error instanceof Error ? error.message : "canonical snapshot read failed",
       decision_read_from_provider: true, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
   }
+}
+
+/** Same canonical contract, opting into the existing same-UID file transport.
+ * Too-large collections keep bounded pages; failures never supply partial rows. */
+export async function readCanonicalSnapshot(value: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+  return readCanonicalSnapshotPage(value, dependencies, CANONICAL_SNAPSHOT_LOCAL_BYTES);
 }

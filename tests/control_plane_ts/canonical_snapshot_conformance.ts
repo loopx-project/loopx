@@ -4,7 +4,7 @@ import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
-import {CANONICAL_SNAPSHOT_PAGE_REQUEST, CANONICAL_SNAPSHOT_PAGE_BYTES,
+import {CANONICAL_SNAPSHOT_PAGE_REQUEST, CANONICAL_SNAPSHOT_PAGE_BYTES, CANONICAL_SNAPSHOT_LOCAL_BYTES,
   readCanonicalSnapshotFromStore} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {normalizeGoalAcceptanceDocument} from "../../loopx/control_plane/goals/acceptance_contract.ts";
@@ -66,11 +66,26 @@ export function registerCanonicalSnapshotConformance(name: string, factory: Auth
       const byId = (rows: JsonObject[]) => new Map(rows.map(row => [row.todo_id, row]));
       assert.deepEqual(byId(result.todos), byId(fixture.projection.todos as JsonObject[]));
       assert.deepEqual(byId(result.leases), byId(fixture.projection.leases as JsonObject[]));
+      const complete = await readCanonicalSnapshotFromStore(snapshotRequest(), store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+      assert.equal(complete.next, null);
+      assert.deepEqual(complete.snapshot, result.pages[0].snapshot);
+      assert.deepEqual(complete.metadata, result.pages[0].metadata);
+      assert.deepEqual(complete.todos, result.todos);
+      assert.deepEqual(complete.leases, result.leases);
+      assert.ok(Buffer.byteLength(JSON.stringify(complete)) > CANONICAL_SNAPSHOT_PAGE_BYTES);
+      // Exercise capacity fallback on this real provider with a smaller private
+      // response allowance. No caller/protocol constant or wire budget changes.
+      const bounded = await readCanonicalSnapshotFromStore(snapshotRequest(), store, CANONICAL_SNAPSHOT_PAGE_BYTES);
+      assert.deepEqual(bounded, result.pages[0]);
       assert.deepEqual(await store.loadAuthority(), before, "pagination is read-only");
       const todoOnly = await collectSnapshot(store, snapshotRequest({include_leases: false}));
       assert.deepEqual(todoOnly.todos, result.todos);
       assert.deepEqual(todoOnly.leases, []);
       assert.ok(todoOnly.pages.every(page => !("leases" in page)));
+      const completeTodoOnly = await readCanonicalSnapshotFromStore(snapshotRequest({include_leases: false}),
+        store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+      assert.deepEqual(completeTodoOnly.todos, result.todos);
+      assert.equal("leases" in completeTodoOnly, false);
     });
   }
 
@@ -87,6 +102,8 @@ export function registerCanonicalSnapshotConformance(name: string, factory: Auth
       operation_id: "concurrent-commit", next_projection: head.head, events: [], receipts: []})).status, "applied");
     await assert.rejects(readCanonicalSnapshotFromStore(snapshotRequest({after: first.next}), store),
       {code: "canonical_snapshot_changed"});
+    await assert.rejects(readCanonicalSnapshotFromStore(snapshotRequest({after: first.next}),
+      store, CANONICAL_SNAPSHOT_LOCAL_BYTES), {code: "canonical_snapshot_changed"});
     const restarted = await collectSnapshot(store);
     assert.notDeepEqual(restarted.pages[0].snapshot, first.snapshot);
   });
@@ -101,6 +118,8 @@ export function registerCanonicalSnapshotConformance(name: string, factory: Auth
       identity[key] = key.endsWith("count") ? Number(identity[key]) + 1 : "foreign";
       await assert.rejects(readCanonicalSnapshotFromStore(snapshotRequest({after: next}), store),
         {code: "canonical_snapshot_changed"}, key);
+      await assert.rejects(readCanonicalSnapshotFromStore(snapshotRequest({after: next}),
+        store, CANONICAL_SNAPSHOT_LOCAL_BYTES), {code: "canonical_snapshot_changed"}, key);
     }
     for (const changed of [{include_leases: false},
       {projection_readback: {provider_revision: "other", changed: true, attempt: 1, target: "latest" as const}}]) {
@@ -120,6 +139,8 @@ export function registerCanonicalSnapshotConformance(name: string, factory: Auth
     assert.equal(result.pages[0].next, null);
     assert.deepEqual(result.todos, []);
     assert.deepEqual(result.leases, []);
+    assert.deepEqual(await readCanonicalSnapshotFromStore(snapshotRequest(), store,
+      CANONICAL_SNAPSHOT_LOCAL_BYTES), result.pages[0]);
   });
 
   test(`${name}: projection confirmation belongs to the same snapshot as every page`, async t => {
@@ -132,6 +153,9 @@ export function registerCanonicalSnapshotConformance(name: string, factory: Auth
       const result = await collectSnapshot(store, snapshotRequest({projection_readback:
         {provider_revision: revision, changed, attempt: 1, target: "latest" as const}}));
       assert.ok(result.pages.every(page => ((page.metadata as JsonObject).projection_readback as JsonObject).status === expected));
+      const complete = await readCanonicalSnapshotFromStore(snapshotRequest({projection_readback:
+        {provider_revision: revision, changed, attempt: 1, target: "latest" as const}}), store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+      assert.deepEqual(complete.metadata, result.pages[0].metadata);
     }
   });
   test(`${name}: enabled acceptance guards stay attached to their own page`, async t => {
@@ -161,6 +185,31 @@ export function registerCanonicalSnapshotConformance(name: string, factory: Auth
       assert.equal(((page.metadata as JsonObject).goal_acceptance_contract as JsonObject).enabled, true);
     }
     assert.equal(seen.size, result.todos.length);
+    const complete = await readCanonicalSnapshotFromStore(snapshotRequest(), store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+    const allGuards = Object.assign({}, ...result.pages.map(page => page.goal_acceptance_work_guards));
+    assert.deepEqual(complete.goal_acceptance_work_guards, allGuards);
+    assert.deepEqual(complete.todos, result.todos);
+  });
+
+  test(`${name}: a complete read rejects store replacement during admission`, async t => {
+    const {store} = await factory(t);
+    await seedSnapshot(store, snapshotFixture().projection);
+    const identity = store.storeIdentity.bind(store);
+    let calls = 0;
+    // Inject replacement at the snapshot admission boundary. Providers may
+    // check identity internally during load; keep those calls bound to the
+    // real store rather than changing the provider's own verification path.
+    const observedStore = new Proxy(store, {get(target, key) {
+      if (key === "storeIdentity") return async () => {
+        const observed = await identity();
+        return ++calls > 1 && observed.status === "available"
+          ? {...observed, store_identity: `${observed.store_identity}:replaced`} : observed;
+      };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    await assert.rejects(readCanonicalSnapshotFromStore(snapshotRequest(), observedStore,
+      CANONICAL_SNAPSHOT_LOCAL_BYTES), {code: "canonical_snapshot_changed"});
   });
 
 }

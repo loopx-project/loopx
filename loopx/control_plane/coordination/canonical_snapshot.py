@@ -14,7 +14,7 @@ from .coordination_state_contract_generated import (
     LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA as REQUEST_SCHEMA,
     LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_RESULT_SCHEMA as RESULT_SCHEMA,
 )
-METHOD = "coordination.local_authority.todo_snapshot_page"
+METHOD = "coordination.local_authority.todo_snapshot"
 
 
 def read_canonical_snapshot(
@@ -55,6 +55,7 @@ def read_canonical_snapshot(
                     "after": after,
                 },
                 timeout=timeout,
+                large_local_snapshot=True,
             )
             require(isinstance(page, dict), "snapshot page is not an object")
             if page.get("status") != "page":
