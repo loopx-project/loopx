@@ -294,6 +294,11 @@ def test_legacy_archive_without_source_bindings_keeps_original_runtime_readback(
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_backup_restores_hardlinked_materials_without_the_source(tmp_path, provider):
     registry, runtime, state = promoted_create_fixture(tmp_path, provider=provider)
+    project = state.parents[3]
+    project_registry = project / ".loopx/registry.json"
+    project_registry.parent.mkdir()
+    registry.rename(project_registry)
+    registry = project_registry
     material = runtime / "required-material.txt"
     material.write_text("Material needed to continue the unfinished task.\n")
     alias = runtime / "material-alias.txt"
@@ -303,7 +308,7 @@ def test_real_backup_restores_hardlinked_materials_without_the_source(tmp_path, 
         "--operation-id", "hardlinked-material", "--text", "Continue using the retained material")
     assert code == 0, added
     result = execute_state_backup_plan(build_state_backup_plan(
-        project=state.parents[3], registry_path=registry, runtime_root=runtime,
+        project=project, registry_path=registry, runtime_root=runtime,
         output_dir=tmp_path / "backups", include_registry_projects=False,
         include_automations=False, include_skills=False))
     archive, manifest = Path(result["archive_path"]), Path(result["manifest_path"])
@@ -312,8 +317,7 @@ def test_real_backup_restores_hardlinked_materials_without_the_source(tmp_path, 
     assert any(member.name == "runtime-root/required-material.txt" for member in hardlinks)
     expected = material.read_bytes()
     runtime.rename(tmp_path / "unavailable-runtime")
-    state.parents[3].rename(tmp_path / "unavailable-project")
-    registry.rename(tmp_path / "unavailable-registry.json")
+    project.rename(tmp_path / "unavailable-project")
     destination = tmp_path / "inert"
     arguments = ("backup-state", "verify", "--archive", archive, "--manifest", manifest,
                  "--destination", destination)
