@@ -232,6 +232,40 @@ def _check_links(links: list[tuple[str, str]]) -> None:
                     pending = list(PurePosixPath(by_name[key]).parts) + pending
 
 
+def _copy_regular_member(
+    archive: tarfile.TarFile, member: tarfile.TarInfo, destination: Path | None, *, keep_data: bool,
+) -> tuple[str, int, bytes, bytes]:
+    """Witness the bounded stream used by both preview and private extraction."""
+    source = archive.extractfile(member)
+    if source is None:
+        raise StateRecoveryError("archive_member_unreadable")
+    data, prefix = bytearray(), bytearray()
+    digest, size = hashlib.sha256(), 0
+    target = None
+    try:
+        if destination is not None:
+            target = open(destination, "xb")
+            os.chmod(destination, 0o600)
+        while chunk := source.read(_CHUNK):
+            size += len(chunk)
+            _require(size <= member.size, "archive_member_size_mismatch")
+            digest.update(chunk)
+            prefix.extend(chunk[:max(0, 100 - len(prefix))])
+            if keep_data:
+                data.extend(chunk)
+            if target is not None:
+                target.write(chunk)
+        _require(size == member.size, "archive_member_size_mismatch")
+        if target is not None:
+            target.flush()
+            os.fsync(target.fileno())
+    finally:
+        source.close()
+        if target is not None:
+            target.close()
+    return digest.hexdigest(), size, bytes(prefix), bytes(data)
+
+
 def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> dict[str, Any]:
     handle.seek(0)
     stream = _BoundedGzip(handle, archive_size)
@@ -293,37 +327,13 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
                          "recovery_capacity_exceeded")
                 if name == "manifest.json":
                     _require(member.size <= MAX_MANIFEST_BYTES, "archive_metadata_too_large")
-                source = archive.extractfile(member)
-                if source is None:
-                    raise StateRecoveryError("archive_member_unreadable")
-                data, prefix = bytearray(), bytearray()
-                digest, size = hashlib.sha256(), 0
-                destination = None
-                try:
-                    if output is not None:
-                        destination = open(output / name, "xb")
-                        os.chmod(output / name, 0o600)
-                    while chunk := source.read(_CHUNK):
-                        size += len(chunk)
-                        _require(size <= member.size, "archive_member_size_mismatch")
-                        digest.update(chunk)
-                        prefix.extend(chunk[:max(0, 100 - len(prefix))])
-                        if name == "manifest.json":
-                            data.extend(chunk)
-                        if destination is not None:
-                            destination.write(chunk)
-                    _require(size == member.size, "archive_member_size_mismatch")
-                    if destination is not None:
-                        destination.flush()
-                        os.fsync(destination.fileno())
-                finally:
-                    source.close()
-                    if destination is not None:
-                        destination.close()
+                digest, size, prefix, data = _copy_regular_member(
+                    archive, member, output / name if output is not None else None,
+                    keep_data=name == "manifest.json")
                 if name == "manifest.json":
-                    embedded = _json(bytes(data))
+                    embedded = _json(data)
                 else:
-                    files.append({"archive_path": name, "sha256": digest.hexdigest(), "size_bytes": size})
+                    files.append({"archive_path": name, "sha256": digest, "size_bytes": size})
                 if prefix[:16] == b"SQLite format 3\0":
                     sqlite_members.append(name)
                     if prefix[18:20] == b"\x01\x01":
