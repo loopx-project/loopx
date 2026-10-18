@@ -292,6 +292,49 @@ def test_legacy_archive_without_source_bindings_keeps_original_runtime_readback(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_backup_restores_hardlinked_materials_without_the_source(tmp_path, provider):
+    registry, runtime, state = promoted_create_fixture(tmp_path, provider=provider)
+    material = runtime / "required-material.txt"
+    material.write_text("Material needed to continue the unfinished task.\n")
+    alias = runtime / "material-alias.txt"
+    os.link(material, alias)
+    code, added = _cli("--registry", registry, "--runtime-root", runtime, "todo", "add",
+        "--goal-id", "goal-a", "--role", "agent", "--claimed-by", "agent-a",
+        "--operation-id", "hardlinked-material", "--text", "Continue using the retained material")
+    assert code == 0, added
+    result = execute_state_backup_plan(build_state_backup_plan(
+        project=state.parents[3], registry_path=registry, runtime_root=runtime,
+        output_dir=tmp_path / "backups", include_registry_projects=False,
+        include_automations=False, include_skills=False))
+    archive, manifest = Path(result["archive_path"]), Path(result["manifest_path"])
+    with tarfile.open(archive) as saved:
+        hardlinks = [member for member in saved if member.islnk()]
+    assert any(member.name == "runtime-root/required-material.txt" for member in hardlinks)
+    expected = material.read_bytes()
+    runtime.rename(tmp_path / "unavailable-runtime")
+    state.parents[3].rename(tmp_path / "unavailable-project")
+    registry.rename(tmp_path / "unavailable-registry.json")
+    destination = tmp_path / "inert"
+    arguments = ("backup-state", "verify", "--archive", archive, "--manifest", manifest,
+                 "--destination", destination)
+    code, preview = _cli(*arguments)
+    assert code == 0, preview
+    assert preview["written"] is False and not destination.exists()
+    code, audit = _cli(*arguments, "--execute")
+    assert code == 0, audit
+    for name in ("required-material.txt", "material-alias.txt"):
+        restored = destination / "data/runtime-root" / name
+        assert restored.read_bytes() == expected
+        assert restored.stat().st_mode & 0o077 == 0
+    assert os.path.samefile(destination / "data/runtime-root/required-material.txt",
+                            destination / "data/runtime-root/material-alias.txt")
+    [goal] = [row for row in audit["components"] if row["owner_kind"] == "coordination_authority"]
+    assert goal["state"] == "readable" and goal["facts"]["todo_count"] == 1
+    assert audit["execution_authority_granted"] is False
+    assert read_state_recovery_audit(destination) == audit
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_backup_recovers_readable_authority_after_original_sources_disappear(tmp_path, provider):
     archive, manifest = _backup(tmp_path, provider)
     source_args = ("--registry", tmp_path / "registry.json", "--runtime-root", tmp_path / "runtime")
@@ -621,7 +664,7 @@ def test_recomputed_archive_digest_does_not_hide_member_corruption(tmp_path):
     ("runtime-root/RETAINED.txt", tarfile.REGTYPE, "", "archive_name_collision"),
     ("runtime-root/retained.txt", tarfile.REGTYPE, "", "archive_name_collision"),
     ("fifo", tarfile.FIFOTYPE, "", "archive_member_type_unsupported"),
-    ("hardlink", tarfile.LNKTYPE, "runtime-root/retained.txt", "archive_member_type_unsupported"),
+    ("hardlink", tarfile.LNKTYPE, "missing-target", "archive_member_type_unsupported"),
     ("outside", tarfile.SYMTYPE, "../escape", "archive_link_escapes"),
     ("runtime-root", tarfile.SYMTYPE, "project", "archive_name_collision"),
 ])
@@ -634,6 +677,30 @@ def test_archive_paths_and_member_types_fail_before_destination_creation(tmp_pat
         verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
     assert not (tmp_path / "inert").exists()
     assert not (tmp_path.parent / "escape").exists()
+
+
+@pytest.mark.parametrize("target,reason", [
+    ("../escape", "archive_path_invalid"),
+    ("/absolute", "archive_path_invalid"),
+    ("safe-link", "archive_member_type_unsupported"),
+    ("prior-hardlink", "archive_member_type_unsupported"),
+    ("hardlink", "archive_member_type_unsupported"),
+])
+def test_hardlink_targets_must_be_prior_regular_archive_members(tmp_path, target, reason):
+    archive, manifest = _backup(tmp_path)
+    symlink = tarfile.TarInfo("safe-link")
+    symlink.type, symlink.linkname = tarfile.SYMTYPE, "runtime-root/retained.txt"
+    _rewrite(archive, manifest, symlink)
+    prior = tarfile.TarInfo("prior-hardlink")
+    prior.type, prior.linkname = tarfile.LNKTYPE, "runtime-root/retained.txt"
+    _rewrite(archive, manifest, prior)
+    member = tarfile.TarInfo("hardlink")
+    member.type, member.linkname = tarfile.LNKTYPE, target
+    _rewrite(archive, manifest, member)
+    with pytest.raises(StateRecoveryError, match=reason):
+        verify_state_backup(archive=archive, manifest=manifest, destination=tmp_path / "inert", execute=True)
+    assert not (tmp_path / "inert").exists()
+    assert not list(tmp_path.glob(".loopx-recovery-*"))
 
 
 def test_large_pax_metadata_is_refused_before_tarfile_decodes_its_body(tmp_path):

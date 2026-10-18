@@ -239,6 +239,7 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
     folded: dict[str, str] = {}
     ancestors: set[str] = set()
     links: list[tuple[str, str]] = []
+    hardlinks: list[tuple[str, str]] = []
     files, sqlite_members, standalone = [], [], []
     embedded: dict[str, Any] | None = None
     logical = 0
@@ -250,7 +251,8 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
                 _require(name not in names and key not in folded, "archive_name_collision")
                 _require(len(names) < MAX_MEMBERS, "recovery_capacity_exceeded")
                 _require(member.sparse is None, "archive_sparse_unsupported")
-                kind = "file" if member.isfile() else "directory" if member.isdir() else "symlink" if member.issym() else None
+                kind = ("file" if member.isfile() else "directory" if member.isdir()
+                        else "symlink" if member.issym() else "hardlink" if member.islnk() else None)
                 _require(kind is not None, "archive_member_type_unsupported")
                 names[name], folded[key] = str(kind), name
                 for parent in PurePosixPath(name).parents:
@@ -260,6 +262,19 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
                              "archive_parent_not_directory")
                 if kind != "directory":
                     _require(key not in ancestors, "archive_parent_not_directory")
+                if kind == "hardlink":
+                    # Our producer deduplicates repeated inodes against an
+                    # earlier regular member. Never resolve via a live path,
+                    # symlink, forward reference or another hard link.
+                    target = _member_name(member.linkname)
+                    _require(names.get(target) == "file", "archive_member_type_unsupported")
+                    _require(member.size == 0, "archive_member_size_mismatch")
+                    hardlinks.append((name, target))
+                    if target in sqlite_members:
+                        sqlite_members.append(name)
+                    if target in standalone:
+                        standalone.append(name)
+                    continue
                 if kind == "symlink":
                     target = member.linkname
                     _require(bool(target) and len(target) <= 1024 and "\x00" not in target
@@ -330,6 +345,9 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
     _check_links(links)
     # Links are materialized last and no member may live beneath a link.
     if output is not None:
+        for name, target in hardlinks:
+            _directories(output, PurePosixPath(name).parts[:-1])
+            os.link(output / target, output / name, follow_symlinks=False)
         for name, target in links:
             _directories(output, PurePosixPath(name).parts[:-1])
             os.symlink(target, output / name)
