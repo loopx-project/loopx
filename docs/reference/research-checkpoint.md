@@ -296,6 +296,15 @@ is required; it retains the original incomplete Task and recorded Turn. A
 disconnected destination refuses readback, then recovers the same accepted
 result when the destination returns, without another model call or debit.
 
+Same-operation recovery also covers an HTTP process exit after destination
+admission but before native dispatch, and after accepted work but before its
+HTTP response. Restarting the listener or inspecting the original Goal does not
+start a model Turn. An explicit retry uses the retained cutover and original
+Turn journal: unfinished work executes once, while accepted work and its exact
+result are read back without another execution or debit. This qualifies retry
+at those commit boundaries, not automatic wake or interruption of a still-active
+native executor; those remain with the responsible Host and execution owners.
+
 ![Reviewed bounded continuation in the normal packaged App](assets/agent-transfer-bounded-confirmation.png)
 
 ![Original Task independently accepted after automatic continuation in the normal packaged App](assets/agent-transfer-bounded-result.png)

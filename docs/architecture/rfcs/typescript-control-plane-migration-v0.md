@@ -93,6 +93,9 @@ the original Task's reviewed local continuation with its existing Goal-acceptanc
 and completion-result owners. One move confirmation can continue the unfinished
 work and return its accepted file through the original Goal outputs; it adds no
 result store or second decision owner. [The bounded profile and evidence limits](../../reference/research-checkpoint.md#admit-a-fresh-session-and-adopt-context)
+include original-entry retry after the HTTP process exits at destination-admitted
+or result-accepted boundaries, without replaying accepted work or debiting twice;
+listener restart alone grants no execution. They
 separate real File/SQLite and native-process checks using deterministic local
 responses from persistent Host wake, necessary configuration/credential rebinding,
 full source-effect drain, portable delivery and the full 120-second journey.
