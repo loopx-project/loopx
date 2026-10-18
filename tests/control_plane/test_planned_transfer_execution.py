@@ -153,6 +153,8 @@ def test_confirmation_runs_registered_original_agent_and_independently_returns_r
     from tests.control_plane.codex_checkpoint_fixture import real_native_source
 
     _goal_document(source, absolute=True)
+    source["cli"]("configure-goal", "--goal-id", "report", "--quota-compute", "0.25",
+        "--quota-window-hours", "2", "--execute")
     original_task, validator = _declare_original_checks(source)
     _declare_goal_result_acceptance(source, tmp_path)
     actual = source["project"].parent / "agent"

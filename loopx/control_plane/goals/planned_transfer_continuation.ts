@@ -46,7 +46,7 @@ export function localTransferGoalDocuments(original: JsonObject): JsonObject[] {
 export function localTransferGoalConfiguration(original: JsonObject): JsonObject {
   const keys = ["id", "display_name", "domain", "status", "role", "parent_goal_id", "repo", "state_file",
     "authority_sources", "adapter", "spawn_policy", "coordination", "execution_profile", "next_probe", "guards",
-    "creation_operation_id", "activation"];
+    "creation_operation_id", "activation", "quota", "compute_quota"];
   if (Object.keys(original).some(key => !keys.includes(key)) || original.parent_goal_id != null) {
     reject("Source Goal configuration requires its owning continuation profile");
   }
@@ -65,11 +65,29 @@ export function localTransferGoalConfiguration(original: JsonObject): JsonObject
     reject("Local Task transfer needs its qualified single-Agent configuration; required materials, capabilities or Host bindings need their original owner");
   }
   localTransferGoalDocuments(original);
+  // Retain declared budget bytes, not a recomputed allowance or a copied
+  // execution grant. The existing quota owner still interprets this policy
+  // against retained original debit/void receipts and current Goal activation.
+  // This positive carrier does not adopt arbitrary capability/credential data.
+  if (original.quota !== undefined) {
+    const quota = requireJsonObject(original.quota, "original execution budget");
+    const numeric = ["compute", "window_hours", "slot_minutes", "allowed_slots", "spent_slots"];
+    if (Object.entries(quota).some(([key, value]) => key === "next_eligible_at"
+      ? typeof value !== "string" : !numeric.includes(key) || typeof value !== "number" || !Number.isFinite(value))) {
+      reject("Original execution budget requires its owning quota configuration before preparation");
+    }
+  }
+  if (original.compute_quota !== undefined &&
+      (typeof original.compute_quota !== "number" || !Number.isFinite(original.compute_quota))) {
+    reject("Original execution budget requires its owning quota configuration before preparation");
+  }
   const {storage_target: _originalCreationTarget, ...currentCoordination} = coordination;
   return {domain: original.domain, role: original.role, parent_goal_id: null,
     spawn_policy: spawn, coordination: currentCoordination,
     ...(original.execution_profile === undefined ? {} : {execution_profile: original.execution_profile}),
-    ...(original.guards === undefined ? {} : {guards: original.guards})};
+    ...(original.guards === undefined ? {} : {guards: original.guards}),
+    ...(original.quota === undefined ? {} : {quota: original.quota}),
+    ...(original.compute_quota === undefined ? {} : {compute_quota: original.compute_quota})};
 }
 
 export function requireLocalTransferTaskBindings(original: JsonObject, projection: JsonObject): void {
@@ -292,7 +310,7 @@ export async function readReviewedTransferContext(receipt: JsonObject,
     (purpose === "readback" && snapshot.activation_state === "stopped");
   if (snapshot.registry_profile !== null || snapshot.registry_role === "global-local" || !activationAllowed ||
       ["id", "repo", "state_file", "planned_transfer", "goal_instance_id", "creation_operation_id", "status",
-        "domain", "role", "spawn_policy", "coordination", "guards", "execution_profile", "authority_sources"]
+        "domain", "role", "spawn_policy", "coordination", "guards", "execution_profile", "authority_sources", "quota", "compute_quota"]
         .some(key => !same(current[key] ?? null, admitted[key] ?? null))) {
     reject("Current Goal registration no longer matches its reviewed continuation; use its Goal owner");
   }

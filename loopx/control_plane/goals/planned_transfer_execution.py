@@ -140,11 +140,18 @@ def _continue_original_turns(plan, invoke, request, runtime, identity, budget, d
     while True:
         if cancelled():
             return {"ok": True, **identity, "turn_count": completed, "loop_disposition": LoopDisposition.STOP.value}
-        if (host_service or "continuation_deadline_at_ms" in plan) and completed == 0 and find_loopx_turn_key_by_settlement_identity(runtime,
+        if completed == 0 and find_loopx_turn_key_by_settlement_identity(runtime,
                 **{name: plan[name] for name in ("goal_id", "agent_id", "todo_id")}, turn_instance_id=key) is None:
-            # A no-spend initial wait must remain a fresh admission check on the
-            # next Host tick, not a journaled model request that is blindly retried.
+            # Every fresh confirmation checks current admission before acquiring
+            # a work lease. Paused/exhausted work must not leave a failed Turn or
+            # claim behind. A later Host tick checks again without replaying work.
             fresh = invoke("turn", "plan", *_common(plan, key), "--include-transaction-detail")
+            if "turn_envelope" not in fresh:
+                # Explicit selection can be refused before a Turn exists. Keep
+                # that original native error; do not manufacture a host decision
+                # or acquire a lease to discover the same refusal a second time.
+                return {"ok": False, **identity, "turn_count": 0,
+                    "reason_code": fresh.get("error_code") or "original_work_continuation_unavailable"}
             decision = decide_loop_disposition(turn_receipt=None, quota_decision=fresh["turn_envelope"])
             if decision["disposition"] != LoopDisposition.RUN_NOW.value:
                 return {"ok": True, **identity, "turn_count": 0, "loop_disposition": decision["disposition"]}
