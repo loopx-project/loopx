@@ -59,6 +59,11 @@ def write_turn_validated_completion(
     task_lease_expected_version: int | None = None,
 ) -> dict[str, Any]:
     """Complete one validated Todo under the effective runtime root."""
+    from ..control_plane.goals.planned_transfer_io import read_reviewed_transfer_result_file
+
+    result_file = read_reviewed_transfer_result_file(registry_path=registry_path, goal_id=goal_id,
+        todo_id=todo_id, agent_id=agent_id, workspace=completion_validation_workspace_path,
+        runtime_root_arg=runtime_root_arg)
 
     return complete_goal_todo(
         registry_path=registry_path,
@@ -69,6 +74,7 @@ def write_turn_validated_completion(
         completion_identity_source="turn_settlement",
         completion_delivery_workspace=completion_delivery_workspace,
         completion_validation_workspace_path=completion_validation_workspace_path,
+        completion_result_file=result_file,
         task_lease_idempotency_key=task_lease_idempotency_key,
         task_lease_expected_version=task_lease_expected_version,
         evidence=evidence,

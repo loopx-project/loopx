@@ -69,7 +69,8 @@ async function locationIdentity(root: string): Promise<string> {
  * No credentials, native sessions or optional capability settings are adopted. */
 export async function planLocalGoalTransferPreparation(value: JsonObject): Promise<JsonObject> {
   const rawMaterials = value.materials;
-  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id", "source_context", "registry_witness", "destination_root", "materials", ...(Object.hasOwn(value, "continue_todo_id") ? ["continue_todo_id"] : [])]) ||
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id", "source_context", "registry_witness", "destination_root", "materials", ...(Object.hasOwn(value, "continue_todo_id") ? ["continue_todo_id"] : []),
+      ...(Object.hasOwn(value, "continue_result_file") ? ["continue_result_file"] : [])]) ||
       !Array.isArray(rawMaterials) || process.platform === "win32") reject("Local preparation requires its explicit original Goal, destination and reviewed materials");
   return visitRegisteredTransferSource(value, requireAuthorityStoreId(value.operation_id, "original operation"), async source => {
     if (source.preview.ready_for_authority_preparation !== true) reject("Original work is not settled; use its existing Task/Turn owners before preparing this move");
@@ -77,7 +78,7 @@ export async function planLocalGoalTransferPreparation(value: JsonObject): Promi
     const goal = requireJsonObject(source.context.goal, "original Goal");
     localTransferGoalConfiguration(goal);
     requireLocalTransferTaskBindings(goal, source.projection);
-    const work = await planTransferOriginalWork(goal, source.projection, value.continue_todo_id, String(source.context.runtime_root));
+    const work = await planTransferOriginalWork(goal, source.projection, value.continue_todo_id, String(source.context.runtime_root), value.continue_result_file);
     const overlaps = (a: string, b: string) => {
       const suffix = relative(a, b);
       return suffix === "" || (!isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`));
@@ -111,6 +112,7 @@ export async function planLocalGoalTransferPreparation(value: JsonObject): Promi
       reviewed.materials.map((row, index) => ({...decodePlannedTransferMaterial(row, index), path: String(materials[index]!.path)})), null);
     return {source_preview_sha256: source.preview.preview_sha256, provider: source.preview.provider, materials, repository,
       ...(work ? {continue_todo_id: work.todo_id} : {}),
+      ...(work?.result ? {continue_result_file: requireJsonObject(work.result, "original result").relative_path} : {}),
       project: join(destination, "workspace"), runtime_root: join(destination, "runtime"),
       recipient_directory: join(destination, "recipient"), artifact_directory: join(destination, "portable")};
   });
@@ -121,7 +123,8 @@ export async function planLocalGoalTransferPreparation(value: JsonObject): Promi
  * a browser-supplied filesystem route. Every confirmation rechecks real owners. */
 export async function readLocalGoalTransferCutoverReview(root: string, goal: string, operation: string): Promise<JsonObject | null> {
   const review = await optional(join(operationDirectory(root, goal, operation, true), "cutover-review.json"));
-  if (review && (!hasExactAuthorityKeys(review, ["schema_version", "goal_id", "operation_id", "target_registry_path", "preview_sha256", "destination_name", ...(Object.hasOwn(review, "continue_todo_id") ? ["continue_todo_id"] : [])]) ||
+  if (review && (!hasExactAuthorityKeys(review, ["schema_version", "goal_id", "operation_id", "target_registry_path", "preview_sha256", "destination_name", ...(Object.hasOwn(review, "continue_todo_id") ? ["continue_todo_id"] : []),
+      ...(Object.hasOwn(review, "continue_result_file") ? ["continue_result_file"] : [])]) ||
       review.schema_version !== REVIEW_SCHEMA || review.goal_id !== goal || review.operation_id !== operation ||
       !BARE_SHA256_PATTERN.test(String(review.preview_sha256)) || typeof review.destination_name !== "string")) reject("Original local cutover review is unavailable; preserve its operation");
   return review;
@@ -163,7 +166,8 @@ export async function retainLocalGoalTransferCutoverReview(value: JsonObject): P
     const review = {schema_version: REVIEW_SCHEMA, goal_id: decision.goal_id, operation_id: decision.operation_id,
       target_registry_path: target.registry_path, preview_sha256: plan.preview_sha256,
       destination_name: basename(dirname(String(target.project))),
-      ...(value.continue_todo_id ? {continue_todo_id: value.continue_todo_id} : {})};
+      ...(value.continue_todo_id ? {continue_todo_id: value.continue_todo_id} : {}),
+      ...(value.continue_result_file ? {continue_result_file: value.continue_result_file} : {})};
     await retain(join(operationDirectory(String(source.runtime_root), String(decision.goal_id), String(decision.operation_id), true), "cutover-review.json"), review);
     return {operation_id: review.operation_id, preview_sha256: review.preview_sha256, destination_name: review.destination_name};
   });
@@ -284,6 +288,7 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
   if (!hasExactAuthorityKeys(value, ["source", "target_snapshot", "target_registry",
       ...(Object.hasOwn(value, "continuation") ? ["continuation"] : []),
       ...(Object.hasOwn(value, "continue_todo_id") ? ["continue_todo_id"] : []),
+      ...(Object.hasOwn(value, "continue_result_file") ? ["continue_result_file"] : []),
       ...(Object.hasOwn(value, "reviewed_preview_sha256") ? ["reviewed_preview_sha256"] : []),
       ...(execute ? ["execute", "expected_preview_sha256"] : [])])) reject("Local cutover requires complete current source and target observations");
   const source = requireJsonObject(value.source, "original source request");
@@ -319,6 +324,8 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
           if ((value.continue_todo_id ?? null) !== ((priorContinuation?.continue_work as JsonObject | undefined)?.todo_id ?? null)) {
             reject("Original continuation Task changed; preserve the reviewed operation");
           }
+          const priorResult = (priorContinuation?.continue_work as JsonObject | undefined)?.result as JsonObject | undefined;
+          if ((value.continue_result_file ?? null) !== (priorResult?.relative_path ?? null)) reject("Original continuation result changed; preserve the reviewed operation");
           if ((value.continuation === "reviewed_context") !== (priorDecision.profile === "source_online_local_runtime_v0")) reject("Original cutover continuation profile changed");
           if (Object.hasOwn(value, "reviewed_preview_sha256") && value.reviewed_preview_sha256 !== canonicalAuthoritySha256(priorDecision)) reject("Original product cutover review changed");
           if (execute && value.expected_preview_sha256 !== canonicalAuthoritySha256(priorDecision)) reject("Reviewed cutover identity changed");
@@ -387,7 +394,7 @@ export async function planLocalGoalTransferCutover(value: JsonObject): Promise<J
           }
         }
         if (continuation && executionWorkspace) continuation.execution_workspace = executionWorkspace;
-        const continueWork = await planTransferOriginalWork(originalGoal, current.projection, value.continue_todo_id, root);
+        const continueWork = await planTransferOriginalWork(originalGoal, current.projection, value.continue_todo_id, root, value.continue_result_file);
         if (continueWork) {
           if (!continuation || (execute && !executionWorkspace)) reject("Automatic continuation requires its reviewed execution workspace");
           continuation.continue_work = continueWork;

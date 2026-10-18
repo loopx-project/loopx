@@ -323,6 +323,8 @@ def run_goal_acceptance_validation_effect(
     goal_id: str,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
+    todo_id: str | None = None,
+    criterion_id: str | None = None,
 ) -> dict[str, Any]:
     """Use the ordinary runner while preserving declared verifier-file identity.
 
@@ -342,6 +344,7 @@ def run_goal_acceptance_validation_effect(
             delivery_workspace=delivery_workspace,
             validation_workspace_path=validation_workspace_path,
             label=label,
+            todo_id=todo_id, goal_acceptance_criterion_id=criterion_id,
         )
         if failure is not None:
             return failure
@@ -380,6 +383,7 @@ def run_goal_acceptance_validation_effect(
             effect={key: value for key, value in effect.items() if key != "validation_files"},
             registry_path=registry_path, goal_id=goal_id,
             delivery_workspace=delivery_workspace, validation_workspace_path=validation_workspace_path,
+            todo_id=todo_id, goal_acceptance_criterion_id=criterion_id,
         )
     if not _acceptance_pins_match(pins, workspace):
         return stale_receipt()

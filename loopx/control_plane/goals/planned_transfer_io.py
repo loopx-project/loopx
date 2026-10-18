@@ -155,7 +155,7 @@ def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> di
             preview = local_goal_transfer_cutover(registry_path=registry_path, goal_id=goal_id,
                 operation_id=review["operation_id"], destination_registry=Path(review["target_registry_path"]),
                 continuation="reviewed_context", reviewed_preview_sha256=review["preview_sha256"],
-                continue_todo_id=review.get("continue_todo_id"))
+                continue_todo_id=review.get("continue_todo_id"), continue_result_file=review.get("continue_result_file"))
         except Exception:
             # Only this read-only destination observation failed. Preserve the
             # native source view/cancellation, including after a browser reload;
@@ -211,6 +211,7 @@ def local_goal_transfer_cutover(
     *, registry_path: Path, goal_id: str, operation_id: str, destination_registry: Path,
     expected_preview_sha256: str | None = None, continuation: str | None = None,
     reviewed_preview_sha256: str | None = None, continue_todo_id: str | None = None,
+    continue_result_file: str | None = None,
 ) -> dict[str, Any]:
     """One source-online local cutover; native owners decide every transition.
 
@@ -221,6 +222,8 @@ def local_goal_transfer_cutover(
     request, snapshot, before = _local_cutover_request(registry_path, goal_id, operation_id, destination_registry, continuation)
     if continue_todo_id is not None:
         request["continue_todo_id"] = continue_todo_id
+    if continue_result_file is not None:
+        request["continue_result_file"] = continue_result_file
     destination_registry = destination_registry.expanduser().absolute()
     if reviewed_preview_sha256 is not None:
         request["reviewed_preview_sha256"] = reviewed_preview_sha256
@@ -258,7 +261,8 @@ def _local_cutover_request(registry_path: Path, goal_id: str, operation_id: str,
 
 
 def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str,
-    destination_root: Path, materials: list[Path], continue_todo_id: str | None = None) -> dict[str, Any]:
+    destination_root: Path, materials: list[Path], continue_todo_id: str | None = None,
+    continue_result_file: str | None = None) -> dict[str, Any]:
     """Fixed IO composition of existing Goal, custody and registry owners.
 
     The Agent supplies an explicit reviewed file selection. TypeScript chooses
@@ -271,6 +275,7 @@ def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_
         "operation_id": operation_id, "destination_root": str(destination_root.expanduser().absolute()),
         "materials": [str(path.expanduser().absolute()) for path in materials],
         **({"continue_todo_id": continue_todo_id} if continue_todo_id is not None else {}),
+        **({"continue_result_file": continue_result_file} if continue_result_file is not None else {}),
     }, timeout=60.0, retry_safe=True)
     recipient = create_planned_transfer_recipient(destination=Path(plan["recipient_directory"]))
     exported = export_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id,
@@ -286,6 +291,8 @@ def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_
     request["execution_repository"] = plan["repository"]
     if "continue_todo_id" in plan:
         request["continue_todo_id"] = plan["continue_todo_id"]
+    if "continue_result_file" in plan:
+        request["continue_result_file"] = plan["continue_result_file"]
     effect_runtime_result("coordination.planned_transfer.retain_local_cutover_review", request,
         timeout=300.0, retry_safe=False)
     return inspect_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
@@ -301,7 +308,7 @@ def confirm_registered_goal_transfer(*, registry_path: Path, goal_id: str, opera
     local_goal_transfer_cutover(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id,
         destination_registry=Path(review["target_registry_path"]), continuation="reviewed_context",
         expected_preview_sha256=expected_preview_sha256, reviewed_preview_sha256=review["preview_sha256"],
-        continue_todo_id=review.get("continue_todo_id"))
+        continue_todo_id=review.get("continue_todo_id"), continue_result_file=review.get("continue_result_file"))
     execution = None
     if review.get("continue_todo_id"):
         # The accepted cutover remains recorded even if the current Host cannot
@@ -332,6 +339,37 @@ def read_goal_transfer_host_context(*, registry_path: Path, goal_id: str,
         "runtime_root": route["source_runtime_root"], "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
     }, timeout=60.0, retry_safe=True)
     return result
+
+
+def read_reviewed_transfer_result_file(*, registry_path: Path, goal_id: str, todo_id: str,
+    agent_id: str | None, workspace: Path | None, runtime_root_arg: str | None = None) -> Path | None:
+    """Adapt the immutable move review to the existing completion-result writer.
+
+    Neither model output nor an arbitrary caller path selects these bytes. The
+    native owner rechecks the current Task, original acceptance and workspace.
+    Normal Goals and earlier reviews keep their existing completion behavior.
+    """
+    from ...registry import find_registry_goal
+    from ...paths import effective_runtime_root
+    from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
+
+    route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+    goal = find_registry_goal(load_registry(Path(route["source_registry"])), goal_id)
+    transfer = goal.get("planned_transfer") if goal else None
+    if not isinstance(transfer, dict) or transfer.get("runtime_admitted") is not True:
+        return None
+    runtime = effective_runtime_root(Path(route["source_registry"]), runtime_root_arg)
+    plan = effect_runtime_result("coordination.planned_transfer.execution_plan", {
+        "runtime_root": str(runtime.resolve()), "goal_id": goal_id,
+        "operation_id": transfer["operation_id"], "todo_id": todo_id,
+    }, retry_safe=True)["plan"]
+    if plan is None or "completion_result_file" not in plan:
+        return None
+    if (Path(plan["registry_path"]).resolve() != Path(route["source_registry"]).resolve()
+            or plan["todo_id"] != todo_id or plan["agent_id"] != agent_id or workspace is None
+            or str(workspace.resolve()) != plan["project"]):
+        raise ValueError("Original result requires its reviewed Task, Agent and workspace")
+    return Path(plan["completion_result_file"])
 
 
 def prepare_registered_goal_transfer(

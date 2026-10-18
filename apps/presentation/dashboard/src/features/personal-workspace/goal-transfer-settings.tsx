@@ -143,6 +143,9 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
         {!view.local_cutover && view.prepared_cutover.continue_work?.continuation_budget ? <p>{zh
           ? `本次最多自动推进 ${view.prepared_cutover.continue_work.continuation_budget.max_turns} 轮，新轮启动窗口 ${view.prepared_cutover.continue_work.continuation_budget.timeout_seconds} 秒；每轮重新检查准入。当前轮次沿原超时完成验收和结算。等待、停止或需要恢复时结束本次推进，不创建后台定时器。`
           : `This request continues for at most ${view.prepared_cutover.continue_work.continuation_budget.max_turns} Turns with a ${view.prepared_cutover.continue_work.continuation_budget.timeout_seconds}-second window for starting further Turns, checking admission each time. Current validation and settlement retain their own timeouts. Waiting, stopping or recovery ends this request; no background timer is created.`}</p> : null}
+        {view.prepared_cutover.continue_work?.result ? <p>{zh
+          ? `结果文件：${view.prepared_cutover.continue_work.result.relative_path}。原任务和 Goal 验收通过后，可在此 Goal 的产出中读取实际内容。`
+          : `Result file: ${view.prepared_cutover.continue_work.result.relative_path}. After the original Task and Goal acceptance pass, read its actual contents in this Goal's outputs.`}</p> : null}
         <button className="personal-primary-action" disabled={busy} type="button" onClick={() => void perform("confirm")}>
           {view.local_cutover ? (zh ? "恢复本次切换" : "Resume this move") : (zh ? "确认切换" : "Confirm local move")}
         </button>

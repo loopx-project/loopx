@@ -4,7 +4,7 @@
  * and current Goal/Task owners; it creates no session, lease or second ledger.
  * Historical source bindings and receipts are context, never executable proof.
  */
-import {dirname, join, relative, resolve} from "node:path";
+import {dirname, extname, isAbsolute, join, relative, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeConflictError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
@@ -18,6 +18,9 @@ import {readGoalTransferHistoryJson, readTransferValidationDeclarations} from ".
 import {repositoryMaterialMapping, type TransferRepository} from "./planned_transfer_repository.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {verifyGoalTransferExecutionWorkspace} from "./planned_transfer_workspace.ts";
+import {requirePhysicalTransferPath} from "./planned_transfer_container.ts";
+import {acceptanceCompletionRequirements} from "./acceptance_contract.ts";
+import {evaluateTaskLeaseWriteScopesOverlap} from "../work_items/task_lease_acquire_decision.ts";
 
 const LOCAL_TRANSFER_CAPABILITIES = ["filesystem_read", "filesystem_write", "shell"] as const;
 
@@ -84,8 +87,12 @@ export function requireLocalTransferTaskBindings(original: JsonObject, projectio
 
 /** This opt-in composes existing Task validation and native execution owners.
  * It is local to this prepared move, never a Chat role or a copied Host grant. */
-export async function planTransferOriginalWork(original: JsonObject, projection: JsonObject, id: unknown, root: string): Promise<JsonObject | null> {
-  if (id === undefined) return null;
+export async function planTransferOriginalWork(original: JsonObject, projection: JsonObject, id: unknown, root: string,
+  resultFile?: unknown): Promise<JsonObject | null> {
+  if (id === undefined) {
+    if (resultFile !== undefined) reject("A continuation result requires its original Task");
+    return null;
+  }
   const todoId = requireAuthorityStoreId(id, "original continuation Task");
   const task = indexCoordinationProjection(projection, String(original.id)).todos.get(todoId);
   const agents = requireJsonObject(original.coordination, "original Agent registration").registered_agents as unknown[];
@@ -98,15 +105,33 @@ export async function planTransferOriginalWork(original: JsonObject, projection:
   if (!declaration.ok || !declaration.value.validation_command_argv) {
     reject("Automatic continuation requires the original Task's independent argv validation declaration");
   }
+  let result: JsonObject | undefined;
+  if (resultFile !== undefined) {
+    const acceptance = acceptanceCompletionRequirements(projection, String(original.id), todoId);
+    if (!acceptance) reject("A continuation result requires original bound Goal acceptance");
+    // This local profile reuses the existing completion-result provider's text
+    // formats. The terminal owner still validates bytes, criteria and binding.
+    if (typeof resultFile !== "string" || !resultFile || isAbsolute(resultFile) || /[\0\\*?\[\]]/u.test(resultFile) ||
+        resultFile.split("/").some(part => !part || part === "." || part === "..") ||
+        [".git", ".loopx"].includes(resultFile.split("/")[0]!) ||
+        ![".txt", ".md", ".json"].includes(extname(resultFile).toLowerCase()) ||
+        evaluateTaskLeaseWriteScopesOverlap({left: task.required_write_scopes, right: [resultFile]}).overlap !== true) {
+      reject("Select a normalized text result inside the original Task's write scopes");
+    }
+    result = {relative_path: resultFile, acceptance_contract_revision: acceptance.contract_revision,
+      acceptance_contract_digest: acceptance.contract_digest};
+  }
   return {todo_id: todoId, agent_id: agents[0], host: "codex-cli", sandbox: "workspace-write", validation_workspace: "reviewed_working_tree",
     validation_sha256: canonicalAuthoritySha256(declaration.value),
+    ...(result ? {result} : {}),
     continuation_budget: {max_turns: 10, timeout_seconds: 90}};
 }
 
 /** Read the admitted operation and the current Task; downstream owners still
  * acquire the lease and decide the exact Turn. This projection grants nothing. */
 export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<JsonObject> {
-  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id"])) reject("Read the original transfer execution identity");
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id",
+      ...(Object.hasOwn(value, "todo_id") ? ["todo_id"] : [])])) reject("Read the original transfer execution identity");
   const root = requireLocalAuthorityRuntimeRoot(value.runtime_root), goal = requireAuthorityStoreId(value.goal_id, "Goal");
   const fence = await loadLegacyCoordinationWriterFence(root, goal);
   if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA ||
@@ -117,6 +142,9 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
   const continuation = requireJsonObject(decision.continuation, "original continuation");
   if (!continuation.continue_work) return {plan: null};
   const work = requireJsonObject(continuation.continue_work, "reviewed original work");
+  // Completion transport selects only this reviewed result. Other Tasks and
+  // earlier reviews retain their ordinary completion path without this input.
+  if (Object.hasOwn(value, "todo_id") && (value.todo_id !== work.todo_id || work.result === undefined)) return {plan: null};
   const budget = requireJsonObject(work.continuation_budget ?? {max_turns: 1, timeout_seconds: 90}, "original continuation budget");
   if (!hasExactAuthorityKeys(budget, ["max_turns", "timeout_seconds"]) ||
       !Number.isInteger(budget.max_turns) || Number(budget.max_turns) < 1 || Number(budget.max_turns) > 10 ||
@@ -135,6 +163,14 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
   const declaration = normalizeTodoCompletionValidationDeclaration(retained ? requireJsonObject(retained.declaration, "original independent validator") : {});
   if (!declaration.ok || !declaration.value.validation_command_argv ||
       canonicalAuthoritySha256(declaration.value) !== work.validation_sha256) reject("Original independent acceptance changed; retain its current owner");
+  let resultPath: string | undefined;
+  if (work.result !== undefined) {
+    const reviewed = requireJsonObject(work.result, "original reviewed result");
+    const acceptance = acceptanceCompletionRequirements(head.head, goal, String(work.todo_id));
+    if (!acceptance || acceptance.contract_revision !== reviewed.acceptance_contract_revision ||
+        acceptance.contract_digest !== reviewed.acceptance_contract_digest) reject("Original result acceptance changed; use its owning review");
+    resultPath = await requirePhysicalTransferPath(resolve(String(execution.path), String(reviewed.relative_path)));
+  }
   return {plan: {registry_path: admission.target_registry_path, runtime_root: root, goal_id: goal,
     agent_id: work.agent_id, todo_id: work.todo_id, project: execution.path,
     turn_instance_id: `transfer-${canonicalAuthoritySha256([decision.operation_id, decision.source_preparation_sha256, work.todo_id])}`,
@@ -142,6 +178,7 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
     write_scopes: task.required_write_scopes, available_capabilities: [...LOCAL_TRANSFER_CAPABILITIES],
     validation_argv: declaration.value.validation_command_argv,
     validation_timeout_seconds: declaration.value.validation_timeout_seconds,
+    ...(resultPath ? {completion_result_file: resultPath} : {}),
     // Historical reviews promised only one dispatch; a later code update must
     // not silently expand an already confirmed execution budget.
     continuation_budget: budget,
@@ -152,7 +189,9 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
  * This chooses its workspace, never grants a validation effect or Task lease;
  * the ordinary terminal transaction still admits and rechecks those effects. */
 export async function validateGoalTransferWorkingState(value: JsonObject): Promise<JsonObject> {
-  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "todo_id", "workspace_path", "declaration_sha256"])) reject("Original validation requires its exact workspace and declaration");
+  const goalCriterion = Object.hasOwn(value, "goal_acceptance_criterion_id");
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "todo_id", "workspace_path",
+      goalCriterion ? "goal_acceptance_criterion_id" : "declaration_sha256"])) reject("Original validation requires its exact workspace and declaration");
   const root = requireLocalAuthorityRuntimeRoot(value.runtime_root), goal = requireAuthorityStoreId(value.goal_id, "Goal");
   const fence = await loadLegacyCoordinationWriterFence(root, goal);
   if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA) return {admitted: false};
@@ -162,7 +201,13 @@ export async function validateGoalTransferWorkingState(value: JsonObject): Promi
   if (!continuation.continue_work) return {admitted: false};
   const work = requireJsonObject(continuation.continue_work, "reviewed original work");
   if (work.todo_id !== value.todo_id || work.validation_workspace !== "reviewed_working_tree" ||
-      work.validation_sha256 !== value.declaration_sha256) return {admitted: false};
+      !goalCriterion && work.validation_sha256 !== value.declaration_sha256) return {admitted: false};
+  if (goalCriterion) {
+    const opened = await openLocalAuthorityStoreHandle(root, goal, {}, {existingOnly: true});
+    const head = await opened.store.loadAuthority();
+    if (head.status !== "loaded" || !acceptanceCompletionRequirements(head.head, goal, String(value.todo_id))
+      ?.criterion_ids.includes(String(value.goal_acceptance_criterion_id))) return {admitted: false};
+  }
   const {plan: rawPlan} = await readGoalTransferExecutionPlan({runtime_root: root, goal_id: goal, operation_id: fence.fence.operation_id});
   const plan = requireJsonObject(rawPlan, "current original execution plan");
   return {admitted: plan.activation_state === "active" && plan.task_status === "open" &&

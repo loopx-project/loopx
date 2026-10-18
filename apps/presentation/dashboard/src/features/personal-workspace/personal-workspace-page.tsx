@@ -344,7 +344,7 @@ function GoalOutputsView({
   return (
     <>
       <section className="personal-object-list personal-files-list" data-testid="personal-goal-outputs">
-        <header><strong>{t("files.title")}</strong>{!teamConfigured ? <span>{items.length}</span> : null}</header>
+        <header><strong>{t("files.title")}</strong>{!teamConfigured && !localResults ? <span>{items.length}</span> : null}</header>
         {reportState?.loading ? (
           <p className="personal-object-list-state" role="status"><RefreshCw className="is-spinning" size={14} />{t("files.loadingReports")}</p>
         ) : null}

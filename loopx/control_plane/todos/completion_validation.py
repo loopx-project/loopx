@@ -119,6 +119,7 @@ def _resolve_completion_validation_workspace(
     label: str,
     todo_id: str | None = None,
     declaration_sha256: str | None = None,
+    goal_acceptance_criterion_id: str | None = None,
 ) -> tuple[Path | None, dict[str, Any] | None]:
     """Resolve the authority-bound workspace for one validation effect.
 
@@ -222,7 +223,7 @@ def _resolve_completion_validation_workspace(
             ),
         )
     clean = _git_workspace_is_clean(candidate)
-    if clean is False and todo_id is not None and declaration_sha256 is not None:
+    if clean is False and todo_id is not None and (declaration_sha256 is not None or goal_acceptance_criterion_id is not None):
         # A prepared move may explicitly select its original pending working
         # files. The TS transfer owner verifies that exact Task, declaration,
         # admitted runtime and physical workspace; generic clean validation is
@@ -234,7 +235,9 @@ def _resolve_completion_validation_workspace(
             route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
             admitted = effect_runtime_result("coordination.planned_transfer.validation_workspace", {
                 "runtime_root": route["source_runtime_root"], "goal_id": goal_id, "todo_id": todo_id,
-                "workspace_path": str(candidate.resolve()), "declaration_sha256": declaration_sha256,
+                "workspace_path": str(candidate.resolve()),
+                **({"goal_acceptance_criterion_id": goal_acceptance_criterion_id}
+                   if goal_acceptance_criterion_id is not None else {"declaration_sha256": declaration_sha256}),
             })
         except Exception:
             return None, _workspace_failure(label, status="workspace_unverified",
@@ -282,6 +285,7 @@ def _run_declared_completion_validation(
     validation_workspace_path: Path | None = None,
     todo_id: str | None = None,
     declaration_sha256: str | None = None,
+    goal_acceptance_criterion_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Run a todo's declared caller-approved validation command.
 
@@ -311,6 +315,7 @@ def _run_declared_completion_validation(
         delivery_workspace=delivery_workspace,
         validation_workspace_path=validation_workspace_path,
         label=label, todo_id=todo_id, declaration_sha256=declaration_sha256,
+        goal_acceptance_criterion_id=goal_acceptance_criterion_id,
     )
     if workspace_failure is not None:
         return workspace_failure
@@ -389,6 +394,7 @@ def run_declared_completion_validation_effect(
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
     todo_id: str | None = None,
+    goal_acceptance_criterion_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute exactly one TypeScript-authorized validation effect.
 
@@ -441,6 +447,7 @@ def run_declared_completion_validation_effect(
         delivery_workspace=delivery_workspace,
         validation_workspace_path=validation_workspace_path,
         todo_id=todo_id, declaration_sha256=declaration_digest,
+        goal_acceptance_criterion_id=goal_acceptance_criterion_id,
     )
     if receipt is None:
         raise RuntimeError("authorized validation effect produced no receipt")
@@ -758,6 +765,8 @@ def execute_completion_validation_effects(
                 effect=row["effect"], registry_path=registry_path, goal_id=goal_id,
                 delivery_workspace=delivery_workspace,
                 validation_workspace_path=validation_workspace_path,
+                todo_id=str(result["todo_id"]) if result.get("todo_id") is not None else None,
+                criterion_id=str(row["criterion_id"]),
             )
             receipts.append({"criterion_id": row.get("criterion_id"), "receipt": receipt})
         updates["goal_acceptance_source_binding"] = dict(source_binding)

@@ -25,12 +25,95 @@ from tests.control_plane.test_planned_transfer_product import _goal_document
 source = source_fixture
 
 
-def _prepare(source, tmp_path):
+def _prepare(source, tmp_path, *, result_file=None):
     destination = tmp_path / "destination"
     destination.mkdir()
     return destination, source["cli"]("goal-transfer", "prepare-local", "--goal-id", "report",
         "--operation-id", "move-a", "--destination-root", str(destination),
-        "--continue-todo-id", source["todo"], "--execute")
+        "--continue-todo-id", source["todo"],
+        *(["--continue-result-file", result_file] if result_file is not None else []), "--execute")
+
+
+def _declare_goal_result_acceptance(source, tmp_path):
+    before = source["cli"]("goal-acceptance", "inspect", "--goal-id", "report")
+    document = {"scope": {"kind": "all_advancement"},
+        "objective": "The original report is independently accepted", "non_goals": [],
+        "criteria": [{"id": "sum", "description": "The original report contains the sum of the supplied inputs",
+            "validation_argv": [sys.executable, "-c", "from pathlib import Path; assert Path('report.txt').read_bytes()==b'21\\n'"],
+            "validation_timeout_seconds": 5}],
+        "bindings": [{"todo_id": source["todo"], "criterion_ids": ["sum"]}]}
+    path = tmp_path / "original-acceptance.json"
+    path.write_text(json.dumps(document))
+    source["cli"]("goal-acceptance", "configure", "--goal-id", "report", "--document", str(path),
+        "--expected-provider-revision", before["provider_revision"], "--execute")
+
+
+def test_result_selection_requires_original_bound_acceptance_before_fencing(source, tmp_path):
+    _goal_document(source, absolute=True)
+    _declare_original_checks(source)
+    destination = tmp_path / "destination"
+    destination.mkdir()
+    before = source["registry"].read_bytes(), source["fence"].read_bytes()
+    args = ("goal-transfer", "prepare-local", "--goal-id", "report", "--operation-id", "move-a",
+        "--destination-root", str(destination), "--continue-todo-id", source["todo"])
+    rejected = source["cli"](*args, "--continue-result-file", "report.txt", "--execute", expected_code=1)
+    assert "bound Goal acceptance" in rejected["error"]
+    _declare_goal_result_acceptance(source, tmp_path)
+    for path in ("../report.txt", "/tmp/report.txt", ".loopx/result.txt", "input.txt", "report*.txt", "report.pdf"):
+        rejected = source["cli"](*args, "--continue-result-file", path, "--execute", expected_code=1)
+        assert "result" in rejected["error"].lower()
+        assert before == (source["registry"].read_bytes(), source["fence"].read_bytes())
+        assert list(destination.iterdir()) == []
+
+
+def test_result_uses_the_current_original_acceptance_and_exact_workspace(source, tmp_path):
+    from loopx.control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
+    from loopx.control_plane.goals.planned_transfer_io import local_goal_transfer_cutover, read_reviewed_transfer_result_file
+
+    _goal_document(source, absolute=True)
+    _declare_original_checks(source)
+    _declare_goal_result_acceptance(source, tmp_path)
+    destination, prepared = _prepare(source, tmp_path, result_file="report.txt")
+    review = prepared["prepared_cutover"]
+    registry, runtime = destination / "workspace/.loopx/registry.json", destination / "runtime"
+    local_goal_transfer_cutover(registry_path=source["registry"], goal_id="report", operation_id="move-a",
+        destination_registry=registry, continuation="reviewed_context", continue_todo_id=source["todo"],
+        continue_result_file="report.txt", reviewed_preview_sha256=review["preview_sha256"],
+        expected_preview_sha256=review["preview_sha256"])
+    workspace = destination / "agent-workspace"
+    assert read_reviewed_transfer_result_file(registry_path=registry, goal_id="report", todo_id=source["todo"],
+        agent_id="agent-a", workspace=workspace) == workspace / "report.txt"
+    assert read_reviewed_transfer_result_file(registry_path=registry, goal_id="report", todo_id="todo_other",
+        agent_id="agent-a", workspace=workspace) is None
+    with pytest.raises(ValueError, match="reviewed Task, Agent and workspace"):
+        read_reviewed_transfer_result_file(registry_path=registry, goal_id="report", todo_id=source["todo"],
+            agent_id="agent-a", workspace=source["project"])
+    with pytest.raises(EffectRuntimeRemoteError, match="not admitted"):
+        read_reviewed_transfer_result_file(registry_path=registry, goal_id="report", todo_id=source["todo"],
+            agent_id="agent-a", workspace=workspace, runtime_root_arg=str(source["runtime"]))
+    request = {"runtime_root": str(runtime), "goal_id": "report", "todo_id": source["todo"],
+        "workspace_path": str(workspace), "goal_acceptance_criterion_id": "sum"}
+    assert effect_runtime_result("coordination.planned_transfer.validation_workspace", request) == {"admitted": True}
+    assert effect_runtime_result("coordination.planned_transfer.validation_workspace",
+        {**request, "goal_acceptance_criterion_id": "unrelated"}) == {"admitted": False}
+    # This narrow profile cannot replace policy. Preserve that native hold
+    # rather than weakening it to make a stale-contract test writable.
+    from loopx.control_plane.goals.acceptance import configure_goal_acceptance, inspect_goal_acceptance
+
+    before = inspect_goal_acceptance(registry_path=registry, runtime_root=str(runtime), goal_id="report")
+    document = json.loads((tmp_path / "original-acceptance.json").read_text())
+    document["criteria"][0]["description"] = "Owner revised the original report acceptance"
+    with pytest.raises(ValueError, match="goal_acceptance_effect_failed"):
+        configure_goal_acceptance(registry_path=registry, runtime_root=str(runtime), goal_id="report", document=document,
+            expected_provider_revision=before["provider_revision"], execute=True)
+    assert inspect_goal_acceptance(registry_path=registry, runtime_root=str(runtime), goal_id="report")["contract"] == before["contract"]
+    # A later linked output must not redirect the reviewed result to source or
+    # other files, even though the relative name still matches the review.
+    (workspace / "report.txt").symlink_to(source["project"] / "input.txt")
+    with pytest.raises(EffectRuntimeRemoteError, match="linked ancestor|worktree file links"):
+        read_reviewed_transfer_result_file(registry_path=registry, goal_id="report", todo_id=source["todo"],
+            agent_id="agent-a", workspace=workspace)
+    (workspace / "report.txt").unlink()
 
 
 def _declare_original_checks(source):
@@ -68,12 +151,14 @@ def test_confirmation_runs_registered_original_agent_and_independently_returns_r
 
     _goal_document(source, absolute=True)
     original_task, validator = _declare_original_checks(source)
+    _declare_goal_result_acceptance(source, tmp_path)
     actual = source["project"].parent / "agent"
     (actual / "input.txt").write_text("5\n7\n9\n")
     (actual / "report.txt").write_text("unfinished\n")
-    destination, prepared = _prepare(source, tmp_path)
+    destination, prepared = _prepare(source, tmp_path, result_file="report.txt")
     assert prepared["prepared_cutover"]["continue_work"]["todo_id"] == source["todo"]
     assert prepared["prepared_cutover"]["continue_work"]["agent_id"] == "agent-a"
+    assert prepared["prepared_cutover"]["continue_work"]["result"]["relative_path"] == "report.txt"
     requests = []
 
     def response(body, number, message):
@@ -116,10 +201,41 @@ def test_confirmation_runs_registered_original_agent_and_independently_returns_r
             if native_outcome == "accepted":
                 assert "21" in work["note"]
                 assert "prepared_cutover" not in result["readback"]
+                from loopx.control_plane.todos.completion_result import read_completion_result
+
+                accepted = read_completion_result(registry_path=destination / "workspace/.loopx/registry.json",
+                    runtime_root=destination / "runtime", goal_id="report", todo_id=source["todo"])
+                assert accepted["text"] == "21\n"
+                assert accepted["result"]["producer_agent_id"] == "agent-a"
+                assert accepted["result"]["todo_id"] == source["todo"]
+                def get(path):
+                    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=90)
+                    connection.request("GET", path)
+                    response = connection.getresponse()
+                    value = response.status, json.loads(response.read())
+                    connection.close()
+                    return value
+
+                # Read bytes through the initiating entry, not a destination
+                # filesystem lookup or the model's completion summary.
+                route = f"/api/chat/goal-results/{source['todo']}?goal_id=report"
+                status, through_original_entry = get(route)
+                assert status == 200 and through_original_entry["text"] == "21\n"
+                assert through_original_entry["result"] == accepted["result"]
+                objects = destination / "runtime/goals/report/result-objects"
+                stored = objects / accepted["result"]["sha256"]
+                stored.write_text("20\n")
+                assert get(route)[0] == 409
+                unavailable = get("/api/chat/goal-results?goal_id=report")[1]
+                assert unavailable["items"] == [] and unavailable["unavailable_todo_ids"] == [source["todo"]]
+                stored.write_bytes(b"21\n")
+                assert get(route)[1]["text"] == "21\n"
             else:
                 # Admission alone must not hide the original UI recovery.
                 assert result["readback"]["prepared_cutover"] == prepared["prepared_cutover"]
                 assert call({"action": "inspect", "goal_id": "report"})[1]["prepared_cutover"] == prepared["prepared_cutover"]
+                assert "completion_result" not in work
+                assert not list((destination / "runtime/goals/report/result-objects").glob("*"))
             for field in ("text", "claimed_by", "task_repository", "required_write_scopes"):
                 assert work.get(field) == original_task.get(field)
             assert work.get("required_capabilities", []) == original_task.get("required_capabilities", [])

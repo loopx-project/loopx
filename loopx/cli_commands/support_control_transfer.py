@@ -32,6 +32,7 @@ def register_goal_transfer(subparsers: argparse._SubParsersAction[argparse.Argum
         if action == "prepare-local":
             command.add_argument("--destination-root", required=True, type=Path)
             command.add_argument("--continue-todo-id", help="Prepare this original Task for automatic continuation after confirmation with the current local Codex CLI login and workspace-write sandbox; requires its original independent argv validator.")
+            command.add_argument("--continue-result-file", help="Original Agent-selected relative .txt/.md/.json output to return through Goal results after the original bound Goal acceptance passes; included in the same move confirmation.")
             command.add_argument("--material", action="append", type=Path, default=[],
                 help="Agent-reviewed workspace input; does not certify complete dependencies or credential isolation.")
         if action in ("cutover-preview", "cutover"):
@@ -78,7 +79,8 @@ def handle_goal_transfer(args: argparse.Namespace, *, registry_path: Path,
                 operation_id=args.operation_id)}
         elif args.goal_transfer_action == "prepare-local":
             payload = prepare_local_goal_transfer(registry_path=registry_path, goal_id=args.goal_id,
-                operation_id=args.operation_id, destination_root=args.destination_root, materials=args.material, continue_todo_id=args.continue_todo_id)
+                operation_id=args.operation_id, destination_root=args.destination_root, materials=args.material,
+                continue_todo_id=args.continue_todo_id, continue_result_file=args.continue_result_file)
         elif args.goal_transfer_action == "confirm":
             payload = confirm_registered_goal_transfer(registry_path=registry_path, goal_id=args.goal_id,
                 operation_id=args.operation_id, expected_preview_sha256=args.expected_preview_sha256)
