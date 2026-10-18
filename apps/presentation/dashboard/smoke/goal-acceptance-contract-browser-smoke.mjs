@@ -63,6 +63,16 @@ try {
     if (await navigation.isVisible()) await navigation.click();
     await page.locator(".personal-goal-link").first().click();
     await page.getByRole("button", { name: locale === "en" ? "Overview" : "概览", exact: true }).click();
+    const section = page.locator(".delivery-acceptance-contract");
+    const openInspection = async () => {
+      const inspection = section.locator(".delivery-check-inspection");
+      if (await inspection.isVisible() && await inspection.getAttribute("open") === null) {
+        await inspection.locator(":scope > summary").focus();
+        await page.keyboard.press("Enter");
+      }
+    };
+    // Both current read owners must describe the same fixture. An empty native
+    // response correctly supersedes retained status, so it cannot test stale work.
     // The owner can invalidate work without changing the contract revision.
     const imageDir = resolve(root, "output/playwright/acceptance-currentness");
     await mkdir(imageDir, {recursive: true});
@@ -72,25 +82,26 @@ try {
         value.verification.contract_revision = value.revision;
         value.verification.contract_digest = value.digest;
       }
+      response = {...snapshot, acceptance: {...acceptance, goal_acceptance_contract: value}};
       payload.run_history.goals[0].acceptance_observation = {...acceptance, goal_acceptance_contract: value};
       await page.reload({waitUntil: "networkidle"});
       const direction = page.locator(".goal-overview-direction");
       await direction.waitFor();
-      const toggle = direction.locator(".goal-direction-toggle");
-      if (await toggle.isVisible() && await toggle.getAttribute("aria-expanded") === "false") await toggle.click();
+      await openInspection();
       await direction.getByText(contract.criteria[0].description, {exact: true}).waitFor();
       await page.screenshot({path: resolve(imageDir, `${locale}-${status}.png`), animations: "disabled"});
       const passing = direction.locator(".goal-overview-criteria .is-verified, .goal-overview-criteria .is-accepted");
       assert.equal(await passing.count(), status === "accepted" ? 1 : 0, `${status}: retained checks are not current whole-scope success`);
       assert.equal(await direction.locator(".goal-overview-criteria li").count(), value.criteria.length);
     }
+    response = structuredClone(snapshot);
     payload.run_history.goals[0].acceptance_observation = acceptance;
     await page.reload({waitUntil: "networkidle"});
     const review = page.locator(".delivery-review");
-    const section = review.locator(".delivery-acceptance-contract");
     const refresh = review.getByRole("button", { name: locale === "en" ? "Refresh snapshot" : "刷新快照", exact: true });
     const exportButton = review.getByRole("button", { name: locale === "en" ? "Export delivery snapshot" : "导出交付快照", exact: true });
     const openAdvanced = async () => {
+      await openInspection();
       const advanced = section.locator(".delivery-check-advanced");
       if (await advanced.isVisible() && await advanced.getAttribute("open") === null) {
         await advanced.locator(":scope > summary").focus();
@@ -138,9 +149,9 @@ try {
     await section.getByText(next.digest, { exact: true }).waitFor();
     assert.equal(await section.getByText(contract.digest, { exact: true }).count(), 0);
     assert.match(await section.locator(".delivery-check-advanced dl").innerText(), /8/);
-    await section.locator("details > summary").first().click();
+    await section.getByText(locale === "en" ? "Check record and versions" : "检查记录与版本", {exact: true}).click();
     await section.getByText("c".repeat(64), { exact: true }).waitFor();
-    assert.match(await section.locator(".delivery-check-result dl").innerText(), /6/);
+    assert.match(await section.getByText(locale === "en" ? "Check record and versions" : "检查记录与版本", {exact: true}).locator("..").locator("dl").innerText(), /6/);
     assert.equal(await section.evaluate(element => element.scrollWidth > element.clientWidth + 2), false, "Long digests must wrap at narrow widths");
     const downloadPromise = page.waitForEvent("download");
     await exportButton.click();

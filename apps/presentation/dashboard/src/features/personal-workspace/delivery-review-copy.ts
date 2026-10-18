@@ -11,6 +11,8 @@ export const goalAcceptanceContractCopy = {
     verificationState: { unverified: "Artifact checks not verified", accepted: "Artifact checks passed", failed: "Artifact checks failed", stale: "Artifact checks stale", partial: "Task checks passed; Goal-wide verification unknown", held: "Task associations require confirmation" },
     notApplicable: "Outside the current task gate", heldTasks: "Tasks held", receipt: "Recorded artifact checks", receiptNote: "Recorded results use the revision below. The current contract status above accounts for stale checks and task holds.",
     operation: "Verification reference", verificationScope: "Verification scope", allCriteria: "All contract criteria", passed: "Passed", failed: "Failed", exitCode: "Exit code",
+    oracleChecker: "Owner-pinned checker", oracleSourceDigest: "Source digest", oracleCheckedAt: "Checked at", oracleInputVersions: "Input versions", oracleOutputVersions: "Output versions",
+    oracleState: {current: "Current versions checked", recorded: "Recorded; current versions not checked", stale: "Source or versions changed; check again", failed: "Checks failed; repair the delivery before checking again", unverified: "Not checked", unavailable: "Evidence unavailable"},
     help: "Setup and readback", guide: "Check setup guide (v0)", guidance: "The Agent can prepare a plan for review without running it. Existing technical contracts can also be imported here or managed through CLI configure/verify/disable. Saving does not run commands. Disabling retains historical evidence.",
   },
   "zh-CN": {
@@ -23,6 +25,8 @@ export const goalAcceptanceContractCopy = {
     verificationState: { unverified: "产物检查未验证", accepted: "产物检查通过", failed: "产物检查失败", stale: "产物检查已过期", partial: "任务检查通过；Goal 整体验证未知", held: "任务关联需要确认" },
     notApplicable: "不属于当前任务门禁范围", heldTasks: "受阻任务", receipt: "已记录的产物检查", receiptNote: "记录对应下方版本。上方当前合同状态已考虑检查过期和任务阻塞。",
     operation: "验证引用", verificationScope: "验证范围", allCriteria: "全部合同条件", passed: "通过", failed: "失败", exitCode: "退出码",
+    oracleChecker: "负责人指定的版本固定检查器", oracleSourceDigest: "来源摘要", oracleCheckedAt: "检查时间", oracleInputVersions: "输入版本", oracleOutputVersions: "输出版本",
+    oracleState: {current: "当前版本已核对", recorded: "历史结果，当前版本未核对", stale: "来源或版本已变化，请重新检查", failed: "检查失败；修复交付物后可再次检查", unverified: "尚未检查", unavailable: "证据不可用"},
     help: "配置与读回", guide: "检查配置指南（v0）", guidance: "Agent 可先准备方案供你核对，准备不会运行检查。已有技术合同也可在这里导入，或通过 CLI configure/verify/disable 管理。保存不执行命令，停用保留历史依据。",
   },
 };
