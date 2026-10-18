@@ -151,7 +151,72 @@ def test_due_vision_wait_restores_explicit_resume(tmp_path, isolated_effect):
     assert any("todo update" in action and "--clear-resume-when" in action
                for action in guard["interaction_contract"]["cli_channel"]["next_cli_actions"])
     assert "vision_wait_state" not in guard
+    assert guard["scheduler_hint"]["action"] == "run_now"
+    assert all(limit is None for limit in guard["scheduler_hint"]["unchanged_poll"]["limits"].values())
     assert state.read_bytes() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
+    tmp_path, isolated_effect, monkeypatch, provider,
+):
+    from argparse import Namespace
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    monkeypatch.syspath_prepend(str(REPO / "scripts"))
+    import external_scheduler_worker as worker
+
+    registry, runtime, state = fixture(tmp_path)
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
+    assert rc == 0, listed
+    initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
+        goal_id=GOAL, handoff_mode="soft_claim", todos=listed["todos"],
+    ), state_path=state, provider=provider)
+    original_state = state.read_bytes()
+    packets, sleeps = [], []
+
+    def real_probe(command, **kwargs):
+        # Adapt process transport only: every reply is produced by the real CLI
+        # against the isolated authority, with a fresh Turn identity.
+        rc, packet = cli(registry, runtime, *command[command.index("quota"):],
+                         "--turn-instance-id", f"scheduled-worker-{len(packets)}")
+        assert rc == 0, packet
+        packets.append(packet)
+        return packet
+
+    def advance_host(seconds):
+        sleeps.append(seconds)
+        assert len(sleeps) <= 4, "explicit stop must end the actual worker"
+        if len(sleeps) == 4:
+            stopped = json.loads(registry.read_text())
+            stopped["goals"][0]["activation_state"] = "stopped"
+            registry.write_text(json.dumps(stopped))
+
+    monkeypatch.setattr(worker, "run_quota_should_run", real_probe)
+    monkeypatch.setattr(worker, "_run_wake", lambda *a, **kw: pytest.fail("a pending wait cannot wake the model"))
+    args = Namespace(cli_bin="loopx", registry=str(registry), runtime_root=str(runtime),
+        runtime_profile="generic_cli", goal_id=GOAL, agent_id=AGENT,
+        state_file=str(tmp_path / "scheduler-state.json"), once=False, wake_cmd="unused",
+        error_backoff_seconds=5, quota_timeout_seconds=90, wake_timeout_seconds=None)
+    assert worker.run_worker(args, sleep=advance_host) == 0
+    assert sleeps == [600, 1200, 1800, 3600]
+    assert len(packets) == 5
+    for packet in packets[:-1]:
+        assert packet["should_run"] is False
+        assert packet["vision_wait_state"]["automatic_resume"] is True
+        hint = packet["scheduler_hint"]
+        assert hint["action"] == "backoff_until_state_change"
+        assert all(limit is None for limit in hint["unchanged_poll"]["limits"].values())
+        assert set(hint["unchanged_poll"]["after_limits"].values()) == {"continue"}
+        assert hint["unchanged_poll"]["final_quota_replan_check_enabled"] is False
+    assert packets[-1]["scheduler_hint"]["action"] == "stop_until_explicit_resume"
+    assert packets[-1]["scheduler_hint"]["cadence_class"] == "goal_stopped"
+    assert state.read_bytes() == original_state
+    runs = [json.loads(line) for line in (runtime / f"goals/{GOAL}/runs/index.jsonl").read_text().splitlines()]
+    assert not any(run.get("classification") in ("quota_monitor_poll", "quota_slot_spent") for run in runs)
 
 
 def test_independent_work_is_not_silenced_by_scheduled_wait(tmp_path, isolated_effect):

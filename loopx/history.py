@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_lock import exclusive_run_index_lock
+from .control_plane.presentation.goal_metadata import goal_parent_fields
 from .authority import goal_authority_registry_summary
 from .control_plane import compact_control_plane_policy
 from .control_plane.goals.activation import (
@@ -454,6 +455,7 @@ def collect_history(
         quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
         goal_record = {
             "id": current_goal_id,
+            **goal_parent_fields(meta),
             "activation_state": activation_state.value,
             "registry_goal_digest": registry_goal_digests.get(current_goal_id),
             "display_name": meta.get("display_name") if registry_member else None,

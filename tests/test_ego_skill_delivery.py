@@ -54,6 +54,14 @@ def test_refresh_copies_installed_skill_without_editing_app_and_reuses_idle_task
     assert "without another ownership-confirmation question" in text
     assert "Stop immediately for active user interaction" in text
     assert "explicit pause" in text and "unrelated space" in text
+    assert "create one replacement without asking only when" in text
+    assert "recorded successful `finish({ keep: [] })`" in text
+    assert "confirms that numeric id is absent" in text
+    assert "Absence alone does not prove normal closure" in text
+    assert "A refused claim never permits replacement" in text
+    assert "never recovery from a stuck, blocked, timed-out" in text
+    assert "single space for subsequent rounds" in text
+    assert "Finish exactly\nonce per space lifetime" in text
     assert "grants no new operation" in text
     assert "Finish once; protect user tabs." in text
     assert (entry / "references/api.md").read_text() == "Version-one API.\n"

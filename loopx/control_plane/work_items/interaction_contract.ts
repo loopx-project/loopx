@@ -17,34 +17,44 @@ import type { JsonObject } from "../effect_program.ts";
 import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
 import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
 
-/** A clock-backed wait needs no observation before its scheduled instant.
- * This read model never relaxes an existing Turn binding or settlement fence.
- * Dependency waits retain their bounded observation/replan policy. */
-export function projectBlockedSuccessorWaitObservation(request: JsonObject): JsonObject {
+function exactBlockedSuccessorWait(request: JsonObject): JsonObject | null {
   const wait = jsonObject(request.vision_wait_state);
   const exact = request.effective_action === AgentScopeFrontierAction.AGENT_SCOPE_WAIT &&
     wait?.schema_version === "goal_vision_wait_state_v0" && wait.state === "waiting" &&
     wait.reason_code === "exact_blocked_successor" && wait.automatic_resume === true &&
     typeof wait.selected_todo_id === "string" && !!wait.selected_todo_id &&
     typeof wait.resume_when === "string" && !!wait.resume_when;
-  if (!exact || !wait) return {required: false};
+  return exact && wait ? wait : null;
+}
+
+/** Share the existing clock proof; a Turn binding always retains supervision. */
+function pendingDatedSuccessor(request: JsonObject, wait: JsonObject): JsonObject | null {
   const receipt = jsonObject(request.heartbeat_receipt);
   const unbound = request.heartbeat_receipt == null || (!!receipt &&
     ["committed", "replayed"].includes(String(receipt.status)) &&
     !("settlement_identity" in receipt) && !("pending_action_selection" in receipt));
   const condition = jsonObject(wait.resume_condition);
-  if (unbound && wait.agent_id === request.agent_id && wait.waiting_todo_count === 1 &&
+  if (unbound && typeof request.agent_id === "string" && !!request.agent_id &&
+      wait.agent_id === request.agent_id && wait.waiting_todo_count === 1 &&
       ["open", "deferred"].includes(String(wait.selected_todo_status)) &&
       condition?.kind === "resume_at") {
     try {
       if (resumeConditionHasKnownPendingTarget(condition, {
         todo_id: wait.selected_todo_id, resume_when: wait.resume_when,
-      })) return {required: false};
+      })) return condition;
     } catch {
       // An incomplete or malformed clock proof cannot relax the contract.
     }
   }
-  return {required: true};
+  return null;
+}
+
+/** A clock-backed wait needs no observation before its scheduled instant.
+ * This read model never relaxes an existing Turn binding or settlement fence.
+ * Dependency waits retain their bounded observation/replan policy. */
+export function projectBlockedSuccessorWaitObservation(request: JsonObject): JsonObject {
+  const wait = exactBlockedSuccessorWait(request);
+  return {required: !!wait && pendingDatedSuccessor(request, wait) === null};
 }
 
 export const INTERACTION_CONTRACT_SCHEMA_VERSION =
@@ -171,9 +181,21 @@ export function projectSchedulerArbitration(value: unknown): JsonObject {
   errors.push(...interactionConsistencyIssues(facts).map(issue => issue.code));
   const [disposition, reason] = schedulerDisposition(facts, modes,
     user.non_gating_notice === true && agent.wait_source === "turn_settlement");
+  const wait = exactBlockedSuccessorWait(request);
+  const condition = !errors.length && disposition === "agent_scope_wait" &&
+    !facts.must_attempt && !facts.user_required && facts.quiet_noop_allowed &&
+    !facts.spend_allowed_now && !facts.spend_after_validation && wait &&
+    (wait.selected_todo_claimed_by == null || wait.selected_todo_claimed_by === "" ||
+      wait.selected_todo_claimed_by === request.agent_id)
+    ? pendingDatedSuccessor(request, wait) : null;
+  // The resume-condition owner has verified both timestamps and a future target.
+  // This private duration bounds host rechecks; it grants no execution/spend.
+  const scheduled = condition ? {scheduled_recheck_after_seconds: Math.ceil(
+    (Date.parse(String(condition.scheduled_for)) - Date.parse(String(condition.evaluated_at))) / 1000,
+  )} : {};
   return {mode, errors: [...new Set(errors)],
     disposition: errors.length ? "consistency_repair" : disposition,
-    reason_code: errors.length ? "scheduler_interaction_contract_inconsistent" : reason};
+    reason_code: errors.length ? "scheduler_interaction_contract_inconsistent" : reason, ...scheduled};
 }
 
 function decodeUserChannel(value: unknown): UserInteractionChannel {

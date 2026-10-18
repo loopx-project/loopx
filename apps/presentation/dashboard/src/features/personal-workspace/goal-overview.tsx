@@ -28,7 +28,8 @@ function relativeLookLabel(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { month: "short", day: "numeric" }).format(then);
 }
 
-export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
+export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenDetails, onSelect, onView, selectedTodoId, board, results, proposals, onPreview, historyRefreshRevision, readSourceUrl, review, digest, railOpen, onCloseRail, onOpenAgentConversation, sinceYouLooked, onMarkSeen }: {
+  readSourceUrl?: string;
   onOpenAgentConversation?: (agentId: string) => void;
   /** Material changes since the owner's last acknowledged look; null when none. */
   sinceYouLooked?: SinceYouLookedDelta | null; onMarkSeen?: () => void;
@@ -104,7 +105,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
     </div>
-    {!readOnly ? <GoalResearchHistory key={goal.goalId} goalId={goal.goalId} active={active} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision}/> : null}
+    {!readOnly || readSourceUrl ? <GoalResearchHistory key={goal.goalId} goalId={goal.goalId} readSourceUrl={readSourceUrl} active={active} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision}/> : null}
     <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
       readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board} results={results}
       map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>

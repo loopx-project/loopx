@@ -141,3 +141,67 @@ test("the required-read reply retains its reads and complete scheduler dispositi
   assert.deepEqual(result, {required_reads: [], arbitration: {mode: "bounded_delivery",
     disposition: "active_work", reason_code: "interaction_agent_attempt_required", errors: []}});
 });
+
+function datedWait(): JsonObject {
+  const resume = "resume_at:2099-01-01T01:00:00Z";
+  return {...facts("agent_scope_wait", false, false, false, true),
+    effective_action: "agent_scope_wait", agent_id: "scheduled-agent",
+    heartbeat_receipt: {status: "committed"},
+    vision_wait_state: {schema_version: "goal_vision_wait_state_v0", state: "waiting",
+      reason_code: "exact_blocked_successor", agent_id: "scheduled-agent",
+      automatic_resume: true, waiting_todo_count: 1, selected_todo_id: "todo_scheduled",
+      selected_todo_status: "deferred", selected_todo_claimed_by: "scheduled-agent",
+      resume_when: resume, resume_condition: {schema_version: "todo_resume_condition_v0",
+        kind: "resume_at", resume_when: resume, target: "2099-01-01T01:00:00Z",
+        satisfied: false, scheduled_for: "2099-01-01T01:00:00Z", evaluated_at: "2099-01-01T00:30:00Z",
+        clock_provider: "runtime_clock", material_change: false, material_change_generation: 0,
+        resume_receipt: null}}};
+}
+
+test("only an unbound pending automatic dated successor carries a scheduled recheck", () => {
+  const input = datedWait();
+  const before = structuredClone(input);
+  assert.deepEqual(projectSchedulerArbitration(input), {mode: "agent_scope_wait", errors: [],
+    disposition: "agent_scope_wait", reason_code: "interaction_agent_scope_wait",
+    scheduled_recheck_after_seconds: 1800});
+  assert.deepEqual(input, before);
+  for (const claimed of [null, ""]) {
+    assert.equal(projectSchedulerArbitration({...input, vision_wait_state: {
+      ...input.vision_wait_state as JsonObject, selected_todo_claimed_by: claimed,
+    }}).scheduled_recheck_after_seconds, 1800);
+  }
+});
+
+test("unproven waits cannot relax finite scheduler supervision", () => {
+  const input = datedWait();
+  const wait = input.vision_wait_state as JsonObject;
+  const condition = wait.resume_condition as JsonObject;
+  const patches: JsonObject[] = [
+    {effective_action: "agent_scope_exhausted"}, {agent_id: "other-agent"},
+    {heartbeat_receipt: {status: "pending"}},
+    {heartbeat_receipt: {status: "committed", settlement_identity: {todo_id: "todo_scheduled"}}},
+    {heartbeat_receipt: {status: "replayed", pending_action_selection: {}}},
+    ...[{automatic_resume: false}, {schema_version: "future"}, {state: "ready"},
+      {waiting_todo_count: 2}, {selected_todo_status: "done"}, {selected_todo_claimed_by: "other-agent"},
+      {agent_id: "other-agent"}, {resume_when: "resume_at:2098-01-01T00:00:00Z"}]
+      .map(patch => ({vision_wait_state: {...wait, ...patch}})),
+    ...[{satisfied: true}, {evaluated_at: condition.scheduled_for}, {evaluated_at: "invalid"},
+      {clock_provider: "caller_clock"}, {material_change: true}, {resume_receipt: {}},
+      {scheduled_for: "2098-01-01T00:00:00Z"}, {kind: "todo_done"}]
+      .map(patch => ({vision_wait_state: {...wait, resume_condition: {...condition, ...patch}}})),
+  ];
+  for (const patch of patches) {
+    assert.equal(projectSchedulerArbitration({...input, ...patch}).scheduled_recheck_after_seconds,
+      undefined, JSON.stringify(patch));
+  }
+  for (const higher of [facts("user_gate", true, false, false, false),
+    facts("terminal_no_followup", false, false, false, true), facts()]) {
+    const result = projectSchedulerArbitration({...input, ...higher});
+    assert.equal(result.scheduled_recheck_after_seconds, undefined);
+    assert.notEqual(result.disposition, "agent_scope_wait");
+  }
+  for (const field of ["spend_allowed_now", "spend_after_validation"]) {
+    assert.equal(projectSchedulerArbitration({...input, cli_channel: {[field]: true}})
+      .scheduled_recheck_after_seconds, undefined);
+  }
+});

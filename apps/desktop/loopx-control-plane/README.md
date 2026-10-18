@@ -22,6 +22,19 @@ with `loopx update`.
 
 ## Updates And Recovery
 
+From a terminal, `loopx upgrade` coordinates the owning CLI installer and this
+App's signed updater, restarts the App and waits for native service readiness.
+Archive users can select Main with `loopx upgrade --ref main`; `--dry-run` is
+read-only. The terminal passes only a bounded request id and an official channel
+to the App. A private request receipt contains versions, source revisions,
+update phase and the qualified service runtime identity; it contains no Goal
+content or credentials. An update check failure remains a failed terminal
+upgrade even when the workspace can still open. Normal launches without that
+request retain their existing three-second optional startup check; an explicit
+terminal upgrade uses the existing thirty-second interactive check budget.
+The existing update panel shows the same native maintenance phases and recovery
+actions. Main is the latest complete signed build, which can lag Git HEAD.
+
 Startup automatically uses the newest qualified local runtime it can establish.
 It compares package versions; equal versions with source revisions use ancestry
 from the fixed official GitHub repository. Installation time and lexical SHA

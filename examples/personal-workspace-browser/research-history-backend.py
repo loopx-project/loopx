@@ -56,6 +56,7 @@ def main():
             state = root / f"{captured_goal}.md"
             state.write_text("# Read-only captured research history\n\n## Agent Todo\n\n## Completed Work Archive\n")
             goals.append({"id": captured_goal,
+                **({"parent_goal_id": capture["parent_goal_id"]} if capture.get("parent_goal_id") else {}),
                 "display_name": capture.get("display_name", "Captured research history"),
                 "repo": str(root), "state_file": state.name,
                 "domain": "project-goal-control-plane",

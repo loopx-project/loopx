@@ -564,3 +564,37 @@ def test_python_source_codec_does_not_coerce_non_boolean_authority(flag) -> None
     assert arbitration.disposition is SchedulerDisposition.CONSISTENCY_REPAIR
     assert arbitration.errors == ("interaction_contract.user_channel.action_required_must_be_boolean",)
     assert payload == original
+
+
+@pytest.mark.parametrize("minutes,progression", [
+    (1, [1]), (11, [10, 11]), (25, [10, 20, 25]), (61, [10, 20, 30, 60]),
+])
+def test_automatic_dated_wait_bounds_rechecks_without_finite_stop(minutes, progression):
+    payload = _payload(mode="agent_scope_wait", should_run=False, user_required=False,
+        must_attempt=False, delivery_allowed=False, quiet_noop_allowed=True)
+    evaluated = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    due = (evaluated + timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
+    resume = f"resume_at:{due}"
+    payload["vision_wait_state"] = {
+        "schema_version": "goal_vision_wait_state_v0", "state": "waiting",
+        "reason_code": "exact_blocked_successor", "automatic_resume": True,
+        "agent_id": payload["agent_identity"]["agent_id"], "waiting_todo_count": 1,
+        "selected_todo_id": "todo_scheduled", "selected_todo_status": "deferred",
+        "resume_when": resume, "resume_condition": {
+            "schema_version": "todo_resume_condition_v0", "kind": "resume_at",
+            "resume_when": resume, "target": due, "satisfied": False,
+            "scheduled_for": due, "evaluated_at": "2099-01-01T00:00:00Z",
+            "clock_provider": "runtime_clock", "material_change": False,
+            "material_change_generation": 0, "resume_receipt": None,
+        },
+    }
+    original = deepcopy(payload)
+    hint = build_scheduler_hint(payload, agent_scope_frontier_actions=AGENT_SCOPE_ACTIONS,
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile("generic_cli"),
+        include_detail=True)
+    local = hint["cold_path_detail"]["local_scheduler"]
+    assert hint["action"] == "backoff_until_state_change"
+    assert local["example_progression_minutes"] == progression
+    assert all(limit is None for limit in hint["unchanged_poll"]["limits"].values())
+    assert set(hint["unchanged_poll"]["after_limits"].values()) == {"continue"}
+    assert payload == original

@@ -59,8 +59,13 @@ def register_ingress(
     message: str,
     source_id: str,
     source_message: str | None = None,
+    origin: str | None = None,
 ) -> None:
-    """Provider-only provenance, persisted before enqueue (never model-authored)."""
+    """Host-verified provenance, persisted before enqueue (never model-authored).
+
+    Existing provider receipts retain their exact shape. Local bound-owner input
+    records its actual web origin rather than impersonating a provider event.
+    """
     if not sender_id or not source_id or not channel.startswith("manager.external."):
         raise ValueError("manager ingress requires exact provider provenance")
     value = dict(
@@ -72,6 +77,10 @@ def register_ingress(
         source_id=source_id,
         source_message=normalize_source_context(message if source_message is None else source_message),
     )
+    if origin is not None:
+        if origin != "web":
+            raise ValueError("unsupported local ingress origin")
+        value["origin"] = origin
     path = (
         _root(runtime_root)
         / "ingress"

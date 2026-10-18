@@ -1102,7 +1102,7 @@ def _interaction_reads_and_arbitration(
     selected = payload.get("selected_todo") or {}
     orchestration = payload.get("task_orchestration_contract") or {}
     projection_params = {
-        "arbitration_facts": _scheduler_arbitration_facts(contract, agent_scope_frontier_actions),
+        "arbitration_facts": _scheduler_arbitration_facts(contract, agent_scope_frontier_actions, payload=payload),
         "required_reads": [dict(item) for item in reads if isinstance(item, dict) and item.get("command")]
             if isinstance(reads, list) else [],
         "goal_id": payload.get("goal_id"),

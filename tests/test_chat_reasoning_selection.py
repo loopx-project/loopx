@@ -50,8 +50,12 @@ for line in sys.stdin:
     request = json.loads(line)
     with capture.open("a") as out: out.write(json.dumps(request)+"\n")
     method = request.get("method")
-    if method == "initialize": result = {"protocolVersion": 1, "agentCapabilities": {}}
+    if method == "initialize": result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}
     elif method == "session/new": result = {"sessionId": "fixture-session", "configOptions": options()}
+    elif method == "session/load":
+        # Recovery restores the provider's own configuration, not the request.
+        selected.update({"model": "first", "depth": "low"})
+        result = {"configOptions": options()}
     elif method == "session/set_config_option":
         if behavior != "ignore" or request["params"]["configId"] != "depth":
             selected[request["params"]["configId"]] = request["params"]["value"]
@@ -179,6 +183,47 @@ def test_registered_acp_discovery_and_selection_share_native_configuration(tmp_p
         assert not any(row["method"] == "session/prompt" for row in packets)
     finally:
         runtime.close()
+
+
+def test_acp_restart_records_provider_restored_settings_instead_of_failing(tmp_path):
+    """Recovery reports the provider's configuration; that is not a failed request."""
+    script, capture = tmp_path / "agent.py", tmp_path / "capture.jsonl"
+    script.write_text(ACP_CONFIG)
+    store = ChatSessionStore(tmp_path / "runtime")
+    endpoints = AgentEndpointRegistry(store.root)
+    endpoints.upsert({"agent_id": "fixture-acp", "display_name": "Fixture ACP", "location": "local",
+                      "command": [sys.executable, str(script), str(capture), "apply"]})
+    first = ChatRuntimeController(store=store, codex_bin="unavailable-fixture-codex",
+                                  endpoint_registry=endpoints)
+    try:
+        session, was_resumed = first.open_session(
+            goal_id="fixture-restart", agent_id="fixture-acp", work_dir=tmp_path,
+            objective="Resume after a Chat restart.", mode="new",
+            agent_model_id="second", agent_reasoning_effort="high")
+        assert was_resumed is False
+        assert session["agent_model_id"] == "second"
+        assert session["requested_agent_model_id"] == "second"
+        assert session["agent_reasoning_effort"] == "high"
+    finally:
+        first.close()
+
+    second = ChatRuntimeController(store=store, codex_bin="unavailable-fixture-codex",
+                                   endpoint_registry=endpoints)
+    try:
+        restored, was_resumed = second.open_session(
+            goal_id="fixture-restart", agent_id="fixture-acp", work_dir=tmp_path,
+            objective="Resume after a Chat restart.", mode="resume_latest")
+        assert was_resumed is True
+        assert restored["session_id"] == session["session_id"]
+        # The ACP provider restores its own values.  Record that readback instead
+        # of rejecting a valid recovery for not echoing the original request.
+        assert restored["agent_model_id"] == "first"
+        assert restored["agent_reasoning_effort"] == "low"
+        assert restored["requested_agent_model_id"] == "second"
+        assert any(json.loads(line)["method"] == "session/load"
+                   for line in capture.read_text().splitlines())
+    finally:
+        second.close()
 
 
 def test_codex_catalog_failure_is_retryable_without_inventing_current_model(tmp_path, monkeypatch):

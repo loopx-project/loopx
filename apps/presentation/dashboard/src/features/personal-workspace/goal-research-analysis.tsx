@@ -16,7 +16,6 @@ type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; 
   objective?: string; episodes?: TrajectoryEpisode[]; job?: Job | null};
 type Snapshot = {ok: true; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]}; pack: Pack | null};
 type Citation = AssessmentCitation & {artifact: string; text: string; applicability: string};
-const endpoint = "/api/chat/research-analysis";
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const locationFor = (goal: string) => {
   const query = new URLSearchParams(window.location.search);
@@ -24,7 +23,8 @@ const locationFor = (goal: string) => {
   return {open: query.get("research_analysis") === goal, packId: owner === goal ? query.get("research_pack") : null};
 };
 
-export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean) {
+export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean, readSourceUrl?: string) {
+  const endpoint = readSourceUrl ? new URL("/api/chat/research-analysis", readSourceUrl).toString() : "/api/chat/research-analysis";
   const [citation, setCitation] = useState<Citation | null>(null);
   const [citationError, setCitationError] = useState("");
   const [citationBusy, setCitationBusy] = useState(false);
@@ -58,7 +58,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     }
     if (current === generation.current && sequence === readSequence.current && scope.current.goalId === goalId && scope.current.packId === packId && !signal?.aborted) {setSnapshot(value); setReadError(""); if (value.pack?.job?.status === "succeeded" || value.pack?.job?.status === "cancelled") setError("");}
     return value;
-  }, [goalId, location.packId, zh]);
+  }, [goalId, location.packId, zh, endpoint]);
   const applyLocation = useCallback((next: typeof location) => {
     // Selection and browser history share one source transition. Invalidate
     // pending reads/actions before a new scope can display the old snapshot.
@@ -116,6 +116,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     requestAnimationFrame(() => {panel.current?.focus({preventScroll: true}); panel.current?.scrollIntoView({block: "start"});});
   };
   const execute = async (retry = false) => {
+    if (readSourceUrl) return;
     if (!pack || pack.availability !== "available" || submitting.current) return;
     show(); submitting.current = true; setPending(true); setError("");
     const current = generation.current;
@@ -126,6 +127,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     finally {if (current === generation.current) {submitting.current = false; setPending(false);}}
   };
   const cancel = async () => {
+    if (readSourceUrl) return;
     if (!pack || cancelPending) return;
     const current = generation.current;
     setCancelPending(true);
@@ -147,7 +149,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     finally {if (current === citeGeneration.current) setCitationBusy(false);}
   };
   const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
-  return {citation, citationBusy, citationError, sourcePanel, readCitation, closeCitation, goalId, zh, location, snapshot, pack, readError, error: error || readError, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+  return {readOnly: Boolean(readSourceUrl), citation, citationBusy, citationError, sourcePanel, readCitation, closeCitation, goalId, zh, location, snapshot, pack, readError, error: error || readError, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
@@ -164,7 +166,7 @@ const reasonCopy = (reason: string | null | undefined, zh: boolean) => {
 };
 
 export function ResearchAnalysisButton({analysis: a}: {analysis: Controller}) {
-  const unavailable = a.pack?.availability !== "available";
+  const unavailable = a.readOnly || a.pack?.availability !== "available";
   // The action keeps its separate-usage consequence visible. Further method
   // explanation is optional; cached results and unavailable states are reads.
   const readOnly = unavailable || a.pack?.result || a.pending || a.recordedRunning;
@@ -179,6 +181,7 @@ export function ResearchAnalysisButton({analysis: a}: {analysis: Controller}) {
 
 export function ResearchAnalysisStatus({analysis: a}: {analysis: Controller}) {
   const p = a.pack;
+  if (a.readOnly && !p) return <p className="research-history-note">{a.zh ? "此运行尚未接入深度分析。" : "Deep analysis is not connected for this runtime."}</p>;
   if (!p) return <p className="research-history-note">{a.loading ? (a.zh ? "正在核对可分析来源；浏览不调用 Agent。" : "Checking analysis sources. Browsing never invokes an Agent.") : reasonCopy(a.snapshot?.catalog.reason_code, a.zh)}</p>;
   return !p.result && p.availability !== "available" ? <p className="research-history-note">{reasonCopy(p.reason_code, a.zh)}</p> : null;
 }

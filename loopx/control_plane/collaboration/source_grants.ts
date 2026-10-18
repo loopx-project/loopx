@@ -1,7 +1,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray } from "../runtime_decode.ts";
-import { normalizeStewardGoalScope } from "./conversation_scope.ts";
+import { normalizeStewardGoalScope, resolveConversationScope } from "./conversation_scope.ts";
 
 type Recipient = { goal_id: string; agent_id?: string };
 type LocalDeliveryScope = "all_registered" | "selected";
@@ -99,6 +99,36 @@ export function resolveSourceRecipients(params: JsonObject): JsonObject {
   const unique = new Map(selected.map(row => [JSON.stringify([row.goal_id, row.agent_id]), row]));
   return { targets: [...unique.values()].sort((a, b) =>
     a.goal_id.localeCompare(b.goal_id) || a.agent_id!.localeCompare(b.agent_id!)) };
+}
+
+/** Verify the host's immutable ingress against its canonical Session/Turn.
+ * IO supplies digests, not a second provenance rule or model-authored identity.
+ * Local continuation retains the binding's narrow audience and source policy.
+ */
+export function validateSourceIngress(params: JsonObject): JsonObject {
+  const session = requireJsonObject(params.session, "source Session");
+  const turn = requireJsonObject(params.turn, "source Turn");
+  const ingress = requireJsonObject(params.ingress, "source ingress");
+  const identity: [string, unknown][] = [["session_id", session.session_id], ["client_turn_id", turn.client_turn_id],
+    ["channel", session.channel_id], ["message_digest", turn.message_digest]];
+  for (const [field, expected] of identity) {
+    if (requireNonEmptyString(ingress[field], `ingress ${field}`) !==
+        requireNonEmptyString(expected, `source ${field}`)) throw new EffectRuntimeRequestError("source mismatch");
+  }
+  const origin = turn.origin;
+  const scope = resolveConversationScope({...session, origin});
+  if (origin !== "lark" && origin !== "external" && origin !== "web"
+      || ingress.origin !== undefined && ingress.origin !== origin
+      || origin === "external" && !scope.bound_steward
+      || origin === "web" && (!scope.bound_steward || ingress.origin !== "web")) {
+    throw new EffectRuntimeRequestError("source mismatch");
+  }
+  const sender = requireNonEmptyString(ingress.sender_id, "verified source sender");
+  requireNonEmptyString(ingress.source_id, "source identity");
+  if (origin === "web" && sender !== requireJsonObject(session.steward_context, "bound steward").operator_ref) {
+    throw new EffectRuntimeRequestError("source mismatch");
+  }
+  return {verified: true};
 }
 
 /** A separate, exact operator grant for existing governed work. Context delivery

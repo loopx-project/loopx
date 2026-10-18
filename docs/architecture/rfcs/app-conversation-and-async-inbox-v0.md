@@ -730,6 +730,37 @@ packaged UI with synthetic fixtures and qualify the chosen real query separately
 | Execution and control | Existing managed Turn, attached-session/host binding, Chat steering/interrupt | Qualify the exact supported profile. Neither registered nor inbox-acknowledged means running; native steering, next-Turn queue and unsupported must stay distinct |
 | Result | Answer-report, artifact/revision, review/adoption and return owners | Read the stored version; preserve source and independent review. A failed report read retries reading, not a new model run |
 
+The local-input repair uses the existing
+`POST /api/chat/sessions/{session_id}/turns` with `message` and a stable
+`client_turn_id`; `delivery: "queue"` remains optional. For an existing private
+bound-owner Session, a normal send now enters the same queue after fresh
+provider/operator, saved-binding and workspace checks. It retains `origin=web`,
+the original Session/thread and the binding's narrow project or steward audience.
+It does not become a provider event or an unrestricted local portfolio. Group
+input and direct steering retain their source guards. The body cannot supply
+origin, owner or provider claims. The TS binding/source owners decide admission
+and provenance; Python observes identity and commits under the binding fence.
+Steward ingress uses the registered coordination root and existing source policy,
+separately from execution grants. File/SQLite HTTP regressions cover full text,
+replay, FIFO and revocation races. The existing session-list endpoint also accepts
+`GET /api/chat/sessions?conversation_binding_id=<binding_id>` to discover existing
+private Sessions through that same fresh binding owner. It returns the existing
+public Session summaries, retaining a project's null Goal and the original
+Session/channel; it does not create or resume a thread, enqueue work or grant
+execution. Group, unavailable and changed sources refuse; closed Sessions are
+not offered as current targets and their history remains stored. An empty,
+duplicate or mixed selector cannot fall back to the ordinary unfiltered list.
+The filtered response includes the matching `conversation_binding_id`; callers
+must require that match before adopting its targets. Older services may ignore
+the query and return an ordinary list without it, which does not qualify this
+discovery operation.
+Provider observation stays outside the publication fence, and ordinary session
+listing adds no provider IO. The product selector must use this verified original
+identity rather than equating an ordinary workspace channel with a bound Chat.
+This is a Core/API prerequisite: packaged
+frontend discovery, live shared-Lark adoption, project-recipient collaboration
+and original-conversation result return still require their existing acceptance.
+
 Lark's readable-answer exit also checks rendered emphasis, not only a matching
 Markdown source receipt. Following the [CommonMark delimiter rules](https://spec.commonmark.org/0.31.2/#emphasis-and-strong-emphasis),
 the shared inbox reply adapter normalizes a paired
@@ -1069,6 +1100,13 @@ Incomplete, failed, stale or changed-binding reads cannot advance coverage.
 The private receipt retains every previously observed gap; absence from a later
 window does not close it. Group topics and other providers retain their own
 coverage contracts.
+
+After an outage, bounded one-day windows continue from the last complete cursor;
+catch-up cannot certify an unscanned interval. A per-binding receipt lock covers
+the read, provider query and write. Regression coverage uses a real native
+binding, Core and connection HTTP endpoint with synthetic provider history and
+host execution: a two-day outage still exposes its missed source, and admitting
+only the later source after interleaved observations cannot erase an earlier gap.
 
 The existing connection API and Lark settings show source coverage separately
 from live-listener readiness and pending execution. Its `ingress` observation

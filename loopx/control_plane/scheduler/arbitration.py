@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
+
 SCHEDULER_ARBITRATION_SCHEMA_VERSION = "scheduler_arbitration_v0"
 
 
@@ -28,6 +30,7 @@ class SchedulerArbitration:
     reason_code: str
     mode: str
     errors: tuple[str, ...] = ()
+    scheduled_recheck_after_seconds: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -54,12 +57,16 @@ class SchedulerArbitration:
                 or not isinstance(projection.get("errors"), list)
                 or any(not isinstance(error, str) for error in projection["errors"])):
             raise TypeError("TypeScript scheduler arbitration shape mismatch")
+        scheduled = projection.get("scheduled_recheck_after_seconds")
+        if scheduled is not None and (type(scheduled) is not int or scheduled <= 0):
+            raise TypeError("TypeScript scheduler scheduled recheck must be positive integer seconds")
         return cls(SchedulerDisposition(projection["disposition"]), projection["reason_code"],
-                   projection["mode"], tuple(projection["errors"]))
+                   projection["mode"], tuple(projection["errors"]), scheduled)
 
 
 def _scheduler_arbitration_facts(
     contract: Any, agent_scope_frontier_actions: Collection[str] = (),
+    *, payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Keep legacy Python scalar/Mapping codecs; transport only consumed facts."""
     contract = contract if isinstance(contract, Mapping) else {}
@@ -79,6 +86,14 @@ def _scheduler_arbitration_facts(
     wait = agent.get("wait") if isinstance(agent, Mapping) else None
     source = wait.get("source") if isinstance(wait, Mapping) else None
     channels["agent_channel"]["wait_source"] = source if isinstance(source, str) and len(source) <= 64 else None
-    return {"schema_version": contract.get("schema_version"),
+    facts = {"schema_version": contract.get("schema_version"),
             "mode": str(contract.get("mode") or "").strip(), **channels,
             "agent_scope_frontier_actions": [str(action) for action in agent_scope_frontier_actions]}
+    wait = exact_blocked_successor_wait_state(payload)
+    if wait:
+        identity = payload.get("agent_identity")
+        facts.update({"effective_action": payload.get("effective_action"),
+                      "agent_id": identity.get("agent_id") if isinstance(identity, Mapping) else None,
+                      "vision_wait_state": wait,
+                      "heartbeat_receipt": payload.get("heartbeat_receipt")})
+    return facts

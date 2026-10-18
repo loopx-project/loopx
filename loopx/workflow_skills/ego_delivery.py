@@ -26,7 +26,9 @@ _POLICY = """
 
 This section overrides only a blanket requirement above or in API references
 to ask again before reclaiming a user-owned or inactive TaskSpace, including
-an entry-time user-control message caused by your own normal handback.
+an entry-time user-control message caused by your own normal handback. It also
+overrides the one-space-per-goal rule only when your own successful finish
+closed that space and the same authorized task later needs browser work.
 
 For the same already-authorized task, reuse its known numeric TaskSpace and
 Page without another ownership-confirmation question when your previous normal
@@ -44,7 +46,17 @@ For this qualified continuation, use the documented `claimTaskSpace(id)` once
 before resolving Pages; use `taskSpace(id)` when already Agent-owned. If an
 initial handle lookup already returned the generic user-control/ended message,
 the same known handback permits that one claim; the message alone is not a new
-live takeover. Do not loop claims or create a replacement space.
+live takeover. Do not loop claims. A refused claim never permits replacement.
+
+If the known space is absent, create one replacement without asking only when
+the recorded successful `finish({ keep: [] })` closed your Agent-created Pages,
+`listTaskSpaces()` confirms that numeric id is absent, and the same task still
+authorizes this browser work. Absence alone does not prove normal closure.
+Record the replacement space id and task identity, then navigate its initial
+`p1`; it becomes the single space for subsequent rounds. This is continuation
+after completed cleanup, never recovery from a stuck, blocked, timed-out,
+failed or unexpectedly missing space. Do not create replacements in a retry
+loop. The reuse example below applies only when the known space still exists.
 
 After normal finish, kept tabs can be unmanaged and old Page labels can be
 absent. Read `task.tabs()`, match the known Page URL, and `task.adopt(tab.page)`
@@ -73,7 +85,8 @@ user-control reservation remains unresolved, ask about that specific choice.
 
 This continuation guidance grants no new operation, account, publishing,
 installation, paid-execution or permission authority. Keep the upstream
-one-space-per-goal, Page protection, handoff, error and finish-once rules.
+single-active-space, Page protection, handoff and error rules. Finish exactly
+once per space lifetime; do not finish early while browser work remains.
 """
 
 

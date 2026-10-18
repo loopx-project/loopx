@@ -7,6 +7,7 @@ mod runtime_selection;
 mod service_endpoints;
 mod services;
 mod update_backup;
+mod upgrade_request;
 mod workspace_handoff;
 mod workspace_location;
 
