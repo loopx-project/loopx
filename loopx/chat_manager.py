@@ -1001,7 +1001,8 @@ def manager_session_model_allocation(
 #     four fixed labelled sections. Existing sessions must receive the new rule.
 # 18: resolve intent and current evidence before deciding whether work remains.
 # 19: default local attention evidence and semantic synthesis, independent of external channels.
-MANAGER_CONTEXT_VERSION = 19
+# 20: carry delivery amendments through question-form feedback; honor handoff-before-repair ordering.
+MANAGER_CONTEXT_VERSION = 20
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any
@@ -1010,8 +1011,9 @@ MANAGER_CONTEXT_VERSION = 19
 MANAGED_SKILL_MARKER_V1 = "<!-- loopx-managed-manager-skill:v1 -->"
 MANAGED_SKILL_MARKER_V2 = "<!-- loopx-managed-manager-skill:v2 -->"
 MANAGED_SKILL_MARKER_V3 = "<!-- loopx-managed-manager-skill:v3 -->"
-MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3)
-MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V3
+MANAGED_SKILL_MARKER_V4 = "<!-- loopx-managed-manager-skill:v4 -->"
+MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3, MANAGED_SKILL_MARKER_V4)
+MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V4
 
 
 def manager_skill_text() -> str:

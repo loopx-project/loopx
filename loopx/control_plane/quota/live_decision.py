@@ -52,11 +52,12 @@ def _receipt_bound_guard_fields(
     receipt = getattr(readback, "heartbeat_receipt", None) or {}
     return {
         "receipt_bound_replan_guard_scoped": bool(
-            obligation_id and isinstance(guard, Mapping)
+            isinstance(guard, Mapping)
             and guard.get("scope") == "turn_guard"
             and guard.get("selected_obligation_id") == obligation_id
         ),
         "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
+        "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
     }
 
 

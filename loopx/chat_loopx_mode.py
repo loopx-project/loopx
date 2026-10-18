@@ -1138,7 +1138,8 @@ def pump_delegation_wakes(
 class DelegationWakeService:
     """Cheap local pump hosted by the existing Chat server, beside the return service."""
 
-    def __init__(self, controller, *, goal_context=None, interval=WAKE_INTERVAL_SECONDS):
+    def __init__(self, controller: Any, *, goal_context: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+                 interval: float = WAKE_INTERVAL_SECONDS) -> None:
         self.controller = controller
         self.goal_context = goal_context
         self.interval = interval
@@ -1147,7 +1148,7 @@ class DelegationWakeService:
             target=self.run, daemon=True, name="loopx-delegation-wakes"
         )
 
-    def start(self):
+    def start(self) -> DelegationWakeService:
         self.thread.start()
         return self
 
@@ -1163,6 +1164,6 @@ class DelegationWakeService:
                 _LOG.warning("Delegation wake receipts unavailable; retrying")
             self.stop.wait(self.interval)
 
-    def close(self):
+    def close(self) -> None:
         self.stop.set()
         self.thread.join(timeout=3)

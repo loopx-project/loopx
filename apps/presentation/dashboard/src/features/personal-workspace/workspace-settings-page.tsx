@@ -15,6 +15,7 @@ import { AutomationCadenceSettings } from "./automation-cadence-settings";
 import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { ConfigurationBackupSettings } from "./configuration-backup-settings";
 import { OperatorCredentialSettings } from "./operator-credential-settings";
+import { CodexAccountSettings } from "./codex-account-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
 import type { AttentionNotificationSupport } from "./attention-notifications";
@@ -227,6 +228,7 @@ export function WorkspaceSettingsPage({
 
         {tab === "provider" ? (
           <div className="personal-provider-settings">
+            <CodexAccountSettings />
             <OperatorCredentialSettings />
           </div>
         ) : null}

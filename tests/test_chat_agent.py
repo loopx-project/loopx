@@ -72,6 +72,64 @@ class _FakeAppServerProcess:
         self.returncode = -1
 
 
+@pytest.mark.parametrize("resume", [False, True])
+def test_managed_chat_materializes_only_new_threads_without_a_turn(monkeypatch, tmp_path, resume):
+    process = _FakeAppServerProcess()
+    if not resume:
+        process.stdout = io.StringIO(process.stdout.getvalue() + json.dumps({
+            "id": 3, "result": {},
+        }) + "\n")
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    adapter = chat_runtime.CodexAppServerAdapter.start(
+        codex_bin="codex", work_dir=tmp_path, goal_id="fixture", objective="Chat",
+        resume_thread_id="thread-loopx-chat" if resume else None,
+    )
+    try:
+        requests = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        names = [row for row in requests if row["method"] == "thread/name/set"]
+        assert names == ([] if resume else [{
+            "method": "thread/name/set", "id": 3,
+            "params": {"threadId": "thread-loopx-chat", "name": "LoopX Chat"},
+        }])
+        assert adapter.upstream_thread_id == "thread-loopx-chat"
+        assert not any(row["method"] in {"turn/start", "thread/fork"} for row in requests)
+        assert [row["method"] for row in requests].count(
+            "thread/resume" if resume else "thread/start") == 1
+    finally:
+        adapter.close_session()
+
+
+def test_failed_empty_thread_materialization_closes_without_publishing_or_replaying(monkeypatch, tmp_path):
+    from loopx.chat_store import ChatSessionStore
+
+    process = _FakeAppServerProcess()
+    process.stdout = io.StringIO(process.stdout.getvalue() + json.dumps({
+        "id": 3, "error": {"code": -32603, "message": "private provider detail"},
+    }) + "\n")
+    real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda name: "codex" if name == "codex" else real_which(name))
+    launches = []
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda command, *a, **k:
+        (launches.append(command) or process) if command[0] == "codex" else real_popen(command, *a, **k))
+    store = ChatSessionStore(tmp_path)
+    controller = chat_runtime.ChatRuntimeController(store=store, codex_bin="codex")
+    monkeypatch.setattr(controller, "capabilities", lambda: [{"agent_id": "codex", "available": True}])
+    try:
+        with pytest.raises(chat_agent.CodexChatAgentError, match="rejected thread/name/set") as caught:
+            controller.open_session(goal_id="loopx-manager", agent_id="codex", work_dir=tmp_path,
+                                    objective="Chat", mode="new", channel_id="manager")
+        assert "private provider detail" not in str(caught.value)
+        assert store.list_sessions() == []
+        assert controller.adapters == {}
+        assert len(launches) == 1 and process.returncode == 0
+        methods = [json.loads(line)["method"] for line in process.stdin.getvalue().splitlines()]
+        assert methods.count("thread/start") == 1
+        assert not set(methods) & {"thread/resume", "thread/fork", "turn/start"}
+    finally:
+        controller.close()
+
+
 @pytest.mark.parametrize("reported", [None, "fixture-model"])
 def test_requested_model_is_not_reported_as_observed_without_native_readback(tmp_path, monkeypatch, reported):
     from loopx.chat_runtime import CodexAppServerAdapter

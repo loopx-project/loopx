@@ -5127,6 +5127,66 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_due_successor_replan_replays_until_the_same_task_is_reopened(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace(
+        f"todo_id={TODO_ID} status=open",
+        f"todo_id={TODO_ID} status=deferred resume_when=resume_at:2000-01-01T00:00:00Z",
+    ))
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    guard = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "due-successor-replay",
+        "--scan-path", str(project),
+    )
+    rc, first = _run_cli(registry_path, runtime, *guard)
+    assert rc == 0, first
+    assert first["effective_action"] == "successor_replan_required"
+    identity = first["heartbeat_receipt"]["settlement_identity"]
+    rc, replay = _run_cli(registry_path, runtime, *guard)
+    assert rc == 0, replay
+    assert replay["effective_action"] == "successor_replan_required"
+    assert replay["normal_delivery_allowed"] is False
+    assert replay["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 0
+
+    rc, deferred = _run_cli(
+        registry_path, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--status", "deferred", "--resume-when", "resume_at:2099-01-01T00:00:00Z",
+        "--reason", "A new dependency is not ready yet.",
+    )
+    assert rc == 0, deferred
+    rc, paused = _run_cli(registry_path, runtime, *guard)
+    assert rc == 0, paused
+    assert paused["should_run"] is False
+    assert paused["normal_delivery_allowed"] is False
+    assert paused["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 0
+
+    rc, reopened = _run_cli(
+        registry_path, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--status", "open", "--clear-resume-when",
+        "--reason", "The dependency is ready; continue the same authorized task.",
+    )
+    assert rc == 0, reopened
+    rc, resumed = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+    assert rc == 0, resumed
+    assert resumed["normal_delivery_allowed"] is True
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 0
+
+
 def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     tmp_path: Path,
 ) -> None:

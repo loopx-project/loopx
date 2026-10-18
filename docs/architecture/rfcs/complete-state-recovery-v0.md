@@ -64,70 +64,44 @@ platform profiles with M4/M5. This coordination checkpoint implements no M2/M3
 behavior and starts no recovery or activation.
 
 <a id="planned-agent-transfer"></a>
+<a id="in-place-major-upgrade"></a>
 
-### Planned agent transfer: proposed product refinement
+### 2.0 in-place upgrade: existing primitives and an Agent prompt
 
-The ordinary user request is **move my Agent to another environment and continue
-its unfinished work**. Preparing that move while the source is reachable can be
-prioritized before disaster recovery. This proposed delivery refinement reuses
-the owners below; it does not rename M1 inspection as migration, relax M2/M3's
-accepted disaster-recovery gates, or claim a working transfer today.
+Migration in this delivery means **upgrade existing LoopX 1.x work to 2.0 in
+place**. Keep the same machine, project, registry/runtime routes and Goal/Agent
+identities. The [copyable upgrade prompt](../../guides/agent-upgrade.md) lets the
+user's Agent compose existing operations. Moving work to another environment,
+transferring sessions and creating a dedicated migration executor or UI are
+outside this delivery.
 
-Start with one populated local Goal and its responsible Agent on a declared
-packaged POSIX File/SQLite profile. Establish that profile's required owners and
-source-stop support, then deliver this whole journey through the existing
-Settings/Capability Center and shared CLI/backend:
+The Agent identifies the installation owner and each Goal's actual provider,
+format and ownership policy, stops affected old writers through their owners,
+settles pending operations and authorized leases, and makes a private backup.
+It updates through the installation owner and uses a format-compatible verifier
+before changing Goal data. It applies only the required changes and continues original work
+through its current admission. Existing valid configuration remains selected;
+new-Goal defaults do not migrate an existing Goal.
 
-1. Prepare the source, its complete requirements and required materials; let
-   their owners settle or visibly hold in-flight work and establish quiescence.
-2. Produce a separately reviewed portable artifact. The raw private backup is
-   not that artifact: apply the encryption/credential-custody decision below,
-   preserve content and history, and identify dependencies that need rebind.
-3. On the destination, preview paths, Goal/Agent identity mapping, dependencies,
-   compatibility, missing context and work outside the captured boundary. The
-   Agent prepares these facts; users do not edit registries or stitch owner
-   commands together. Ask only for missing consequential choices or credentials.
-4. Confirm the prepared cutover once. Existing Goal, authority, session, lease,
-   quota and effect owners must admit the destination and exclude stale source
-   execution. A copied Host/session id or released lease is not that admission.
-5. Continue a task left unfinished before transfer; independently accept its
-   result and read it back from the initiating product entry. Preserve later
-   writes, and expose interruption/retry/rollback there as part of the journey.
-
-The transferred work includes Goal intent/constraints, full active and archived
-Todos and relations, Agent role and necessary decision context, required
-artifacts/materials and capability configuration. Use a supported Host export
-or reviewed continuation context; do not claim that copying a third-party
-session database resumes that session. Identity continuity versus a new lifetime
-must be explicit in the Goal owner's plan; historical receipt bodies stay
-unaltered and do not become fresh execution proof. Unknown external effects
-hold with their original operation identity instead of being redispatched.
-
-The implementation boundary is the **prepared transfer through destination
-continuation**, including its product entry and real failure/recovery path.
-Select repairs by a demonstrated break in that journey. Do not schedule a
-manifest-field series first or require every cloud/platform profile and D2's
-ten-day default qualification before delivering the first supported transfer.
-The selected profile still needs all of its actual dependencies and safety
-gates; an unused provider needs owner-confirmed absence, not an exclude flag.
-
-Current pieces and the remaining integration are concrete:
-
-| Existing owner / entry | Reuse and remaining work |
+| Observed upgrade need | Existing owner / entry |
 | --- | --- |
-| `backup-state`, configuration backup and authority archive | Reuse actual content export, safe extraction and original-receipt audit. Build the portable transfer composition over them; an inert destination is not a registered, executable Goal. |
-| `migrate-state` | Legacy Goal Harness copy only. Its preview and execution both reject canonical source/target authority through the existing fence owner; it is not a modern Agent transfer shortcut. |
-| Goal/session/Host and Task/lease owners | Prepare destination bindings and executable Task declarations through their actual lifecycle. Retain old lineage, reject stale executors, and rebind supported sessions; metadata copying cannot repair or mint a grant. |
-| Settings/Capability Center and CLI | One prepared operation with preview, confirmation, visible holds, same-operation retry and continued-work readback. Do not expose eight independent owner runbooks as the ordinary user workflow. |
+| Package/runtime and Host material | Existing installation owner and `update check/plan/apply`; preserve state routes and verify active layers. |
+| Old canonical authority format | `authority-archive upgrade`; back up, verify and upgrade the existing store without switching provider. |
+| Unpromoted Markdown authority | `coordination-shadow inspect-source/prepare-import/apply-import`; import complete records into the reviewed provider for the same registered Goal. |
+| Historical `legacy` ownership policy | `handoff-mode plan-migration/migrate`; preserve assignments and settled history while explicitly selecting `soft_claim` or `hard_lease`. |
 
-Before the drill, freeze the supported profile, data/effect disposition and
-targets for elapsed time, required user input, navigation and recovery effort.
-Use two isolated packaged environments with completed and unfinished work plus
-real required materials. Cover stale/changed source, damaged input, missing
-materials, occupied destination, interruption and duplicate confirmation;
-protected duplicate operations must remain zero. A successful planned transfer
-does not qualify unavailable-source M3 recovery. This refinement adds no
-activation, credential-transfer, paid experiment or release authorization.
+Qualify an ordinary 1.4.2 installation upgraded to the pinned 2.0 candidate in
+the same isolated environment and paths. Read back full active/archive records,
+relationships, configuration and original receipts; continue and verify one
+useful original task step. Cover the relevant refusals and same-operation
+recovery without duplicating effects or overwriting later writes. Polish only
+reproduced gaps in the existing owners. Binary rollback is not data rollback;
+retain the owning backup/recovery and post-upgrade-write boundaries.
+
+M2/M3 disaster recovery below remains separate. An in-place upgrade neither
+requires a new Goal lifetime nor qualifies cross-machine transfer, unavailable-
+source recovery, all Host profiles or D2/D3. This proposal authorizes no live
+upgrade, release, credential transfer or paid execution.
 
 ### First supported user outcome
 

@@ -166,6 +166,7 @@ class QuotaSettlementReadback:
     progress: dict[str, Any] | None = None
     native_child_admission: dict[str, Any] | None = None
     heartbeat_reentry_qualification: dict[str, Any] | None = None
+    successor_replan_pending: bool = False
 
 
 def attach_settlement_progress(
@@ -439,6 +440,7 @@ def read_heartbeat_settlement(
         progress=_optional_readback_record(payload.get("progress")),
         native_child_admission=_optional_readback_record(payload.get("native_child_admission")),
         heartbeat_reentry_qualification=_optional_readback_record(payload.get("heartbeat_reentry_qualification")),
+        successor_replan_pending=payload.get("successor_replan_pending") is True,
         spend_run=_optional_readback_record(payload.get("spend_run")),
         heartbeat_receipt=_optional_readback_record(payload.get("heartbeat_receipt")),
         writeback_event=_optional_readback_record(payload.get("writeback_event")),

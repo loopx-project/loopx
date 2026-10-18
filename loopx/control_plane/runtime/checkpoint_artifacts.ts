@@ -16,6 +16,7 @@ import {normalizeHeartbeatReplanObligationId, normalizeHeartbeatTodoId} from "..
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {checkpointRetentionPlan} from "./checkpoint_retention.ts";
 
 const SCHEMA = "loopx_checkpoint_artifact_set_v0";
 type Component = {id: string; source_path: string};
@@ -228,6 +229,52 @@ async function verify(root: string, expected: unknown): Promise<JsonObject> {
 const ADMITTED_RECEIPT_STATUSES: ReadonlySet<string> = new Set(["committed", "replayed", "upgraded"]);
 export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "checkpoint artifacts request");
+  if (request.action === "retention_plan") {
+    if (!hasExactAuthorityKeys(request, ["action", "input"])) throw new Error("invalid checkpoint retention request");
+    return checkpointRetentionPlan(request.input);
+  }
+  if (request.action === "retention_inventory") {
+    if (!hasExactAuthorityKeys(request, ["action", "bank"])) throw new Error("invalid checkpoint inventory request");
+    const bank = absolute(request.bank, "checkpoint bank");
+    await physical(bank);
+    const points: JsonObject[] = [], incomplete: string[] = [];
+    for (const name of (await readdir(bank)).sort()) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(name)) continue;
+      const root = join(bank, name), info = await lstat(root);
+      if (info.isSymbolicLink()) throw new Error("checkpoint bank contains a symlink");
+      if (!info.isDirectory()) continue;
+      const path = join(root, "checkpoint.json");
+      try {await lstat(path);} catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        incomplete.push(name); continue;
+      }
+      await physical(path);
+      const text = await readFile(path, "utf8"), manifest = manifestBody(JSON.parse(text));
+      if ((await readdir(root)).sort().join(",") !== "checkpoint.json,components") {
+        throw new Error("checkpoint retention found unexpected point members");
+      }
+      await physical(join(root, "components"));
+      const declared = components(manifest.components).map(c => c.id).sort();
+      if ((await readdir(join(root, "components"))).sort().join(",") !== declared.join(",")) {
+        throw new Error("checkpoint retention found undeclared components");
+      }
+      const witness = requireJsonObject(manifest.artifact_witness, "checkpoint artifact witness");
+      let bytes = Buffer.byteLength(text);
+      for (const members of Object.values(witness)) {
+        if (!Array.isArray(members)) throw new Error("invalid checkpoint artifact inventory");
+        for (const member of members) {
+          const row = requireJsonObject(member, "checkpoint member");
+          if (row.kind === "file") {
+            if (typeof row.size !== "number" || !Number.isSafeInteger(row.size) || row.size < 0) throw new Error("invalid checkpoint member size");
+            bytes += row.size;
+          }
+        }
+      }
+      points.push({id: name, sha256: manifest.sha256, sealed_at: (await lstat(path)).mtimeMs / 1000, bytes});
+    }
+    // Metadata-only inventory: this is not member verification or admission.
+    return {points, incomplete, integrity_verified: false, execution_authority_granted: false};
+  }
   if (request.action === "restore_capture") {
     if (!hasExactAuthorityKeys(request, ["action", "checkpoint_sha256", "goal_id", "agent_id", "current_obligation_id", "review",
         ...(request.include_review_basis === undefined ? [] : ["include_review_basis"])]) ||

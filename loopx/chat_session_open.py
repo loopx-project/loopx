@@ -38,7 +38,7 @@ def open_chat_session(
     objective: str,
     mode: str,
     requested_endpoint: str = "",
-    agent_model_id: str = "",
+    agent_model_id: str | None = "",
     agent_reasoning_effort: str | None = None,
     project_ref: str | None = None,
 ) -> tuple[dict[str, Any], bool]:

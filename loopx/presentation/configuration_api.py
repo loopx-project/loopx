@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from . import codex_attached_api as attached_api
+from . import codex_accounts_api as accounts_api
 from . import workspace_preferences_api as preferences_api
 from . import configuration_backup_api as backup_api
 from . import state_recovery_api as recovery_api
@@ -20,6 +21,7 @@ from .. import chat_automation_cadence_api as cadence_api
 
 
 class ChatConfigurationRequestMixin(
+    accounts_api.CodexAccountsRequestMixin,
     attached_api.CodexAttachedRequestMixin,
     request_api.RequestControlMixin,
     preferences_api.WorkspacePreferencesRequestMixin,
@@ -40,6 +42,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_get_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            accounts_api.CODEX_ACCOUNTS_PATH: self._codex_accounts_read,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_read,
             attached_api.CODEX_ATTACHED_LIVE_PATH: self._codex_attached_live,
             request_api.REQUEST_CONTROL_PATH: self._request_control_read,
@@ -59,6 +62,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            accounts_api.CODEX_ACCOUNTS_PATH: self._codex_accounts_write,
             context_api.DECISION_CONTEXT_PATH: self._decision_context_request,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_send,
             attached_api.CODEX_ATTACHED_OPEN_PATH: self._codex_attached_open,

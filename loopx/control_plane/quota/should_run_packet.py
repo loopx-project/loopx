@@ -700,10 +700,10 @@ def _resolve_agent_lane_delivery_route(
     return selected_action
 
 
-def _scoped_gate_deferred_replan_frontier(
+def _selected_deferred_replan_frontier(
     prepared: _QuotaDecisionPreparation,
 ) -> dict[str, Any] | None:
-    """Keep an authoritative gate fallback in the replan lane.
+    """Keep an authoritative selected resume in the replan lane.
 
     The fallback selector may choose a ready deferred successor while an open
     advancement remains covered by the gate. That choice is a lifecycle replan,
@@ -716,13 +716,19 @@ def _scoped_gate_deferred_replan_frontier(
         if isinstance(fallback, dict)
         else None
     )
+    receipt_resume = prepared.receipt_bound_successor_replan
+    if receipt_resume:
+        selected = next((candidate for candidate in _agent_scope_deferred_resume_candidates(
+            prepared.agent_todo_summary or {},
+            agent_id=normalize_todo_claimed_by((prepared.agent_identity or {}).get("agent_id")),
+        ) if normalize_todo_id(candidate.get("todo_id")) == prepared.receipt_bound_todo_id), None)
     agent_id = normalize_todo_claimed_by(
         (prepared.agent_identity or {}).get("agent_id")
     )
     if (
         not agent_id
         or not isinstance(selected, dict)
-        or selected.get("fallback_kind") != "deferred_successor_replan"
+        or (not receipt_resume and selected.get("fallback_kind") != "deferred_successor_replan")
     ):
         return None
     todo_id = normalize_todo_id(selected.get("todo_id")) or "<todo_id>"
@@ -732,7 +738,7 @@ def _scoped_gate_deferred_replan_frontier(
         quiet_noop_allowed=False,
         spend_policy="spend once after validated successor replan/todo writeback",
         reason=(
-            f"scoped user gate fallback selected ready deferred successor {todo_id}; "
+            f"selected ready deferred successor {todo_id}; "
             "resolve its lifecycle before selecting another advancement"
         ),
         recommended_action=(
@@ -743,7 +749,7 @@ def _scoped_gate_deferred_replan_frontier(
         candidate_counts={"deferred_resume_candidate_count": 1},
         extra_fields={
             "deferred_resume_candidates": [selected],
-            "scoped_user_gate_fallback": True,
+            "scoped_user_gate_fallback": not receipt_resume,
         },
     )
 
@@ -1135,18 +1141,18 @@ def _resolve_quota_should_run_route(
     elif (
         not replan_decision_allowed
         and not receipt_bound_monitor_settled
-        and prepared.receipt_bound_todo_id is None
+        and (prepared.receipt_bound_todo_id is None or prepared.receipt_bound_successor_replan)
     ):
         # The typed receipt owner already selected this Turn's immutable
-        # binding. Frontier discovery is for unbound Turns: a newly ready
-        # successor must not replace an interrupted Turn's Todo/effect after
-        # the receipt-bound delivery route has been resolved above.
+        # binding. Only its original, still-ready resume replan can reenter
+        # this frontier. An unrelated newly ready successor cannot replace
+        # an interrupted Turn's Todo/effect.
         selected_recommended_action = selected_action_with_agent_lane(
             selected_recommended_action,
             agent_lane_next_action=agent_lane_next_action,
         )
         agent_scope_frontier = (
-            _scoped_gate_deferred_replan_frontier(prepared)
+            _selected_deferred_replan_frontier(prepared)
             or _agent_scope_no_candidate_frontier(
                 agent_identity=prepared.agent_identity,
                 agent_todo_summary=prepared.agent_todo_summary,

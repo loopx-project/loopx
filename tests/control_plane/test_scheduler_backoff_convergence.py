@@ -517,3 +517,76 @@ def test_capability_bridge_wait_backs_off_and_material_work_resets(
     )
     assert still_active["codex_app"]["stateful_backoff"]["progression_index"] == 0
     assert "recommended_rrule" not in still_active["codex_app"]
+
+
+@pytest.mark.parametrize("human_gate", [False, True])
+@pytest.mark.parametrize("host_already_tightened", [False, True])
+def test_monitor_deadline_clamp_resets_progression_before_native_ack(
+    monkeypatch,
+    tmp_path: Path,
+    host_already_tightened: bool,
+    human_gate: bool,
+) -> None:
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    decision = _monitor_decision(now=now, minutes_until_due=55, cadence="60m")
+    if human_gate:
+        decision["effective_action"] = "operator_gate_notify"
+        decision["interaction_contract"]["mode"] = "user_gate"
+        decision["interaction_contract"]["user_channel"] = {
+            "action_required": True,
+            "notify": "NOTIFY",
+        }
+        decision["interaction_contract"]["agent_channel"]["quiet_noop_allowed"] = False
+    decision["agent_todo_summary"]["current_agent_claimed_monitor_items"][0][
+        "last_checked_at"
+    ] = now.isoformat()
+    first = _hint(monkeypatch, decision, now=now)
+    settled_15 = _ack_state(
+        first, runtime_root=tmp_path, applied_rrule=HOST_15, generated_at=now
+    )
+    later = now + timedelta(minutes=15)
+    advance = _hint(
+        monkeypatch, decision, now=later, scheduler_state=settled_15, host_rrule=HOST_15
+    )
+    assert advance["codex_app"]["stateful_backoff"]["progression_index"] == 1
+    settled_30 = _ack_state(
+        advance, runtime_root=tmp_path, applied_rrule=HOST_30, generated_at=later
+    )
+
+    # Elapsed time shortens the same monitor's allowed progression, without a
+    # Todo edit or phase change. A new bucket policy must reset before commit.
+    clamped_at = now + timedelta(minutes=30)
+    clamped = _hint(
+        monkeypatch,
+        decision,
+        now=clamped_at,
+        scheduler_state=settled_30,
+        host_rrule=HOST_15 if host_already_tightened else HOST_30,
+    )
+    app = clamped["codex_app"]
+    backoff = app["stateful_backoff"]
+    assert app["example_progression_minutes"] == [15]
+    assert backoff["current_rrule"] == HOST_15
+    assert backoff["reset_token"] != settled_30["reset_token"]
+    assert backoff["state_status"] == "reset_required"
+    assert backoff["progression_index"] == 0
+    assert backoff["apply_needed"] is not host_already_tightened
+    assert backoff["ack_needed"] is True
+    committed = _ack_state(
+        clamped, runtime_root=tmp_path, applied_rrule=HOST_15, generated_at=clamped_at
+    )
+    assert committed["progression_index"] == 0
+    assert committed["progression_minutes"] == [15]
+
+    unchanged = _hint(
+        monkeypatch,
+        decision,
+        now=clamped_at + timedelta(minutes=1),
+        scheduler_state=committed,
+        host_rrule=HOST_15,
+    )
+    assert (
+        unchanged["codex_app"]["stateful_backoff"]["reset_token"]
+        == backoff["reset_token"]
+    )
+    assert unchanged["codex_app"]["stateful_backoff"]["ack_needed"] is False

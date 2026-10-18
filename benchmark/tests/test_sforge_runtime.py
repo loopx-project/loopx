@@ -666,6 +666,9 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     ("heartbeat-resume", ["--stride-strategy", "future_policy"]),
     ("official", ["--checkpoint-request", "missing.json"]),
     ("native-goal", ["--checkpoint-request", "missing.json"]),
+    ("heartbeat-explore", ["--checkpoint-retention-policy", "policy.json"]),
+    ("heartbeat-explore", ["--no-checkpoint-retention"]),
+    ("heartbeat-explore", ["--no-checkpoint-retention", "--checkpoint-retention-policy", "policy.json"]),
 ])
 def test_edgebench_rejects_invalid_profile_settings_before_creating_trial(tmp_path, profile, options):
     pytest.importorskip('sforge')

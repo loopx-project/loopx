@@ -270,6 +270,68 @@ def test_review_evidence_retains_brief_without_provider_payload():
     assert "raw_provider_payload" not in row["review_response"] and "usage" not in row["review_response"]
 
 
+@pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
+@pytest.mark.parametrize("custom_owner_instructions", [False, True])
+def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_owner_text(
+    tmp_path, profile, custom_owner_instructions
+):
+    from loopx.chat_agent import _turn_prompt
+    from loopx.chat_manager import manager_workspace, MANAGED_SKILL_CURRENT_MARKER
+
+    workspace = manager_workspace(tmp_path, runtime_profile=profile)
+    instructions = workspace / "AGENTS.md"
+    skill = workspace / ".agents/skills/loopx-manager/SKILL.md"
+    previous = "Custom owner instructions" if custom_owner_instructions else "# LoopX managed manager instructions\nOlder guidance"
+    instructions.write_text(previous)
+    skill.write_text("<!-- loopx-managed-manager-skill:v3 -->\nOlder managed skill")
+    manager_workspace(tmp_path, runtime_profile=profile)
+    current = instructions.read_text()
+    if custom_owner_instructions:
+        assert current == previous
+    else:
+        assert "question-form feedback" in current
+    assert MANAGED_SKILL_CURRENT_MARKER in skill.read_text()
+    assert "standalone explanation or opinion request" in skill.read_text()
+    assert "finish that response before separate repair" in skill.read_text()
+    turn = _turn_prompt("A follow-up about existing work.", runtime_profile=profile)
+    assert "do not end at agreement or design advice" in turn
+    assert "never resend merely because reading or adoption is unrecorded" in turn
+
+
+def test_followthrough_oracles_distinguish_context_not_question_wording():
+    suite = json.loads((ROOT / "examples/evaluations/chat-followthrough.public.json").read_text())
+    cases = {case["id"]: case for case in suite["cases"]}
+    amendment = cases["question-amends-delivery"]
+    opinion = cases["same-question-standalone"]
+    assert amendment["request"] == opinion["request"]
+    assert amendment["expected"] == "handoff" and opinion["expected"] == "answer"
+    assert suite["contexts"][amendment["context_ref"]]["goals"] == suite["contexts"][opinion["context_ref"]]["goals"]
+    for case in cases.values():
+        answer = {"message": "Evidence: " + " ".join(case.get("required_evidence_refs", []))}
+        if case["expected"] == "handoff":
+            answer["context_handoff"] = {**case["target"], "brief": {"context": " ".join(case["required_handoff_refs"])}}
+            assert not evaluation.score(case, {"message": "Here is design advice; I can forward it later."})["passed"]
+            assert not evaluation.score(case, {**answer, "gate": {"kind": "confirmation"}})["passed"]
+            assert not evaluation.score(case, {**answer, "context_handoff": {**case["target"], "brief": {}}})["passed"]
+            for omitted in case["required_handoff_refs"]:
+                incomplete = {**answer["context_handoff"], "brief": {
+                    "context": " ".join(ref for ref in case["required_handoff_refs"] if ref != omitted)
+                }}
+                assert not evaluation.score(case, {
+                    **answer, "message": omitted, "context_handoff": incomplete
+                })["passed"]
+            wrong_owner = {**answer["context_handoff"], "agent_id": "unrelated-owner"}
+            assert not evaluation.score(case, {**answer, "context_handoff": wrong_owner})["passed"]
+        else:
+            assert not evaluation.score(case, {**answer, "context_handoff": amendment["target"]})["passed"]
+        assert evaluation.score(case, answer)["passed"]
+        assert not evaluation.score(case, {**answer, "proposals": [{"kind": "todo"}]})["passed"]
+        assert not evaluation.score(case, {**answer, "protected_action": {"operation": "deploy"}})["passed"]
+    delivered = suite["contexts"][cases["reuse-delivered-handoff"]["context_ref"]]["handoff_receipts"][0]
+    assert delivered["delivery"]["status"] == "delivered"
+    assert delivered["read"]["status"] == delivered["decision"]["status"] == "not_recorded"
+
+
 def test_material_purpose_oracles_reject_wrong_role_and_dropped_destination():
     suite = json.loads((ROOT / "examples/evaluations/chat-purpose.public.json").read_text())
     cases = {case["id"]: case for case in suite["cases"]}

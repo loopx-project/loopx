@@ -1,0 +1,29 @@
+.personal-codex-accounts { display: grid; gap: 20px; padding: 8px 0 24px; color: var(--pw-text); }
+.personal-codex-accounts > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; }
+.personal-codex-accounts h2 { margin: 0; font-size: var(--text-heading); line-height: var(--leading-heading); font-weight: 600; }
+.personal-codex-accounts p { margin: 0; line-height: var(--leading-prose); }
+.personal-codex-accounts header > span, .codex-account-effect, .personal-codex-accounts details, .codex-account-actions > span { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.codex-account-enable { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 12px 0; border-top: 1px solid var(--pw-line); border-bottom: 1px solid var(--pw-line); }
+.codex-account-enable input { accent-color: var(--pw-text); width: 18px; height: 18px; }
+.codex-account-state { display: flex; gap: 8px; align-items: center; font-size: var(--text-body); }
+.codex-account-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.codex-account-list article { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; padding-top: 16px; border-top: 2px solid var(--pw-line); min-width: 0; }
+.codex-account-list article.is-current { border-color: var(--pw-text); }
+.codex-account-name { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.codex-account-name > span, .codex-account-list article > span { font-size: var(--text-caption); color: var(--pw-muted); }
+.codex-account-list dl { display: grid; gap: 12px; margin: 0; }
+.codex-account-list dt { color: var(--pw-muted); font-size: var(--text-caption); }
+.codex-account-list dd { margin: 4px 0 0; font-size: var(--text-heading); font-variant-numeric: tabular-nums; }
+.personal-codex-accounts button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font-size: var(--text-body); cursor: pointer; }
+.personal-codex-accounts button:disabled { opacity: .5; cursor: default; }
+.personal-codex-accounts button:focus-visible, .personal-codex-accounts input:focus-visible, .personal-codex-accounts summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; }
+.codex-account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.personal-codex-accounts details { border-top: 1px solid var(--pw-line); padding-top: 16px; }
+.personal-codex-accounts summary { cursor: pointer; padding: 4px 0; }
+.personal-codex-accounts details p { margin: 12px 0; }
+.personal-codex-accounts [role="alert"] { display: flex; gap: 8px; align-items: flex-start; color: var(--pw-red); }
+@media (max-width: 640px) {
+  .codex-account-list { grid-template-columns: 1fr; gap: 20px; }
+  .codex-account-list dl { grid-template-columns: 1fr 1fr; width: 100%; }
+  .codex-account-list article > button { width: 100%; }
+}

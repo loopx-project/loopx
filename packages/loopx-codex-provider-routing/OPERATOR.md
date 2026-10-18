@@ -1,5 +1,8 @@
 # Local CPA operator
 
+Legacy opt-in compatibility. New native account installations use
+[Native accounts](NATIVE.md); this operator is never selected automatically.
+
 The package now includes `loopx-cpa-operator`, a separately invoked local CLI.
 The managed extension protocol remains read-only and permission-free. Installing
 or running that protocol does not enable the operator, discover credentials,

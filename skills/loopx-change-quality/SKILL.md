@@ -208,5 +208,12 @@ Report:
 - receipt id and exact verification status;
 - premerge status, failures or skips, and manual holds.
 
-Stop before delivery when strict policy requires a receipt and the receipt is
-missing, invalid, stale, or contains an unresolved blocker.
+Hold merge, promotion and claims of qualified delivery when strict policy
+requires a receipt and it is missing, invalid, stale, or contains an unresolved
+blocker. Continue feasible authorized repair and rerun qualification; a quality
+hold does not itself make an Agent task an external wait. Preserve the actual
+required checks and failed observations. When a real dependency prevents
+repair, record its typed wait and consider other authorized Goal work through
+the current selection contract. A completed author proposal may enter normal
+PR review with its qualification hold disclosed; this grants no merge or
+installation authority.

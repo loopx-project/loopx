@@ -363,7 +363,7 @@
         "loopx/control_plane/agents/agent_scope.py::_other_agent_or_exhausted_frontier",
         "loopx/control_plane/agents/agent_scope.py::_route_continuation_frontier",
         "loopx/control_plane/agents/agent_scope.py::_selected_candidate_priority_frontier",
-        "loopx/control_plane/quota/should_run_packet.py::_scoped_gate_deferred_replan_frontier"
+        "loopx/control_plane/quota/should_run_packet.py::_selected_deferred_replan_frontier"
       ],
       "call_producers": {
         "loopx/control_plane/agents/agent_scope_frontier.py::build_agent_scope_frontier_payload": [

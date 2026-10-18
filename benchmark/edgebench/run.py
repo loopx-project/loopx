@@ -133,6 +133,11 @@ def main(argv=None):
     parser.add_argument("--restore-checkpoint", type=Path,
                         help="Explicit complete checkpoint to continue under fresh native/Goal identities")
     parser.add_argument("--restore-sha256")
+    retention = parser.add_mutually_exclusive_group()
+    retention.add_argument("--checkpoint-retention-policy", type=Path,
+                           help="Override default latest-only rotation in controller-enabled checkpoint banks")
+    retention.add_argument("--no-checkpoint-retention", action="store_true",
+                           help="Keep every captured point; disable default checkpoint rotation")
     parser.add_argument("--restore-config", type=Path)
     parser.add_argument("--restore-goal")
     parser.add_argument("--restore-agent")
@@ -183,6 +188,8 @@ def main(argv=None):
     handoff = checkpoint_request is not None and declaration.get("controller_handoff", False)
     if bool(args.checkpoint_controller_file) != handoff or (handoff and args.feedback != "native"):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
+    if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
+        parser.error("Checkpoint retention requires the explicit native controller capture path")
     restore_values = (args.restore_sha256, args.restore_config, args.restore_goal,
                       args.restore_agent, args.restore_source_todo)
     if bool(args.restore_checkpoint) != all(restore_values) or (not args.restore_checkpoint and any(restore_values)):
@@ -313,7 +320,9 @@ def main(argv=None):
     checkpoint = None
     if args.checkpoint_controller_file is not None:
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
-        checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, trial / "checkpoints")
+        checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, trial / "checkpoints",
+                                          retention_policy=args.checkpoint_retention_policy,
+                                          retention_enabled=not args.no_checkpoint_retention)
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,

@@ -1322,6 +1322,9 @@ function readQuotaSettlementFromRequest(
     completion_event: completionEvent,
     monitor_phase: monitorPhase,
     replay_phase: replayPhase,
+    successor_replan_pending: replayPhase === "open" &&
+      heartbeatReceipt.status === "successor_replan_required" &&
+      receiptDetails.should_run === true && receiptDetails.delivery_allowed === false,
     native_child_admission: nativeChildReportAdmission(
       receiptDetails, heartbeatReceipt.status, identity.effect_id, replayPhase,
       closeoutStarted,

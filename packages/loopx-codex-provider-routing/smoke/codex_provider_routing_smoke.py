@@ -29,7 +29,7 @@ reconcile_integration_candidate = contract.reconcile_integration_candidate
 
 
 def _assert_layered_retry_templates() -> None:
-    app = (PACKAGE_ROOT / "templates" / "codex-app-config.toml").read_text()
+    app = (PACKAGE_ROOT / "templates" / "legacy-cpa-config.toml").read_text()
     local_cpa = app.split("[model_providers.local-cpa]", maxsplit=1)[1]
     request_retries = re.search(r"(?m)^request_max_retries\s*=\s*(\d+)\s*$", local_cpa)
     stream_retries = re.search(r"(?m)^stream_max_retries\s*=\s*(\d+)\s*$", local_cpa)

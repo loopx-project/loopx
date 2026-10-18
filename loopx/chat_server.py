@@ -11,10 +11,13 @@ from collections.abc import Callable, Mapping
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
 
 from .presentation import configuration_api as config_api
+from .presentation.codex_accounts_api import CodexAccountService
+if TYPE_CHECKING:
+    from .capabilities.native_chat.transports import ChatConversationTransports
 from .attached_session_api import AttachedSessionRequestMixin
 from .zcode_goal_mode.api import ZCodeGoalRequestMixin
 from .chat import (
@@ -41,7 +44,6 @@ from .chat_goal_subagent_api import (
 from .chat_status_api import ChatStatusRequestMixin
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
-    TERMINAL_TURN_STATES,
     ChatRuntimeController,
     ChatTurnAcceptanceUnavailableError,
 )
@@ -51,12 +53,12 @@ from .chat_manager import (
 )
 from .chat_session_open import open_chat_session
 from .chat_ssh_source_api import SshSourceRequestMixin
-from .chat_store import ChatSessionStore, normalize_agent_model_id
-from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort
+from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
+from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
 from .extensions.lark.private_conversations import LarkPrivateConversations
-from .chat_loopx_mode import handle_loopx_request
+from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
     project_chat_session_snapshot,
@@ -89,14 +91,13 @@ from .extensions.lark.goal_channel import (
     setup_lark_goal_channel,
 )
 from .extensions.lark.goal_topic_connections import list_lark_apps
-from .extensions.lark.goal_topic_runtime import LarkGoalTopicRuntimeService
+from .extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 from .extensions.lark.manager_routing import authorized_manager_goal_ids
 from .extensions.lark.cli_transport import CommandRunner
 from .extensions.runtime import (
     default_extension_state_file,
     resolve_extension_activation,
 )
-from .history import load_registry
 from .chat_completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
 from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
@@ -104,6 +105,7 @@ from .chat_todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity
+from .control_plane.projects.registry_codec import load_registry
 from .registry import registry_goals, resolve_state_file
 from .state_projection import build_active_state_structured_projection
 from .status_server import (
@@ -259,7 +261,7 @@ def build_chat_status_projection(
     queue_items = queue.get("items") if isinstance(queue, dict) else []
     queue_by_goal = {
         str(item.get("goal_id") or ""): item
-        for item in queue_items if isinstance(queue_items, list) and isinstance(item, dict)
+        for item in (queue_items if isinstance(queue_items, list) else []) if isinstance(item, dict)
     }
     goals: list[dict[str, Any]] = []
     for raw_goal in registry_goals(registry):
@@ -285,7 +287,8 @@ def build_chat_status_projection(
         latest_validation = asset.get("latest_validation")
         if isinstance(latest_validation, dict) and latest_validation.get("summary"):
             evidence.insert(0, _compact_text(latest_validation.get("summary")))
-        quota = item.get("quota") if isinstance(item, dict) and isinstance(item.get("quota"), dict) else {}
+        raw_quota = item.get("quota") if isinstance(item, dict) else None
+        quota = raw_quota if isinstance(raw_quota, dict) else {}
         goals.append(
             {
                 "goal_id": goal_id,
@@ -441,7 +444,9 @@ class ChatHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     registry_path: Path
+    runtime_root: Path
     runtime_root_override: str | None
+    codex_account_service: CodexAccountService
     scan_roots: list[Path]
     limit: int
     selected_goal_id: str | None
@@ -460,6 +465,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
     lark_private_conversations: LarkPrivateConversations
     ssh_config_path: Path | None
     goal_subagent_configuration_enabled: bool
+    conversation_transports: ChatConversationTransports
+    delegation_wake_service: DelegationWakeService
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         # Freeze before serving: an in-place package upgrade must not retag the
@@ -469,6 +476,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
         self.completed_todo_pages = CompletedTodoPages()
 
     def server_close(self) -> None:
+        if hasattr(self, "codex_account_service"):
+            self.codex_account_service.close()
         if hasattr(self, "lark_app_setup_manager"):
             self.lark_app_setup_manager.close()
         if hasattr(self, "manager_return_service"):
@@ -538,7 +547,12 @@ class ChatRequestHandler(
         turn_replay_safe: bool = False,
         todo_receipt: dict[str, Any] | None = None,
         delivery_state: Literal["not_delivered", "unresolved"] | None = None,
+        **unsupported: object,
     ) -> None:
+        # Legacy mixins expose **kwargs; keep unknown options rejected at the
+        # concrete boundary instead of silently widening the HTTP contract.
+        if unsupported:
+            raise TypeError("unsupported error response options")
         payload: dict[str, Any] = {"ok": False, "error": _compact_text(message)}
         if error_code:
             payload["error_code"] = _compact_text(error_code, limit=80)
@@ -630,7 +644,7 @@ class ChatRequestHandler(
             unknown = set(body) - {"goal_id", "agent_id", "agent_model_id", "agent_reasoning_effort", "mode", "context_kind", "project_ref"}
             if unknown:
                 raise ValueError("unknown session field")
-            goal_id = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
+            goal_id: str | None = _compact_text(body.get("goal_id"), limit=160) or self.server.selected_goal_id or ""
             # ``agent_id`` is the caller's explicit executor pick and stays empty
             # when the caller does not make one. Each channel then resolves its
             # own default through its own owner instead of inheriting whatever
@@ -658,10 +672,10 @@ class ChatRequestHandler(
                 context = self._session_context({"goal_id": None, "channel_id": selected["channel_id"],
                                                  "project_context": selected["context"]})
             else:
-                registry, goal = self._registry_and_goal(goal_id)
+                registry, goal = self._registry_and_goal(goal_id or "")
                 context = _goal_public_context(registry, goal)
             runtime_objective = str(context["objective"] or context["title"])
-            project = context["project"]
+            project = cast(Path, context["project"])
             if not project.is_dir():
                 raise CodexChatAgentError(
                     "The Goal project root is unavailable.",
@@ -819,17 +833,18 @@ class ChatRequestHandler(
             self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
             return
         try:
-            submit = (self.server.runtime_controller.enqueue_turn if body.get("delivery") == "queue"
-                      else self.server.runtime_controller.submit_turn)
-            turn, created = submit(
-                session_id=session_id,
-                client_turn_id=client_turn_id,
-                message=message,
-                attachments=attachments,
-                work_dir=context["project"],
-                objective=runtime_objective,
-                **({"origin": "web"} if body.get("delivery") == "queue" else {}),
-            )
+            if body.get("delivery") == "queue":
+                turn, created = self.server.runtime_controller.enqueue_turn(
+                    session_id=session_id, client_turn_id=client_turn_id,
+                    message=message, attachments=attachments,
+                    work_dir=cast(Path, context["project"]), objective=runtime_objective, origin="web",
+                )
+            else:
+                turn, created = self.server.runtime_controller.submit_turn(
+                    session_id=session_id, client_turn_id=client_turn_id,
+                    message=message, attachments=attachments,
+                    work_dir=cast(Path, context["project"]), objective=runtime_objective,
+                )
             if body.get("client_turn_id"):
                 turn_id = str(turn["turn_id"])
                 self._send_json(
@@ -910,7 +925,8 @@ class ChatRequestHandler(
     def _session_snapshot(self, session_id: str) -> None:
         try:
             self.server.runtime_controller.recover_exited_turn(session_id)
-            self._send_json(project_chat_session_snapshot(
+            snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
+            self._send_json(snapshot(
                 self.server.runtime_root, self.server.chat_store, session_id,
                 registry=self.server.registry_path))
         except KeyError:
@@ -943,13 +959,13 @@ class ChatRequestHandler(
         last_event_id = self.headers.get("Last-Event-ID")
         query = parse_qs(urlparse(self.path).query)
         if not last_event_id:
-            last_event_id = (query.get("after") or [None])[0]
+            last_event_id = (query.get("after") or [""])[0] or None
         if str(last_event_id or "0") != "0":
-            turn = self.server.chat_store.load_turn(session_id, turn_id) or {}
+            prior_turn = self.server.chat_store.load_turn(session_id, turn_id) or {}
             self.server.chat_store.update_turn(
                 session_id,
                 turn_id,
-                sse_reconnect_count=int(turn.get("sse_reconnect_count") or 0) + 1,
+                sse_reconnect_count=int(prior_turn.get("sse_reconnect_count") or 0) + 1,
             )
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1053,7 +1069,7 @@ class ChatRequestHandler(
             objective = str(context["objective"] or context["title"])
             restored = self.server.runtime_controller.resume_session(
                 session_id=session_id,
-                work_dir=context["project"],
+                work_dir=cast(Path, context["project"]),
                 objective=objective,
             )
         except KeyError:
@@ -1403,6 +1419,7 @@ class ChatRequestHandler(
         )
 
     def _action_apply(self, proposal_id: str) -> None:
+        proposal: dict[str, object] | None
         try:
             body = self._read_json()
             if body:
@@ -1552,7 +1569,7 @@ class ChatRequestHandler(
                     "endpoints": self.server.runtime_controller.capabilities(),
                 }
             )
-        get_dispatch = {
+        get_dispatch: dict[str, Callable[[], None]] = {
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/goal-results": self._goal_results,
@@ -1605,7 +1622,7 @@ class ChatRequestHandler(
         path = urlparse(self.path).path
         if self._dispatch_zcode_goal(path, apply=True):
             return
-        post_dispatch = {
+        post_dispatch: dict[str, Callable[[], None]] = {
             RESEARCH_ANALYSIS_PATH: self._research_analysis_write,
             RESEARCH_ANALYSIS_PATH + "/cancel": self._research_analysis_write,
             CHAT_SESSIONS_PATH: self._create_session,
@@ -1732,6 +1749,7 @@ def serve_chat(
     server = ChatHTTPServer((host, port), ChatRequestHandler)
     server.registry_path = resolved_registry_path
     server.runtime_root = runtime_root
+    server.codex_account_service = CodexAccountService(runtime_root)
     server.runtime_root_override = resolved_runtime_root_override
     server.scan_roots = resolved_scan_roots
     server.limit = limit
@@ -1757,18 +1775,24 @@ def serve_chat(
     )
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
+    def manager_scope(session: dict[str, object]) -> list[str] | None:
+        if isinstance(session.get("steward_context"), dict):
+            bindings = server.runtime_controller.project_contexts.conversation_bindings
+            if bindings is None:
+                raise ValueError("Steward conversation bindings are unavailable")
+            return cast(list[str] | None, bindings.steward_scope(session))
+        return authorized_manager_goal_ids(
+            build_lark_goal_topic_runtime_snapshot(
+                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
+            ), session, runtime_root=runtime_root, registry_path=resolved_registry_path,
+        )
+
     server.runtime_controller = ChatRuntimeController(
         store=server.chat_store,
         registry_path=resolved_registry_path,
         project_contexts=ChatProjectContexts(resolved_scan_roots, workspace_grant=project_workspace_grant,
                                             filesystem_scope=project_filesystem_scope),
-        manager_scope_resolver=lambda session: (
-            server.runtime_controller.project_contexts.conversation_bindings.steward_scope(session)
-            if isinstance(session.get("steward_context"), dict) else authorized_manager_goal_ids(
-            build_lark_goal_topic_runtime_snapshot(
-                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
-            ), session, runtime_root=runtime_root, registry_path=resolved_registry_path,
-        )),
+        manager_scope_resolver=manager_scope,
         codex_bin=codex_bin,
         claude_bin=claude_bin,
         kiro_cli_bin=kiro_cli_bin,
@@ -1788,7 +1812,7 @@ def serve_chat(
 
     server.lark_private_conversations = private_transport
 
-    def _lark_snapshot():
+    def _lark_snapshot() -> dict[str, object]:
         snapshot = build_lark_goal_topic_runtime_snapshot(registry_path=server.registry_path,
             runtime_root_override=server.runtime_root_override)
         snapshot["private_profiles"] = private_transport.profiles()
@@ -1828,9 +1852,8 @@ def serve_chat(
     server.manager_return_service = start_return_service(
         server, server.runtime_controller.coordination_runtime_root, start_service=False
     )
-    from .chat_loopx_mode import DelegationWakeService
 
-    def _wake_goal_context(session):
+    def _wake_goal_context(session: dict[str, object]) -> dict[str, object]:
         registry = load_registry(server.registry_path)
         goal = next(
             (item for item in registry_goals(registry) if str(item.get("id") or "") == str(session["goal_id"])),

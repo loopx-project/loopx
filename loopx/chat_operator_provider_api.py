@@ -37,7 +37,7 @@ class OperatorProviderRequestMixin:
 
     server: _OperatorProviderServer
 
-    def _send_json(self, payload: dict, status: int = 200) -> None: ...
+    def _send_json(self, payload: dict, *, status: int = 200) -> None: ...
 
     def _send_error(
         self, message: str, *, status: int, error_code: str

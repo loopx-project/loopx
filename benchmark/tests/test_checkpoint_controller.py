@@ -645,6 +645,11 @@ def test_real_docker_controller_export_import_and_next_grade(tmp_path, monkeypat
                 phase_source.write_text(f"{int(time.time()) + 7200}\n")
             point = transport.capture(files[0], token=token, capture_id="c" * 32, destination=exported,
                                       phase_deadline_file=phase_source if phase_budget else None)
+            if phase_budget and not lose_response:
+                # The real Docker/native restore also traverses a managed-bank
+                # reader lock. Other parameter rows retain off-state coverage.
+                from loopx.hosts.checkpoint_retention import _state
+                _state(tmp_path)
             # Admission clock only: HTTP, transport/fsync, Docker and native
             # grading remain real. Offline/import IO must not spend cooldown.
             now = [time.time() + 7200]

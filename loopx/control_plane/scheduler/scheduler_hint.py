@@ -772,7 +772,14 @@ class _SchedulerHintBuilder:
             "local_scheduler_unchanged_poll_limit": cli_limit,
             "claude_code_loop_unchanged_poll_limit": claude_limit,
         }
-        reset_profile_snapshot = reset_profile_snapshot_override or profile_snapshot
+        # A deadline can shrink the allowed buckets without changing the
+        # monitor/phase identity. Bind the effective progression so the typed
+        # commit owner sees an identity reset, rather than an index regression.
+        # Elapsed time within the same buckets must not reset backoff.
+        reset_profile_snapshot = {
+            **(reset_profile_snapshot_override or profile_snapshot),
+            "app_automation_progression_minutes": app_cadence_progression,
+        }
         (
             reset_token,
             identity_signature,

@@ -35,6 +35,9 @@ export const privateStewardScopeScenario = {
     const {page} = context;
     try {
       async function settings() {
+        // On phone widths Goal navigation is a closed drawer; Settings lives inside it.
+        const navigation = page.locator(".personal-mobile-menu");
+        if (await navigation.isVisible()) await navigation.click();
         await page.getByRole("button", {name: "设置", exact: true}).click();
         await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       }

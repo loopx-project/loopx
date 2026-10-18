@@ -81,7 +81,7 @@ class CompletedTodoPages:
     ttl_seconds = 300
     max_cache_bytes = 16 * 1024 * 1024
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._snapshots = OrderedDict()
         self._lock = Lock()
 

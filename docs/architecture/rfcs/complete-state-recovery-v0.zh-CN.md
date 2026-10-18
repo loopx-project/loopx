@@ -49,55 +49,35 @@ held，未知状态不改称可恢复，执行权限始终为 false。限制与�
 继续由 M4/M5 承接。本协调检查点未实现 M2/M3，也不启动恢复或激活。
 
 <a id="planned-agent-transfer"></a>
+<a id="in-place-major-upgrade"></a>
 
-### 计划内 Agent 迁移：产品交付细化提案
+### 2.0 原地迁移式升级：已有原子能力与 Agent prompt
 
-普通用户要完成的是**把我的 Agent 搬到另一个环境，并继续原来未完成的工作**。
-源端仍可联系时的计划内迁移，可以优先于灾难恢复交付。本提案复用下述既有 owner，
-不把 M1 检查改称迁移，不降低 M2/M3 已接受的灾难恢复门，也不声称现在已经能完成迁移。
+本次迁移指**现有 LoopX 1.x 工作原地升级到 2.0**。保持同一机器、项目、
+registry/runtime 路由及 Goal/Agent 身份，由用户的 Agent 配合[可复制升级 prompt](../../guides/agent-upgrade.md)
+组合现有操作。本次不交付跨环境搬迁、会话转移、专用迁移 executor 或 UI。
 
-从一个有真实内容的本地 Goal 及其负责 Agent 开始，明确正常安装的 POSIX
-File/SQLite profile、实际必要 owner 和源端停止支持，然后通过现有设置/能力中心
-及共享 CLI/backend 交付完整旅程：
+Agent 识别安装归属及各 Goal 的真实 provider、格式和所有权策略，通过原 owner
+停止受影响旧写方、对账未完成操作并结清获准处理的租约，先私有备份。沿安装 owner
+更新，并在改变 Goal 数据前用兼容工具校验备份。只执行必要变化，然后按当前准入
+继续原工作。有效的已有配置保持选定；修改
+新 Goal 默认值不等于升级现有 Goal。
 
-1. 准备源端、完整要求和必要材料，由各自 owner 结算或明确 hold 进行中的工作，
-   并建立静止边界。
-2. 生成单独评审的可携产物。原始私有备份不等于这个产物；落实下文的加密与凭证
-   保管决定，保留内容和历史，并识别需重绑的依赖。
-3. 目标端预览路径、Goal/Agent 身份映射、依赖、兼容性、缺失上下文和捕获边界外的
-   工作。Agent 先准备这些事实，不让用户编辑 registry 或拼接各 owner 命令；只为
-   缺失的重要选择或凭证请求输入。
-4. 对已准备的切换进行一次确认。既有 Goal、authority、session、lease、quota 与
-   effect owner 必须准入目标并排除源端过期执行；复制 Host/session id 或已释放
-   lease 不等于取得准入。
-5. 继续完成迁移前留下的任务，独立验收其结果，并从发起产品入口读回。保留后写，
-   同入口提供中断、重试和回退，这些都属于迁移旅程。
-
-迁移内容包括 Goal 意图/约束、完整活动与归档 Todo 及关系、Agent 角色和必要决策
-上下文、必要产物/材料和能力配置。采用受支持的 Host 导出或经评审的接续上下文，
-不声称复制第三方 session 数据库就能恢复该 session。延续身份还是建立新 lifetime
-须由 Goal owner 的计划明确；原历史 receipt 正文不变，也不成为新的 execution proof。
-外部 effect 结果未知时，携原 operation identity 保持 hold，不重新派发。
-
-实现边界是**已准备的迁移到目标继续工作**，包括产品入口和真实失败/恢复路径。
-按这条旅程的实证断点选择修复，不先排一串 manifest 字段，也不要求所有云/平台
-profile 及 D2 十日默认资格先完成。所选 profile 自身的实际依赖和安全门仍须成立；
-未用 provider 需要 owner 证实不存在依赖，不能用 exclude flag 代替。
-
-既有基础与剩余整合的归属如下：
-
-| 既有 owner / 入口 | 复用及剩余工作 |
+| 实际升级需要 | 既有 owner／入口 |
 | --- | --- |
-| `backup-state`、configuration backup 与 authority archive | 复用实际内容导出、安全解包和原 receipt 审计，在其上组合可携迁移。隔离可读目标不等于已注册、可执行的 Goal。 |
-| `migrate-state` | 只复制旧 Goal Harness 状态。预览与执行均通过既有 fence owner 拒绝 canonical 源/目标，不是现代 Agent 迁移捷径。 |
-| Goal/session/Host 与 Task/lease owner | 通过真实生命周期准备目标绑定和可执行 Task 声明，保留旧 lineage、拒绝过期 executor、重绑受支持 session；复制元数据不能修复或铸造 grant。 |
-| 设置/能力中心与 CLI | 一次已准备的 operation，包含预览、确认、可见 hold、原操作重试和继续工作读回。不把八套 owner runbook 作为普通用户流程。 |
+| 安装包／runtime 与 Host 材料 | 既有安装 owner 和 `update check/plan/apply`；保持状态路由并验证实际激活层。 |
+| 旧 canonical authority 格式 | `authority-archive upgrade`；对现有 store 备份、校验和格式升级，不切换 provider。 |
+| 尚用 Markdown authority 的 Goal | `coordination-shadow inspect-source/prepare-import/apply-import`；为同一已注册 Goal 向审核的 provider 导入完整记录。 |
+| 历史 `legacy` 所有权策略 | `handoff-mode plan-migration/migrate`；保留归属与已结算历史，明确选择 `soft_claim` 或 `hard_lease`。 |
 
-演练前冻结支持 profile、数据/effect 处置，以及耗时、必要用户输入、导航和恢复
-负担目标。使用两个隔离的正常安装环境，包含已完成/未完成工作及真实必要材料。
-覆盖源变化/过期、输入损坏、缺材料、目标占用、中断和重复确认；受保护重复操作
-必须为零。计划内迁移成功不证明原源不可用的 M3 恢复合格。本提案不新增激活、
-凭证转移、付费实验或发布授权。
+用普通 1.4.2 安装在同一隔离环境、同一路径升级到固定 2.0 候选，读回完整活动／
+归档记录、关系、配置和原 receipts，继续原任务有用的一步并验证结果。覆盖相关拒绝
+及原 operation 恢复，不重复副作用、不覆盖后写。只打磨既有 owner 的可复现断点。
+回退二进制不等于回退数据，保留对应备份／恢复与升级后新写的边界。
+
+下文 M2/M3 灾难恢复独立保留。原地升级不要求新 Goal lifetime，也不证明跨机
+搬迁、原源不可用恢复、所有 Host 或 D2/D3 合格。本提案不授权活跃升级、发布、
+凭证转移或付费执行。
 
 ### 首个支持的用户结果
 

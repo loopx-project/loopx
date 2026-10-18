@@ -20,13 +20,13 @@ class GoalDirectionRequestMixin:
     server: Any
     path: str
 
-    def _send_json(self, value: dict[str, Any], **kwargs: Any) -> None:
+    def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
         raise NotImplementedError
 
     def _send_error(self, message: str, **kwargs: Any) -> None:
         raise NotImplementedError
 
-    def _read_json(self, **kwargs: Any) -> dict[str, Any]:
+    def _read_json(self, *, max_bytes: int = 256 * 1024) -> dict[str, Any]:
         raise NotImplementedError
 
     def _direction_route(self, goal_id: Any) -> tuple[Path, dict[str, str]]:

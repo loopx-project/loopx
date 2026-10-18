@@ -27,8 +27,8 @@ Current co-located distributions, in directory order:
   LoopX-governed work unit on Ark Managed Agents (Python distribution, no
   `extension.toml`; selected with `turn run-once --host generic-cli`);
 - [`loopx-codex-provider-routing`](loopx-codex-provider-routing/README.md):
-  public-safe Codex App + CPA catalog compilation, qualification and upgrade
-  planning;
+  native Codex account slots, allowance observation and automatic handoff at
+  safe boundaries, with legacy CPA qualification and rollback compatibility;
 - [`loopx-community-discussion`](loopx-community-discussion/README.md):
   public-safe community discussion scanner producing compact
   `discussion_fact_v0` facts;

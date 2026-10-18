@@ -195,7 +195,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   const selected = optionalNonEmptyString(request.selected_obligation_id, "selected_obligation_id");
   const current = request.current_obligation == null ? null
     : requireJsonObject(request.current_obligation, "current_obligation");
-  if (selected === null) return {obligation: current};
+  if (selected === null) return {obligation: request.guard_scoped === true ? null : current};
   if (!/^replan-[a-f0-9]{16}$/.test(selected) || typeof request.guard_scoped !== "boolean" ||
       !Array.isArray(request.transition_candidates) ||
       ![null, "open", "settlement_pending"].includes(request.replay_phase as string | null)) {

@@ -170,7 +170,11 @@ Inspect the private external manifest with
 isolated restore, independently hash each listed regular member and compare its
 byte count. The list excludes the self-containing `manifest.json`, directories
 and tar links; retain the existing whole-archive checksum for their integrity
-and inspect link destinations separately. Earlier backups may lack this list;
+and inspect link destinations separately.
+The inert verifier accepts producer-generated hard links only to an earlier
+regular member inside the archive. It recreates that link after verified file
+extraction with private permissions. Missing, forward, chained, symlink and
+escaping targets remain refused; links never resolve against the live source. Earlier backups may lack this list;
 its absence does not grant migration qualification or erase their recovery
 support. A failed or short source read leaves an earlier backup intact.
 
@@ -475,8 +479,9 @@ and 16 MiB total extended metadata. Paths have at most 64 components, 1,024
 characters and 255 UTF-8 bytes per component; JSON nesting is bounded at 64.
 Owner inspection permits 128 Goals, 128 SQLite files and 20,000 committed
 transactions per Goal. Overflow refuses publication rather than truncating a
-required inventory. Internal symlinks remain inert; escaping/cyclic links,
-hard links, sparse or special files and normalized name collisions reject.
+required inventory. Internal symlinks and hard links to earlier regular members
+remain inert; escaping/cyclic links, other hard-link targets, sparse or special
+files and normalized name collisions reject.
 
 Archive parsing never loads restored code. Database/domain inspection runs in a
 disposable verifier with a 90-second deadline and a 512 MiB V8 heap ceiling.
@@ -640,3 +645,11 @@ Native Windows tests cover the configuration-only CLI export/verify/restore and
 local HTTP checkpoint with UTF-8 values. The packaged browser journey, full
 state backup, provider promotion, a destination machine and long-duration SQLite
 operation remain separate qualifications.
+
+## Agent-assisted 2.0 in-place upgrade
+
+Use the [copyable upgrade prompt](../guides/agent-upgrade.md) to let your Agent
+compose the existing installation and data-upgrade primitives in the same
+project and state routes. Verify the private backup before mutation, preserve
+full Tasks/configuration/receipts, then verify useful original work. Backup
+verification alone does not upgrade a Goal or authorize a data rollback.

@@ -5,6 +5,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
+import time
 
 
 def register_research_checkpoint(subparsers, add_subcommand_format) -> None:
@@ -13,13 +15,16 @@ def register_research_checkpoint(subparsers, add_subcommand_format) -> None:
     add_subcommand_format(parser)
     # Local CLI operations compose existing artifact/session/continuation APIs;
     # they are not a new persisted lifecycle or authority vocabulary.
-    parser.add_argument("operation", choices=("capture", "verify", "admit-session", "adopt-context"))
+    parser.add_argument("operation", choices=("capture", "verify", "admit-session", "adopt-context", "rotate"))
     parser.add_argument("--goal-id")
     parser.add_argument("--agent-id")
     parser.add_argument("--project", default=".")
     parser.add_argument("--request-file", type=Path)
     parser.add_argument("--root", type=Path)
     parser.add_argument("--expected-sha256")
+    parser.add_argument("--expected-plan-sha256", help="Rotate only the unchanged previewed retention plan")
+    parser.add_argument("--watch", action="store_true", help="Explicit rotate --execute loop; stop the process to disable")
+    parser.add_argument("--interval-seconds", type=float, default=300)
     parser.add_argument("--turn-instance-id")
     parser.add_argument("--config-path", type=Path)
     from ..control_plane.turn_driver.codex_cli import CODEX_CLI_SANDBOXES
@@ -29,7 +34,7 @@ def register_research_checkpoint(subparsers, add_subcommand_format) -> None:
         parser.add_argument("--" + name)
     parser.add_argument("--lease-version", type=int)
     parser.add_argument("--execute", action="store_true",
-        help="Explicitly perform capture, session admission or context adoption; otherwise preview only.")
+        help="Explicitly perform capture, adoption or retention deletion; otherwise preview only.")
 
 
 def handle_research_checkpoint(args: argparse.Namespace, *, registry_path: Path,
@@ -42,6 +47,39 @@ def handle_research_checkpoint(args: argparse.Namespace, *, registry_path: Path,
         if any(getattr(args, name) is None or getattr(args, name) == "" for name in names):
             raise ValueError("Missing explicit " + ", ".join("--" + name.replace("_", "-") for name in names))
     try:
+        if args.watch and (args.operation != "rotate" or not args.execute or args.expected_plan_sha256):
+            raise ValueError("--watch requires rotate --execute without a frozen preview digest")
+        if args.expected_plan_sha256 and args.operation != "rotate":
+            raise ValueError("--expected-plan-sha256 requires rotate")
+        if args.operation == "rotate":
+            required("root")
+            if not 10 <= args.interval_seconds <= 86400:
+                raise ValueError("Retention interval must be between 10 and 86400 seconds")
+            from ..hosts.checkpoint_retention import bank_generation, retention_policy_bytes, rotate_bank
+            previous = None
+            next_due = None
+            while True:
+                # A supervisor bank publishes its editable default policy.
+                # An unmanaged, explicitly selected bank uses the typed default
+                # without creating any state during preview.
+                raw = retention_policy_bytes(args.root, args.request_file)
+                generation = bank_generation(args.root, raw)
+                if generation != previous or (next_due is not None and time.time() >= next_due):
+                    result = rotate_bank(args.root, json.loads(raw), execute=args.execute,
+                                         expected_plan_sha256=args.expected_plan_sha256)
+                    payload = {"ok": True, **result}
+                    print_payload(payload, output_format(args), lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+                    sys.stdout.flush()
+                    # Remember the post-cleanup bank; do not wake just because
+                    # this operation removed its own selected directories.
+                    after = bank_generation(args.root, raw)
+                    previous = after if {p[0] for p in after[1]} == {p["id"] for p in result["retained"]} else None
+                    next_due = result["grace_expires_at"]
+                if not args.watch:
+                    return 0
+                # No model/Goal/control-plane reads. Only the selected local
+                # bank and explicit policy are revisited at this bounded rate.
+                time.sleep(args.interval_seconds)
         if args.operation == "capture":
             required("request_file", "turn_instance_id", "goal_id", "agent_id", "sandbox")
         else:
@@ -52,8 +90,10 @@ def handle_research_checkpoint(args: argparse.Namespace, *, registry_path: Path,
             required("goal_id", "agent_id", "sandbox", "source_todo_id", "todo_id",
                      "operation_id", "expected_revision", "lease_key", "lease_version")
         if args.operation == "verify":
-            result = effect_runtime_result("runtime.checkpoint_artifacts", {
-                "action": "verify", "root": str(args.root), "expected_sha256": args.expected_sha256}, large_local_snapshot=True)
+            from ..hosts.checkpoint_retention import checkpoint_bank_use
+            with checkpoint_bank_use(args.root):
+                result = effect_runtime_result("runtime.checkpoint_artifacts", {
+                    "action": "verify", "root": str(args.root), "expected_sha256": args.expected_sha256}, large_local_snapshot=True)
         elif not args.execute:
             result = {"dry_run": True, "operation": args.operation, "execution_authority_granted": False,
                 "next_action": "Review the explicit source/destination and use --execute for this operation."}
@@ -71,12 +111,16 @@ def handle_research_checkpoint(args: argparse.Namespace, *, registry_path: Path,
                     turn_instance_id=args.turn_instance_id, timeout=args.timeout_seconds)
             elif args.operation == "admit-session":
                 from ..hosts.codex_checkpoint import admit_native_checkpoint_session
-                result = admit_native_checkpoint_session(env, args.root, args.expected_sha256,
-                    args.config_path, sandbox=args.sandbox, timeout=args.timeout_seconds)
+                from ..hosts.checkpoint_retention import checkpoint_bank_use
+                with checkpoint_bank_use(args.root):
+                    result = admit_native_checkpoint_session(env, args.root, args.expected_sha256,
+                        args.config_path, sandbox=args.sandbox, timeout=args.timeout_seconds)
             else:
-                result = adopt_todo_context(env, args.root, args.expected_sha256,
-                    source_todo_id=args.source_todo_id, todo_id=args.todo_id, operation_id=args.operation_id,
-                    expected_revision=args.expected_revision, lease_key=args.lease_key, lease_version=args.lease_version)
+                from ..hosts.checkpoint_retention import checkpoint_bank_use
+                with checkpoint_bank_use(args.root):
+                    result = adopt_todo_context(env, args.root, args.expected_sha256,
+                        source_todo_id=args.source_todo_id, todo_id=args.todo_id, operation_id=args.operation_id,
+                        expected_revision=args.expected_revision, lease_key=args.lease_key, lease_version=args.lease_version)
         payload = {"ok": True, **result}
     except (ValueError, OSError, RuntimeError) as error:
         payload = {"ok": False, "error": str(error), "execution_authority_granted": False,

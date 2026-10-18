@@ -1,9 +1,17 @@
 # LoopX Codex Provider Routing
 
-This optional LoopX extension owns the public-safe integration contract for a
-single Codex App using CPA as its multi-subscription and multi-provider data
-plane. It packages configuration compilation, qualification readback and
-upgrade planning without becoming a model proxy or credential authority.
+This optional extension integrates **native Codex account slots** with LoopX.
+It observes allowance, selects an authorized available account after exhaustion,
+and asks the installed native slot owner to switch at an idle boundary. Codex
+keeps its official OpenAI login, model settings and history. CPA is no longer
+the recommended provider path.
+
+Install this package in the LoopX runtime, then open **Settings → Model provider
+→ Native Codex accounts**. The page discovers slots, enables automatic handoff,
+checks allowance, switches explicitly and reads back recovery. The same owner
+is available through `loopx-codex-accounts`. See the [native guide](NATIVE.md)
+for prerequisites, migration and the safe-boundary limitation. Installation
+alone switches nothing.
 
 ## Placement
 
@@ -11,16 +19,26 @@ This package is an **extension** that supplies a standalone integration
 provider. It is not a built-in capability:
 
 - Codex App owns task settings, turn snapshots and the session store;
-- CPA owns credential selection, online routing, retry and stream adaptation;
-- the operator owns OAuth/API credentials, process installation and private
-  build/rollback receipts;
-- LoopX owns this versioned public contract, managed extension lifecycle,
-  public-safe qualification results and upgrade gates.
+- the installed Personal Apps slot manager owns credential transactions,
+  idle admission, login-cache preservation and rollback;
+- the optional provider owns allowance observation and its default-off policy;
+  its TypeScript selector is shared by CLI and App;
+- LoopX Core supplies optional lifecycle and owner-local presentation transport,
+  without becoming a credential or model proxy.
 
-The extension declares no permissions and performs no writes. It does not read
+The **managed qualification protocol** declares no permissions and performs no writes. It does not read
 `HOME`, `CODEX_HOME`, auth files, process tables or network endpoints. Callers
 must convert local observations into the content-free snapshot schema before
-qualification.
+qualification. The separately invoked native host reads local credentials,
+queries native usage and performs explicitly enabled account effects. It is
+never invoked by the permissionless protocol or its doctor.
+
+## Legacy compatibility
+
+Existing CPA contracts, fixtures and `loopx-cpa-operator` remain for explicit
+legacy use and rollback. They are not started, migrated or selected automatically.
+The following operations describe that compatibility protocol; they do not
+certify native-slot availability or authorize a native switch.
 
 ## Operations
 
