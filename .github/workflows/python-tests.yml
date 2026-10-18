@@ -807,6 +807,17 @@ jobs:
       - name: Qualify the canary premerge contract smoke on native Windows
         run: python examples/canary/premerge-validation-gate-smoke.py
 
+      - name: Qualify native CLI output fixture and diagnostic boundaries
+        run: >-
+          python -m pytest -q
+          tests/control_plane/test_cli_output_budget.py
+          tests/control_plane/test_cli_output_differential.py
+          -k "stable_budget_fixture or probe_process_failure_preserves_utf8_diagnostics"
+
+      - name: Qualify the native Windows CLI output differential
+        timeout-minutes: 12
+        run: python examples/control_plane/cli-output-budget-regression-smoke.py
+
       - name: Run native Windows lifecycle tests
         run: >-
           python -m pytest -q

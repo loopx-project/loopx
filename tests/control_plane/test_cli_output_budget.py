@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import io
 import json
 import os
@@ -30,6 +29,10 @@ from loopx.control_plane.testing.cli_output_budget import (
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.help_surface import COMMAND_GROUPS
 from loopx.rollout_event_log import rollout_event_log_path
+from tests.control_plane.cli_output_fixture import (
+    budget_fixture_path,
+    stable_budget_fixture_root as _stable_budget_fixture_root,
+)
 
 GOAL_ID = "cli-output-budget-goal"
 AGENT_IDS = ("codex-alpha", "codex-beta", "codex-gamma")
@@ -325,21 +328,6 @@ def _quota_payload_without_rollout_receipt(text: str) -> dict[str, object]:
     payload = json.loads(text)
     payload.pop("rollout_event", None)
     return payload
-
-
-@contextlib.contextmanager
-def _stable_budget_fixture_root(root: Path):
-    """Keep lexical and resolved fixture paths independent of runner layout."""
-
-    suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    fixture = Path("/tmp") / f"loopx-cli-budget-{suffix}"
-    if fixture.exists() or fixture.is_symlink():
-        raise RuntimeError(f"refusing to replace existing fixture root: {fixture}")
-    fixture.mkdir()
-    try:
-        yield fixture
-    finally:
-        shutil.rmtree(fixture)
 
 
 def _surface_commands(
@@ -814,16 +802,26 @@ def test_stable_budget_fixture_uses_an_owned_physical_short_root(tmp_path: Path)
     outer = tmp_path / ("nested-runner-" + "p" * 128)
     with _stable_budget_fixture_root(outer) as fixture:
         assert not fixture.is_symlink()
-        assert fixture.resolve().parent == Path("/tmp").resolve()
+        expected_parent = Path(tempfile.gettempdir()) if os.name == "nt" else Path("/tmp")
+        assert fixture.resolve().parent == expected_parent.resolve()
         (fixture / "owned.json").write_text("{}", encoding="utf-8")
     assert not fixture.exists()
     assert not outer.exists()
 
 
+def test_stable_budget_fixture_does_not_require_a_drive_root_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tempfile.gettempdir())
+    with _stable_budget_fixture_root(tmp_path / "native-temp-drive") as fixture:
+        expected_parent = Path(tempfile.gettempdir()) if os.name == "nt" else Path("/tmp")
+        assert fixture.resolve().parent == expected_parent.resolve()
+    assert not fixture.exists()
+
+
 def test_stable_budget_fixture_preserves_an_existing_directory(tmp_path: Path) -> None:
     root = tmp_path / "foreign-directory"
-    suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    fixture = Path("/tmp") / f"loopx-cli-budget-{suffix}"
+    fixture = budget_fixture_path(root)
     fixture.mkdir()
     marker = fixture / "foreign.json"
     marker.write_text("preserve", encoding="utf-8")
@@ -836,6 +834,26 @@ def test_stable_budget_fixture_preserves_an_existing_directory(tmp_path: Path) -
         assert marker.read_text(encoding="utf-8") == "preserve"
     finally:
         shutil.rmtree(fixture)
+
+
+def test_stable_budget_fixture_cleans_up_after_a_failed_probe(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="probe failed"):
+        with _stable_budget_fixture_root(tmp_path / "failed-probe") as fixture:
+            (fixture / "owned.json").write_text("{}", encoding="utf-8")
+            raise RuntimeError("probe failed")
+    assert not fixture.exists()
+
+
+def test_stable_budget_fixture_retains_the_posix_path_contract(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from tests.control_plane import cli_output_fixture
+
+    monkeypatch.setattr(cli_output_fixture, "os", SimpleNamespace(name="posix"))
+    fixture = cli_output_fixture.budget_fixture_path(tmp_path)
+    assert fixture.parent == Path("/tmp")
+    assert fixture.name.startswith("loopx-cli-budget-")
+    assert len(fixture.name) == len("loopx-cli-budget-") + 12
+    assert fixture == cli_output_fixture.budget_fixture_path(tmp_path)
 
 
 def test_real_cli_output_stays_inside_baseline_and_growth_contracts(

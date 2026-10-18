@@ -21,10 +21,12 @@ from loopx.control_plane.testing.cli_output_differential import (  # noqa: E402
     compare_cli_output_receipts,
     select_cli_output_base_ref,
 )
+from tests.control_plane.cli_output_fixture import budget_fixture_path  # noqa: E402
 
 
 PROBE_TEST = REPO_ROOT / "tests" / "control_plane" / "test_cli_output_budget.py"
 PROBE_RUNNER = REPO_ROOT / "examples" / "control_plane" / "cli-output-probe-runner.py"
+FIXTURE_SUPPORT = REPO_ROOT / "tests" / "control_plane" / "cli_output_fixture.py"
 SEMANTICS_SOURCE = (
     REPO_ROOT / "loopx" / "control_plane" / "testing" / "cli_output_semantics.py"
 )
@@ -37,6 +39,8 @@ def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) ->
         env=env,
         check=False,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=240,
@@ -64,8 +68,9 @@ def _run_probe(
     env["PYTHONPATH"] = str(source_root)
     # Both revisions measure the same fixture, including implicit machine
     # defaults. Never let the operator's registry/configuration select a host.
-    isolated_current = str(fixture_root / "host-runtime")
-    isolated_legacy = str(fixture_root / "legacy-runtime")
+    stable_root = budget_fixture_path(fixture_root)
+    isolated_current = str(stable_root / "host-runtime")
+    isolated_legacy = str(stable_root / "legacy-runtime")
     bootstrap = (
         "import pathlib, runpy, sys; from loopx import paths; "
         f"paths.DEFAULT_RUNTIME_ROOT=pathlib.Path({isolated_current!r}); "
@@ -109,6 +114,8 @@ def _is_ancestor(ancestor: str, descendant: str) -> bool:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if completed.returncode == 0:
         return True
@@ -156,6 +163,7 @@ def main() -> int:
         base_receipt = temp_root / "base-receipt.json"
         candidate_receipt = temp_root / "candidate-receipt.json"
         shutil.copy2(PROBE_RUNNER, probe_runner)
+        shutil.copy2(FIXTURE_SUPPORT, temp_root / FIXTURE_SUPPORT.name)
         shutil.copy2(SEMANTICS_SOURCE, semantics_source)
 
         _run(
