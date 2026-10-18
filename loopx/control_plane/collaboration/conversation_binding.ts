@@ -279,6 +279,16 @@ export function planConversationBinding(params: JsonObject): JsonObject {
   return {changed: true, state: next};
 }
 
+function boundProject(params: JsonObject, row: JsonObject): Record<string, string> {
+  if (!Array.isArray(params.available_projects)) throw new EffectRuntimeRequestError("workspace grants unavailable");
+  const projects = params.available_projects.map(normalizeProjectContext).filter(project => project.project_ref === row.project_ref);
+  if (projects.length !== 1) throw new EffectRuntimeRequestError("workspace grant is unavailable or ambiguous");
+  if (row.grant === "workspace_write" && projects[0].grant !== "workspace_write") {
+    throw new EffectRuntimeRequestError("workspace write grant is no longer available");
+  }
+  return projects[0];
+}
+
 export function resolveBoundConversation(params: JsonObject): JsonObject {
   const current = state(params.current);
   const id = ref(params.binding_id, "binding identity");
@@ -307,15 +317,10 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
       || params.group_ref !== undefined || params.topic_ref !== undefined || params.group_human_message === true) {
     throw new EffectRuntimeRequestError("message audience is outside the binding grant");
   }
-  if (!Array.isArray(params.available_projects)) throw new EffectRuntimeRequestError("workspace grants unavailable");
-  const projects = params.available_projects.map(normalizeProjectContext).filter(project => project.project_ref === row.project_ref);
-  if (projects.length !== 1) throw new EffectRuntimeRequestError("workspace grant is unavailable or ambiguous");
-  if (row.grant === "workspace_write" && projects[0].grant !== "workspace_write") {
-    throw new EffectRuntimeRequestError("workspace write grant is no longer available");
-  }
+  const project = boundProject(params, row);
   const goals = row.context_kind === "steward" && row.goal_scope === "all_registered"
     ? normalizeStewardGoalScope(params.available_goal_ids) : row.goal_ids;
-  const rawContext = {...projects[0], ...topic, audience: group ? "bound_group" : "bound_owner", binding_id: id, source_ref: source,
+  const rawContext = {...project, ...topic, audience: group ? "bound_group" : "bound_owner", binding_id: id, source_ref: source,
     provider_ref: row.provider_ref, operator_ref: row.operator_ref, grant: row.grant,
     ...(row.context_kind === "steward" ? {kind: "bound_steward", grant: "portfolio_read", goal_ids: goals} : {})};
   const context = group ? normalizeProjectContext(rawContext) : rawContext;
@@ -333,9 +338,42 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
   // verified owner in this private source may inherit an explicit machine
   // owner grant. Portfolio scope and project write grants do not imply it.
   return {binding: row, context, owner_manager_audience: row.context_kind === "steward"
-      && projects[0].filesystem_scope !== "workspace_only",
+      && project.filesystem_scope !== "workspace_only",
     channel_id: row.context_kind === "steward"
     ? `manager.external.native.${id}.${source}` : `project.external.${id}.${source}`};
+}
+
+/** Discover existing private targets from canonical metadata. This is a read
+ * projection: the next input still needs fresh source and execution admission.
+ */
+export function listLocalBoundSessions(params: JsonObject): JsonObject {
+  const current = state(params.current);
+  const id = ref(params.binding_id, "binding identity");
+  const row = current.bindings.find(item => item.binding_id === id);
+  if (!row) throw new EffectRuntimeRequestError("conversation binding is no longer authorized");
+  observed(row, params.observation);
+  if (row.audience === "group") throw new EffectRuntimeRequestError("local discovery requires a private binding");
+  boundProject(params, row);
+  if (!Array.isArray(params.sessions)) throw new EffectRuntimeRequestError("canonical Session observations unavailable");
+  const ids: string[] = [];
+  for (const value of params.sessions) {
+    const session = requireJsonObject(value, "canonical Session");
+    const contexts = [session.project_context, session.steward_context];
+    if (!contexts.some(value => value && typeof value === "object" && !Array.isArray(value)
+        && (value as JsonObject).binding_id === id) || session.status === "closed") continue;
+    const steward = row.context_kind === "steward";
+    const saved = requireJsonObject(steward ? session.steward_context : session.project_context, "bound Session context");
+    const selected = resolveBoundConversation({...params, source_ref: saved.source_ref,
+      sender_ref: row.operator_ref, private_human_message: false, origin: "web", session_context: saved});
+    if (session.channel_id !== selected.channel_id || session.goal_id !== (steward ? "loopx-manager" : null)
+        || session.agent_id !== row.executor_endpoint_id || session.executor_endpoint_id !== row.executor_endpoint_id
+        || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null) {
+      throw new EffectRuntimeRequestError("canonical bound Session identity changed");
+    }
+    ids.push(sessionIdentity(session.session_id, "bound Session identity"));
+  }
+  if (new Set(ids).size !== ids.length) throw new EffectRuntimeRequestError("canonical bound Session identity is ambiguous");
+  return {session_ids: ids};
 }
 
 /** Shared native command projection. Provider grammar carries the explicit

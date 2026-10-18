@@ -229,6 +229,43 @@ class ChatConversationBindings:
                 raise ValueError("conversation binding changed before input admission")
             yield self._resolve_observed(current, observed["binding"], observed["observation"], source)
 
+    def local_sessions(self, binding_id: str) -> list[dict[str, Any]]:
+        """Read original targets; metadata hints never replace Core's grant.
+
+        Provider IO and store inventory stay outside the publication fence.
+        Discovery neither restores a thread nor creates a Session or Turn.
+        """
+        if self.controller is None:
+            raise ValueError("the bound conversation store is unavailable")
+        row = next((item for item in self.read()["bindings"] if item["binding_id"] == binding_id), None)
+        if row is None:
+            raise ValueError("conversation binding is no longer authorized")
+        observation = dict(self.observe(row["transport_ref"]))
+        store = self.controller.store
+        sessions = {}
+        for summary in store.list_sessions():
+            session = store.load_session(summary["session_id"])
+            # Narrow the IO payload only. Core independently validates every
+            # matching context, audience and canonical Session identity.
+            if session and any(isinstance(session.get(key), dict)
+                    and session[key].get("binding_id") == binding_id
+                    for key in ("project_context", "steward_context")):
+                sessions[session["session_id"]] = session
+        with exclusive_file_lock(self.path, operation="read_local_bound_sessions"):
+            current = self.read()
+            if next((item for item in current["bindings"] if item["binding_id"] == binding_id), None) != row:
+                raise ValueError("conversation binding changed during identity verification")
+            result = self._core("collaboration.conversation.local_sessions", {
+                "current": current, "binding_id": binding_id, "observation": observation,
+                "available_projects": self.projects.available(),
+                "sessions": [{key: session.get(key) for key in (
+                    "session_id", "goal_id", "agent_id", "executor_endpoint_id", "channel_id",
+                    "session_mode", "status", "project_context", "steward_context")}
+                    for session in sessions.values()],
+                **({"available_goal_ids": self.goal_scope_ids(row)} if row.get("goal_scope") == "all_registered" else {}),
+            })
+            return [store.public_session(sessions[sid]) for sid in result["session_ids"]]
+
     def goal_scope_ids(self, binding: dict[str, Any]) -> list[str]:
         if binding.get("goal_scope") != "all_registered":
             return list(binding.get("goal_ids", []))

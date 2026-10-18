@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {planConversationBinding, resolveBoundConversation, planBoundConversationRequest,
-  stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
+  stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget,
+  listLocalBoundSessions} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 import {resolveConversationScope, projectConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
 
 const project = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/authorized/notes",
@@ -15,6 +16,56 @@ const observation = {transport_ref: row.transport_ref, provider_ref: row.provide
 const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision: 0, bindings: []};
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
+
+for (const kind of ["project", "steward"]) {
+  const selected = kind === "steward" ? {...row, context_kind: kind, grant: "portfolio_read", goal_ids: []} : row;
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const lookup = {current: configured, binding_id: row.binding_id, observation, available_projects: [project]};
+  const context = resolveBoundConversation({...lookup, source_ref: "e".repeat(24),
+    sender_ref: row.operator_ref, private_human_message: true}).context;
+  const session = {session_id: "original", goal_id: kind === "steward" ? "loopx-manager" : null,
+    agent_id: "codex", executor_endpoint_id: "codex", session_mode: "managed_runtime", status: "ready",
+    channel_id: `${kind === "steward" ? "manager.external.native" : "project.external"}.${row.binding_id}.${"e".repeat(24)}`,
+    ...(kind === "steward" ? {steward_context: context} : {project_context: context})};
+
+  test(`${kind} discovery reuses verified saved identity and excludes unrelated or closed Sessions`, () => {
+    const snapshots = [session, {...session, session_id: "historical", status: "closed"},
+      {session_id: "local", goal_id: null, channel_id: `project.${project.project_ref}`}];
+    const before = structuredClone(snapshots);
+    assert.deepEqual(listLocalBoundSessions({...lookup, sessions: snapshots}), {session_ids: ["original"]});
+    assert.deepEqual(snapshots, before);
+    assert.deepEqual(listLocalBoundSessions({...lookup, sessions: []}), {session_ids: []});
+    assert.throws(() => listLocalBoundSessions({...lookup, sessions: [session, session]}), /ambiguous/);
+  });
+
+  test(`${kind} discovery refuses changed canonical role, executor, channel or saved source`, () => {
+    for (const change of [{goal_id: "another-goal"}, {channel_id: "manager"}, {agent_id: "other"},
+      {executor_endpoint_id: "other"}, {session_mode: "attached_host"},
+      {[kind === "steward" ? "project_context" : "steward_context"]: context},
+      {[kind === "steward" ? "steward_context" : "project_context"]:
+        {...context as Record<string, unknown>, operator_ref: "f".repeat(24)}},
+      {[kind === "steward" ? "steward_context" : "project_context"]:
+        {...context as Record<string, unknown>, source_ref: "f".repeat(24)}}]) {
+      assert.throws(() => listLocalBoundSessions({...lookup, sessions: [{...session, ...change}]}));
+    }
+    for (const change of [{current}, {available_projects: []},
+      {observation: {...observation, verified: false}},
+      {observation: {...observation, provider_ref: "f".repeat(24)}},
+      {observation: {...observation, operator_ref: "f".repeat(24)}},
+      {observation: {...observation, transport_ref: "another-app"}}]) {
+      // An empty inventory is not permission to bypass current source checks.
+      assert.throws(() => listLocalBoundSessions({...lookup, ...change, sessions: []}));
+    }
+  });
+}
+
+test("local discovery never promotes a group binding to a private recipient", () => {
+  const group = "1".repeat(24);
+  const configured = planConversationBinding({...request,
+    binding: {...row, audience: "group", group_refs: [group]}, available_group_refs: [group]}).state;
+  assert.throws(() => listLocalBoundSessions({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], sessions: []}), /private binding/);
+});
 
 test("an unfrozen recovered stop cannot borrow current cancellation scope", () => {
   const request = {request_ref: "e".repeat(24), command: "stop"};

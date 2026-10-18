@@ -74,11 +74,110 @@ def bound_chat(tmp_path, monkeypatch, request):
             source_context={"source_ref": "a" * 24, "sender_ref": observed["operator_ref"], "private_human_message": True})
         return binding, session
 
+    post.server_address = server.server_address
     yield store, runtime, bindings, observed, post, open_bound, capture, canonical
     server.shutdown()
     server.server_close()
     thread.join(timeout=2)
     runtime.close()
+
+
+def _bound_sessions(post, query):
+    connection = http.client.HTTPConnection(*post.server_address, timeout=15)
+    try:
+        connection.request("GET", "/api/chat/sessions?" + query)
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("kind", ["project", "steward"])
+def test_http_binding_discovery_selects_original_session_without_starting_work(bound_chat, kind):
+    store, runtime, _, _, post, open_bound, capture, _ = bound_chat
+    binding, original = open_bound(kind)
+    other, _ = runtime.open_session(goal_id=None, agent_id="codex", objective="", mode="new",
+        work_dir=Path(runtime.project_contexts.available()[0]["workspace_path"]),
+        project_ref=binding["project_ref"])
+    before = store.load_session(original["session_id"])
+    requests_before = capture.read_bytes()
+    status, listed = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
+    assert status == 200, listed
+    assert [row["session_id"] for row in listed["sessions"]] == [original["session_id"]]
+    assert listed["sessions"][0]["goal_id"] == ("loopx-manager" if kind == "steward" else None)
+    assert listed["sessions"][0]["session_id"] != other["session_id"]
+    assert store.load_session(original["session_id"]) == before
+    assert capture.read_bytes() == requests_before
+    status, ordinary = _bound_sessions(post, "")
+    assert status == 200 and {row["session_id"] for row in ordinary["sessions"]} == {
+        original["session_id"], other["session_id"]}
+    # The discovery result is an existing identity, not a new execution grant.
+    selected = listed["sessions"][0]
+    status, accepted = post(selected, {"message": "Continue the discovered original conversation.",
+                                     "client_turn_id": "discovered"})
+    assert status == 202, accepted
+    assert runtime.wait_for_turn(session_id=selected["session_id"], turn_id=accepted["turn_id"],
+                                 timeout_sec=15)["status"] == "completed"
+    assert store.load_session(selected["session_id"])["upstream_thread_id"] == original["upstream_thread_id"]
+
+
+@pytest.mark.parametrize("query", ["conversation_binding_id=", "conversation_binding_id=x&conversation_binding_id=y",
+                                  "conversation_binding_id=x&goal_id=goal-a"])
+def test_http_binding_discovery_rejects_ambiguous_selector_without_unfiltered_fallback(bound_chat, query):
+    _, _, _, _, post, open_bound, _, _ = bound_chat
+    open_bound()
+    status, denied = _bound_sessions(post, query)
+    assert status == 400 and "sessions" not in denied
+
+
+@pytest.mark.parametrize("mutation", ["operator_ref", "verified", "workspace", "revoked", "closed"])
+def test_http_binding_discovery_rechecks_private_source_and_retains_closed_history(bound_chat, mutation):
+    store, _, bindings, observed, post, open_bound, capture, canonical = bound_chat
+    binding, session = open_bound()
+    if mutation == "operator_ref":
+        observed[mutation] = "f" * 24
+    elif mutation == "verified":
+        observed[mutation] = False
+    elif mutation == "workspace":
+        Path(session["project_context"]["workspace_path"]).rename(canonical.parent / "removed-workspace")
+    elif mutation == "revoked":
+        bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    else:
+        store.update_session(session["session_id"], status="closed")
+    before = capture.read_bytes()
+    status, result = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
+    if mutation == "closed":
+        assert status == 200 and result["sessions"] == []
+        assert store.load_session(session["session_id"])["status"] == "closed"
+    else:
+        assert status == 409 and "sessions" not in result
+    assert capture.read_bytes() == before
+
+
+def test_http_binding_discovery_does_not_hold_publication_fence_during_provider_io(bound_chat, monkeypatch):
+    _, _, bindings, observed, post, open_bound, _, _ = bound_chat
+    binding, _ = open_bound()
+    verifying, release = threading.Event(), threading.Event()
+    result = []
+
+    def observe(_):
+        snapshot = dict(observed)
+        verifying.set()
+        assert release.wait(5)
+        return snapshot
+
+    monkeypatch.setattr(bindings, "_observe_owner", observe)
+    reader = threading.Thread(target=lambda: result.append(_bound_sessions(post,
+        "conversation_binding_id=" + binding["binding_id"])))
+    reader.start()
+    try:
+        assert verifying.wait(5)
+        bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    finally:
+        release.set()
+        reader.join(timeout=10)
+    assert not reader.is_alive() and result[0][0] == 409
+    assert "sessions" not in result[0][1]
 
 
 def test_http_local_owner_continues_private_project_thread_and_queue(bound_chat):
@@ -131,6 +230,8 @@ def test_http_local_input_cannot_inherit_a_group_topic(bound_chat):
     status, denied = post(session, {"message": "not a verified group event", "client_turn_id": "group-web"})
     assert status == 400 and denied["delivery_state"] == "not_delivered"
     assert store.queued_turns(session["session_id"]) == []
+    status, denied = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
+    assert status == 409 and "sessions" not in denied
 
 
 def test_http_bound_steward_keeps_web_provenance_at_coordination_root(bound_chat, monkeypatch):
