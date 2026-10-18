@@ -8,6 +8,20 @@
 .research-progress select { min-width: 0; max-width: 400px; min-height: 44px; border: 1px solid var(--pw-line); border-radius: 6px; padding: 8px; background: var(--pw-bg); color: var(--pw-text); font: inherit; }
 .research-progress p, .research-progress small { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-prose); }
 .research-progress summary { min-height: 44px; padding-block: 12px; cursor: pointer; font-size: var(--text-caption); }
+.research-retained-improvement { margin-block-start: 20px; }
+.research-retained-improvement h4 { margin: 0; font-size: var(--text-body); font-weight: 500; }
+.research-retained-improvement summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; list-style: none; }
+.research-retained-improvement summary::-webkit-details-marker { display: none; }
+.research-retained-improvement summary strong { font-size: var(--text-title); font-weight: 600; font-variant-numeric: tabular-nums; }
+.research-retained-improvement summary span { color: var(--pw-muted); font-size: var(--text-body); }
+.research-retained-improvement details[open] summary svg { transform: rotate(180deg); }
+.research-retained-improvement dl { margin: 0; font-size: var(--text-body); }
+.research-retained-improvement dl > div { padding-block: 6px; }
+.research-retained-improvement dt { color: var(--pw-muted); font-size: var(--text-caption); }
+.research-retained-improvement dd { margin: 0; }
+.research-retained-improvement dd button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0; background: none; border: 0; color: var(--pw-text); font: inherit; cursor: pointer; }
+.research-retained-improvement dd button:hover { text-decoration: underline; }
+.research-retained-improvement summary:focus-visible, .research-retained-improvement dd button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .research-effect-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px 24px; margin-block-start: 12px; }
 .research-effect-metric { min-width: 0; }
 .research-effect-metric[open] { grid-column: 1 / -1; }
