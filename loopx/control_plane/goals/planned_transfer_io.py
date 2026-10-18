@@ -131,6 +131,23 @@ def read_goal_transfer_workspace_target(*, registry_path: Path, goal_id: str) ->
     }, timeout=60.0, retry_safe=True)["target"]
 
 
+def read_goal_transfer_host_work(*, registry_path: Path, goal_id: str) -> dict[str, Any] | None:
+    """Discover only original work explicitly reviewed for this local Host.
+
+    Source and destination Chat hosts use the same verified native admission.
+    No Python receipt scan, copied session or durable scheduler index is added.
+    """
+    from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
+
+    route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+    target = read_goal_transfer_workspace_target(registry_path=registry_path, goal_id=goal_id)
+    if target is None:
+        target = {"runtime_root": route["source_runtime_root"]}
+    return effect_runtime_result("coordination.planned_transfer.execution_plan", {
+        "runtime_root": target["runtime_root"], "goal_id": goal_id, "host_service": True,
+    }, retry_safe=True)["plan"]
+
+
 def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> dict[str, Any]:
     """Shared Settings/CLI transport; the native owner discovers preparation."""
     result = _read_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
@@ -155,7 +172,8 @@ def inspect_registered_goal_transfer(*, registry_path: Path, goal_id: str) -> di
             preview = local_goal_transfer_cutover(registry_path=registry_path, goal_id=goal_id,
                 operation_id=review["operation_id"], destination_registry=Path(review["target_registry_path"]),
                 continuation="reviewed_context", reviewed_preview_sha256=review["preview_sha256"],
-                continue_todo_id=review.get("continue_todo_id"), continue_result_file=review.get("continue_result_file"))
+                continue_todo_id=review.get("continue_todo_id"), continue_result_file=review.get("continue_result_file"),
+                continue_with_host_service=review.get("continue_with_host_service", False))
         except Exception:
             # Only this read-only destination observation failed. Preserve the
             # native source view/cancellation, including after a browser reload;
@@ -211,7 +229,7 @@ def local_goal_transfer_cutover(
     *, registry_path: Path, goal_id: str, operation_id: str, destination_registry: Path,
     expected_preview_sha256: str | None = None, continuation: str | None = None,
     reviewed_preview_sha256: str | None = None, continue_todo_id: str | None = None,
-    continue_result_file: str | None = None,
+    continue_result_file: str | None = None, continue_with_host_service: bool = False,
 ) -> dict[str, Any]:
     """One source-online local cutover; native owners decide every transition.
 
@@ -224,6 +242,8 @@ def local_goal_transfer_cutover(
         request["continue_todo_id"] = continue_todo_id
     if continue_result_file is not None:
         request["continue_result_file"] = continue_result_file
+    if continue_with_host_service:
+        request["continue_with_host_service"] = True
     destination_registry = destination_registry.expanduser().absolute()
     if reviewed_preview_sha256 is not None:
         request["reviewed_preview_sha256"] = reviewed_preview_sha256
@@ -262,7 +282,7 @@ def _local_cutover_request(registry_path: Path, goal_id: str, operation_id: str,
 
 def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_id: str,
     destination_root: Path, materials: list[Path], continue_todo_id: str | None = None,
-    continue_result_file: str | None = None) -> dict[str, Any]:
+    continue_result_file: str | None = None, continue_with_host_service: bool = False) -> dict[str, Any]:
     """Fixed IO composition of existing Goal, custody and registry owners.
 
     The Agent supplies an explicit reviewed file selection. TypeScript chooses
@@ -276,6 +296,7 @@ def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_
         "materials": [str(path.expanduser().absolute()) for path in materials],
         **({"continue_todo_id": continue_todo_id} if continue_todo_id is not None else {}),
         **({"continue_result_file": continue_result_file} if continue_result_file is not None else {}),
+        **({"continue_with_host_service": True} if continue_with_host_service else {}),
     }, timeout=60.0, retry_safe=True)
     recipient = create_planned_transfer_recipient(destination=Path(plan["recipient_directory"]))
     exported = export_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id,
@@ -293,6 +314,8 @@ def prepare_local_goal_transfer(*, registry_path: Path, goal_id: str, operation_
         request["continue_todo_id"] = plan["continue_todo_id"]
     if "continue_result_file" in plan:
         request["continue_result_file"] = plan["continue_result_file"]
+    if "continue_with_host_service" in plan:
+        request["continue_with_host_service"] = plan["continue_with_host_service"]
     effect_runtime_result("coordination.planned_transfer.retain_local_cutover_review", request,
         timeout=300.0, retry_safe=False)
     return inspect_registered_goal_transfer(registry_path=registry_path, goal_id=goal_id)
@@ -308,7 +331,8 @@ def confirm_registered_goal_transfer(*, registry_path: Path, goal_id: str, opera
     local_goal_transfer_cutover(registry_path=registry_path, goal_id=goal_id, operation_id=operation_id,
         destination_registry=Path(review["target_registry_path"]), continuation="reviewed_context",
         expected_preview_sha256=expected_preview_sha256, reviewed_preview_sha256=review["preview_sha256"],
-        continue_todo_id=review.get("continue_todo_id"), continue_result_file=review.get("continue_result_file"))
+        continue_todo_id=review.get("continue_todo_id"), continue_result_file=review.get("continue_result_file"),
+        continue_with_host_service=review.get("continue_with_host_service", False))
     execution = None
     if review.get("continue_todo_id"):
         # The accepted cutover remains recorded even if the current Host cannot

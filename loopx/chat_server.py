@@ -471,6 +471,18 @@ class ChatHTTPServer(ThreadingHTTPServer):
         self.completed_todo_pages = CompletedTodoPages()
         self.goal_chat_routes_lock = threading.RLock()
 
+    def start_host_wakes(self, *, goal_context=None) -> None:
+        from .chat_loopx_mode import ChatHostWakeService
+
+        with self.goal_chat_routes_lock:
+            if hasattr(self, "host_wake_service"):
+                return
+            if not hasattr(self, "goal_chat_routes"):
+                self.goal_chat_routes = ChatGoalRuntimeRoutes(self.runtime_controller,
+                    store=self.chat_store, registry_path=self.registry_path)
+            self.host_wake_service = ChatHostWakeService(self.runtime_controller,
+                goal_context=goal_context, goal_routes=self.goal_chat_routes).start()
+
     def server_close(self) -> None:
         if hasattr(self, "lark_app_setup_manager"):
             self.lark_app_setup_manager.close()
@@ -478,8 +490,8 @@ class ChatHTTPServer(ThreadingHTTPServer):
             self.manager_return_service.close()
         if hasattr(self, "conversation_transports"):
             self.conversation_transports.close()
-        if hasattr(self, "delegation_wake_service"):
-            self.delegation_wake_service.close()
+        if hasattr(self, "host_wake_service"):
+            self.host_wake_service.close()
         if hasattr(self, "lark_goal_topic_runtime"):
             self.lark_goal_topic_runtime.close()
         if hasattr(self, "runtime_controller"):
@@ -1901,8 +1913,6 @@ def serve_chat(
     server.manager_return_service = start_return_service(
         server, server.runtime_controller.coordination_runtime_root, start_service=False
     )
-    from .chat_loopx_mode import DelegationWakeService
-
     def _wake_goal_context(session):
         registry = load_registry(server.registry_path)
         goal = next(
@@ -1913,9 +1923,7 @@ def serve_chat(
             raise ValueError("goal_id was not found in the active LoopX registry")
         return _goal_public_context(registry, goal)
 
-    server.delegation_wake_service = DelegationWakeService(
-        server.runtime_controller, goal_context=_wake_goal_context
-    ).start()
+    server.start_host_wakes(goal_context=_wake_goal_context)
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
     print(f"Agent boundary: local adapters, project grant {project_workspace_grant}, approval policy never", flush=True)

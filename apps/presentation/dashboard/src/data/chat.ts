@@ -53,6 +53,7 @@ const goalTransferViewSchema = z.object({
       sandbox: z.literal("workspace-write"), validation_workspace: z.literal("reviewed_working_tree"), validation_sha256: z.string(),
       result: z.object({relative_path: z.string(), acceptance_contract_revision: z.number().int().positive(),
         acceptance_contract_digest: z.string()}).optional(),
+      continue_with_host_service: z.literal(true).optional(),
       continuation_budget: z.object({max_turns: z.number().int().positive(), timeout_seconds: z.number().int().positive()}).optional()}).optional()}).optional(),
   prepared_cutover_unavailable: z.boolean().optional(),
   destination_control: z.object({operation: z.enum(["stop", "resume"]), expected_state_fingerprint: z.string()}).optional(),

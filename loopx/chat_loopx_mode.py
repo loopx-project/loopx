@@ -1122,16 +1122,18 @@ def pump_delegation_wakes(
     return changed
 
 
-class DelegationWakeService:
+class ChatHostWakeService:
     """Cheap local pump hosted by the existing Chat server, beside the return service."""
 
-    def __init__(self, controller, *, goal_context=None, interval=WAKE_INTERVAL_SECONDS):
+    def __init__(self, controller, *, goal_context=None, goal_routes=None, interval=WAKE_INTERVAL_SECONDS):
         self.controller = controller
         self.goal_context = goal_context
         self.interval = interval
+        self.goal_routes = goal_routes
+        self.continuation_thread = None
         self.stop = threading.Event()
         self.thread = threading.Thread(
-            target=self.run, daemon=True, name="loopx-delegation-wakes"
+            target=self.run, daemon=True, name="loopx-chat-host-wakes"
         )
 
     def start(self):
@@ -1148,8 +1150,19 @@ class DelegationWakeService:
                 )
             except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                 _LOG.warning("Delegation wake receipts unavailable; retrying")
+            if self.goal_routes is not None and not self.stop.is_set() and (
+                    self.continuation_thread is None or not self.continuation_thread.is_alive()):
+                # Native work can take longer than one tick. Do not block
+                # conversation wakes or overlap this Host's previous dispatch.
+                self.continuation_thread = threading.Thread(
+                    target=self.goal_routes.continue_transferred_work,
+                    kwargs={"cancelled": self.stop.is_set}, daemon=True,
+                    name="loopx-reviewed-goal-continuation")
+                self.continuation_thread.start()
             self.stop.wait(self.interval)
 
     def close(self):
         self.stop.set()
         self.thread.join(timeout=3)
+        if self.continuation_thread is not None:
+            self.continuation_thread.join(timeout=3)

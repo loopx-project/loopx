@@ -88,9 +88,10 @@ export function requireLocalTransferTaskBindings(original: JsonObject, projectio
 /** This opt-in composes existing Task validation and native execution owners.
  * It is local to this prepared move, never a Chat role or a copied Host grant. */
 export async function planTransferOriginalWork(original: JsonObject, projection: JsonObject, id: unknown, root: string,
-  resultFile?: unknown): Promise<JsonObject | null> {
+  resultFile?: unknown, hostService?: unknown): Promise<JsonObject | null> {
+  if (hostService !== undefined && hostService !== true) reject("Review the explicit local Host service continuation option");
   if (id === undefined) {
-    if (resultFile !== undefined) reject("A continuation result requires its original Task");
+    if (resultFile !== undefined || hostService !== undefined) reject("A continuation result or Host service requires its original Task");
     return null;
   }
   const todoId = requireAuthorityStoreId(id, "original continuation Task");
@@ -124,24 +125,36 @@ export async function planTransferOriginalWork(original: JsonObject, projection:
   return {todo_id: todoId, agent_id: agents[0], host: "codex-cli", sandbox: "workspace-write", validation_workspace: "reviewed_working_tree",
     validation_sha256: canonicalAuthoritySha256(declaration.value),
     ...(result ? {result} : {}),
+    ...(hostService === true ? {continue_with_host_service: true} : {}),
     continuation_budget: {max_turns: 10, timeout_seconds: 90}};
 }
 
 /** Read the admitted operation and the current Task; downstream owners still
  * acquire the lease and decide the exact Turn. This projection grants nothing. */
 export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<JsonObject> {
-  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id", "operation_id",
+  const service = value.host_service === true;
+  if (!hasExactAuthorityKeys(value, ["runtime_root", "goal_id",
+      ...(Object.hasOwn(value, "operation_id") ? ["operation_id"] : []),
+      ...(Object.hasOwn(value, "host_service") ? ["host_service"] : []),
       ...(Object.hasOwn(value, "todo_id") ? ["todo_id"] : [])])) reject("Read the original transfer execution identity");
+  if ((!service && !Object.hasOwn(value, "operation_id")) ||
+      Object.hasOwn(value, "host_service") && !service) reject("Read the original Host continuation identity");
   const root = requireLocalAuthorityRuntimeRoot(value.runtime_root), goal = requireAuthorityStoreId(value.goal_id, "Goal");
   const fence = await loadLegacyCoordinationWriterFence(root, goal);
-  if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA ||
-      fence.fence.operation_id !== value.operation_id) reject("Original destination runtime is not admitted");
+  if (fence.status !== "loaded" || fence.fence.schema_version !== PLANNED_TRANSFER_RUNTIME_FENCE_SCHEMA) {
+    if (service) return {plan: null};
+    reject("Original destination runtime is not admitted");
+  }
+  if (Object.hasOwn(value, "operation_id") && fence.fence.operation_id !== value.operation_id) reject("Original destination operation changed");
   const {requireLocalGoalTransferAdmission} = await import("./planned_transfer_cutover.ts");
   const admission = await requireLocalGoalTransferAdmission(root, goal, fence.fence);
   const decision = requireJsonObject(admission.decision, "original cutover");
   const continuation = requireJsonObject(decision.continuation, "original continuation");
   if (!continuation.continue_work) return {plan: null};
   const work = requireJsonObject(continuation.continue_work, "reviewed original work");
+  // Old reviews never authorize a persistent caller. Discovery is a read of
+  // this exact immutable admission, not a new work queue or Host grant.
+  if (service && work.continue_with_host_service !== true) return {plan: null};
   // Completion transport selects only this reviewed result. Other Tasks and
   // earlier reviews retain their ordinary completion path without this input.
   if (Object.hasOwn(value, "todo_id") && (value.todo_id !== work.todo_id || work.result === undefined)) return {plan: null};
@@ -152,6 +165,18 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
     reject("Original continuation requires its reviewed bounded execution budget");
   }
   const {snapshot, materials} = await readReviewedTransferContext(admission, "readback");
+  let deadline: number | undefined;
+  if (work.continue_with_host_service === true) {
+    const window = requireJsonObject(admission.continuation_window, "original Host continuation window");
+    if (!hasExactAuthorityKeys(window, ["started_at_ms", "deadline_at_ms"]) ||
+        !Number.isSafeInteger(window.started_at_ms) || Number(window.started_at_ms) <= 0 ||
+        window.deadline_at_ms !== Number(window.started_at_ms) + Number(budget.timeout_seconds) * 1000) {
+      reject("Recover the original Host continuation window; never reset its budget");
+    }
+    deadline = Number(window.deadline_at_ms);
+    if (Date.now() < Number(window.started_at_ms)) reject("Local clock precedes the original continuation window");
+    if (service && (Date.now() >= deadline || snapshot.activation_state !== "active")) return {plan: null};
+  }
   const execution = requireJsonObject(continuation.execution_workspace, "original execution workspace");
   await verifyGoalTransferExecutionWorkspace(execution, materials, false);
   const opened = await openLocalAuthorityStoreHandle(root, goal, {}, {existingOnly: true});
@@ -159,6 +184,7 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
   if (head.status !== "loaded") reject("Current original work is unavailable");
   const task = indexCoordinationProjection(head.head, goal).todos.get(String(work.todo_id));
   if (!task || task.claimed_by !== work.agent_id) reject("Original Task no longer belongs to its reviewed Agent");
+  if (service && task.status !== "open") return {plan: null};
   const retained = (await readTransferValidationDeclarations(root, goal, head.head)).find(row => row.todo_id === work.todo_id);
   const declaration = normalizeTodoCompletionValidationDeclaration(retained ? requireJsonObject(retained.declaration, "original independent validator") : {});
   if (!declaration.ok || !declaration.value.validation_command_argv ||
@@ -171,7 +197,7 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
         acceptance.contract_digest !== reviewed.acceptance_contract_digest) reject("Original result acceptance changed; use its owning review");
     resultPath = await requirePhysicalTransferPath(resolve(String(execution.path), String(reviewed.relative_path)));
   }
-  return {plan: {registry_path: admission.target_registry_path, runtime_root: root, goal_id: goal,
+  return {plan: {registry_path: admission.target_registry_path, runtime_root: root, goal_id: goal, operation_id: decision.operation_id,
     agent_id: work.agent_id, todo_id: work.todo_id, project: execution.path,
     turn_instance_id: `transfer-${canonicalAuthoritySha256([decision.operation_id, decision.source_preparation_sha256, work.todo_id])}`,
     host: work.host, sandbox: work.sandbox, task_status: task.status,
@@ -182,6 +208,7 @@ export async function readGoalTransferExecutionPlan(value: JsonObject): Promise<
     // Historical reviews promised only one dispatch; a later code update must
     // not silently expand an already confirmed execution budget.
     continuation_budget: budget,
+    ...(deadline === undefined ? {} : {continuation_deadline_at_ms: deadline}),
     activation_state: snapshot.activation_state}};
 }
 

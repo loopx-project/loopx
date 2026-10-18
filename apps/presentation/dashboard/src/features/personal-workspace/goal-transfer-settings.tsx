@@ -91,8 +91,8 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
       : (zh ? "切换已接受，本次续办请求需要恢复。请以下方原任务的当前状态为准；恢复本次切换不会重复已记录的工作或扣额。" : "The switch was accepted. This continuation request needs recovery; read the original task's current status below. Resume this move without repeating recorded work or debits.")}</p> : null}
     {executionDisposition && executionDisposition !== "run_now" && executionDisposition !== "terminal" ? <p role="status">
       {zh ? "本次推进：" : "This continuation: "}{dispositionLabels[executionDisposition]}{zh ? "。" : ". "}
-      {zh ? "原任务当前状态见下方。重复确认只恢复原轮次，不重置已审阅的轮次上限，也不创建后台定时器。"
-        : "Read the original Task's current state below. Repeating confirmation only recovers its original Turns; it does not reset the reviewed Turn limit or create a background timer."}
+      {zh ? "原任务当前状态见下方。重复确认只恢复原轮次，不重置已审阅的执行预算。"
+        : "Read the original Task's current state below. Repeating confirmation recovers original Turns without resetting the reviewed execution budget."}
     </p> : null}
     {view ? <>
       <p>{view.local_cutover ? (view.local_cutover.target_activation_state === "stopped"
@@ -141,8 +141,14 @@ export function GoalTransferSettings({goalId}: {goalId: string}) {
             : `Confirm to let ${view.prepared_cutover.continue_work.agent_id} continue the original task in its destination workspace with the destination's current Codex login and original independent checks. Source credentials are not installed.`)
           : (zh ? "确认后，目标环境取得新的执行准入并保留原任务。尚未配置自动续办，仍需在目标环境启动执行。" : "Confirm to admit the destination and retain its original tasks. Automatic continuation is not configured; start execution in the destination environment.")}</p> : null}
         {!view.local_cutover && view.prepared_cutover.continue_work?.continuation_budget ? <p>{zh
-          ? `本次最多自动推进 ${view.prepared_cutover.continue_work.continuation_budget.max_turns} 轮，新轮启动窗口 ${view.prepared_cutover.continue_work.continuation_budget.timeout_seconds} 秒；每轮重新检查准入。当前轮次沿原超时完成验收和结算。等待、停止或需要恢复时结束本次推进，不创建后台定时器。`
-          : `This request continues for at most ${view.prepared_cutover.continue_work.continuation_budget.max_turns} Turns with a ${view.prepared_cutover.continue_work.continuation_budget.timeout_seconds}-second window for starting further Turns, checking admission each time. Current validation and settlement retain their own timeouts. Waiting, stopping or recovery ends this request; no background timer is created.`}</p> : null}
+          ? `本次最多自动推进 ${view.prepared_cutover.continue_work.continuation_budget.max_turns} 轮，新轮启动窗口 ${view.prepared_cutover.continue_work.continuation_budget.timeout_seconds} 秒；每轮重新检查准入。当前轮次沿原超时完成验收和结算。`
+          : `This request continues for at most ${view.prepared_cutover.continue_work.continuation_budget.max_turns} Turns with a ${view.prepared_cutover.continue_work.continuation_budget.timeout_seconds}-second window for starting further Turns, checking admission each time. Current validation and settlement retain their own timeouts.`}</p> : null}
+        {view.prepared_cutover.continue_work?.continue_with_host_service ? <p>{zh
+          ? "此确认也允许本机 Chat 服务在等待解除或服务重开后续办原任务。启动窗口从首次确认起计时，重开或重复确认不重置；停止目标 Goal 可阻止新工作。服务关闭时不会唤醒。"
+          : "This confirmation also allows this machine's Chat service to continue the original task after a wait clears or the service reopens. Its start window begins at the first confirmation; reopening or reconfirming never resets it. Stop the destination Goal to prevent new work. A closed service cannot wake work."}</p>
+          : view.prepared_cutover.continue_work ? <p>{zh
+            ? "等待、停止或需要恢复时结束本次推进；此准备未授权服务自动续办。"
+            : "Waiting, stopping or recovery ends this request. This preparation does not authorize automatic service continuation."}</p> : null}
         {view.prepared_cutover.continue_work?.result ? <p>{zh
           ? `结果文件：${view.prepared_cutover.continue_work.result.relative_path}。原任务和 Goal 验收通过后，可在此 Goal 的产出中读取实际内容。`
           : `Result file: ${view.prepared_cutover.continue_work.result.relative_path}. After the original Task and Goal acceptance pass, read its actual contents in this Goal's outputs.`}</p> : null}

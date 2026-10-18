@@ -8,6 +8,7 @@ Manager, external and ordinary project conversations retain their original owner
 from __future__ import annotations
 
 import threading
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ from .chat_manager import MANAGER_AGENT_GOAL_ID, is_manager_channel
 from .control_plane.goals.planned_transfer_io import read_goal_transfer_workspace_target
 from .control_plane.turn_driver.turn_host_process import require_goal_runtime_current
 from .registry import load_registry, registry_goals
+
+_LOG = logging.getLogger(__name__)
 
 
 def _owner_goal(session: dict[str, Any]) -> str | None:
@@ -131,6 +134,32 @@ class ChatGoalRuntimeRoutes:
     def _goals(self) -> list[str]:
         return ([str(row["id"]) for row in registry_goals(load_registry(self.registry_path))]
                 if self.registry_path else [])
+
+    def continue_transferred_work(self, *, cancelled) -> None:
+        """Host IO only; native admission and the Turn controller own each wake.
+
+        Called from the existing Chat wake service, independently of its
+        conversation pump. No per-Goal timer, queue or copied Host binding.
+        """
+        from .control_plane.goals.planned_transfer_io import read_goal_transfer_host_work
+        from .control_plane.goals.planned_transfer_execution import continue_transferred_work
+        from .file_lock import LockAcquireTimeoutError
+
+        for goal in self._goals():
+            if cancelled():
+                return
+            try:
+                plan = read_goal_transfer_host_work(registry_path=self.registry_path, goal_id=goal)
+                if plan is not None:
+                    continue_transferred_work(registry_path=Path(plan["registry_path"]),
+                        goal_id=goal, operation_id=plan["operation_id"], codex_bin=self.primary.codex_bin,
+                        codex_home=self.primary.codex_home, host_service=True, cancelled=cancelled)
+            except LockAcquireTimeoutError:
+                # Another caller holds this exact original operation. This tick
+                # skips it; the native journal/lease still owns any live effect.
+                continue
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                _LOG.warning("Reviewed Goal continuation is unavailable; its original state is retained")
 
     def close(self) -> None:
         with self.lock:
