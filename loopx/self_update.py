@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import sys
+import zipimport
 from typing import Any
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -508,6 +509,46 @@ def _python_distribution_rollback_plan(
     }
 
 
+def _windows_console_update_refusal(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """A distlib launcher holds its own executable open until Python exits.
+
+    Use its actual zip loader, not argv[0]: distlib removes the .exe suffix.
+    The module entry has a source loader and can safely replace the launcher.
+    """
+    loader = getattr(sys.modules.get("__main__"), "__loader__", None)
+    lifecycle = payload.get("install_lifecycle") or {}
+    if (
+        sys.platform != "win32"
+        or not isinstance(loader, zipimport.zipimporter)
+        or Path(loader.archive).name.casefold() != "loopx.exe"
+        or lifecycle.get("execution_driver") not in {"python_pip", "python_pipx"}
+    ):
+        return None
+    retry = interpreter_invocation(sys.executable, ["-m", "loopx.entrypoint", *sys.argv[1:]])
+    reason = (
+        "The running Windows console launcher cannot be replaced by pip. "
+        "No update was started; retry through the owning Python interpreter."
+    )
+    return {
+        **payload,
+        "ok": False,
+        "changes_applied": False,
+        "execution": None,
+        "error": reason,
+        "recommended_action": f"{reason}\n{retry}",
+        "install_lifecycle": {**lifecycle, "loopx_apply_supported": False, "reason": reason},
+        "plan": {
+            **payload.get("plan", {}), "apply_supported": False,
+            "blocked_reason": reason, "mutates_release_install": False,
+        },
+        "commands": {**payload.get("commands", {}), "apply": retry},
+        "next_action": {
+            "kind": "use_installation_owner", "command": retry,
+            "mutating": True, "requires_explicit_approval": True, "reason": reason,
+        },
+    }
+
+
 def build_rollback_plan(
     *,
     release_id: str,
@@ -831,7 +872,7 @@ def build_update_plan(
             "requires_explicit_approval": bool(owner_upgrade_command),
             "reason": recommended_action,
         }
-    return {
+    payload = {
         "ok": not execute or apply_supported,
         "schema_version": UPDATE_PLAN_SCHEMA_VERSION,
         "mode": "update",
@@ -893,6 +934,7 @@ def build_update_plan(
         ),
         "recommended_action": recommended_action,
     }
+    return (_windows_console_update_refusal(payload) if execute else None) or payload
 
 
 def _execute_python_distribution_update(
@@ -902,6 +944,9 @@ def _execute_python_distribution_update(
     route_arguments: list[str],
     progress: Callable[[str], None] = lambda _stage: None,
 ) -> dict[str, Any]:
+    refused = _windows_console_update_refusal(payload)
+    if refused is not None:
+        return refused
     lifecycle = (
         payload.get("install_lifecycle")
         if isinstance(payload.get("install_lifecycle"), dict)

@@ -7,6 +7,8 @@ import subprocess
 import sys
 import threading
 import time
+import zipfile
+import zipimport
 from unittest import mock
 
 from loopx import __version__
@@ -484,6 +486,88 @@ def test_python_distribution_apply_uses_the_owning_interpreter_pip() -> None:
     assert run.call_args_list[1].args[0][-4:] == ["authority-archive", "upgrade", "--all-known", "--execute"]
     assert run.call_args_list[2].args[0][3:5] == ["workflow-skills", "--install"]
     assert run.call_args_list[3].args[0][3:5] == ["slash-commands", "--install"]
+
+
+@pytest.mark.parametrize("installer", ["pip", "pipx"])
+def test_windows_console_apply_refuses_before_installation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, installer: str,
+) -> None:
+    doctor = doctor_payload()
+    doctor["package"] = {"install_kind": "python_distribution"}
+    doctor["install_freshness"]["python_distribution_installer"] = installer
+    # A saved plan must not bypass the check at execution time.
+    saved_plan = build_update_plan(action="apply", doctor_payload=doctor)
+    launcher = tmp_path / "loopx.exe"
+    with zipfile.ZipFile(launcher, "w") as archive:
+        archive.writestr("__main__.py", "")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys.modules["__main__"], "__loader__", zipimport.zipimporter(str(launcher)))
+    monkeypatch.setattr(sys, "argv", [str(launcher.with_suffix("")), "--registry", "project O'Brien $name/registry.json",
+                                      "--format", "json", "update", "--execute", "--timeout-seconds", "60"])
+    with mock.patch("loopx.self_update.subprocess.run") as run:
+        planned = build_update_plan(action="apply", doctor_payload=doctor)
+        executed = execute_update_plan(saved_plan)
+    run.assert_not_called()
+    for result in (planned, executed):
+        assert result["ok"] is False
+        assert result["changes_applied"] is False
+        assert result["execution"] is None
+        assert result["plan"]["apply_supported"] is False
+        assert result["plan"]["mutates_release_install"] is False
+        assert "launcher" in result["error"].lower()
+        retry = result["next_action"]["command"]
+        assert "loopx.entrypoint" in retry
+        assert "--registry" in retry and "--timeout-seconds" in retry
+        assert result["next_action"]["mutating"] is True
+
+
+@pytest.mark.parametrize("action", ["check", "plan"])
+def test_windows_console_read_only_update_keeps_its_plan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, action: str,
+) -> None:
+    doctor = doctor_payload()
+    doctor["package"] = {"install_kind": "python_distribution"}
+    doctor["install_freshness"]["python_distribution_installer"] = "pip"
+    baseline = build_update_plan(action=action, doctor_payload=doctor)
+    launcher = tmp_path / "loopx.exe"
+    with zipfile.ZipFile(launcher, "w") as archive:
+        archive.writestr("__main__.py", "")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys.modules["__main__"], "__loader__", zipimport.zipimporter(str(launcher)))
+    assert build_update_plan(action=action, doctor_payload=doctor) == baseline
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows console launcher")
+def test_real_windows_console_refuses_before_starting_installer(tmp_path: Path) -> None:
+    from distlib.scripts import ScriptMaker
+
+    marker = tmp_path / "installer-started"
+    (tmp_path / "update_probe.py").write_text(
+        "import json,subprocess\n"
+        "from pathlib import Path\n"
+        "from loopx import self_update\n"
+        "def main():\n"
+        "    def installer(*args, **kwargs):\n"
+        f"        Path({str(marker)!r}).write_text('unsafe installation', encoding='utf-8')\n"
+        "        return subprocess.CompletedProcess([], 1, '', 'installation refused by fixture')\n"
+        "    self_update.subprocess.run = installer\n"
+        "    payload = {'install_lifecycle': {'execution_driver': 'python_pip'}, 'plan': {'apply_supported': True}}\n"
+        "    result = self_update.execute_update_plan(payload)\n"
+        "    print(json.dumps(result))\n"
+        "    return 0 if result['ok'] else 1\n",
+        encoding="utf-8",
+    )
+    maker = ScriptMaker(None, str(tmp_path))
+    maker.variants = {""}
+    maker.make("loopx = update_probe:main")
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), str(REPO_ROOT)])}
+    result = subprocess.run([str(tmp_path / "loopx.exe"), "update", "apply"],
+                            env=env, capture_output=True, encoding="utf-8", timeout=30)
+    assert result.returncode == 1, result.stderr
+    assert not marker.exists(), "the real launcher reached the installer"
+    refusal = json.loads(result.stdout)
+    assert refusal["execution"] is None
+    assert "loopx.entrypoint" in refusal["next_action"]["command"]
 
 
 def test_pipx_distribution_apply_preserves_the_pipx_environment() -> None:

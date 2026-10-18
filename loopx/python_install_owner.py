@@ -30,7 +30,7 @@ def _is_windows_host() -> bool:
     return os.name == "nt"
 
 
-def interpreter_invocation(python_executable: str) -> str:
+def interpreter_invocation(python_executable: str, arguments: list[str] | None = None) -> str:
     """The text that runs an interpreter path on the host that prints it.
 
     POSIX shells run a quoted path directly. PowerShell reads a bare quoted
@@ -38,11 +38,15 @@ def interpreter_invocation(python_executable: str) -> str:
     literal is required; that form also carries spaces and apostrophes in the
     interpreter path. This module owns the renderer because the pip-owned
     upgrade command is the first caller; doctor and update reuse it.
+    Arguments, when supplied, use the same host quoting and retain empty values.
     """
 
     if _is_windows_host():
-        return f"& {_powershell_literal(python_executable)}"
-    return shlex.quote(python_executable)
+        return " ".join(
+            [f"& {_powershell_literal(python_executable)}",
+             *(_powershell_literal(value) for value in arguments or [])]
+        )
+    return shlex.join([python_executable, *(arguments or [])])
 
 
 def resolve_python_install_owner(

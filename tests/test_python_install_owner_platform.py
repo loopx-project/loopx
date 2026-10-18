@@ -60,6 +60,20 @@ def pip_owner_upgrade_command() -> str:
     return command
 
 
+def test_windows_interpreter_arguments_round_trip_through_powershell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if PWSH is None:
+        pytest.skip("PowerShell is unavailable")
+    pretend_windows_host(monkeypatch)
+    arguments = ["-c", "import json,sys; print(json.dumps(sys.argv[1:]))", "O'Brien $name", "中文 🚀", "", 'a"b']
+    command = python_install_owner.interpreter_invocation(sys.executable, arguments)
+    completed = subprocess.run([PWSH, "-NoLogo", "-NoProfile", "-Command", command],
+                               capture_output=True, encoding="utf-8", check=True)
+    import json
+    assert json.loads(completed.stdout) == arguments[2:]
+
+
 def pip_doctor_payload() -> dict[str, object]:
     """Just enough collected-doctor shape for a pip-owned update plan."""
 
