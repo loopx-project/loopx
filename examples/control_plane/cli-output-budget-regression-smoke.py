@@ -42,9 +42,13 @@ def main() -> int:
         cwd=REPO_ROOT,
         check=False,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=300,
+        # The child runs two separately bounded 240-second probes, plus
+        # checkout/cleanup. Do not cut off a valid second native Windows probe.
+        timeout=600,
     )
     if completed.returncode != 0:
         raise AssertionError(

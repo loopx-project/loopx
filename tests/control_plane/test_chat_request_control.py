@@ -6,13 +6,11 @@ from test_chat_goal_amendment import api as api
 from test_goal_amendment_authority import source_goal as source_goal
 from test_request_amendment_recovery import BRIEF
 from loopx.capabilities.manager_context import deliver
-from loopx.chat_store import ChatSessionStore
 
 
 def _source(api):
     call, f, server = api
-    store = ChatSessionStore(f["runtime"])
-    server.chat_store = store
+    store = server.chat_store
     session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
         upstream_thread_id="request-control-fixture", channel_id="manager")
     turn, _ = store.create_turn(session["session_id"], client_turn_id="request-source", message="Check the current contract", origin="web")

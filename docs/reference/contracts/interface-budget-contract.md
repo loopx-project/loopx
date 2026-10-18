@@ -138,7 +138,7 @@ warning and any already-over-budget fixture instead of truncating requirements.
 仅人工诊断输出上限由 5,100 调至 5,250，机器 JSON／正文／行数／执行预算不变。
 重规划指导增加 363 字节，独立指导预算为 1,800；8 KiB 总包告警及原有超限仍保留。
 
-The same qualification also covers emitted `--compact` Markdown, independently
+The historical pause/correction qualification also covered emitted `--compact` Markdown, independently
 of the task-body and thin-output limits. On the unchanged native mode fixture,
 base `3e611660a` emits 11,315 characters and the pause/correction head
 `84e00bac1` emits 11,530, failing the old 11,500 ceiling; both have 145 lines.
@@ -150,7 +150,9 @@ only this Markdown regression ceiling to 11,750, leaving 220 characters of
 headroom (the base had 185) for bounded wording variation. JSON grows from
 12,658 to 12,873 under the unchanged 13,500 ceiling; the 155-line cap, semantic
 anchors, fixture population, growth checks and execution limits remain intact.
-This qualifies readable output size, not installed host behavior or model adoption.
+This qualified readable output size, not installed host behavior or model adoption.
+The current native-host ceilings and matched measurements are recorded in
+[Native fixture qualification](#native-fixture-qualification).
 
 The base/head differential independently detects the same instruction rollout:
 work-context text adds 208 characters (one receipt character may vary), optional
@@ -164,14 +166,15 @@ change. Missing or contradictory observations, already-upgraded bases, other
 surfaces and growth beyond the allowance retain ordinary failure behavior.
 This evidence does not qualify arbitrary future wording or runtime authority.
 
-同一资格化还须独立覆盖 `--compact` 的完整 Markdown 输出：不改原生 mode 夹具时，
+历史暂停／纠偏资格化还独立覆盖了 `--compact` 的完整 Markdown 输出：不改原生 mode 夹具时，
 基线 `3e611660a` 为 11,315 字符，暂停／纠偏头 `84e00bac1` 为 11,530，
 确实超过旧 11,500 上限；两者均为 145 行。新增 215 字符承载当前心跳单次停止、
 结果确认、未确认处理、证据限定的局部纠偏及原结算义务，各自支持不同决定，
 不能作为重复诊断删除。保留全文，仅将该 Markdown 回归上限调至 11,750，
 留 220 字符余量供有界措辞变化（基线余量为 185）。JSON 从 12,658 增至
 12,873，仍遵守原 13,500 上限；155 行、语义锚点、夹具规模、增长检查和执行限制
-不变。这只资格化可读输出尺寸，不证明安装态行为或模型采纳。
+不变。这只资格化可读输出尺寸，不证明安装态行为或模型采纳。当前原生宿主上限与
+成对测量见 [Native fixture qualification](#native-fixture-qualification)。
 
 base/head 差异门独立测得工作上下文增加 208 字符（回执可能差 1 字符）、可选
 replan 指引增加 363、thin/brief/compact 输出增加 154/163/215。既有 probe
@@ -404,6 +407,53 @@ qualified replacement replan-context projection and remains a review signal.
 Coverage-only to dense replan context has a measured, one-time allowance on its
 three affected JSON surfaces; dense-to-dense changes retain ordinary limits.
 
+### Native fixture qualification
+
+The probe and its historical base share the current physical fixture-root owner:
+POSIX retains `/tmp/loopx-cli-budget-…`; Windows uses an owned directory in its
+native temporary root, without requiring a drive-root `tmp` directory. Implicit
+machine runtime paths use that same isolated root. Existing roots are refused
+and owned fixtures are removed on failure as well as success. Subprocess readers
+decode UTF-8 so an actual probe failure remains visible on Windows locales.
+
+On matched native Windows main/candidate fixtures, the guided-start Markdown
+rows measure 3,203 / 3,204 / 3,203 characters (small/crowded/multi-Agent) on both
+revisions, with identical JSON measurements and semantic checks. The previous
+3,200-character ceiling rejects these complete routed commands. The full nested
+canary layout measures 3,245 / 3,246 / 3,245 on both revisions. The shared
+characterization ceiling is now 3,400 for all three populations, leaving at
+least 154 characters for bounded host-path variation. No product prose is
+shortened; guided-start JSON, line, per-Todo growth and semantic guards are unchanged.
+
+The same native canary layout emits 5,989 Markdown characters for thin heartbeat
+(all three populations), and 13,685 JSON / 11,854 Markdown characters for compact
+heartbeat, identically on base and candidate with equal semantic receipts. Their
+previous 5,800 and 13,500 / 11,750 ceilings reject that native path cost. The
+characterization limits are 6,200 and 14,000 / 12,200 respectively; line limits,
+other modes, differential growth and semantic obligations remain unchanged.
+These bounded increases retain full executable routes rather than trimming
+agent-consumed instructions to satisfy a host-specific ceiling.
+
+Windows qualification can use the existing explicit canary time budget:
+
+```powershell
+uv run --extra test loopx canary smoke-suite --script cli-output-budget-regression-smoke.py --timeout-seconds 660
+```
+
+The wrapper allows two 240-second probes plus checkout/cleanup within 600
+seconds; this is a validation-driver allowance, not a product latency claim.
+
+原生 Windows 与历史基线共用当前物理夹具目录，不要求预先创建盘符根目录下的
+`tmp`；默认机器运行时路径也归入同一隔离目录，已有目录拒绝覆盖，失败时照常
+清理。配对引导输出为 3,203 / 3,204 / 3,203 字符，原 3,200 上限无法保留完整路由；
+完整嵌套 canary 的成对测量为 3,245 / 3,246 / 3,245。三个规模的共用字符上限
+调整为 3,400，至少保留 154 字符路径余量，JSON、行数、增长和语义检查不变，不删减
+产品指令。心跳 thin 三个规模均为 5,989 字符，compact 为 JSON 13,685 / Markdown
+11,854 字符，基线与候选的成对测量和语义一致；对应上限由 5,800 和
+13,500 / 11,750 调整为 6,200 和 14,000 / 12,200，保留完整可执行路径，行数、
+其他模式和差分增长检查不变。原生检查可显式给予上述 660 秒预算，不据此
+宣称产品延迟改善。
+
 Both budget layers are intentionally about projections, not the full archival
 facts. When a surface needs more detail, put that detail behind a queryable
 cold-path command or a linked run-history artifact instead of making the
@@ -542,8 +592,11 @@ The instruction-coherence change keeps action-specific authorization, sustained
 integration/negative-case/readback work and exact current settlement/recovery in
 all heartbeat modes. On the same supported 320-character scope plus capability
 fixture, normalized thin body cost is 3,172 → 3,599 characters. The thin body
-ceiling is 3,600; CLI JSON/Markdown ceilings are 3,900/5,800 (previously
-3,400/5,250), against measured 3,651/5,579 on the same public fixture.
+ceiling is 3,600. That instruction rollout measured CLI JSON/Markdown at
+3,651/5,579 and used 3,900/5,800 ceilings (previously 3,400/5,250). Current
+native-host ceilings are 3,900/6,200; the matched native measurements and
+unchanged-body boundary are recorded in
+[Native fixture qualification](#native-fixture-qualification).
 The registered-profile brief body grows from 4,447 to 4,675, with a 4,800
 ceiling (previously 4,600). Full/compact remove duplicated static recipes; no host execution quota, authority,
 line, key or reward-memory allowance changes. Oversized custom inputs still fail.
