@@ -46,6 +46,35 @@ CLI/provider acceptance checks both dependency kinds, replay, no debit,
 original validator preservation and independent next-Turn selection. It does
 not claim live research adoption or PostgreSQL qualification.
 
+### Admitted autonomous-replan closeout
+
+An admitted autonomous-replan Turn has an obligation binding rather than a Todo
+binding. Its existing replan owner can accept a concrete blocker or a fresh
+evidence-linked path while the underlying work remains unqualified. Previously,
+the verified blocked writeback still required a quota spend because the
+no-spend readback recognized only Todo-bound attempts.
+
+The same TypeScript settlement owner now recognizes that qualified blocked
+replan. The original guard's selected obligation, exact Goal/Agent/Turn, typed
+blocker/evidence and observation fingerprint, accepted semantic delta and
+satisfied semantic-closeout checkpoint must agree with the durable writeback.
+The existing `typed_blocked_writeback_no_spend` result closes only that Turn.
+No Todo, wait clock, source observation, delivery credit or completion is
+created. Exact replay and a later spend request cannot add a debit; an already
+committed debit remains intact. Capability retirement keeps its separate guard
+and proof requirements.
+
+This is settlement qualification, not a new wait or acceptance policy. Current
+canonical resume conditions still decide when work becomes runnable; independent
+work and genuine uncovered gaps retain ordinary admission. A blocker string,
+stale or rejected semantic ACK, mismatched fingerprint, missing checkpoint or
+missing durable receipt cannot qualify. Existing source-qualified historical
+writebacks can be read using their original receipts without rewriting history.
+Older runtimes may still request a spend for this binding; reconcile it with a
+compatible runtime before rollback rather than paying or rewriting the receipt.
+CLI and managed heartbeat consume the same settlement result; no frontend
+control, Lark authority, configuration or Python decision owner is added.
+
 ### Registering a source-satisfied successor
 
 External-wait authoring recomputes a successor's `todo_done` or
@@ -174,6 +203,26 @@ Dashboard 已消费 canonical 等待与回执，Chat／Lark 仍复用 Todo updat
 不新增前端控件、Lark 命令或独立 UI 权威。File、SQLite 的真实 CLI／provider
 验收覆盖两种依赖、重放、零扣额、原验收器保留与下一 Turn 独立选择；不据此
 宣称投研真实采用或 PostgreSQL 资格已通过。
+
+### 已准入的自主重规划收尾
+
+已准入的 autonomous-replan Turn 绑定 obligation 而非 Todo。既有 replan owner
+可能在底层工作仍未满足验收时，接受具体 blocker 或带证据的新路径决策。过去虽然
+阻塞写回及收据已核验，no-spend 读回只识别 Todo 绑定，仍会要求扣额。
+
+现有 TypeScript settlement owner 现在识别这种已合格的阻塞重规划：原 guard 选定的
+obligation、精确 Goal/Agent/Turn、typed blocker/evidence 及观察 fingerprint、已接受
+semantic delta、满足的 semantic-closeout checkpoint 与持久收据必须一致。沿用
+`typed_blocked_writeback_no_spend`，只关闭本次 Turn，不生成 Todo、等待时钟、来源
+观察、交付信用或完成声明。精确重放及后续 spend 请求均不追加扣额；已有真实扣额
+保留，capability retirement 仍需其独立 guard 和证明。
+
+这修正结算资格，不改变等待或验收规则。canonical 恢复条件仍决定何时可执行，独立
+工作和真正未覆盖的缺口保持严格准入。单独 blocker 文本、过期或被拒绝的 semantic
+ACK、错配 fingerprint、缺 checkpoint 或持久收据均不合格。已有合格历史写回可按
+原收据读回，不改历史。旧运行时可能仍要求这类绑定扣额；回滚前须用兼容运行时
+核对，不得为旧提示补扣或改写收据。CLI 与 managed heartbeat 消费同一结果，不新增前端控制、
+Lark 权限、配置或 Python 决策源。
 
 ### 登记源证据已满足的后继
 
