@@ -37,7 +37,8 @@ export function decodeMonitorSchedule(row: JsonObject): MonitorSchedule {
   return {watchOnly: requireBoolean(row.watch_only, "watch_only"),
     dueAt: optionalTime(row.due_at, "due_at"), expiresAt: optionalTime(row.expires_at, "expires_at")};
 }
-const monitorIsActive = (row: MonitorSchedule, now: number) => row.expiresAt === null || row.expiresAt > now;
+export const monitorIsActive = (row: Pick<MonitorSchedule, "expiresAt">, now: number): boolean =>
+  row.expiresAt === null || row.expiresAt > now;
 export function monitorIsDue(row: MonitorSchedule, now: number): boolean {
   return monitorIsActive(row, now) && row.dueAt !== null && row.dueAt <= now;
 }

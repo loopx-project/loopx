@@ -185,6 +185,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.collaboration.peers",
     "loopx.control_plane.collaboration.request_control_source",
     "loopx.control_plane.collaboration.result_files",
+    "loopx.control_plane.collaboration.turn_context_observation",
     "loopx.control_plane.coordination.local_authority_shadow_history",
     "loopx.control_plane.coordination.shadow_management",
     "loopx.control_plane.digest_envelope",
@@ -1593,6 +1594,17 @@ def test_inbox_linked_references_keep_their_two_shapes(tmp_path: Path) -> None:
         {},
         "links_unreadable_or_conflicting",
     )
+
+
+def test_turn_agenda_addresses_keep_the_bare_digest_contract(tmp_path: Path) -> None:
+    from loopx.control_plane.collaboration.turn_context_observation import _paths
+
+    rejected = (HEX64.upper(), HEX64[:-1], HEX64 + "0", "g" * 64,
+                "sha256-" + HEX64, HEX64 + ".stop")
+    for stem in (*BARE_ACCEPTS, *rejected):
+        (tmp_path / f"{stem}.json").write_text("{}", encoding="utf-8")
+    (tmp_path / f"{HEX64}.txt").write_text("{}", encoding="utf-8")
+    assert {path.stem for path in _paths(tmp_path)} == set(BARE_ACCEPTS)
 
 
 def test_outcome_projection_fingerprint_requires_the_envelope() -> None:

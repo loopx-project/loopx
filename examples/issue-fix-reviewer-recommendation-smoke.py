@@ -7,7 +7,6 @@ import errno
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,6 +25,7 @@ from loopx.capabilities.issue_fix.reviewer_recommendation import (  # noqa: E402
     ISSUE_FIX_REVIEWER_SOURCES_INPUT_SCHEMA_VERSION,
     build_issue_fix_reviewer_recommendation_packet,
 )
+from loopx.extensions.process_runtime import remove_owned_tree  # noqa: E402
 
 
 PRIVATE_PATTERNS = [
@@ -44,7 +44,7 @@ def temporary_git_repo() -> Iterator[Path]:
     finally:
         for attempt in range(10):
             try:
-                shutil.rmtree(path)
+                remove_owned_tree(path)
                 break
             except FileNotFoundError:
                 break

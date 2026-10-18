@@ -984,6 +984,20 @@ receipts have no concrete executed-monitor identity and do not count toward
 this threshold; distinct heartbeat turn ids are idempotency evidence, not
 monitor execution evidence.
 
+The current Todo `consecutive_no_change` detector shares the Monitor lifetime
+rule with scheduling. At one explicit runtime observation, `expires_at` at or
+before that instant excludes that Monitor from `monitor_no_change_streak`.
+The recorded Todo, counters, observation hash/generation and pending successor
+remain unchanged. An active Monitor whose next poll is in the future can still
+require a streak review; expiry and due time have different meanings.
+Goal-frontier and status callers use the same TypeScript expiry/selection owner
+while preserving their existing trigger shape, scope and tie order. Historical
+requests without a current clock retain their previous replay behavior;
+independent progress and periodic-review triggers remain effective. Quiet
+heartbeat liveness receipts can still be recorded without polling the source
+or spending a slot. This source repair does not establish installed adoption,
+full Goal acceptance or CI qualification.
+
 After that bounded replan slice is acknowledged by a compact state run carrying
 `autonomous_replan_ack_v0` and `repair_delta_contract_v0` with
 `delta_present=true`, later empty monitor polls for the same acknowledged wait
