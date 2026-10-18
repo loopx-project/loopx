@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from ...file_lock import try_exclusive_file_lock
 from .conversation_identity import identity_ref
 from .goal_channel_transport import call, json_payload, lark_args
 from .group_history import _provider_page
@@ -96,22 +97,36 @@ class PrivateIngressObserver:
                 continue  # Another provider's binding is not a Lark source.
             path = self._path(binding["binding_id"])
             try:
-                state = _observation(path)
+                _observation(path)
             except (OSError, ValueError, TypeError):
                 # Preserve an unreadable receipt for recovery, rather than
                 # resetting its dedupe fence and reconnecting it again.
                 continue
-            try:
-                if records is None:
-                    records = self._records()
-                if self._observe(binding, records, state, cancelled):
-                    reconnect.append(binding["transport_ref"])
-            except (OSError, ValueError, KeyError, TypeError):
-                # Never publish provider exceptions or turn failed reads into
-                # empty history. Retain the last complete bound and every gap.
-                state.update(status=IngressObservationStatus.UNAVAILABLE.value,
-                             last_checked_at=time.time())
-            write_private_json_atomic(path, state)
+            with try_exclusive_file_lock(
+                path, agent_id="loopx-lark", operation="observe_private_ingress",
+            ) as ownership:
+                if ownership is None:
+                    # Another observer already owns this binding's receipt.
+                    # Skipping the read-modify-write keeps its committed gap
+                    # instead of overwriting it with an older window.
+                    continue
+                try:
+                    state = _observation(path)
+                    if records is None:
+                        records = self._records()
+                    if self._observe(binding, records, state, cancelled):
+                        reconnect.append(binding["transport_ref"])
+                    write_private_json_atomic(path, state)
+                except (OSError, ValueError, KeyError, TypeError):
+                    # Never publish provider exceptions or turn failed reads
+                    # into empty history. Retain the bound and every gap.
+                    try:
+                        state = _observation(path)
+                    except (OSError, ValueError, TypeError):
+                        continue
+                    state.update(status=IngressObservationStatus.UNAVAILABLE.value,
+                                 last_checked_at=time.time())
+                    write_private_json_atomic(path, state)
         return reconnect
 
     def _records(self) -> list[dict[str, Any]]:
@@ -148,10 +163,13 @@ class PrivateIngressObserver:
             raise ValueError("history observation binding changed")
         now = time.time()
         end = now - 5  # Leave live stream/admission a short race window.
-        # A later captured message cannot certify the earlier stream. Start
-        # with the bounded day, then advance only from a complete source read.
-        start = max(float(state.get("last_complete_at") or now - 86400), now - 86400) - 60
-        if start >= end:
+        # Only the first observation is capped to one day. With a cursor, resume
+        # exactly there and advance at most one day per pass, so a longer
+        # outage is covered in contiguous segments instead of being skipped.
+        cursor = state.get("last_complete_at")
+        start = (float(cursor) - 60) if cursor is not None else (now - 86400)
+        window_end = min(end, start + 86400)
+        if start >= window_end:
             return False
         messages: list[Mapping[str, Any]] = []
         token: str | None = None
@@ -160,7 +178,7 @@ class PrivateIngressObserver:
             if cancelled():
                 raise OSError("source observation stopped")
             args = ["im", "+chat-messages-list", "--as", "bot", "--chat-id", chat,
-                    "--start", _iso(start), "--end", _iso(end), "--order", "asc",
+                    "--start", _iso(start), "--end", _iso(window_end), "--order", "asc",
                     "--page-size", "50", "--no-reactions", "--format", "json"]
             if token:
                 args += ["--page-token", token]
@@ -209,7 +227,11 @@ class PrivateIngressObserver:
         reconnect = any(not gaps[ref]["reply_observed"] for ref in gaps.keys() - prior_gaps)
         # Only source identifiers and content-free observations persist. A
         # source missing from a later window is never silently forgotten.
-        state.update(source_fingerprint=fingerprint, last_checked_at=now, last_complete_at=end,
-                     window_start=start, window_end=end, gaps=gaps,
-                     status=(IngressObservationStatus.GAP if gaps else IngressObservationStatus.VERIFIED).value)
+        behind = window_end < end - 1
+        state.update(source_fingerprint=fingerprint, last_checked_at=now,
+                     last_complete_at=window_end,
+                     window_start=start, window_end=window_end, gaps=gaps,
+                     status=(IngressObservationStatus.GAP if gaps
+                             else IngressObservationStatus.UNAVAILABLE if behind
+                             else IngressObservationStatus.VERIFIED).value)
         return reconnect

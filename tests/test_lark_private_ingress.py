@@ -272,6 +272,87 @@ def test_page_budget_or_cancellation_never_advances_complete_coverage(source_mon
     assert f.monitor._path(f.binding["binding_id"]).read_bytes() == before
 
 
+def test_restart_after_a_long_outage_keeps_contiguous_coverage(source_monitor):
+    f = source_monitor
+    assert f.monitor.observe() == []
+    assert f.monitor.health(f.binding["binding_id"])["last_complete_at"] == 1095.0
+    # One owner message arrives inside the outage and is never captured.
+    missed = owner_source("om_during_outage")
+    timeline = [(1400.0, missed)]
+
+    def time_filtered(args, _cwd=None, _timeout=None):
+        f.calls.append(args)
+        start = datetime.fromisoformat(args[args.index("--start") + 1]).timestamp()
+        end = datetime.fromisoformat(args[args.index("--end") + 1]).timestamp()
+        rows = [row for at, row in timeline if start <= at <= end]
+        return {"returncode": 0, "stdout": json.dumps({"ok": True, "identity": "bot",
+            "data": {"messages": rows, "has_more": False}}), "stderr": ""}
+
+    f.transport.runner = time_filtered
+    f.clock[0] = 1100 + 2 * 86400
+    f.calls.clear()
+    f.monitor.observe()
+    # The resumed window starts at the stored cursor (- overlap), never at
+    # "now minus a day", so the missed message stays observable.
+    start = datetime.fromisoformat(f.calls[0][f.calls[0].index("--start") + 1]).timestamp()
+    assert start <= 1400
+    health = f.monitor.health(f.binding["binding_id"])
+    assert health["status"] == "gap" and health["source_gap_count"] == 1
+    # A pass that has not reached the live edge advances contiguously and does
+    # not certify the whole outage.
+    assert 1095.0 < health["last_complete_at"] < f.clock[0] - 86400
+    for _ in range(3):
+        f.monitor.observe()
+    caught_up = f.monitor.health(f.binding["binding_id"])
+    assert caught_up["last_complete_at"] == f.clock[0] - 5
+    assert caught_up["source_gap_count"] == 1
+
+
+def test_interleaved_observers_do_not_overwrite_a_committed_gap(source_monitor):
+    f = source_monitor
+    first = PrivateIngressObserver(f.transport)
+    f.pages[0]["data"]["messages"] = [owner_source("om_first")]
+    entered, release = threading.Event(), threading.Event()
+    original = f.transport.runner
+    calls = {"count": 0}
+    failures: list[BaseException] = []
+
+    def slow(args, cwd=None, timeout=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            entered.set()
+            assert release.wait(10)
+        return original(args, cwd, timeout)
+
+    def observe_first():
+        try:
+            first.observe()
+        except BaseException as error:  # pragma: no cover - surfaced below
+            failures.append(error)
+
+    f.transport.runner = slow
+    worker = threading.Thread(target=observe_first)
+    worker.start()
+    path = f.monitor._path(f.binding["binding_id"])
+    try:
+        assert entered.wait(10)
+        before = path.read_bytes() if path.exists() else None
+        # The second observer must not race the receipt read-modify-write while
+        # the first one is mid-observation.
+        assert f.monitor.observe() == []
+        assert (path.read_bytes() if path.exists() else None) == before
+    finally:
+        release.set()
+        worker.join(10)
+    assert not failures
+    health = f.monitor.health(f.binding["binding_id"])
+    assert health["status"] == "gap" and health["source_gap_count"] == 1
+    # The next scheduled pass keeps the discovered gap.
+    f.clock[0] += 60
+    f.monitor.observe()
+    assert f.monitor.health(f.binding["binding_id"])["source_gap_count"] == 1
+
+
 def test_fresh_grant_change_retains_same_source_coverage_without_replaying(source_monitor):
     f = source_monitor
     f.pages[0]["data"]["messages"] = [owner_source()]
