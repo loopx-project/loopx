@@ -1,6 +1,17 @@
 // Public URLs are independent of the local preview's deployment base.
 export const siteUrl = "https://loopx-project.github.io/loopx/";
 export const pageMetadata = {
+  delegationLab: {
+    path: "lab/delegation/",
+    en: {
+      title: "LoopX Delegation Lab — The request changed. Did the result?",
+      description: "Change an allocation request, expose a stale plan, and check a corrected result in a browser-local exercise. Explore receipt, adoption, independent verification and return.",
+    },
+    zh: {
+      title: "LoopX 委派实验室 — 要求改了，结果呢？",
+      description: "通过浏览器本地分配练习，修订要求、发现旧方案失效并核验新结果。区分接收回执、实际采纳、独立验证与结果回传，追溯可复现的原始案例。",
+    },
+  },
   timeMachine: {
     path: "lab/time-machine/",
     en: {

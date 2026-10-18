@@ -23,7 +23,7 @@ for (const [, href] of skill.matchAll(/\]\((https:\/\/[^)]+)\)/g)) {
   }
 }
 const titles = new Set();
-for (const [path, subject] of [["", "long-running"], ["benchmarks/swe-marathon/", "SWE-Marathon"], ["benchmarks/lhtb/", "LHTB"], ["lab/time-machine/", "Time Machine"]]) {
+for (const [path, subject] of [["", "long-running"], ["benchmarks/swe-marathon/", "SWE-Marathon"], ["benchmarks/lhtb/", "LHTB"], ["lab/time-machine/", "Time Machine"], ["lab/delegation/", "Delegation Lab"]]) {
   const html = await readFile(resolve(directory, path, "index.html"), "utf8");
   const title = html.match(/<title>(.*?)<\/title>/s)?.[1];
   assert(title?.toLowerCase().includes(subject.toLowerCase()), `${path}: descriptive title`);
@@ -43,6 +43,7 @@ for (const [path, subject] of [["", "long-running"], ["benchmarks/swe-marathon/"
     assert.equal(structured?.["@type"], "SoftwareSourceCode");
     assert.equal(structured?.codeRepository, "https://github.com/loopx-project/loopx");
     assert(html.includes('lab/time-machine/'), "homepage discovers the interactive research experience");
+    assert(html.includes('lab/delegation/'), "homepage discovers the delegation exercise");
   }
   if (path === "lab/time-machine/") {
     assert(html.includes("Local results improved."), "question exists before JavaScript");
@@ -80,4 +81,4 @@ if (process.argv.includes("--with-docs")) {
   const index = await readFile(resolve(directory, "sitemap.xml"), "utf8");
   for (const [, url] of index.matchAll(/<loc>(.*?)<\/loc>/g)) await access(resolve(directory, url.slice(origin.length)));
 }
-console.log(`SEO publication: agent skill and owner links, four prerendered routes, ${locations.length} canonical sitemap targets, assets and metadata passed`);
+console.log(`SEO publication: agent skill and owner links, five prerendered routes, ${locations.length} canonical sitemap targets, assets and metadata passed`);
