@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from collections.abc import Callable
+import json
 from pathlib import Path
 import os
 import re
@@ -34,6 +36,18 @@ SOURCE_COMMIT_CHECK_TIMEOUT_SECONDS = 3
 SOURCE_COMMIT_READ_LIMIT_BYTES = 256
 PERSISTED_PYTHON_FILENAME = ".loopx-python"
 _PACKAGE_VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"([^"]+)"$', re.MULTILINE)
+
+
+def _installed_readback(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    try:
+        doctor = json.loads(result.stdout)
+        if isinstance(doctor, dict):
+            identity = doctor.get("service_runtime_identity")
+            if isinstance(identity, dict):
+                return identity
+    except (ValueError, TypeError):
+        pass
+    return {}
 
 
 class UpdateAction(StrEnum):
@@ -886,6 +900,7 @@ def _execute_python_distribution_update(
     *,
     timeout_seconds: int,
     route_arguments: list[str],
+    progress: Callable[[str], None] = lambda _stage: None,
 ) -> dict[str, Any]:
     lifecycle = (
         payload.get("install_lifecycle")
@@ -945,6 +960,7 @@ def _execute_python_distribution_update(
         if step != "install":
             command[3:3] = route_arguments
     results: dict[str, subprocess.CompletedProcess[str]] = {}
+    progress("Updating CLI through its Python package manager")
     results["install"] = subprocess.run(
         commands["install"],
         text=True, encoding="utf-8", errors="replace",
@@ -953,6 +969,7 @@ def _execute_python_distribution_update(
     )
     if results["install"].returncode == 0:
         for step in ("authority_upgrade", "workflow_skills", "slash_commands", "doctor"):
+            progress(f"Validating updated runtime: {step}")
             results[step] = subprocess.run(
                 commands[step],
                 text=True, encoding="utf-8", errors="replace",
@@ -987,6 +1004,8 @@ def _execute_python_distribution_update(
         execution[f"{step}_returncode"] = result.returncode
         execution[f"{step}_stdout_tail"] = result.stdout[-2000:]
         execution[f"{step}_stderr_tail"] = result.stderr[-2000:]
+        if step == "doctor" and result.returncode == 0:
+            execution["installed_runtime_identity"] = _installed_readback(result)
 
     runtime_steps = (
         "install",
@@ -1054,6 +1073,7 @@ def _execute_python_distribution_update(
 def execute_update_plan(
     payload: dict[str, Any], *, timeout_seconds: int = 600,
     registry_path: Path | None = None, runtime_root: str | None = None,
+    progress: Callable[[str], None] = lambda _stage: None,
 ) -> dict[str, Any]:
     route_arguments = []
     if registry_path is not None:
@@ -1075,6 +1095,7 @@ def execute_update_plan(
             payload,
             timeout_seconds=timeout_seconds,
             route_arguments=route_arguments,
+            progress=progress,
         )
     if driver != "archive_snapshot":
         updated = dict(payload)
@@ -1117,10 +1138,12 @@ def execute_update_plan(
         installer_url,
         env=env,
         timeout_seconds=timeout_seconds,
+        progress=progress,
     )
     # Match install-local.sh's LOOPX_BIN_DIR override, including its empty-value
     # default. Read back the installation that this update actually replaced.
     loopx_bin = Path(env.get("LOOPX_BIN_DIR") or _user_loopx_bin().parent) / "loopx"
+    progress("Validating installed CLI")
     doctor_result = subprocess.run(
         [str(loopx_bin), *route_arguments, "--format", "json", "doctor"],
         text=True, encoding="utf-8", errors="replace",
@@ -1136,9 +1159,11 @@ def execute_update_plan(
         "install_stderr_tail": install_result.stderr[-2000:],
         "doctor_stdout_tail": doctor_result.stdout[-2000:],
         "doctor_stderr_tail": doctor_result.stderr[-2000:],
+        "installed_runtime_identity": _installed_readback(doctor_result) if doctor_result.returncode == 0 else {},
     }
     extension_doctor_result = None
     if install_result.returncode == 0 and doctor_result.returncode == 0:
+        progress("Validating enabled extensions")
         extension_doctor_result = subprocess.run(
             [
                 str(loopx_bin),
@@ -1454,10 +1479,16 @@ def render_update_plan_markdown(payload: dict[str, Any]) -> str:
             lines.append(f"- Private recovery snapshot: `{prompt_upgrade['snapshot_file']}`")
         if prompt_upgrade.get("next_action"):
             lines.append(f"- Next: {prompt_upgrade['next_action']}")
+    installed_identity = (payload.get("execution") or {}).get("installed_runtime_identity")
+    if installed_identity:
+        lines.extend(["", "## Installed CLI Readback", "",
+                      f"- Version: `{installed_identity.get('package_version')}`",
+                      f"- Source revision: `{installed_identity.get('source_revision')}`",
+                      "- Fresh process installation check passed; the plan below describes the pre-update installation."])
     lines.extend(
         [
             "",
-            "## Details",
+            "## Plan (before execution)" if payload.get("execute_requested") else "## Details",
             "",
             f"- OK: `{payload.get('ok')}`",
             f"- Requested action: `{payload.get('requested_action')}`",

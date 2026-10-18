@@ -14,6 +14,10 @@ from ..control_plane.operator_credential import (
     OPERATOR_CREDENTIAL_ENV_VARS,
     OPERATOR_ENDPOINT_ENV_VAR,
 )
+from ..control_plane.operator_provider import (
+    MESSAGES_COMPATIBILITY_OK,
+    messages_endpoint_compatibility,
+)
 
 
 DshHostRunner = Callable[[Mapping[str, Any]], dict[str, Any]]
@@ -81,6 +85,18 @@ def build_dsh_operation_host_runner(
         for name in (*OPERATOR_CREDENTIAL_ENV_VARS, OPERATOR_ENDPOINT_ENV_VAR)
         if environ.get(name)
     }
+    # The Messages transport resolves <base>/v1/messages, so a bare API root
+    # answers 404 long after configuration. Fail the launch with a typed reason
+    # instead of spending a model call on an endpoint that cannot answer.
+    endpoint = credential.get(OPERATOR_ENDPOINT_ENV_VAR)
+    if endpoint:
+        compatibility = messages_endpoint_compatibility(endpoint)
+        if compatibility != MESSAGES_COMPATIBILITY_OK:
+            raise ValueError(
+                "the managed DSH operation host requires a Messages-compatible "
+                f"provider endpoint ({compatibility}); store the provider's "
+                "compatibility root, for DeepSeek https://api.deepseek.com/anthropic"
+            )
     options = {
         "runtime_root": runtime_root, "registry_path": registry_path,
         "project": workspace,

@@ -306,6 +306,43 @@ workflow set; a lone generated entry does not replace missing rich workflows.
 
 ## Upgrade And Repair
 
+For an existing installation, use one command:
+
+```bash
+loopx upgrade
+```
+
+This updates the CLI through its existing archive, pip or pipx owner, refreshes
+managed host material, and updates/restarts an installed macOS App through its
+native signed updater. A CLI-only machine stays CLI-only. Archive installations
+retain their recorded source ref, including Main or a pinned commit; package
+manager installations retain their package index. To select Main explicitly
+for an archive installation and its App:
+
+```bash
+loopx upgrade --ref main
+```
+
+`loopx upgrade --dry-run` previews the same installed surfaces without changing
+them. Text output reports the current stage and elapsed waiting time every ten
+seconds; `--format json` keeps stdout as one structured result. Completion
+requires native App update and service readback, not just a successful launch.
+An unavailable feed, signature failure or partial upgrade returns a nonzero
+exit code and preserves the separate CLI and App outcomes. Main's App channel
+follows its latest complete signed build and may lag Git HEAD. Older Apps
+without terminal-upgrade readback can follow their existing startup updater,
+but remain unqualified until an updated App returns that readback. Existing
+Recovery & updates controls remain the recovery entry point.
+
+Multiple standard App installations require resolving that ambiguity before
+any update. Unsupported installation owners retain their existing instructions;
+the command does not rewrite a source checkout, switch a package-manager install
+to an archive, or add Windows native-update support.
+
+已有安装可直接执行 `loopx upgrade`，统一更新 CLI 与已安装的 macOS App。
+默认沿用原安装来源；归档安装使用 `--ref main` 可选择 Main。终端持续显示当前阶段
+与等待时长，并分别读回 CLI、App 和服务结果；部分失败不会显示为全部完成。
+
 `loopx update` is the channel-aware upgrade entry point. Its actions have the
 same meaning for humans and agents:
 

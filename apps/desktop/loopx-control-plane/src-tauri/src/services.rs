@@ -149,6 +149,10 @@ pub(crate) struct SelectedRuntime {
 }
 
 impl ServiceSet {
+    pub(crate) fn runtime_identity(&self) -> Option<&serde_json::Value> {
+        self.runtime.identity.as_ref()
+    }
+
     pub(crate) fn start(
         runtime: &SelectedRuntime,
         endpoints: &ServiceEndpoints,

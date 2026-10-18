@@ -56,7 +56,7 @@ try {
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   const url = new URL("/chat/", catalog[0].status_url);
-  url.search = new URLSearchParams({ goalId: "same-goal", view: "overview", statusUrl: catalog[0].status_url });
+  url.search = new URLSearchParams({ goalId: "same-goal", view: "overview", statusUrl: process.env.LOOPX_RUNTIME_READER_BEFORE === "1" ? catalog[0].status_url : "/status.json" });
   await page.goto(url.toString());
   await page.getByRole("heading", { name: "Retained research", exact: true }).waitFor();
   if (process.env.LOOPX_RUNTIME_READER_BEFORE === "1") {
@@ -69,15 +69,19 @@ try {
     await page.screenshot({path:resolve(output,"desktop.png")});
     await page.getByLabel("研究历程", {exact:true}).getByRole("button", {name:"关系图", exact:true}).click();
     assert.equal(await page.locator(".research-history-edges > g > path").count(),2);
+    await page.locator(".research-history-node").filter({hasText:"Retained route 0"}).click();
+    assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0");
     await page.getByLabel("选择控制面来源", {exact:true}).click();
     await page.getByRole("option", {name:"Fresh",exact:true}).click();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("research_node"),null,"a source switch must not rebind the same node id in another physical source");
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     await page.getByLabel("研究历程", {exact:true}).getByRole("button", {name:"关系图",exact:true}).click();
     await page.locator(".research-history-node").filter({hasText:"Fresh route 0"}).waitFor();
     assert.equal(await page.locator(".research-history-node").filter({hasText:"Retained route"}).count(),0);
     await page.goBack();
     await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0","Back restores the original source-local selection");
     await page.goForward();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     await page.reload();

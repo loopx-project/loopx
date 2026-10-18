@@ -133,20 +133,26 @@ fn finder_runtime_path_includes_tools_without_loading_shell_profiles() {
 fn spawn_listener_fixture(
     executable: &Path,
     command: &str,
-    port: u16,
     payload: &str,
-) -> std::process::Child {
+) -> (std::process::Child, u16) {
+    use std::os::fd::OwnedFd;
     use std::os::unix::fs::PermissionsExt;
 
+    // Keep the OS reservation through exec; releasing a port number before
+    // Python binds it lets unrelated concurrent tests steal the fixture port.
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve loopback listener");
+    let port = listener
+        .local_addr()
+        .expect("reserved loopback address")
+        .port();
     let source = format!(
         r#"#!/usr/bin/env python3
 import socket
 import time
 
 payload = {payload:?}.encode("utf-8")
-server = socket.socket()
-server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind(("127.0.0.1", {port}))
+server = socket.socket(fileno=0)
 server.listen(8)
 while True:
     connection, _ = server.accept()
@@ -171,22 +177,14 @@ while True:
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(executable, permissions).expect("make listener fixture executable");
-    Command::new(executable)
+    let child = Command::new(executable)
         .args([command, "--host", "127.0.0.1", "--port", &port.to_string()])
-        .stdin(Stdio::null())
+        .stdin(Stdio::from(OwnedFd::from(listener)))
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
-        .expect("spawn listener fixture")
-}
-
-#[cfg(not(windows))]
-fn reserve_loopback_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .expect("reserve loopback port")
-        .local_addr()
-        .expect("reserved loopback address")
-        .port()
+        .expect("spawn listener fixture");
+    (child, port)
 }
 
 #[cfg(not(windows))]
@@ -351,19 +349,14 @@ fn service_supervisor_reuses_matching_replaces_stale_and_rejects_foreign() {
         "source_revision": "current-revision",
     });
 
-    let matching_port = reserve_loopback_port();
     let matching_executable = fixture_root.join("matching-loopx");
     let matching_payload = serde_json::json!({
         "source": "serve-status",
         "runtime_identity": current_identity,
     })
     .to_string();
-    let mut matching = spawn_listener_fixture(
-        &matching_executable,
-        "serve-status",
-        matching_port,
-        &matching_payload,
-    );
+    let (mut matching, matching_port) =
+        spawn_listener_fixture(&matching_executable, "serve-status", &matching_payload);
     wait_for_probe(
         ServiceKind::Status,
         matching_port,
@@ -377,7 +370,6 @@ fn service_supervisor_reuses_matching_replaces_stale_and_rejects_foreign() {
     matching.kill().expect("stop matching fixture");
     matching.wait().expect("reap matching fixture");
 
-    let stale_port = reserve_loopback_port();
     let stale_executable = fixture_root.join("loopx");
     let stale_payload = serde_json::json!({
         "source": "serve-status",
@@ -389,12 +381,8 @@ fn service_supervisor_reuses_matching_replaces_stale_and_rejects_foreign() {
         },
     })
     .to_string();
-    let mut stale = spawn_listener_fixture(
-        &stale_executable,
-        "serve-status",
-        stale_port,
-        &stale_payload,
-    );
+    let (mut stale, stale_port) =
+        spawn_listener_fixture(&stale_executable, "serve-status", &stale_payload);
     wait_for_probe(
         ServiceKind::Status,
         stale_port,
@@ -428,14 +416,9 @@ fn service_supervisor_reuses_matching_replaces_stale_and_rejects_foreign() {
         .expect("stale fixture final status")
         .is_some());
 
-    let foreign_port = reserve_loopback_port();
     let foreign_executable = fixture_root.join("foreign-server");
-    let mut foreign = spawn_listener_fixture(
-        &foreign_executable,
-        "serve-status",
-        foreign_port,
-        r#"{"source":"other"}"#,
-    );
+    let (mut foreign, foreign_port) =
+        spawn_listener_fixture(&foreign_executable, "serve-status", r#"{"source":"other"}"#);
     wait_for_probe(
         ServiceKind::Status,
         foreign_port,
@@ -459,9 +442,8 @@ fn service_supervisor_reuses_matching_replaces_stale_and_rejects_foreign() {
     // A silent listener must be distinct from a foreign HTTP response. Only
     // the expected LoopX process may be terminated after the startup grace.
     for confirmed in [true, false] {
-        let port = reserve_loopback_port();
         let executable = fixture_root.join(if confirmed { "loopx" } else { "silent-foreign" });
-        let mut silent = spawn_listener_fixture(&executable, "chat", port, "");
+        let (mut silent, port) = spawn_listener_fixture(&executable, "chat", "");
         wait_for_probe(
             ServiceKind::Chat,
             port,

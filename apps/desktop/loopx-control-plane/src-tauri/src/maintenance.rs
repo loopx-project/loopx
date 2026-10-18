@@ -27,6 +27,7 @@ pub struct Maintenance {
     automatic_update_checked: AtomicBool,
     incomplete_app_installation: AtomicBool,
     manual_failure_pending: AtomicBool,
+    upgrade_request: std::sync::OnceLock<Option<crate::upgrade_request::UpgradeRequest>>,
 }
 
 #[derive(Default)]
@@ -143,6 +144,10 @@ impl Maintenance {
             }
         }
         *snapshot = value.clone();
+        drop(snapshot);
+        if let Some(Some(request)) = self.upgrade_request.get() {
+            request.publish(phase, &value["details"]);
+        }
         value
     }
 
@@ -842,7 +847,10 @@ fn automatic_app_update(app: &AppHandle) {
     {
         return;
     }
-    let channel = if app.package_info().version.pre.as_str().starts_with("main.") {
+    let request = state.upgrade_request.get().and_then(Option::as_ref);
+    let channel = if let Some(request) = request {
+        request.channel.as_str()
+    } else if app.package_info().version.pre.as_str().starts_with("main.") {
         "main"
     } else {
         "stable"
@@ -853,8 +861,14 @@ fn automatic_app_update(app: &AppHandle) {
             async {
                 let url = endpoint(channel)?;
                 // Keep the optional feed lookup on the startup path bounded.
-                let checked =
-                    perform(app, "check", channel, url.clone(), Duration::from_secs(3)).await?;
+                let checked = perform(
+                    app,
+                    "check",
+                    channel,
+                    url.clone(),
+                    Duration::from_secs(if request.is_some() { 30 } else { 3 }),
+                )
+                .await?;
                 Ok((checked["phase"] == "available").then_some(url))
             },
             |url| async move {
@@ -874,11 +888,26 @@ pub fn start_services(
     app: &AppHandle,
     endpoints: &crate::service_endpoints::ServiceEndpoints,
 ) -> Result<Option<crate::services::ServiceSet>, String> {
+    app.state::<Maintenance>().upgrade_request.get_or_init(|| {
+        let args = std::env::args().collect::<Vec<_>>();
+        if !args
+            .iter()
+            .any(|arg| arg.starts_with("--loopx-upgrade-request="))
+        {
+            return None;
+        }
+        crate::upgrade_request::UpgradeRequest::from_args(
+            &args,
+            app.path().app_local_data_dir().ok()?,
+            app.package_info().version.to_string(),
+            bundled_runtime::identity(app).ok()?["source_revision"].clone(),
+        )
+    });
     app.state::<Maintenance>()
         .startup_started
         .get_or_init(Instant::now);
     automatic_app_update(app);
-    app.state::<Maintenance>().reconcile_services(|| {
+    let result = app.state::<Maintenance>().reconcile_services(|| {
         let runtime = match resume_runtime(app) {
             Ok(runtime) => runtime,
             Err(error) => {
@@ -900,7 +929,13 @@ pub fn start_services(
                 .publish("connecting", json!({"service":service}));
         })
         .map_err(|e| e.to_string())
-    })
+    });
+    if let Ok(Some(services)) = &result {
+        if let Some(Some(request)) = app.state::<Maintenance>().upgrade_request.get() {
+            request.services_ready(services.runtime_identity());
+        }
+    }
+    result
 }
 
 pub fn reconnect_requested(app: &AppHandle) -> bool {
