@@ -750,6 +750,10 @@ Session/channel; it does not create or resume a thread, enqueue work or grant
 execution. Group, unavailable and changed sources refuse; closed Sessions are
 not offered as current targets and their history remains stored. An empty,
 duplicate or mixed selector cannot fall back to the ordinary unfiltered list.
+The filtered response includes the matching `conversation_binding_id`; callers
+must require that match before adopting its targets. Older services may ignore
+the query and return an ordinary list without it, which does not qualify this
+discovery operation.
 Provider observation stays outside the publication fence, and ordinary session
 listing adds no provider IO. The product selector must use this verified original
 identity rather than equating an ordinary workspace channel with a bound Chat.

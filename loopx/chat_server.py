@@ -959,7 +959,10 @@ class ChatRequestHandler(
                 # A failed provider/store read may contain private diagnostics.
                 # Refuse this selector; never fall back to an unfiltered list.
                 return self._send_error("Original private conversation is unavailable; verify its App, owner and workspace binding.", status=409)
-            return self._send_json({"ok": True, "schema_version": "loopx_chat_session_list_v1", "sessions": sessions})
+            # Older services ignore this new query. A matching selector in the
+            # response lets callers reject their ordinary, unfiltered result.
+            return self._send_json({"ok": True, "schema_version": "loopx_chat_session_list_v1",
+                                    "conversation_binding_id": query["conversation_binding_id"][0], "sessions": sessions})
         goal_id = _compact_text((query.get("goal_id") or [""])[0], limit=160) or None
         agent_id = _compact_text((query.get("agent_id") or [""])[0], limit=80) or None
         channel_id = _compact_text((query.get("channel_id") or [""])[0], limit=160) or None

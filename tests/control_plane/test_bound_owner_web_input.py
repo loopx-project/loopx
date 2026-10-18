@@ -103,6 +103,7 @@ def test_http_binding_discovery_selects_original_session_without_starting_work(b
     requests_before = capture.read_bytes()
     status, listed = _bound_sessions(post, "conversation_binding_id=" + binding["binding_id"])
     assert status == 200, listed
+    assert listed["conversation_binding_id"] == binding["binding_id"]
     assert [row["session_id"] for row in listed["sessions"]] == [original["session_id"]]
     assert listed["sessions"][0]["goal_id"] == ("loopx-manager" if kind == "steward" else None)
     assert listed["sessions"][0]["session_id"] != other["session_id"]
@@ -111,6 +112,7 @@ def test_http_binding_discovery_selects_original_session_without_starting_work(b
     status, ordinary = _bound_sessions(post, "")
     assert status == 200 and {row["session_id"] for row in ordinary["sessions"]} == {
         original["session_id"], other["session_id"]}
+    assert "conversation_binding_id" not in ordinary
     # The discovery result is an existing identity, not a new execution grant.
     selected = listed["sessions"][0]
     status, accepted = post(selected, {"message": "Continue the discovered original conversation.",
