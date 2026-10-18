@@ -53,6 +53,8 @@ class LarkPrivateConversations:
         self.root = controller.store.root / "lark-private-deliveries"
         from .owner_attention import LarkOwnerAttention
         self.owner_attention = LarkOwnerAttention(self)
+        from .private_ingress import PrivateIngressObserver
+        self.ingress = PrivateIngressObserver(self)
 
     def profiles(self) -> dict[str, dict[str, str]]:
         """Discover current App configuration, never authorize a conversation.
