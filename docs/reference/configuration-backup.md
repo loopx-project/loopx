@@ -645,8 +645,10 @@ local HTTP checkpoint with UTF-8 values. The packaged browser journey, full
 state backup, provider promotion, a destination machine and long-duration SQLite
 operation remain separate qualifications.
 
-## Agent-assisted migration
+## Agent-assisted 2.0 in-place upgrade
 
-For moving unfinished Agent work, use the [copyable migration prompt](../guides/agent-migration.md)
-to compose these existing primitives. The Agent handles discovery, path mapping,
-verification and current-owner admission; this adds no automatic migration service.
+Use the [copyable upgrade prompt](../guides/agent-upgrade.md) to let your Agent
+compose the existing installation and data-upgrade primitives in the same
+project and state routes. Verify the private backup before mutation, preserve
+full Tasks/configuration/receipts, then verify useful original work. Backup
+verification alone does not upgrade a Goal or authorize a data rollback.

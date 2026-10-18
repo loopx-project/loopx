@@ -64,42 +64,44 @@ platform profiles with M4/M5. This coordination checkpoint implements no M2/M3
 behavior and starts no recovery or activation.
 
 <a id="planned-agent-transfer"></a>
+<a id="in-place-major-upgrade"></a>
 
-### Planned Agent migration: existing primitives plus an Agent prompt
+### 2.0 in-place upgrade: existing primitives and an Agent prompt
 
-The user outcome is **move my Agent to another environment and continue its
-unfinished work**. The initial delivery composes existing atomic capabilities
-with a [copyable Agent migration prompt](../../guides/agent-migration.md).
-The user's Agent coordinates the steps; a dedicated transfer executor,
-background Host wake, migration conversation/UI or automatic result-return
-system is not a prerequisite.
+Migration in this delivery means **upgrade existing LoopX 1.x work to 2.0 in
+place**. Keep the same machine, project, registry/runtime routes and Goal/Agent
+identities. The [copyable upgrade prompt](../../guides/agent-upgrade.md) lets the
+user's Agent compose existing operations. Moving work to another environment,
+transferring sessions and creating a dedicated migration executor or UI are
+outside this delivery.
 
-The Agent inventories complete Goal/Task data, relationships, required materials,
-configuration and supported context. It quiesces the source through existing
-owners, privately exports and verifies the required data, restores into an empty
-isolated destination, maps paths and rebinds reviewed settings. Destination
-credentials are authenticated separately. Current Goal/Task/session and
-claim/lease admission remain with their existing owners; copied records never
-supply execution authority. Unknown effects are reconciled by their original
-operation identity. Keep the source and rollback copy until the switch is
-verified, with no concurrent source/destination execution.
+The Agent identifies the installation owner and each Goal's actual provider,
+format and ownership policy, stops affected old writers through their owners,
+settles pending operations and authorized leases, and makes a private backup.
+It updates through the installation owner and uses a format-compatible verifier
+before changing Goal data. It applies only the required changes and continues original work
+through its current admission. Existing valid configuration remains selected;
+new-Goal defaults do not migrate an existing Goal.
 
-| Existing owner / entry | Bounded contribution |
+| Observed upgrade need | Existing owner / entry |
 | --- | --- |
-| `backup-state`, configuration backup and authority archive | Reuse export, integrity checks, isolated restore and original-receipt readback; fix reproduced producer/consumer gaps in these owners. A readable checkpoint is not activation. |
-| Supported checkpoint/context and Goal/Task/session/lease owners | Reuse supported context adoption and current destination admission. Otherwise provide a complete handoff and explicitly identify a fresh conversation; do not promise arbitrary Host continuation. |
-| Existing CLI and Settings/Capability Center | Keep each primitive usable through its current entry. Let the Agent compose the commands rather than asking the user to stitch owner runbooks together. |
+| Package/runtime and Host material | Existing installation owner and `update check/plan/apply`; preserve state routes and verify active layers. |
+| Old canonical authority format | `authority-archive upgrade`; back up, verify and upgrade the existing store without switching provider. |
+| Unpromoted Markdown authority | `coordination-shadow inspect-source/prepare-import/apply-import`; import complete records into the reviewed provider for the same registered Goal. |
+| Historical `legacy` ownership policy | `handoff-mode plan-migration/migrate`; preserve assignments and settled history while explicitly selecting `soft_claim` or `hard_lease`. |
 
-Each primitive refinement needs a real export/verify/restore or rebinding
-counterexample, focused positive and refusal cases, and evidence that source and
-occupied destinations remain intact. Keep repairs independently reviewable;
-do not grow a new orchestrator to qualify a primitive. A completed migration
-still requires the destination Agent to perform and verify useful original
-work, not just report a successful backup. The prompt and primitive checks alone
-do not claim that this end-to-end migration has been exercised.
+Qualify an ordinary 1.4.2 installation upgraded to the pinned 2.0 candidate in
+the same isolated environment and paths. Read back full active/archive records,
+relationships, configuration and original receipts; continue and verify one
+useful original task step. Cover the relevant refusals and same-operation
+recovery without duplicating effects or overwriting later writes. Polish only
+reproduced gaps in the existing owners. Binary rollback is not data rollback;
+retain the owning backup/recovery and post-upgrade-write boundaries.
 
-This route preserves the accepted M2/M3 disaster-recovery gates below. It grants
-no activation, credential transfer, paid execution or release authority.
+M2/M3 disaster recovery below remains separate. An in-place upgrade neither
+requires a new Goal lifetime nor qualifies cross-machine transfer, unavailable-
+source recovery, all Host profiles or D2/D3. This proposal authorizes no live
+upgrade, release, credential transfer or paid execution.
 
 ### First supported user outcome
 

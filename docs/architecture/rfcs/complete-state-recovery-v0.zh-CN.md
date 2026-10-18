@@ -49,33 +49,35 @@ held，未知状态不改称可恢复，执行权限始终为 false。限制与�
 继续由 M4/M5 承接。本协调检查点未实现 M2/M3，也不启动恢复或激活。
 
 <a id="planned-agent-transfer"></a>
+<a id="in-place-major-upgrade"></a>
 
-### 计划内 Agent 迁移：已有原子能力与 Agent prompt
+### 2.0 原地迁移式升级：已有原子能力与 Agent prompt
 
-用户结果是**把我的 Agent 搬到另一个环境，并继续原来未完成的工作**。首轮交付
-复用已有原子能力，配合[可复制的迁移 prompt](../../guides/agent-migration.md)，
-由用户的 Agent 协调步骤；不以专用迁移 executor、后台 Host 唤醒、迁移会话/UI
-或自动结果回传系统为前置。
+本次迁移指**现有 LoopX 1.x 工作原地升级到 2.0**。保持同一机器、项目、
+registry/runtime 路由及 Goal/Agent 身份，由用户的 Agent 配合[可复制升级 prompt](../../guides/agent-upgrade.md)
+组合现有操作。本次不交付跨环境搬迁、会话转移、专用迁移 executor 或 UI。
 
-Agent 盘点完整 Goal/Task 数据、关系、必要材料、配置及受支持上下文，通过既有
-owner 停止源端写入，私有导出并校验所需数据，在全新隔离目标恢复、映射路径和
-重绑已审查配置。凭证在目标重新认证。当前 Goal/Task/session 与 claim/lease
-准入仍由既有 owner 决定，复制记录不授予执行权。未知 effect 沿原 operation
-identity 恢复。切换验证前保留源和回退副本，不让源与目标并行执行。
+Agent 识别安装归属及各 Goal 的真实 provider、格式和所有权策略，通过原 owner
+停止受影响旧写方、对账未完成操作并结清获准处理的租约，先私有备份。沿安装 owner
+更新，并在改变 Goal 数据前用兼容工具校验备份。只执行必要变化，然后按当前准入
+继续原工作。有效的已有配置保持选定；修改
+新 Goal 默认值不等于升级现有 Goal。
 
-| 既有 owner / 入口 | 有界贡献 |
+| 实际升级需要 | 既有 owner／入口 |
 | --- | --- |
-| `backup-state`、configuration backup 与 authority archive | 复用导出、完整性校验、隔离恢复和原 receipt 读回；在这些 owner 修复可复现的生产者/消费者缺口。隔离可读不等于激活。 |
-| 受支持的 checkpoint/context 与 Goal/Task/session/lease owner | 复用上下文采用及目标当前准入；不支持时提供完整交接并明确新会话，不承诺任意 Host 接续。 |
-| 既有 CLI 与设置/能力中心 | 各原子能力沿原入口可用，由 Agent 组合命令，不让用户拼接多套 owner runbook。 |
+| 安装包／runtime 与 Host 材料 | 既有安装 owner 和 `update check/plan/apply`；保持状态路由并验证实际激活层。 |
+| 旧 canonical authority 格式 | `authority-archive upgrade`；对现有 store 备份、校验和格式升级，不切换 provider。 |
+| 尚用 Markdown authority 的 Goal | `coordination-shadow inspect-source/prepare-import/apply-import`；为同一已注册 Goal 向审核的 provider 导入完整记录。 |
+| 历史 `legacy` 所有权策略 | `handoff-mode plan-migration/migrate`；保留归属与已结算历史，明确选择 `soft_claim` 或 `hard_lease`。 |
 
-每项原子打磨须有真实导出/校验/恢复或重绑反例、聚焦的成功及拒绝验证，并证明
-源和已占用目标保持完整。修复独立可评审，不为资格验证扩建编排器。迁移完成仍须
-目标 Agent 实际继续原工作并验证有用结果，不能只报告备份成功；prompt 与原子
-检查本身也不宣称已经执行过这条端到端迁移。
+用普通 1.4.2 安装在同一隔离环境、同一路径升级到固定 2.0 候选，读回完整活动／
+归档记录、关系、配置和原 receipts，继续原任务有用的一步并验证结果。覆盖相关拒绝
+及原 operation 恢复，不重复副作用、不覆盖后写。只打磨既有 owner 的可复现断点。
+回退二进制不等于回退数据，保留对应备份／恢复与升级后新写的边界。
 
-该路径保留下文已接受的 M2/M3 灾难恢复门，不新增激活、凭证转移、付费执行或
-发布授权。
+下文 M2/M3 灾难恢复独立保留。原地升级不要求新 Goal lifetime，也不证明跨机
+搬迁、原源不可用恢复、所有 Host 或 D2/D3 合格。本提案不授权活跃升级、发布、
+凭证转移或付费执行。
 
 ### 首个支持的用户结果
 
