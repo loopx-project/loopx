@@ -742,7 +742,18 @@ origin, owner or provider claims. The TS binding/source owners decide admission
 and provenance; Python observes identity and commits under the binding fence.
 Steward ingress uses the registered coordination root and existing source policy,
 separately from execution grants. File/SQLite HTTP regressions cover full text,
-replay, FIFO and revocation races. This is a Core/API prerequisite: packaged
+replay, FIFO and revocation races. The existing session-list endpoint also accepts
+`GET /api/chat/sessions?conversation_binding_id=<binding_id>` to discover existing
+private Sessions through that same fresh binding owner. It returns the existing
+public Session summaries, retaining a project's null Goal and the original
+Session/channel; it does not create or resume a thread, enqueue work or grant
+execution. Group, unavailable and changed sources refuse; closed Sessions are
+not offered as current targets and their history remains stored. An empty,
+duplicate or mixed selector cannot fall back to the ordinary unfiltered list.
+Provider observation stays outside the publication fence, and ordinary session
+listing adds no provider IO. The product selector must use this verified original
+identity rather than equating an ordinary workspace channel with a bound Chat.
+This is a Core/API prerequisite: packaged
 frontend discovery, live shared-Lark adoption, project-recipient collaboration
 and original-conversation result return still require their existing acceptance.
 

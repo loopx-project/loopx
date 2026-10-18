@@ -479,6 +479,13 @@ CLI/SSH 导出使用 `goal-portfolio --manager-view todos --goal-id GOAL --todo-
 TS binding/source owner 决定准入和来源关联，Python 观测身份并在 binding 发布锁内落队列。
 管家 ingress 沿注册的 coordination root 和现有 source policy，执行授权仍独立。
 真实 File/SQLite HTTP 回归覆盖完整文本、重放、FIFO 和撤权竞态。
+现有会话列表也支持 `GET /api/chat/sessions?conversation_binding_id=<binding_id>`，
+由同一 binding owner 重新核验后发现已经存在的本人私聊 Session。
+返回既有公开 Session 摘要，保留项目的空 Goal 和原 Session/channel；不创建或恢复线程、
+不排入工作，也不授予执行权限。群、不可用或已经变化的来源明确拒绝；关闭会话不再作为
+当前目标提供，历史继续保存。空、重复或混合筛选不能退回普通的未筛选列表。
+Provider 观测在发布锁外完成；普通会话列表不增加 provider IO。产品选择器须采用
+这个已核验的原会话身份，不能把普通工作区 channel 当作已经绑定的 Chat。
 此项是 Core/API 前置：打包前端发现、真实共享飞书会话采用、项目接收者协作与原会话
 结果返回仍须完成各自现有验收，不以合成测试宣称整条用户旅程完成。
 
