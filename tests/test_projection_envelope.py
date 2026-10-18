@@ -597,6 +597,24 @@ def test_cached_status_keeps_observed_at_and_restamps_staleness(tmp_path: Path, 
     assert "(cached)" in render_status_markdown(cached)
 
 
+@pytest.mark.parametrize("content", [b"\xff", b'{"payload":"\xe2\x82', b'{"payload":'])
+def test_unreadable_cache_is_a_non_mutating_miss(tmp_path: Path, content: bytes) -> None:
+    args = _cache_args(_registry(tmp_path))
+    path = status_projection_cache_path(
+        args["runtime_root"], status_projection_cache_key(**args)
+    )
+    path.parent.mkdir(parents=True)
+    path.write_bytes(content)
+
+    cached, metadata = load_status_projection_cache(max_age_seconds=3600, **args)
+
+    assert cached is None
+    assert metadata["hit"] is False
+    assert metadata["miss_reason"] == "unreadable"
+    assert metadata["error"]
+    assert path.read_bytes() == content
+
+
 def test_cache_entry_without_an_envelope_is_a_miss(tmp_path: Path) -> None:
     registry_path = _registry(tmp_path)
     args = _cache_args(registry_path)

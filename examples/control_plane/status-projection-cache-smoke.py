@@ -383,6 +383,35 @@ def main() -> int:
         assert_cache_expired(expired_quota)
         assert_next_action(expired_quota, successor_id)
 
+        # A damaged optional cache cannot hide the current canonical successor.
+        for previous, command in (
+            (expired_status, ("status",)),
+            (expired_quota, (
+                "quota", "should-run", "--goal-id", GOAL_ID,
+                "--agent-id", AGENT_ID, "--available-capability", "shell",
+            )),
+        ):
+            path = Path(str(cache_metadata(previous)["path"]))
+            damaged = b'{"payload":"\xe2\x82'
+            path.write_bytes(damaged)
+            args = (*command, "--scan-path", str(public_doc), "--limit", "5")
+            recovered = run_cli(registry_path, *args, "--use-projection-cache")
+            assert recovered["ok"] is True, recovered
+            assert cache_metadata(recovered)["hit"] is False, recovered
+            assert cache_metadata(recovered)["miss_reason"] == "unreadable", recovered
+            assert successor_id in json.dumps(recovered), recovered
+            assert path.read_bytes() == damaged
+            if command[0] == "quota":
+                assert_next_action(recovered, successor_id)
+
+            rewritten = run_cli(
+                registry_path, *args, "--use-projection-cache", "--write-projection-cache",
+            )
+            assert_cache_written(rewritten)
+            reused = run_cli(registry_path, *args, "--use-projection-cache")
+            assert_cache_hit(reused)
+            assert successor_id in json.dumps(reused), reused
+
         public_doc.write_text(
             f"Public leak probe must still be caught by default quota scan: {PRIVATE_DOC_MARKER}\n",
             encoding="utf-8",
