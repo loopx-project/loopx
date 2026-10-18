@@ -94,12 +94,16 @@ and completion-result owners. One move confirmation can continue the unfinished
 work and return its accepted file through the original Goal outputs; it adds no
 result store or second decision owner. [The bounded profile and evidence limits](../../reference/research-checkpoint.md#admit-a-fresh-session-and-adopt-context)
 include original-entry retry after the HTTP process exits at destination-admitted
-or result-accepted boundaries, without replaying accepted work or debiting twice;
-listener restart alone grants no execution. They
-separate real File/SQLite and native-process checks using deterministic local
-responses from persistent Host wake, necessary configuration/credential rebinding,
-full source-effect drain, portable delivery and the full 120-second journey.
-Those remain open; this candidate is not merged or release-qualified. Keep C1/T4
+or result-accepted boundaries, without replaying accepted work or debiting twice.
+An explicit preparation option now lets that same confirmation authorize the
+existing local Chat Host wake service after waiting or restarting. Its native
+admission freezes the first-confirmation start window; journals and dispatch
+locks retain the original Turn budget and once-only execution. Old reviews gain
+no background caller; stopped, expired or unsettled work retains its hold.
+Real File/SQLite and native-process checks use deterministic local responses.
+This bounded service profile leaves necessary configuration/credential rebinding,
+full source Host/effect drain, portable delivery, live-model behavior and the full
+120-second journey open. The candidate is not merged or release-qualified. Keep C1/T4
 and D2/D3 open rather than derive another writer-deletion or result-store task.
 
 1. Close T4/C1 and D1 adoption on pinned final-main source and normal installed

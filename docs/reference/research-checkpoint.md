@@ -264,7 +264,8 @@ original Task, obtains a new lease, and resumes the destination-native Agent
 thread. A running Turn's validation and settlement keep their owning timeouts;
 this dispatch window is not the full migration's elapsed-time qualification.
 Waiting, stopping, replan, an exhausted budget or a failed original validator
-ends this request. No background timer is installed. Previously admitted
+ends this request. Reviews without service continuation do not enable a background
+caller. Previously admitted
 decisions without this budget retain a single dispatch. Retrying confirmation
 recovers the exact original chain
 from native journals, including a completed descendant; it cannot start another
@@ -298,12 +299,41 @@ result when the destination returns, without another model call or debit.
 
 Same-operation recovery also covers an HTTP process exit after destination
 admission but before native dispatch, and after accepted work but before its
-HTTP response. Restarting the listener or inspecting the original Goal does not
+HTTP response. For reviews without service continuation, restarting the listener or inspecting the original Goal does not
 start a model Turn. An explicit retry uses the retained cutover and original
 Turn journal: unfinished work executes once, while accepted work and its exact
 result are read back without another execution or debit. This qualifies retry
-at those commit boundaries, not automatic wake or interruption of a still-active
-native executor; those remain with the responsible Host and execution owners.
+at those commit boundaries, not interruption of a still-active native executor;
+that remains with its original execution owner.
+
+An Agent may explicitly add `--continue-with-host-service` alongside the original
+`--continue-todo-id` during preparation. The same Settings confirmation then
+discloses and authorizes the local Chat Host to continue that original Task after
+a wait clears or the service reopens. Existing reviews without this flag keep
+their earlier behavior. The existing native admission freezes the start/deadline
+at first confirmation; reopening, resuming or reconfirming cannot replenish its
+90-second start window. The native Turn journals retain the ten-Turn limit.
+The existing Chat Host wake pump runs this IO separately from conversation
+wakes, with no per-Goal timer, work queue or copied Host grant. Every dispatch
+rechecks native admission, current activation, Task ownership, quota and lease;
+two listeners share the original dispatch lock. A stopped Goal or expired window
+admits no new work. Failed or unsettled journals retain their original recovery
+owner rather than gaining a retry from a service restart. A closed service does
+not wake work; stop the destination Goal in Settings to prevent further dispatch.
+
+Normal noneditable-package File/SQLite qualification covers service restart after
+admission, waiting after independently checked progress, owner resume and exact
+accepted-result return. Two competing listeners still execute and debit each
+Turn once. Separate checks retain old-review isolation, immutable/expired windows
+and unsettled-effect refusal. The packaged App displays this authorization before
+its one confirmation and reads the accepted original Task afterward. This is a
+bounded local-service profile, not unattended execution beyond its reviewed window.
+
+![Explicit local Host continuation in the normal packaged App](assets/agent-transfer-host-service-confirmation.png)
+
+![Accepted original result after the reviewed move](assets/agent-transfer-host-service-result.png)
+
+![A disconnected destination clears the old accepted result](assets/agent-transfer-host-service-unavailable.png)
 
 ![Reviewed bounded continuation in the normal packaged App](assets/agent-transfer-bounded-confirmation.png)
 
@@ -311,9 +341,10 @@ native executor; those remain with the responsible Host and execution owners.
 
 The original confirmation replays without executing tools again. Normal
 noneditable-package qualification uses deterministic local model responses and
-synthetic inputs. Bounded continuation inside this request is separate from
-persistent wake after waiting or service exit, live-model behavior and the
-complete installed migration/120-second qualification.
+synthetic inputs. The explicit local-service continuation above is separate from
+live-model behavior, necessary configuration/credential rebinding, full source
+Host/effect drain, portable delivery and the complete installed migration/120-second
+qualification. Those remain open.
 
 Distinct source workspaces, unknown mappings, links/submodules, conflicted or
 special index states, and dirty canonical checkouts still hold before preparation.
@@ -433,10 +464,21 @@ remain unqualified.
 项目设置、非信任状态及 provider/model/sandbox 等变化仍受原配置摘要约束。正常非
 editable 包使用本地固定模型响应，不调用付费模型。新准备的审阅冻结最多十轮、
 90 秒的新轮启动窗口；当前轮次的终验与结算沿原超时处理，不冒充全旅程耗时门。
-等待、停止、重规划、预算耗尽或终验失败时结束本次推进，不安装后台定时器。
+等待、停止、重规划、预算耗尽或终验失败时结束本次请求；未选择服务续办的准备不启用后台 caller。
 已准入的历史决定若未带此预算，仍只有单轮预算；升级界面会提示需要重新规划，
-保留原任务和已记录的轮次。目标恢复后可恢复同一次迁移；跨等待或服务退出后的持续唤醒、
-真实模型及完整 120 秒旅程仍待验收。
+保留原任务和已记录的轮次。目标恢复后可恢复同一次迁移。
+Agent 可在原 `--continue-todo-id` 准备中显式加入 `--continue-with-host-service`，由同一次
+设置页确认说明并授权本机 Chat Host 在等待解除或服务重开后继续原任务；旧准备不自动升级。
+首次确认把启动／截止时间冻结在既有原生准入凭据中；重开、恢复、重复确认都不补充 90 秒
+启动窗口，原 Turn journal 保留十轮上限。复用现有 Chat Host 唤醒周期，原任务 IO 与对话
+唤醒分开，不增加每 Goal 定时器、工作队列或复制 Host 授权。每轮重查原生准入、当前
+activation、任务归属、quota 与租约；两个服务共享原 dispatch lock。停止目标 Goal 或窗口
+到期不启动新工作，服务关闭时不唤醒；失败／未结算执行仍交原 owner 恢复。
+正常非 editable 包的 File/SQLite 验证覆盖准入后服务重开、阶段进展后等待、本人恢复及
+原入口实际结果返回；竞争服务不重复执行或扣额，并保留旧准备隔离、窗口不可重置／到期、
+未结算 effect 拒绝等反例。正常打包界面显示授权并由一次确认完成原任务；这只是有界本地
+服务 profile，真实模型、必要配置／凭证重绑、完整源 Host/effect drain、可携交付及完整
+120 秒旅程仍待验收。
 仅通过 argv 传参的迁移桥接会关闭 CLI 子进程的 stdin，避免独立验收消费宿主的
 终端／长期输入管道并等待 EOF。Host 协议和结果仍走独立输入通道，其它 caller 的
 验收输入兼容性、原校验命令和原超时不变。界面显示本次推进的实际等待／重规划等
