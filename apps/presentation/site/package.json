@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "test:delegation": "node --test src/delegation-lab/allocation.test.mjs",
     "build": "tsc --noEmit && node scripts/build.mjs",
     "smoke:seo": "node scripts/seo-smoke.mjs",
     "smoke:seo:bases": "node --test scripts/seo-smoke.test.mjs",

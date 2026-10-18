@@ -212,6 +212,19 @@ instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
 
+An autonomous-replan binding can also close without debit after its existing
+replan owner accepts a concrete blocker or evidence-linked path disposition.
+Readback must match the original selected obligation, Goal/Agent/Turn, typed
+blocked observation and fingerprint, accepted semantic delta, satisfied semantic
+checkpoint, and durable receipt. It uses the same
+`typed_blocked_writeback_no_spend` result; it does not invent a Todo binding or
+retry timer. A later spend request for that exact closed Turn is a no-op.
+This corrects the prior spend-required result for a qualified blocked replan.
+Canonical waits, source observations, ordinary outcome/checkpoint gates and
+selection of independent work remain unchanged. A previously committed debit
+is retained, and neither a bare blocker declaration nor an unqualified ACK
+closes the Turn.
+
 An accepted `vision_checkpoint_v0` for `outcome_progress` also closes its exact
 Todo-bound Turn after the matching writeback and spend receipts commit. Both
 `in_flight_continuation` and `semantic_closeout` use their corresponding typed
@@ -440,7 +453,7 @@ eligible for exact Todo-bound Turn settlement only when it includes a
 `evidence_ids`. Missing schemas, prose-only blockers, malformed evidence, and
 Todo identity mismatches remain fail-closed.
 
-New Turn-bound blocked writebacks also require a bounded retry on the same
+New Todo-bound blocked writebacks also require a bounded retry on the same
 unfinished advancement Todo. A legacy Todo must have a pending
 `resume_when=resume_at:<timezone-aware-time>` due in 1–30 minutes. With promoted
 File/SQLite authority, an open Todo without its own resume condition can use
@@ -983,6 +996,20 @@ instead of another quiet skip. Automatic `quota should-run` heartbeat liveness
 receipts have no concrete executed-monitor identity and do not count toward
 this threshold; distinct heartbeat turn ids are idempotency evidence, not
 monitor execution evidence.
+
+The current Todo `consecutive_no_change` detector shares the Monitor lifetime
+rule with scheduling. At one explicit runtime observation, `expires_at` at or
+before that instant excludes that Monitor from `monitor_no_change_streak`.
+The recorded Todo, counters, observation hash/generation and pending successor
+remain unchanged. An active Monitor whose next poll is in the future can still
+require a streak review; expiry and due time have different meanings.
+Goal-frontier and status callers use the same TypeScript expiry/selection owner
+while preserving their existing trigger shape, scope and tie order. Historical
+requests without a current clock retain their previous replay behavior;
+independent progress and periodic-review triggers remain effective. Quiet
+heartbeat liveness receipts can still be recorded without polling the source
+or spending a slot. This source repair does not establish installed adoption,
+full Goal acceptance or CI qualification.
 
 After that bounded replan slice is acknowledged by a compact state run carrying
 `autonomous_replan_ack_v0` and `repair_delta_contract_v0` with

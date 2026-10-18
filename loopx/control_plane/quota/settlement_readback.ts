@@ -33,6 +33,7 @@ import {
 } from "./settlement_workspace_causality.ts";
 import {
   isBoundedBlockedRetry,
+  isAcceptedBlockedReplanWriteback,
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
   isAcceptedReplanWriteback,
@@ -1198,21 +1199,23 @@ function readQuotaSettlementFromRequest(
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
+  const semanticReplanGuard = projectSemanticReplanGuard(receiptDetails);
   // The exact Turn-bound blocked writeback is itself a durable no-spend
   // closeout. It cannot certify Todo completion or become delivery progress.
   // A spend already committed for this identity remains an ordinary spend
   // settlement, so readback never erases a historical debit.
   const blockedNoSpend = writeback.failure === null &&
     spendRun === null && spendEvent === null &&
-    identity.binding_kind === "todo" &&
-    writebackRun !== null && writebackRun.delivery_outcome === "outcome_gap" &&
-    isBoundedBlockedRetry(writebackRun.blocked_retry, identity.todo_id) &&
-    isTurnScopedSettlementOutcome(
-      writebackRun.delivery_outcome,
-      writebackRun.progress_observation,
-      identity.todo_id,
-    );
-  const semanticReplanGuard = projectSemanticReplanGuard(receiptDetails);
+    ((identity.binding_kind === "todo" &&
+      writebackRun !== null && writebackRun.delivery_outcome === "outcome_gap" &&
+      isBoundedBlockedRetry(writebackRun.blocked_retry, identity.todo_id) &&
+      isTurnScopedSettlementOutcome(
+        writebackRun.delivery_outcome,
+        writebackRun.progress_observation,
+        identity.todo_id,
+      )) || isAcceptedBlockedReplanWriteback(
+        writebackRun, identity, semanticReplanGuard.selected_obligation_id,
+      ));
   const retiredNoSpend = writeback.failure === null &&
     spendRun === null && spendEvent === null &&
     isCapabilityRetirementWriteback(writebackRun, identity, semanticReplanGuard.selected_capability_guard);

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from copy import deepcopy
 from pathlib import Path
@@ -17,6 +18,10 @@ from tests.control_plane.test_quota_settlement_cli import (
     _spend_run_count, _write_fixture,
 )
 from loopx.todos import complete_goal_todo
+from loopx.control_plane.work_items.replan_context_codec import (
+    project_replan_context,
+    replan_history_from_status,
+)
 
 BODY = "[P1] " + "Retain the original requirements and verify the result. " * 24 + "TAIL: preserve cancellation."
 
@@ -200,3 +205,88 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
         rc, spent = _run_generated_cli(accepted["settlement_owed"]["command"], registry_path=registry)
         assert rc == 0 and spent["appended"] is not replay, spent
         assert _spend_run_count(runtime) == 2
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeypatch, provider):
+    """A caller following the delivered example must retain a real work link."""
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    # Fund all three admitted Turns before execution; the shared fixture's
+    # ordinary two-slot window is intentionally smaller than this journey.
+    initial = json.loads(registry.read_text())
+    initial["goals"][0]["quota"]["allowed_slots"] = 3
+    registry.write_text(json.dumps(initial))
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    _initialize_authority(runtime, registry, state, provider)
+
+    def run(*args):
+        return _run_cli(registry, runtime, *args, cwd=project)
+
+    rc, configured = run("configure-goal", "--goal-id", GOAL_ID,
+                         "--execution-replan-after-turns", "1", "--execute")
+    assert rc == 0, configured
+    for stage in ("initial", "review", "subsequent"):
+        binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                   "--todo-id", TODO_ID, "--turn-instance-id", f"link-example-{stage}")
+        rc, guard = run("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                        "--agent-id", AGENT_ID, "--turn-instance-id", f"link-example-{stage}",
+                        "--scan-path", str(project))
+        if rc == 0 and guard["interaction_contract"]["cli_channel"].get("selection_required"):
+            selection = guard["interaction_contract"]["cli_channel"]["selection_command"]
+            command = selection["route_prefix"] + " " + selection["command_args_template"].format(todo_id=TODO_ID)
+            rc, guard = _run_generated_cli(command, registry_path=registry)
+        assert rc == 0 and guard["interaction_contract"]["agent_channel"]["delivery_allowed"], (
+            stage, guard.get("error"), guard.get("reason"))
+        args = ["refresh-state", *binding, "--classification", "validated_progress",
+                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                "--no-global-sync", "--suppress-external-sinks"]
+        if stage == "review":
+            authoring = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["vision_authoring"]
+            example = re.search(r"retain:todo_<id>", authoring["authoring_hint"])
+            assert example, "The authoring contract must offer an executable retention example."
+            vision = deepcopy(authoring["minimal_example"])
+            vision["todo_delta"] = [example.group().replace("todo_<id>", TODO_ID)]
+            vision["path_delta"].update(
+                outcome="replan", observed_reality="Continue the admitted original work.",
+                retained=["Original requirements"], evidence_refs=["validation:work-link"])
+            path = tmp_path / "linked-vision.json"
+            path.write_text(json.dumps(vision))
+            args += ["--agent-vision-json", str(path), "--autonomous-replan-recorded",
+                     "--repair-delta-kind", "goal_vision_patch"]
+        else:
+            args += ["--delivery-boundary", "in_flight_continuation"]
+        rc, written = run(*args)
+        assert rc == 0, written
+        rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)
+        assert rc == 0, spent
+
+    # Read the real immutable CLI history, not a hand-authored decision fixture.
+    status = {"registry": str(registry), "runtime_root": str(runtime), "run_history": {"runs": []}}
+    context = project_replan_context(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status,
+        stride_strategy="evidence_conditioned_v1")
+    follow = context["decision_followthrough"]
+    assert [row["todo_id"] for row in follow["planned_work"]] == [TODO_ID]
+    assert follow["ordinary_work"]["recorded_count"] == 1
+    evidence = follow["ordinary_work"]["evidence"][0]
+    assert evidence["todo_id"] == TODO_ID
+    assert follow["planned_work"][0]["ordinary_evidence_refs"] == [evidence["evidence_ref"]]
+    assert follow["execution_and_goal_gain"] == "unknown"
+    # Reading this view neither enables stride nor settles another Turn.
+    ordinary = project_replan_context(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status, stride_strategy="off")
+    assert "decision_followthrough" not in ordinary
+    assert _spend_run_count(runtime) == 3
+
+    # Preserve compatibility without turning a descriptive or unsupported
+    # action into a causal work link. Mutate a copy, never the authority store.
+    historical = deepcopy(replan_history_from_status(status, GOAL_ID))
+    review = next(row for row in historical if row.get("turn_instance_id") == "link-example-review"
+                  and row.get("agent_vision"))
+    review["agent_vision"]["todo_delta"] = [f"action:{TODO_ID}", "Keep investigating."]
+    unlinked = project_replan_context(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=historical,
+        history_newest_first=False, stride_strategy="evidence_conditioned_v1")
+    assert unlinked["decision_followthrough"]["planned_work"] == []
+    assert "ordinary_work" not in unlinked["decision_followthrough"]
