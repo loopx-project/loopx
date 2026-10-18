@@ -52,6 +52,13 @@ server.registry_path = Path(registry)
 server.runtime_root = Path(runtime)
 server.runtime_root_override = runtime
 server.verbose = False
+if fault == 'host':
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    server.chat_store = ChatSessionStore(Path(runtime))
+    server.runtime_controller = ChatRuntimeController(store=server.chat_store,
+        registry_path=Path(registry), codex_bin=os.environ['LOOPX_NATIVE_CHECKPOINT_BIN'])
+    server.start_host_wakes()
 print(json.dumps({'port': server.server_port}), flush=True)
 server.serve_forever()
 """

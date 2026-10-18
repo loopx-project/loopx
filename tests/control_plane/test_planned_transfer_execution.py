@@ -25,13 +25,14 @@ from tests.control_plane.test_planned_transfer_product import _goal_document
 source = source_fixture
 
 
-def _prepare(source, tmp_path, *, result_file=None):
+def _prepare(source, tmp_path, *, result_file=None, host_service=False):
     destination = tmp_path / "destination"
     destination.mkdir()
     return destination, source["cli"]("goal-transfer", "prepare-local", "--goal-id", "report",
         "--operation-id", "move-a", "--destination-root", str(destination),
         "--continue-todo-id", source["todo"],
-        *(["--continue-result-file", result_file] if result_file is not None else []), "--execute")
+        *(["--continue-result-file", result_file] if result_file is not None else []),
+        *(["--continue-with-host-service"] if host_service else []), "--execute")
 
 
 def _declare_goal_result_acceptance(source, tmp_path):
@@ -116,11 +117,13 @@ def test_result_uses_the_current_original_acceptance_and_exact_workspace(source,
     (workspace / "report.txt").unlink()
 
 
-def _declare_original_checks(source):
+def _declare_original_checks(source, *, staged=False):
     # Validator is original Task authority, not a browser field or model claim.
     preparation_lease = source["acquire"]("prepare-original-validation")["lease"]
     record = source["cli"]("todo", "list", "--goal-id", "report", "--todo-id", source["todo"])
     validator = [sys.executable, "-c", "from pathlib import Path; assert Path('report.txt').read_bytes()==b'21\\n'"]
+    if staged:
+        validator = [sys.executable, "-c", "from pathlib import Path; assert Path('report.txt').read_bytes() in (b'12\\n',b'21\\n')"]
     source["cli"]("todo", "update", "--goal-id", "report", "--todo-id", source["todo"],
         "--agent-id", "agent-a", "--update-operation-id", "original-independent-validator",
         "--update-expected-provider-revision", record["authority_read"]["provider_revision"],
