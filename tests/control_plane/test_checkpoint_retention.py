@@ -1,7 +1,6 @@
 """Real local artifact owner, retention CLI and filesystem recovery negatives."""
 import json
 import os
-from pathlib import Path
 import threading
 from types import SimpleNamespace
 
