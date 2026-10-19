@@ -127,6 +127,9 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
         return {kind: "project_workspace", goal_ids: [], private_conversation: false};
       }
     } catch { /* Incomplete host identity grants no context. */ }
+    // Explicit null identifies a project Session; a missing legacy Goal field
+    // is different and must not be manufactured by an observation adapter.
+    return {kind: "unavailable", goal_ids: [], private_conversation: false};
   }
   if (goal === "loopx-manager" && (input.origin === undefined || input.origin === "lark" || input.origin === "external" || input.origin === "web")) {
     try {
@@ -135,6 +138,11 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
         return {kind: "external_audience", goal_ids: [], private_conversation: false, bound_steward: true};
       }
     } catch { /* An incomplete steward identity cannot authorize a portfolio. */ }
+  }
+  // Declared context must match a typed identity above; a legacy channel cannot
+  // turn inconsistent recovered project metadata into broader authority.
+  if (input.project_context != null) {
+    return {kind: "unavailable", goal_ids: [], private_conversation: false};
   }
   if (channel === "manager") {
     return {kind: "owner_portfolio", goal_ids: null, private_conversation: true};

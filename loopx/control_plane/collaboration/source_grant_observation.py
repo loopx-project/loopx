@@ -94,9 +94,9 @@ def _source_context_grant(
     return cast(dict[str, Any], effect_runtime_result(
         "collaboration.source.context_authority",
         {
-            "conversation": {key: session.get(key) for key in (
+            "conversation": {key: session[key] for key in (
                 "session_id", "goal_id", "channel_id", "project_context", "steward_context",
-            )} | {"origin": turn.get("origin", "unknown")},
+            ) if key in session} | {"origin": turn.get("origin", "unknown")},
             "turn": {"client_turn_id": turn.get("client_turn_id"), "origin": turn.get("origin"),
                      "message_digest": _hash(turn.get("message"))} if ingress is not None else None,
             "ingress": {key: ingress[key] for key in (

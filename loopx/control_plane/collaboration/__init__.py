@@ -17,9 +17,11 @@ def conversation_trigger(mode: str | None = None, **evidence: bool) -> dict[str,
 
 
 def conversation_scope(session: dict[str, Any], *, origin: str | None = None) -> dict[str, Any]:
+    # Core distinguishes an absent legacy Goal field from an explicit project null.
     return effect_runtime_result("collaboration.conversation.scope", {
-        "channel_id": session.get("channel_id"), "goal_id": session.get("goal_id"),
-        "project_context": session.get("project_context"), "steward_context": session.get("steward_context"),
+        **{key: session[key] for key in (
+            "channel_id", "goal_id", "project_context", "steward_context",
+        ) if key in session},
         **({"origin": origin} if origin is not None else {}),
     })
 
