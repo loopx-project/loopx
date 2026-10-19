@@ -54,7 +54,11 @@ class ChatIngressStore:
                             "external_agent_target": external_agent_target,
                         },
                     )
-                    self._recover_queued_turn_input(session_id, existing)
+                    # Managed acceptance retains its own message identity and
+                    # visible text. A queue-mode retry only replays that receipt;
+                    # the original typed acceptance owner finishes its writes.
+                    if "_acceptance" not in existing:
+                        self._recover_queued_turn_input(session_id, existing)
                     return existing, False
                 session = self.load_session(session_id)
                 if session is None or session.get("status") == "closed":
@@ -141,6 +145,8 @@ class ChatIngressStore:
         """
         from .chat_store import _read_jsonl
 
+        if "_acceptance" in turn:
+            raise ValueError("managed Turn acceptance must finish before queue dispatch")
         turn_id = str(turn["turn_id"])
         event_path = self._event_path(session_id, turn_id)
         try:

@@ -37,6 +37,81 @@ def session_runtime(tmp_path, *, channel="goal.public-research"):
     )
 
 
+@pytest.mark.parametrize("failure", ["before_message", "after_message", "before_event"])
+@pytest.mark.parametrize("display", ["Execution request", "Original visible request 原文"])
+def test_queue_replay_leaves_prepared_managed_input_with_its_owner(tmp_path, monkeypatch, failure, display):
+    """A queue-mode retry cannot replace the managed owner's display or identity."""
+    store, sid, _ = session_runtime(tmp_path)
+    with monkeypatch.context() as fault:
+        append_message = store.append_message
+
+        def interrupted_message(*args, **kwargs):
+            if failure == "before_message":
+                raise OSError("managed acceptance interrupted")
+            row = append_message(*args, **kwargs)
+            if failure == "after_message":
+                raise OSError("managed acceptance interrupted")
+            return row
+
+        fault.setattr(store, "append_message", interrupted_message)
+        if failure == "before_event":
+            fault.setattr(store, "append_event", lambda *_, **__: (_ for _ in ()).throw(OSError("managed acceptance interrupted")))
+        with pytest.raises(OSError, match="managed acceptance interrupted"):
+            store.create_turn(sid, client_turn_id="original", message="Execution request",
+                              display_message=display, origin="web")
+
+    prepared = store.turn_for_client(sid, "original")
+    assert prepared and "_acceptance" in prepared
+    # Reopen after the crash; the durable capsule belongs to managed acceptance.
+    restarted = ChatSessionStore(tmp_path)
+    before_messages = restarted.messages(sid)
+    before_events = restarted.events_after(sid, prepared["turn_id"], None)
+    replay, created = restarted.create_queued_turn(
+        sid, client_turn_id="original", message="Execution request", origin="web")
+    assert not created and replay == prepared
+    assert restarted.messages(sid) == before_messages
+    assert restarted.events_after(sid, prepared["turn_id"], None) == before_events
+    accepted = restarted.accept_managed_turn(sid, client_turn_id="original", message="Execution request",
+                                             display_message=display, origin="web")
+    assert accepted.turn["turn_id"] == prepared["turn_id"] and "_acceptance" not in accepted.turn
+    assert accepted.dispatch_required
+    inputs = restarted.messages(sid)
+    assert len(inputs) == 1 and inputs[0]["text"] == display
+    assert inputs[0]["message_id"] == prepared["_acceptance"]["message_id"]
+
+
+def test_queue_claim_cannot_dispatch_prepared_managed_acceptance(tmp_path, monkeypatch):
+    """A crash before activation still requires the original acceptance owner."""
+    import loopx.chat_store as chat_store
+
+    store, sid, _ = session_runtime(tmp_path)
+    write = chat_store._atomic_write_json
+
+    def interrupted(path, value, **kwargs):
+        if path == store._session_path(sid):
+            raise OSError("activation interrupted")
+        return write(path, value, **kwargs)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(chat_store, "_atomic_write_json", interrupted)
+        with pytest.raises(OSError, match="activation interrupted"):
+            store.create_turn(sid, client_turn_id="original", message="Execution request",
+                              display_message="Original visible request", origin="web")
+    prepared = store.turn_for_client(sid, "original")
+    restarted = ChatSessionStore(tmp_path)
+    assert restarted.load_session(sid)["active_turn_id"] is None
+    with pytest.raises(ValueError, match="managed.*acceptance"):
+        restarted.claim_next_queued_turn(sid, host_claim_id="queue-host")
+    assert restarted.turn_for_client(sid, "original") == prepared
+    assert restarted.messages(sid) == []
+    assert restarted.events_after(sid, prepared["turn_id"], None) == []
+    assert restarted.load_session(sid)["active_turn_id"] is None
+    accepted = restarted.accept_managed_turn(sid, client_turn_id="original", message="Execution request",
+                                             display_message="Original visible request", origin="web")
+    assert accepted.dispatch_required and accepted.turn["turn_id"] == prepared["turn_id"]
+    assert restarted.messages(sid)[0]["text"] == "Original visible request"
+
+
 @pytest.mark.parametrize("failure", ["before_message", "after_message", "before_event", "after_event"])
 @pytest.mark.parametrize("recovery", ["retry", "claim"])
 def test_queued_input_publication_recovers_after_restart(tmp_path, monkeypatch, failure, recovery):

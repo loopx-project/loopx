@@ -439,6 +439,52 @@ def _bound_project(fixture):
 
 
 @pytest.mark.parametrize("committed", [False, True])
+def test_http_queue_retry_retains_original_managed_acceptance(ordinary, monkeypatch, committed):  # noqa: F811
+    store, runtime, contexts, request, capture, _fake, _workspace = ordinary
+    status, session = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": contexts.available()[0]["project_ref"]})
+    assert status == 201
+    sid = session["session_id"]
+    thread = store.load_session(sid)["upstream_thread_id"]
+    body = {"message": "Continue the original request 原文", "client_turn_id": "original-managed-input"}
+    append = store.append_message
+
+    def interrupted(*args, **kwargs):
+        if kwargs.get("role") == "user":
+            if committed:
+                append(*args, **kwargs)
+            raise OSError("managed input publication interrupted")
+        return append(*args, **kwargs)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(store, "append_message", interrupted)
+            status, failed = request(f"/api/chat/sessions/{sid}/turns", body)
+            assert status == 503 and failed["error_code"] == "chat_turn_acceptance_unavailable"
+        prepared = store.turn_for_client(sid, body["client_turn_id"])
+        message_id = prepared["_acceptance"]["message_id"]
+        inputs = store.messages(sid)
+        for _ in range(2):
+            status, replay = request(f"/api/chat/sessions/{sid}/turns", {**body, "delivery": "queue"})
+            assert status == 202 and not replay["created"] and replay["turn_id"] == prepared["turn_id"]
+        assert store.messages(sid) == inputs
+        assert store.events_after(sid, prepared["turn_id"], None) == []
+        assert request(f"/api/chat/sessions/{sid}/turns", {**body, "message": "Changed", "delivery": "queue"})[0] == 400
+        status, accepted = request(f"/api/chat/sessions/{sid}/turns", body)
+        assert status == 202 and not accepted["created"] and accepted["turn_id"] == prepared["turn_id"]
+        result = runtime.wait_for_turn(session_id=sid, turn_id=prepared["turn_id"], timeout_sec=10)
+        assert result["status"] == "completed" and "_acceptance" not in result
+        assert store.load_session(sid)["upstream_thread_id"] == thread
+        assert store.load_session(sid)["goal_id"] is None
+        inputs = [row for row in store.messages(sid) if row["role"] == "user"]
+        assert len(inputs) == 1 and inputs[0]["message_id"] == message_id and inputs[0]["text"] == body["message"]
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(row.get("method") == "turn/start" for row in calls) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("committed", [False, True])
 def test_bound_http_retry_repairs_interrupted_queue_input_once(ordinary, monkeypatch, committed):  # noqa: F811
     store, runtime, _contexts, request, capture, _fake, workspace = ordinary
     _bindings, _args, _binding, session, active = _bound_project(ordinary)
