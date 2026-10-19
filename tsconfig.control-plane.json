@@ -13,6 +13,11 @@
     "types": ["node"]
   },
   "include": [
+    "tests/control_plane_ts/authority_source.test.ts",
+    "tests/control_plane_ts/goal_ref_claim_compatibility.test.ts",
+    "tests/control_plane_ts/room_resume.test.ts",
+    "tests/control_plane_ts/room_claim_request.test.ts",
+    "tests/control_plane_ts/room_work_projection.test.ts",
     "loopx/control_plane/**/*.ts",
     "loopx/zcode_goal_mode/**/*.ts",
     "tests/control_plane_ts/explore_research.test.ts",

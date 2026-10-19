@@ -1,4 +1,5 @@
 import {PrivateConversationPanel} from "./private-conversation-panel";
+import {RoomWorkPanel} from "./room-work-panel";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
@@ -207,6 +208,8 @@ export function LarkSettingsPage({
 }) {
   const { t } = useWorkspaceI18n();
   const [tab, setTab] = useState<Tab>("connections");
+  const [workConnection, setWorkConnection] = useState<LarkGoalConnection | null>(null);
+  const workTrigger = useRef<HTMLButtonElement | null>(null);
   const [apps, setApps] = useState<LarkApp[]>([]);
   const [connections, setConnections] = useState<LarkGoalConnection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -597,6 +600,7 @@ export function LarkSettingsPage({
                 <span>{connection.conversation_kind === "manager" ? t(connection.turn_trigger === "human_messages" ? "lark.triggerHuman" : "lark.triggerAddressed") : connection.capture_scope === "addressed_only" ? t("lark.mentionsOnly") : t("lark.allTopicMessages")}</span>
                 <span><strong>{connection.conversation_kind === "manager" ? t("lark.managerConversation") : ingressPresentation(connection.ingress_mode, t).label}</strong><small>{connection.conversation_kind === "manager" ? t("lark.managerConversationDescription") : connection.agent_id ?? ingressPresentation(connection.ingress_mode, t).detail}</small></span>
                 <span className="personal-lark-row-actions">
+                  {connection.agent_id && connection.conversation_kind !== "manager" ? <button type="button" onClick={event => {workTrigger.current = event.currentTarget; setWorkConnection(connection);}}>{t("roomWork.title")}</button> : null}
                   <button aria-label={t("lark.settingsConfigure", { goal: connection.goal_title })} onClick={() => openConnectionEditor(connection)} type="button"><Settings2 size={15} /></button>
                   <button aria-label={t("lark.settingsDisconnect", { goal: connection.goal_title })} className={disconnectConnectionId === connection.connection_id ? "is-confirm" : ""} onClick={() => void disconnect(connection.goal_id, connection.connection_id)} type="button"><Unlink size={15} />{disconnectConnectionId === connection.connection_id ? t("common.confirm") : null}</button>
                 </span>
@@ -607,6 +611,7 @@ export function LarkSettingsPage({
         </div>
       ) : null}
 
+      {workConnection ? <RoomWorkPanel key={workConnection.connection_id} connection={workConnection} triggerElement={workTrigger.current} onClose={() => setWorkConnection(null)} /> : null}
       {modalOpen ? (
         <div className="personal-lark-modal-backdrop" role="presentation">
           <section aria-labelledby="connect-lark-title" aria-modal="true" className="personal-lark-modal" role="dialog">

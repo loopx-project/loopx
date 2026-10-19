@@ -29,6 +29,7 @@ from .extensions.lark.goal_topic_connections import (
 from .extensions.lark.goal_topic_batch import connect_lark_goal_topics
 from .extensions.lark.cli_transport import CommandRunner, default_subprocess_runner
 from .chat_agent import CodexChatAgentError
+from .presentation.room_work_api import RoomWorkChatRequestMixin
 from .chat_manager import (
     controller_runtime_root,
     manager_channel,
@@ -329,7 +330,7 @@ def reconcile_lark_manager_route(
     }
 
 
-class LarkChatRequestMixin:
+class LarkChatRequestMixin(RoomWorkChatRequestMixin):
     """Loopback HTTP handlers for Goal repository and Lark topic connections."""
 
     server: Any

@@ -33,6 +33,8 @@ LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS = 15.0
 LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = (
     "loopx_local_coordination_todo_claim_request_v1"
 )
+LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2"
+LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v3"
 LOCAL_COORDINATION_TODO_CLAIM_METHOD = "coordination.local_authority.todo_claim"
 
 
@@ -152,10 +154,13 @@ def claim_canonical_todo_if_promoted(
     actor_agent_id: str | None,
     dry_run: bool,
     operation_id: str | None = None,
+    expected_provider_revision: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
+    registry_sources: list[dict[str, str]] | None = None,
+    admit_before: str | None = None,
 ) -> dict[str, Any]:
     """Route a claim to the canonical TypeScript transaction owner."""
     with authority_registry_source(registry_path) as registry_source:
@@ -163,7 +168,9 @@ def claim_canonical_todo_if_promoted(
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
-            "schema_version": LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA,
+            "schema_version": (LOCAL_COORDINATION_TODO_CLAIM_TIMED_REQUEST_SCHEMA if admit_before is not None else
+                LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA
+                if registry_sources is None else LOCAL_COORDINATION_TODO_CLAIM_GUARDED_REQUEST_SCHEMA),
             "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
             "goal_id": goal_id,
             "todo_id": todo_id,
@@ -172,11 +179,15 @@ def claim_canonical_todo_if_promoted(
             "actor_agent_id": actor_agent_id,
             "registered_agents": registered,
             "registry_source": registry_source,
+            **({"registry_sources": registry_sources} if registry_sources is not None else {}),
+            **({"admit_before": admit_before} if admit_before is not None else {}),
             "operation_id": (
                 operation_id
                 if operation_id is not None
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
+            **({"expected_provider_revision": expected_provider_revision}
+               if expected_provider_revision is not None else {}),
             "lease_request": (
                 {
                     "idempotency_key": task_lease_idempotency_key,

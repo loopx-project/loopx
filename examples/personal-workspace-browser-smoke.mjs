@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
+import {roomWorkScenario} from "./personal-workspace-browser/room-work.mjs";
 import { zcodeGoalScenario } from "./personal-workspace-browser/zcode-goal.mjs";
 import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
 import {agentModelSelectionScenario} from "./personal-workspace-browser/agent-model-selection.mjs";
@@ -137,6 +138,7 @@ scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 scenarioCatalog.push(agentModelSelectionScenario);
+scenarioCatalog.push(roomWorkScenario);
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
   : selectScenarioShard(scenarioCatalog, process.env.LOOPX_PERSONAL_WORKSPACE_SHARD);

@@ -85,6 +85,13 @@ Retrieval relevance and action applicability remain separate. Recalled
 guidance is conditional private context; the agent must compare it with the
 exact turn situation and current authority before acting.
 
+The optional Goal Channel `work resume` composition uses a read-only invocation:
+it refreshes recall instead of reusing a previous receipt and disables pending
+ingest reconciliation for that invocation. Ordinary automatic admission retains
+its existing reconciliation behavior. See the
+[room-work usage contract](../../../docs/reference/goal-channel-room-work.md#private-read-only-reconnect-context)
+for current authority readback and private reference handling.
+
 ## Freshness And Failure
 
 Active Reward Memory records may carry `lifecycle.expires_at`. Retrieval ignores

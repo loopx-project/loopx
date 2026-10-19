@@ -1529,6 +1529,58 @@ export function registerAuthorityStoreConformance(
         {...request, operation_id: "bad-projection", todo: {...todo, todo_id: "todo-projection", source_section: "Agent Todo"}},
       ]) assert.equal((await executeCoordinationTodoCreate(store, invalid)).status, "failed");
     });
+    test(`${providerName} conformance: claim admission deadline uses the final clock without renewing replay (${native ? "native" : "v0"})`, async (t) => {
+      const {store} = await factory(t);
+      const goalId = "goal-claim-deadline";
+      assert.equal((await store.commitAuthority({operation_id: "seed-claim-deadline",
+        expected_provider_revision: null, events: [], receipts: [],
+        next_projection: {...todoClaimProjection(goalId, native), handoff_mode: "soft_claim"},
+      })).status, "applied");
+      const before = await store.loadAuthority();
+      const cutoff = Date.parse("2026-09-05T04:30:01Z");
+      let clock = cutoff - 1;
+      t.mock.method(Date, "now", () => clock);
+      const request = {goal_id: goalId, todo_id: "todo-claim", claimed_by: "agent-a",
+        actor_agent_id: "agent-a", expected_role: "agent", registered_agents: ["agent-a", "agent-b"],
+        operation_id: "claim-before-deadline", dry_run: false,
+        now: new Date(cutoff - 1), admit_before: new Date(cutoff)};
+      const delayed = new Proxy(store, {get(target, key) {
+        if (key === "loadAuthority") return async () => {
+          const head = await target.loadAuthority();
+          clock = cutoff;
+          request.admit_before.setTime(cutoff + 60_000);
+          return head;
+        };
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      }});
+      const rejected = await executeCoordinationTodoClaim(delayed, request);
+      assert.equal(rejected.reason_code, "claim_expired", JSON.stringify(rejected));
+      assert.equal(rejected.failure_kind, "decision_rejection");
+      assert.deepEqual(await store.loadAuthority(), before);
+      assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+
+      request.admit_before = new Date(cutoff);
+      clock = cutoff - 1;
+      assert.equal((await executeCoordinationTodoClaim(store, request)).status, "applied");
+      const accepted = await store.loadAuthority();
+      clock = cutoff;
+      assert.equal((await executeCoordinationTodoClaim(store, request)).status, "replayed",
+        "a committed receipt is historical acceptance, not a new timed claim");
+      assert.deepEqual(await store.loadAuthority(), accepted);
+      const expiredNoop = {...request, operation_id: "expired-new-identity"};
+      assert.equal((await executeCoordinationTodoClaim(store, expiredNoop)).reason_code, "claim_expired");
+      assert.equal((await store.readReceipt(expiredNoop.operation_id)).status, "missing");
+      assert.deepEqual(await store.loadAuthority(), accepted);
+      assert.equal((await executeCoordinationTodoClaim(store, {...expiredNoop, dry_run: true})).reason_code, "claim_expired");
+      const {admit_before: _deadline, ...untimed} = request;
+      assert.equal((await executeCoordinationTodoClaim(store,
+        {...untimed, operation_id: "untimed-new-identity"})).status, "no_change",
+      "untimed direct claims retain their existing receipt behavior");
+      const invalidDeadline = {...request, operation_id: "invalid-deadline", admit_before: new Date(NaN)};
+      assert.equal((await executeCoordinationTodoClaim(store, invalidDeadline)).failure_kind, "protocol_failure");
+      assert.equal((await store.readReceipt(invalidDeadline.operation_id)).status, "missing");
+    });
     test(`${providerName} conformance: Todo claim atomically acquires canonical ownership (${native ? "native" : "v0"})`, async (t) => {
       const {store} = await factory(t);
       const goalId = "goal-atomic-ownership";
