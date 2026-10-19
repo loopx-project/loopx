@@ -40,6 +40,7 @@ class CodexAppServerAdapter:
         work_dir: Path,
         goal_id: str | None,
         objective: str,
+        history: list[dict[str, Any]] | None = None,
         resume_thread_id: str | None = None,
         startup_timeout_sec: float = 30.0,
         idle_timeout_sec: float = 180.0,
@@ -54,6 +55,19 @@ class CodexAppServerAdapter:
         service_tier: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
     ) -> "CodexAppServerAdapter":
+        history_items = []
+        # Migration restores the full visible conversation in native history.
+        # The objective is repeated per Turn; putting the transcript there
+        # duplicates it indefinitely and prevents native compaction from helping.
+        for item in ([] if resume_thread_id else history or []):
+            role, text = item.get("role", "user"), str(item.get("content") or "")
+            if role not in {"user", "assistant"}:
+                raise ValueError("Visible Chat history requires user or assistant roles")
+            if text.strip():
+                history_items.append({
+                    "type": "message", "role": role,
+                    "content": [{"type": "output_text" if role == "assistant" else "input_text", "text": text}],
+                })
         retry_timeout = bool(resume_thread_id)
         while True:
             try:
@@ -85,6 +99,14 @@ class CodexAppServerAdapter:
                         session._request("thread/name/set", {
                             "threadId": session.thread_id, "name": "LoopX Chat",
                         })
+                        if history_items:
+                            # Persist before Core publishes the upstream binding,
+                            # even if the service restarts before its first Turn.
+                            # An unknown outcome fails closed: never retry or
+                            # fall back to replaying history inside a user Turn.
+                            session._request("thread/inject_items", {
+                                "threadId": session.thread_id, "items": history_items,
+                            })
                     except Exception:
                         session.close()
                         raise

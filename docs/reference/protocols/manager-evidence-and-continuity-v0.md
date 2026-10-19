@@ -94,6 +94,18 @@ start, resume and turn start explicitly carry the settings; worker configuration
 is unchanged. Capabilities expose the manager defaults, their source, and the
 status and revision of the machine document they were read from.
 
+When a Codex context or model migration needs a fresh upstream thread, the
+adapter preserves all nonempty visible user/assistant messages, in order and
+with their original text, through native
+[`thread/inject_items`](https://developers.openai.com/codex/app-server/#inject-items-into-a-thread).
+It persists this history before Core publishes the replacement binding, without
+starting a model turn. Later requests carry the stable objective and fresh Core
+evidence; they do not reattach the migrated transcript. Native resume reuses the
+stored history, including after a restart before the first request. An injection
+failure closes the new adapter without publishing it or replaying the operation;
+older hosts that lack this RPC must be upgraded. Existing failed requests remain
+failed and are not automatically retried by this context transfer.
+
 The managed profile reaches the channel as the same one-line readback the
 governed Turn publishes (`deepseek-flash@high`), so the channel and the
 bounded Turns it drives cannot report two different managed profiles; the

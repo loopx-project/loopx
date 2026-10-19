@@ -273,7 +273,8 @@ def test_project_codex_tool_and_legacy_session_refresh_do_not_inherit_steward_pe
         assert call["resume_thread_id"] is None
         assert call["runtime_profile"] == "restricted" and call["sandbox"] is None
         assert [t["name"] for t in call["dynamic_tools"]] == [CONTEXT_TOOL_NAME]
-        assert "Keep the earlier correction" in call["objective"]
+        assert call["history"] == [{"role": "user", "content": "Keep the earlier correction."}]
+        assert "Keep the earlier correction" not in call["objective"]
         current = store.load_session(old["session_id"])
         assert current["coordination_context_version"] == PROJECT_CONTEXT_VERSION
         controller._ensure_adapter(current, work_dir=repo, objective="Research delivery")

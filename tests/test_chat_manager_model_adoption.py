@@ -217,9 +217,9 @@ def test_model_edit_keeps_early_context_through_public_resume(upstream_boundary,
     # have a persisted rollout, so a model edit cannot assume resumability.
     assert starts[-1][0]["resume_thread_id"] is None
     assert updated["upstream_thread_id"] != session["upstream_thread_id"]
-    objective = starts[-1][0]["objective"]
-    positions = [objective.index(text) for text in messages]
-    assert positions == sorted(positions)
+    # Native history is restored once, separately from the repeated objective.
+    assert [item["content"] for item in starts[-1][0]["history"]] == messages
+    assert all(text not in starts[-1][0]["objective"] for text in messages)
 
 
 @pytest.mark.parametrize("policy,effort,expected_effort", [
