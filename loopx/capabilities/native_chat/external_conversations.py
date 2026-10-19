@@ -46,7 +46,8 @@ class ChatExternalConversations:
 
     def _context_recovery_plan(self, row: dict[str, Any], *,
                                observation: dict[str, Any] | None = None,
-                               source_verified: bool = False) -> dict[str, Any]:
+                               source_verified: bool = False,
+                               discovery_only: bool = False) -> dict[str, Any]:
         from ...chat_manager import MANAGER_CONTEXT_VERSION
         from ...control_plane.effect_runtime import effect_runtime_result
 
@@ -55,10 +56,19 @@ class ChatExternalConversations:
         turn = store.load_turn(str(row.get("session_id") or ""), str(row.get("turn_id") or ""))
         if not session or not turn:
             return {}
-        selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
+        if discovery_only:
+            # A queue hint must not serialize provider identity IO across all
+            # historical failures. Reuse the same typed planner with the local
+            # enabled binding; admission independently resolves fresh authority.
+            selected_binding = next((item for item in self.bindings.read()["bindings"]
+                if item["binding_id"] == row["binding_id"] and item.get("enabled") is True), None)
+            if selected_binding is None:
+                return {}
+        else:
+            selected_binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
-            "current_session": session, "binding": selected["binding"],
+            "current_session": session, "binding": selected_binding,
             "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
                 "steering_observed": any(event.get("kind") == "turn.steered"
                     for event in store.events_after(session["session_id"], turn["turn_id"], None)),
@@ -80,7 +90,7 @@ class ChatExternalConversations:
             turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
             if not turn or turn.get("status") != "failed":
                 return False
-            return self._context_recovery_plan(row).get("recovery_candidate") is True
+            return self._context_recovery_plan(row, discovery_only=True).get("recovery_candidate") is True
         except (KeyError, ValueError, RuntimeError, OSError):
             return False
 

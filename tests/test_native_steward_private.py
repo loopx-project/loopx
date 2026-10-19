@@ -74,6 +74,42 @@ def finish(runtime, row):
     return runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
 
 
+@pytest.mark.parametrize("case", ["enabled", "disabled", "missing", "authority-unavailable"])
+def test_recovery_discovery_never_observes_provider_but_admission_still_does(steward, monkeypatch, case):
+    store, runtime, provider, transport, binding, capture, _ = steward
+    fake = Path(runtime.codex_bin)
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "contextWindowExceeded"')
+    source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    fake.write_text(source)
+    event = provider.event("steward-app", "discovery-only", "typed terminal failure")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    assert finish(runtime, row)["status"] == "failed"
+    store.update_session(row["session_id"], manager_context_version=20)
+    assert transport.reconcile() == 1
+    if case == "disabled":
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    elif case == "missing":
+        current = transport.bindings.read()
+        current["bindings"] = []
+        transport.bindings.path.write_text(json.dumps(current))
+    before_calls, before_requests, before_writes = len(provider.calls), capture.read_bytes(), list(provider.writes)
+    with monkeypatch.context() as discovery:
+        discovery.setattr(transport.bindings, "observe", lambda *_a, **_kw: pytest.fail("provider IO in discovery"))
+        assert transport.core.context_recovery_candidate(ref) is (case not in {"disabled", "missing"})
+    assert len(provider.calls) == before_calls  # Includes no hidden auth/status probe.
+    if case == "authority-unavailable":
+        provider.owner_ready = False
+        # A local hint is not permission: the normal admission owner must
+        # freshly reject unavailable authority before native observation/work.
+        with pytest.raises(ValueError):
+            transport.core.recover_failed_request(ref, source_observation=lambda _selected: pytest.fail("source IO after rejection"))
+        assert not transport.core.read_request(ref).get("context_recovery")
+    assert transport.core.read_request(ref)["turn_id"] == row["turn_id"]
+    assert capture.read_bytes() == before_requests and provider.writes == before_writes
+
+
 @pytest.mark.parametrize("fault", [None, "revoked", "source-changed", "native-effect", "unknown-native",
     "reservation-crash", "post-enqueue-crash", "transport-sync-crash", "existing-return",
     "foreign-native-thread", "wrong-native-turn", "policy-native-proof", "steered", "native-goal", "current-context"])

@@ -1313,6 +1313,11 @@ the complete visible user/assistant history once in native persisted history;
 the old upstream identity remains recorded, and native Goal/attached executions
 are not replaced by this migration.
 
+Discovery uses the local enabled binding and the same typed candidate planner,
+without provider identity IO for every historical failure. This is a queue hint;
+admission still re-resolves current App/owner/grant and exact source/native proof
+under the existing fences before reserving or enqueueing any continuation.
+
 Core may admit one correlated continuation per request for this migration only
 after current App/owner/grant and unchanged source verification, an exact failed
 native Turn readback, and a complete inventory containing only its original user
