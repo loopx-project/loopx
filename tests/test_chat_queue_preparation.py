@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import runpy
+import subprocess
 import sys
 import threading
 import time
@@ -294,12 +295,27 @@ def drain(runtime, session_id, tmp_path):
 
 
 @pytest.fixture
-def codex_startup(tmp_path):
+def codex_startup(tmp_path, monkeypatch):
     """Exercise the real stdio handshake and cleanup, without model execution."""
     capture = tmp_path / "requests.jsonl"
     attempts = tmp_path / "attempts"
     entered, release = tmp_path / "entered", tmp_path / "release"
     source = runpy.run_path(str(Path(__file__).parents[1] / "examples/loopx-chat-runtime-smoke.py"))["FAKE_CODEX"]
+    native_processes = []
+    popen = subprocess.Popen
+
+    def start_process(command, *args, **kwargs):
+        owned = isinstance(command, list) and command and command[0] == str(tmp_path / "codex")
+        if owned and native_processes:
+            # Check the actual owned handle before another process starts.
+            # The child must not infer cleanup from a potentially reused PID.
+            assert native_processes[-1].returncode is not None, "previous startup process must exit and be reaped before retry"
+        process = popen(command, *args, **kwargs)
+        if owned:
+            native_processes.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", start_process)
 
     def start(mode, *, stage="thread/resume"):
         script = source.replace("#!/usr/bin/env python3", f"#!{sys.executable}")
@@ -308,13 +324,6 @@ import os
 from pathlib import Path
 attempts = Path({str(attempts)!r})
 previous = json.loads(attempts.read_text()) if attempts.exists() else []
-if previous:
-    try:
-        os.kill(previous[-1], 0)
-    except ProcessLookupError:
-        pass
-    else:
-        raise AssertionError("previous startup process must be closed")
 attempt = len(previous) + 1
 attempts.write_text(json.dumps([*previous, os.getpid()]))''')
         script = script.replace('    method = request.get("method")', f'''
