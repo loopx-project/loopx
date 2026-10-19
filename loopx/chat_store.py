@@ -14,6 +14,7 @@ import time
 from typing import Any
 import uuid
 from weakref import WeakValueDictionary
+from .control_plane.runtime.file_paths import windows_extended_path
 
 from .chat import (
     require_matching_message_replay,
