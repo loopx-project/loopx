@@ -520,10 +520,19 @@ def _windows_console_update_refusal(payload: dict[str, Any]) -> dict[str, Any] |
     if (
         sys.platform != "win32"
         or not isinstance(loader, zipimport.zipimporter)
-        or Path(loader.archive).name.casefold() != "loopx.exe"
         or lifecycle.get("execution_driver") not in {"python_pip", "python_pipx"}
     ):
         return None
+    launcher = Path(loader.archive)
+    if launcher.name.casefold() != "loopx.exe":
+        # pipx suffixes the exposed app name, but its symlink/hardlink can still
+        # hold this installation's actual console executable open.
+        owned_launcher = Path(sys.executable).with_name("loopx.exe")
+        try:
+            if not launcher.samefile(owned_launcher):
+                return None
+        except FileNotFoundError:
+            return None
     retry = interpreter_invocation(sys.executable, ["-m", "loopx.entrypoint", *sys.argv[1:]])
     reason = (
         "The running Windows console launcher cannot be replaced by pip. "

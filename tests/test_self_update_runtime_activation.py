@@ -489,8 +489,9 @@ def test_python_distribution_apply_uses_the_owning_interpreter_pip() -> None:
 
 
 @pytest.mark.parametrize("installer", ["pip", "pipx"])
+@pytest.mark.parametrize("linked_alias", [False, True])
 def test_windows_console_apply_refuses_before_installation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, installer: str,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, installer: str, linked_alias: bool,
 ) -> None:
     doctor = doctor_payload()
     doctor["package"] = {"install_kind": "python_distribution"}
@@ -500,6 +501,11 @@ def test_windows_console_apply_refuses_before_installation(
     launcher = tmp_path / "loopx.exe"
     with zipfile.ZipFile(launcher, "w") as archive:
         archive.writestr("__main__.py", "")
+    if linked_alias:
+        alias = tmp_path / "loopx-preview.exe"
+        alias.hardlink_to(launcher)
+        launcher = alias
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys.modules["__main__"], "__loader__", zipimport.zipimporter(str(launcher)))
     monkeypatch.setattr(sys, "argv", [str(launcher.with_suffix("")), "--registry", "project O'Brien $name/registry.json",
@@ -519,6 +525,27 @@ def test_windows_console_apply_refuses_before_installation(
         assert "loopx.entrypoint" in retry
         assert "--registry" in retry and "--timeout-seconds" in retry
         assert result["next_action"]["mutating"] is True
+
+
+@pytest.mark.parametrize("owned_exists", [False, True])
+def test_windows_unrelated_zip_console_keeps_update_plan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, owned_exists: bool,
+) -> None:
+    doctor = doctor_payload()
+    doctor["package"] = {"install_kind": "python_distribution"}
+    doctor["install_freshness"]["python_distribution_installer"] = "pipx"
+    owned = tmp_path / "loopx.exe"
+    with zipfile.ZipFile(owned, "w") as archive:
+        archive.writestr("__main__.py", "")
+    unrelated = tmp_path / "unrelated.exe"
+    unrelated.write_bytes(owned.read_bytes())
+    if not owned_exists:
+        owned.unlink()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
+    baseline = build_update_plan(action="apply", doctor_payload=doctor)
+    monkeypatch.setattr(sys.modules["__main__"], "__loader__", zipimport.zipimporter(str(unrelated)))
+    assert build_update_plan(action="apply", doctor_payload=doctor) == baseline
 
 
 @pytest.mark.parametrize("action", ["check", "plan"])

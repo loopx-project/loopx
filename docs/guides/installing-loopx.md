@@ -419,6 +419,10 @@ preserves the original arguments, including registry and runtime routes:
 python -m loopx.entrypoint --format json update apply
 ```
 
+Linked pipx application aliases, such as `loopx-preview.exe` installed with
+`--suffix=-preview`, receive the same protection when they refer to the owning
+environment's `loopx.exe` file.
+
 Use the interpreter printed in the refusal rather than an unrelated `python`
 from PATH. Read-only `update check` and `update plan` remain available. If a
 previous update already damaged the installation, repair it with that owning
