@@ -2310,6 +2310,13 @@ coverage; legacy runtime goals are extra. An unknown `--goal-id` is reported as
 the consumer rule are in the
 [projection envelope contract](reference/contracts/projection-envelope-contract.md).
 
+An unreadable optional cache (including invalid UTF-8 or malformed JSON) is a
+cache miss with `miss_reason=unreadable`, not a status-collection failure.
+`status` and `quota should-run` collect live source facts instead. Reading does
+not repair or delete the damaged cache; `--write-projection-cache` explicitly
+replaces it with the newly collected projection. Canonical source errors still
+retain their normal diagnostics and admission rules.
+
 ## Decision Freshness Summary
 
 `decision_freshness_summary` is an optional checkpointed-decision projection over

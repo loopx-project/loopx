@@ -200,7 +200,7 @@ def load_status_projection_cache(
         return None, metadata
     try:
         cache_record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         metadata["miss_reason"] = "unreadable"
         metadata["error"] = str(exc)
         return None, metadata
