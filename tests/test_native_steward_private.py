@@ -114,6 +114,26 @@ def test_personal_steward_uses_registered_portfolio_and_configured_inbox_root(st
     assert not (workspace / "ACTIVE_GOAL_STATE.md").exists()
 
 
+def test_legacy_delivery_only_receipt_does_not_block_steward_conversation(steward):
+    store, runtime, provider, transport, _, capture, _ = steward
+    orphan = transport.core.root / ("f" * 24 + ".json")
+    orphan.parent.mkdir(parents=True, exist_ok=True)
+    orphan.write_text(json.dumps({"delivery_verified": True}))
+    before = orphan.read_bytes()
+    event = provider.event("steward-app", "after_legacy_receipt", "Check the authorized portfolio")
+    assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+    row = next(r for r in transport.core.pending() if r.get("request_ref") == identity_ref(
+        transport.bindings.read()["bindings"][1]["provider_ref"], event["message_id"]))
+    assert finish(runtime, row)["status"] == "completed"
+    session = store.load_session(row["session_id"])
+    assert transport.core.commission_evidence(session) == []
+    selection = provider.event("notes-app", "select_after_legacy_receipt", "/project")
+    assert transport.admit("notes-app", selection)["status"] == "command_recorded"
+    assert orphan.read_bytes() == before
+    packets = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(p["method"] == "turn/start" for p in packets) == 1
+
+
 def test_verified_empty_steward_is_not_missing_authorization_and_does_not_inherit(steward):
     store, runtime, provider, transport, binding, _, _ = steward
     transport.admit("steward-app", provider.event("steward-app", "empty", "What new work do you manage?"))

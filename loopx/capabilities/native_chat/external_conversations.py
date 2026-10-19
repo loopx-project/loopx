@@ -168,7 +168,7 @@ class ChatExternalConversations:
         controller = self.controller
         self.bindings.ensure_delivery_scope(selected)
         if not row.get("routing_recorded"):
-            choices = [item for item in self.pending() if item["binding_id"] == row["binding_id"]
+            choices = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
                 and item["source"]["source_ref"] == row["source"]["source_ref"]
                 and item.get("selection_recorded")]
             previous = max(choices, key=lambda item: item.get("selection_order", 0)) if choices else None
@@ -262,7 +262,7 @@ class ChatExternalConversations:
                 row["response"] = "当前没有已授权且可用的 Agent。请在本机 Chat → 设置 → Lark，为此 App 明确授权已有 attached Session；名称相似不会获得授权。" if not choices else "可选 Agent（使用确切命令）：\n" + "\n".join(f"{item['agent_id']} · {item['goal_id']}\n/agent {item['target_ref']}" for item in choices)
             if row.get("selection_recorded"):
                 row["selection_order"] = 1 + max((item.get("selection_order", 0) for item in self.pending()
-                    if item["binding_id"] == row["binding_id"] and item["source"]["source_ref"] == row["source"]["source_ref"]), default=0)
+                    if item.get("binding_id") == row["binding_id"] and item["source"]["source_ref"] == row["source"]["source_ref"]), default=0)
             row.update(status="command_completed", session_id=None, turn_id=None)
         elif operation == "steward_action":
             parsed = self.bindings._core("collaboration.steward.command", {"command": row["command"], "message": row["message"]})
@@ -385,8 +385,9 @@ class ChatExternalConversations:
         latest: dict[str, dict[str, Any]] = {}
         for row in sorted(self.pending(), key=lambda row: row.get("created_at", "")):
             resources = row.get("commission_resources") or {}
-            if (row["binding_id"] == saved["binding_id"] and row["source"]["source_ref"] == saved["source_ref"]
-                    and resources.get("goal_id") in allowed):
+            if (resources.get("goal_id") in allowed
+                    and row["binding_id"] == saved["binding_id"]
+                    and row["source"]["source_ref"] == saved["source_ref"]):
                 latest[resources["goal_id"]] = row
         facts = []
         for goal_id, row in latest.items():
@@ -603,6 +604,8 @@ class ChatExternalConversations:
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(path, operation="record_external_chat_delivery"):
             row = _read_json(path)
+            if row.get("request_ref") != request_ref:
+                raise ValueError("delivery request journal unavailable")
             if row.get("commission_adoption_pending"):
                 raise ValueError("commission adoption is pending; notification cannot settle the effect")
             if (row.get("session_id"), row.get("turn_id")) != (session_id, turn_id):

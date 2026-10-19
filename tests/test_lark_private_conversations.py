@@ -305,6 +305,123 @@ def test_abandoned_capture_recovers_only_with_current_binding(ordinary, monkeypa
         runtime.close()
 
 
+@pytest.mark.parametrize("unavailable", ["bot_ready", "owner_ready"])
+def test_owner_event_survives_identity_outage_and_recovers_once(ordinary, unavailable):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    event = provider.event("notes-app", "identity_outage", "Explain this project")
+    try:
+        setattr(provider, unavailable, False)
+        assert transport.admit("notes-app", event)["status"] == "audience_rejected"
+        path = next(transport.root.glob("*.json"))
+        captured = json.loads(path.read_text())
+        assert captured["status"] == "captured" and captured["event"] == event
+        assert transport.pending_delivery_paths() == [path]
+        assert store.list_sessions() == [] and transport.core.pending() == []
+        assert provider.writes == [] and provider.reaction_creates == []
+        assert transport.reconcile_request(path) == 0
+        assert json.loads(path.read_text()) == captured
+
+        # The normal scanner can recover the same receipt after a restart;
+        # no source-history replay or second event consumer is involved.
+        restored = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        setattr(provider, unavailable, True)
+        restored.reconcile_request(path)
+        row = restored.core.pending()[0]
+        result = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert result["status"] == "completed"
+        restored.reconcile()
+        delivered = json.loads(path.read_text())
+        assert delivered["status"] == "delivered" and delivered["event"] == event
+        assert delivered["deliveries"]["terminal"]["verified"] is True
+        assert len(store.list_sessions()) == 1
+        assert [m["text"] for m in store.messages(row["session_id"]) if m["role"] == "user"] == [event["content"]]
+        provider_messages = json.loads(json.dumps(provider.messages))
+        provider_writes = list(provider.writes)
+        restored.admit("notes-app", event)
+        restored.reconcile()
+        assert provider.messages == provider_messages and provider.writes == provider_writes
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("change", ["revoked", "source_sender_changed", "owner_changed"])
+def test_unverified_owner_receipt_does_not_grant_later_execution(ordinary, monkeypatch, change):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    event = provider.event("notes-app", "unverified_boundary", "Explain this project")
+    try:
+        provider.owner_ready = False
+        assert transport.admit("notes-app", event)["status"] == "audience_rejected"
+        path = next(transport.root.glob("*.json"))
+        captured = json.loads(path.read_text())
+        provider.owner_ready = True
+        if change == "revoked":
+            transport.bindings.disconnect(captured["binding_id"],
+                expected_revision=transport.bindings.read()["revision"])
+        elif change == "source_sender_changed":
+            provider.messages[event["message_id"]]["sender"]["id"] = "ou_other"
+        else:
+            observe = transport.bindings.observe
+            monkeypatch.setattr(transport.bindings, "observe", lambda profile: {
+                **observe(profile), "operator_ref": "f" * 24})
+        assert transport.reconcile_request(path) == 0
+        assert store.list_sessions() == [] and transport.core.pending() == []
+        assert provider.writes == [] and provider.reaction_creates == []
+        assert json.loads(path.read_text())["status"] == "captured"
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("group", [False, True])
+def test_identity_outage_does_not_precapture_groups_or_other_owners(ordinary, group):  # noqa: F811
+    store, runtime, provider, transport = (connect_group if group else connect)(ordinary)
+    event = provider.topic("unverified_group", "Explain this project") if group else provider.event(
+        "notes-app", "unverified_other_owner", "Explain this project")
+    if not group:
+        event["sender_id"] = "ou_other"
+    try:
+        provider.bot_ready = False
+        assert transport.admit("notes-app", event)["status"] == "audience_rejected"
+        assert list(transport.root.glob("*.json")) == []
+        assert store.list_sessions() == [] and transport.core.pending() == []
+        assert provider.writes == [] and provider.reaction_creates == []
+    finally:
+        runtime.close()
+
+
+def test_rejected_source_returns_notice_without_creating_core_execution(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    event = provider.event("notes-app", "rejected_before_core", "Explain this project")
+    try:
+        admit = transport.core.admit
+        def reject(**_kwargs):
+            raise ValueError("identity changed before Core admission")
+
+        monkeypatch.setattr(transport.core, "admit", reject)
+        assert transport.admit("notes-app", event)["status"] == "command_rejected"
+        path = next(transport.root.glob("*.json"))
+        captured = json.loads(path.read_text())
+        native_path = transport.core.root / f"{captured['request_ref']}.json"
+        assert not native_path.exists()
+        assert transport.reconcile_request(path) == 1
+        delivered = json.loads(path.read_text())
+        assert delivered["status"] == "delivered"
+        assert delivered["deliveries"]["terminal"]["verified"] is True
+        assert len(provider.writes) == 1 and not native_path.exists()
+        assert store.list_sessions() == []
+        with pytest.raises(ValueError, match="request journal unavailable"):
+            transport.core.record_delivery(captured["request_ref"], session_id=None, turn_id=None)
+        assert not native_path.exists()
+        monkeypatch.setattr(transport.core, "admit", admit)
+        assert transport.admit("notes-app", event)["status"] == "command_rejected"
+        assert not native_path.exists() and store.list_sessions() == []
+        assert len(provider.writes) == 1
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("group", [False, True])
 def test_completion_during_processing_receipt_returns_final_without_stale_draft(ordinary, monkeypatch, tmp_path, group):  # noqa: F811
     store, runtime, provider, transport = (connect_group if group else connect)(ordinary)

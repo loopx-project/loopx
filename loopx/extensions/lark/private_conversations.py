@@ -558,13 +558,28 @@ class LarkPrivateConversations:
             request = identity_ref(binding["provider_ref"], event["message_id"])
             control_root = self._admitted_control_root({"request_ref": request, "source": source,
                                                        "event": event}, binding)
-            selected = (None if control_root else self.bindings.resolve(
-                binding_id=binding["binding_id"], **source, include_observation=True))
         except (KeyError, StopIteration, ValueError):
             return {"status": "audience_rejected"}
         request = identity_ref(binding["provider_ref"], event["message_id"])
         path = self.root / f"{request}.json"
         with exclusive_file_lock(path, operation="capture_private_chat_request"):
+            # Retain a candidate from the locally bound owner before provider
+            # identity IO can fail. This private receipt grants no execution:
+            # recovery still verifies the App, current owner, source and Core
+            # grant before creating a Turn. Groups and other senders keep their
+            # existing pre-capture privacy boundary.
+            if (not path.exists() and binding.get("enabled") is True
+                    and binding.get("audience", "owner") == "owner"
+                    and source.get("private_human_message") is True
+                    and source["sender_ref"] == binding["operator_ref"]):
+                _atomic_write_json(path, {"schema_version": "lark_private_chat_delivery_v0",
+                    "request_ref": request, "profile": profile, "binding_id": binding["binding_id"],
+                    "source": source, "event": event, "deliveries": {}, "status": "captured"})
+            try:
+                selected = (None if control_root else self.bindings.resolve(
+                    binding_id=binding["binding_id"], **source, include_observation=True))
+            except (KeyError, StopIteration, ValueError):
+                return {"status": "audience_rejected"}
             if path.exists():
                 record = _read_json(path)
                 # event_id can change on redelivery; canonical message content
@@ -578,6 +593,11 @@ class LarkPrivateConversations:
                     "event": event, "deliveries": {}, "status": "captured"}
                 if binding.get("audience") != "group":
                     _atomic_write_json(path, record)
+            # A transport-only rejection never owned a Core request. Its
+            # verified notice stays terminal on provider redelivery too.
+            if (record["status"] == "delivered"
+                    and "session_id" not in record and "turn_id" not in record):
+                return {"status": "command_rejected"}
             if control_root:
                 result = self._admit_group_control(path, record, binding, control_root,
                                                   defer_background_stop=defer_background_stop)
@@ -1163,7 +1183,10 @@ class LarkPrivateConversations:
                     config = inbox()
                     acknowledge_lark_event_inbox(project=self.runtime_root, config_path=config,
                         message_ids=[record["event"]["message_id"]], execute=True)
-                    self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"), turn_id=record.get("turn_id"))
+                    if native_path.exists():
+                        self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"), turn_id=record.get("turn_id"))
+                    elif record["status"] != "rejected":
+                        raise ValueError("delivery request journal unavailable")
                     record["status"] = "delivered"
                     _atomic_write_json(path, record)
                     return 1
