@@ -167,7 +167,9 @@ def _restart_app(
         capture_output=True,
         timeout=min(timeout_seconds, 30),
     )
-    launch = ["/usr/bin/open", "-a", str(app)]
+    # A running QA/copy can share the bundle id. LaunchServices must start
+    # this installation after quit, rather than activate that other process.
+    launch = ["/usr/bin/open", "-n", "-a", str(app)]
     if os.environ.get("LOOPX_BIN"):
         launch += ["--env", f"LOOPX_BIN={os.environ['LOOPX_BIN']}"]
     subprocess.run(

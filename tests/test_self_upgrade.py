@@ -37,6 +37,7 @@ def test_app_restart_keeps_an_explicit_terminal_runtime_pin(monkeypatch):
         _restart_app(Path("/synthetic/LoopX.app"), "a" * 32, "main", 60)
     quit_command = run.call_args_list[0].args[0]
     launch_command = run.call_args_list[1].args[0]
+    assert launch_command[:4] == ["/usr/bin/open", "-n", "-a", "/synthetic/LoopX.app"]
     assert quit_command[-1] == "/synthetic/LoopX.app"
     assert "/synthetic/LoopX.app" not in quit_command[2]
     assert (
