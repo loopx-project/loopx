@@ -3,6 +3,8 @@ import {resolve} from "node:path";
 import {outputDir} from "./fixture.mjs";
 
 async function verifyLarkLoading(browser, url, collectCoverage) {
+  let releaseCatalog;
+  const catalog = new Promise(resolve => {releaseCatalog = resolve;});
   let releaseSlow;
   const slow = new Promise(resolve => {releaseSlow = resolve;});
   let revision = 1, catalogs = 0;
@@ -11,8 +13,14 @@ async function verifyLarkLoading(browser, url, collectCoverage) {
     await page.route("**/api/chat/lark/apps?*", async route => {
       const query = new URL(route.request().url()).searchParams;
       const current = revision;
-      const refs = ["fast", "slow", "failed"];
-      if (query.get("verify") === "false") catalogs++;
+      const refs = current === 3 ? [] : ["fast", "slow", "failed"];
+      if (query.get("verify") === "false") {
+        catalogs++;
+        if (current === 1) await catalog;
+        if (current === 4) {
+          await route.fulfill({status: 502, json: {ok: false, error: "Synthetic catalog outage", error_code: "lark_configuration_unavailable"}}); return;
+        }
+      }
       else {
         probes.push(query.get("app_ref"));
         if (query.get("app_ref") === "slow" && current === 1) await slow;
@@ -38,6 +46,19 @@ async function verifyLarkLoading(browser, url, collectCoverage) {
   }
   try {
     await openSettings();
+    const appTab = page.locator(".personal-lark-tabs").getByRole("button", {name: /^Lark Apps/u});
+    // Hold the actual catalog response: an unknown count must not masquerade
+    // as an empty directory, regardless of the component's state variable names.
+    await appTab.getByText("…", {exact: true}).waitFor();
+    await page.screenshot({path: resolve(outputDir, "lark-catalog-pending-desktop.png"), animations: "disabled"});
+    if (await appTab.getByText("0", {exact: true}).count() || await page.locator(".personal-lark-empty").count()) throw new Error("Pending catalog displayed a false empty directory");
+    if ((await page.locator(".personal-lark-app-toolbar > span").innerText()) !== "… 个可复用 App") throw new Error("Pending catalog toolbar displayed a false App count");
+    await page.setViewportSize({width: 390, height: 844});
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("Pending Lark catalog overflows at 390px");
+    await page.screenshot({path: resolve(outputDir, "lark-catalog-pending-narrow.png"), animations: "disabled"});
+    await page.setViewportSize({width: 1512, height: 982});
+    releaseCatalog();
+    await appTab.getByText("3", {exact: true}).waitFor();
     const fast = page.locator(".personal-lark-app-card").filter({hasText: "fast 1"});
     await fast.getByText("自动回复可用", {exact: true}).waitFor();
     await page.locator(".personal-lark-app-card").filter({hasText: "slow 1"}).getByText("正在核验…", {exact: true}).waitFor();
@@ -52,12 +73,30 @@ async function verifyLarkLoading(browser, url, collectCoverage) {
     releaseSlow();
     await page.waitForTimeout(200);
     if (catalogs !== 2 || probes.length !== 6 || await page.getByText("slow 1", {exact: true}).count()) throw new Error("Late verification escaped its settings generation");
+    // A confirmed empty catalog is different from loading. It clears the old
+    // cards, schedules no health probes and can recover on the same page.
+    revision = 3;
+    await page.getByRole("button", {name: "刷新配置并重试核验", exact: true}).click();
+    await appTab.getByText("0", {exact: true}).waitFor();
+    await page.locator(".personal-lark-empty").waitFor();
+    if (await page.locator(".personal-lark-app-card").count() || catalogs !== 3 || probes.length !== 6) throw new Error("Empty catalog retained stale profiles or started verification");
+    // A failed read is unknown, never a confirmed zero; its visible error and
+    // retry stay available without retaining the previous directory's cards.
+    revision = 4;
+    await page.getByRole("button", {name: "刷新配置并重试核验", exact: true}).click();
+    await page.locator(".personal-notification-error").waitFor();
+    await page.screenshot({path: resolve(outputDir, "lark-catalog-failed.png"), animations: "disabled"});
+    if (await appTab.getByText("…", {exact: true}).count() !== 1 || (await page.locator(".personal-lark-app-toolbar > span").innerText()) !== "… 个可复用 App" || await page.locator(".personal-lark-empty, .personal-lark-app-card").count() || catalogs !== 4 || probes.length !== 6) throw new Error("Failed catalog masqueraded as an empty or stale directory");
+    revision = 5;
+    await page.getByRole("button", {name: "刷新配置并重试核验", exact: true}).click();
+    await page.locator(".personal-lark-app-card").filter({hasText: "slow 5"}).getByText("自动回复可用", {exact: true}).waitFor();
+    if (catalogs !== 5 || probes.length !== 9 || await page.locator(".personal-lark-empty, .personal-notification-error").count()) throw new Error("Failed catalog did not recover without duplicate reads");
     await page.setViewportSize({width: 390, height: 844});
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("Lark configuration overflows at 390px");
     await page.screenshot({path: resolve(outputDir, "lark-progressive-narrow.png"), animations: "disabled"});
     if (context.errors.some(error => !error.startsWith("Failed to load resource:"))) throw new Error(context.errors.join(" | "));
     return await context.close();
-  } catch (error) {releaseSlow(); await context.close(); throw error;}
+  } catch (error) {releaseCatalog(); releaseSlow(); await context.close(); throw error;}
 }
 
 // One Goal's lifecycle action must not send the rest of the workspace back to

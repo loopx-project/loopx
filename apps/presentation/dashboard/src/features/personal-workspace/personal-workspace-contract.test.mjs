@@ -578,7 +578,8 @@ assert.match(larkSettings, /fetchLarkAppSetup/, "Registration polls the local se
 assert.match(larkSettings, /window\.open\(/, "Registration opens the provider flow from a user gesture");
 assert.match(larkSettings, /window\.open\(window\.location\.href,\s*"_blank"\)/, "Registration never leaves a blank waiting tab");
 assert.match(larkSettings, /setAppRef\(snapshot\.app_ref\)/, "Completed registration selects the new App");
-assert.match(larkSettings, /loading \? "…" : apps\.length/, "Lark App count does not flash a false zero while loading");
+// Loading/empty App counts are exercised against the rendered page in the
+// progressive-loading browser scenario, independently of local state names.
 assert.match(larkSettings, /openConnectionEditor\(connection\)/, "Every Lark connection settings button opens a scoped editor");
 assert.match(larkSettings, /focusGoalConnection[\s\S]*openConnectionEditor\(connection\)[\s\S]*openConnect\(goals\.find/, "Goal-level Lark entry opens the scoped connection editor or create flow");
 

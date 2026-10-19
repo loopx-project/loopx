@@ -211,6 +211,7 @@ export function LarkSettingsPage({
   const { t } = useWorkspaceI18n();
   const [tab, setTab] = useState<Tab>("connections");
   const {apps, loading: appsLoading, error: appsError, refresh: refreshApps} = useLarkApps();
+  const appCount = appsLoading || appsError !== null ? "…" : apps.length;
   const [connections, setConnections] = useState<LarkGoalConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -554,7 +555,7 @@ export function LarkSettingsPage({
       )}
 
       <nav className="personal-lark-tabs" aria-label={t("lark.management")}>
-        <button aria-current={tab === "apps" ? "page" : undefined} onClick={() => setTab("apps")} type="button">{t("lark.apps")} <span>{appsLoading ? "…" : apps.length}</span></button>
+        <button aria-current={tab === "apps" ? "page" : undefined} onClick={() => setTab("apps")} type="button">{t("lark.apps")} <span>{appCount}</span></button>
         <button aria-current={tab === "connections" ? "page" : undefined} onClick={() => setTab("connections")} type="button">{t("lark.connections")} <span>{loading ? "…" : connections.length}</span></button>
       </nav>
       {tab === "connections" ? <PrivateConversationPanel apps={apps.filter(app => app.ready && app.app_ref !== "default")} onOpenOriginal={onOpenOriginalConversation} /> : null}
@@ -564,7 +565,7 @@ export function LarkSettingsPage({
 
       {tab === "apps" ? (
         <div className="personal-lark-apps">
-          <div className="personal-lark-app-toolbar"><span>{t("lark.reusableApps", { count: apps.length })}</span><div className="personal-lark-app-actions"><button className="personal-icon-button" title={t("lark.retryVerification")} aria-label={t("lark.retryVerification")} disabled={appsLoading} onClick={() => void refreshApps()} type="button"><RefreshCw size={16} /></button><button className="personal-primary-action" disabled={cliUnavailable || larkCliUnavailable(appsError)} onClick={openSetup} type="button"><Plus size={16} />{t("lark.newApp")}</button></div></div>
+          <div className="personal-lark-app-toolbar"><span>{t("lark.reusableApps", { count: appCount })}</span><div className="personal-lark-app-actions"><button className="personal-icon-button" title={t("lark.retryVerification")} aria-label={t("lark.retryVerification")} disabled={appsLoading} onClick={() => void refreshApps()} type="button"><RefreshCw size={16} /></button><button className="personal-primary-action" disabled={cliUnavailable || larkCliUnavailable(appsError)} onClick={openSetup} type="button"><Plus size={16} />{t("lark.newApp")}</button></div></div>
           <div className="personal-lark-app-grid">
             {apps.map((app) => (
               <article className="personal-lark-app-card" key={app.app_ref}>
