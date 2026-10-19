@@ -78,9 +78,12 @@ are withheld on failure; retry targets the failed selection, not the last
 successful reader.
 Switching prepared readers clears source-local question and analysis selections;
 Back restores the previous reader's URL and its own selection.
-All mutation endpoints are denied. A read-only source does not imply an
+By default all mutation endpoints are denied. A read-only source does not imply an
 analysis pack, model execution, adoption or validated benefit; analysis remains
-unavailable until its existing owner binds the appropriate source pack.
+unavailable until its existing owner binds the appropriate source pack and the
+operator explicitly enables [local analysis](../reference/trajectory-assessment.md#existing-isolated-goal-sources).
+That separate local provider uses the original source Goal id and a
+source-namespace-isolated store; it creates no Goal mirror or source mutations.
 The adapter uses one local Python process with one HTTP listener/thread per
 prepared source. Cache misses invoke the source's native status CLI or bounded
 log read; no lower CPU, process or IO cost is implied. Local host/container
