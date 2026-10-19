@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,22 @@ from ...extensions.process_runtime import terminate_process_tree
 # Frozen wire id shared with capabilities/issue_fix. Kept verbatim for wire
 # compatibility with existing caller-repo-branch receipts.
 CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION = "issue_fix_validation_command_v0"
+_VALIDATION_STDIN: ContextVar[int | None] = ContextVar("validation_stdin", default=None)
+
+
+@contextmanager
+def noninteractive_validation() -> Iterator[None]:
+    """Give validators EOF in this context, preserving other callers' stdin.
+
+    Trusted noninteractive hosts use this scope instead of lending their live
+    conversation input to child validators. Nested scopes and failures restore
+    the previous input policy; ordinary validation keeps inheriting stdin.
+    """
+    token = _VALIDATION_STDIN.set(subprocess.DEVNULL)
+    try:
+        yield
+    finally:
+        _VALIDATION_STDIN.reset(token)
 
 
 def run_caller_validation(
@@ -49,6 +67,7 @@ def run_caller_validation(
         argv,
         cwd=workspace,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        stdin=_VALIDATION_STDIN.get(),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=os.name == "posix",

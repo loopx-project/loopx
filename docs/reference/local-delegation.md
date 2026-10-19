@@ -293,7 +293,22 @@ Current grants, stop state and declared ancestry are checked again before
 revalidation or committed-result recovery. Restoring the task output alone
 does not restore unavailable source inputs.
 
+If the original worker still owns the operation, revalidation returns its
+current observation without starting another revalidation or settlement. A terminal
+observation can precede worker release; check delivery again after it finishes.
+Managed CLI subprocesses receive no caller stdin: their request is supplied in
+arguments, keeping MCP and other interactive input channels with their owner.
+Delegation validators also receive EOF instead of conversation input. Ordinary
+standalone caller validation retains its existing stdin inheritance.
+If a host terminates its worker process tree on disconnect (for example a
+Windows MCP Job), reconnect and use `resume` for the original operation. This
+reconciles its durable execution; it does not bypass the host's process policy.
+
 中文：先修复真实产物或校验环境，再复核原执行；通过后继续原 Turn 结算，保留失败证据，不重复 Host 或扣额。停止、撤权与来源链失效仍阻止复验或提交后的恢复；仅修复输出不能恢复失效的来源输入。
+原 worker 仍占用执行时，复核只返回当前观察，不另行复核任务或结算。终态观察可能早于 worker 释放；结束后再重新检查交付。
+托管 CLI 子进程通过参数接收请求，不继承调用方的标准输入，MCP 等交互通道仍由原调用方持有。
+委派校验器同样读取 EOF，不消费对话输入；普通独立调用校验器仍保留原有的标准输入继承行为。
+宿主断连时若终止整个进程树（如 Windows MCP Job），重连后可沿原 operation 执行 `resume`，对账持久化执行，不绕过宿主进程策略。
 
 ## Source use and recheck
 

@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 from .file_lock import (
-    exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
+    exclusive_file_lock, try_exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
     LOCK_HOLDER_ABSENT, LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED,
     LOCK_HOLDER_FOREIGN_HOST, LOCK_HOLDER_LIVE, LockAcquisitionPolicy, LockAcquireTimeoutError,
 )
@@ -36,6 +36,7 @@ from .control_plane.effect_runtime import (
     effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
 )
 from .control_plane.coordination.local_authority import local_authority_is_promoted
+from .control_plane.runtime.validation_command import noninteractive_validation
 from .control_plane.turn_driver.journal_store import (
     load_turn_journal,
     turn_journal_path,
@@ -737,7 +738,8 @@ class Delegations:
         return self.read(operation_id)
 
     def _spawn(self, operation_id: str, *, prepared_source_request_id: str | None = None) -> None:
-        # Detached stdio survives requester exit; the worker owns its single-flight lock.
+        # No inherited stdio pipes. A host may still terminate its process tree;
+        # scoped resume retains the durable execution and its single-flight fence.
         operation_id = require_operation_id(operation_id)
         precondition = [] if prepared_source_request_id is None else ["--prepared-source-request-id", prepared_source_request_id]
         subprocess.Popen([*_python_module_command("loopx.collaboration_mcp"),
@@ -800,7 +802,10 @@ class Delegations:
     def revalidate(self, operation_id: str) -> dict:
         """Explicitly rerun the original postcondition; never repeat Host work."""
         path = self.path(require_operation_id(operation_id))
-        with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
+        with try_exclusive_file_lock(path) as acquired:
+            if acquired is None:
+                # Terminal publication can precede the original worker's release.
+                return self.read(operation_id)
             if self._read_stop(path) is not None:
                 raise ValueError(DELEGATION_STOPPED_MESSAGE)
             row = _read(path)
@@ -1318,7 +1323,8 @@ class Delegations:
         if delegated_lease is None:
             completed = subprocess.run([*_python_module_command("loopx.cli"), *arguments],
                 cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
-                timeout=timeout, env=environment)
+                # Requests are entirely in argv; never inherit the caller's MCP/HTTP pipe.
+                stdin=subprocess.DEVNULL, timeout=timeout, env=environment)
             stdout, returncode = completed.stdout, completed.returncode
         else:
             from .control_plane.turn_driver.host_process_transport import run_host_process
@@ -1363,7 +1369,8 @@ class Delegations:
         return value
 
     def _validate(self, binding: dict) -> dict:
-        return delegation_validation.validate(self, binding)
+        with noninteractive_validation():
+            return delegation_validation.validate(self, binding)
 
     def _accepted(self, binding: dict) -> dict:
         return delegation_results.accepted_result(self, binding)

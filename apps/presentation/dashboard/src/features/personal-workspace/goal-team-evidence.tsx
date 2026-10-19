@@ -132,7 +132,8 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
         <p><strong>{result.task_failure.recovery_kind === "replan_required" ? (zh ? "需要重新规划" : "Replan required") : (zh ? "需要修复原任务" : "Repair the original task")}</strong></p>
         <p>{result.task_failure.summary}</p>
         <p>{zh ? "先修复任务产物或验收环境，再复核原执行。此操作复用原 Host 结果；检查通过后继续原结算，可能写回状态并扣除原任务额度。它不自动修复代码。" : "Repair the artifact or validation environment, then recheck the original Host result. Passing checks continue pending settlement, including state writeback and the original quota charge. This does not edit code."}</p>
-        <button type="button" disabled={busy} onClick={() => void read(true)}>{zh ? "复核原任务" : "Revalidate original task"}</button>
+        {result.worker_active ? <p>{zh ? "原执行仍在收尾。结束后选择“重新检查交付”，再复核原任务。" : "The original worker is still finishing. Choose Check delivery again after it finishes, then revalidate the task."}</p> : null}
+        <button type="button" disabled={busy || result.worker_active} onClick={() => void read(true)}>{zh ? "复核原任务" : "Revalidate original task"}</button>
         <details><summary>{zh ? "原执行标识" : "Original execution identity"}</summary><code>{result.task_failure.turn_key}</code></details>
       </section> : null}
       {result.status === "accepted" && result.current_use?.state !== "unavailable" && !result.error && !result.recovery_required ? <details>
