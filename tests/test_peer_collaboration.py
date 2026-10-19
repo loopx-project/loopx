@@ -122,12 +122,34 @@ def cli(root, registry, agent, action, *args, ok=True):
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
         cwd=registry.parent,
     )
     result = json.loads(proc.stdout)
     assert proc.returncode == (0 if ok else 1), (proc.stdout, proc.stderr)
     return result
+
+
+def test_peer_cli_preserves_unicode_request_and_reply(scenario):
+    root, registry, brief, _, _, _, parent = scenario
+    purpose = "独立复核恢复计划 🚀"
+    reply = "已验证库存约束，恢复完成 🚀"
+    path = root / "unicode-peer-brief.json"
+    path.write_text(json.dumps({**brief, "purpose": purpose}, ensure_ascii=False), encoding="utf-8")
+    request_id = cli(root, registry, "builder", "request", "--peer-agent-id", "reviewer",
+                     "--operation-id", "unicode-review", "--brief-file", str(path),
+                     "--parent-request-id", parent)["request_id"]
+    received = next(item for item in cli(root, registry, "reviewer", "read")["items"]
+                    if item["request_id"] == request_id)
+    assert received["brief"]["purpose"] == purpose
+    cli(root, registry, "reviewer", "acknowledge", "--request-id", request_id,
+        "--decision", "adopt", "--reason", "按原约束进行独立复核。")
+    cli(root, registry, "reviewer", "report", "--request-id", request_id, "--reply-text", reply)
+    returned = cli(root, registry, "builder", "read")["peer_returns"]["items"][0]
+    assert returned["text"] == reply and returned["parent_request_id"] == parent
+    rejected = cli(root, registry, "unknown-agent", "read", ok=False)
+    assert rejected["ok"] is False and "recipient is not registered" in rejected["error"]
 
 
 @pytest.fixture
