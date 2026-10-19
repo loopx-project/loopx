@@ -163,6 +163,93 @@ def test_success_keeps_inherited_stdin() -> None:
     assert json.loads(proc.stdout)["passed"] is True
 
 
+def test_noninteractive_validation_restores_stdin_after_nested_exception() -> None:
+    outer = """
+import json, sys
+from pathlib import Path
+from loopx.control_plane.runtime.validation_command import noninteractive_validation, run_caller_validation
+def check(expected):
+    return run_caller_validation(Path.cwd(),
+        validation_argv=[sys.executable, '-c', f'import sys;assert sys.stdin.read()=={expected!r}'],
+        validation_label='Scoped input', timeout_seconds=3)
+with noninteractive_validation():
+    assert check('')['passed']
+    try:
+        with noninteractive_validation():
+            raise RuntimeError('synthetic nested failure')
+    except RuntimeError:
+        pass
+    assert check('')['passed']
+assert check('caller input')['passed']
+print(json.dumps({'restored': True}))
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", outer], input="caller input", text=True,
+        capture_output=True, cwd=Path(__file__).resolve().parents[2], timeout=15,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"restored": True}
+
+
+def test_noninteractive_validation_does_not_change_another_thread() -> None:
+    outer = """
+import sys
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from loopx.control_plane.runtime.validation_command import noninteractive_validation, run_caller_validation
+def check(expected):
+    return run_caller_validation(Path.cwd(),
+        validation_argv=[sys.executable, '-c', f'import sys;assert sys.stdin.read()=={expected!r}'],
+        validation_label='Thread input', timeout_seconds=3)
+with ThreadPoolExecutor(max_workers=1) as pool:
+    with noninteractive_validation():
+        assert pool.submit(check, 'other thread input').result(timeout=5)['passed']
+        assert check('')['passed']
+"""
+    proc = subprocess.run(
+        [sys.executable, "-c", outer], input="other thread input", text=True,
+        capture_output=True, cwd=Path(__file__).resolve().parents[2], timeout=15,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows pending parent stdin regression")
+def test_noninteractive_validation_with_pending_parent_stdin_read() -> None:
+    # Keep the writer open while another parent thread waits for input. A
+    # validator must see EOF without inheriting this live conversation pipe.
+    outer = """
+import json, os, sys, threading
+from pathlib import Path
+from loopx.control_plane.runtime.validation_command import noninteractive_validation, run_caller_validation
+reading = threading.Event()
+def read():
+    reading.set()
+    sys.stdin.buffer.read(1)
+threading.Thread(target=read, daemon=True).start()
+assert reading.wait(1)
+with noninteractive_validation():
+    result = run_caller_validation(Path.cwd(),
+        validation_argv=[sys.executable, '-c', "import sys;assert sys.stdin.read()==''"],
+        validation_label='Pending parent input', timeout_seconds=3)
+print(json.dumps(result), flush=True)
+os._exit(0)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", outer], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+    try:
+        # communicate() would close the writer and erase the regression.
+        assert process.wait(timeout=5) == 0
+        stdout, stderr = process.communicate(timeout=2)
+        assert json.loads(stdout)["passed"] is True, stderr
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=5)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_timeout_keeps_canonical_todo_open_and_declaration_unchanged(

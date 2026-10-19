@@ -73,7 +73,7 @@ def service(tmp_path, request, monkeypatch):
             "from pathlib import Path; import sys; "
             "from loopx.control_plane.effect_runtime import _runtime_dir, restart_effect_runtime; "
             "assert _runtime_dir().parent == Path(sys.argv[1]); "
-            "result = restart_effect_runtime(); "
+            "result = restart_effect_runtime(wait_for_exit=True); "
             "assert result['status'] in {'stopped', 'not_running'}, result",
             str(tmp_path),
         ], cwd=Path(__file__).resolve().parents[1], env=runtime_env,
@@ -264,8 +264,9 @@ def wait(service, operation="analysis-1"):
     while time.monotonic() < deadline:
         result = service.read(operation)
         if result["status"] in {"accepted", "rejected"}:
-            return result
-        if result.get("error"):
+            if not result["worker_active"]:
+                return result
+        elif result.get("error"):
             pytest.fail(str(result))
         time.sleep(0.25)
     pytest.fail(str(service.read(operation)))

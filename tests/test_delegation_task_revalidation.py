@@ -4,6 +4,8 @@ import json
 import os
 import sys
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -13,6 +15,93 @@ from loopx.collaboration_mcp import Delegations
 from test_local_delegation import brief, service as delegation_service, wait
 
 service = delegation_service
+
+
+def test_active_rejected_worker_defers_revalidation_until_release(service, monkeypatch):
+    """Terminal publication is observable before the original worker releases ownership."""
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+
+    root, runner = service
+    output = root / "analyst/initial/output.json"
+    saved = output.read_bytes()
+    output.write_text("{}")
+    published, release = Event(), Event()
+    observe = runner._observe
+
+    def pause_after_rejection(path, row, status, **facts):
+        observe(path, row, status, **facts)
+        if status == "rejected":
+            published.set()
+            assert release.wait(120), "test did not release the terminal worker"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with monkeypatch.context() as worker_patch:
+            worker_patch.setattr(runner, "_spawn", lambda _: None)
+            worker_patch.setattr(runner, "_observe", pause_after_rejection)
+            runner.start("analysis", "analysis-1", brief())
+            worker = pool.submit(runner.execute, "analysis-1")
+            try:
+                assert published.wait(120), "worker did not publish the task failure"
+                failed = runner.read("analysis-1")
+                assert failed["status"] == "rejected" and failed["worker_active"]
+                turn_key = failed["task_failure"]["turn_key"]
+                path = runner.path("analysis-1")
+                journal = turn_journal_path(runner.root, goal_id=runner.goal_id, turn_key=turn_key)
+                original_record, original_journal = path.read_bytes(), journal.read_bytes()
+                with monkeypatch.context() as duplicate_patch:
+                    def forbidden_effect(*args, **kwargs):
+                        pytest.fail("an active operation must not retry validation or write execution state")
+                    duplicate_patch.setattr(runner, "_cli", forbidden_effect)
+                    duplicate_patch.setattr(runner, "_spawn", forbidden_effect)
+                    duplicate_patch.setattr(runner, "_fenced_write", forbidden_effect)
+                    duplicate = runner.revalidate("analysis-1")
+                assert duplicate["operation_id"] == "analysis-1"
+                assert duplicate["task_failure"] == failed["task_failure"]
+                assert duplicate["worker_active"] is True
+                assert path.read_bytes() == original_record
+                assert journal.read_bytes() == original_journal
+                assert (root / "analyst/initial/host-invocations").read_text().strip() == "1"
+
+                read = runner.read
+                def release_after_active_read(operation):
+                    result = read(operation)
+                    if result["status"] == "rejected" and result["worker_active"]:
+                        release.set()
+                    return result
+                with monkeypatch.context() as readiness_patch:
+                    readiness_patch.setattr(runner, "read", release_after_active_read)
+                    ready = wait(runner)
+                assert ready["worker_active"] is False
+            finally:
+                release.set()
+                worker.result(timeout=30)
+
+    output.write_bytes(saved)
+    runner.revalidate("analysis-1")
+    accepted = wait(runner)
+    assert accepted["status"] == "accepted", accepted
+    assert json.loads(runner.path("analysis-1").read_text())["turn_key"] == turn_key
+    assert (root / "analyst/initial/host-invocations").read_text().strip() == "1"
+
+
+def test_revalidation_preserves_an_internal_lock_timeout(service, monkeypatch):
+    """Only operation-lock contention is a no-op; retry execution failures stay visible."""
+    from loopx.file_lock import LockAcquireTimeoutError
+
+    root, runner = service
+    output = root / "analyst/initial/output.json"
+    saved = output.read_bytes()
+    output.write_text("{}")
+    runner.start("analysis", "analysis-1", brief())
+    assert wait(runner)["status"] == "rejected"
+    output.write_bytes(saved)
+    failure = LockAcquireTimeoutError(incident={}, incident_recorded=False, incident_channel="fixture")
+    def fail_inside_retry(*args, **kwargs):
+        raise failure
+    monkeypatch.setattr(runner, "_cli", fail_inside_retry)
+    with pytest.raises(LockAcquireTimeoutError) as raised:
+        runner.revalidate("analysis-1")
+    assert raised.value is failure
 
 
 def test_original_task_revalidation_repairs_output_without_repeating_host(service):
@@ -45,6 +134,9 @@ def test_original_task_revalidation_repairs_output_without_repeating_host(servic
                 result = await session.call_tool("revalidate_delegation", {"operation_id": "analysis-1"})
                 assert not result.isError, result
     asyncio.run(recheck_mcp())
+    # A Windows MCP host may close its entire Job on disconnect. Reconcile
+    # the original committed Turn through the existing independent caller.
+    runner.resume("analysis-1")
     accepted = wait(runner)
     assert accepted["status"] == "accepted", json.dumps({"read": accepted, "record": json.loads(runner.path("analysis-1").read_text())})
     assert "task_failure" not in accepted
