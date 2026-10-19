@@ -7,7 +7,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 from pathlib import Path
+import queue
+import subprocess
+import threading
+import time
 from typing import Any, Callable
 
 from ...chat_agent import CodexChatAgentSession, CodexChatTimeoutError
@@ -18,6 +23,41 @@ from ...chat_codex_goal import CodexGoalDriver
 class CodexAppServerAdapter:
     session: CodexChatAgentSession
     goal_driver: CodexGoalDriver | None = None
+
+    @staticmethod
+    def failed_request_observation(*, codex_bin: str, codex_home: Path,
+                                   thread_ids: list[str], turn_id: str) -> dict[str, Any] | None:
+        """Read persisted native metadata/items; create no native conversation.
+
+        The initialized stdio client is not a listener or a model runner. It
+        uses the same native dispatcher as authentication/control and never
+        calls thread/start, resume, inject or turn/start.
+        """
+        from ...chat_agent import _reader
+
+        process = subprocess.Popen([codex_bin, "app-server", "--listen", "stdio://"],
+            cwd=str(codex_home), env={**os.environ, "CODEX_HOME": str(codex_home)},
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", bufsize=1)
+        native = CodexChatAgentSession(process=process, messages=queue.Queue(), thread_id="",
+            work_dir=codex_home, response_timeout_sec=5)
+        try:
+            threading.Thread(target=_reader, args=(process.stdout, native.messages), daemon=True).start()
+            native._request("initialize", {"clientInfo": {"name": "loopx_chat", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": True}})
+            native._notify("initialized", {})
+            deadline = time.monotonic() + 5
+            for thread_id in dict.fromkeys(thread_ids):
+                native.thread_id = thread_id
+                native.response_timeout_sec = max(.01, deadline - time.monotonic())
+                proof = native.failed_request_readback(turn_id)
+                if proof is not None:
+                    return proof
+                if time.monotonic() >= deadline:
+                    break
+            return None
+        finally:
+            native.close()
 
     @property
     def current_model_id(self) -> str | None:

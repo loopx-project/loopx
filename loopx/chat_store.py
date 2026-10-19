@@ -403,6 +403,7 @@ class ChatSessionStore(ChatIngressStore):
                     "upstream_mode",
                     "codex_home",
                     "manager_context_version",
+                    "upstream_context_history",
                     "coordination_context_version",
                     "external_conversation_binding_id",
                     "loopx_mode",
@@ -424,6 +425,17 @@ class ChatSessionStore(ChatIngressStore):
                 unknown = set(changes) - allowed
                 if unknown:
                     raise ValueError(f"unsupported chat session fields: {sorted(unknown)}")
+                if "upstream_context_history" in changes:
+                    history = changes["upstream_context_history"]
+                    previous = payload.get("upstream_context_history") or []
+                    if not isinstance(history, list) or history[:len(previous)] != previous:
+                        raise ValueError("native context provenance must preserve its prior prefix")
+                    for item in history:
+                        if (not isinstance(item, dict) or set(item) != {"thread_id", "manager_context_version"}
+                                or item["manager_context_version"] is not None and (
+                                    type(item["manager_context_version"]) is not int or item["manager_context_version"] < 0)):
+                            raise ValueError("invalid native context provenance")
+                        _opaque_id(item["thread_id"], field="upstream_thread_id")
                 if "external_conversation_binding_id" in changes:
                     identity = _opaque_id(changes["external_conversation_binding_id"], field="external_conversation_binding_id")
                     if payload.get("session_mode") != CHAT_SESSION_MODE_ATTACHED or payload.get("external_conversation_binding_id") not in {None, identity}:

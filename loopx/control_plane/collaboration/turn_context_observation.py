@@ -3,7 +3,7 @@ import shlex
 from pathlib import Path
 
 from .goal_instance_scope import collaboration_goal_scope
-from .inbox_read import read_inbox_transaction
+from .inbox import read_inbox_transaction
 
 
 def delegation_read_command(root, registry, goal_id, agent_id):

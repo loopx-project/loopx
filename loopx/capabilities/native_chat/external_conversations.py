@@ -44,6 +44,109 @@ class ChatExternalConversations:
         self.root = controller.store.root / "external-requests"
         self.actions: Any | None = None
 
+    def _context_recovery_plan(self, row: dict[str, Any], *,
+                               observation: dict[str, Any] | None = None,
+                               source_verified: bool = False) -> dict[str, Any]:
+        from ...chat_manager import MANAGER_CONTEXT_VERSION
+        from ...control_plane.effect_runtime import effect_runtime_result
+
+        store = self.controller.store
+        session = store.load_session(str(row.get("session_id") or ""))
+        turn = store.load_turn(str(row.get("session_id") or ""), str(row.get("turn_id") or ""))
+        if not session or not turn:
+            return {}
+        selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])
+        return effect_runtime_result("collaboration.conversation.request", {
+            "request": {key: value for key, value in row.items() if key != "attachments"},
+            "current_session": session, "binding": selected["binding"],
+            "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
+                "steering_observed": any(event.get("kind") == "turn.steered"
+                    for event in store.events_after(session["session_id"], turn["turn_id"], None)),
+                "native_observation": observation, "source_verified": source_verified},
+        })
+
+    def context_recovery_candidate(self, request_ref: str) -> bool:
+        """Discovery only; every authority and native fact is re-read at admission."""
+        try:
+            row = self.read_request(request_ref)
+            # Avoid provider IO for ordinary delivered results/control receipts.
+            if row.get("status") != "accepted":
+                return False
+            recovery = row.get("context_recovery")
+            if recovery and row.get("turn_id") != recovery["failed_turn_id"]:
+                return not row.get("delivery_verified")
+            if not row.get("delivery_verified"):
+                return False
+            turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
+            if not turn or turn.get("status") != "failed":
+                return False
+            return self._context_recovery_plan(row).get("recovery_candidate") is True
+        except (KeyError, ValueError, RuntimeError, OSError):
+            return False
+
+    def recover_failed_request(self, request_ref: str, *,
+                               source_observation: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
+        """Reserve/admit one same-source continuation through the existing queue.
+
+        The failed Turn and its original notice remain immutable. The new Turn
+        has a deterministic client identity, original grant/source and a native
+        no-effects readback; a crash resumes that reservation, never replays the
+        failed Turn or fabricates successful execution.
+        """
+        from .codex_adapter import CodexAppServerAdapter
+        from ...chat_manager import MANAGER_CONTEXT_VERSION
+
+        path = self.root / f"{request_ref}.json"
+        with exclusive_file_lock(path, operation="admit_external_chat_request"):
+            row = self.read_request(request_ref)
+            with exclusive_file_lock(self.root / "source-fences" / f"{row['binding_id']}.{row['source']['source_ref']}.json", operation="route_external_chat_request"):
+                plan = self._context_recovery_plan(row)
+                if not plan.get("recovery_candidate"):
+                    return row
+                session = self.controller.store.load_session(row["session_id"])
+                turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
+                assert session is not None and turn is not None
+                self.controller._check_codex_home(session)
+                context = self.controller.project_contexts.session_context(session)
+                proof = CodexAppServerAdapter.failed_request_observation(
+                    codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
+                    thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
+                source = source_observation(selected)
+                plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None)
+                if not plan.get("recovery_eligible"):
+                    return row
+                recovery = row.get("context_recovery")
+                if recovery is None:
+                    recovery = {"version": MANAGER_CONTEXT_VERSION, "failed_turn_id": row["turn_id"],
+                        "native_observation": proof, "source_observation": source,
+                        "client_turn_id": plan["client_turn_id"],
+                        "failure_notice_delivery_verified": row["delivery_verified"]}
+                    row["context_recovery"] = recovery
+                    _atomic_write_json(path, row)
+                # Freeze correlation before the existing queue can dispatch.
+                self._record_steward_ingress(row, selected, session, plan["client_turn_id"])
+                continued, _ = self.controller.enqueue_turn(session_id=row["session_id"],
+                    client_turn_id=plan["client_turn_id"], message=row["message"],
+                    attachments=row.get("attachments"), origin=row.get("origin", "lark"),
+                    work_dir=context["project"], objective=context["objective"])
+                row.update(turn_id=continued["turn_id"], delivery_verified=False)
+                _atomic_write_json(path, row)
+            self.controller.resume_session_queue(session_id=row["session_id"],
+                work_dir=context["project"], objective=context["objective"])
+            return row
+
+    def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*", str(turn.get("client_turn_id") or ""))
+        if match is None:
+            return None
+        row = self.read_request(match[1])
+        recovery = row.get("context_recovery")
+        if (row.get("session_id") == session["session_id"] and recovery
+                and recovery["client_turn_id"] == turn["client_turn_id"]):
+            return {"request_ref": row["request_ref"], **recovery}
+        return None
+
     def _automation_cadence_observation(
         self, target: Mapping[str, Any]
     ) -> dict[str, Any]:

@@ -74,6 +74,134 @@ def finish(runtime, row):
     return runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
 
 
+@pytest.mark.parametrize("fault", [None, "revoked", "source-changed", "native-effect", "unknown-native",
+    "reservation-crash", "post-enqueue-crash", "transport-sync-crash", "existing-return",
+    "foreign-native-thread", "wrong-native-turn", "policy-native-proof", "steered", "native-goal", "current-context"])
+def test_existing_scanner_automatically_continues_legacy_failure_and_returns_original(steward, monkeypatch, fault):
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.chat_manager import MANAGER_CONTEXT_VERSION
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    fake = Path(runtime.codex_bin)
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "contextWindowExceeded"')
+    # The demonstrated failure precedes any model output or tool. The native
+    # protocol inventory below is independently covered in test_chat_agent.
+    source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    fake.write_text(source)
+    event = provider.event("steward-app", "legacy-overfull", "typed terminal failure")
+    assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+    row = next(r for r in transport.core.pending() if r.get("request_ref") == identity_ref(binding["provider_ref"], event["message_id"]))
+    failed = finish(runtime, row)
+    assert failed["status"] == "failed" and failed["delta_count"] == 0
+    assert failed["error_code"] == "context_window_exceeded"
+    failed_path = store._turn_path(row["session_id"], row["turn_id"])
+    failed_bytes = failed_path.read_bytes()
+    store.update_session(row["session_id"], manager_context_version=20)
+    assert transport.reconcile() == 1  # the error notice, never business completion
+    path = transport.root / (row["request_ref"] + ".json")
+    prior = json.loads(path.read_text())
+    assert prior["status"] == "delivered"
+    failure_notice = dict(prior["deliveries"]["terminal"])
+    runtime.adapters.pop(row["session_id"]).close_session()
+    fake.write_text(source.replace('"durable-thread"', '"recovered-thread"')
+        .replace('if "typed terminal failure" in json.dumps(request.get("params") or {}):', 'if False:'))
+    proof = {"thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+        "only_original_user_item": True, "codex_error_info": "contextWindowExceeded"}
+    if fault == "foreign-native-thread":
+        proof["thread_id"] = "foreign-thread"
+    elif fault == "wrong-native-turn":
+        proof["turn_id"] = "foreign-turn"
+    elif fault == "policy-native-proof":
+        proof["codex_error_info"] = "cyberPolicy"
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(
+        lambda **_: None if fault in {"native-effect", "unknown-native"} else proof), raising=False)
+    if fault == "revoked":
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    elif fault == "source-changed":
+        provider.messages[event["message_id"]]["content"] = "Changed original requirement"
+    elif fault == "existing-return":
+        provider.messages[event["message_id"]]["thread_replies"] = [{"message_id": "om_existing",
+            "sender": {"id": provider.profile_apps["steward-app"], "sender_type": "app"},
+            "content": "Prior verified completion; preserve it instead of repeating effects."}]
+    elif fault == "steered":
+        store.append_event(row["session_id"], row["turn_id"], kind="turn.steered", payload={"client_ingress_id": "correction"})
+    elif fault == "native-goal":
+        from loopx.chat_codex_goal import UPSTREAM_MODE
+        store.update_session(row["session_id"], upstream_mode=UPSTREAM_MODE)
+    elif fault == "current-context":
+        store.update_session(row["session_id"], manager_context_version=MANAGER_CONTEXT_VERSION)
+    if fault in {"reservation-crash", "post-enqueue-crash"}:
+        enqueue = runtime.enqueue_turn
+        def crash(**kwargs):
+            if fault == "post-enqueue-crash":
+                enqueue(**kwargs)
+            raise OSError("simulated admission crash")
+        monkeypatch.setattr(runtime, "enqueue_turn", crash)
+        with pytest.raises(OSError, match="admission"):
+            transport.reconcile()
+        monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+    elif fault == "transport-sync-crash":
+        recover = transport.core.recover_failed_request
+        def crash_sync(*args, **kwargs):
+            recover(*args, **kwargs)
+            raise OSError("simulated transport sync crash")
+        monkeypatch.setattr(transport.core, "recover_failed_request", crash_sync)
+        with pytest.raises(OSError, match="transport sync"):
+            transport.reconcile()
+    # A fresh instance models restart: no manual enqueue, new event or source
+    # mutation is supplied to make the old delivered record visible again.
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+    restored = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+        runner=provider, cli_bin="lark-cli")
+    held = {"revoked", "source-changed", "native-effect", "unknown-native", "foreign-native-thread",
+        "wrong-native-turn", "policy-native-proof", "steered", "native-goal", "current-context"}
+    if fault in held:
+        restored.reconcile()
+    else:
+        import threading
+        from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+        service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=store.root.parent,
+            runtime_controller=runtime, private_conversations=restored)
+        worker = threading.Thread(target=service._reconcile_private)
+        worker.start()
+        try:
+            deadline = time.monotonic() + 12
+            while not json.loads(path.read_text()).get("deliveries", {}).get(
+                    f"terminal.recovery.{MANAGER_CONTEXT_VERSION}", {}).get("verified"):
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+        finally:
+            service._closed.set()
+            service._delivery_wakeup.set()
+            worker.join(5)
+        assert not worker.is_alive() and not service._workers  # no new event consumer
+    current = restored.core.read_request(row["request_ref"])
+    if fault in held:
+        assert current["turn_id"] == row["turn_id"] and not current.get("context_recovery")
+        assert json.loads(path.read_text()) == prior
+        assert failed_path.read_bytes() == failed_bytes
+        return
+    assert current["turn_id"] != row["turn_id"] and current["session_id"] == row["session_id"]
+    assert finish(runtime, current)["status"] == "completed"
+    assert restored.reconcile_request(path) == 0  # scanner already delivered it
+    delivered = json.loads(path.read_text())
+    assert delivered["status"] == "delivered" and delivered["deliveries"]["terminal"] == failure_notice
+    assert delivered["deliveries"][f"terminal.recovery.{MANAGER_CONTEXT_VERSION}"]["verified"]
+    assert restored.core.read_request(row["request_ref"])["delivery_verified"]
+    assert failed_path.read_bytes() == failed_bytes and len(store.list_sessions()) == 1
+    before_writes = list(provider.writes)
+    restored.reconcile_request(path)
+    restored.reconcile()
+    assert provider.writes == before_writes
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(r["method"] == "turn/start" for r in requests) == 2
+    assert any(r["method"] == "thread/inject_items" for r in requests)
+    assert "request_recovery" in capture.read_text() and "legacy-overfull" in capture.read_text()
+    if fault == "existing-return":
+        assert "Prior verified completion" in capture.read_text()
+
+
 def test_personal_steward_uses_registered_portfolio_and_configured_inbox_root(steward, tmp_path):
     from loopx.capabilities.manager_context.discovery import agent_page
     from loopx.capabilities.manager_context import configure_delivery_scope

@@ -241,7 +241,7 @@ def request(
 
 
 def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
-    from .inbox_read import read_inbox_transaction
+    from .inbox import read_inbox_transaction
 
     return read_inbox_transaction(root, {
         "operation": "returns", "goal_id": goal_id, "agent_id": agent_id, "mark_read": mark_read,
@@ -486,7 +486,7 @@ def read_inbox(
     caller_goal_ref=None,
 ):
     from .inbox import _pending_result
-    from .inbox_read import read_inbox_transaction
+    from .inbox import read_inbox_transaction
     from .turn_context_observation import delegation_read_command
     from .links import receiver_work_observations
 
