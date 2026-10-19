@@ -1485,7 +1485,10 @@ class CodexChatAgentSession:
             if not selected or selected.get("status") != "failed":
                 return None
             info = _retry_error_details(selected.get("error")).get("retry", {}).get("codex_error_info")
-            if info in ("contextWindowExceeded", "serverOverloaded", "internalServerError"):
+            # `other` is evidence of a failed native request, not permission to
+            # retry it. The typed admission owner separately decides whether
+            # this proven user-only failure is eligible for one continuation.
+            if info in ("contextWindowExceeded", "serverOverloaded", "internalServerError", "other"):
                 return {"codex_error_info": info}
             if isinstance(info, dict) and len(info) == 1:
                 detail = next(iter(info.values()))

@@ -1318,7 +1318,7 @@ without provider identity IO for every historical failure. This is a queue hint;
 admission still re-resolves current App/owner/grant and exact source/native proof
 under the existing fences before reserving or enqueueing any continuation.
 
-Core may admit one correlated continuation per request for this migration only
+Core may admit one correlated continuation per request and context version
 after current App/owner/grant and unchanged source verification, an exact failed
 native Turn readback, and a complete inventory containing only its original user
 item. Policy/usage denials, corrections, tools, unknown effects, closed Sessions,
@@ -1328,6 +1328,13 @@ queue owns continuation, and a distinct frozen delivery phase owns the eventual
 original-source result. A restart resumes the deterministic reservation rather
 than dispatching it twice. Existing provider replies accompany recovery as data
 so completed work can be retained without repeating its effects.
+
+The same bounded admission also covers a current-format `host_gate` failure
+whose native error is `other`, only when the stable native inventory proves
+there was exactly the original user input and no execution item. It resumes the
+existing thread, without a history migration or error-message text matching.
+This proves absence of execution, not provider health or eventual success. A
+failed continuation is returned and retained; it cannot generate another retry.
 
 Continuation admission, progress, cursor and final delivery use a version-scoped
 presentation journal. They never reopen the acknowledged original Inbox source

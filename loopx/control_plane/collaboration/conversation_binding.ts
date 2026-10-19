@@ -503,15 +503,20 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if (Number.isSafeInteger(current.manager_context_version) && Number(current.manager_context_version) < version) {
     oldThreads.push(sessionIdentity(current.upstream_thread_id, "original native thread"));
   }
-  if (!oldThreads.length) return no;
+  const currentHostFailure = current.manager_context_version === version && failed.error_code === "host_gate";
+  const nativeThreads = currentHostFailure
+    ? [sessionIdentity(current.upstream_thread_id, "current native thread"), ...oldThreads] : oldThreads;
+  if (!nativeThreads.length) return no;
   const candidate = {...no, recovery_candidate: true, client_turn_id: client,
-    session_id: current.session_id, failed_turn_id: failed.turn_id, native_thread_ids: [...new Set(oldThreads)]};
+    session_id: current.session_id, failed_turn_id: failed.turn_id, native_thread_ids: [...new Set(nativeThreads)]};
   if (recovery.native_observation == null) return candidate;
   const observed = requireJsonObject(recovery.native_observation, "native failure readback");
-  if (!oldThreads.includes(String(observed.thread_id)) || observed.turn_id !== failed.upstream_turn_id
+  if (!nativeThreads.includes(String(observed.thread_id)) || observed.turn_id !== failed.upstream_turn_id
       || observed.only_original_user_item !== true || recovery.source_verified !== true) return candidate;
   const info = observed.codex_error_info;
-  let transient = ["contextWindowExceeded", "serverOverloaded", "internalServerError"].includes(String(info));
+  let transient = (oldThreads.includes(String(observed.thread_id))
+    && ["contextWindowExceeded", "serverOverloaded", "internalServerError"].includes(String(info)))
+    || (currentHostFailure && observed.thread_id === current.upstream_thread_id && info === "other");
   if (info && typeof info === "object" && !Array.isArray(info)) {
     const entries = Object.entries(info);
     if (entries.length === 1 && ["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"].includes(entries[0][0])) {

@@ -238,6 +238,56 @@ def test_existing_scanner_automatically_continues_legacy_failure_and_returns_ori
         assert "Prior verified completion" in capture.read_text()
 
 
+@pytest.mark.parametrize("fault", [None, "native-effect", "policy", "failure-again"])
+def test_current_context_host_failure_gets_one_proven_continuation(steward, monkeypatch, fault):
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.chat_manager import MANAGER_CONTEXT_VERSION
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    fake = Path(runtime.codex_bin)
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "other"')
+    source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    fake.write_text(source)
+    event = provider.event("steward-app", "host-startup", "typed terminal failure")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    failed = finish(runtime, row)
+    assert failed["status"] == "failed" and failed["error_code"] == "host_gate" and failed["delta_count"] == 0
+    assert store.load_session(row["session_id"])["manager_context_version"] == MANAGER_CONTEXT_VERSION
+    failed_path = store._turn_path(row["session_id"], row["turn_id"])
+    failed_bytes = failed_path.read_bytes()
+    transport.reconcile()
+    path = transport.root / (ref + ".json")
+    notice = json.loads(path.read_text())["deliveries"]["terminal"]
+    runtime.adapters.pop(row["session_id"]).close_session()
+    if fault != "failure-again":
+        fake.write_text(source.replace('if "typed terminal failure" in json.dumps(request.get("params") or {}):', 'if False:'))
+    proof = {"thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+        "only_original_user_item": fault != "native-effect", "codex_error_info": "cyberPolicy" if fault == "policy" else "other"}
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **_: proof))
+    transport.reconcile()
+    current = transport.core.read_request(ref)
+    if fault in {"native-effect", "policy"}:
+        assert current["turn_id"] == row["turn_id"] and not current.get("context_recovery")
+        expected_starts = 1
+    else:
+        assert current["turn_id"] != row["turn_id"] and current["session_id"] == row["session_id"]
+        assert finish(runtime, current)["status"] == ("failed" if fault == "failure-again" else "completed")
+        transport.reconcile()
+        assert json.loads(path.read_text())["deliveries"][f"terminal.recovery.{MANAGER_CONTEXT_VERSION}"]["verified"]
+        expected_starts = 2
+    # A persistent provider failure is surfaced once, never an infinite replay.
+    transport.reconcile()
+    transport.reconcile()
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(r["method"] == "turn/start" for r in requests) == expected_starts
+    assert not any(r["method"] == "thread/inject_items" for r in requests)
+    assert failed_path.read_bytes() == failed_bytes
+    assert json.loads(path.read_text())["deliveries"]["terminal"] == notice
+    assert len(store.list_sessions()) == 1
+
+
 def test_personal_steward_uses_registered_portfolio_and_configured_inbox_root(steward, tmp_path):
     from loopx.capabilities.manager_context.discovery import agent_page
     from loopx.capabilities.manager_context import configure_delivery_scope

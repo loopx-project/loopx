@@ -263,7 +263,7 @@ def test_transient_recovery_requires_complete_native_terminal_and_effect_readbac
     assert all(method in {"thread/turns/list", "thread/items/list"} for method, _ in calls)
 
 
-@pytest.mark.parametrize("fault", [None, "older", "active", "tool", "answer", "correction",
+@pytest.mark.parametrize("fault", [None, "older", "host-other", "active", "tool", "answer", "correction",
     "foreign", "unknown", "changed-error", "policy", "usage", "unauthorized", "http401"])
 def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp_path, monkeypatch, fault):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
@@ -277,7 +277,7 @@ def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp
         assert params["threadId"] == "original-thread"
         if method == "thread/turns/list":
             reads += 1
-            info = {"policy": "cyberPolicy", "usage": "usageLimitExceeded",
+            info = {"host-other": "other", "policy": "cyberPolicy", "usage": "usageLimitExceeded",
                 "unauthorized": "unauthorized", "http401": {"responseStreamDisconnected": {"httpStatusCode": 401}}}.get(fault, "contextWindowExceeded")
             if fault == "changed-error" and reads > 1:
                 info = "other"
@@ -296,9 +296,9 @@ def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp
 
     monkeypatch.setattr(session, "_write", write)
     proof = session.failed_request_readback("failed")
-    if fault in {None, "older"}:
+    if fault in {None, "older", "host-other"}:
         assert proof == {"thread_id": "original-thread", "turn_id": "failed",
-            "only_original_user_item": True, "codex_error_info": "contextWindowExceeded"}
+            "only_original_user_item": True, "codex_error_info": "other" if fault == "host-other" else "contextWindowExceeded"}
     else:
         assert proof is None
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}
