@@ -238,7 +238,7 @@ def turn_start_hook(
     def produce():
         nonlocal snapshot
         try:
-            from ...control_plane.collaboration.inbox_read import read_inbox_transaction
+            from ...control_plane.collaboration.inbox import read_inbox_transaction
             from ...control_plane.collaboration.inbox import _pending_result
 
             with collaboration_goal_scope(
