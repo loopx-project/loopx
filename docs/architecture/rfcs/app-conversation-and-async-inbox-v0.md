@@ -1324,6 +1324,17 @@ original-source result. A restart resumes the deterministic reservation rather
 than dispatching it twice. Existing provider replies accompany recovery as data
 so completed work can be retained without repeating its effects.
 
+Continuation admission, progress, cursor and final delivery use a version-scoped
+presentation journal. They never reopen the acknowledged original Inbox source
+or edit its failure notice as a new draft. The final replaces only the new draft.
+For already-returned legacy continuations that reused the old notice, the same
+worker may restore that notice and retire subsequent stale drafts using their
+exact confirmed edit proofs. This is edit-only presentation repair: current
+source/grant, canonical Turn and unchanged prior-or-desired provider body must
+verify. Changed bodies, uncertain effects and edit-limit rejections stay pending;
+repair neither enqueues work nor appends another result. Acceptance independently
+checks actual provider bodies, including rollover and lost acknowledgements.
+
 Qualification covers the actual background scanner, source/grant counterexamples,
 native inventory reads and crashes before admission, after enqueue and before
 transport synchronization. Synthetic model/provider journeys and read-only native

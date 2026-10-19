@@ -991,6 +991,7 @@ def update_lark_inbox_reply(
     before_send: Callable[[str], Any],
     delivery_attempt_recorder: Callable[[Any], None],
     finalize_reactions: bool = False,
+    require_previous_text_match: bool = False,
 ) -> dict[str, Any]:
     """Replace one known Bot reply, verifying source and exact provider readback.
 
@@ -1052,6 +1053,8 @@ def update_lark_inbox_reply(
                        "intent_digest": _intent_digest(profile, chat_id, receipt)}
     edit_limit_reached = False
     if not lark_markdown_readback_matches(text=text, message=message):
+        if require_previous_text_match and not lark_markdown_readback_matches(text=previous_text, message=message):
+            return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_mismatch"}
         edit_args = [*base, "im", "+messages-edit", "--message-id", ref,
                      "--msg-type", "post", "--content", content, "--as", "bot", "--format", "json"]
         preview = _call(runner, [*edit_args, "--dry-run"])
