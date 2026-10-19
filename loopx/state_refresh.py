@@ -1143,6 +1143,11 @@ def refresh_state_run(
                 review_pages=((agent_vision or {}).get("stride_decision") or {}).get(
                     "explore_review", {}).get("result_pages"))
 
+        from .control_plane.quota.heartbeat_receipt import guard_source_for_turn, guard_cadence
+        retained_source = guard_source_for_turn(runtime_root, goal_id=safe_goal_id,
+            agent_id=normalized_agent_id, turn_instance_id=turn_instance_id, goal_ref=goal_ref) if settlement_readback else None
+        # Retained identity cannot override a later explicit policy revision.
+        usable_source = retained_source if retained_source and retained_source.get("cadence") == guard_cadence(registry_path,runtime_root,safe_goal_id) else None
         from .control_plane.goals.checkpoint_context_io import _checkpoint_effect
         replan_stage = _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
             "phase": "replan_stage", "heartbeat_receipt": settlement_readback.heartbeat_receipt if settlement_readback else None,
@@ -1157,6 +1162,8 @@ def refresh_state_run(
             capability_evidence=capability_evidence,
             guard_capability=settlement_replan_guard.get("selected_capability_guard"),
             todo_fields=todo_fields,
+            receipt_bound_source=(usable_source or {}).get("obligation"),
+            receipt_bound_guard_recorded_at=(settlement_readback.heartbeat_receipt or {}).get("recorded_at") if settlement_readback else None,
             autonomous_replan_recorded=replan_stage["qualify"],
             requested_delta_kinds=normalized_repair_delta_kinds,
             active_state_next_action_update=None,

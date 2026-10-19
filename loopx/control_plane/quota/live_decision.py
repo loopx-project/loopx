@@ -653,7 +653,11 @@ def build_live_quota_should_run_decision(
         goal_id=goal_id,
         agent_id=agent_id,
     )
-    payload: dict[str, Any] = build_quota_should_run(
+    from .heartbeat_receipt import guard_source_for_turn
+    retained_source = guard_source_for_turn(runtime_root, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=turn_instance_id, goal_ref=goal_ref) if agent_id and turn_instance_id else None
+    decision_status_payload = {**decision_status_payload, "_receipt_bound_semantic_source": (retained_source or {}).get("obligation")}
+    payload = build_quota_should_run(
         decision_status_payload,
         goal_id=goal_id,
         agent_id=agent_id,

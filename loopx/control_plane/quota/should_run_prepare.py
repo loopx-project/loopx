@@ -275,11 +275,17 @@ def _prepare_quota_replan_context(
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
     )
+    retained_semantic_source = status_payload.get("_receipt_bound_semantic_source")
+    if isinstance(retained_semantic_source, dict):
+        from ..work_items.progress_observation import build_replan_context
+        retained_semantic_source = {**retained_semantic_source, "replan_context": build_replan_context(
+            retained_semantic_source, goal_id=safe_goal_id, agent_id=agent_frontier_id,
+            newest_first_runs=_goal_latest_runs(status_payload, goal_id=safe_goal_id), source_status=status_payload)}
     replan_obligation = (
         None
         if receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED
         else _preserve_receipt_bound_replan_obligation(
-            goal_frontier_context.get("replan_obligation"),
+            retained_semantic_source or goal_frontier_context.get("replan_obligation"),
             receipt_bound_replan_obligation_id,
             guard_scoped=receipt_bound_replan_guard_scoped,
             agent_id=agent_frontier_id,

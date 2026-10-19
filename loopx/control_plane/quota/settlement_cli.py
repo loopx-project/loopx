@@ -158,6 +158,11 @@ def reconcile_existing_heartbeat_receipt(
             if upgraded:
                 receipt_status = "upgraded"
                 receipt_appended = True
+    from .heartbeat_receipt import find_heartbeat_receipt
+    refreshed = find_heartbeat_receipt(runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+        turn_instance_id=turn_instance_id, goal_ref=goal_ref)
+    if refreshed and refreshed.get("event_id") == receipt.get("event_id"):
+        receipt = refreshed
     details_value = receipt.get("details")
     details: Mapping[str, object] = (
         details_value if isinstance(details_value, Mapping) else {}
@@ -451,6 +456,15 @@ def quota_rollout_details(
         details["semantic_replan_capability_id"] = capability_guard["capability_id"]
         details["semantic_replan_gap_id"] = capability_guard["gap_id"]
         details["semantic_replan_frontier_revision"] = capability_guard["frontier_revision"]
+    if semantic_replan_obligation_id:
+        from .heartbeat_receipt import bounded_guard_source, guard_cadence, store_guard_source_blob
+        source_obligation = payload.get("autonomous_replan_obligation")
+        if (isinstance(source_obligation, dict) and source_obligation.get("obligation_id") == semantic_replan_obligation_id
+            and not source_obligation.get("settlement_action_packet")
+            and not (payload.get("replan_action_packet") or {}).get("settlement_only")):
+            source = bounded_guard_source(source_obligation,
+                guard_cadence(payload["registry"], payload["runtime_root"], args.goal_id))
+            details["semantic_replan_source_ref"] = store_guard_source_blob(payload["runtime_root"],args.goal_id,source)
     cli_channel = interaction.get("cli_channel")
     if isinstance(cli_channel, Mapping) and cli_channel.get("quota_spend_source"):
         details["quota_spend_source"] = cli_channel["quota_spend_source"]

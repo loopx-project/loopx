@@ -233,6 +233,7 @@ def qualify_replan_writeback(
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
     replan_source_route: Mapping[str, Any] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
+    receipt_bound_source: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Return the shared open obligation and the writeback's typed delta.
 
@@ -374,6 +375,20 @@ def qualify_replan_writeback(
             context.get("replan_transition_candidates", [])
             if isinstance(candidate.get("obligation"), dict) and
             candidate["obligation"].get("obligation_id") == guard_semantic_replan_obligation_id), None)
+    if receipt_bound_source is not None and guard_scoped:
+        if receipt_bound_source.get("obligation_id") != guard_semantic_replan_obligation_id:
+            raise ValueError("guard_source_invalid: writeback source identity differs")
+        if not lifecycle:
+            obligation = receipt_bound_source
+            if (receipt_bound_source.get("resolution_mode") == "todo_lifecycle_settlement"
+                    and receipt_bound_guard_recorded_at and agent_todo_source_items):
+                from ..effect_runtime import effect_runtime_result
+                obligation = effect_runtime_result("work_item.replan_semantics.project", {
+                    "operation": "lifecycle_obligation", "obligation": receipt_bound_source,
+                    "selected_obligation_id": guard_semantic_replan_obligation_id,
+                    "guard_recorded_at": receipt_bound_guard_recorded_at,
+                    "agent_id": safe_agent_id, "items": agent_todo_source_items,
+                })["obligation"]
     # Every selected replan retains its exact receipt-bound source. A missing
     # reconstruction must not fall through as an unselected future obligation
     # and commit an unqualified writeback. Plain outcome reviews additionally
@@ -452,6 +467,7 @@ def enforce_open_replan_writeback(
     guard_semantic_replan_obligation_id: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    receipt_bound_source: dict[str, Any] | None = None,
     todo_fields: dict[str, Any] | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
@@ -489,6 +505,7 @@ def enforce_open_replan_writeback(
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         receipt_bound_replan_review=receipt_bound_replan_review,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
+        receipt_bound_source=receipt_bound_source,
     )
     if not obligation:
         if isinstance(semantic_delta, dict) and semantic_delta.get("accepted") is True:
@@ -536,6 +553,7 @@ def qualify_refresh_replan_writeback(
     settlement_guard_semantic_replan_obligation_id: str | None,
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    receipt_bound_source: dict[str, Any] | None = None,
     newest_first_runs: list[dict[str, Any]],
     state_text: str,
     goal_id: str,
@@ -623,6 +641,7 @@ def qualify_refresh_replan_writeback(
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         receipt_bound_replan_review=receipt_bound_replan_review,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
+        receipt_bound_source=receipt_bound_source,
     )
     if semantic_delta:
         if semantic_delta.get("retirement") and delivery_outcome != "outcome_gap":
