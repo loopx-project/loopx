@@ -226,11 +226,11 @@ class GoalSourceReader:
         self._status = None
         self._pages = CompletedTodoPages()
 
-    def status(self, goal_id=None):
+    def status(self, goal_id=None, *, fresh=False):
         with self._lock:
             try:
                 selected = self.source.check_access(goal_id)
-                if (self._status is None or selected != self._selected
+                if (fresh or self._status is None or selected != self._selected
                         or monotonic() - self._read_at >= 2):
                     self._status = None
                     self._status = self.source.read_status(selected)
@@ -246,8 +246,8 @@ class GoalSourceReader:
                 "operations": {"goals": True, "status": True, "history": True,
                                "lifecycle": False, "conversation": False, "analysis": False}}
 
-    def goals(self, goal_id=None):
-        status = self.status(goal_id)
+    def goals(self, goal_id=None, *, fresh=False):
+        status = self.status(goal_id, fresh=fresh)
         return {"ok": True, "source": self.source.describe(),
                 "items": status["run_history"]["goals"]}
 

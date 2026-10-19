@@ -15,7 +15,7 @@ type Job = {status: string; attempt?: number; analysis_wall_seconds?: number | n
 type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; method_version: string;
   config: {model: string; effort: string; service_tier: string}; availability: string; reason_code: string | null;
   objective?: string; episodes?: TrajectoryEpisode[]; job?: Job | null};
-type Snapshot = {ok: true; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]}; pack: Pack | null};
+type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]}; pack: Pack | null};
 type Citation = AssessmentCitation & {artifact: string; text: string; applicability: string};
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const locationFor = (goal: string) => {
@@ -117,23 +117,23 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     requestAnimationFrame(() => {panel.current?.focus({preventScroll: true}); panel.current?.scrollIntoView({block: "start"});});
   };
   const execute = async (retry = false) => {
-    if (readSourceUrl) return;
+    if (readSourceUrl && snapshot?.execution_enabled !== true) return;
     if (!pack || pack.availability !== "available" || submitting.current) return;
     show(); submitting.current = true; setPending(true); setError("");
     const current = generation.current;
     try {
-      await requestJson(endpoint, {method: "POST", body: JSON.stringify({goal_id: goalId, pack_id: pack.pack_id, analysis_key: pack.analysis_key, retry})});
+      await requestJson(sourceReadApiUrl(readSourceUrl, endpoint), {method: "POST", body: JSON.stringify({goal_id: goalId, pack_id: pack.pack_id, analysis_key: pack.analysis_key, retry})});
       if (current === generation.current) await read(pack.pack_id);
     } catch (e) {if (current === generation.current) {setError(errorText(e)); void read(pack.pack_id).catch(() => undefined);}}
     finally {if (current === generation.current) {submitting.current = false; setPending(false);}}
   };
   const cancel = async () => {
-    if (readSourceUrl) return;
+    if (readSourceUrl && snapshot?.execution_enabled !== true) return;
     if (!pack || cancelPending) return;
     const current = generation.current;
     setCancelPending(true);
     try {
-      await requestJson(`${endpoint}/cancel`, {method: "POST", body: JSON.stringify({goal_id: goalId, pack_id: pack.pack_id, analysis_key: pack.analysis_key})});
+      await requestJson(sourceReadApiUrl(readSourceUrl, `${endpoint}/cancel`), {method: "POST", body: JSON.stringify({goal_id: goalId, pack_id: pack.pack_id, analysis_key: pack.analysis_key})});
       if (current === generation.current) await read(pack.pack_id);
     } catch (e) {if (current === generation.current) setError(errorText(e));}
     finally {if (current === generation.current) setCancelPending(false);}
@@ -150,7 +150,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     finally {if (current === citeGeneration.current) setCitationBusy(false);}
   };
   const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
-  return {readOnly: Boolean(readSourceUrl), citation, citationBusy, citationError, sourcePanel, readCitation, closeCitation, goalId, zh, location, snapshot, pack, readError, error: error || readError, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+  return {readOnly: Boolean(readSourceUrl) && snapshot?.execution_enabled !== true, citation, citationBusy, citationError, sourcePanel, readCitation, closeCitation, goalId, zh, location, snapshot, pack, readError, error: error || readError, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;

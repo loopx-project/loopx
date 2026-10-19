@@ -4,6 +4,7 @@ The fixture executable is synthetic; this does not qualify model judgment.
 No active Goal, solver state, model account or evaluator is touched.
 """
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -18,6 +19,8 @@ import pytest
 
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import register_pack
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+from loopx.control_plane.status.goal_source import GoalSource
+from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
 
 
 @pytest.fixture
@@ -173,3 +176,184 @@ def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(wor
     assert not w["count"].exists()
     with pytest.raises(HTTPError):
         w["request"](goal="other-owner", pack_id=registered["pack_id"])
+
+
+@contextmanager
+def source_analysis_workspace(w, name, *, enabled=True):
+    """Synthetic source transport; actual local store, HTTP and provider process."""
+    class Source(GoalSource):
+        failed = False
+        registered = True
+        reads = 0
+
+        def __init__(self):
+            super().__init__(name, name, "/registry", "/runtime", "/cli", "/python",
+                             "/bin", "local", "host", "research-owner")
+
+        def read_status(self, goal_id=None):
+            self.reads += 1
+            self.check_access(goal_id)
+            if self.failed:
+                raise OSError("Private source diagnostic")
+            return {"ok": True, "run_history": {"goals": [{"id": self.goal_id,
+                    "registry_member": self.registered}]}}
+
+    server = RuntimeWorkspaceServer(Source(), w["tmp_path"],
+        analysis_runtime_root=w["tmp_path"] / "source-analysis" if enabled else None)
+    data = json.loads((w["tmp_path"] / "input.json").read_text())
+    data["scope"].update(goal_id="research-owner", case_id=name)
+    path = w["tmp_path"] / f"input-{name}.json"
+    path.write_text(json.dumps(data))
+    pack = register_pack(runtime_root=server.analysis_runtime_root or w["tmp_path"] / "disabled",
+        owner_goal_id="research-owner", input_path=path, source_root=w["sources"], title=name)
+    operation = dict(goal_id="research-owner", pack_id=pack["pack_id"], analysis_key=pack["analysis_key"])
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+
+    def request(*, body=None, suffix="", namespace=server.source.namespace, method=None, headers=None, **query):
+        if namespace is not None:
+            query["source_namespace"] = namespace
+        if body is None:
+            query.setdefault("goal_id", "research-owner")
+        url = f"http://127.0.0.1:{server.server_port}/api/chat/research-analysis{suffix}?{urlencode(query)}"
+        req = Request(url, data=None if body is None else json.dumps(body).encode(), method=method,
+                      headers={"Content-Type": "application/json", **(headers or {})})
+        with urlopen(req, timeout=25) as response:
+            return json.load(response)
+
+    try:
+        yield dict(request=request, operation=operation, server=server, input_path=path)
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+
+
+def test_source_goal_analysis_reads_cancel_retry_and_reuse_do_not_mutate_source(workspace):
+    w = workspace
+    with source_analysis_workspace(w, "retained") as s:
+        read, operation = s["request"], s["operation"]
+        snapshot = read()
+        assert snapshot["execution_enabled"] is True
+        assert snapshot["pack"]["scope"]["goal_id"] == "research-owner"
+        assert snapshot["pack"]["job"] is None and not w["count"].exists()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(read, body=operation)
+            until = time.monotonic() + 8
+            while time.monotonic() < until:
+                job = read()["pack"]["job"]
+                if job and job["status"] == "running":
+                    break
+                time.sleep(.05)
+            else:
+                pytest.fail("Local source-analysis process did not start")
+            assert read(body=operation)["job"]["status"] == "busy"
+            assert read(body=operation, suffix="/cancel")["job"]["cancel_requested"]
+            assert running.result(timeout=8)["job"]["status"] == "cancelled"
+        w["mode"].write_text("ok")
+        assert read(body={**operation, "retry": True})["job"]["status"] == "succeeded"
+        view = read()["pack"]
+        assert view["result"]["assessments"][0]["verdict"] == "no"
+        calls = w["count"].read_bytes()
+        assert read(body=operation)["job"]["reused"]
+        assert w["count"].read_bytes() == calls
+        citation = dict(pack_id=operation["pack_id"], analysis_key=operation["analysis_key"],
+                        source_id="facts", first_line=2, last_line=2)
+        assert read(suffix="/citation", **citation)["text"] == "Only the diagnostic was measured; native utility remains untested."
+        for path, original in w["before"].items():
+            assert path.read_bytes() == original
+        (w["sources"] / "facts.txt").write_text("changed source")
+        assert read()["pack"]["applicability"] == "historical"
+        assert read(suffix="/citation", **citation)["text"] == "Only the diagnostic was measured; native utility remains untested."
+        with pytest.raises(HTTPError) as changed:
+            read(body=operation)
+        assert changed.value.code == 409
+
+
+def test_source_analysis_requires_exact_namespace_goal_and_live_membership(workspace):
+    w = workspace
+    with source_analysis_workspace(w, "retained") as a, source_analysis_workspace(w, "fresh") as b:
+        assert a["server"].analysis_runtime_root != b["server"].analysis_runtime_root
+        assert a["request"]()["pack"]["scope"]["case_id"] == "retained"
+        assert b["request"]()["pack"]["scope"]["case_id"] == "fresh"
+        for namespace in (None, "0" * 64, b["server"].source.namespace):
+            with pytest.raises(HTTPError):
+                a["request"](namespace=namespace)
+            with pytest.raises(HTTPError):
+                a["request"](namespace=namespace, body=a["operation"])
+        for body in (a["operation"], {**b["operation"], "goal_id": "another-goal"}):
+            with pytest.raises(HTTPError):
+                b["request"](body=body)
+        with pytest.raises(HTTPError):
+            b["request"](pack_id=a["operation"]["pack_id"])
+        source = a["server"].source
+        for registered, failed, code in ((False, False, 404), (True, True, 503)):
+            source.registered, source.failed = registered, failed
+            a["server"].reader._read_at = 0
+            with pytest.raises(HTTPError) as denied:
+                a["request"](body=a["operation"])
+            assert denied.value.code == code
+        source.registered, source.failed = True, False
+        a["server"].reader._read_at = 0
+        assert a["request"]()["pack"]["scope"]["case_id"] == "retained"
+        assert not w["count"].exists()
+
+
+@pytest.mark.parametrize("registered,failed,code", [(False, False, 404), (True, True, 503)])
+@pytest.mark.parametrize("retry", [False, True])
+def test_source_execution_rechecks_a_warm_source_before_start_or_retry(
+        workspace, monkeypatch, registered, failed, code, retry):
+    w = workspace
+    w["mode"].write_text("ok")
+    # Hold the display-cache clock inside its normal lifetime. Source facts
+    # change after a real GET; the test never alters private cache fields.
+    monkeypatch.setattr("loopx.control_plane.status.goal_source.monotonic", lambda: 100.0)
+    with source_analysis_workspace(w, "warm-source") as s:
+        read, operation, source = s["request"], s["operation"], s["server"].source
+        assert read()["pack"]["job"] is None
+        assert read()["pack"]["scope"]["goal_id"] == "research-owner"
+        assert source.reads == 1  # ordinary reads still share the display cache
+        source.registered, source.failed = registered, failed
+        with pytest.raises(HTTPError) as denied:
+            read(body={**operation, "retry": retry})
+        assert denied.value.code == code
+        assert source.reads == 2
+        assert not w["count"].exists()
+        source.registered, source.failed = True, False
+        assert read(body={**operation, "retry": retry})["job"]["status"] == "succeeded"
+        assert source.reads == 3
+        assert w["count"].read_text().splitlines() == ["started"]
+        assert read()["pack"]["scope"]["goal_id"] == "research-owner"
+        for path, original in w["before"].items():
+            assert path.read_bytes() == original
+
+
+def test_source_analysis_default_off_and_non_analysis_writes_stay_disabled(workspace):
+    w = workspace
+    with source_analysis_workspace(w, "disabled", enabled=False) as s:
+        with pytest.raises(HTTPError) as unavailable:
+            s["request"]()
+        assert unavailable.value.code == 503
+        with pytest.raises(HTTPError) as unavailable_citation:
+            s["request"](suffix="/citation")
+        assert unavailable_citation.value.code == 404
+        with pytest.raises(HTTPError) as readonly:
+            s["request"](body=s["operation"])
+        assert readonly.value.code == 405
+    with source_analysis_workspace(w, "enabled") as s:
+        for method in ("PUT", "PATCH", "DELETE"):
+            with pytest.raises(HTTPError) as readonly:
+                s["request"](body=s["operation"], method=method)
+            assert readonly.value.code == 405
+        with pytest.raises(HTTPError) as origin:
+            s["request"](body=s["operation"], headers={"Origin": "https://unrelated.example"})
+        assert origin.value.code == 403
+        data = json.loads(s["input_path"].read_text())
+        data["scope"]["goal_id"] = "another-goal"
+        s["input_path"].write_text(json.dumps(data))
+        registered = register_pack(runtime_root=s["server"].analysis_runtime_root,
+            owner_goal_id="research-owner", input_path=s["input_path"], source_root=w["sources"], title="Wrong Goal")
+        for body in (None, dict(goal_id="research-owner", pack_id=registered["pack_id"], analysis_key=registered["analysis_key"])):
+            with pytest.raises(HTTPError):
+                s["request"](body=body)
+        assert not w["count"].exists()

@@ -19,26 +19,33 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 from ..capabilities.explore.result_log import explore_history_rows
 from ..control_plane.status.goal_source import GoalSource, GoalSourceReader, SourceScopeError
-from ..status_server import cors_response_headers, is_loopback_host, is_loopback_origin
+from ..status_server import cors_response_headers, is_loopback_host, is_loopback_origin, parse_strict_json_object
 from .chat_bundle import validate_bundle
+from .research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
 
 
 class RuntimeWorkspaceServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, source, assets_dir, *, port=0):
+    def __init__(self, source, assets_dir, *, port=0, analysis_runtime_root=None):
         super().__init__(("127.0.0.1", port), RuntimeWorkspaceHandler)
         self.source = source
         self.reader = GoalSourceReader(source, history_projector=explore_history_rows)
         self.assets_dir = Path(assets_dir).resolve()
         self.catalog = []
+        # A local analysis store never becomes the remote Goal's authority.
+        # Physical source identity isolates even identically named Goals.
+        self.analysis_runtime_root = (Path(analysis_runtime_root).expanduser().resolve()
+                                      / "goal-sources" / source.namespace) if analysis_runtime_root is not None else None
+        self.analysis_source_namespace = source.namespace
+        self.analysis_execution_enabled = self.analysis_runtime_root is not None
 
     @property
     def status_url(self):
         return f"http://127.0.0.1:{self.server_port}/status.json?source_namespace={self.source.namespace}"
 
 
-class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
+class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
 
@@ -54,6 +61,9 @@ class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _allowed(self):
+        if len(self.headers.get_all("Host", [])) != 1 or len(self.headers.get_all("Origin", [])) > 1:
+            self._json({"ok": False, "error": "Loopback owner access required."}, 403)
+            return False
         try:
             host = urlparse("//" + self.headers.get("Host", "")).hostname or ""
         except ValueError:
@@ -65,11 +75,50 @@ class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self._allowed():
+            if (self.server.analysis_execution_enabled
+                    and urlparse(self.path).path in {RESEARCH_ANALYSIS_PATH, RESEARCH_ANALYSIS_PATH + "/cancel"}):
+                self._research_analysis_write()
+                return
             self._json({"ok": False, "error": "This source is read-only."}, 405)
 
-    do_PUT = do_POST
-    do_PATCH = do_POST
-    do_DELETE = do_POST
+    def _reject_mutation(self):
+        if self._allowed():
+            self._json({"ok": False, "error": "This source is read-only."}, 405)
+
+    do_PUT = _reject_mutation
+    do_PATCH = _reject_mutation
+    do_DELETE = _reject_mutation
+
+    def _send_json(self, payload, *, status=200):
+        self._json(payload, status)
+
+    def _send_error(self, message, *, status=400, error_code=None):
+        self._json({"ok": False, "error": message, **({"error_code": error_code} if error_code else {})}, status)
+
+    def _read_json(self, *, max_bytes):
+        if len(self.headers.get_all("Content-Length", [])) != 1 or self.headers.get("Transfer-Encoding"):
+            raise ValueError("Invalid analysis request framing")
+        length = int(self.headers.get("Content-Length") or "0")
+        if not 0 < length <= max_bytes:
+            raise ValueError("Invalid analysis request size")
+        return parse_strict_json_object(self.rfile.read(length))
+
+    def _research_analysis_scope(self, goal_id):
+        # Check current access and actual registered membership before local
+        # pack reads or provider effects. No host registry entry is created.
+        try:
+            # Display reads may share their short cache. A provider operation
+            # must check the original source again before admitting any work.
+            goals = self.server.reader.goals(goal_id, fresh=self.command == "POST")["items"]
+            if not any(goal["id"] == goal_id and goal.get("registry_member") is True for goal in goals):
+                raise SourceScopeError("Analysis requires a registered source Goal")
+        except SourceScopeError:
+            self._send_error("Goal or connection is not available in this source.", status=404)
+            return None
+        except (ValueError, OSError, subprocess.SubprocessError):
+            self._send_error("The original Goal source is unavailable; refresh to retry.", status=503)
+            return None
+        return self.server.analysis_runtime_root
 
     def do_OPTIONS(self):
         if self._allowed():
@@ -97,7 +146,9 @@ class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
             return
         try:
             if parsed.path == "/api/goal-source":
-                self._json(self.server.reader.describe())
+                description = self.server.reader.describe()
+                description["operations"]["analysis"] = self.server.analysis_execution_enabled
+                self._json(description)
             elif parsed.path.startswith("/api/goal-source/"):
                 if query.get("source_namespace") != [self.server.source.namespace]:
                     self._json({"ok": False, "error": "Source identity changed; read its description again."}, 409)
@@ -120,9 +171,15 @@ class RuntimeWorkspaceHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/chat/explore-results" and query.get("view") == ["history"]:
                 cursor = query.get("cursor", [""])[0]
                 self._json(self.server.reader.history(goal_id, cursor))
-            elif parsed.path == "/api/chat/research-analysis":
-                self.server.source.check_access(goal_id)
-                self._json({"ok": False, "error": "此运行来源尚未绑定分析包。"}, 503)
+            elif parsed.path in {RESEARCH_ANALYSIS_PATH, RESEARCH_ANALYSIS_PATH + "/citation"}:
+                if self.server.analysis_execution_enabled:
+                    self._research_analysis_read()
+                else:
+                    self.server.source.check_access(goal_id)
+                    if parsed.path == RESEARCH_ANALYSIS_PATH:
+                        self._json({"ok": False, "error": "此运行来源尚未绑定分析包。"}, 503)
+                    else:
+                        self._json({"ok": False, "error": "Read endpoint is not available for this source."}, 404)
             else:
                 self._json({"ok": False, "error": "Read endpoint is not available for this source."}, 404)
         except SourceScopeError:
@@ -155,6 +212,8 @@ def main():
     parser.add_argument("--sources", type=Path, required=True, help="Owner-prepared Goal source manifest")
     parser.add_argument("--assets-dir", type=Path, help="Explicit custom/prototype assets, as in loopx chat")
     parser.add_argument("--port", type=int, default=0, help="First loopback port; default allocates temporary ports")
+    parser.add_argument("--analysis-runtime-root", type=Path,
+                        help="Explicit local analysis storage and Codex execution; never writes to the original Goal source")
     args = parser.parse_args()
     assets = (args.assets_dir or Path(__file__).resolve().parents[1] / "web" / "chat").expanduser().resolve()
     if args.assets_dir is None:
@@ -175,7 +234,8 @@ def main():
         parser.error("Choose unprivileged ports for all readers")
     if len({s.id for s in sources}) != len(sources):
         parser.error("Source ids must be unique")
-    servers = [RuntimeWorkspaceServer(source, assets, port=args.port + i if args.port else 0)
+    servers = [RuntimeWorkspaceServer(source, assets, port=args.port + i if args.port else 0,
+                                      analysis_runtime_root=args.analysis_runtime_root)
                for i, source in enumerate(sources)]
     catalog = [{"id": s.source.id, "label": s.source.label, "status_url": s.status_url} for s in servers]
     threads = []
@@ -186,6 +246,7 @@ def main():
         threads.append(thread)
     print(json.dumps({"ok": True, "read_only": True, "sources": [{**item,
         "namespace": server.source.namespace,
+        **({"analysis_enabled": True} if server.analysis_execution_enabled else {}),
         "access_url": f"http://127.0.0.1:{server.server_port}/api/goal-source",
         "url": f"http://127.0.0.1:{server.server_port}/chat/?" + urlencode({
             **({"goalId": server.source.goal_id} if server.source.goal_id else {}),

@@ -1,9 +1,9 @@
 # Evidence-bound trajectory assessment
 
-Status: an opt-in analysis producer, source-verified pack registry and metric
-protocol. The packaged Goal-view consumer and independent evaluator calibration
-remain separate acceptance work.
-This implements the read-only producer slice of the S5/S11
+Status: source-verified trajectory packs, an opt-in analysis producer and the
+packaged Goal reader. Independent evaluator calibration and scientific
+treatment-effect qualification remain separate acceptance work.
+These use the S5/S11
 [research episode assessment](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement).
 It does not change solver prompts, benchmark scoring, checkpoints or research budgets.
 
@@ -413,6 +413,56 @@ metrics and source-bound reuse; the browser cannot supply local paths, model
 settings or arbitrary commands. Native utility remains unknown without its
 measured projection. Agent judgments are uncalibrated and do not establish
 scientific gains or a whole-run success rate.
+
+### Existing isolated Goal sources
+
+The prepared runtime workspace can use this same reader and analysis provider
+without copying an execution Goal into the local registry. Start its ordinary
+entry with an explicit, local analysis store:
+
+```sh
+python -m loopx.presentation.runtime_workspace --sources sources.json \
+  --analysis-runtime-root .local/source-analysis
+```
+
+This option enables **local** Codex analysis on explicit button clicks. It uses
+the local account and incurs separate analysis usage. Omitting it preserves
+the original read-only behavior: no analysis jobs or mutations are accepted.
+It grants no source-Goal lifecycle, conversation, scoring or solver writes.
+Stop and restart the reader without the option to disable local execution;
+historical packs remain on disk. Cancel running analysis through its existing
+action before stopping the server.
+
+The trusted curator registers authorized inputs through the existing
+`trajectory-pack-register` command. For each source, use runtime root
+`<analysis-runtime-root>/goal-sources/<source-namespace>` and the **original
+source Goal id** as `--goal-id`. The input's `scope.goal_id` must match that id.
+The namespace is returned by `/api/goal-source`; it binds the prepared physical
+source, including its pinned container and registry. Keep the native run,
+checkpoint, evidence revisions and observation window explicit in the pack.
+Registration creates analysis artifacts only; it does not create or reparent
+a Goal. Parent/child organization remains whatever the original authority
+actually records.
+
+The packaged Goal overview then shows registered factual measurements and
+citations without a model call. **Deep analysis** explicitly invokes the same
+toolkit provider, claim, retry, cancellation and result validation as the local
+Goal reader. Its selector, refresh and browser history retain the physical
+source. Analysis reads and writes require its namespace and current registered
+Goal membership; another source with the same Goal name cannot read or execute
+those packs. Provider operations re-read the original source before admission;
+ordinary display reads retain their short cache. Removed or unavailable sources
+fail visibly and retry against the original selection. Changed evidence retains
+its historical result and prevents
+new execution until its source is requalified.
+
+The following packaged reader uses a synthetic Goal, evidence and provider
+response. Its example values do not qualify model judgment or benchmark gains.
+
+![Original source Goal with local factual measurements](../development/assets/runtime-source-analysis/facts-desktop.png)
+
+[After explicit analysis](../development/assets/runtime-source-analysis/analysis-desktop.png)
+and the [narrow-screen metric reader](../development/assets/runtime-source-analysis/analysis-phone-detail.png).
 
 The synthetic packaged example below illustrates the reader and its scope
 controls; its numbers are test data, not benchmark findings. Real registered
