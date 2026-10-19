@@ -108,7 +108,7 @@ def test_operation_source_appearing_after_committed_read_is_observed_on_next_rea
     import pytest
     from loopx.chat_store import ChatSessionStore
     from loopx.capabilities.manager_context import deliver
-    from loopx.control_plane.collaboration import inbox_read
+    from loopx.control_plane.collaboration import inbox as inbox_read
     from loopx.control_plane.collaboration.peers import read_inbox
 
     registry = tmp_path / "registry.json"
