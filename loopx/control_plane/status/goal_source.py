@@ -366,14 +366,15 @@ class GoalSourceCatalog:
         source_goal.update({key: row[key] for key in ("parent_goal_id", "source_access")})
         return status
 
-    def analysis_scope(self, goal_id, *, namespace, fresh):
+    def analysis_scope(self, goal_id, *, namespace, fresh, verify_source=True):
         resolved = self.resolve(goal_id)
         if resolved is None:
             return None
         row, reader = resolved
         if namespace != reader.source.namespace:
             raise SourceScopeError("Analysis source identity changed")
-        reader.registered_status(goal_id, fresh=fresh)
+        if verify_source:
+            reader.registered_status(goal_id, fresh=fresh)
         return self.runtime_root / "goal-sources" / row["source_access"]["namespace"]
 
     def update(self, *, parent_goal_id, raw_source):

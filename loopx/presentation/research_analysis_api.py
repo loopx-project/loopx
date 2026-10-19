@@ -34,7 +34,7 @@ class ResearchAnalysisRequestMixin:
             if pack["scope"]["goal_id"] != goal_id:
                 raise ValueError("The analysis input belongs to a different source Goal")
 
-    def _research_analysis_scope(self, goal_id):
+    def _research_analysis_scope(self, goal_id, *, cancel=False):
         validate_goal_id(goal_id)
         selected = getattr(self.server, "selected_goal_id", None)
         if selected and selected != goal_id:
@@ -49,7 +49,10 @@ class ResearchAnalysisRequestMixin:
             if len(values) != 1:
                 raise ValueError("Keep the original source identity")
             try:
-                return catalog.analysis_scope(goal_id, namespace=values[0], fresh=self.command == "POST")
+                # Stopping this host's existing job needs its pinned local
+                # scope, not a successful round-trip to the solver host.
+                return catalog.analysis_scope(goal_id, namespace=values[0], fresh=self.command == "POST",
+                                              verify_source=not cancel)
             except (OSError, subprocess.SubprocessError):
                 self._send_error("The original Goal is unavailable; refresh to retry.", status=503)
                 return None
@@ -109,10 +112,11 @@ class ResearchAnalysisRequestMixin:
             if not cancel and type(body.get("retry", False)) is not bool:
                 raise ValueError("Retry must be an explicit boolean")
             if getattr(self.server, "analysis_source_namespace", None) is None:
-                if linked_goal_source(self.server, body["goal_id"]) is not None:
+                if (linked_goal_source(self.server, body["goal_id"]) is not None
+                        or "source_namespace" in parse_qs(urlparse(self.path).query, keep_blank_values=True)):
                     if self._research_analysis_query(body["goal_id"]):
                         raise ValueError("Only the pinned source selector is accepted")
-            runtime = self._research_analysis_scope(body["goal_id"])
+            runtime = self._research_analysis_scope(body["goal_id"], cancel=cancel)
             if runtime is None:
                 return
             args = dict(runtime_root=runtime, owner_goal_id=body["goal_id"],

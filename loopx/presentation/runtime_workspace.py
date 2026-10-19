@@ -103,7 +103,7 @@ class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandl
             raise ValueError("Invalid analysis request size")
         return parse_strict_json_object(self.rfile.read(length))
 
-    def _research_analysis_scope(self, goal_id):
+    def _research_analysis_scope(self, goal_id, *, cancel=False):
         # Check current access and actual registered membership before local
         # pack reads or provider effects. No host registry entry is created.
         try:

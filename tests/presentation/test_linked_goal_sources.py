@@ -4,10 +4,12 @@ The source CLI and assessment subprocess are disposable fixtures. No active
 solver, model account or installed App is changed by this regression suite.
 """
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import sys
+import time
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -196,3 +198,37 @@ def test_original_task_detail_cannot_follow_a_replaced_source(workspace):
     detail = request(endpoint + urlencode({**query, 'source_namespace': namespace}))
     assert detail['source_access']['namespace'] == namespace
     assert detail['text'] == 'Check the replacement question against its own evidence'
+
+
+def test_analysis_rejects_a_namespace_on_an_unlinked_local_goal(workspace):
+    _, request, _ = native_source(workspace)
+    with pytest.raises(HTTPError):
+        request('/api/chat/research-analysis?source_namespace=' + 'f' * 64, workspace['operation'])
+    assert not workspace['count'].exists()
+
+
+def test_app_can_cancel_its_local_analysis_while_original_source_is_offline(workspace):
+    w = workspace
+    raw, request, before = native_source(w)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    namespace = GoalSource.parse(raw).namespace
+    pack = register_pack(runtime_root=w['server'].runtime_root / 'goal-sources' / namespace,
+        owner_goal_id='solver-goal', input_path=w['tmp_path'] / 'input.json', source_root=w['sources'],
+        title='Fixed original source')
+    operation = dict(goal_id='solver-goal', pack_id=pack['pack_id'], analysis_key=pack['analysis_key'])
+    endpoint = '/api/chat/research-analysis?source_namespace=' + namespace
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        running = pool.submit(request, endpoint, operation)
+        until = time.monotonic() + 12
+        while not w['count'].exists() and time.monotonic() < until:
+            time.sleep(.05)
+        assert w['count'].exists()
+        source_registry = Path(raw['registry'])
+        source_registry.unlink()
+        try:
+            cancelled = request('/api/chat/research-analysis/cancel?source_namespace=' + namespace, operation)
+            assert cancelled['job']['cancel_requested']
+            assert running.result(timeout=8)['job']['status'] == 'cancelled'
+        finally:
+            source_registry.write_bytes(before[source_registry])
+    assert len(w['count'].read_text().splitlines()) == 1
