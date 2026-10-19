@@ -1877,6 +1877,7 @@ class ChatRuntimeController:
                     and exc.error_code in {"host_gate", "upstream_transport_failure", "server_overloaded"}
                     and self._prepare_transport_retry(
                         session_id, turn_id, adapter, retry_binding, exc.native_error_info,
+                        routing_timeout=exc.native_routing_timeout,
                     )):
                 return True
             if execution_ended():
@@ -1938,6 +1939,7 @@ class ChatRuntimeController:
     def _prepare_transport_retry(
         self, session_id: str, turn_id: str, adapter: CodexAppServerAdapter,
         retry_binding: dict[str, str], native_error_info: dict[str, Any] | str | None,
+        *, routing_timeout: bool = False,
     ) -> bool:
         """A bounded same-worker retry chain, reserved durably before each backoff.
 
@@ -1961,12 +1963,14 @@ class ChatRuntimeController:
         try:
             events = self.store.events_after(session_id, turn_id, None)
             attempt = len([row for row in events if row.get("kind") == "transport.retry_planned"]) + 1
-            if ((not isinstance(native_error_info, dict) and native_error_info != "serverOverloaded")
+            if ((not isinstance(native_error_info, dict) and native_error_info != "serverOverloaded"
+                 and not (native_error_info == "other" and routing_timeout))
                     or attempt > TRANSPORT_RETRY_MAX_RETRIES or not current()):
                 return False
             original = str((self.store.load_turn(session_id, turn_id) or {}).get("upstream_turn_id") or "")
             proof = adapter.session.transport_retry_readback(original) if original else None
-            if proof is None or proof["codex_error_info"] != native_error_info or not current():
+            if (proof is None or proof["codex_error_info"] != native_error_info or not current()
+                    or (native_error_info == "other" and proof.get("pre_execution_routing_timeout") is not True)):
                 return False
             delay = TRANSPORT_RETRY_BACKOFF_SECONDS * attempt
             self.store.append_event(session_id, turn_id, kind="transport.retry_planned", payload={
@@ -1974,7 +1978,8 @@ class ChatRuntimeController:
                 "binding_sha256": retry_binding["sha256"], "readback": proof,
                 "not_before": (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(),
             })
-            label = "模型暂时繁忙" if native_error_info == "serverOverloaded" else "连接暂时中断"
+            label = ("模型暂时繁忙" if native_error_info == "serverOverloaded"
+                     else "上游路由暂时不可用" if native_error_info == "other" else "连接暂时中断")
             self.store.append_event(session_id, turn_id, kind="agent.phase", payload={
                 "phase": "retrying",
                 "label": f"{label}，已核验本轮未执行工具；正在原会话继续（第 {attempt}/{TRANSPORT_RETRY_MAX_RETRIES} 次重试）。",

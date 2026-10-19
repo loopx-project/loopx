@@ -33,6 +33,7 @@ class CodexChatAgentError(RuntimeError):
         self.gate = gate
         self.error_code = error_code
         self.native_error_info: dict[str, Any] | str | None = None
+        self.native_routing_timeout = False
 
 
 class CodexChatTimeoutError(CodexChatAgentError):
@@ -201,6 +202,12 @@ def _retry_error_details(error: Any) -> dict[str, Any]:
     return {"retry": {"codex_error_info": safe_info}}
 
 
+def _routing_discovery_timeout(error: Any) -> bool:
+    # A fixed native provider diagnostic, never a substring/prose retry grant.
+    return (isinstance(error, dict) and error.get("codexErrorInfo") == "other"
+            and error.get("message") == "workspace routing discovery timed out")
+
+
 def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     """Project only the app-server's typed error, never its arbitrary prose."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
@@ -263,12 +270,14 @@ def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     if isinstance(safe_info, dict) and "activeTurnNotSteerable" not in safe_info:
         selected = ("upstream_transport_failure", "Codex 上游响应连接失败，本轮未完成。")
     if selected is None:
-        return CodexChatAgentError(
+        failure = CodexChatAgentError(
             fallback,
             gate=_host_tool_gate(
                 fallback, "Inspect the Codex host error before continuing."
             ),
         )
+        failure.native_routing_timeout = _routing_discovery_timeout(error)
+        return failure
     code, summary = selected
     policy = isinstance(info, str) and info in {"cyberPolicy", "misalignmentPolicyViolation"}
     return CodexChatAgentError(
@@ -1517,7 +1526,7 @@ class CodexChatAgentSession:
     def transport_retry_readback(self, turn_id: str) -> dict[str, Any] | None:
         """Read native terminal/effect facts; notification history is insufficient.
 
-        Only a failed, latest Turn with a typed connection/overload error and a complete
+        Only a failed, latest Turn with a known connection/overload error and a complete
         text-only inventory is eligible. Unknown items, tools (including reads),
         delivery, additional user input and unreadable inventories stop recovery.
         This is adapter IO evidence, never permission to reopen a Core Turn.
@@ -1549,6 +1558,8 @@ class CodexChatAgentSession:
             info = _retry_error_details(error).get("retry", {}).get("codex_error_info")
             if info == "serverOverloaded":
                 return {"codex_error_info": info}
+            if _routing_discovery_timeout(error):
+                return {"codex_error_info": info, "pre_execution_routing_timeout": True}
             if not isinstance(info, dict) or len(info) != 1:
                 return None
             variant, detail = next(iter(info.items()))
@@ -1588,6 +1599,8 @@ class CodexChatAgentSession:
             # An accepted user item binds the complete inventory to this native
             # request. A second user item can be a correction; never drop it.
             if user_count != 1 or failed_turn() != terminal:
+                return None
+            if terminal.get("pre_execution_routing_timeout") and len(items) != 1:
                 return None
             return {"thread_id": self.thread_id, "turn_id": turn_id,
                     "item_count": len(items), **terminal}
