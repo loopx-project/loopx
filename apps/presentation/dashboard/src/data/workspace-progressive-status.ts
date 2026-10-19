@@ -17,6 +17,7 @@ const directorySchema = z.object({
   goals: z.array(z.object({
     id: z.string(),
     parent_goal_id: z.string().nullable().optional().catch(null),
+    source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true)}).optional(),
     display_name: z.string(),
     activation_state: z.enum(["active", "stopped"]),
     registry_member: z.literal(true),
@@ -68,6 +69,7 @@ export function reusableGoalSnapshots(
     const snapshot = previous.snapshots[goal.id];
     if (!earlier || !snapshot || invalidated.has(goal.id)) return [];
     if (earlier.display_name !== goal.display_name
+      || earlier.source_access?.namespace !== goal.source_access?.namespace
       || earlier.parent_goal_id !== goal.parent_goal_id
       || earlier.activation_state !== goal.activation_state) return [];
     return [[goal.id, snapshot]];

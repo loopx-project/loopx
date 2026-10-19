@@ -318,6 +318,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               : t("drawer.goalDetails");
   const goalId = selection.kind === "proposal" ? selection.item.goalId ?? "manager"
       : selection.item.goalId;
+  const taskReadable = !readOnly || goals.some(goal => goal.goalId === goalId && goal.sourceAccess);
   const contextLabel = selection.kind === "attention" ? selection.item.goalTitle ?? t("drawer.currentGoal")
     : selection.kind === "todo" ? selection.item.goalTitle
       : selection.kind === "run" ? selection.item.goalTitle
@@ -642,7 +643,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         ) : selection.item.detailMode ? (
           <section className="personal-task-inspector-summary">
             <p className="personal-proposal-explainer">{t(selection.item.detailMode === "missing_current" ? "drawer.taskReadbackUnavailable" : "drawer.taskRequestOnly")}</p>
-            <TaskRequest todo={selection.item} local={!readOnly} />
+            <TaskRequest todo={selection.item} local={taskReadable} />
           </section>
         ) : (
           <>
@@ -654,8 +655,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 {selection.item.priority ? <span>{selection.item.priority}</span> : null}
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
               </div>
-              <TaskRequest key={`${selection.item.goalId}:${selection.item.todoId}`} todo={selection.item} local={!readOnly}
-                onSave={!todoCompleted ? callbacks.onSaveTodoRequirements : undefined} />
+              <TaskRequest key={`${selection.item.goalId}:${selection.item.todoId}`} todo={selection.item} local={taskReadable}
+                onSave={!readOnly && !todoCompleted ? callbacks.onSaveTodoRequirements : undefined} />
               {selection.item.status === "blocked" ? <section aria-label={t("drawer.blockedReason")} className="personal-task-blocked-reason" data-recorded={selection.item.blockedReason ? "true" : "false"}>
                 <h4><AlertCircle size={14} />{t("drawer.blockedReason")}</h4>
                 <p>{selection.item.blockedReason ?? t("drawer.blockedReasonMissing")}</p>

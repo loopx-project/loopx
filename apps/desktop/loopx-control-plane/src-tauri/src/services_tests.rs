@@ -124,6 +124,11 @@ fn finder_runtime_path_includes_tools_without_loading_shell_profiles() {
                 .unwrap()
     );
     assert!(paths.contains(&PathBuf::from("/usr/local/bin")));
+    for prefix in ["/opt/homebrew", "/usr/local"] {
+        for version in ["24", "22"] {
+            assert!(paths.contains(&PathBuf::from(format!("{prefix}/opt/node@{version}/bin"))));
+        }
+    }
     assert!(paths.contains(&PathBuf::from("/sbin")));
     let again = runtime_search_path(Some("/fixture/user".into()), Some(path.clone()));
     assert_eq!(again, path, "tool search must be idempotent");

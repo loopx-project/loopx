@@ -41,7 +41,6 @@ from .control_plane.runtime.time import now_utc_iso
 from .feedback import validate_goal_id
 from .history import load_registry
 from .control_plane.projects.registry_codec import load_project_registry
-from .registry import registry_goals
 from .status import collect_status
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
@@ -197,19 +196,16 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
             )
             return
         try:
+            registry = {}
             if views is not None or requested_goals is not None or delivery_review:
                 # Discovery reads only metadata. Full status/runtime reads keep
                 # their existing lifecycle-only profile refusal.
                 registry = (_discovery_registry(self.server.registry_path) if views == ["workspace-directory"]
                     else load_registry(self.server.registry_path))
-                if goal_id and goal_id not in {
-                    str(g.get("id")) for g in registry_goals(registry)
-                }:
+                directory = workspace_goal_directory(registry, selected_goal_id=goal_id)
+                if goal_id and not directory["goals"]:
                     self._send_error("Goal is no longer registered.", status=404)
                     return
-                directory = workspace_goal_directory(
-                    registry, selected_goal_id=goal_id
-                )
                 if views == ["workspace-directory"]:
                     directory["contract"] = _discovery_contract(self.server.registry_path)
                     # Discovery stays metadata-only: redact with the roots this
@@ -227,7 +223,15 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     )
                     self._send_json(directory)
                     return
-            projection = collect_status(
+            linked = None
+            if goal_id and registry.get("goal_source_links"):
+                from .presentation.goal_source_routing import goal_source_catalog
+                catalog = goal_source_catalog(self.server)
+                if delivery_review and catalog.resolve(goal_id, registry):
+                    self._send_error("Execution review belongs to the original Goal runtime.", status=403)
+                    return
+                linked = catalog.status(goal_id, registry)
+            projection = linked if linked is not None else collect_status(
                 registry_path=self.server.registry_path,
                 # The Chat service already starts on an absent registry as an
                 # empty workspace (serve_chat); its status reports the same
@@ -265,13 +269,14 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     "presentation_surfaces_url": DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
                     "presentation_detail_url": DEFAULT_EXTENSION_PROJECTION_PATH,
                 }
-                attach_host_thread_activity(
-                    projection, observers=codex_thread_observers()
-                )
-                attach_host_delivery_windows(
-                    projection,
-                    expectations=codex_delivery_expectations,
-                )
+                if linked is None:
+                    attach_host_thread_activity(
+                        projection, observers=codex_thread_observers()
+                    )
+                    attach_host_delivery_windows(
+                        projection,
+                        expectations=codex_delivery_expectations,
+                    )
             if delivery_review:
                 if projection.get("ok") is not True:
                     self._send_error("Delivery review sources are unavailable.", status=503)

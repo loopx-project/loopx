@@ -6,6 +6,7 @@ const pageStarted = performance.now();
 let lastTiming = null;
 let timingObservedAt = pageStarted;
 let bootState = null;
+let observedEnvironment = null;
 function renderStartup(result) {
   const state = result?.state;
   bootState = state;
@@ -125,6 +126,9 @@ function codeText(code, phase) {
     return "启动参数 LOOPX_BIN 固定了当前运行时。请通过该安装方式修复它，或移除、修正 LOOPX_BIN 后重新打开 App；清除记住的选择不会改变此参数。";
   }
   if (typeof code === "string" && /^runtime_install_exit_(\d+|signal)$/.test(code)) {
+    if (code === "runtime_install_exit_1" && observedEnvironment?.node_found === false) {
+      return "安装程序退出（1）；App 的启动环境未找到 Node.js。请启用受支持的 Node.js 后点击「修复当前版本」。";
+    }
     // Exit 2 from install-local.sh is its "no usable Python 3.11+" gate; the
     // same exit can technically be a usage error, so the wording stays
     // probabilistic and points at the repair action.
@@ -168,9 +172,12 @@ function safeEnvironment(result) {
     runtime_executable_found: flag(environment.runtime_executable_found),
     python3_found: flag(environment.python3_found),
     python3_version: text(environment.python3_version),
+    node_found: flag(environment.node_found),
+    node_version: text(environment.node_version),
   };
 }
 function renderDiagnostics(result) {
+  observedEnvironment = safeEnvironment(result);
   const failure = result.last_failure ?? result.state;
   const text = JSON.stringify({
     schema_version: "desktop_recovery_diagnostics_v2",

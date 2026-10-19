@@ -1,6 +1,7 @@
 """Loopback read adapter for the canonical Explore result projection."""
 
 from urllib.parse import parse_qs, urlparse
+import subprocess
 
 from ..control_plane.todos.list_readback import list_goal_todos
 
@@ -60,6 +61,20 @@ class ExploreResultsRequestMixin:
         query = parse_qs(urlparse(self.path).query)
         goal_id = query.get("goal_id", [""])[0]
         try:
+            from .goal_source_routing import linked_goal_source
+            resolved = linked_goal_source(self.server, goal_id)
+            if resolved is not None:
+                if not self._require_loopback_origin():
+                    return
+                if query.get("view", ["history"]) != ["history"]:
+                    self._send_error("Use the original source history.", status=400)
+                    return
+                row, reader = resolved
+                if query.get("source_namespace") != [reader.source.namespace]:
+                    self._send_error("Source identity changed; refresh the Goal.", status=409)
+                    return
+                self._send_json(reader.history(goal_id, query.get("cursor", [""])[0]))
+                return
             runtime_root = self._goal_result_scope(goal_id)
             if runtime_root is None:
                 return
@@ -81,5 +96,5 @@ class ExploreResultsRequestMixin:
                 "Result page expired; refresh to read current evidence." if expired else
                 "Explore evidence could not be verified.", status=409,
             )
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, subprocess.SubprocessError):
             self._send_error("Explore evidence could not be read.", status=503)

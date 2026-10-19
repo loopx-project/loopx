@@ -109,9 +109,7 @@ class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandl
         try:
             # Display reads may share their short cache. A provider operation
             # must check the original source again before admitting any work.
-            goals = self.server.reader.goals(goal_id, fresh=self.command == "POST")["items"]
-            if not any(goal["id"] == goal_id and goal.get("registry_member") is True for goal in goals):
-                raise SourceScopeError("Analysis requires a registered source Goal")
+            self.server.reader.registered_status(goal_id, fresh=self.command == "POST")
         except SourceScopeError:
             self._send_error("Goal or connection is not available in this source.", status=404)
             return None

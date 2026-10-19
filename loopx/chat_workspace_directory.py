@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
+import hashlib
+import json
 
 from .chat import redact_local_paths
 from .control_plane.goals.activation import goal_activation_state
@@ -31,9 +33,17 @@ def workspace_goal_directory(
                 "registry_member": True,
             }
         )
+    links = registry.get("goal_source_links", [])
+    if links:
+        from .control_plane.status.goal_source import linked_source_goals
+        goals.extend(goal for goal in linked_source_goals(registry)
+                     if not selected_goal_id or goal["id"] == selected_goal_id)
+    revision = registry_activation_revision(registry)
+    if links:
+        revision += ":" + hashlib.sha256(json.dumps(links, sort_keys=True).encode()).hexdigest()[:24]
     return {
         "ok": True,
         "schema_version": "loopx_workspace_directory_v1",
-        "registry_revision": registry_activation_revision(registry),
+        "registry_revision": revision,
         "goals": goals,
     }

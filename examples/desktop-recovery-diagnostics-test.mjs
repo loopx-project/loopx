@@ -67,6 +67,22 @@ test('legacy pairing state reaches diagnostics without private detail', () => {
   assert.ok(!JSON.stringify(value).includes('PRIVATE'));
 });
 
+test('missing Node is diagnosed from observation, not inferred from every exit 1', () => {
+  const {context, elements} = page();
+  context.packet = {state: {phase: 'error', details: {code: 'runtime_install_exit_1'}},
+    environment: {node_found: false, node_version: null, path: 'PRIVATE'}};
+  runInNewContext('renderDiagnostics(packet); render(packet.state)', context);
+  assert.match(elements.get('#update-status').textContent, /Node.js/);
+  assert.equal(JSON.parse(elements.get('#diagnostics').value).environment.node_found, false);
+  assert.ok(!elements.get('#diagnostics').value.includes('PRIVATE'));
+  context.packet.environment = {node_found: true, node_version: '24.21.0'};
+  runInNewContext('renderDiagnostics(packet); render(packet.state)', context);
+  assert.doesNotMatch(elements.get('#update-status').textContent, /未找到 Node/);
+  delete context.packet.environment;
+  runInNewContext('renderDiagnostics(packet); render(packet.state)', context);
+  assert.doesNotMatch(elements.get('#update-status').textContent, /未找到 Node/);
+});
+
 test('terminal runtime identity failure stops waiting and opens recovery immediately', () => {
   const {context, elements} = page();
   const packet = {state:{phase:'runtime_required',details:{code:'runtime_identity_unavailable',bundled_repair_available:false}}};

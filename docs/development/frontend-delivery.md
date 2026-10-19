@@ -90,6 +90,46 @@ log read; no lower CPU, process or IO cost is implied. Local host/container
 readback and SSH command composition are separate validation boundaries; a
 composed command test does not prove a live remote host/container journey.
 
+### Native App source Goals
+
+A prepared reader or a separately served workspace is an access adapter. It
+does not complete a request to use the installed LoopX App. For that request,
+the App's normal Chat service must discover the original Goals through its
+persisted directory, keep them beneath the requested parent, and use the same
+origin for status, native Task/history reads and explicit analysis. A browser
+URL, local-storage source switch or empty local analysis Goal is not a substitute.
+Qualify the running installed App and service identities, parent-to-child
+navigation, original evidence, analysis readback, source failure and reopening.
+Keep backend, browser-renderer and native WebView evidence distinct.
+
+The registry's `goal_source_links` contains only owner-configured references:
+`parent_goal_id` plus the existing explicit source object above, scoped to one
+original Goal. It creates no execution Goal, state document, worker or copied
+registry entry. The TypeScript presentation owner validates the local parent
+and unambiguous original identity; the existing source reader performs IO.
+`POST /api/chat/goal-sources` admits that connection through the normal loopback
+owner boundary after verifying original membership; `GET` reads safe descriptors.
+The same POST removes a link when given `parent_goal_id`, `goal_id` and its
+current `source_namespace`; removal preserves the original Goal and local
+analysis artifacts and refuses a stale physical identity.
+An Agent prepares the connection within the owner's authority. Do not require
+the owner to discover runtime paths, write a manifest or copy a tunnel command.
+Links survive ordinary registry synchronization and App restart. Ambiguous Goal
+ids, unknown parents and source replacement are refused instead of borrowing
+another Goal's state. Native execution/configuration remains on the original
+runtime; the local App does not acquire those writes through a display link.
+
+Each linked Goal carries `source_access` in the workspace projection. Its
+original Goal id, tasks, explicit graph edges and native measurements remain
+intact; the local link owns only parent organization. Source identity pins
+history and analysis requests. First-layer reads invoke no model. Optional
+second-layer artifacts use the existing toolkit store beneath the local
+runtime's `goal-sources/<physical-namespace>` and remain bound to that original
+Goal. Every model start/retry revalidates original membership without the display
+cache. Source loss must stay local to the affected Goal and must not launch a
+model or strand the rest of the App. Native liveness, causal value and missing
+relations cannot be supplied by the local parent or an analysis result.
+
 ## Task-first delivery / 从用户任务开始
 
 Use the existing task/PR delivery brief, not a second checklist or approval form.

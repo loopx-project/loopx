@@ -408,6 +408,7 @@ fn compose_environment(
     arch: &str,
     runtime_executable_found: bool,
     python3: (bool, Option<String>),
+    node: (bool, Option<String>),
 ) -> Value {
     json!({
         "os_version": os_version,
@@ -415,6 +416,8 @@ fn compose_environment(
         "runtime_executable_found": runtime_executable_found,
         "python3_found": python3.0,
         "python3_version": python3.1,
+        "node_found": node.0,
+        "node_version": node.1,
     })
 }
 
@@ -442,6 +445,7 @@ fn detect_environment() -> Value {
         std::env::consts::ARCH,
         runtime_executable_found,
         crate::services::python3_environment(),
+        crate::services::node_environment(),
     )
 }
 
@@ -1907,19 +1911,22 @@ mod tests {
             "aarch64",
             false,
             (true, Some("3.9.6".to_string())),
+            (false, None),
         );
         assert_eq!(environment["os_version"], "26.5");
         assert_eq!(environment["arch"], "aarch64");
         assert_eq!(environment["runtime_executable_found"], false);
         assert_eq!(environment["python3_found"], true);
         assert_eq!(environment["python3_version"], "3.9.6");
+        assert_eq!(environment["node_found"], false);
+        assert_eq!(environment["node_version"], Value::Null);
         // The fresh-Mac signature: no Homebrew/CLT python3 answers a version
         // probe, and the runtime executable has never been installed.
-        let fresh = compose_environment(None, "aarch64", false, (false, None));
+        let fresh = compose_environment(None, "aarch64", false, (false, None), (false, None));
         assert_eq!(fresh["os_version"], Value::Null);
         assert_eq!(fresh["python3_found"], false);
         assert_eq!(fresh["python3_version"], Value::Null);
-        // The block carries exactly the five diagnostic keys — no paths,
+        // The block carries only coarse diagnostic keys — no paths,
         // environment variables or free-form output can join it.
         let keys: Vec<&str> = environment
             .as_object()
@@ -1931,6 +1938,8 @@ mod tests {
             keys,
             [
                 "arch",
+                "node_found",
+                "node_version",
                 "os_version",
                 "python3_found",
                 "python3_version",
