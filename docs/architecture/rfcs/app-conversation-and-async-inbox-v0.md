@@ -1336,6 +1336,11 @@ existing thread, without a history migration or error-message text matching.
 This proves absence of execution, not provider health or eventual success. A
 failed continuation is returned and retained; it cannot generate another retry.
 
+Recovery discovery backoff is only a temporary hint. The existing reply worker
+retains its per-request fairness count while that canonical request still exists;
+an omitted hint does not retire work or let earlier unresolved requests repeatedly
+take every available slot. The four-worker and no-extra-backlog limits stay intact.
+
 Continuation admission, progress, cursor and final delivery use a version-scoped
 presentation journal. They never reopen the acknowledged original Inbox source
 or edit its failure notice as a new draft. The final replaces only the new draft.

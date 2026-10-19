@@ -225,3 +225,46 @@ def test_no_private_transport_registers_no_runtime_wakeup(tmp_path):
         runtime_controller=SimpleNamespace(turn_release_wakeup=unexpected))
     service._reconcile_private()
     service.close()
+
+
+def test_temporary_discovery_backoff_does_not_starve_later_durable_request(tmp_path, monkeypatch):
+    from concurrent.futures import Future
+    import loopx.extensions.lark.goal_topic_runtime_service as service_module
+
+    paths = [tmp_path / str(index) for index in range(5)]
+    for path in paths:
+        path.write_text("durable original request")
+    seen, batches = [], []
+
+    class CompletedPool:
+        def __init__(self, **_kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def submit(self, operation, path):
+            future = Future()
+            future.set_result(operation(path))
+            return future
+
+    class BackoffTransport:
+        polls = 0
+        def pending_delivery_paths(self):
+            self.polls += 1
+            if self.polls == 7:
+                service._closed.set()
+            # The canonical requests remain present during the hint's backoff.
+            return paths if self.polls % 2 and self.polls < 7 else []
+        def reconcile_request(self, path):
+            seen.append(path)
+            batches.append(self.polls)
+            return 0  # An unresolved request remains canonical, without effects.
+
+    monkeypatch.setattr(service_module, "ThreadPoolExecutor", CompletedPool)
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=BackoffTransport())
+    monkeypatch.setattr(service._delivery_wakeup, "wait", lambda _timeout: None)
+    service._reconcile_private()
+    assert set(seen) == set(paths)
+    assert paths[-1] in seen[4:8]  # The previously skipped request gets the next chance.
+    assert all(batches.count(batch) <= 4 for batch in set(batches))
+    assert all(path.read_text() == "durable original request" for path in paths)
+    assert not service._workers  # Original reply scheduling creates no consumer.

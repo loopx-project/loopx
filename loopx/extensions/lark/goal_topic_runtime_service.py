@@ -130,7 +130,10 @@ class LarkGoalTopicRuntimeService:
                         logging.getLogger(__name__).warning("Private Chat delivery reconciliation is pending")
                 try:
                     paths = transport.pending_delivery_paths()
-                    attempted = {path: count for path, count in attempted.items() if path in paths}
+                    # Discovery can temporarily hide a durable request during
+                    # backoff. Retain its fairness count until the source is
+                    # actually removed, so earlier hints cannot starve later work.
+                    attempted = {path: count for path, count in attempted.items() if path.exists()}
                     owner_attention = getattr(transport, "owner_attention", None)
                     attention_ready = (owner_attention is not None and attention is None
                         and time.monotonic() >= attention_due and owner_attention.has_enabled())
