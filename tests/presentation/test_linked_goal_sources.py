@@ -76,7 +76,8 @@ def test_app_parent_directory_reads_original_tasks_history_and_explicit_analysis
     actual = snapshot['run_history']['goals'][0]
     assert actual['id'] == 'solver-goal' and actual['parent_goal_id'] == 'research-owner'
     assert actual['native_parent_goal_id'] is None
-    task = request('/api/chat/todo/detail?goal_id=solver-goal&todo_id=todo_original')
+    task = request('/api/chat/todo/detail?' + urlencode({
+        'goal_id': 'solver-goal', 'todo_id': 'todo_original', 'source_namespace': namespace}))
     assert task['text'] == 'Check the original question against its evidence'
     assert 'review_basis' not in task
     history = request('/api/chat/explore-results?' + urlencode({
@@ -165,3 +166,33 @@ def test_app_source_links_reject_other_origins_unknown_parents_and_identity_coll
     assert host.read_bytes() == bound and not w['count'].exists()
     with pytest.raises(HTTPError):
         request('/api/chat/research-analysis?goal_id=solver-goal&source_namespace=' + 'f' * 64)
+
+
+def test_original_task_detail_cannot_follow_a_replaced_source(workspace):
+    raw, request, _ = native_source(workspace)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    old_namespace = GoalSource.parse(raw).namespace
+    endpoint = '/api/chat/todo/detail?'
+    query = {'goal_id': 'solver-goal', 'todo_id': 'todo_original'}
+    with pytest.raises(HTTPError):
+        request(endpoint + urlencode(query))
+    old_url = endpoint + urlencode({**query, 'source_namespace': old_namespace})
+    assert request(old_url)['source_access']['namespace'] == old_namespace
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner',
+        'goal_id': 'solver-goal', 'source_namespace': old_namespace})
+    with pytest.raises(HTTPError) as removed:
+        request(old_url)
+    assert removed.value.code == 409
+    replacement = copy.deepcopy(raw)
+    replacement['id'] = 'replacement'
+    state = Path(raw['registry']).parent / 'active.md'
+    state.write_text(state.read_text().replace('Check the original question against its evidence',
+        'Check the replacement question against its own evidence'))
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': replacement})
+    with pytest.raises(HTTPError) as replaced:
+        request(old_url)
+    assert replaced.value.code == 409
+    namespace = GoalSource.parse(replacement).namespace
+    detail = request(endpoint + urlencode({**query, 'source_namespace': namespace}))
+    assert detail['source_access']['namespace'] == namespace
+    assert detail['text'] == 'Check the replacement question against its own evidence'

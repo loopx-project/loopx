@@ -646,14 +646,17 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
   return parsedPayload as T;
 }
 
-export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal) {
+export async function readTodoRequest(goalId: string, todoId: string, signal: AbortSignal, sourceNamespace?: string) {
   const query = new URLSearchParams({goal_id: goalId, todo_id: todoId});
+  if (sourceNamespace) query.set("source_namespace", sourceNamespace);
   const result = z.object({
     ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
     status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
     review_basis: todoUpdateSourceBasisSchema.optional(),
+    source_access: z.object({namespace: z.string()}).optional(),
   }).parse(await requestJson<unknown>(`/api/chat/todo/detail?${query}`, {signal}));
   if (result.goal_id !== goalId || result.todo_id !== todoId) throw new Error("Task source changed");
+  if (sourceNamespace && result.source_access?.namespace !== sourceNamespace) throw new Error("Task source changed");
   return result;
 }
 

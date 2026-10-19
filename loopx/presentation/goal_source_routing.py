@@ -34,13 +34,19 @@ class GoalSourceRequestMixin:
         values = query.get("goal_id", [])
         resolved = linked_goal_source(self.server, values[0]) if len(values) == 1 else None
         if resolved is None:
+            if "source_namespace" in query:
+                self._send_error("Source identity changed; refresh the Goal.", status=409)
+                return
             return super()._todo_detail()
         if not self._require_loopback_origin():
             return
-        if set(query) != {"goal_id", "todo_id"} or len(query["todo_id"]) != 1:
+        if set(query) != {"goal_id", "todo_id", "source_namespace"} or len(query["todo_id"]) != 1:
             self._send_error("Choose one original Goal and Task.", status=400)
             return
         row, reader = resolved
+        if query["source_namespace"] != [reader.source.namespace]:
+            self._send_error("Source identity changed; refresh the Goal.", status=409)
+            return
         try:
             goal_id, todo_id = values[0], query["todo_id"][0]
             item = reader.source.read_todo(goal_id, todo_id).get("todo")

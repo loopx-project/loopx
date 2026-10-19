@@ -11,11 +11,11 @@ type RequestRead = {identity: string} & (
   | {phase: "ready"; detail: Awaited<ReturnType<typeof readTodoRequest>>}
 );
 
-export function TaskRequest({todo, local, onSave}: {todo: WorkspaceTodo; local: boolean;
+export function TaskRequest({todo, local, sourceNamespace, onSave}: {todo: WorkspaceTodo; local: boolean; sourceNamespace?: string;
   onSave?: PersonalWorkspaceCallbacks["onSaveTodoRequirements"]}) {
   const {t} = useWorkspaceI18n();
   const sourceId = todo.sourceTodoId;
-  const identity = JSON.stringify([local, todo.goalId, sourceId, todo.requestText, todo.status]);
+  const identity = JSON.stringify([local, sourceNamespace, todo.goalId, sourceId, todo.requestText, todo.status]);
   const [read, setRead] = useState<RequestRead | null>(null);
   const [retry, setRetry] = useState(0);
   const [draft, setDraft] = useState<{text: string; basis: TodoUpdateSourceBasis} | null>(null);
@@ -31,7 +31,7 @@ export function TaskRequest({todo, local, onSave}: {todo: WorkspaceTodo; local: 
     if (!local || !sourceId) return;
     const controller = new AbortController();
     setRead({identity, phase: "loading"});
-    void readTodoRequest(todo.goalId, sourceId, controller.signal).then(detail => {
+    void readTodoRequest(todo.goalId, sourceId, controller.signal, sourceNamespace).then(detail => {
       if (controller.signal.aborted) return;
       setRead({identity, phase: "ready", detail});
       if (rebaseRef.current && detail.review_basis) {
@@ -45,7 +45,7 @@ export function TaskRequest({todo, local, onSave}: {todo: WorkspaceTodo; local: 
       if (!controller.signal.aborted) setRead({identity, phase: "error"});
     });
     return () => controller.abort();
-  }, [identity, local, retry, todo.goalId, sourceId]);
+  }, [identity, local, retry, todo.goalId, sourceId, sourceNamespace]);
   const current = local && read?.identity === identity ? read : null;
   const detail = current?.phase === "ready" ? current.detail : null;
   const editable = local && onSave && todo.claimedBy && sourceId && detail?.review_basis
