@@ -259,7 +259,13 @@ def _indexed_artifact_exists(value: Any, *, artifact_root: Path | None) -> bool:
     path = Path(text).expanduser()
     if not path.is_absolute() and artifact_root is not None:
         path = artifact_root / path
-    return path.exists()
+    try:
+        return path.exists()
+    except OSError:
+        # Availability is a best-effort observation, not run-index authority.
+        # Match pathlib's Python 3.14 behavior on older supported interpreters:
+        # inaccessible or invalid artifact paths must not hide durable history.
+        return False
 
 
 def _observe_run_artifacts(

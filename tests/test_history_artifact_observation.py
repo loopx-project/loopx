@@ -1,10 +1,12 @@
 """History retains control evidence without probing every discarded artifact."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -140,7 +142,8 @@ def test_full_index_reader_still_observes_every_row(history_case):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_public_history_and_status_keep_artifacts_with_canonical_todos(history_case, monkeypatch, tmp_path, provider):
+@pytest.mark.parametrize("unobservable_artifact", [False, True])
+def test_public_history_and_status_keep_artifacts_with_canonical_todos(history_case, monkeypatch, tmp_path, provider, unobservable_artifact):
     from tests.control_plane.canonical_authority_fixture import (
         initialize_canonical_authority, isolate_sqlite_runtime,
     )
@@ -150,6 +153,11 @@ def test_public_history_and_status_keep_artifacts_with_canonical_todos(history_c
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, index, _ = history_case
+    if unobservable_artifact:
+        rows = [json.loads(line) for line in index.read_text().splitlines() if line.startswith("{")]
+        rows[997]["json_path"] = "x" * 256
+        index.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    original_index = index.read_bytes()
     state = tmp_path / "state.md"
     state.write_text("---\nstatus: active\n---\n# Example\n\n## Agent Todo\n")
     write_fixture_registry(project=tmp_path, registry_path=registry, runtime_root=runtime,
@@ -173,7 +181,53 @@ def test_public_history_and_status_keep_artifacts_with_canonical_todos(history_c
             goal = history["goals"][0]
             assert goal["unique_runs"] == 1000
             assert goal["latest_status_run"]["run_id"] == "run-997"
-            assert goal["latest_status_run"]["json_exists"] is True
+            assert goal["latest_status_run"]["json_exists"] is not unobservable_artifact
             assert goal["latest_status_run"]["markdown_exists"] is False
+            assert index.read_bytes() == original_index
     finally:
         restart_effect_runtime()
+
+
+@pytest.mark.parametrize("error_number", [errno.ENAMETOOLONG, errno.EACCES, errno.EIO])
+@pytest.mark.parametrize("artifact_field", ["json_path", "markdown_path"])
+def test_artifact_observation_failure_preserves_history_and_retries(
+    tmp_path, monkeypatch, error_number, artifact_field,
+):
+    artifact = tmp_path / "artifact"
+    artifact.write_text("evidence", encoding="utf-8")
+    row = {"generated_at": "2026-01-01T00:00:00Z", "run_id": "retained",
+           "json_path": str(artifact), "markdown_path": str(artifact)}
+    failed_path = tmp_path / "unobservable"
+    row[artifact_field] = str(failed_path)
+    index = tmp_path / "index.jsonl"
+    index.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    original = index.read_bytes()
+    original_exists = Path.exists
+
+    def unavailable(path):
+        if path == failed_path:
+            raise OSError(error_number, "artifact observation unavailable")
+        return original_exists(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "exists", unavailable)
+        snapshot = load_index_snapshot(index)
+    assert snapshot.raw_count == 1
+    assert snapshot.records[0]["run_id"] == "retained"
+    assert snapshot.records[0][artifact_field.replace("_path", "_exists")] is False
+    other_flag = "markdown_exists" if artifact_field == "json_path" else "json_exists"
+    assert snapshot.records[0][other_flag] is True
+    assert snapshot.digest == f"sha256:{hashlib.sha256(original).hexdigest()}"
+    assert index.read_bytes() == original
+    failed_path.write_text("recovered", encoding="utf-8")
+    recovered = load_index_snapshot(index)
+    assert recovered.records[0]["json_exists"] is True
+    assert recovered.records[0]["markdown_exists"] is True
+    assert recovered.digest == snapshot.digest
+
+
+def test_index_read_errors_still_propagate(tmp_path):
+    index = tmp_path / "index.jsonl"
+    index.mkdir()
+    with pytest.raises(OSError):
+        load_index_snapshot(index)

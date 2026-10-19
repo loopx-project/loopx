@@ -1867,11 +1867,22 @@ still observe every row by default. This is a caller filesystem optimization,
 independent of the Todo authority provider, not an index cache or a limit on
 decision history.
 
+An artifact that cannot be observed because its filesystem lookup fails (for
+example an overlong filename, permission denial or I/O error) has its existing
+availability flag set to `false`. This means availability was not confirmed,
+not that deletion was proven. The Run and its semantic evidence remain visible;
+the read does not rewrite the index or retain a negative result across requests.
+Errors reading the index itself still propagate.
+
 文件存在性是每次读取对返回记录的实时观测，不信任索引中保存的布尔值。先用完整索引
 完成去重、额度和语义历史归约，再检查近期记录、最新状态、Agent 窗口及保留语义证据
 的文件；即使 `--limit 0`，旧愿景、用户纠偏和有效阻塞重试也不会因此丢失。索引不变时，
 文件创建／删除仍在下次读取生效；底层完整索引接口默认保留逐条检查行为。这不改变
 File／SQLite 等 Todo provider 的权威，也不限制决策历史。
+
+若文件查询因文件名过长、权限不足或 I/O 错误而失败，对应可用性标记为 `false`，
+表示未确认可用，而非已证实删除。Run 及其语义证据仍保留；读取不会改写索引，
+也不会跨请求缓存失败结果。读取索引本身的错误仍会向上传递。
 
 On the `status`, `quota should-run`, and `history` read paths, relative
 `common_runtime_root` values, relative `--runtime-root` overrides, and relative
