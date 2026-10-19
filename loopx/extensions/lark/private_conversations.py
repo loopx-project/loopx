@@ -51,6 +51,7 @@ class LarkPrivateConversations:
         self.runtime_root, self.runner, self.cli_bin = runtime_root, runner, cli_bin
         self.reaction_feedback = reaction_feedback
         self.root = controller.store.root / "lark-private-deliveries"
+        self._context_recovery_probe_at: dict[Path, float] = {}
         from .owner_attention import LarkOwnerAttention
         self.owner_attention = LarkOwnerAttention(self)
         from .private_ingress import PrivateIngressObserver
@@ -711,9 +712,10 @@ class LarkPrivateConversations:
         saved = session["steward_context"]
         selected = self.bindings.session_context(saved)
         client = str(turn.get("client_turn_id") or "")
-        request = client.removeprefix("external-")
-        if client != f"external-{request}" or not re.fullmatch(r"[a-f0-9]{24}", request):
+        match = re.fullmatch(r"external-([a-f0-9]{24})(?:-recovery-[1-9][0-9]*)?", client)
+        if match is None:
             raise ValueError("original private request unavailable")
+        request = match[1]
         record = _read_json(self.root / f"{request}.json")
         native = self.core.read_request(request)
         message_id = str(record.get("event", {}).get("message_id") or "")
@@ -967,11 +969,35 @@ class LarkPrivateConversations:
 
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
-        return [path for path in sorted(self.root.glob("*.json"))
-                if _read_json(path)["status"] != "delivered"]
+        paths = []
+        for path in sorted(self.root.glob("*.json")):
+            row = _read_json(path)
+            if row["status"] != "delivered":
+                paths.append(path)
+            elif (row.get("session_id") and row.get("turn_id")
+                    and time.monotonic() >= self._context_recovery_probe_at.get(path, 0)):
+                # Only a discovery/backoff hint, never execution authority.
+                # The canonical request, provider effect inventory and source
+                # are independently re-read by recover_failed_request.
+                self._context_recovery_probe_at[path] = time.monotonic() + 60
+                if self.core.context_recovery_candidate(row["request_ref"]):
+                    paths.append(path)
+        return paths
 
     def reconcile(self) -> int:
         return sum(self.reconcile_request(path) for path in self.pending_delivery_paths())
+
+    def _recovery_source_observation(self, record: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any] | None:
+        source = self._source_message(record, selected=selected)
+        native = self.core.read_request(record["request_ref"])
+        expected = record.get("reply_context_source_text", native.get("message"))
+        # Resume the admitted text, never an edited/replaced source. Keep the
+        # original reply-context text when admission had added verified ancestry.
+        # An unavailable rendering is unknown, not permission to guess a body.
+        if (source is None or record["event"].get("message_type") != "text"
+                or not isinstance(source.get("content"), str) or source["content"] != expected):
+            return None
+        return dict(source)
 
     def _received_during_recovery(self, path: Path) -> None:
         """Acknowledge durable ordinary admission independently of recovery.
@@ -997,7 +1023,8 @@ class LarkPrivateConversations:
             saved = (session or {}).get("project_context") or (session or {}).get("steward_context")
             if (not session or not turn or not saved or session.get("status") == "closed"
                     or turn.get("session_id") != session["session_id"]
-                    or turn.get("client_turn_id") != f"external-{record['request_ref']}"
+                    or turn.get("client_turn_id") != (record.get("context_recovery", {}).get("client_turn_id")
+                        or f"external-{record['request_ref']}")
                     or identity_ref(saved["provider_ref"], record["event"]["message_id"]) != record["request_ref"]
                     or record["source"] != lark_private_source(
                         provider_ref=saved["provider_ref"], event=record["event"])):
@@ -1014,6 +1041,21 @@ class LarkPrivateConversations:
         # Repair only this persisted source. Core still owns admission, recovery
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
+        if row["status"] == "delivered" and row.get("session_id") and row.get("turn_id"):
+            # Legacy terminal delivery may be only a verified failure notice.
+            # Core decides whether a migration continuation is safe; preserve
+            # the old Turn and every frozen/ambiguous provider attempt.
+            recovered = self.core.recover_failed_request(row["request_ref"],
+                source_observation=lambda selected: self._recovery_source_observation(row, selected))
+            if (recovered.get("context_recovery") and not recovered.get("delivery_verified")
+                    and recovered.get("turn_id") != row["turn_id"]):
+                with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+                    row = _read_json(path)
+                    if any(row.get(key) != recovered.get(key) for key in ("request_ref", "binding_id", "source", "session_id")):
+                        raise ValueError("original recovery source changed")
+                    row.update(status="accepted", turn_id=recovered["turn_id"],
+                        context_recovery=recovered["context_recovery"])
+                    _atomic_write_json(path, row)
         if row["status"] == "captured":
             # Intake may still own this capture. Wait on its existing fence and
             # read its result before retrying admission from a stale snapshot.
@@ -1155,7 +1197,9 @@ class LarkPrivateConversations:
                         or _command_text(str(record.get("response_code") or "")) or str(record.get("response") or ""))
                     if record.get("status_snapshot"):
                         response = _status_text(record["status_snapshot"], help_requested=native.get("command") == "help")
-                if self._deliver(path, record, "terminal", response, inbox=inbox):
+                terminal_phase = ("terminal.recovery." + str(record["context_recovery"]["version"])
+                    if record.get("context_recovery") else "terminal")
+                if self._deliver(path, record, terminal_phase, response, inbox=inbox):
                     if control_receipt_first:
                         # The verified result is the useful control receipt.
                         # Preserve the usual idempotent reaction, after it.

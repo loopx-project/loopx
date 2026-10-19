@@ -1304,6 +1304,31 @@ image input, unchanged Session, replay, durable restart and download-time
 revocation; live provider/model acceptance is reported separately. No new
 Session authority, queue, worker or feature toggle is introduced.
 
+### Native history migration and unfinished-request continuation
+
+A delivered failure notice is not a completed business request. The existing
+private reply scanner now discovers eligible unfinished ordinary Codex steward
+requests after the legacy manager-context migration. Context version 21 restores
+the complete visible user/assistant history once in native persisted history;
+the old upstream identity remains recorded, and native Goal/attached executions
+are not replaced by this migration.
+
+Core may admit one correlated continuation per request for this migration only
+after current App/owner/grant and unchanged source verification, an exact failed
+native Turn readback, and a complete inventory containing only its original user
+item. Policy/usage denials, corrections, tools, unknown effects, closed Sessions,
+group/attached routes and unreadable evidence remain holds. The original failed
+Turn and its verified failure notice remain unchanged; the existing same-Session
+queue owns continuation, and a distinct frozen delivery phase owns the eventual
+original-source result. A restart resumes the deterministic reservation rather
+than dispatching it twice. Existing provider replies accompany recovery as data
+so completed work can be retained without repeating its effects.
+
+Qualification covers the actual background scanner, source/grant counterexamples,
+native inventory reads and crashes before admission, after enqueue and before
+transport synchronization. Synthetic model/provider journeys and read-only native
+observations do not certify live model completion or the wider conversation SLA.
+
 ### Lark progress-edit budget and final-result recovery
 
 Private conversations and steward commissions reuse persisted Turn events to

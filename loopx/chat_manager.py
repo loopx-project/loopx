@@ -1002,7 +1002,10 @@ def manager_session_model_allocation(
 # 18: resolve intent and current evidence before deciding whether work remains.
 # 19: default local attention evidence and semantic synthesis, independent of external channels.
 # 20: carry delivery amendments through question-form feedback; honor handoff-before-repair ordering.
-MANAGER_CONTEXT_VERSION = 20
+# 21: migrate the former transcript-in-objective representation to persisted
+#     native history. Merely removing it from new prompts leaves old upstream
+#     conversations overfull and unable to compact before their next request.
+MANAGER_CONTEXT_VERSION = 21
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any

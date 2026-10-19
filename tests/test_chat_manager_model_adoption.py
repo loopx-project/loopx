@@ -107,6 +107,30 @@ def test_idle_conversation_adopts_model_preserving_context_and_authority(convers
     assert len(starts) == 2
 
 
+def test_restart_migrates_legacy_history_once_preserving_source_and_native_provenance(conversation):
+    root, store, runtime, session, starts = conversation
+    sid = session["session_id"]
+    for index in range(40):
+        store.append_message(sid, role="user" if index % 2 == 0 else "agent",
+            text=f"Retain original constraint and result {index}.")
+    before = store.messages(sid)
+    legacy = store.update_session(sid, manager_context_version=20)
+    runtime.adapters.pop(sid).close_session()  # the existing service restarted
+    runtime._ensure_adapter(legacy, work_dir=root, objective="manager")
+    current = store.load_session(sid)
+    assert starts[-1][0]["resume_thread_id"] is None
+    assert current["manager_context_version"] == MANAGER_CONTEXT_VERSION
+    assert current["upstream_context_history"] == [{"thread_id": session["upstream_thread_id"],
+        "manager_context_version": 20}]
+    assert [item["content"] for item in starts[-1][0]["history"]] == [item["text"] for item in before]
+    assert all(item["text"] not in starts[-1][0]["objective"] for item in before)
+    assert store.messages(sid) == before and current["channel_id"] == session["channel_id"]
+    runtime._ensure_adapter(current, work_dir=root, objective="manager")
+    assert len(starts) == 2 and store.load_session(sid)["upstream_context_history"] == current["upstream_context_history"]
+    with pytest.raises(ValueError, match="preserve"):
+        store.update_session(sid, upstream_context_history=[])
+
+
 @pytest.mark.parametrize("turn_status", ["starting", "running", "interrupting"])
 def test_model_edit_never_replaces_an_in_flight_turn(conversation, turn_status):
     root, store, runtime, session, starts = conversation

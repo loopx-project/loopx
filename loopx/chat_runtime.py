@@ -927,6 +927,7 @@ class ChatRuntimeController:
             ]
             legacy_manager_context = (
                 is_manager_channel(session.get("channel_id"))
+                and session.get("upstream_mode") != CODEX_GOAL_CHAT_MODE
                 and (
                     session.get("manager_context_version") != MANAGER_CONTEXT_VERSION
                     or manager_profile_changed
@@ -1022,6 +1023,18 @@ class ChatRuntimeController:
                         **manager_runtime_session_fields(manager_runtime),
                         **alloc.manager_executor_session_fields(model_allocation),
                     }
+                    if legacy_manager_context and adapter.upstream_thread_id != session.get("upstream_thread_id"):
+                        # Preserve provenance for read-only checks of failed
+                        # native requests after this history migration. Publish
+                        # the native binding and representation version together;
+                        # neither a crash nor a later resume may mark the old
+                        # overfull thread as having adopted the new format.
+                        changes["upstream_context_history"] = [
+                            *(session.get("upstream_context_history") or []),
+                            {"thread_id": session["upstream_thread_id"],
+                             "manager_context_version": session.get("manager_context_version")},
+                        ]
+                        changes["upstream_thread_id"] = adapter.upstream_thread_id
                     if session["channel_id"] == "manager":
                         changes["goal_id"] = MANAGER_AGENT_GOAL_ID
                     self.store.update_session(session_id, **changes)
