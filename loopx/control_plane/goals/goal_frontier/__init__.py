@@ -1682,6 +1682,7 @@ def build_goal_frontier_projection_context_from_status(
             selected_obligation_id=receipt_bound_replan_obligation_id,
             guard_recorded_at=receipt_bound_guard_recorded_at, agent_id=agent_id,
             items=agent_todo_source_items or [],
+            admitted_source=status_payload.get("_receipt_bound_semantic_source"),
             derive=lambda summary: derive_goal_frontier_replan_obligation_from_summaries(
                 user_todo_summary=None, agent_todo_summary=summary,
                 work_lane_contract=work_lane_contract, agent_id=agent_id,
@@ -1728,6 +1729,21 @@ def build_goal_frontier_projection_context_from_status(
         goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
     )
+    if replan_obligation:
+        replan_obligation = dict(replan_obligation)
+        if replan_obligation.get("resolution_mode") == "todo_lifecycle_settlement":
+            # Retain the native admission facts in the immutable guard source.
+            # Closeout must not rewrite historical Todo timestamps to prove time.
+            ids = {item.get("todo_id") for item in replan_obligation.get("triggers", [])}
+            replan_obligation["lifecycle_admission_items"] = [
+                {key: item[key] for key in (
+                    "todo_id", "index", "status", "done", "task_class", "archive_state",
+                    "claimed_by", "last_actor_agent_id", "completed_at", "updated_at",
+                    "no_followup", "completion_continuation", "completion_recovery",
+                    "completion_turn_key", "successor_todo_ids", "superseded_by",
+                ) if key in item}
+                for item in (agent_todo_source_items or []) if item.get("todo_id") in ids
+            ]
 
     goal_frontier_projection = build_goal_frontier_projection_from_summaries(
         goal_id=goal_id,
