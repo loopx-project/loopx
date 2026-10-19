@@ -7,6 +7,7 @@ source archive; it never reads judge artifacts or initiates an evaluation.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import gzip
 import hashlib
 import io
 import json
@@ -17,6 +18,7 @@ import stat
 import tarfile
 import threading
 import uuid
+import zlib
 
 SCHEMA = "edgebench_native_feedback_v1"
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
@@ -218,7 +220,7 @@ class NativeResearchFeedback:
                 # an absent exact native archive binding.
                 try:
                     row["candidate_sha256"], _ = archive_manifest(raw)
-                except (ValueError, tarfile.TarError):
+                except (EOFError, ValueError, gzip.BadGzipFile, tarfile.TarError, zlib.error):
                     pass
                 row["attribution_status"] = "verified"
                 if status not in {"completed", "error"}:

@@ -10,10 +10,10 @@ import pytest
 from benchmark.runtime.research_probe import run_probe
 from benchmark.runtime.research_feedback_sync import synchronize_native_feedback
 from benchmark.runtime.research_submission import (
-    mark_dispatched, prepare_submission, record_response, synchronize_intents,
+    mark_dispatched, prepare_submission, record_response, register_probe, synchronize_intents,
 )
 from benchmark.tests.test_native_research_feedback import (
-    LocalCopyBackend, archive_bytes, native_http, submit_fixture,
+    LocalCopyBackend, archive_bytes, native_http, probe_record, submit_fixture,
 )
 from test_research_feedback_wait import runtime as runtime  # real File/SQLite fixture
 import test_quota_settlement_cli as fixture
@@ -60,19 +60,60 @@ def test_released_independent_work_gets_a_wake_even_when_a_later_result_needs_re
     released["records"].append({**released["records"][0], "submission_id": "submission-2",
         "round_id": "agent-2", "result_ref": "native-result:submission-2"})
     original = research_feedback_sync.write_feedback_finding
+    signal = Path(runtime.env["LOOPX_RESEARCH_FEEDBACK_ROOT"]) / "ingestion" / "wake.json"
+    published = []
 
     def unavailable(env, packet, record, todo_id):
         if record["submission_id"] == "submission-2":
+            # The first release must be visible while this consumer still
+            # owns the lock, before a later result has returned or failed.
+            published.append(json.loads(signal.read_text())["revision"])
+            assert runtime.quota()["should_run"]
             raise RuntimeError("synthetic independent result needs retry")
         return original(env, packet, record, todo_id)
 
     monkeypatch.setattr(research_feedback_sync, "write_feedback_finding", unavailable)
     with pytest.raises(RuntimeError, match="independent result needs retry"):
         synchronize_native_feedback(runtime.env, packet=released)
-    signal = Path(runtime.env["LOOPX_RESEARCH_FEEDBACK_ROOT"]) / "ingestion" / "wake.json"
-    assert len(json.loads(signal.read_text())["revision"]) == 64
+    assert len(published) == 1 and len(published[0]) == 64
+    assert json.loads(signal.read_text())["revision"] == published[0]
     assert next(row for row in todos(runtime)["todos"] if row["todo_id"] == dependency)["status"] == "done"
     assert runtime.quota()["should_run"], "one failing result cannot suppress already released work"
+
+
+def test_error_archive_and_independent_probe_result_reach_real_writeback(runtime):
+    from benchmark.runtime.research_feedback_wait import wait_for_feedback
+
+    native = runtime.temp / "native"
+    native.mkdir()
+    with native_http(native) as (_state, release, observer, root):
+        env = dict(runtime.env, LOOPX_RESEARCH_FEEDBACK_ROOT=str(root))
+        register_probe(root, *probe_record())
+        invalid = submit_fixture(observer, b"not a gzip archive")
+        valid = submit_fixture(observer, archive_bytes({"candidate.py": b"original"}))
+        pending = observer.update(LocalCopyBackend(), None)
+        wait_for_feedback(env, todo_id=fixture.TODO_ID,
+            submission_id=valid["submission_id"], packet=pending)
+        assert not runtime.quota()["should_run"]
+        observer.after_publish = lambda _backend, _handle, packet: synchronize_native_feedback(env, packet=packet)
+        release(invalid["submission_id"], status="error")
+        release(valid["submission_id"], score=0)
+        completed = observer.update(LocalCopyBackend(), None)
+        records = {row["submission_id"]: row for row in completed["records"]}
+        error_ref = records[invalid["submission_id"]]["result_ref"]
+        valid_ref = records[valid["submission_id"]]["result_ref"]
+        assert "candidate_sha256" not in records[invalid["submission_id"]]
+        context = runtime.call("explore", "turn-context", *runtime.binding)
+        findings = context["graph"]["writeback_results"]
+        [error] = [row for row in findings if error_ref in row["evidence_refs"]]
+        assert '"status": "error"' in error["summary"] and not error.get("execution_observation")
+        valid_findings = [row for row in findings if valid_ref in row["evidence_refs"]]
+        assert len(valid_findings) == 2
+        [bound] = [row for row in valid_findings if row.get("execution_observation")]
+        assert bound["execution_observation"]["candidate_sha256"] == probe_record()[0]["candidate_sha256"]
+        assert runtime.quota()["should_run"], "an unrelated invalid archive must not strand released work"
+        assert synchronize_native_feedback(env, packet=completed)["released"] == []
+        assert runtime.call("explore", "turn-context", *runtime.binding)["graph"]["writeback_results"] == findings
 
 
 def test_native_result_reaches_replan_and_a_changed_real_experiment(runtime, monkeypatch):

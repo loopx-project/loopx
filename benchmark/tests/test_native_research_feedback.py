@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from email.parser import BytesParser
 from email.policy import default
+import gzip
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
@@ -21,7 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from benchmark.edgebench.research_feedback import NativeResearchFeedback, archive_manifest, canonical_json
+from benchmark.edgebench.research_feedback import SCHEMA, NativeResearchFeedback, archive_manifest, canonical_json
 from benchmark.runtime.research_submission import (
     bind_execution_observations, declared_wait_packet, instrument_submit_script,
     mark_dispatched, prepare_submission, record_response, record_result,
@@ -172,6 +173,115 @@ def test_late_negative_result_binds_original_selected_manifest_not_current_files
         assert bound["result_summary"]["score"] == 0
         assert completed == observer.poll(), "unchanged results retain their first observation identity"
         assert (tmp_path / "candidate.py").read_text() == "new workspace"
+
+
+@pytest.mark.parametrize("corruption", ["invalid-gzip", "truncated-gzip", "invalid-deflate", "bad-crc"])
+def test_malformed_native_error_archive_does_not_block_independent_probe_binding(tmp_path, corruption):
+    with native_http(tmp_path) as (state, release, observer, root):
+        observation, manifest = probe_record()
+        register_probe(root, observation, manifest)
+        # Native admission accepts opaque bytes; failed archive listing releases
+        # an error while retaining those exact bytes, without a source manifest.
+        archive = archive_bytes({"candidate.py": b"original"})
+        if corruption == "invalid-gzip":
+            invalid = b"not-a-tar-gzip"
+        elif corruption == "truncated-gzip":
+            invalid = archive[:len(archive) // 2]
+        else:
+            # Keep the tar header in one gzip member so decompression/CRC
+            # errors surface during member reads, after tarfile.open returns.
+            unpacked = gzip.decompress(archive)
+            first = bytearray(gzip.compress(unpacked[:512]))
+            if corruption == "bad-crc":
+                first[-8] ^= 1
+                following = gzip.compress(unpacked[512:])
+            else:
+                following = archive[:10] + b"\x07" + archive[-8:]  # Reserved deflate block type.
+            invalid = bytes(first) + following
+        failed = submit_fixture(observer, invalid)
+        release(failed["submission_id"], status="error")
+        good = submit_fixture(observer, archive)
+        release(good["submission_id"])
+        packet = observer.update(LocalCopyBackend(), None)
+        failed_record = next(row for row in packet["records"] if row["submission_id"] == failed["submission_id"])
+        assert failed_record["status"] == "error" and failed_record["result_ref"]
+        assert failed_record["attribution_status"] == "verified", "the native archive/result identity remains evidence"
+        assert "candidate_sha256" not in failed_record, "invalid tar bytes cannot qualify a source manifest"
+        [bound] = bind_execution_observations(root, packet)
+        assert bound["submission_id"] == good["submission_id"]
+        assert bound["execution_observation"]["result_candidate_sha256"] == observation["candidate_sha256"]
+
+
+@pytest.mark.parametrize("per_run_limit", [False, True], ids=["aggregate", "run-task"])
+def test_native_capacity_refusal_allows_an_explicit_later_submission(tmp_path, monkeypatch, per_run_limit):
+    native = pytest.importorskip("sforge.harness.judge_server")
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from sforge.harness.config import SForgeConfig
+
+    run_id, task_id = "synthetic-run", "synthetic-task"
+    task = SimpleNamespace(judge=SimpleNamespace(selection="pass_rate_first", score_direction="maximize"))
+    monkeypatch.setattr(native, "create_backend_from_config", lambda _config: SimpleNamespace(backend_name="synthetic"))
+    monkeypatch.setattr(native.JudgeState, "load_tasks", lambda state: setattr(state, "tasks", {task_id: task}))
+    config = SForgeConfig(log_dir=tmp_path / "judge", tasks_dir=tmp_path / "tasks",
+        judge_max_concurrent=1, judge_max_pending=0,
+        judge_max_outstanding_per_run=1 if per_run_limit else None)
+    with TestClient(native.create_app(config)) as client:
+        state = client.app.state.judge
+        token = state.register_session(task_id, run_id)
+        def history():
+            response = client.get("/api/v1/history", params={"token": token})
+            response.raise_for_status()
+            return response.json()
+        root = tmp_path / "feedback"
+        root.mkdir()
+        (root / "native.json").write_bytes(canonical_json(dict(
+            schema_version=SCHEMA, run_id=run_id, task_id=task_id, records=[])))
+        archive = tmp_path / "packaged.tar.gz"
+        archive.write_bytes(archive_bytes({"candidate.py": b"original"}))
+        prepared = prepare_submission(root, archive, history_reader=history)
+        mark_dispatched(root, prepared["operation_id"])
+        # Occupy real native admission capacity without starting an evaluation.
+        state._reserve(run_id, task_id)
+        try:
+            response = client.post("/api/v1/submit", data={"token": token},
+                files={"archive": ("submission.tar.gz", Path(prepared["archive_path"]).read_bytes())})
+            assert response.status_code == 503 and response.headers["retry-after"] == "5"
+            intent = record_response(root, prepared["operation_id"], response.status_code, response.json())
+            assert intent["acceptance"] == "rejected"
+        finally:
+            state._release(run_id, task_id)
+        assert history()["entries"] == []
+        assert state.resolve_token(token)["next_agent"] == 1
+        state._reserve(run_id, task_id)
+        state._release(run_id, task_id)
+        later = prepare_submission(root, archive, history_reader=history)
+        assert later["action"] == "submit" and later["operation_id"] != prepared["operation_id"]
+        assert not state.submissions and history()["entries"] == [], "neither response handling nor prepare resubmits"
+
+
+@pytest.mark.parametrize("http_status,response", [
+    (503, {"detail": "Service Unavailable"}),
+    (503, {"detail": "Judge capacity full; retry this snapshot later; acceptance unknown"}),
+    (500, {"detail": "Judge capacity full; retry this snapshot later"}),
+    (502, {"detail": "Bad Gateway"}),
+    (503, {"detail": {"message": "Judge capacity full; retry this snapshot later"}}),
+])
+def test_unproven_server_failure_cannot_allow_resubmission(tmp_path, http_status, response):
+    root = tmp_path / "feedback"
+    root.mkdir()
+    (root / "native.json").write_bytes(canonical_json(dict(schema_version=SCHEMA,
+        run_id="synthetic-run", task_id="synthetic-task", records=[])))
+    archive = tmp_path / "packaged.tar.gz"
+    archive.write_bytes(archive_bytes({"candidate.py": b"original"}))
+    prepared = prepare_submission(root, archive,
+        history_reader=lambda: {"run_id": "synthetic-run", "entries": []})
+    mark_dispatched(root, prepared["operation_id"])
+    intent = record_response(root, prepared["operation_id"], http_status, response)
+    assert intent["acceptance"] == "unknown"
+    with pytest.raises(ValueError, match="native_acceptance_unknown_no_resubmit"):
+        prepare_submission(root, archive)
+    assert len(list((root / "intents").glob("*.json"))) == 1
 
 
 def test_lost_reply_recovers_same_operation_and_never_resubmits(tmp_path):

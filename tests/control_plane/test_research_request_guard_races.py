@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 import os
+import socket
 import socketserver
 import subprocess
 import sys
@@ -57,10 +58,10 @@ def _native_process():
         process.wait(timeout=5)
 
 
-def _send(guard, result):
+def _send(guard, result, body=b'{"input":"synthetic request"}'):
     try:
         with urllib.request.urlopen(urllib.request.Request(guard.base_url + "/responses",
-                data=b'{"input":"synthetic request"}'), timeout=40) as response:
+                data=body), timeout=40) as response:
             result["status"] = response.status
     except urllib.error.HTTPError as error:
         result["status"] = error.code
@@ -175,6 +176,76 @@ def test_slow_proxy_connect_cannot_hold_the_goal_stop_writer(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_backpressured_post_releases_the_goal_stop_writer(tmp_path, monkeypatch, provider):
+    env, session, initial, registry = _admitted_owner(tmp_path, monkeypatch, provider)
+    headers_received, release = threading.Event(), threading.Event()
+    original_connection = gateway_module._upstream_connection
+
+    def connection(*args, **kwargs):
+        current = original_connection(*args, **kwargs)
+        connect = current.connect
+
+        def connect_with_small_buffer():
+            connect()
+            current.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+
+        current.connect = connect_with_small_buffer
+        return current
+
+    class BackpressuredUpstream(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.settimeout(10)
+            headers = bytearray()
+            while not headers.endswith(b"\r\n\r\n"):
+                chunk = self.request.recv(1)
+                if not chunk:
+                    return
+                headers.extend(chunk)
+            headers_received.set()
+            # No body reads: even a modest request fills the real TCP buffers.
+            release.wait(20)
+
+    monkeypatch.setattr(gateway_module, "_upstream_connection", connection)
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), BackpressuredUpstream) as upstream, _native_process() as process:
+        upstream.daemon_threads = True
+        upstream.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+        upstream_thread.start()
+        current_env = dict(env, OPENAI_BASE_URL=f"http://127.0.0.1:{upstream.server_address[1]}/v1")
+        wake = tmp_path / "body-send-wake"
+        wake.mkdir()
+        guard = ResearchRequestGuard(current_env, {"turn_id": "wake-body-send"}, wake)
+        response, reader = {}, None
+        try:
+            with guard.serve():
+                guard.bind(process, current_env, session, original_quota=initial)
+                body = json.dumps({"input": "x" * (128 * 1024)}).encode()
+                reader = threading.Thread(target=_send, args=(guard, response, body))
+                reader.start()
+                assert headers_received.wait(30), "request did not reach the admitted POST"
+                with project_registry_transaction(registry, operation="fixture_stop_during_body_send") as transaction:
+                    payload = transaction.payload_copy()
+                    goal = next(row for row in payload["goals"] if row["id"] == fixture.GOAL_ID)
+                    goal["activation"] = {"schema_version": "loopx_goal_activation_v1", "state": "stopped",
+                        "updated_at": "2026-01-01T00:00:00Z", "reason": "Synthetic Stop during POST backpressure"}
+                    transaction.commit(payload)
+                assert not release.is_set(), "Stop must commit without waiting for the upstream to drain"
+                assert json.loads(registry.read_text())["goals"][0]["activation"]["state"] == "stopped"
+                reader.join(timeout=10)
+                assert not reader.is_alive() and response == {"status": 502}
+                assert not guard.refused and process.poll() is None, "transport timeout is not an admission refusal"
+        finally:
+            release.set()
+            if reader is not None:
+                reader.join(timeout=40)
+            upstream.shutdown()
+            upstream_thread.join(timeout=5)
+    events = [json.loads(line) for line in (wake / "provider-requests.jsonl").read_text().splitlines()]
+    assert [event["event"] for event in events] == ["dispatch", "finished"]
+    assert all(event["forwarded"] is None for event in events), "partial sends retain unknown acceptance"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_pending_connection_cannot_borrow_a_rebound_process_or_turn(tmp_path, monkeypatch, provider):
     env, session, initial, _registry = _admitted_owner(tmp_path, monkeypatch, provider)
     connected, release = threading.Event(), threading.Event()
@@ -214,7 +285,61 @@ def test_pending_connection_cannot_borrow_a_rebound_process_or_turn(tmp_path, mo
             assert not reader.is_alive() and response == {"status": 409}
             assert upstream == {} and replacement.poll() is None
             original.wait(timeout=5)
-            assert receipt["request_admission_refused"]["code"] == "research_request_without_live_owner"
+            assert not guard.refused and not guard.admission_error
+            assert "request_admission_refused" not in receipt
+            # A replacement legitimately resuming the admitted original Turn
+            # must still be able to send, after the stale request was refused.
+            guard.bind(replacement, env, session, original_quota=initial)
+            next_response = {}
+            _send(guard, next_response)
+            assert next_response == {"status": 200}
+            assert upstream["body"] and replacement.poll() is None
     events = [json.loads(line) for line in (wake / "provider-requests.jsonl").read_text().splitlines()]
-    assert len(events) == 1 and events[0]["forwarded"] is False
-    assert events[0]["loopx_turn_id"] == env["LOOPX_TURN"], "failed request retains its original Turn"
+    finished = [event for event in events if event["event"] == "finished"]
+    assert [event["forwarded"] for event in finished] == [False, True]
+    assert finished[0]["refusal_code"] == "research_request_without_live_owner"
+    assert finished[0]["loopx_turn_id"] == env["LOOPX_TURN"], "failed request retains its original Turn"
+
+
+def test_current_admission_failure_stays_latched_across_rebinding(tmp_path):
+    @contextmanager
+    def unavailable(**_kwargs):
+        raise OSError("synthetic authority read failure")
+        yield
+
+    entered = []
+
+    @contextmanager
+    def healthy(**_kwargs):
+        entered.append(True)
+        yield
+
+    wake = tmp_path / "failed-admission-wake"
+    wake.mkdir()
+    receipt = {"turn_id": "wake-failed-admission"}
+    owner = SimpleNamespace(launch_lifetime=unavailable)
+    session = SimpleNamespace(session_id="native-failed-admission", goal_ref=None,
+        admission=SimpleNamespace(with_launch_decision=lambda _check: owner))
+    with _recording_upstream() as (url, upstream), _native_process() as original, _native_process() as replacement:
+        env = dict(OPENAI_BASE_URL=url, OPENAI_API_KEY="fixture-credential", NO_PROXY="127.0.0.1",
+            LOOPX_TURN="failed-admission-turn", LOOPX_GOAL_ID="fixture-goal", LOOPX_AGENT_ID="fixture-agent",
+            LOOPX_PHASE_DEADLINE_EPOCH=str(time.time() + 180))
+        guard = ResearchRequestGuard(env, receipt, wake)
+        with guard.serve():
+            guard.bind(original, env, session)
+            response = {}
+            _send(guard, response)
+            assert response == {"status": 409}
+            assert guard.refused and guard.admission_error
+            assert receipt["request_admission_refused"]["code"] == "research_request_admission_unavailable"
+            original.wait(timeout=5)
+            owner = SimpleNamespace(launch_lifetime=healthy)
+            guard.bind(replacement, env, session)
+            next_response = {}
+            _send(guard, next_response)
+            assert next_response == {"status": 409}
+            replacement.wait(timeout=5)
+            assert guard.refused and guard.admission_error and not entered and not upstream
+    events = [json.loads(line) for line in (wake / "provider-requests.jsonl").read_text().splitlines()]
+    assert [event["refusal_code"] for event in events] == [
+        "research_request_admission_unavailable", "research_original_request_recovery_required"]

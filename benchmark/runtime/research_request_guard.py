@@ -58,7 +58,7 @@ class ResearchRequestGuard:
         try:
             self._require_live_binding(owner, process)
         except Exception as error:
-            self._reject(request, process, error)
+            self._reject(request, owner, process, error)
         return self._bound_lifetime(request, owner, process)
 
     def _require_live_binding(self, owner, process):
@@ -71,20 +71,26 @@ class ResearchRequestGuard:
             if time.time() >= float(self.env["LOOPX_PHASE_DEADLINE_EPOCH"]):
                 raise FirstPartyHostRuntimeRejected("research_phase_budget_exhausted")
 
-    def _reject(self, request, process, error):
+    def _reject(self, request, owner, process, error):
         # Failure to read authority is not permission. Only admission calls
         # reach here; a connect/send error remains a transport observation.
         code = error.code if isinstance(error, FirstPartyHostRuntimeRejected) else "research_request_admission_unavailable"
         with self.lock:
-            self.refused = True
-            self.admission_error = self.admission_error or not isinstance(error, FirstPartyHostRuntimeRejected)
             request["refusal_code"] = code
-            self.receipt.setdefault("request_admission_refused", {"request_id": request["request_id"], "code": code})
-        if process is not None and process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGINT)
-            except ProcessLookupError:
-                pass
+            current = self.admission is owner and self.process is process
+            if current:
+                # A late request retains its own rejection evidence, but must
+                # not poison a checkpoint replacement's valid admission. A
+                # genuine current refusal stays latched until the wake returns
+                # to its scheduler; bind() cannot clear that recovery boundary.
+                self.refused = True
+                self.admission_error = self.admission_error or not isinstance(error, FirstPartyHostRuntimeRejected)
+                self.receipt.setdefault("request_admission_refused", {"request_id": request["request_id"], "code": code})
+            if process is not None and (current or self.process is not process) and process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
         raise ProviderGatewayRequestRejected() from None
 
     @contextmanager
@@ -98,7 +104,7 @@ class ResearchRequestGuard:
                 # after that wait and immediately before the provider send.
                 self._require_live_binding(owner, process)
             except Exception as error:
-                self._reject(request, process, error)
+                self._reject(request, owner, process, error)
             yield
 
     def observe(self, event):

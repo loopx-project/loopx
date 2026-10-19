@@ -86,6 +86,14 @@ def _scope(env):
     return goal, agent, observer
 
 
+def _is_feedback_todo(todo, observer, agent):
+    key = todo.get("target_key")
+    return (isinstance(key, str) and re.fullmatch(r"native-feedback:[0-9a-f]{32}", key) is not None
+        and todo.get("role") == "agent" and todo.get("claimed_by") == observer
+        and todo.get("task_class") == "advancement_task" and todo.get("action_kind") == "observe"
+        and agent in (todo.get("excluded_agents") or []))
+
+
 def _dependency(todos, key, observer, agent):
     matches = [todo for todo in todos if todo.get("target_key") == key]
     if len(matches) > 1:
@@ -93,9 +101,7 @@ def _dependency(todos, key, observer, agent):
     if not matches:
         return None
     todo = matches[0]
-    if (todo.get("role") != "agent" or todo.get("claimed_by") != observer
-            or todo.get("task_class") != "advancement_task" or todo.get("action_kind") != "observe"
-            or agent not in (todo.get("excluded_agents") or [])):
+    if not _is_feedback_todo(todo, observer, agent):
         raise ValueError("native feedback Todo belongs to another operation")
     return todo
 
@@ -217,9 +223,11 @@ def main():
 
     root = Path(os.environ.get("LOOPX_RESEARCH_FEEDBACK_ROOT", _CONTROL + "/native-feedback"))
     env = feedback_environment(root)
-    packet = json.loads((root / "native.json").read_text(encoding="utf-8"))
-    result = (wait_for_feedback(env, todo_id=args.todo_id, submission_id=args.submission_id, packet=packet)
-              if args.command == "wait" else synchronize_native_feedback(env, packet=packet))
+    if args.command == "wait":
+        packet = json.loads((root / "native.json").read_text(encoding="utf-8"))
+        result = wait_for_feedback(env, todo_id=args.todo_id, submission_id=args.submission_id, packet=packet)
+    else:
+        result = synchronize_native_feedback(env)
     print(json.dumps(result, allow_nan=False))
     return 0
 

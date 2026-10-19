@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import fcntl
+import gzip
 import hashlib
 import json
 import os
@@ -16,15 +17,23 @@ from pathlib import Path
 import re
 import shlex
 import sys
+import tarfile
 import uuid
 import urllib.parse
 import urllib.request
+import zlib
 
 from benchmark.edgebench.research_feedback import (
     archive_manifest, canonical_json, read_archive, validate_packet, write_bytes_atomic,
 )
 
 _OPERATION = re.compile(r"[0-9a-f]{32}\Z")
+# Native _reserve rejects before allocating a round; this protocol exposes the
+# refusal through exact detail strings, without a separate admission error code.
+_NATIVE_CAPACITY_REJECTIONS = frozenset({
+    "Judge capacity full; retry this snapshot later",
+    "Run/task evaluation capacity full; retry this snapshot later",
+})
 
 
 def _atomic(path, value):
@@ -86,7 +95,9 @@ def bind_execution_observations(root: Path, packet: dict):
                 manifest = probe["manifest"]
                 try:
                     digest, files = archive_manifest(raw, [entry["path"] for entry in manifest["files"]])
-                except ValueError:
+                except (EOFError, ValueError, gzip.BadGzipFile, tarfile.TarError, zlib.error):
+                    # A retained native error archive can be invalid tar. Keep
+                    # its generic result usable without attributing a probe.
                     continue
                 if (digest != observation["candidate_sha256"] or digest != manifest["candidate_sha256"]
                         or files != manifest["files"]):
@@ -228,15 +239,17 @@ def record_response(root: Path, operation_id: str, http_status: int, response: d
         if not intent.get("dispatch_started"):
             raise ValueError("native_operation_not_dispatched")
         sid, round_id = response.get("submission_id"), response.get("round_id")
+        detail = response.get("detail")
         if (http_status == 200 and isinstance(sid, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", sid)
                 and isinstance(round_id, str) and re.fullmatch(r"agent-[1-9][0-9]*", round_id)
                 and sid not in intent["before_submission_ids"]):
             if intent.get("submission_id") not in (None, sid) or intent.get("round_id") not in (None, round_id):
                 raise ValueError("native_acceptance_receipt_changed")
             intent.update(acceptance="accepted", submission_id=sid, round_id=round_id)
-        elif http_status in {400, 401, 403, 404, 413, 429} and isinstance(response.get("detail"), str):
-            # Native rejection responses precede admission. A 5xx, parse error
-            # or lost response cannot prove rejection and remains unresolved.
+        elif isinstance(detail, str) and (http_status in {400, 401, 403, 404, 413, 429}
+                or (http_status == 503 and detail in _NATIVE_CAPACITY_REJECTIONS)):
+            # Only proven native refusals precede admission. Other 5xx, unknown
+            # 503 details, parse errors and lost replies remain unresolved.
             intent["acceptance"] = "rejected"
         _atomic(path, intent)
         return intent

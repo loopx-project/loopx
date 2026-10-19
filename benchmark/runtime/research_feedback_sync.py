@@ -7,6 +7,8 @@ No score comparison, candidate adoption or research completion is inferred here.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -110,44 +112,82 @@ lost response or repeated native history read can finish without a second result
     return {"submission_id": record["submission_id"], "findings": receipts}
 
 
-def synchronize_native_feedback(env, *, packet=None):
-    """Called by the low-cost runner and the native submit response hook."""
-    from .research_feedback_wait import synchronize_feedback_waits, wait_for_feedback
-    from .research_submission import declared_wait_packet, read_packet, synchronize_intents
+@contextmanager
+def _consumer_lock(root):
+    directory = root / "ingestion"
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "consumer.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # The runner retries incomplete consumption. Never wait behind a
+            # second consumer while holding any Goal/provider authority lock.
+            raise RuntimeError("native_feedback_consumer_busy") from None
+        yield
+
+
+def _publish_feedback_wake(env, root):
+    from .research_feedback_wait import _is_feedback_todo, _loopx, _scope
     from benchmark.edgebench.research_feedback import canonical_json, write_bytes_atomic
 
+    goal, agent, observer = _scope(env)
+    listed = _loopx(env, "todo", "list", "--goal-id", goal, "--role", "agent")
+    completed = sorted((todo["target_key"], todo["todo_id"]) for todo in listed["todos"]
+        if todo.get("status") == "done" and _is_feedback_todo(todo, observer, agent))
+    # Current canonical completions, including ones absent from an older
+    # packet, own this hint. No publication journal or new admission authority
+    # is needed to recover a crash between Todo completion and notification.
+    revision = hashlib.sha256(canonical_json(completed)).hexdigest()
+    encoded = canonical_json({"revision": revision})
+    path = root / "ingestion" / "wake.json"
+    try:
+        with path.open("rb") as existing:
+            if existing.read(len(encoded) + 1) == encoded:
+                return revision
+    except FileNotFoundError:
+        pass
+    write_bytes_atomic(path, encoded)
+    return revision
+
+
+def synchronize_native_feedback(env, *, packet=None):
+    """Consume runner/manual feedback once, then hint a fresh scheduler read."""
+    from .research_feedback_wait import synchronize_feedback_waits, wait_for_feedback
+    from .research_submission import declared_wait_packet, read_packet, synchronize_intents
+
     root = Path(env["LOOPX_RESEARCH_FEEDBACK_ROOT"])
-    packet = read_packet(root) if packet is None else packet
-    intents = synchronize_intents(root, packet)
-    revision = hashlib.sha256(canonical_json(packet)).hexdigest()
+    # Lock order: consumer, the short submission journal transaction, then
+    # individual ordinary Todo/Explore calls. No provider lock encloses this.
+    with _consumer_lock(root):
+        packet = read_packet(root) if packet is None else packet
+        intents = synchronize_intents(root, packet)
 
-    def released(observed):
-        # An independent, already durable result must still wake its work if a
-        # later result in the same packet fails and needs a separate retry.
-        partial = hashlib.sha256(canonical_json([revision, observed])).hexdigest()
-        write_bytes_atomic(root / "ingestion" / "wake.json", canonical_json({"revision": partial}))
+        def released(_observed):
+            # Publish each durable success before another result can fail.
+            _publish_feedback_wake(env, root)
 
-    result = synchronize_feedback_waits(env, packet, after_release=released)
-    waiting = []
-    for intent in intents:
-        if (intent.get("wait_todo_id") and intent.get("acceptance") == "accepted"
-                and intent.get("submission_id") and not intent.get("result_observed")):
-            declaration = declared_wait_packet(root, intent)
-            current = [row for row in declaration["records"]
-                       if row.get("submission_id") == intent["submission_id"]]
-            if (len(current) == 1 and current[0].get("status") in {"completed", "error"}
-                    and current[0].get("attribution_status") == "verified"
-                    and current[0].get("result_ref")):
-                # The native process may have died before its result receipt.
-                # Released evidence has already satisfied the observation;
-                # replay must not re-defer a now completed or repurposed Todo.
-                continue
-            waiting.append(wait_for_feedback(env, todo_id=intent["wait_todo_id"],
-                submission_id=intent["submission_id"], packet=declaration))
-    # A durable consumer readback, rather than a pending raw feedback copy,
-    # wakes the existing scheduler. It still owns launch/Stop/budget decisions.
-    write_bytes_atomic(root / "ingestion" / "wake.json", canonical_json({"revision": revision}))
-    return {**result, "waits": waiting, "revision": revision}
+        try:
+            result = synchronize_feedback_waits(env, packet, after_release=released)
+            waiting = []
+            for intent in intents:
+                if (intent.get("wait_todo_id") and intent.get("acceptance") == "accepted"
+                        and intent.get("submission_id") and not intent.get("result_observed")):
+                    declaration = declared_wait_packet(root, intent)
+                    current = [row for row in declaration["records"]
+                               if row.get("submission_id") == intent["submission_id"]]
+                    if (len(current) == 1 and current[0].get("status") in {"completed", "error"}
+                            and current[0].get("attribution_status") == "verified"
+                            and current[0].get("result_ref")):
+                        # Released evidence must not re-defer completed or
+                        # repurposed work after a lost native result receipt.
+                        continue
+                    waiting.append(wait_for_feedback(env, todo_id=intent["wait_todo_id"],
+                        submission_id=intent["submission_id"], packet=declaration))
+        finally:
+            # Repair a lost notification even when its Todo was already done
+            # before this retry, or a later independent result still fails.
+            revision = _publish_feedback_wake(env, root)
+        return {**result, "waits": waiting, "revision": revision}
 
 
 def main(argv=None):

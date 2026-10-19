@@ -11,6 +11,7 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import sys
 import threading
 import time
 import uuid
@@ -30,6 +31,10 @@ class RunnerOwnedProviderGateway:
 
 
 _DEFAULT_ALLOWED_PATHS = ("/responses", "/responses/compact")
+# An authority lifetime may hold the Goal writer lock (whose ordinary wait is
+# five seconds). Bound its network send independently of long model responses;
+# gateways without an authority lifetime retain their existing timeout policy.
+_GUARDED_SEND_TIMEOUT_SEC = 1.0
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -127,6 +132,41 @@ def _upstream_connection(
 
 
 @contextmanager
+def _bounded_request_send(connection: http.client.HTTPConnection, timeout_sec: float):
+    """Give headers and the in-memory body one shared transport deadline."""
+    sock = connection.sock
+    if sock is None:
+        raise http.client.NotConnected()
+    deadline = time.monotonic() + timeout_sec
+    original_timeout, original_send = sock.gettimeout(), connection.send
+
+    def send(data):
+        # HTTPConnection supplies encoded headers and our in-memory bytes body.
+        # Keep its audit event, but own the partial-write loop: SSLSocket's
+        # sendall can otherwise give successive SSL writes a fresh timeout.
+        sys.audit("http.client.send", connection, data)
+        with memoryview(data) as view:
+            offset = 0
+            while offset < len(view):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("provider request send deadline exhausted")
+                sock.settimeout(remaining)
+                sent = sock.send(view[offset:])
+                if sent <= 0:
+                    raise ConnectionError("provider connection closed during send")
+                offset += sent
+
+    connection.send = send
+    try:
+        yield
+    finally:
+        connection.send = original_send
+        if connection.sock is sock:
+            sock.settimeout(original_timeout)
+
+
+@contextmanager
 def serve_runner_owned_provider_gateway(
     *,
     upstream_base_url: str,
@@ -147,6 +187,8 @@ def serve_runner_owned_provider_gateway(
     A request_lifetime factory captures the caller binding before connection
     setup; its context is entered only for the admitted POST send. The factory
     must not retain authority locks while DNS/TCP/CONNECT/TLS can block.
+    Guarded headers and body share a one-second send budget; response reads
+    still use request_timeout_sec, as do unguarded requests.
     """
 
     upstream = _validated_upstream(upstream_base_url)
@@ -237,7 +279,11 @@ def serve_runner_owned_provider_gateway(
                     observed["forwarded"] = None  # A send failure may still have reached the upstream.
                     if observe_request is not None:
                         observe_request({**observed, "event": "dispatch"})
-                    connection.request("POST", upstream_path, body=body, headers=headers)
+                    send_lifetime = (_bounded_request_send(connection,
+                        min(request_timeout_sec, _GUARDED_SEND_TIMEOUT_SEC))
+                        if request_lifetime is not None else nullcontext())
+                    with send_lifetime:
+                        connection.request("POST", upstream_path, body=body, headers=headers)
                     observed["forwarded"] = True
                 response = connection.getresponse()
                 observed["status"] = response.status
