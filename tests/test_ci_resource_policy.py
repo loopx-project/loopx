@@ -25,7 +25,8 @@ def event(name: str, *, pr: int = 101, tag: str = "", backend: bool = True) -> d
             event=SimpleNamespace(action="opened", number=pr, pull_request=SimpleNamespace(number=pr), release=SimpleNamespace(tag_name=tag)),
         ),
         "inputs": SimpleNamespace(tag=tag),
-        "needs": SimpleNamespace(changes=SimpleNamespace(outputs=SimpleNamespace(**{
+        "cancelled": lambda: False,
+        "needs": SimpleNamespace(chat_bundle=SimpleNamespace(result="success"), changes=SimpleNamespace(outputs=SimpleNamespace(**{
             key: str(backend).lower() for key in ("backend_tests", "core_tests", "python_tests", "stage2c_tests")
         }))),
     }
@@ -37,6 +38,7 @@ def expression(value: str | bool, context: dict) -> str | bool:
         return value
 
     def evaluate(source: str):
+        source = source.replace("needs.chat-bundle", "needs.chat_bundle")
         return eval(  # noqa: S307 - repository-owned expressions, no builtins.
             re.sub(r"!(?!=)", " not ", source.strip()).replace("&&", " and ").replace("||", " or "),
             {"__builtins__": {}, "format": lambda template, *args: template.format(*args)},
@@ -74,7 +76,7 @@ def test_signed_desktop_prs_do_not_share_either_publication_channel() -> None:
     assert expression(concurrency["group"], event("schedule")) == expression(concurrency["group"], event("workflow_dispatch"))
 
 
-def test_main_supersession_does_not_cancel_nightly_or_manual_full_qualification() -> None:
+def test_main_finishes_active_qualification_and_keeps_only_the_latest_pending_successor() -> None:
     policy = workflow("python-tests")
     assert "schedule" in policy[True]
     concurrency = policy["concurrency"]
@@ -83,7 +85,8 @@ def test_main_supersession_does_not_cancel_nightly_or_manual_full_qualification(
         if context["github"].event_name != "pull_request":
             del context["github"].event.number
     assert len({expression(concurrency["group"], context) for context in contexts}) == 5
-    assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [True, True, False, False, False]
+    assert [expression(concurrency["cancel-in-progress"], context) for context in contexts] == [False, True, False, False, False]
+    assert concurrency["queue"] == "single"
 
 
 @pytest.mark.parametrize("job_id", ["checks", "pytest", "stage2c-correctness-e2e", "merge-gate"])

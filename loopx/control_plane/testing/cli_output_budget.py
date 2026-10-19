@@ -86,10 +86,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "packet_summary",
         ),
         markdown_anchor="# Guided Start Goal",
+        # Matched native Windows base/head fixtures retain full routes and
+        # emit up to 3,246 Markdown chars in the nested canary. Keep their meaning and allow
+        # bounded host-path variation; JSON, line and growth guards stay fixed.
         max_chars={
-            "small": {"json": 40_000, "markdown": 3_200},
-            "crowded": {"json": 40_000, "markdown": 3_200},
-            "multi_agent": {"json": 40_000, "markdown": 3_200},
+            "small": {"json": 40_000, "markdown": 3_400},
+            "crowded": {"json": 40_000, "markdown": 3_400},
+            "multi_agent": {"json": 40_000, "markdown": 3_400},
         },
         max_lines={
             "small": {"json": 450, "markdown": 55},
@@ -298,9 +301,10 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            "small": {"json": 3_900, "markdown": 5_800},
-            "crowded": {"json": 3_900, "markdown": 5_800},
-            "multi_agent": {"json": 3_900, "markdown": 5_800},
+            # Matched native Windows base/head emit 5,989 Markdown chars.
+            "small": {"json": 3_900, "markdown": 6_200},
+            "crowded": {"json": 3_900, "markdown": 6_200},
+            "multi_agent": {"json": 3_900, "markdown": 6_200},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},
@@ -538,7 +542,9 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("task_body", "quota_guard_command", "interface_budget"),
         markdown_anchor="# Heartbeat Automation Prompt",
-        max_chars={"json": 13_500, "markdown": 11_750},
+        # Matched native Windows base/head: 13,685 JSON / 11,854 Markdown.
+        # Retain complete host routes; line and semantic guards are unchanged.
+        max_chars={"json": 14_000, "markdown": 12_200},
         max_lines={"json": 58, "markdown": 155},
     ),
     CliOutputModeVariantSpec(

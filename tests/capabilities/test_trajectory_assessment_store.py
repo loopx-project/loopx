@@ -189,6 +189,46 @@ def test_native_results_register_through_real_cli_and_read_without_analysis(pack
     assert not list((scope["runtime_root"] / "benchmark" / "trajectory-assessments").glob("*/jobs/*"))
 
 
+def test_native_improvement_citations_are_readable_without_model_execution(pack):
+    scope, _, _, input_path, sources, _ = pack
+    evidence = "Native results\nolder best: 100\nbaseline: 12\nretained: 15\nApplied retained source; verified hash\n"
+    (sources / "result.txt").write_text(evidence)
+    data = json.loads(input_path.read_text())
+    data["sources"][0].update(first_line=1, text=evidence,
+        artifact_sha256=hashlib.sha256(evidence.encode()).hexdigest())
+    input_path.write_text(json.dumps(data))
+    native = {
+        "schema_version": "trajectory_native_outcomes_v1", "scope": data["scope"],
+        "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T00:10:00Z", "complete": False,
+        "metric": {"name": "utility", "unit": "points", "higher_is_better": True},
+        "retained_result_id": "result-9",
+        "comparison": {"baseline_result_id": "result-7",
+            "retention_citation": {"source_id": "source", "first_line": 5, "last_line": 5}},
+        "samples": [{"submission_index": index, "result_id": f"result-{index}", "candidate_ref": f"candidate-{index}",
+            "submitted_at": "2026-01-01T00:01:00Z", "observed_at": "2026-01-01T00:02:00Z",
+            "valid": True, "value": value, "citation": {"source_id": "source", "first_line": line, "last_line": line}}
+            for index, value, line in [(2, 100, 2), (7, 12, 3), (9, 15, 4)]],
+    }
+    path = sources / "comparison.json"
+    path.write_text(json.dumps(native))
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Source-bound retained improvement", native_outcomes_json=path.name)
+    operation = {**scope, "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert view["native_outcomes"]["projection"]["retained_improvement"]["value"] == 3
+    assert view["native_outcomes"]["projection"]["initial"] is None
+    assert view["result"] is None and view["job"] is None
+    assert read_citation(**operation, source_id="source", first_line=3, last_line=3)["text"] == "baseline: 12"
+    assert read_citation(**operation, source_id="source", first_line=5, last_line=5)["text"] == "Applied retained source; verified hash"
+    with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+        read_citation(**operation, source_id="source", first_line=1, last_line=1)
+    path.write_text("{}")
+    old = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert old["native_outcomes"]["applicability"] == "historical"
+    assert old["native_outcomes"]["projection"]["retained_improvement"]["value"] == 3
+    assert read_citation(**operation, source_id="source", first_line=5, last_line=5)["applicability"] == "historical"
+
+
 def test_native_capture_cannot_borrow_another_run_or_escape_source_root(pack):
     scope, _, _, input_path, sources, _ = pack
     path = sources / "wrong-native.json"

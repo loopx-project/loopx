@@ -842,6 +842,38 @@ relaxes body qualification nor grants dismissal or merge authority.
 不改变已有正式意见，head 变化仍需新证据。本修复改变默认队列和 readiness
 分类，不放宽正文校验，也不授予撤回评审或合并权限。
 
+The default queue also avoids duplicating a submitted independent review. A
+complete, paginated GitHub history can establish `independent_review` when a
+non-author, non-bot account with `OWNER`, `MEMBER`, `COLLABORATOR` or `CONTRIBUTOR`
+association submitted `COMMENTED`, `APPROVED` or `CHANGES_REQUESTED` on the current
+head. These are formal review events, including inline-only reviews, not issue
+comments. The typed history owner uses each reviewer's latest submitted event;
+pending reviews do not erase prior activity, and dismissal retires that actor's
+coverage. Missing actor/association metadata, incomplete reads or a new head
+cannot establish coverage. The live provider rechecks head/base after history.
+
+Covered rows remain in inventory with the reviewer, review URL/state and exact
+head, a null action, null plan/template and no evidence commands. Read that
+record once and continue the queue; the contributor need not write this agent's
+bilingual format. This is work coverage, not a qualified approval or merge
+permission. Existing dissent, strict approval-body qualification, closeout,
+validation and merge-readiness gates remain. An explicit authorized
+`--fresh-audit-exact-head NUMBER@HEAD_OID` can request new evidence despite
+coverage. No reviewer-name whitelist, new configuration or automatic write is
+introduced.
+
+默认队列也跳过已有独立评审覆盖的重复全文审查：完整分页的 GitHub 记录证明，
+当前提交已由非作者、非机器人且身份为 OWNER、MEMBER、COLLABORATOR 或
+CONTRIBUTOR 的账号提交 COMMENTED、APPROVED 或 CHANGES_REQUESTED。这里指正式
+review（包括只有行内意见的评审），不包括普通 issue 评论。复用同一 TypeScript
+历史 owner，按每个评审者最近的已提交记录判断；待提交不会抹去旧记录，撤销只
+撤回该账号的覆盖。身份未知、来源不完整或换头时不跳过，读取后还须核对 head/base。
+载荷的 `independent_review` 给出评审者、原记录链接、状态和精确提交；该行仍在
+inventory，但不生成可执行计划或证据命令。第三方无需使用本 agent 的双语格式。
+跳过重复工作不授予批准或合并资格，不清除阻塞意见；原批准正文、closeout、验证
+和 merge-readiness 门保留。明确要求重新取证时，沿原精确头 fresh-audit 入口执行。
+不新增人名白名单、配置或自动外部写入。
+
 After a published exact-head `APPROVE` is read back, the capability-owned
 `review_execution_contract.approval_closeout` requires effective-review
 reconciliation. This also works for an existing approval without a duplicate audit:

@@ -10,7 +10,8 @@ from tests.control_plane.test_monitor_followthrough_contract import (
     AGENT_ID, GOAL_ID, _add_monitor, _write_fixture,
 )
 from loopx.control_plane.testing.canary_harness import run_json_cli
-from loopx.todos import add_goal_todo
+from loopx.control_plane.testing.canary_harness import run_json_cli_result
+from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
 from loopx.control_plane.effect_program import ReceiptBoundMonitorPhase
 from loopx.control_plane.quota.should_run import build_quota_should_run
 from loopx.control_plane.testing.quota_fixtures import (
@@ -100,3 +101,162 @@ def test_scoped_gate_cannot_reopen_an_exact_settled_monitor(tmp_path, monkeypatc
     rows = [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
     assert sum(row["classification"] == "quota_monitor_poll" for row in rows) == 1
     assert not any(row["classification"] in {"state_refreshed", "quota_slot_spent"} for row in rows)
+
+
+def _primary_monitor_fixture(tmp_path, monkeypatch, provider, route="source"):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    source, runtime, _state = _write_fixture(tmp_path, provider=provider)
+    gated = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="agent",
+        text="Await a scoped owner decision", task_class="advancement_task",
+        status="blocked", claimed_by=AGENT_ID, agent_id=AGENT_ID)
+    gate = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="user",
+        text="Decide the dependent work", task_class="user_gate", bound_agent=AGENT_ID,
+        blocks_agent=AGENT_ID, unblocks_todo_id=gated["todo_id"], agent_id=AGENT_ID)
+    monitor = _add_monitor(source, text="Observe a synthetic public target",
+        target_key="primary-target", next_due_at="2000-01-01T00:00:00Z")
+    registry = source
+    if route == "global":
+        registry = runtime / "registry.global.json"
+        payload = json.loads(source.read_text())
+        payload["registry_role"] = "global-local"
+        payload["goals"][0]["source_registry"] = str(source)
+        registry.write_text(json.dumps(payload))
+    return source, registry, runtime, gated, gate, monitor
+
+
+def _primary_monitor_args(command, turn, monitor):
+    return ["quota", command, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--runtime-profile", "generic_cli", "--turn-instance-id", turn,
+        "--available-capability", "network", "--available-capability", "external_evidence_poll",
+        *(["--todo-id", monitor["todo_id"], "--target-key", "primary-target",
+           "--result-hash", "primary-observation", "--execute"] if command == "monitor-poll" else [])]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("route", ["source", "global"])
+@pytest.mark.parametrize("gate_kind", ["linked", "unknown", "global"])
+def test_primary_monitor_gate_rejects_new_write_but_preserves_committed_replay(
+    tmp_path, monkeypatch, provider, route, gate_kind,
+):
+    source, registry, runtime, gated, gate, monitor = _primary_monitor_fixture(
+        tmp_path, monkeypatch, provider, route)
+    turn = "primary-monitor-gate-turn"
+    def call(command):
+        return run_json_cli_result(*_primary_monitor_args(command, turn, monitor),
+            registry_path=registry, runtime_root=runtime)
+    rc, admitted = call("should-run")
+    assert rc == 0 and admitted["should_run"] is True
+    assert admitted["heartbeat_receipt"]["settlement_identity"]["todo_id"] == monitor["todo_id"]
+    if gate_kind == "unknown":
+        add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="user",
+            text="Decide an unspecified dependency", task_class="user_gate",
+            bound_agent=AGENT_ID, blocks_agent=AGENT_ID, agent_id=AGENT_ID)
+    else:
+        patch = {"unblocks_todo_id": monitor["todo_id"]} if gate_kind == "linked" else {
+            "global_gate": True, "clear_blocks_agent": True}
+        update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=gate["todo_id"],
+            agent_id=AGENT_ID, **patch)
+    rc, blocked = call("should-run")
+    assert rc == 0 and blocked["should_run"] is False
+    assert blocked["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    before = list_goal_todos(registry_path=source, goal_id=GOAL_ID)
+    rc, denied = call("monitor-poll")
+    assert rc == 1 and denied["error_code"] == "monitor_poll_admission_rejected", denied
+    assert list_goal_todos(registry_path=source, goal_id=GOAL_ID) == before
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    assert not index.exists()
+    if gate_kind != "linked":
+        return
+    update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=gate["todo_id"],
+        agent_id=AGENT_ID, unblocks_todo_id=gated["todo_id"], clear_global_gate=True)
+    rc, observed = call("monitor-poll")
+    assert rc == 0 and observed["ok"] is True, observed
+    update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=gate["todo_id"],
+        agent_id=AGENT_ID, unblocks_todo_id=monitor["todo_id"])
+    committed = list_goal_todos(registry_path=source, goal_id=GOAL_ID)
+    rc, replay = call("monitor-poll")
+    assert rc == 0 and replay["replayed"] is True and replay["appended"] is False
+    assert list_goal_todos(registry_path=source, goal_id=GOAL_ID) == committed
+    rows = [json.loads(line) for line in index.read_text().splitlines()]
+    assert [row["classification"] for row in rows] == ["quota_monitor_poll"]
+
+
+def _primary_record_invocation(registry, runtime, monitor, turn):
+    from loopx.quota import record_quota_monitor_poll
+    from loopx.status import collect_status
+    run_json_cli(*_primary_monitor_args("should-run", turn, monitor),
+        registry_path=registry, runtime_root=runtime)
+    status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
+        scan_roots=[registry.parent.parent], limit=20,
+        goal_id=GOAL_ID, include_public_boundary_scan=False)
+    return lambda: record_quota_monitor_poll(status, goal_id=GOAL_ID,
+        registry_path=registry, execute=True, agent_id=AGENT_ID,
+        todo_id=monitor["todo_id"], target_key="primary-target",
+        result_hash="primary-observation", cadence="1h", turn_instance_id=turn,
+        receipt_bound_todo_id=monitor["todo_id"],
+        available_capabilities=["network", "external_evidence_poll"])
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_primary_monitor_gate_change_after_preflight_prevents_business_write(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.control_plane.quota import monitor_poll
+    source, registry, runtime, _gated, gate, monitor = _primary_monitor_fixture(
+        tmp_path, monkeypatch, provider)
+    invoke = _primary_record_invocation(registry, runtime, monitor, "primary-gate-race")
+    original = monitor_poll._provider_writeback
+    def interleaved(plan, **kwargs):
+        update_goal_todo(registry_path=source, goal_id=GOAL_ID,
+            todo_id=gate["todo_id"], agent_id=AGENT_ID,
+            unblocks_todo_id=monitor["todo_id"])
+        return original(plan, **kwargs)
+    monkeypatch.setattr(monitor_poll, "_provider_writeback", interleaved)
+    denied = invoke()
+    assert denied["ok"] is False and denied["error_code"] == "monitor_poll_rejected", denied
+    assert "current User gate dependencies" in denied["reason"]
+    current = list_goal_todos(registry_path=source, goal_id=GOAL_ID,
+        todo_id=monitor["todo_id"])["todo"]
+    assert current.get("result_hash") is None
+    assert current["next_due_at"] == "2000-01-01T00:00:00Z"
+    assert not (runtime / "goals" / GOAL_ID / "runs" / "index.jsonl").exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("business_committed", [False, True])
+def test_old_primary_monitor_plan_keeps_identity_without_new_gate_authority(
+    tmp_path, monkeypatch, provider, business_committed,
+):
+    from loopx.control_plane.quota import monitor_poll
+    source, registry, runtime, _gated, gate, monitor = _primary_monitor_fixture(
+        tmp_path, monkeypatch, provider)
+    invoke = _primary_record_invocation(registry, runtime, monitor, "primary-gate-recovery")
+    original = monitor_poll._provider_writeback
+    def interrupted(plan, **kwargs):
+        if business_committed:
+            original(plan, **kwargs)
+        pending = list((runtime / "goals" / GOAL_ID / "runs/.transactions/quota-monitor-poll").glob("*.json"))
+        assert len(pending) == 1
+        # Compatibility fixture for a pre-guard primary Monitor reservation.
+        receipt = json.loads(pending[0].read_text())
+        receipt["provider_plan"].pop("gate_scope_guard")
+        pending[0].write_text(json.dumps(receipt))
+        raise ValueError("synthetic response interruption")
+    monkeypatch.setattr(monitor_poll, "_provider_writeback", interrupted)
+    assert invoke()["ok"] is False
+    monkeypatch.setattr(monitor_poll, "_provider_writeback", original)
+    update_goal_todo(registry_path=source, goal_id=GOAL_ID,
+        todo_id=gate["todo_id"], agent_id=AGENT_ID, unblocks_todo_id=monitor["todo_id"])
+    recovered = invoke()
+    if business_committed:
+        assert recovered["ok"] is True, recovered
+        assert invoke()["replayed"] is True
+    else:
+        assert recovered["ok"] is False and recovered["error_code"] == "monitor_poll_rejected", recovered
+        assert "current User gate dependencies" in recovered["reason"]
+        current = list_goal_todos(registry_path=source, goal_id=GOAL_ID,
+            todo_id=monitor["todo_id"])["todo"]
+        assert current.get("result_hash") is None
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    rows = [json.loads(line) for line in index.read_text().splitlines()] if index.exists() else []
+    assert [row["classification"] for row in rows] == (["quota_monitor_poll"] if business_committed else [])

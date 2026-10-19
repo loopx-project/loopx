@@ -23,6 +23,7 @@ from ..agents.workspace_guard import (
     observe_goal_local_workspace,
 )
 from ..quota.decision_summary import (
+    goal_missing_state_blocker as _goal_missing_state_blocker,
     quota_plan_items as _quota_plan_items,
 )
 from ..quota.goal_boundary import (
@@ -472,6 +473,45 @@ def build_quota_paused_should_run_payload(
     return payload
 
 
+def _apply_missing_state_health_guidance(
+    payload: dict[str, Any],
+    status_payload: dict[str, Any],
+    *,
+    goal_id: str,
+) -> None:
+    """Name the registry health blocker and its repair on a health skip.
+
+    The live quota lane can still carry the generic "run the first adapter
+    tick" action while status has already reported the Goal's active state file
+    as missing. Replace that guidance on the eligible health skip so the packet
+    points at the same reconnect/retire repair as the status finding. Other
+    skip routes (operator gate, terminal closure, monitor quiet, automation
+    upgrade) keep their own channel and interaction contract.
+    """
+
+    if payload.get("should_run") is True:
+        return
+    if payload.get("status_health_ok") is not False:
+        return
+    if payload.get("effective_action") != EffectiveAction.QUOTA_SKIP.value:
+        return
+    if payload.get("state") != "eligible":
+        return
+    if payload.get("safe_bypass_allowed") is True:
+        return
+    blocker = _goal_missing_state_blocker(status_payload, goal_id=goal_id)
+    if blocker is None:
+        return
+    recommended = str(blocker.get("recommended_action") or "").strip()
+    message = str(blocker.get("message") or "").strip()
+    payload["state"] = "blocked_health"
+    payload["status"] = "state_file_missing"
+    payload["source"] = "global_registry"
+    payload["reason"] = recommended or message or payload.get("reason")
+    if recommended:
+        payload["recommended_action"] = recommended
+
+
 def build_quota_should_run(
     status_payload: dict[str, Any],
     *,
@@ -610,6 +650,11 @@ def build_quota_should_run(
             scheduler_state_read_observer=_app_scheduler_state_read_observer(
                 direct_sources
             ),
+        )
+        _apply_missing_state_health_guidance(
+            payload,
+            status_payload,
+            goal_id=safe_goal_id,
         )
         _record_unread_app_scheduler_state_source(
             resolved_scheduler_context,

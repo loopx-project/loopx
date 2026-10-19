@@ -926,7 +926,11 @@ export function PersonalWorkspacePage({
   statusSourceControl,
   serviceNotice,
   workspaceConversations,
+  rootGoalId,
+  onChangeGoalRoot,
 }: {
+  rootGoalId?: string;
+  onChangeGoalRoot?: (goalId: string | null) => void;
   workspaceConversations?: WorkspaceConversationDirectory;
   /** The bound Session's mode queues a message sent while its Turn runs. */
   conversationQueuesFollowUps?: boolean;
@@ -961,6 +965,8 @@ export function PersonalWorkspacePage({
   const [localGoalId, setLocalGoalId] = useState<string | null>(controlledGoalId ?? null);
   const [localAgentId, setLocalAgentId] = useState(controlledAgentId ?? agents.find((agent) => agent.available)?.agentId ?? "codex");
   const selectionScope = `${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${controlledGoalId === undefined ? localGoalId : controlledGoalId}`;
+  const runtimeSourceUnavailable = statusSourceControl?.activeSource.kind === "runtime"
+    && statusSourceControl.connectionState === "error";
   const [selectionState, setSelectionState] = useState<{scope: string; value: WorkspaceDrawerSelection | null} | null>(null);
   const selection = selectionState?.scope === selectionScope ? selectionState.value : null;
   const currentSelectionScope = useRef({scope: selectionScope, generation: 0});
@@ -1151,6 +1157,7 @@ export function PersonalWorkspacePage({
     [workspaceGoals],
   );
   const selectedGoal = workspaceGoals.find((goal) => goal.goalId === selectedGoalId) ?? null;
+  const rootUnavailable = Boolean(rootGoalId && !selectedGoal);
   function openSettings(target: Extract<WorkspaceDrawerSelection, { kind: "settings" }>, returnToModel = false) {
     settingsReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settingsFromModelMenuRef.current = returnToModel;
@@ -2669,6 +2676,7 @@ export function PersonalWorkspacePage({
           <div>
           <ChannelHeader
             agents={agents}
+            scopeUnavailable={rootUnavailable}
             agentWorkActive={agentWorkActive}
             conversationScope={workspaceConversations && (workspaceConversations.projects?.length || workspaceConversations.readFailed || selectedWorkspaceRef) ? {
               onChange: (value) => {
@@ -2694,7 +2702,7 @@ export function PersonalWorkspacePage({
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
             onOpenConversationSettings={!readOnly ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
-            onRefresh={callbacks.onRefresh ? () => void refreshWorkspace() : undefined}
+            onRefresh={callbacks.onRefresh && !runtimeSourceUnavailable ? () => void refreshWorkspace() : undefined}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {
               setManagerConversationReceiptVisible(false);
@@ -2719,7 +2727,7 @@ export function PersonalWorkspacePage({
             selectedAgentReasoningEffort={selectedAgentReasoningEffort}
             refreshState={refreshState}
             readOnlySourceLabel={readOnly ? statusSourceControl?.activeSource.label : undefined}
-            selectedGoal={selectedGoal}
+            selectedGoal={runtimeSourceUnavailable ? null : selectedGoal}
             selectedGoalTab={selectedGoalTab}
             goalLifecycleBusy={selectedGoal ? lifecycleBusyGoalIds.has(selectedGoal.goalId) : false}
             onOpenWorkspace={() => selectGoal(null)}
@@ -2728,8 +2736,13 @@ export function PersonalWorkspacePage({
               : undefined}
             resumeReviewed={!callbacks.onExecuteGoalLifecycle}
           />
-          {selectedGoal && !selectedGoal.loadState && !agentWorkActive ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
-            : selectedGoal?.loadState === "loading" ? <GoalVitalsSkeleton /> : null}
+          {runtimeSourceUnavailable ? <section className="personal-runtime-source-error" role="alert">
+            <div><strong>{t("source.runtimeUnavailable", {source: statusSourceControl.activeSource.label})}</strong>
+              {statusSourceControl.errorMessage ? <details><summary>{t("source.failureDetails")}</summary><p>{statusSourceControl.errorMessage}</p></details> : null}</div>
+            {callbacks.onRefresh ? <button disabled={refreshState === "loading"} type="button" onClick={() => void refreshWorkspace()}>{t("startup.retry")}</button> : null}
+          </section> : null}
+          {!runtimeSourceUnavailable && selectedGoal && !selectedGoal.loadState && !agentWorkActive ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
+            : !runtimeSourceUnavailable && selectedGoal?.loadState === "loading" ? <GoalVitalsSkeleton /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
           </div>
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
@@ -2745,6 +2758,7 @@ export function PersonalWorkspacePage({
               followConversationRef.current = nearBottom;
               setShowLatestMessage(!nearBottom);
             }}>
+            {!rootUnavailable && !runtimeSourceUnavailable ? <>
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && callbacks.onSelectWorkAgent ? <section className="attached-agent-conversations"><button type="button" className="attached-conversation-entry" onClick={() => callbacks.onSelectWorkAgent?.("")}>{locale === "zh-CN" ? "Agent 工作记录" : "Agent work conversations"}</button></section> : null}
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && conversationSessionId && loopxMode?.settings.execution_config && loopxMode.settings.agent_id ? <GoalTeamResults
               key={`${conversationSessionId}:${loopxMode.settings.agent_id}:${loopxMode.settings.execution_config}`}
@@ -2783,7 +2797,7 @@ export function PersonalWorkspacePage({
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     board={taskBoard(!settingsOpen && selectedGoalTab === "overview")} results={goalResults(!settingsOpen && selectedGoalTab === "overview")}
-                    historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,
+                    historyRefreshRevision={historyRefreshRevision} readSourceUrl={statusSourceControl?.activeSource.kind === "runtime" && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error" ? statusSourceControl.activeSource.statusUrl : undefined} proposals={proposals} onPreview={createPreview} />,
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}
@@ -2822,8 +2836,9 @@ export function PersonalWorkspacePage({
                   : undefined}
                 onOpenGoalEvidence={(goalId) => { selectGoal(goalId, "chat"); }} />
             )}
+            </> : null}
           </div>
-          <div className="personal-composer-wrap" hidden={agentWorkActive}>
+          {!rootUnavailable ? <div className="personal-composer-wrap" hidden={agentWorkActive}>
             {!readOnly && actionReadback.isError ? <div className="personal-history-notice" role="status" data-testid="personal-action-readback-error">
               <span>{t("proposal.readbackUnavailable")}</span><button type="button" disabled={actionReadback.isFetching}
                 onClick={() => void actionReadback.refetch()}>{t("proposal.readbackRetry")}</button>
@@ -2990,18 +3005,20 @@ export function PersonalWorkspacePage({
               : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
             </> : null}
             </>}
-          </div>
+          </div> : null}
         </div>
       )}
       sidebar={(
         <GoalSidebar
-          key={statusSourceControl?.activeSource.statusUrl ?? "/status.json"}
+          key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${rootGoalId ?? ""}`}
+          rootGoalId={rootGoalId}
+          onChangeGoalRoot={onChangeGoalRoot}
           attentionCount={managerNeedsYouCount}
           goals={workspaceGoals}
           goalArchiveLoadState={goalArchiveLoadState}
           goalLifecycleOperations={callbacks.onExecuteGoalLifecycle ? ["stop", "resume"] : undefined}
           lifecycleBusyGoalIds={lifecycleBusyGoalIds}
-          onRequestGoalCreate={readOnly ? undefined : requestGoalCreate}
+          onRequestGoalCreate={readOnly || rootGoalId ? undefined : requestGoalCreate}
           onRequestGoalLifecycle={readOnly && !callbacks.onExecuteGoalLifecycle
             ? undefined
             : (goal, operation) => void requestGoalLifecycle(goal, operation)}

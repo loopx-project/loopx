@@ -711,6 +711,19 @@ def load_explore_result_events_strict(
     return events
 
 
+def explore_history_rows(events, *, goal_id=None):
+    """Shared read projection: preserve history without exposing arbitrary payloads."""
+    if goal_id is not None:
+        events = [validate_explore_result_event(event, expected_goal_id=goal_id) for event in events]
+    fields = (
+        "schema_version", "event_id", "goal_id", "event_kind", "result_id",
+        "recorded_at", "title", "summary", "status", "node_kind",
+        "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
+        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence",
+    )
+    return [{key: event[key] for key in fields if key in event} for event in events]
+
+
 def _fold_by_result_id(
     events: Sequence[Mapping[str, Any]], *, event_kind: str
 ) -> list[dict[str, Any]]:

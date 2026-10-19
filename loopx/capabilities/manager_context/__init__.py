@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 import re
 import shlex
 
 from ...file_lock import exclusive_file_lock
+from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.source_grant_observation import (
     POLICY_SCHEMA as POLICY_SCHEMA,
     registered_context_recipients,
@@ -59,8 +61,13 @@ def register_ingress(
     message: str,
     source_id: str,
     source_message: str | None = None,
+    origin: str | None = None,
 ) -> None:
-    """Provider-only provenance, persisted before enqueue (never model-authored)."""
+    """Host-verified provenance, persisted before enqueue (never model-authored).
+
+    Existing provider receipts retain their exact shape. Local bound-owner input
+    records its actual web origin rather than impersonating a provider event.
+    """
     if not sender_id or not source_id or not channel.startswith("manager.external."):
         raise ValueError("manager ingress requires exact provider provenance")
     value = dict(
@@ -72,6 +79,10 @@ def register_ingress(
         source_id=source_id,
         source_message=normalize_source_context(message if source_message is None else source_message),
     )
+    if origin is not None:
+        if origin != "web":
+            raise ValueError("unsupported local ingress origin")
+        value["origin"] = origin
     path = (
         _root(runtime_root)
         / "ingress"
@@ -105,7 +116,13 @@ def deliver(
 ) -> dict:
     request = normalize_request(request)
     target = {key: request[key] for key in ("goal_id", "agent_id")}
-    with collaboration_goal_scope(
+    # Share the configuration writer's fence through inbox/route publication.
+    # Order: source policy -> Goal lifetime -> request; local owner stays independent.
+    scope = conversation_scope(session, origin=turn.get("origin", "unknown"))
+    with (
+        exclusive_file_lock((_root(runtime_root) / "policy.json").with_suffix(".lock"))
+        if scope["kind"] == "external_audience" else nullcontext()
+    ), collaboration_goal_scope(
         registry_path,
         goal_id=request["goal_id"],
         agents=(request["agent_id"],),

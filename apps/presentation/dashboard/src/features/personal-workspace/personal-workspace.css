@@ -82,6 +82,13 @@
 .personal-status-source-meta small { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .personal-status-source-meta button { margin-left: auto; width: 22px; height: 22px; color: var(--pw-faint); }
 .personal-status-source-error { margin: 0 3px; color: var(--pw-red); font-size: var(--text-caption); line-height: var(--leading-caption); overflow-wrap: anywhere; }
+.personal-runtime-source-error { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px clamp(14px, 3vw, 32px); border-bottom: 1px solid var(--pw-line); color: var(--pw-red); font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-runtime-source-error > div { min-width: 0; }
+.personal-runtime-source-error strong { font-weight: 600; }
+.personal-runtime-source-error details { margin-top: 8px; color: var(--pw-muted); overflow-wrap: anywhere; }
+.personal-runtime-source-error summary { cursor: pointer; }
+.personal-runtime-source-error p { margin: 8px 0 0; }
+.personal-runtime-source-error > button { flex-shrink: 0; min-height: 44px; padding: 0 16px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer; }
 .personal-status-source-form { position: absolute; z-index: 12; top: calc(100% - 4px); left: 12px; right: 12px; display: grid; gap: 10px; padding: 13px; border: 1px solid var(--pw-line-strong); border-radius: 12px; background: #fff; box-shadow: 0 12px 32px rgb(30 28 20 / 14%); }
 .personal-status-source-form > header { display: flex; align-items: center; justify-content: space-between; font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-status-source-form label { display: grid; gap: 5px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
@@ -106,6 +113,9 @@
 .personal-status-source-command button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; justify-self: end; min-height: 25px; padding: 0 8px; border: 1px solid var(--pw-line-strong); border-radius: 7px; background: #fff; color: var(--pw-blue-ink); cursor: pointer; font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 500; }
 .personal-status-source-command button:disabled { color: var(--pw-faint); cursor: not-allowed; }
 .personal-sidebar-nav { flex: 1; padding: 12px 12px; overflow: auto; }
+.personal-goal-tree-toggle { display: grid; place-items: center; width: 22px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--pw-muted); cursor: pointer; }
+.personal-goal-tree-toggle:hover { color: var(--pw-text); }
+.personal-goal-root-scope { display: flex; align-items: center; gap: 7px; margin: 0 10px 8px; border: 0; background: transparent; color: var(--pw-muted); cursor: pointer; font: inherit; }
 .personal-manager-link, .personal-goal-link, .personal-sidebar-utility { width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .personal-manager-link { display: grid; grid-template-columns: 30px 1fr auto auto; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 11px; font-weight: 600; }
 .personal-manager-link:hover, .personal-goal-link:hover { background: rgb(255 255 255 / 65%); }
@@ -118,6 +128,8 @@
 .personal-goal-list { display: grid; gap: 2px; }
 .personal-goal-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px 28px; align-items: center; gap: 2px; border-radius: 11px; }
 .personal-goal-row:has(.personal-goal-move-actions) { grid-template-columns: minmax(0, 1fr) 52px 28px; }
+.personal-goal-row.has-goal-tree { grid-template-columns: 22px minmax(0, 1fr) auto auto; }
+.personal-goal-row.has-goal-tree:has(.personal-goal-move-actions) { grid-template-columns: 22px minmax(0, 1fr) 52px 28px; }
 .personal-goal-row[data-reorder-goal] > .personal-goal-link { cursor: grab; user-select: none; }
 .personal-goal-row[data-reorder-goal] > .personal-goal-link:active { cursor: grabbing; }
 .personal-goal-row.is-drop-before { box-shadow: 0 -2px var(--color-link, #0070f3); }

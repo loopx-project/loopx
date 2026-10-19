@@ -749,18 +749,27 @@ pull requests. It intentionally excludes provider-backed evaluation and the
 full smoke catalog, so ordinary iteration does not depend on credentials,
 network latency, provider availability, or a two-hour matrix.
 
-The existing `kernel-static-checks` job first checks the Stage 2C dependency
-lock and top-level module budget. A failed invariant makes the existing
-`checks` preflight fail, so PR long-test shards do not enter their shared queue.
-These tests also remain in the complete six-shard collection.
+The existing `kernel-static-checks` job checks the Stage 2C dependency lock,
+top-level module budget and the existing Ruff scope immediately after change
+classification, before the Chat build or any heavy matrix. Ordinary PR, main-push
+and merge-queue qualification requires this static admission to succeed. Client-only
+work retains its explicit backend exemption. Scheduled/manual full runs may
+continue after a static failure for diagnostics, but cancelled, missing or
+unexpectedly skipped prerequisites cannot admit work. The invariant tests also
+remain in the complete six-shard collection. File-authority tests, mypy and CLI
+output budgets live in `kernel-contracts`; both kernel lanes remain required by
+the existing `checks` aggregate.
 
 `.github/workflows/python-tests.yml` 会在相关 Python PR 上运行这条快速通道。
 它刻意不包含真实模型调用和 full smoke catalog，因此普通迭代不依赖凭证、网络
 时延、模型服务可用性或两小时级测试矩阵。
 
-既有 `kernel-static-checks` 作业先检查 Stage 2C 依赖锁和顶层模块预算。不变量失败
-会使既有 `checks` 前置门失败，阻止 PR 的长测试分片进入共享队列。这些测试仍保留
-在六分片的完整 collection 中。
+既有 `kernel-static-checks` 在变更分类后立即检查 Stage 2C 依赖锁、顶层模块预算
+和原有 Ruff 范围，先于 Chat 构建与全部重型矩阵。普通 PR、main push 和 merge
+queue 必须通过静态准入；纯前端仍保留明确的后端豁免。定时／手动全量运行可在
+静态失败后继续诊断，但取消、缺失或意外跳过均不能准入。不变量测试仍保留在六分片
+完整 collection 中。File authority、mypy 和 CLI 输出预算移到 `kernel-contracts`；
+两个 kernel 通道仍由既有 `checks` 汇总要求通过。
 
 The Linux suite uses six hosted runners with two xdist workers each.
 `pytest-split` partitions the complete collection using `least_duration`;
@@ -828,11 +837,13 @@ PR 使用前述豁免，Sonar 配置变更仍全量运行，包括没有 token �
 
 Full Python shards share six repository-wide job concurrency groups, one per
 `matrix.shard`, across PR, main, merge-queue and manual runs carrying this
-workflow version. Shards wait for `checks`; ordinary PRs enter only after it
-succeeds. Non-PR runs still collect Python diagnostics after failed checks when
-classification and the source bundle succeeded and the workflow is not cancelled.
-Skipped required shards remain a qualification failure. This avoids long-test
-work for known-red PRs but adds serial latency when capacity is idle; see the
+workflow version. Shards wait for the statically admitted source bundle, then
+overlap the remaining TypeScript, browser and kernel-contract checks. Scheduled
+and manual runs may collect diagnostics after static failure; ordinary PR,
+main-push and merge-queue candidates may not. Skipped required shards and failed
+static admission remain qualification failures. The six-slot bound is unchanged,
+but those jobs can now overlap the other matrices; a later failure in those
+checks may coexist with Python execution. See the
 [admission tradeoff](ci-impact-selection.md#six-complete-python-shards).
 Each group admits one running job and uses `queue: max`
 to retain up to 100 pending jobs instead of replacing another current
@@ -858,10 +869,11 @@ retaining workflow-level cancellation and the required gate. See GitHub's
 [concurrency queue contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
 全量 Python 分片按 `matrix.shard` 共用六个仓库级 job concurrency 组，适用于
-携带本版 workflow 的 PR、main、merge queue 和手动运行。分片先等待 `checks`，
-普通 PR 仅在其成功后进入队列；非 PR 在分类、源码构建成功且未取消时仍保留失败后
-的完整 Python 诊断。必需分片跳过仍判失败。此规则减少已知失败 PR 的长测试占用，
-但会增加空闲队列中的串行延迟。每组允许一个运行中 job，
+携带本版 workflow 的 PR、main、merge queue 和手动运行。分片等待静态准入后的
+源码 bundle，再与余下 TypeScript、浏览器及 kernel-contract 检查并行。仅定时和
+手动运行可在静态失败后继续诊断；普通 PR、main push 与 merge queue 不可。
+必需分片跳过、静态准入失败仍判失败。六槽上限不变，但现在会与其他矩阵重叠，
+这些检查稍后失败时 Python 可能已在运行。每组允许一个运行中 job，
 用 `queue: max` 保留至多 100 个等待 job，不替换其他有效候选。workflow 级取消
 请求清退同 PR 的旧 head；可信 base 分支的 `synchronize` 清理还会取消遗留
 旧 run，包括普通取消后仍继续的 `always()` 汇总。清理要求事件中的当前 head、

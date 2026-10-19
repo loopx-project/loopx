@@ -747,6 +747,23 @@ solver usage and the current analysis attempt's receipt stay separate; full-stud
 cost and causal benefit remain unknown. No first-viewport/hero/CTA change is
 introduced; six uncalibrated process judgments retain their existing role.
 
+**Checkpoint 2026-10-18 (shared Goal source reading, proposed).** Source IO
+now lives below presentation in `control_plane/status/goal_source.py`, reusing
+native status, strict Explore validation and the shared history projection.
+Local/SSH connection and host/container environment compose independently;
+prepared scope selects one original Goal or all registered Goals. App, CLI and
+Agents share source description, Goal listing, status and paged-history reads.
+The thin workspace adapter retains existing UI endpoints. Configuration-derived
+source identity binds requests, cursors and selection. Source manifests require
+one explicit connection/environment/scope model. A failed source is visible in the main
+view on narrow screens, cached contents are withheld and retry keeps that source.
+Disposable native-host and real local-container reads, HTTP isolation/recovery
+and packaged desktop/narrow journeys are verified; SSH composition has command
+tests, not a live remote-host/container qualification. One local reader process
+serves multiple source listeners and invokes native IO on cache misses; no CPU or
+IO saving is established. This is a read-only increment: no management grant,
+new execution Goal/registry, automatic analysis-pack binding or V12 completion.
+
 ## 12. Open decisions
 
 | # | Decision | Owner | Options | Recommendation | Needed before |

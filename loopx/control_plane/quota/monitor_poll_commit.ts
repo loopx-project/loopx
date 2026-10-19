@@ -567,6 +567,18 @@ interface Admission {
   external: boolean;
 }
 
+function monitorGateAllowsObservation(decision: MonitorDecision): boolean {
+  if (!decision.requires_user_action) return true;
+  const gateScope = decision.auxiliary_gate_scope;
+  const monitor = decision.registry_due_monitor;
+  return decision.safe_bypass_allowed &&
+    decision.safe_bypass_kind === "scoped_user_gate_fallback" &&
+    gateScope?.schema_version === "todo_gate_scope_projection_v0" &&
+    gateScope.agent_id === decision.agent_id && gateScope.todo_id === monitor.todo_id &&
+    gateScope.state === "independent" && typeof gateScope.gate_count === "number" &&
+    Number.isInteger(gateScope.gate_count) && gateScope.gate_count > 0;
+}
+
 async function readMonitorSettlement(request: MonitorRequest): Promise<JsonObject | null> {
   const todoId = request.observation.settlement_todo_id ?? request.observation.todo_id;
   // The Turn/effect and run record belong to the decision Agent; provider actor
@@ -628,13 +640,7 @@ async function auxiliaryMonitorAllowed(
   const monitor = decision.registry_due_monitor;
   // Retain ordinary quota/due-work admission and capability/gate projections;
   // lifecycle lookup must not become a second should-run bypass.
-  const gateScope = decision.auxiliary_gate_scope;
-  const independentGate = decision.safe_bypass_allowed &&
-    decision.safe_bypass_kind === "scoped_user_gate_fallback" &&
-    gateScope?.schema_version === "todo_gate_scope_projection_v0" &&
-    gateScope.agent_id === decision.agent_id && gateScope.todo_id === monitor.todo_id &&
-    gateScope.state === "independent" && typeof gateScope.gate_count === "number" && Number.isInteger(gateScope.gate_count) && gateScope.gate_count > 0;
-  return (!decision.requires_user_action || independentGate) && dueMonitorAllowed(decision, observation) &&
+  return monitorGateAllowsObservation(decision) && dueMonitorAllowed(decision, observation) &&
     monitor.due === true && candidateMatches(monitor, observation) &&
     (monitor.claimed_by == null || monitor.claimed_by === decision.agent_id);
 }
@@ -662,6 +668,10 @@ async function admission(request: MonitorRequest, historicalAdmission = false): 
   const due = auxiliary ?? dueMonitorAllowed(request.decision, request.observation);
   if (auxiliary === false) {
     throw new EffectRuntimeRequestError("auxiliary monitor-poll requires its own due Monitor target",
+      "monitor_poll_admission_rejected");
+  }
+  if (due && !monitorGateAllowsObservation(request.decision)) {
+    throw new EffectRuntimeRequestError("Monitor observation is blocked by current User gate dependencies",
       "monitor_poll_admission_rejected");
   }
   if (
@@ -940,9 +950,8 @@ function requestDigest(request: MonitorRequest): string {
   }));
 }
 
-function providerPlanFor(request: MonitorRequest, gateGuard = Boolean(
-  request.observation.settlement_todo_id && request.observation.settlement_todo_id !== request.observation.todo_id
-), legacyBatchVersion: 1 | null = null): MonitorProviderPlan {
+function providerPlanFor(request: MonitorRequest, gateGuard = true,
+  legacyBatchVersion: 1 | null = null): MonitorProviderPlan {
   const resultHash = request.observation.result_hash;
   if (!resultHash) {
     throw new EffectRuntimeRequestError("monitor todo writeback requires --result-hash");
@@ -977,12 +986,10 @@ function providerPlanFor(request: MonitorRequest, gateGuard = Boolean(
   };
 }
 
-/** Upgrade uncommitted historical auxiliary dispatch without rewriting its WAL.
+/** Upgrade uncommitted historical Monitor dispatch without rewriting its WAL.
  * Existing business receipts replay the same intended-effect identity first. */
-function providerDispatchPlan(request: MonitorRequest, plan: MonitorProviderPlan): MonitorProviderPlan {
-  return request.observation.settlement_todo_id &&
-    request.observation.settlement_todo_id !== request.observation.todo_id
-    ? {...plan, gate_scope_guard: true} : plan;
+function providerDispatchPlan(plan: MonitorProviderPlan): MonitorProviderPlan {
+  return {...plan, gate_scope_guard: true};
 }
 
 function providerPlanObject(value: unknown): MonitorProviderPlan {
@@ -2397,7 +2404,7 @@ async function evaluateQuotaMonitorPollRequest(
         { ok: true, dry_run: false, provider_required: true },
         "quota monitor-poll Todo provider is required",
         currentDigest,
-        providerDispatchPlan(request, plan),
+        providerDispatchPlan(plan),
       );
     }
 

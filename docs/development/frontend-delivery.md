@@ -6,6 +6,87 @@ validation only; resolving a source merge followed by a build produces one
 coherent HTML/JavaScript/CSS set. Do not concatenate competing HTML entrypoints or
 asset-retention manifests when resolving an older PR.
 
+For owner-authorized reads of existing runtimes, shared access lives in
+`loopx.control_plane.status.goal_source`. Native status and Explore owners retain
+their semantics; this Python IO provider adds neither decisions nor lifecycle
+authority. Connection (`local` or a configured `ssh` alias) is independent of
+environment (`host` or a container pinned by its full physical id), so a remote
+container uses the same reader. It never starts a container, tunnel or worker.
+
+The thin presentation adapter
+`python -m loopx.presentation.runtime_workspace --sources <manifest>` serves the
+packaged Goal workspace. The Agent prepares a private JSON array of sources:
+
+```json
+[
+  {
+    "id": "research", "label": "Research",
+    "connection": {"kind": "local"},
+    "environment": {"kind": "host"},
+    "scope": {"all_registered": true},
+    "registry": "/runtime/registry.json", "runtime_root": "/runtime/state",
+    "cli": "/runtime/bin/loopx", "python": "/runtime/bin/python",
+    "path": "/runtime/bin:/usr/bin:/bin"
+  }
+]
+```
+
+Use `connection: {"kind": "ssh", "host_alias": "configured-alias"}` for SSH;
+the alias must remain in the existing SSH catalog. Use
+`environment: {"kind": "container", "container_id": "<full 64-character id>"}`
+for a container. `scope: {"goal_id": "original-goal"}` restricts the source to
+one Goal; `all_registered` allows the native registered Goal list without copying
+its registry. Source paths are absolute in the selected environment. The reader
+requires this explicit connection/environment/scope model; there is no alternate
+manifest format or implicit scope conversion.
+
+Startup JSON returns working workspace URLs, `access_url` and a source namespace.
+The existing source selector offers the prepared readers. Keep these manifests
+and actual source captures private. Before staging or updating the PR,
+compare every source, validation script and visual-evidence path with the
+selected Todo's declared write scopes; place presentation evidence inside the
+existing authorized surface rather than assuming all docs/examples are covered.
+Build Chat first or supply
+`--assets-dir`; stop the adapter to remove its temporary readers.
+
+App, CLI and Agents can use the same loopback read API: `GET /api/goal-source`
+describes identity, scope and supported operations; `/goals`, `/status` and
+`/history` below it require `source_namespace`, with optional `goal_id` and history
+`cursor`. Status is wrapped as `status`; Goal lists and history use `items`.
+The CLI client shares this transport:
+
+```sh
+python -m loopx.control_plane.status.goal_source goals --endpoint <prepared-status-url>
+python -m loopx.control_plane.status.goal_source history --endpoint <prepared-status-url> --goal-id <original-goal>
+```
+
+Retain the returned pinned status URL/namespace on subsequent reads, including
+history cursors. A stale identity returns an error even if a new reader reuses
+the port. The App binds an initial relative `/status.json` entry to its prepared
+identity once, preserving ordinary local/SSH behavior outside these readers.
+Its existing status/history aliases use this same reader, not separate IO.
+
+These are read transports, not connected execution Goals or a second registry.
+Native status and complete validated Explore history stay scoped to the physical
+source, including identical Goal ids in different containers. Status has a
+two-second per-reader cache; history uses bounded server-local snapshots. A failed
+read or removed SSH alias invalidates saved status/pages. Unavailable sources
+fail visibly without replacement; refreshing retries.
+The main view keeps the selected source's failure and retry visible on narrow
+screens, with technical detail collapsed. Other sources' cached Goal contents
+are withheld on failure; retry targets the failed selection, not the last
+successful reader.
+Switching prepared readers clears source-local question and analysis selections;
+Back restores the previous reader's URL and its own selection.
+All mutation endpoints are denied. A read-only source does not imply an
+analysis pack, model execution, adoption or validated benefit; analysis remains
+unavailable until its existing owner binds the appropriate source pack.
+The adapter uses one local Python process with one HTTP listener/thread per
+prepared source. Cache misses invoke the source's native status CLI or bounded
+log read; no lower CPU, process or IO cost is implied. Local host/container
+readback and SSH command composition are separate validation boundaries; a
+composed command test does not prove a live remote host/container journey.
+
 ## Task-first delivery / 从用户任务开始
 
 Use the existing task/PR delivery brief, not a second checklist or approval form.

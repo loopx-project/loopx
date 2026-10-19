@@ -8,7 +8,8 @@ import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_au
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
-import {readCanonicalSnapshotFromStore, readCanonicalSnapshotPage, CANONICAL_SNAPSHOT_PAGE_BYTES} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
+import {readCanonicalSnapshotFromStore, readCanonicalSnapshotPage, readCanonicalSnapshot,
+  CANONICAL_SNAPSHOT_PAGE_BYTES, CANONICAL_SNAPSHOT_LOCAL_BYTES} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
 import {collectSnapshot, registerCanonicalSnapshotConformance, seedSnapshot, snapshotRequest, snapshotFixture} from "./canonical_snapshot_conformance.ts";
 
@@ -52,6 +53,9 @@ test("oversized single records fail explicitly instead of truncating or looping"
   await seedSnapshot(store, projection);
   const before = await store.loadAuthority();
   await assert.rejects(collectSnapshot(store), {code: "canonical_snapshot_record_too_large"});
+  const complete = await readCanonicalSnapshotFromStore(snapshotRequest(), store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+  assert.equal(complete.next, null);
+  assert.deepEqual(complete.todos, todos, "the private transport keeps the whole oversized inline record");
   assert.deepEqual(await store.loadAuthority(), before);
 });
 
@@ -76,6 +80,8 @@ test("a missing runtime provider read does not initialize a replacement authorit
   assert.equal(result.reason_code, undefined);
   assert.deepEqual(await readdir(root), before);
   assert.equal("todos" in result, false);
+  assert.deepEqual(await readCanonicalSnapshot(snapshotRequest({runtime_root: root})), result);
+  assert.deepEqual(await readdir(root), before);
 });
 
 test("ordering uses Unicode code points rather than JavaScript default UTF-16 sorting", async t => {
@@ -125,6 +131,8 @@ for (const kind of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" 
         const ownershipReason = variant === "duplicate_todo" ? /duplicate todo ids/
           : variant === "bad_digest" ? /digest mismatch/ : /lease references an unknown todo/;
         await assert.rejects(readCanonicalSnapshotFromStore(snapshotRequest(), store), collectionReason);
+        await assert.rejects(readCanonicalSnapshotFromStore(snapshotRequest(), store,
+          CANONICAL_SNAPSHOT_LOCAL_BYTES), collectionReason);
         await assert.rejects(readCoordinationOwnership(store, "goal-a", "2026-09-29T00:00:00Z"), ownershipReason);
         // Todo-only callers never acquired a lease-graph dependency. Keep that
         // acceptance boundary even while complete reads reuse the Todo index.

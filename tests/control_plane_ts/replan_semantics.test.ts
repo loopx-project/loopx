@@ -84,7 +84,11 @@ test("receipt-bound reentry keeps original canonical proof separate from the nex
     transition_candidates: []}).obligation as JsonObject;
   assert.equal(unchanged.selection_binding, "heartbeat_receipt");
   assert.equal(unchanged.resolution_mode, undefined);
-  assert.equal(projectReplanSemantics({...request, selected_obligation_id: null}).obligation, current);
+  // A receipt admitted without replan work cannot adopt a later frontier.
+  assert.equal(projectReplanSemantics({...request, selected_obligation_id: null}).obligation, null);
+  // A fresh, unguarded read still exposes that current frontier for admission.
+  assert.equal(projectReplanSemantics({...request, guard_scoped: false,
+    selected_obligation_id: null}).obligation, current);
 });
 
 test("verified original writeback projects only its outstanding debit even after frontier drift", () => {

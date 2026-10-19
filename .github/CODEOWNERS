@@ -3,7 +3,7 @@
 #
 # GitHub applies the LAST matching pattern, so this file runs from broad to
 # narrow: fallback, module map, subsystem routes, then governance paths.
-# @loopx-agent shares every route; narrower rules must retain that owner.
+# @loopx-agent and @songoow share every route; narrower rules retain both.
 # When a line lists several owners, approval from any one of them satisfies
 # code-owner review.
 #
@@ -12,74 +12,74 @@
 # contributors are routed through GOVERNANCE.md, not through this file.
 
 # Fallback for paths no module line claims, such as a new top-level directory.
-* @huangruiteng @loopx-agent
+* @huangruiteng @songoow @loopx-agent
 
 # --- Module map --------------------------------------------------------------
 # Every top-level module has an explicit line so ownership is visible per
 # module. A subsystem appointment narrows a path in the next section.
 
 # Control-plane kernel: authority, state, quota, todos, leases, TS transactions.
-/loopx/control_plane/ @huangruiteng @loopx-agent
-/loopx/semantics/ @huangruiteng @loopx-agent
-/loopx/*.py @huangruiteng @loopx-agent
+/loopx/control_plane/ @huangruiteng @songoow @loopx-agent
+/loopx/semantics/ @huangruiteng @songoow @loopx-agent
+/loopx/*.py @huangruiteng @songoow @loopx-agent
 
 # CLI surface.
-/loopx/cli_commands/ @huangruiteng @loopx-agent
+/loopx/cli_commands/ @huangruiteng @songoow @loopx-agent
 
 # Capabilities, extensions, domain packs and experiments.
-/loopx/capabilities/ @huangruiteng @loopx-agent
-/loopx/extensions/ @huangruiteng @loopx-agent
-/loopx/domain_packs/ @huangruiteng @loopx-agent
-/loopx/experiments/ @huangruiteng @loopx-agent
+/loopx/capabilities/ @huangruiteng @songoow @loopx-agent
+/loopx/extensions/ @huangruiteng @songoow @loopx-agent
+/loopx/domain_packs/ @huangruiteng @songoow @loopx-agent
+/loopx/experiments/ @huangruiteng @songoow @loopx-agent
 
 # Host goal-mode adapters (Claude, DSH, OpenCode, Pi, ...).
-/loopx/*_goal_mode/ @huangruiteng @loopx-agent
+/loopx/*_goal_mode/ @huangruiteng @songoow @loopx-agent
 
 # Presentation: Python projections, dashboard, site and desktop shell.
-/loopx/presentation/ @huangruiteng @loopx-agent
-/apps/presentation/ @huangruiteng @loopx-agent
-/apps/desktop/ @huangruiteng @loopx-agent
+/loopx/presentation/ @huangruiteng @songoow @loopx-agent
+/apps/presentation/ @huangruiteng @songoow @loopx-agent
+/apps/desktop/ @huangruiteng @songoow @loopx-agent
 
 # Canary metrics, benchmarks and regression corpora.
-/loopx/canary/ @huangruiteng @loopx-agent
-/benchmark/ @huangruiteng @loopx-agent
-/regression/ @huangruiteng @loopx-agent
+/loopx/canary/ @huangruiteng @songoow @loopx-agent
+/benchmark/ @huangruiteng @songoow @loopx-agent
+/regression/ @huangruiteng @songoow @loopx-agent
 
 # Optional provider packages.
-/packages/ @huangruiteng @loopx-agent
+/packages/ @huangruiteng @songoow @loopx-agent
 
 # Agent skills, man pages, docs, examples, tests, scripts and demos.
-/skills/ @huangruiteng @loopx-agent
-/man/ @huangruiteng @loopx-agent
-/docs/ @huangruiteng @loopx-agent
-/examples/ @huangruiteng @loopx-agent
-/tests/ @huangruiteng @loopx-agent
-/scripts/ @huangruiteng @loopx-agent
-/demo/ @huangruiteng @loopx-agent
-/deprecate/ @huangruiteng @loopx-agent
+/skills/ @huangruiteng @songoow @loopx-agent
+/man/ @huangruiteng @songoow @loopx-agent
+/docs/ @huangruiteng @songoow @loopx-agent
+/examples/ @huangruiteng @songoow @loopx-agent
+/tests/ @huangruiteng @songoow @loopx-agent
+/scripts/ @huangruiteng @songoow @loopx-agent
+/demo/ @huangruiteng @songoow @loopx-agent
+/deprecate/ @huangruiteng @songoow @loopx-agent
 
 # --- Subsystem routes --------------------------------------------------------
 
 # Frontend source and chat bundle delivery (built assets are not tracked).
-/apps/presentation/dashboard/ @huangruiteng @maxliux5 @loopx-agent
-/loopx/presentation/chat_bundle.py @huangruiteng @maxliux5 @loopx-agent
-/scripts/chat_bundle* @huangruiteng @maxliux5 @loopx-agent
+/apps/presentation/dashboard/ @huangruiteng @maxliux5 @songoow @loopx-agent
+/loopx/presentation/chat_bundle.py @huangruiteng @maxliux5 @songoow @loopx-agent
+/scripts/chat_bundle* @huangruiteng @maxliux5 @songoow @loopx-agent
 
 # Lark integration (subsystem maintainer: @steven-kid).
-/loopx/extensions/lark/ @huangruiteng @steven-kid @loopx-agent
-/loopx/cli_commands/lark_*.py @huangruiteng @steven-kid @loopx-agent
-/docs/integrations/lark-*.md @huangruiteng @steven-kid @loopx-agent
-/docs/reference/protocols/lark-*.md @huangruiteng @steven-kid @loopx-agent
-/examples/lark-* @huangruiteng @steven-kid @loopx-agent
-/examples/lark_extension_test_support.py @huangruiteng @steven-kid @loopx-agent
-/examples/control_plane/lark-* @huangruiteng @steven-kid @loopx-agent
-/tests/extensions/test_lark_*.py @huangruiteng @steven-kid @loopx-agent
+/loopx/extensions/lark/ @huangruiteng @steven-kid @songoow @loopx-agent
+/loopx/cli_commands/lark_*.py @huangruiteng @steven-kid @songoow @loopx-agent
+/docs/integrations/lark-*.md @huangruiteng @steven-kid @songoow @loopx-agent
+/docs/reference/protocols/lark-*.md @huangruiteng @steven-kid @songoow @loopx-agent
+/examples/lark-* @huangruiteng @steven-kid @songoow @loopx-agent
+/examples/lark_extension_test_support.py @huangruiteng @steven-kid @songoow @loopx-agent
+/examples/control_plane/lark-* @huangruiteng @steven-kid @songoow @loopx-agent
+/tests/extensions/test_lark_*.py @huangruiteng @steven-kid @songoow @loopx-agent
 
 # --- Governance, CI and release policy (must stay last) ---------------------
-/.github/ @huangruiteng @loopx-agent
-/scripts/ci/ @huangruiteng @loopx-agent
-/AGENTS.md @huangruiteng @loopx-agent
-/CONTRIBUTING.md @huangruiteng @loopx-agent
-/docs/product/release-*.md @huangruiteng @loopx-agent
-/docs/development/contributor-tasks.md @huangruiteng @loopx-agent
-/docs/project/technical-directions*.md @huangruiteng @loopx-agent
+/.github/ @huangruiteng @songoow @loopx-agent
+/scripts/ci/ @huangruiteng @songoow @loopx-agent
+/AGENTS.md @huangruiteng @songoow @loopx-agent
+/CONTRIBUTING.md @huangruiteng @songoow @loopx-agent
+/docs/product/release-*.md @huangruiteng @songoow @loopx-agent
+/docs/development/contributor-tasks.md @huangruiteng @songoow @loopx-agent
+/docs/project/technical-directions*.md @huangruiteng @songoow @loopx-agent

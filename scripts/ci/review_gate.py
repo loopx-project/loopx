@@ -17,6 +17,7 @@ JOB_OUTPUT = {
 }
 CHECK_OUTPUT = {
     "kernel-static-checks": "backend_tests",
+    "kernel-contracts": "backend_tests",
     "typescript-coverage": "backend_tests",
     "dashboard-acceptance": "core_tests",
     "chat-bundle-browser": "core_tests",

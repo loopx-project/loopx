@@ -22,8 +22,8 @@ repository-wide maintainer authority.
 ## Maintainer And Review Roster
 
 This is the public list of everyone who can satisfy a review requirement on
-`main`, and the paths they answer for. It is a snapshot audited on
-**2026-10-04**; the matching routes live in [`CODEOWNERS`](CODEOWNERS) and a
+`main`, and the paths they answer for. It records appointments through
+**2026-10-19**; the matching routes live in [`CODEOWNERS`](CODEOWNERS) and a
 change to either file changes both in one pull request.
 
 | Account | Role | Scope | `CODEOWNERS` route | Since |
@@ -32,10 +32,12 @@ change to either file changes both in one pull request.
 | [`@steven-kid`](https://github.com/steven-kid) | Subsystem maintainer | [Lark integration](#lark-integration) | Lark extension, its CLI delegates, Lark docs and focused tests | 2026-08-16 ([#3236](https://github.com/loopx-project/loopx/pull/3236)) |
 | [`@maxliux5`](https://github.com/maxliux5) | Code owner | Frontend source under `apps/presentation/dashboard/` and chat bundle delivery | Dashboard source, `loopx/presentation/chat_bundle.py`, `scripts/chat_bundle*` | 2026-09-08 ([#4071](https://github.com/loopx-project/loopx/pull/4071)) |
 | [`@loopx-agent`](https://github.com/loopx-agent) | Automated technical code owner | Whole repository; evidence-backed technical review, including governance, CI and release changes | Every route, including the `*` fallback and later subsystem overrides | 2026-10-04 |
+| [`@songoow`](https://github.com/songoow) | Technical code owner | Whole repository; technical review across subsystems, including governance, CI and release-policy changes | Every route, including the `*` fallback and later subsystem overrides | 2026-10-19 |
 
-`@loopx-agent` shares code ownership on every path with the existing owners.
-This includes paths introduced later through the `*` fallback; every narrower
-route retains the account so GitHub's last-match rule cannot erase it.
+`@loopx-agent` and `@songoow` share code ownership on every path with the
+existing owners. This includes paths introduced later through the `*` fallback;
+every narrower route retains both accounts so GitHub's last-match rule cannot
+erase either one.
 Subsystem maintainers and the lead maintainer retain their responsibilities.
 Code ownership qualifies a technical approval for the protected-branch review
 requirement; it does not grant release, appointment, security-handling or
@@ -54,6 +56,21 @@ They count as one account's reviews; multiple agent sessions do not create
 independent GitHub reviewers. Author-owned pull requests still need another
 eligible reviewer because GitHub does not accept self-approval.
 
+The lead maintainer explicitly expands `@songoow`'s existing reliability
+review responsibility to repository-wide technical code ownership. The
+[earlier accepted diagnostics scope](https://github.com/loopx-project/loopx/issues/4069#issuecomment-5595593586)
+is historical evidence of that responsibility, not acceptance of a broader
+availability commitment. Current repository access is Maintain (including
+Write). Recent substantive cross-author reviews include complete-snapshot
+transport in [#6828](https://github.com/loopx-project/loopx/pull/6828#pullrequestreview-5564036586),
+workspace navigation in [#6834](https://github.com/loopx-project/loopx/pull/6834#pullrequestreview-5564314366),
+and desktop update lifecycle in [#6835](https://github.com/loopx-project/loopx/pull/6835#pullrequestreview-5564422318).
+Each names its reviewed head, invariants and independently performed validation;
+the two change requests also preserve concrete unresolved findings. These
+records support broader technical routing without treating review volume or
+approval as proof of maintainer authority. Best-effort availability and all
+separate release, appointment, security-handling and bypass boundaries remain.
+
 An `APPROVED` review and GitHub's aggregate review decision are separate facts.
 Required code-owner approval uses `CODEOWNERS` on the pull request's base
 branch. An account's repository admin permission alone does not satisfy that
@@ -63,6 +80,9 @@ do not report it as approved solely from the submitted review. See
 [GitHub's code-owner rules](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
 
 ### Code Owner Eligibility
+
+The `@songoow` scope expansion above is an explicit lead-maintainer appointment;
+the general eligibility process below otherwise remains unchanged.
 
 GitHub only honours code owners with repository write access, and a code-owner
 approval satisfies the code-owner review requirement on its paths. A route is
@@ -285,7 +305,6 @@ says what still separates each contact from a `CODEOWNERS` route under the
 | TypeScript transaction migration | [`@hhyykk`](https://github.com/hhyykk) | Proposed paired review of complete transaction cutovers and Python/TypeScript parity; scope confirmation and organization + Write invitation acceptance pending. | Needs scope and access acceptance, and three qualifying in-scope reviews. |
 | Task leases and scheduler boundaries | [`@yuefengw`](https://github.com/yuefengw) | Proposed paired review of lease lifecycle and boundary regressions; scope confirmation pending. | Needs scope acceptance, write access and in-scope reviews. |
 | DSH integration | [`@wujc12`](https://github.com/wujc12) | Designated by the lead maintainer 2026-09-07 as first-review contact for the DSH plugin, installation and host-integration regressions; no acceptance recorded. Shared replan and lifecycle contracts stay separately reviewed. | Has write access; needs scope acceptance and in-scope reviews. |
-| Reliability diagnostics | [`@songoow`](https://github.com/songoow) | Accepted 2026-09-09: observer-envelope and ledger integrity, receipt/projection consistency, readback and time-evaluation correctness. Privacy and first-write data boundaries stay separately reviewed. | Has write access and an accepted scope; needs three qualifying in-scope cross-author reviews. |
 
 Start by linking a real cross-author PR, not by creating a quota of new
 implementation work. A review should state the exact head, the governing
@@ -338,9 +357,9 @@ policy and has no required reviewers. No publication workflow or trusted
 publisher identity is changed by this access rollout.
 
 CODEOWNERS routes review, not directory-level write permissions. Unassigned
-paths fall back to the lead maintainer; workflow, governance and release-policy
-changes remain lead-maintainer-owned. Do not share owner credentials with
-contributors or give automated reviewers broader credentials than necessary.
+paths fall back to the repository-wide technical owners; workflow, governance
+and release-policy paths retain the lead maintainer alongside those owners.
+Do not share owner credentials with contributors or give automated reviewers broader credentials than necessary.
 
 ## Project Roles
 

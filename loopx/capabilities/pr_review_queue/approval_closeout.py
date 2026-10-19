@@ -41,8 +41,8 @@ def plan_approval_closeout(request: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def select_review_conclusion(request: dict[str, Any]) -> int:
-    """Transport qualified bodies to the shared typed history owner."""
+def select_review_history(request: dict[str, Any]) -> dict[str, Any]:
+    """Transport bodies and provider provenance to the shared history owner."""
     try:
         result = effect_runtime_result("capabilities.pr_review.conclusion.select", request)
     except EffectRuntimeRejected as error:
@@ -50,11 +50,11 @@ def select_review_conclusion(request: dict[str, Any]) -> int:
     index = result.get("index") if isinstance(result, dict) else None
     if type(index) is not int or not 0 <= index < len(request["reviews"]):
         raise TypeError("typed review conclusion index mismatch")
-    return index
+    return result
 
 
 def read_github_approval_closeout(*, repository: str, exact_head: str) -> dict[str, Any]:
-    from .github_source import _fetch_complete_pr_files, run_gh_json
+    from .github_source import _fetch_complete_pr_files, fetch_complete_pr_reviews, run_gh_json
     from ...pr_review import (
         BEHAVIORAL_POLICY_AREAS, CODE_AREAS, _files, _review_conclusion,
         resolve_current_github_login,
@@ -83,13 +83,8 @@ def read_github_approval_closeout(*, repository: str, exact_head: str) -> dict[s
     if any(not isinstance(row, dict) or not isinstance(row.get("path"), str)
            or not row["path"].strip() for row in pr["files"]):
         raise ValueError("changed-file readback is malformed")
-    pages = run_gh_json(["api", "--paginate", "--slurp",
-                         f"repos/{repository}/pulls/{number}/reviews?per_page=100"])
-    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
-        raise ValueError("paginated review readback is incomplete")
-    reviews = [row for page in pages for row in page]
-    if any(not isinstance(row, dict) for row in reviews):
-        raise ValueError("review readback is malformed")
+    reviews = fetch_complete_pr_reviews(repository=repository, number=str(number),
+                                        cwd=None, run_gh_json=run_gh_json)
     # Validate bodies here; the typed owner selects the effective opinion from
     # the complete history. Authentication permits the read, not reviewer scope.
     behavior_bearing = bool({row["area"] for row in _files(pr)} & (CODE_AREAS | BEHAVIORAL_POLICY_AREAS))

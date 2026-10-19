@@ -222,6 +222,63 @@ def _fetch_complete_pr_files(
         return None
 
 
+def fetch_complete_pr_reviews(*, repository: str, number: str, cwd: Path | None,
+                              run_gh_json: GitHubJsonRunner) -> list[dict[str, Any]]:
+    """One complete provider history for queue coverage and approval closeout."""
+    pages = run_gh_json(["api", "--paginate", "--slurp",
+                        f"repos/{repository}/pulls/{number}/reviews?per_page=100"],
+                       **({"cwd": cwd} if cwd is not None else {}))
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        raise ValueError("paginated review readback is incomplete")
+    reviews = [row for page in pages for row in page]
+    if any(not isinstance(row, dict) for row in reviews):
+        raise ValueError("review readback is malformed")
+    return reviews
+
+
+def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
+                              repository: str, number: str, cwd: Path | None,
+                              run_gh_json: GitHubJsonRunner) -> bool:
+    author = row.get("author")
+    author = author.get("login") if isinstance(author, dict) else None
+    # This only avoids unnecessary provider reads. Eligibility belongs to TS;
+    # no association, state or actor-type policy is duplicated here.
+    if not author or not any(isinstance(review, dict)
+            and isinstance(review.get("author"), dict) and review["author"].get("login")
+            and review["author"]["login"].casefold() != author.casefold()
+            for review in details["reviews"]):
+        return True
+    try:
+        reviews = fetch_complete_pr_reviews(repository=repository, number=number,
+                                            cwd=cwd, run_gh_json=run_gh_json)
+        normalized = []
+        for review in reviews:
+            user = review.get("user") or {}
+            if (not isinstance(user, dict) or not isinstance(user.get("login"), str)
+                    or type(review.get("id")) is not int or any(
+                        not isinstance(review.get(key), str)
+                        for key in ("state", "commit_id", "html_url"))):
+                raise ValueError("review provenance readback is malformed")
+            normalized.append({"id": review.get("id"), "url": review.get("html_url"),
+                "author": {"login": user.get("login"), "is_bot": {"User": False, "Bot": True}.get(user.get("type"))},
+                "authorAssociation": review.get("author_association"), "state": review.get("state"),
+                "submittedAt": review.get("submitted_at"), "commit": {"oid": review.get("commit_id")},
+                "body": review.get("body")})
+        after = run_gh_json(["pr", "view", number, "--json", "headRefOid,baseRefOid",
+                             "--repo", repository], cwd=cwd)
+        if not isinstance(after, dict) or any(after.get(key) != row.get(key)
+                for key in ("headRefOid", "baseRefOid")):
+            return False
+    except Exception:
+        # Unknown coverage is not a reason to skip work. Retain the ordinary
+        # versioned detail read and its existing body/conclusion qualification.
+        row["reviews_complete"] = False
+        return True
+    details["reviews"] = normalized
+    row["reviews_complete"] = True
+    return True
+
+
 def attach_pr_review_details(
     row: dict[str, Any],
     *,
@@ -259,6 +316,8 @@ def attach_pr_review_details(
         key not in details for key in detail_fields
     ):
         return False
+    if not isinstance(details["reviews"], list):
+        return False
     # Query the version alongside computed merge fields: an unversioned
     # GitHub detail query can return UNKNOWN while readiness has known state.
     # Never combine details from a different head/base with the list snapshot.
@@ -282,6 +341,9 @@ def attach_pr_review_details(
         if detail_files is None:
             return False
         details["files"] = detail_files
+    if not _attach_review_provenance(row, details, repository=repository, number=number,
+                                    cwd=cwd, run_gh_json=run_gh_json):
+        return False
     for key in detail_fields:
         row[key] = details[key]
     return True

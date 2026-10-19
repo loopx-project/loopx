@@ -296,6 +296,23 @@ thresholds, automatic interventions or new experiment authorization.
 
 ## Source, access and recovery
 
+Research and experiments use the existing Goal workspace. Within one status
+source, the registry's declared `parent_goal_id` organizes a recursive sidebar:
+children start folded and the selected Goal's ancestors reopen on reload or
+browser Back. Goal ordering moves siblings only; it never changes parentage.
+Orphans and cyclic ancestry remain visible with an unresolved-parent indicator.
+
+Selecting a parent exposes **Only this Goal and its children**. It opens the same
+frontend with a shareable `rootGoalId` display scope; **All Goals** returns to the
+current source's full workspace. A second frontend window can open that URL
+without copying, moving or rebinding live Goals. An unavailable root shows a
+retryable gap, without substituting unrelated Goals. The grouping conveys no
+Agent assignment, dependency, access, budget or lifecycle inheritance; each
+Goal retains its own execution state and acceptance. Child counts do not settle
+the parent's outcome. This same-source view does not itself connect experiment
+instances held in other registries or runtimes; their source-qualified read
+bridge remains a separate integration boundary.
+
 An inline evidence detail needs the producing owner, source identity/revision,
 artifact version, observation/check time, freshness/coverage, explicit relationship
 basis and separate check/adoption observations. Inventory existing producers before

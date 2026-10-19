@@ -423,7 +423,7 @@ def _read_latest_holder_record(path: Path) -> tuple[dict[str, object], bool]:
             text = holder_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             continue
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             unreadable = True
             continue
         try:

@@ -111,7 +111,10 @@ def observe_quota_cycle(*, registry_path: Path, runtime_root: Path, goal_id: str
                            "goal": goal_id, "agent": agent_id, "turn": turn_id,
                            "phase": phase, "at": at, "host": host,
                            "path": str(usage_ping.state_path()), "generation": state["generation"]},
-                          command=[sys.executable, "-m", "loopx.usage_goal"])
+                          # Detachment uses the OS temp directory as cwd. Its
+                          # unrelated loopx cache/package must not shadow this
+                          # interpreter's installed observer, including editable installs.
+                          command=[sys.executable, "-P", "-m", "loopx.usage_goal"])
     except Exception:
         pass
 

@@ -47,10 +47,11 @@ export function StatusSourceSwitcher({
   const [label, setLabel] = useState("");
   const [localPort, setLocalPort] = useState("8876");
   const [statusUrl, setStatusUrl] = useState("");
+  const runtimeSources = sources.length > 0 && sources.every((source) => source.kind === "runtime");
   const quickAddPrefix = "configured:";
   const sourceOptions = [
     ...sources.map((source) => ({ label: source.kind === "local" ? t("source.local") : source.label, value: source.id })),
-    ...configuredHosts
+    ...(runtimeSources ? [] : configuredHosts)
       .filter((host) => !sources.some((source) => source.label === host.alias))
       .map((host) => ({
         group: t("source.configuredGroup", { count: configuredHosts.length }),
@@ -66,8 +67,9 @@ export function StatusSourceSwitcher({
   }, [configuredHosts, hostAlias, localPort, t]);
 
   useEffect(() => {
+    if (runtimeSources) return;
     void loadConfiguredHosts();
-  }, []);
+  }, [runtimeSources]);
 
   async function loadConfiguredHosts() {
     setConfiguredHostsLoading(true);
@@ -171,7 +173,7 @@ export function StatusSourceSwitcher({
     <section aria-label={t("source.controlPlane")} className="personal-status-source">
       <header>
         <span>Control plane</span>
-        <button aria-label={t("source.addSsh")} onClick={openForm} title={t("source.add")} type="button"><Plus size={14} /></button>
+        {!runtimeSources ? <button aria-label={t("source.addSsh")} onClick={openForm} title={t("source.add")} type="button"><Plus size={14} /></button> : null}
       </header>
       <WorkspaceSelect
         ariaLabel={t("source.select")}
@@ -189,12 +191,12 @@ export function StatusSourceSwitcher({
       />
       <div className="personal-status-source-meta">
         <span className={`is-${connectionState}`}><i />{connectionState === "loading" ? t("source.connecting") : connectionState === "error" ? t("source.notAvailable") : connectionState === "degraded" ? t("source.executionUnavailable") : t("source.connected")}</span>
-        <small>{activeSource.readOnly ? t("source.readOnly") : t("source.localInteractive")}</small>
+        <small>{activeSource.kind === "runtime" ? t("source.runtimeReadOnly") : activeSource.readOnly ? t("source.readOnly") : t("source.localInteractive")}</small>
         {activeSource.kind === "ssh_tunnel" ? (
           <button aria-label={t("source.remove", { source: activeSource.label })} onClick={() => onRemove(activeSource.id)} title={t("source.removeCurrent")} type="button"><Trash2 size={12} /></button>
         ) : null}
       </div>
-      {errorMessage ? <p className="personal-status-source-error" role="alert">{errorMessage}</p> : null}
+      {errorMessage && !runtimeSources ? <p className="personal-status-source-error" role="alert">{errorMessage}</p> : null}
       {adding ? (
         <div className="personal-status-source-form">
           <header><strong>{t("source.addSsh")}</strong><button aria-label={t("source.closeForm")} onClick={closeForm} type="button"><X size={13} /></button></header>

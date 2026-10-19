@@ -1071,7 +1071,7 @@ def main() -> int:
         "review_sequence_membership": "review_action_kind_non_null_only",
         "no_action_inventory_location": "pull_requests",
         "generic_rereview_terms_force_fresh_audit": False,
-        "no_action_behavior": "compact_exact_head_conclusion_readback_only",
+        "no_action_behavior": "compact_exact_head_review_or_lifecycle_readback_only",
         "no_action_execution_artifacts": "plan_and_template_null_commands_empty",
         "force_fresh_audit_requires": (
             "An explicit request to rerun evidence despite the unchanged/no-action "

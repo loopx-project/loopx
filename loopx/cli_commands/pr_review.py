@@ -185,7 +185,7 @@ def register_pr_review_command(
         metavar="NUMBER@HEAD_OID",
         help=(
             "Explicitly request a fresh evidence audit for one unchanged exact head "
-            "that already has a valid conclusion. Repeatable."
+            "that already has a valid conclusion or independent review. Repeatable."
         ),
     )
     parser.add_argument(

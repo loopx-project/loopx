@@ -6,6 +6,7 @@ from ..control_plane.todos.list_readback import list_goal_todos
 
 from ..capabilities.explore.result_log import (
     build_explore_result_projection,
+    explore_history_rows,
     explore_result_log_path,
     load_explore_result_events_strict,
 )
@@ -49,18 +50,9 @@ def _history_rows(runtime_root, goal_id):
     In particular, do not expose arbitrary observation payloads or materialize
     parent links as scientific supporting evidence.
     """
-    fields = (
-        "schema_version", "event_id", "goal_id", "event_kind", "result_id",
-        "recorded_at", "title", "summary", "status", "node_kind",
-        "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
-        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence",
-    )
-    return [
-        {key: event[key] for key in fields if key in event}
-        for event in load_explore_result_events_strict(
-            explore_result_log_path(runtime_root, goal_id), goal_id=goal_id,
-        )
-    ]
+    return explore_history_rows(load_explore_result_events_strict(
+        explore_result_log_path(runtime_root, goal_id), goal_id=goal_id,
+    ))
 
 
 class ExploreResultsRequestMixin:

@@ -200,6 +200,48 @@ images, authenticated scope and broad reliability are separate qualifications.
 [Host-provider reuse checkpoint](../../../docs/architecture/rfcs/ledger/external-evidence-research-capability-v0/2026-10-11-host-provider-reuse.md)
 records a bounded real method, public-scope connector and failed-reader journey.
 
+## Ego/X discovery / Ego/X 发现
+
+Use X discovery when the question needs creator demos, current discussions or
+original announcements, or the user requests that platform. It is a retrieval
+route, not a mandatory source for every research question. Prefer official docs
+or source code for technical verification. The host `external-research` method
+guides that choice; the contract does not automatically run a browser or search
+X merely because a research plan exists.
+
+需要作者演示、近期讨论、原始公告或用户指定 X 时，使用 X 发现路径；不是每个问题
+都必须搜索 X。技术事实继续回到官方文档或源码核验。宿主 `external-research` 方法
+指导选路；研究计划本身不会自动启动浏览器或搜索。
+
+Reuse the optional [Ego source reader's `search_x`](../../../docs/integrations/ego-source-reader.md#x-search-and-original-post-discovery)
+when that tool is available. Otherwise use the installed `ego-browser` CLI under
+its current skill: open the platform search UI, wait for actual results, retain
+original post links and inspect relevant media. Web-search snippets and a search
+URL alone are not evidence that an Ego/X search ran. Preserve the existing
+TaskSpace and account boundary; do not copy cookies, install a browser, change
+profiles or take over user control to complete a search.
+
+优先复用已启用 Ego reader 的 `search_x`；没有该工具时，按当前 Ego skill 使用已安装
+CLI 打开平台搜索、等待真实结果、保留原帖链接并检查相关媒体。网页搜索摘要或仅有
+搜索 URL 不证明已通过 Ego 搜索 X。沿用现有 TaskSpace 和账户边界，不复制 cookie、
+安装浏览器、更换 profile 或接管用户控制。
+
+After a bounded real readiness probe, represent this observed host tool as a
+`connector` in the existing inventory; its provider id is caller-declared, not a
+new built-in registration. Use `plan` before the selected research execution,
+then `receipt`, explicit `admit`/reject and `readback` as above. Query excerpts
+are discovery evidence; original-post and video reads have their own scopes.
+An empty platform state is different from a loading shell, login wall or failed
+read. Keep raw result pages and account context provider-private. No new Goal,
+evidence ledger, automatic admission, account mutation or background search is
+created by this route.
+
+真实有界 probe 后才把宿主工具作为既有 inventory 的 `connector`；provider id 由调用者
+声明，不新增 built-in 注册。正式执行前生成 plan，随后校验 receipt、明确采纳/拒绝并
+读回。搜索摘录、原帖读取和视频观察分别记录范围；空结果、加载中、登录墙和失败不能
+混为一谈。原始结果与账户上下文留私有侧，不创建新 Goal、平行账本、自动采纳、账户
+写入或后台搜索。
+
 ## Public GitHub method / 公开 GitHub 方法
 
 The bundled `method:public-github` provider performs anonymous, bounded HTTPS

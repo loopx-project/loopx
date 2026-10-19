@@ -115,6 +115,7 @@ def test_cli_reports_the_gap_without_rewriting_an_immutable_result(exchange):
 def test_original_app_conversation_retains_readback_and_recovers_over_real_http(tmp_path, damaged_lane):
     from loopx.capabilities.manager_context import deliver
     from loopx.capabilities.manager_context.roundtrip import drain
+    from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.chat_store import ChatSessionStore
 
@@ -144,6 +145,8 @@ def test_original_app_conversation_retains_readback_and_recovers_over_real_http(
     path.write_text("{damaged")
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_root, server.registry_path = store, tmp_path, registry
+    server.runtime_controller = ChatRuntimeController(
+        store=store, codex_bin="missing-codex", registry_path=registry)
     server.verbose = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

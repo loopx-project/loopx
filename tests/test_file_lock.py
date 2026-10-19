@@ -599,3 +599,70 @@ def test_windows_holder_reader_prefers_the_latest_acquisition(
     state, record = file_lock.lock_holder_liveness(target)
     assert state == file_lock.LOCK_HOLDER_LIVE
     assert record["acquired_at"] == "2026-01-01T00:00:02Z"
+
+
+@pytest.mark.parametrize("payload", [b"\xff\xfe", b'{"pid": "\xe2\x82'])
+def test_holder_liveness_treats_invalid_utf8_as_unreadable(
+    tmp_path: Path, payload: bytes
+) -> None:
+    target = tmp_path / "state.json"
+    holder = lock_holder_path(target)
+    holder.write_bytes(payload)
+
+    assert file_lock.lock_holder_liveness(target) == (
+        file_lock.LOCK_HOLDER_UNREADABLE,
+        {},
+    )
+    assert holder.read_bytes() == payload
+
+
+@pytest.mark.parametrize("corrupt_current", [True, False])
+def test_windows_holder_reader_keeps_valid_record_when_other_name_is_invalid_utf8(
+    tmp_path: Path, windows_holder_layout: None, corrupt_current: bool
+) -> None:
+    target = tmp_path / "state.json"
+    current, legacy = file_lock.lock_holder_paths(target)
+    corrupt, valid = (current, legacy) if corrupt_current else (legacy, current)
+    corrupt.write_bytes(b"\xff\xfe")
+    expected = _holder_fields(acquired_at="2026-01-01T00:00:00Z")
+    valid.write_text(json.dumps(expected), encoding="utf-8")
+
+    assert file_lock.lock_holder_liveness(target) == (
+        file_lock.LOCK_HOLDER_LIVE,
+        expected,
+    )
+    assert corrupt.read_bytes() == b"\xff\xfe"
+
+
+def test_invalid_utf8_holder_preserves_timeout_incident_and_lock_recovery(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "state.json"
+    target.write_text("{}", encoding="utf-8")
+    process, _, _ = _start_stalled_holder(target)
+    holder = lock_holder_path(target)
+    try:
+        # Only corrupt disposable advisory metadata, never a live user lock.
+        holder.write_bytes(b"\xff\xfe")
+        with pytest.raises(LockAcquireTimeoutError) as raised:
+            with exclusive_file_lock(target, timeout_seconds=0):
+                pytest.fail("corrupt metadata bypassed the held kernel lock")
+
+        payload = raised.value.to_payload()
+        assert payload["error_code"] == LOCK_ACQUIRE_TIMEOUT_ERROR_CODE
+        assert payload["incident_recorded"] is True
+        assert payload["lock_timeout"]["holder"] == {}
+        assert payload["operator_action"]["action"] == "inspect_lock_holder"
+        incidents = lock_incident_path(target).read_text(encoding="utf-8").splitlines()
+        assert len(incidents) == 1
+        assert json.loads(incidents[0]) == payload["lock_timeout"]
+        assert holder.read_bytes() == b"\xff\xfe"
+        assert process.poll() is None
+        assert target.read_text(encoding="utf-8") == "{}"
+    finally:
+        _stop(process)
+
+    # Once the real holder exits, normal acquisition replaces corrupt metadata.
+    with exclusive_file_lock(target, timeout_seconds=0):
+        assert file_lock.lock_holder_liveness(target)[0] == file_lock.LOCK_HOLDER_LIVE
+    assert file_lock.lock_holder_liveness(target)[0] == file_lock.LOCK_HOLDER_RELEASED

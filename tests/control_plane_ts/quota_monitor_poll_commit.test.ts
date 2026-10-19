@@ -442,6 +442,7 @@ test("Todo commit journals provider intent before writeback and resumes exactly 
   assert.equal(preflight.status, "provider_required");
   assert.deepEqual(preflight.provider_plan, {
     schema_version: "monitor_poll_todo_provider_plan_v0",
+    gate_scope_guard: true,
     monitor_effect_id: "quota-monitor-poll:todo-turn",
     goal_id: goalId,
     generated_at: "2026-08-27T12:00:00+08:00",

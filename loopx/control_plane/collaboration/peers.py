@@ -10,6 +10,7 @@ import hashlib
 import os
 import re
 import stat
+from contextlib import nullcontext
 from pathlib import Path
 
 from .inbox import (
@@ -33,6 +34,7 @@ from .goal_instance_scope import (
     goal_accepts_collaboration,
 )
 from ...agent_registry import registered_agent_ids_for_goal
+from ...file_lock import exclusive_file_lock
 from ...thread_agent_binding import resolve_thread_agent_binding
 from ..projects.registry_codec import load_project_registry
 from ..runtime.file_paths import windows_extended_path
@@ -90,7 +92,12 @@ def request(
     if source_agent_id == target_agent_id:
         raise ValueError("a peer request requires a different receiving Agent")
     operation_id = require_operation_id(operation_id)
-    with collaboration_goal_scope(
+    # An inherited source grant must remain current until its request is stored.
+    # Take the policy fence before Goal/request locks, as the source writer does.
+    with (
+        exclusive_file_lock((_root(root) / "policy.json").with_suffix(".lock"))
+        if parent_request_id else nullcontext()
+    ), collaboration_goal_scope(
         registry,
         goal_id=goal_id,
         agents=(source_agent_id, target_agent_id),
@@ -607,6 +614,7 @@ def read_inbox(
     workspace=None,
     cursor=None,
     operation_cursor=None,
+    request_id=None,
     caller_goal_ref=None,
 ):
     from .inbox import pending
@@ -624,14 +632,18 @@ def read_inbox(
             agent_id,
             cursor=cursor,
             operation_cursor=operation_cursor,
+            request_id=request_id,
             scope=goal_scope,
         )
-        peer_returns, return_deliveries = _collect_returns(
-            root,
-            goal_id,
-            agent_id,
-            scope=goal_scope,
-        )
+        if request_id is None:
+            peer_returns, return_deliveries = _collect_returns(
+                root,
+                goal_id,
+                agent_id,
+                scope=goal_scope,
+            )
+        else:
+            peer_returns, return_deliveries = {"items": []}, []
         if peer_returns["items"]:
             result["peer_returns"] = peer_returns
         else:
@@ -673,8 +685,9 @@ def read_inbox(
             _record_return_reads(root, return_deliveries, scope=goal_scope)
     from .turn_context_observation import read_delegation_turn_context
 
-    result["unfinished_delegations"] = read_delegation_turn_context(
-        root, registry, goal_id, agent_id)["unfinished_delegations"]
+    if request_id is None:
+        result["unfinished_delegations"] = read_delegation_turn_context(
+            root, registry, goal_id, agent_id)["unfinished_delegations"]
     result["followthrough"] = (
         "Use each request's receiver_followthrough to reconcile it with actual Core work. "
         "Record an explicit assessment even when continuing other work; a read is not a decision. "
@@ -688,6 +701,12 @@ def read_inbox(
         "Finish the original request with return_result, including evidence and remaining gaps. "
         "Adoption, file hashes and returned opinions are not independent acceptance or Todo completion."
     )
+    if request_id is not None:
+        result["followthrough"] = (
+            "Inspect this exact request's current source, revisions and receipts. "
+            "A historical read does not reopen concluded work or deliver other peer results. "
+            "For unfinished work, follow its existing receiver_followthrough and current authority."
+        )
     return result
 
 

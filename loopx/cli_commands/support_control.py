@@ -93,6 +93,7 @@ SUPPORT_CONTROL_COMMANDS = {
     "promotion-readiness",
     "upgrade-plan",
     "update",
+    "upgrade",
     "registry",
     "registry-boundary",
     "serve-status",

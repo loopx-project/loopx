@@ -21,9 +21,61 @@ test("native facts preserve first quality, actual retention and submission order
   assert.equal(native.initial?.value,2); assert.equal(native.best_valid?.value,1);
   assert.equal(native.retained?.result_id,"result-3"); assert.equal(native.final_valid?.result_id,"result-3");
   assert.equal(native.sample_count,3); assert.equal(native.valid_count,3);
+  assert.equal(Object.hasOwn(native,"retained_improvement"),false,"An absent comparison preserves the old response shape");
   assert.equal(prepareTrajectoryAssessment({input,config,native_outcomes:capture()}).analysis_key,
     prepareTrajectoryAssessment({input,config}).analysis_key,"native readback does not rerun unchanged analysis");
   assert.equal(Object.hasOwn(prepareTrajectoryAssessment({input,config}),"native_outcomes"),false);
+});
+test("a declared baseline measures adopted improvement in native units, including lower-is-better and losses",()=>{
+  const raw={...capture(), comparison:{baseline_result_id:"result-1",retention_citation:{source_id:"s",first_line:3,last_line:3}}};
+  let native=project(raw);
+  assert.equal(native.retained_improvement?.value,1);
+  assert.equal(native.retained_improvement?.baseline?.value,2);
+  raw.metric.higher_is_better=true;
+  assert.equal(project(raw).retained_improvement?.value,-1,"An adopted regression is negative, not clamped away");
+  raw.complete=false;raw.samples=raw.samples.slice(1);raw.comparison.baseline_result_id="result-2";
+  native=project(raw);
+  assert.equal(native.initial,null,"An explicit comparison does not invent a complete prefix");
+  assert.equal(native.retained_improvement?.value,-4);
+});
+test("rejecting a candidate and retaining the baseline realizes zero, not an avoided-loss benefit",()=>{
+  const raw={...capture(), comparison:{baseline_result_id:"result-1",retention_citation:{source_id:"s",first_line:1,last_line:1}}};
+  raw.metric.higher_is_better=true;raw.retained_result_id="result-1";
+  assert.equal(project(raw).retained_improvement?.value,0);
+  assert.equal(project(raw).retained_improvement?.final_candidate_delta,-1);
+  assert.equal(project(raw).best_valid?.value,5,"Best observed candidate does not override actual retention");
+});
+test("unknown baselines and unobserved retention cannot produce realized improvement",()=>{
+  const raw:any={...capture(), comparison:{baseline_result_id:null,retention_citation:{source_id:"s",first_line:3,last_line:3}}};
+  assert.equal(project(raw).retained_improvement?.value,null,"No fallback to submission one");
+  raw.comparison.baseline_result_id="result-1";raw.comparison.retention_citation=null;
+  assert.equal(project(raw).retained_improvement?.value,null);
+  raw.comparison.retention_citation={source_id:"s",first_line:3,last_line:3};raw.retained_result_id=null;
+  assert.equal(project(raw).retained_improvement?.value,null);
+  assert.equal(project(raw).retained_improvement?.final_candidate_delta,1,"Observed candidate change is separate from retention");
+});
+test("an archived result may have unknown submission time without inventing a clock or losing its measurement",()=>{
+  const raw:any={...capture(), comparison:{baseline_result_id:"result-1",retention_citation:{source_id:"s",first_line:3,last_line:3}}};
+  raw.samples[0].submitted_at=null;
+  assert.equal(project(raw).retained_improvement?.value,1);
+  assert.equal(project(raw).retained_improvement?.baseline?.submitted_at,null);
+  raw.samples[0].observed_at="2025-12-31T23:59:59Z";
+  assert.throws(()=>project(raw),/outside its capture/);
+});
+test("comparisons reject foreign, invalid or later baselines, unbound retention evidence and overflow",()=>{
+  for (const mutate of [
+    (x:any)=>x.comparison.baseline_result_id="foreign",
+    (x:any)=>{x.samples[0].valid=false;x.samples[0].value=null;},
+    (x:any)=>{x.comparison.baseline_result_id="result-3";x.retained_result_id="result-1";},
+    (x:any)=>x.comparison.retention_citation.source_id="foreign",
+    (x:any)=>x.comparison.retention_citation.last_line=4,
+    (x:any)=>delete x.comparison.baseline_result_id,
+    (x:any)=>delete x.comparison.retention_citation,
+    (x:any)=>{x.samples[0].value=-Number.MAX_VALUE;x.samples[2].value=Number.MAX_VALUE;},
+  ]) {
+    const raw:any={...capture(), comparison:{baseline_result_id:"result-1",retention_citation:{source_id:"s",first_line:3,last_line:3}}};
+    mutate(raw);assert.throws(()=>project(raw));
+  }
 });
 test("higher-is-better is explicit; best measurement does not invent retained selection",()=>{
   const raw=capture();raw.metric.higher_is_better=true;raw.retained_result_id="result-1";

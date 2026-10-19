@@ -61,10 +61,11 @@ def pages():
 def read(responses, *, include_leases=True):
     calls = []
 
-    def rpc(method, request, *, timeout):
+    def rpc(method, request, *, timeout, large_local_snapshot):
         assert method == METHOD
         assert request["include_leases"] is include_leases
         assert timeout == 15
+        assert large_local_snapshot is True
         assert request["after"] == (None if not calls else calls[-1]["next"])
         response = responses[len(calls)]
         calls.append(deepcopy(response))

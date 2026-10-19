@@ -75,11 +75,7 @@ class ChatProjectContexts:
             if self.conversation_bindings is None:
                 raise ValueError("bound steward authority is unavailable")
             selected = self.conversation_bindings.session_context(steward)
-            if session.get("goal_id") != "loopx-manager" or session.get("channel_id") != selected["channel_id"]:
-                raise ValueError("steward audience mismatch")
-            from ...chat_manager import MANAGER_AGENT_OBJECTIVE
-            return {"project": Path(selected["context"]["workspace_path"]), "objective": MANAGER_AGENT_OBJECTIVE,
-                    "title": "Steward"}
+            return self.runtime_context(session, selected)
         saved = session.get("project_context")
         if not isinstance(saved, dict) or session.get("goal_id") is not None:
             raise ValueError("invalid ordinary project Session")
@@ -89,7 +85,18 @@ class ChatProjectContexts:
             selected = self.conversation_bindings.session_context(saved)
         else:
             selected = self.resolve(str(saved.get("project_ref") or ""), session_context=saved)
-        if session.get("channel_id") != selected["channel_id"]:
+        return self.runtime_context(session, selected)
+
+    @staticmethod
+    def runtime_context(session: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any]:
+        """Adapt an already verified Core selection; never repeat provider IO under its fence."""
+        if session.get("steward_context") is not None:
+            if session.get("goal_id") != "loopx-manager" or session.get("channel_id") != selected["channel_id"]:
+                raise ValueError("steward audience mismatch")
+            from ...chat_manager import MANAGER_AGENT_OBJECTIVE
+            return {"project": Path(selected["context"]["workspace_path"]), "objective": MANAGER_AGENT_OBJECTIVE,
+                    "title": "Steward"}
+        if session.get("goal_id") is not None or session.get("channel_id") != selected["channel_id"]:
             raise ValueError("project conversation channel mismatch")
         objective = PROJECT_WORK_OBJECTIVE if selected["context"]["grant"] == "workspace_write" else PROJECT_CONVERSATION_OBJECTIVE
         return {"project": Path(selected["context"]["workspace_path"]),

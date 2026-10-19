@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import io
 import json
 import os
@@ -9,6 +8,7 @@ import shlex
 import shutil
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -30,6 +30,10 @@ from loopx.control_plane.testing.cli_output_budget import (
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 from loopx.help_surface import COMMAND_GROUPS
 from loopx.rollout_event_log import rollout_event_log_path
+from tests.control_plane.cli_output_fixture import (
+    budget_fixture_path,
+    stable_budget_fixture_root as _stable_budget_fixture_root,
+)
 
 GOAL_ID = "cli-output-budget-goal"
 AGENT_IDS = ("codex-alpha", "codex-beta", "codex-gamma")
@@ -325,21 +329,6 @@ def _quota_payload_without_rollout_receipt(text: str) -> dict[str, object]:
     payload = json.loads(text)
     payload.pop("rollout_event", None)
     return payload
-
-
-@contextlib.contextmanager
-def _stable_budget_fixture_root(root: Path):
-    """Keep lexical and resolved fixture paths independent of runner layout."""
-
-    suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    fixture = Path("/tmp") / f"loopx-cli-budget-{suffix}"
-    if fixture.exists() or fixture.is_symlink():
-        raise RuntimeError(f"refusing to replace existing fixture root: {fixture}")
-    fixture.mkdir()
-    try:
-        yield fixture
-    finally:
-        shutil.rmtree(fixture)
 
 
 def _surface_commands(
@@ -814,16 +803,26 @@ def test_stable_budget_fixture_uses_an_owned_physical_short_root(tmp_path: Path)
     outer = tmp_path / ("nested-runner-" + "p" * 128)
     with _stable_budget_fixture_root(outer) as fixture:
         assert not fixture.is_symlink()
-        assert fixture.resolve().parent == Path("/tmp").resolve()
+        expected_parent = Path(tempfile.gettempdir()) if os.name == "nt" else Path("/tmp")
+        assert fixture.resolve().parent == expected_parent.resolve()
         (fixture / "owned.json").write_text("{}", encoding="utf-8")
     assert not fixture.exists()
     assert not outer.exists()
 
 
+def test_stable_budget_fixture_does_not_require_a_drive_root_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tempfile.gettempdir())
+    with _stable_budget_fixture_root(tmp_path / "native-temp-drive") as fixture:
+        expected_parent = Path(tempfile.gettempdir()) if os.name == "nt" else Path("/tmp")
+        assert fixture.resolve().parent == expected_parent.resolve()
+    assert not fixture.exists()
+
+
 def test_stable_budget_fixture_preserves_an_existing_directory(tmp_path: Path) -> None:
     root = tmp_path / "foreign-directory"
-    suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    fixture = Path("/tmp") / f"loopx-cli-budget-{suffix}"
+    fixture = budget_fixture_path(root)
     fixture.mkdir()
     marker = fixture / "foreign.json"
     marker.write_text("preserve", encoding="utf-8")
@@ -836,6 +835,26 @@ def test_stable_budget_fixture_preserves_an_existing_directory(tmp_path: Path) -
         assert marker.read_text(encoding="utf-8") == "preserve"
     finally:
         shutil.rmtree(fixture)
+
+
+def test_stable_budget_fixture_cleans_up_after_a_failed_probe(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="probe failed"):
+        with _stable_budget_fixture_root(tmp_path / "failed-probe") as fixture:
+            (fixture / "owned.json").write_text("{}", encoding="utf-8")
+            raise RuntimeError("probe failed")
+    assert not fixture.exists()
+
+
+def test_stable_budget_fixture_retains_the_posix_path_contract(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from tests.control_plane import cli_output_fixture
+
+    monkeypatch.setattr(cli_output_fixture, "os", SimpleNamespace(name="posix"))
+    fixture = cli_output_fixture.budget_fixture_path(tmp_path)
+    assert fixture.parent == Path("/tmp")
+    assert fixture.name.startswith("loopx-cli-budget-")
+    assert len(fixture.name) == len("loopx-cli-budget-") + 12
+    assert fixture == cli_output_fixture.budget_fixture_path(tmp_path)
 
 
 def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
@@ -1455,7 +1474,13 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
 
 def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Compare selectors at the same observation instant, including freshness.
+    monkeypatch.setattr(
+        "loopx.control_plane.runtime.time.now_utc",
+        lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
     with _stable_budget_fixture_root(
         tmp_path / "quota-detail-alias-scheduler"
     ) as stable_root:
@@ -1488,7 +1513,13 @@ def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
 
 def test_quota_cli_all_detail_matches_repeated_canonical_selectors(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Compare selectors at the same observation instant, including freshness.
+    monkeypatch.setattr(
+        "loopx.control_plane.runtime.time.now_utc",
+        lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
     with _stable_budget_fixture_root(tmp_path / "quota-detail-all") as stable_root:
         project, runtime, registry_path, state_file = _write_fixture(
             stable_root,
@@ -1718,12 +1749,18 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
     # A reproducible 128-character absolute root, independent of pytest's
     # ever-growing temp/worker prefix. Keep full routes and this workload;
     # presentation-budget changes require matched base/head cost evidence.
-    # Reuse the other budget fixtures' short namespace. A canary's nested
-    # TMPDIR can already exceed 128 characters before we create this root.
-    parent = Path("/tmp").resolve()
+    # Use an existing native temp namespace on Windows; a drive-root /tmp
+    # need not exist. POSIX keeps the short namespace used by socket fixtures.
+    parent = Path(tempfile.gettempdir() if os.name == "nt" else "/tmp").resolve()
+    prefix = "loopx-brief-"
+    # A nested runner temp can exceed the workload itself. Use its nearest
+    # existing ancestor that leaves room for our owned, random child.
+    while len(str(parent / prefix)) + 8 > 128:
+        assert parent != parent.parent, "No temporary ancestor fits the 128-character workload"
+        parent = parent.parent
     # tempfile contributes an eight-character random suffix. Hold input size
-    # constant across Linux /tmp and macOS's longer temporary-directory root.
-    prefix = "loopx-brief-".ljust(128 - len(str(parent)) - 1 - 8, "p")
+    # constant even when the selected parent is a drive or share root.
+    prefix += "p" * (128 - len(str(parent / prefix)) - 8)
     with tempfile.TemporaryDirectory(prefix=prefix, dir=parent) as directory:
         root = Path(directory).resolve()
         assert len(str(root)) == 128
@@ -1733,11 +1770,38 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
 def test_long_path_budget_is_independent_of_runner_temp_prefix(
     tmp_path: Path, monkeypatch
 ) -> None:
-    parent = tmp_path / ("nested-canary-" + "p" * 128)
+    # Remain longer than the workload without adding 141 characters to an
+    # arbitrary runner prefix and crossing Windows directory limits.
+    prefix = "nested-canary-".ljust(160 - len(str(tmp_path.resolve())) - 1, "p")
+    parent = tmp_path / prefix
     parent.mkdir()
     assert len(str(parent.resolve())) > 128
     monkeypatch.setattr(tempfile, "tempdir", str(parent))
     test_brief_budget_retains_full_commands_on_real_long_paths()
+
+
+@pytest.mark.parametrize("nested_temp", [False, True])
+def test_long_path_budget_uses_native_temp_without_a_drive_root_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nested_temp: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    # Model a Windows drive with no /tmp while keeping real filesystem and
+    # CLI reads. Do not change the host's pathlib or product platform checks.
+    missing_drive_tmp = tmp_path / "missing-drive-tmp"
+    path_type = Path
+
+    def native_path(value):
+        return missing_drive_tmp if value == "/tmp" else path_type(value)
+
+    monkeypatch.setitem(globals(), "Path", native_path)
+    monkeypatch.setitem(globals(), "os", SimpleNamespace(name="nt", environ=os.environ))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    if nested_temp:
+        test_long_path_budget_is_independent_of_runner_temp_prefix(tmp_path, monkeypatch)
+    else:
+        test_brief_budget_retains_full_commands_on_real_long_paths()
+    assert not missing_drive_tmp.exists()
 
 
 def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(

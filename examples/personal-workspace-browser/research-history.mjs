@@ -52,12 +52,22 @@ function analysisReadback(selected = "a") {
     snapshot.pack.native_outcomes.projection.final_valid = {...snapshot.pack.native_outcomes.projection.final_valid,
       submission_index: 4, result_id: "native-later", candidate_ref: "candidate-later", value: 5};
   }
+  if (["a", "b", "d"].includes(selected)) {
+    const native = snapshot.pack.native_outcomes.projection;
+    native.retained_improvement = {
+      baseline: selected === "d" ? null : selected === "b" ? native.retained : native.initial,
+      retention_citation: {source_id: "source", first_line: 1, last_line: 2},
+      value: selected === "d" ? null : selected === "b" ? 0 : 4,
+      final_candidate_delta: selected === "d" ? null : selected === "b" ? -2 : 4,
+    };
+  }
   if (selected === "d") {snapshot.pack.result = null; snapshot.pack.job = null; snapshot.pack.native_outcomes.projection.initial = null;}
   return snapshot;
 }
 
-async function startHistoryOwner(fixture) {
-  const child = spawn(resolveTestPython(), ["-u", "examples/personal-workspace-browser/research-history-backend.py", ...(fixture ? ["--fixture", fixture] : [])],
+export async function startHistoryOwner(fixture) {
+  const fixtures = Array.isArray(fixture) ? fixture : fixture ? [fixture] : [];
+  const child = spawn(resolveTestPython(), ["-u", "examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path])],
     {cwd: repoRoot, env: {...process.env, LOOPX_USAGE_PING: "0"}, stdio: ["ignore", "pipe", "pipe"]});
   let diagnostic = "";
   child.stderr.on("data", chunk => {diagnostic = (diagnostic + chunk).slice(-4000);});
@@ -447,8 +457,20 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
       const basis = progress.locator('.research-progress-basis');
       assert.equal(await basis.evaluate(e => e.open), false);
+      const improvement = progress.getByRole('region', {name: '已采用成果增量', exact: true});
+      assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '+4');
+      await improvement.getByRole('button', {name: '成果增量说明', exact: true}).focus();
+      await improvement.getByRole('tooltip').waitFor({state: 'visible'});
+      await page.keyboard.press('Escape');
+      await improvement.locator('summary').click();
+      await improvement.getByRole('button', {name: '查看原文', exact: true}).click();
+      await citedOriginal.waitFor();
+      await citedOriginal.press('Escape');
+      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await improvement.locator('summary').click();
+      await basis.locator(':scope > summary').click();
       const nativeResults = progress.getByRole('region', {name: '原生测量', exact: true});
-      assert.match(await nativeResults.innerText(), /首次提交.*7.*提交 1/s, 'Native measurements need no disclosure before reading');
+      assert.match(await nativeResults.innerText(), /首次提交.*7.*提交 1/s, 'Detailed native measurements use the existing source disclosure');
       assert.match(await nativeResults.innerText(), /原生保留结果.*3.*提交 3/s);
       assert.match(await nativeResults.innerText(), /越低越好/);
       await nativeResults.getByRole('button', {name: /首次提交.*查看原始证据/}).scrollIntoViewIfNeeded();
@@ -461,6 +483,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await citedOriginal.innerText(), /Synthetic original evidence/);
       await citedOriginal.press('Escape');
       await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await basis.locator(':scope > summary').click();
       await benefitMetric.locator('summary').click();
       assert.match(await progress.innerText(), /0 \/ 1/);
       assert.match(await progress.innerText(), /1 \/ 2/);
@@ -492,6 +515,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(await analysis.locator("header p").first().textContent(), "Synthetic analysis B", "A delayed same-Goal read cannot undo a pack selection");
       assert.match(await progress.innerText(), /历史捕获|historical/i);
+      assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '0', 'A rejected candidate does not create realized gain');
+      await basis.locator(':scope > summary').click();
       assert.match(await nativeResults.innerText(), /历史原生测量.*当前结果未核验/s, 'Stale measurements never appear current');
       assert.match(await nativeResults.locator('[data-native-point="retained"]').innerText(), /3.*提交 3/s);
       assert.match(await nativeResults.locator('[data-native-point="final_valid"]').innerText(), /5.*提交 4/s, 'The last submission is not silently presented as retained or best');
@@ -502,14 +527,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.screenshot({path: resolve(outputDir, "research-analysis-mobile.png"), animations: "disabled"});
       // Browser history changes source identity too. While A is delayed or
       // unavailable, B's interpretation/cost must not be shown under A's URL.
-      await page.evaluate(({goal, a, b}) => {
-        const url = new URL(location.href);
-        url.searchParams.set("research_analysis_goal", goal);
-        url.searchParams.set("research_pack", a);
-        history.replaceState(history.state, "", url);
-        url.searchParams.set("research_pack", b);
-        history.pushState(history.state, "", url);
-      }, {goal, a: "a".repeat(64), b: "b".repeat(64)});
+      // Use the real selector-created history entry, rather than fabricating
+      // pushState here: source selection itself must preserve Back/Forward.
       const backStarted = new Promise(resolve => {slowStarted = resolve;});
       const backDelivered = new Promise(resolve => {oldDelivered = resolve;});
       holdOldAnalysis = unavailableAnalysis = true;
@@ -552,6 +571,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
         'An all-unknown but eligible metric has no declared exclusion');
       assert.doesNotMatch(await progress.innerText(), /0%/);
       assert.equal(await nativeResults.count(), 0, 'A missing native capture cannot borrow the previous scope');
+      assert.equal(await improvement.count(), 0, 'An absent comparison preserves the prior process-only surface');
       assert.match(await progress.innerText(), /原生测量.*未采集/);
       await history.getByRole("button", {name: "查看分析", exact: true}).click();
       await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis C$/}).waitFor();
@@ -561,7 +581,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /所选范围尚未分析/);
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
-      assert.match(await nativeResults.innerText(), /原生保留结果.*3.*提交 3/s, 'Native facts do not require an analyzer result or disclosure');
+      assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '—', 'Missing comparison evidence is unknown, never zero');
+      await basis.locator(':scope > summary').click();
+      assert.match(await nativeResults.innerText(), /原生保留结果.*3.*提交 3/s, 'Native facts do not require an analyzer result');
       assert.match(await nativeResults.innerText(), /部分窗口，起点未知/);
       assert.match(await nativeResults.locator('[data-native-point="initial"]').innerText(), /— 未知/);
       const nativeCitation = nativeResults.getByRole('button', {name: /原生保留结果.*查看原始证据/});

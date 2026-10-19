@@ -233,6 +233,10 @@ contiguous submission indices starting at one. An invalid record uses
 `valid:false,value:null`; zero is a valid measured value, never a missing value.
 `retained_result_id:null` means retention is unknown, not that the mathematically
 best value was adopted.
+An archived measurement may explicitly use `submitted_at:null` when only its
+readback time is known; `observed_at` must still be inside the capture. This does
+not invent an original submission time, a full evaluation duration or prefix
+coverage. Known submission times retain all existing calendar/window checks.
 
 The existing typed benchmark-toolkit prepare owner returns a separate bounded
 `native_outcomes` projection: first valid submission-one value when the prefix
@@ -258,8 +262,53 @@ Synthetic packaged native readback (not benchmark findings):
 ![Native outcome source disclosure](../development/assets/research-analysis/native-outcomes-desktop.png)
 
 [Narrow-screen source disclosure](../development/assets/research-analysis/native-outcomes-mobile.png).
-The existing six-judgment first viewport is unchanged; these facts live in its
-existing source disclosure, with costs in their separate disclosure.
+Detailed native facts live in the existing source disclosure, with costs in
+their separate disclosure.
+
+#### Quantified retained improvement
+
+To expose observed outcome value alongside the six process judgments, the same
+provider may optionally add `comparison` to its native capture:
+
+```json
+"comparison": {
+  "baseline_result_id": "result-1",
+  "retention_citation": {"source_id":"adoption-source", "first_line":4, "last_line":8}
+}
+```
+
+The provider fixes a comparable baseline under the same native objective,
+metric, unit and evaluation conditions; it must not select a baseline after
+seeing the gain. Its result must be valid and present in this same scoped
+capture, no later in submission order than the retained result. An incomplete
+prefix may still contain an explicitly known baseline; that does not establish
+the study's initial value. The retention citation must bind original evidence
+of actual retained source/result identity, not a proposed decision or the
+mathematically best score. Source binding checks provenance, not the truth or
+comparability of provider claims.
+
+The TypeScript owner adds `retained_improvement`: baseline, retention citation,
+signed `value` and separate `final_candidate_delta`. Higher-is-better uses
+retained minus baseline; lower-is-better reverses the subtraction. For example,
+native error 7 → retained 3 yields **+4 points**. Retaining 7 after rejecting a
+candidate with error 9 yields **0**, with candidate delta **−2**; avoiding that
+regression is not a new realized benefit. An actually retained regression is
+negative. Baseline or retention may explicitly be `null`; missing baseline,
+retained result or retention evidence leaves realized value `null`, never zero.
+Invalid references, unbound citations and non-finite differences are rejected.
+Omitting `comparison` preserves the previous projection shape and does not
+invent a baseline from the first/best result. Native-only registration still
+does not execute an analysis or alter its key.
+
+The Goal shows one compact **Retained improvement / 已采用成果增量** value before
+the process judgments. Hover, keyboard focus or tap explains the metric;
+expansion exposes both measured endpoints, retention evidence and candidate
+change. Historical/unreadable provenance remains visible. The value describes
+the declared native comparison, not objective completion, a general utility
+score, matched LoopX uplift or causal attribution. Do not add across tasks,
+units, overlapping windows or inherited results. Displayed precision is rounded;
+original endpoint values remain readable in their citations. Pack selection
+creates browser history so Back/Forward restores its scope and evidence.
 
 ### Solver capture registration
 

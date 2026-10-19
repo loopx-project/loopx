@@ -66,6 +66,12 @@ names the contract the change is judged against.
 Receive pending current-session requests through `review_execution_contract.decision_procedure.establish_goal` before generic queue selection, including other agents sharing a GitHub account; task intake and claimed action authority are separate judgments. Resolve the selected requests with repeatable `--target-exact-head NUMBER@HEAD_OID`. Follow `scheduling_policy` and its ranked actionable `review_sequence`; explicit current-request PR selection may override ordering only, never `pull_requests[].review_action_kind` or exact-head idempotency. Generic `re-review`, `重新review`, and `复审` wording selects the named PR; it is not a force-refresh token. Todo/monitor prose may not select work.
 When `review_action_kind` is null, the row stays in `pull_requests` inventory but must not appear in `review_sequence`; its `review_plan` and `review_template` are null and `evidence_commands` is empty. Read the packet's actual no-action reason and read back the relevant lifecycle/draft state or conclusion once; null action does not imply an existing conclusion. If the caller is also the authorized author and its proposal is complete, mark Draft ready and read back its state and unchanged head, then regenerate the packet. Reserve Draft for unfinished author work with a concrete remaining implementation or integration step. Missing review or held CI/merge qualification does not require Draft. A reviewer alone has no authority to change another author's submission state or invent a review action. Run a fresh audit only when the user explicitly requests fresh evidence despite an existing conclusion, or supplies a concrete new concern; regenerate with `--fresh-audit-exact-head NUMBER@HEAD_OID`, then execute the complete current plan and never inherit the earlier approval. Fresh audit is not a Draft bypass. For every actionable PR:
 
+When the capability supplies `independent_review` and a null action, read back
+that submitted review and skip duplicate full review. Its source-bound coverage
+does not require this agent's bilingual body format, grant approval or merge
+authority, or clear blockers. Unknown provenance does not establish coverage.
+An explicitly authorized fresh audit uses the same exact-head override above.
+
 1. Record the packet's exact head, then follow `review_execution_contract.decision_procedure`:
    the current goal and `problem_context` delivery judgment first, including on re-review,
    then `evidence_commands` and repository-native validation.

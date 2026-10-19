@@ -303,10 +303,14 @@ def main() -> int:
             "pull_request_review",
             "periodic_report",
             "content_ops",
+            "decision_context",
         }
         references = features["content_ops"]
         assert references["availability"] == "local_artifact_preview", references
         assert "default" not in references and "current" not in references, references
+        decision_context = features["decision_context"]
+        assert decision_context["availability"] == "local_artifact_preview", decision_context
+        assert "default" not in decision_context and "current" not in decision_context, decision_context
         improvement = features["goal_capability_organization"]
         assert improvement["default"] == {
             "mode": "off", "discovery_budget_minutes": 5, "max_trials": 1,

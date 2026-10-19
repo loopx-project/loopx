@@ -432,11 +432,20 @@ def main() -> int:
     args = parser.parse_args()
     _install_pytest_import_stub()
     probe = _load_module("loopx_cli_output_probe_fixture", args.test_source)
+    fixture_support = _load_module(
+        "loopx_cli_output_fixture_support",
+        Path(__file__).with_name("cli_output_fixture.py"),
+    )
+    # Scenario helpers also call this owner; historical test modules must not
+    # re-enter their old /tmp implementation from inside the shared outer root.
+    probe._stable_budget_fixture_root = fixture_support.stable_budget_fixture_root
     semantics = _load_module("loopx_cli_output_probe_semantics", args.semantics_source)
     if args.fixture_root.exists():
         shutil.rmtree(args.fixture_root)
     args.fixture_root.mkdir(parents=True)
-    with probe._stable_budget_fixture_root(args.fixture_root) as stable_root:
+    # Use one current root owner for both revisions. A historical test source
+    # may still assume /tmp exists on every Windows drive.
+    with fixture_support.stable_budget_fixture_root(args.fixture_root) as stable_root:
         rows = [
             *_default_rows(
                 probe, semantics, stable_root,

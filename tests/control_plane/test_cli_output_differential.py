@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 
 import pytest
 
@@ -21,6 +22,22 @@ from loopx.control_plane.testing.cli_output_semantics import (
     command_route_counts,
     todo_work_counts_schema_versions,
 )
+
+
+def test_probe_process_failure_preserves_utf8_diagnostics(tmp_path):
+    import runpy
+    from pathlib import Path
+
+    smoke = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    with pytest.raises(AssertionError, match="恢复 🚀"):
+        smoke["_run"](
+            [sys.executable, "-c",
+             "import sys; sys.stderr.buffer.write('恢复 🚀'.encode('utf-8')); sys.exit(1)"],
+            cwd=tmp_path,
+        )
 
 
 def _row(**overrides: object) -> dict[str, object]:

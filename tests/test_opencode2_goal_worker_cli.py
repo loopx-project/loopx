@@ -3,11 +3,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tempfile
 from types import SimpleNamespace
+
+import pytest
 
 from loopx.cli_commands.opencode2_goal_worker import (
     handle_opencode2_goal_worker_command,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_worker_cache(tmp_path, monkeypatch):
+    # Mocked process launches still materialize the real worker/cache files.
+    # Keep those files out of later tests' detached working directories.
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(name, str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
 
 class FakeProcess:

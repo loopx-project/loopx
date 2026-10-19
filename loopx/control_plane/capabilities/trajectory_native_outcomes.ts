@@ -4,7 +4,7 @@ import type {AssessmentCitation, TrajectoryInput} from "./trajectory_assessment_
 
 export interface NativeOutcomePoint {
   submission_index: number; result_id: string; candidate_ref: string;
-  submitted_at: string; observed_at: string; value: number; citation: AssessmentCitation;
+  submitted_at: string | null; observed_at: string; value: number; citation: AssessmentCitation;
 }
 export interface TrajectoryNativeOutcomes {
   method: "source_bound_native_outcomes_v1";
@@ -13,6 +13,10 @@ export interface TrajectoryNativeOutcomes {
   sample_count: number; valid_count: number;
   initial: NativeOutcomePoint | null; best_valid: NativeOutcomePoint | null;
   retained: NativeOutcomePoint | null; final_valid: NativeOutcomePoint | null;
+  retained_improvement?: {
+    baseline: NativeOutcomePoint | null; retention_citation: AssessmentCitation | null;
+    value: number | null; final_candidate_delta: number | null;
+  };
   limitations: string[];
 }
 
@@ -43,6 +47,14 @@ function timestamp(value: unknown, label: string): string {
   if (new Date(value).toISOString() !== canonical) fail(`${label} must be a UTC timestamp`);
   return value;
 }
+function boundCitation(value: unknown, input: TrajectoryInput): AssessmentCitation {
+  const citation = object(value, "native citation"), source = input.sources.find(s => s.id === citation.source_id);
+  const first = citation.first_line, last = citation.last_line;
+  if (!source || !Number.isSafeInteger(first) || !Number.isSafeInteger(last)
+      || Number(first) < source.first_line || Number(last) < Number(first)
+      || Number(last) >= source.first_line + source.text.split("\n").length) fail("native citation is outside registered evidence");
+  return {source_id: source.id, first_line: Number(first), last_line: Number(last)};
+}
 
 /** The provider declares validity/retention. This owner checks binding and ranks
  * valid measurements within that declared capture, never certifying a study. */
@@ -67,19 +79,16 @@ export function projectTrajectoryNativeOutcomes(value: unknown, input: Trajector
     const result = identifier(sample.result_id, "native result"), candidate = identifier(sample.candidate_ref, "native candidate");
     if (seen.has(result)) fail("native result identity is duplicated");
     seen.add(result);
-    const submitted = timestamp(sample.submitted_at, "native submitted_at"), observed = timestamp(sample.observed_at, "native observed_at");
-    if (Date.parse(submitted) < Date.parse(start) || Date.parse(observed) > Date.parse(end)
-        || Date.parse(submitted) > Date.parse(observed)) fail("native result lies outside its capture or precedes submission");
+    const submitted = sample.submitted_at === null ? null : timestamp(sample.submitted_at, "native submitted_at");
+    const observed = timestamp(sample.observed_at, "native observed_at");
+    if (Date.parse(observed) < Date.parse(start) || Date.parse(observed) > Date.parse(end)
+        || submitted && (Date.parse(submitted) < Date.parse(start) || Date.parse(submitted) > Date.parse(observed))) fail("native result lies outside its capture or precedes submission");
     if (typeof sample.valid !== "boolean" || sample.valid && (typeof sample.value !== "number" || !Number.isFinite(sample.value))
         || !sample.valid && sample.value !== null) fail("native validity and measured value must agree; missing/invalid is not zero");
-    const citation = object(sample.citation, "native citation"), source = input.sources.find(s => s.id === citation.source_id);
-    const first = citation.first_line, last = citation.last_line;
-    if (!source || !Number.isSafeInteger(first) || !Number.isSafeInteger(last)
-        || Number(first) < source.first_line || Number(last) < Number(first)
-        || Number(last) >= source.first_line + source.text.split("\n").length) fail("native citation is outside registered evidence");
+    const citation = boundCitation(sample.citation, input);
     if (sample.valid) valid.push({submission_index: Number(index), result_id: result, candidate_ref: candidate,
       submitted_at: submitted, observed_at: observed, value: sample.value as number,
-      citation: {source_id: source.id, first_line: Number(first), last_line: Number(last)}});
+      citation});
   }
   let best: NativeOutcomePoint | null = null;
   for (const point of valid) if (!best || (metric.higher_is_better ? point.value > best.value : point.value < best.value)) best = point;
@@ -87,10 +96,28 @@ export function projectTrajectoryNativeOutcomes(value: unknown, input: Trajector
   if (retainedId !== null) identifier(retainedId, "retained native result");
   const retained = valid.find(point => point.result_id === retainedId) ?? null;
   if (retainedId !== null && !retained) fail("retained native result must be a valid result in this capture");
+  let improvement: TrajectoryNativeOutcomes["retained_improvement"];
+  if (Object.hasOwn(raw, "comparison")) {
+    const comparison = object(raw.comparison, "native comparison"), baselineId = comparison.baseline_result_id;
+    if (baselineId !== null) identifier(baselineId, "baseline native result");
+    const baseline = valid.find(point => point.result_id === baselineId) ?? null;
+    if (baselineId !== null && !baseline) fail("baseline native result must be a valid result in this capture");
+    if (baseline && retained && baseline.submission_index > retained.submission_index) fail("baseline cannot follow the retained result");
+    const retention = comparison.retention_citation === null ? null : boundCitation(comparison.retention_citation, input);
+    const delta = (point: NativeOutcomePoint | null) => {
+      if (!baseline || !point) return null;
+      const difference = metric.higher_is_better ? point.value - baseline.value : baseline.value - point.value;
+      if (!Number.isFinite(difference)) fail("native improvement must be finite");
+      return difference === 0 ? 0 : difference;
+    };
+    improvement = {baseline, retention_citation: retention, value: retention ? delta(retained) : null,
+      final_candidate_delta: delta(valid.at(-1) ?? null)};
+  }
   return {method: "source_bound_native_outcomes_v1", scope: input.scope, start, end, complete: raw.complete,
     metric: {name, unit, higher_is_better: metric.higher_is_better}, sample_count: raw.samples.length,
     valid_count: valid.length, initial: raw.complete ? valid.find(point => point.submission_index === 1) ?? null : null,
     best_valid: best, retained, final_valid: valid.at(-1) ?? null,
+    ...(improvement ? {retained_improvement: improvement} : {}),
     limitations: ["Provider-recorded measurements in the declared capture; not study countability or a causal effect.",
       "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
       "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",

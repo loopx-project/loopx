@@ -37,7 +37,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/python-tests.yml"
-ACTIVATION = "needs.changes.outputs.python_tests == 'true'"
+ACTIVATION = (
+    "needs.changes.outputs.python_tests == 'true' && !cancelled() "
+    "&& needs.chat-bundle.result == 'success'"
+)
 NODE_OPTION_DENIAL = "NODE_OPTIONS could turn the suite command into a no-op"
 QUALIFY_COMMAND = (
     "node",

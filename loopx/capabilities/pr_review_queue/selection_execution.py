@@ -20,6 +20,12 @@ EXACT_HEAD_PATTERN = re.compile(
 )
 
 
+def _independently_reviewed(item: Mapping[str, Any]) -> bool:
+    evidence = item.get("independent_review")
+    return isinstance(evidence, Mapping) and evidence.get("source_complete") is True \
+        and evidence.get("head_oid") == item.get("head_oid")
+
+
 def review_action_kind(item: Mapping[str, Any]) -> str | None:
     state = str(item.get("state") or "").upper()
     if item.get("is_draft") is True or state == "CLOSED":
@@ -33,6 +39,8 @@ def review_action_kind(item: Mapping[str, Any]) -> str | None:
         # lane forever, even after the head stops being mergeable.
         if state == "OPEN" and str(conclusion.get("verdict") or "").upper() == "APPROVE":
             return "qualify_pull_request_merge_readiness"
+        return None
+    if _independently_reviewed(item):
         return None
     if state == "MERGED":
         return "audit_merged_pull_request_exact_head"
@@ -104,8 +112,10 @@ def materialize_review_execution(
     if fresh_audit_requested:
         if action_kind is not None:
             raise ValueError(f"fresh audit exact head {key} is already actionable")
-        if conclusion.get("valid") is not True:
-            raise ValueError(f"fresh audit exact head {key} requires a valid prior conclusion")
+        peer_coverage = _independently_reviewed(item) and item.get("is_draft") is not True \
+            and str(item.get("state") or "").upper() in {"OPEN", "MERGED"}
+        if conclusion.get("valid") is not True and not peer_coverage:
+            raise ValueError(f"fresh audit exact head {key} requires a valid prior conclusion or independent review")
         action_kind = "audit_pull_request_exact_head"
 
     result: dict[str, Any] = {
@@ -123,6 +133,11 @@ def materialize_review_execution(
             instruction = "This PR is closed: read back lifecycle state and any recorded conclusion."
         elif conclusion.get("valid") is True:
             instruction = "Read back the existing exact-head conclusion."
+        elif _independently_reviewed(item):
+            peer = item["independent_review"]
+            instruction = (f"The current exact head has an independent contributor/maintainer review by "
+                f"{peer['reviewer']} ({peer['state']}): {peer['url']}. Read it back and skip duplicate "
+                "full review. This grants no approval or merge authority; preserve blockers and validation.")
         else:
             instruction = "Read back lifecycle state; no valid exact-head conclusion is established."
         return result | {

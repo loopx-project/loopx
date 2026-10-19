@@ -43,7 +43,7 @@ PrintPayload = Callable[
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
-UPDATE_CONTROL_COMMANDS = {"update"}
+UPDATE_CONTROL_COMMANDS = {"update", "upgrade"}
 
 
 def register_update_command(
@@ -52,11 +52,13 @@ def register_update_command(
 ) -> None:
     update_parser = subparsers.add_parser(
         "update",
+        aliases=["upgrade"],
         help="Inspect or apply an update using the active installation owner.",
         description=(
             "Use `update check` for a read-only freshness probe, `update plan` for the "
             "full no-write plan, or `update apply` for an explicit archive-snapshot "
-            "mutation. Bare `update` remains a read-only plan."
+            "mutation. Bare `update` remains a read-only plan. `upgrade` applies "
+            "the update and updates/restarts an installed macOS App in one command."
         ),
     )
     add_subcommand_format(update_parser)
@@ -126,6 +128,10 @@ def handle_update_command(
         return None
 
     update_action = UpdateAction.PLAN
+    upgrade = args.command == "upgrade"
+    from .support_control_update_progress import UpdateProgress
+
+    progress = UpdateProgress(output_format(args) != "json")
     try:
         update_action = resolve_update_action(
             args.update_action,
@@ -133,6 +139,14 @@ def handle_update_command(
             dry_run=args.dry_run,
             execute=args.execute,
         )
+        if upgrade and not any((args.update_action, args.check, args.dry_run, args.execute, args.rollback)):
+            update_action = UpdateAction.APPLY
+        if update_action is UpdateAction.APPLY:
+            progress.report("Checking installation owner and update source")
+        if args.timeout_seconds <= 0:
+            raise ValueError("--timeout-seconds must be positive")
+        if upgrade and args.rollback:
+            raise ValueError("CLI rollback uses `loopx update --rollback`; App rollback uses Recovery & updates")
         if args.rollback and args.update_action:
             raise ValueError(
                 "update rollback cannot be combined with check, plan, or apply"
@@ -154,15 +168,24 @@ def handle_update_command(
                         "--installed-doctor-json must contain a JSON object"
                     )
                 doctor_payload = loaded_doctor
-            payload = build_update_plan(
-                repo=args.repo,
-                ref=args.ref,
-                archive_url=args.archive_url,
-                action=update_action,
-                doctor_payload=doctor_payload,
-                registry_path=registry_path,
-                runtime_root=args.runtime_root,
-            )
+            if upgrade:
+                from .support_control_upgrade import build_upgrade_plan
+
+                payload = build_upgrade_plan(
+                    repo=args.repo, ref=args.ref, archive_url=args.archive_url,
+                    action=update_action, doctor_payload=doctor_payload,
+                    registry_path=registry_path, runtime_root=args.runtime_root,
+                )
+            else:
+                payload = build_update_plan(
+                    repo=args.repo,
+                    ref=args.ref,
+                    archive_url=args.archive_url,
+                    action=update_action,
+                    doctor_payload=doctor_payload,
+                    registry_path=registry_path,
+                    runtime_root=args.runtime_root,
+                )
             payload["installed_doctor_source"] = (
                 "explicit_json" if doctor_payload is not None else "current_runtime"
             )
@@ -184,8 +207,13 @@ def handle_update_command(
                     runtime_root=args.runtime_root,
                     timeout_seconds=args.timeout_seconds, runtime_update=partial(
                         execute_update_plan, registry_path=selected_registry, runtime_root=str(selected_runtime),
+                        progress=progress.report,
                     ),
                 )
+                if upgrade:
+                    from .support_control_upgrade import finish_upgrade
+
+                    payload = finish_upgrade(payload, timeout_seconds=args.timeout_seconds, progress=progress.report)
     except Exception as exc:
         payload = {
             "ok": False,
@@ -199,5 +227,12 @@ def handle_update_command(
             "error": str(exc),
             "recommended_action": "fix update planning or installation before retrying",
         }
-    print_payload(payload, output_format(args), render_update_plan_markdown)
+    finally:
+        progress.stop()
+    renderer = render_update_plan_markdown
+    if upgrade:
+        from .support_control_upgrade import render_upgrade_markdown
+
+        renderer = render_upgrade_markdown
+    print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") else 1
