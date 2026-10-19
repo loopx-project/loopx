@@ -34,6 +34,12 @@ outside the authority lock. The original owner/process is pinned before that
 connection; its binding, liveness, current control and phase deadline are checked
 again immediately before sending. A delayed old request cannot borrow a newer
 process or Turn, and a slow connection does not prevent a concurrent Stop write.
+For guarded requests, headers and body share a one-second send deadline (or
+the caller's shorter timeout); response reads retain their original timeout.
+An incomplete send releases the authority lock and remains ambiguous. Refusing
+an obsolete binding interrupts only its captured process; it cannot mark a
+valid replacement binding refused. A current binding's refusal still requires
+the existing recovery path.
 
 Private `provider-requests.jsonl` correlates wake, LoopX Turn, native
 session/thread/Turn when supplied, client request, gateway request and returned
@@ -117,6 +123,15 @@ if the workspace has changed. It never posts that unresolved operation again.
 An unresolved acceptance stops that retry with an explicit unknown reason;
 independent research may continue. Receiving external feedback does not pretend
 that the interrupted native client observed its result or completed its operation.
+The supported native provider's two exact capacity-full 503 responses are
+pre-admission refusals: they consume neither a round nor a submission. Those
+operations retain their snapshots but are marked rejected, allowing a later
+explicit submit invocation. Other 5xx, unrecognized 503 responses and lost
+responses remain unknown; the response hook never automatically resubmits.
+If the retained archive and result identities are verified but the archive
+cannot be parsed, its native error remains a generic finding without a bound
+probe manifest. That record does not prevent unrelated verified results from
+being ingested.
 
 ## Explicit feedback dependencies and wakeup
 
@@ -146,7 +161,15 @@ native error results remain evidence; neither automatically marks research block
 Consumption runs under a 60-second process-group timeout with bounded cleanup;
 durable results can release independent work even if a later item needs retry.
 
-The consumer then publishes a revision signal. The opt-in scheduler wrapper
+Consumers serialize ingestion with a nonblocking local lock; a busy consumer
+leaves retry to the existing runner. The revision signal is derived from the
+current canonical completed observation Todos, rather than the caller's possibly
+older feedback packet. Each successful release publishes it immediately, and
+replay reconstructs it if completion persisted before notification failed.
+An old packet cannot replace a newer completion signal, and unchanged completed
+observations do not create fresh wakeups.
+
+The opt-in scheduler wrapper
 observes that small file during its ordinary sleep and promptly returns to the
 same scheduler's quota check. Repeated or invalid signals do not busy-loop, and a
 signal alone grants no model admission. When all model work is waiting, the
@@ -197,12 +220,22 @@ Goal/Todo/Host/Explore 上。候选完成只释放后续研究；本次没有包
 原生归档。归档哈希与所选文件清单哈希分别保存并验证关系。结果晚到时始终指向
 原候选，不改写新工作区或自动采用、回滚。提交响应丢失时恢复原操作，无法唯一
 匹配时保留未知，不重复消耗评测机会。首次候选按实际接受顺序评价。
+支持的原生 provider 在受理前返回的两种明确容量 503 会记为拒绝，保留快照并允许
+稍后显式提交；其他 5xx、无法识别的 503 与丢失响应仍为未知，不自动重发。
+原始归档与结果身份可靠但归档无法解析时，保留未绑定探针的通用错误 finding，
+不阻断独立正常结果，也不声称坏归档具有已验证的候选文件清单。
 
 只有显式 `--wait-todo` 或反馈依赖命令才延后指定 Todo。运行器负责真实外部观察，
 先写入 Explore 并读回，再完成观察依赖；其自身不占模型 Turn 或预算。
 全部可执行工作等待时停止模型请求；有独立工作时保持准入。新反馈信号打断
 调度休眠后仍需通过当前准入，不通过换 Turn、重发操作或重置预算逃出等待。
 准入锁前后的原进程、绑定和截止时间都校验，慢连接也不会占住 Stop 的写锁。
+带准入保护的请求头与请求体共用一秒发送期限（调用者设置更短时沿用更短值），
+响应读取仍用原超时；发送不完整会释放锁并保留未知转发状态。旧绑定的拒绝只影响
+旧进程，不能污染合法替换进程；当前绑定的真实拒绝仍须走原恢复路径。
+反馈消费者非阻塞互斥，繁忙时由原运行器稍后重试。唤醒版本来自当前 canonical
+已完成观察 Todo，独立结果完成后立即发布；完成已落盘但通知失败时可重建补发，
+旧包不能覆盖新完成信号，重复消费也不会持续制造唤醒。
 
 探针保留实际耗时、退出状态及可选 solver 报告；坏诊断不能抹掉可靠测量。
 完整成本先提供已知总时长、去重计数和明确的未知覆盖，阶段分摊不伪造为零。
