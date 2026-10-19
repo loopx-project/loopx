@@ -1012,8 +1012,17 @@ File and SQLite. PostgreSQL has native result transaction/head/CAS conformance;
 the ordinary Python CLI/MCP/managed runtime does not supply the existing
 service-owned PostgreSQL factory. A PostgreSQL selector therefore fails closed
 without legacy fallback; this slice does not add that product integration.
-Packaged frontend and Lark recovery journeys are also unqualified. These are delivery
-limits, not an option to silently bypass freshness on a protected admission.
+The packaged Chat regression exercises the existing **Continue review** control,
+production HTTP/controller and native checkpoint owners on a disposable Goal.
+It retains the original SDK session, Todo, Turn and committed result, reads fresh
+direction facts, settles once, then reloads and replays without another debit.
+Its SDK transport is deterministic and unrelated workspace navigation is a
+synthetic shell; the checkpoint HTTP responses come from the production owner.
+Run the public smoke described below for the exact candidate being delivered.
+This does not qualify live model judgments, native Desktop rendering or live Lark
+delivery. The four legacy Lark recovery entrypoints and PostgreSQL first-delivery
+callers remain unqualified. These are delivery limits, not an option to silently
+bypass freshness on a protected admission.
 Manual Todo lifecycle operations without any work admission retain their existing
 permission and validation contract. They have not captured an Agent work basis
 and are not qualified result-freshness execution. Absence of an admission is not
@@ -1271,10 +1280,68 @@ terminal owner 先保留合法结果和原终结意图，完成当前 Agent 的�
 沿同 Turn terminal upgrade 关闭。默认 managed 续接原 Host/session，required
 checkpoint 会增加一次方向调用；typed 豁免不增加该调用。方向 stale 只重判方向，
 不重复实施、验证或扣额。历史 refresh→spend→terminal 顺序保留。
-完整 changed-frontier 改向出口与混版本回退仍待独立验收；独立 reviewer
-另行登记完整契约，没有方向专用尝试预算或通用回滚协议。
-status/quota 的回执投影可供既有前端及 Lark 读取，但不代表默认产品旅程已交付，
-也不代表 Goal 已完成或模型效果已提升。
+公开 terminal/frontier 回归覆盖当前方向改变后保留原结果、按新 frontier 续接，
+以及显式 gate、方向权限拒绝和原 Turn 恢复；通过这些隔离用例不等于真实模型
+能正确判断任意方向。混版本回退和独立 reviewer 仍须各自的完整契约；没有
+方向专用尝试预算或通用回滚协议。打包 Chat 的“继续核验”烟测运行实际控件、
+HTTP/controller 和原生 checkpoint，使用确定性 SDK，保留会话与原结果，并验证
+单次扣额及重载/重放零增量。真实 Lark、实时模型效果与 token 成本、Native
+Desktop 渲染仍未验证，不能从 status/quota 投影存在推断这些旅程已通过，
+也不能据此关闭 Goal。
+
+
+### Recovery checks and support boundary
+
+Public regression commands from the selected checkout are:
+
+```sh
+python -m pytest -q tests/control_plane/test_receipt_bound_lifecycle_recovery.py \
+  tests/control_plane/test_default_terminal_frontier.py \
+  tests/control_plane/test_default_terminal_admission_gates.py \
+  tests/test_chat_coordinator_checkpoint.py tests/test_chat_queued_write_recovery.py
+node --experimental-sqlite --experimental-strip-types --test \
+  tests/control_plane_ts/prior_monitor_closeout.test.ts
+python scripts/chat_bundle.py build
+python scripts/chat_bundle.py verify --source
+node apps/presentation/dashboard/smoke/checkpoint-recovery-browser-smoke.mjs \
+  --output /absolute/path/to/fresh-disposable-evidence
+```
+
+Use the checkout's compatible Python test environment, supported Node and frontend
+lockfile dependencies. The browser smoke needs Playwright and a headless Chromium;
+`LOOPX_PLAYWRIGHT_PACKAGE` and `LOOPX_CHROME_HEADLESS_SHELL` may select existing
+local installations. Its output includes actual HTTP observations, native result
+and settlement records, desktop/narrow screenshots and browser errors. A missing,
+failed or skipped check is an open evidence gap; a source test run does not qualify
+a different installed artifact.
+
+Receipt-bound recovery preserves the original semantic obligation and cadence
+source instead of deriving a replacement from the current schedule. Missing,
+changed or foreign source facts fail closed; no implicit historical-source adoption
+is granted. A committed monitor poll may close its own Turn without an accountable
+work writeback or quota debit. Unbound settlement diagnostics must not report that
+exact proved poll as old unpaid work. The execution guard still verifies its
+committed metadata against the bound Todo; an arbitrary settled-looking flag is
+not admission authority. The File/SQLite public tests retain wrong-identity,
+missing-proof and replay negatives.
+
+Local-registry Legacy Markdown, File and SQLite caller coverage is distinct from
+PostgreSQL native head/CAS conformance. Service-owned PostgreSQL first-delivery
+factory integration remains outside this qualification. Lark contract tests use
+synthetic transports; live delivery and the four legacy recovery routes remain
+unqualified. Two platform-specific Lark lifecycle scenarios have POSIX-only
+coverage and must not be presented as Windows support. These boundaries also apply
+to any packaged build, regardless of a successful frontend smoke.
+
+For rollback, stop new admissions, preserve original receipt/journal/source blobs,
+then finish or explicitly reconcile pending protected Turns using a compatible
+runtime. Check source, interpreter, original identities and unresolved append state
+before switching a task-owned launcher to a retained qualified installation. Never
+relabel an earlier receipt as evidence for the new build, reimplement a durable
+result or charge a replay. The regression for an unchanged result also preserves
+its original completion timestamp. Global installation changes, integration with a
+newer main and remote publication are separate operations with their own validation.
+This support note does not certify a Goal, live model usefulness or a release.
 
 Code publication remains a separate operation. Qualify ref CAS against an
 integration target that is not checked out; this protocol does not wrap direct

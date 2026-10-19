@@ -1212,6 +1212,12 @@ direction checkpoint remains pending, the existing mode bar shows the retained
 result and **Continue review**. The current SDK conversation reads and judges
 fresh native facts; a finished SDK run does not settle the LoopX Todo or Goal.
 No owner copies a context token and no additional execution setting is added.
+The packaged checkpoint browser smoke drives that rendered control through the
+production owning HTTP route, reloads and checks the original result/session and
+single native settlement. Only its SDK transport and unrelated workspace shell
+are synthetic. This evidence does not establish live model decision quality,
+live Lark delivery or native Desktop rendering; see the
+[default freshness support and recovery boundary](protocols/goal-vision-replan-contract-v0.md#recovery-checks-and-support-boundary).
 
 The existing `loopx_collaboration` tool retains its name and action vocabulary.
 `read(operation_id=todo_id, brief={purpose:"first_delivery"})` reads the configured
