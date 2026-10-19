@@ -438,6 +438,77 @@ def _bound_project(fixture):
     return bindings, args, binding, session, turn
 
 
+@pytest.mark.parametrize("committed", [False, True])
+def test_bound_http_retry_repairs_interrupted_queue_input_once(ordinary, monkeypatch, committed):  # noqa: F811
+    store, runtime, _contexts, request, capture, _fake, workspace = ordinary
+    _bindings, _args, _binding, session, active = _bound_project(ordinary)
+    sid = session["session_id"]
+    original_thread = store.load_session(sid)["upstream_thread_id"]
+    message = "Continue with the complete original input: 原文\nsecond line"
+    append = store.append_message
+
+    def interrupted(*args, **kwargs):
+        if kwargs.get("role") == "user" and kwargs.get("text") == message:
+            if committed:
+                append(*args, **kwargs)
+            raise OSError("queued input publication interrupted")
+        return append(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "append_message", interrupted)
+        with pytest.raises(OSError, match="queued input publication interrupted"):
+            runtime.enqueue_turn(session_id=sid, client_turn_id="original-input", message=message,
+                                 work_dir=workspace, objective="", origin="web")
+    original = store.turn_for_client(sid, "original-input")
+    assert original["status"] == "queued"
+    assert store.load_session(sid)["active_turn_id"] == active["turn_id"]
+    body = {"message": message, "client_turn_id": "original-input", "delivery": "queue"}
+    for _ in range(2):
+        status, recovered = request(f"/api/chat/sessions/{sid}/turns", body)
+        assert status == 202 and not recovered["created"]
+        assert recovered["turn_id"] == original["turn_id"]
+    inputs = [row for row in store.messages(sid) if row["turn_id"] == original["turn_id"] and row["role"] == "user"]
+    assert len(inputs) == 1 and inputs[0]["text"] == message and inputs[0]["origin"] == "web"
+    assert sum(row["kind"] == "turn.queued" for row in store.events_after(sid, original["turn_id"], None)) == 1
+    assert store.load_session(sid)["active_turn_id"] == active["turn_id"]
+    runtime.interrupt_turn(session_id=sid, turn_id=active["turn_id"])
+    assert runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)["status"] == "completed"
+    assert store.load_session(sid)["upstream_thread_id"] == original_thread
+    assert store.load_session(sid)["goal_id"] is None
+    calls = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in calls) == 2
+    status, replay = request(f"/api/chat/sessions/{sid}/turns", body)
+    assert status == 202 and not replay["created"] and replay["turn_id"] == original["turn_id"]
+    assert [row for row in store.messages(sid) if row["turn_id"] == original["turn_id"] and row["role"] == "user"] == inputs
+
+
+def test_bound_queue_recovery_does_not_bypass_revoked_source(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, _contexts, request, _capture, _fake, workspace = ordinary
+    bindings, _args, binding, session, _active = _bound_project(ordinary)
+    sid = session["session_id"]
+    append = store.append_message
+
+    def interrupted(*args, **kwargs):
+        if kwargs.get("role") == "user" and kwargs.get("text") == "Original queued request":
+            raise OSError("queued input publication interrupted")
+        return append(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "append_message", interrupted)
+        with pytest.raises(OSError):
+            runtime.enqueue_turn(session_id=sid, client_turn_id="revoked-input", message="Original queued request",
+                                 work_dir=workspace, objective="", origin="web")
+    original = store.turn_for_client(sid, "revoked-input")
+    bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    before = store.messages(sid)
+    status, _ = request(f"/api/chat/sessions/{sid}/turns", {
+        "message": "Original queued request", "client_turn_id": "revoked-input", "delivery": "queue"})
+    assert status == 400
+    assert store.messages(sid) == before
+    assert store.load_turn(sid, original["turn_id"])["status"] == "interrupted"
+    assert not store.load_turn(sid, original["turn_id"]).get("upstream_turn_id")
+
+
 @pytest.mark.parametrize("entrypoint", ["http", "runtime_context"])
 def test_bound_session_identity_is_checked_before_input_or_runtime_resolution(ordinary, monkeypatch, entrypoint):  # noqa: F811
     from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
