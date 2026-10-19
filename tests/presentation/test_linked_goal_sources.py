@@ -155,7 +155,9 @@ def test_app_source_links_reject_other_origins_unknown_parents_and_identity_coll
     host = w['server'].registry_path
     before = host.read_bytes()
     for body, origin in [({'parent_goal_id': 'research-owner', 'source': raw}, 'https://unrelated.example'),
-                         ({'parent_goal_id': 'absent', 'source': raw}, None)]:
+                         ({'parent_goal_id': 'absent', 'source': raw}, None),
+                         ({'parent_goal_id': 'research-owner', 'source': {
+                             **raw, 'scope': {'goal_id': 'research-owner'}}}, None)]:
         with pytest.raises(HTTPError):
             request('/api/chat/goal-sources', body, origin)
         assert host.read_bytes() == before
@@ -232,3 +234,38 @@ def test_app_can_cancel_its_local_analysis_while_original_source_is_offline(work
         finally:
             source_registry.write_bytes(before[source_registry])
     assert len(w['count'].read_text().splitlines()) == 1
+
+
+def test_removed_parent_does_not_poison_other_local_or_source_goals(workspace):
+    from loopx.control_plane.projects.registry_codec import mutate_project_registry
+
+    w = workspace
+    raw, request, _ = native_source(w)
+    source_registry = Path(raw['registry'])
+    registry = json.loads(source_registry.read_text())
+    (source_registry.parent / 'other.md').write_bytes((source_registry.parent / 'active.md').read_bytes())
+    registry['goals'].append({**registry['goals'][0], 'id': 'other-solver', 'state_file': 'other.md'})
+    source_registry.write_text(json.dumps(registry))
+    other = {**raw, 'id': 'other-source', 'scope': {'goal_id': 'other-solver'}}
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    request('/api/chat/goal-sources', {'parent_goal_id': 'other-owner', 'source': other})
+    before = source_registry.read_bytes()
+    # Exercise the registry owner's committed removal, never a source solver write.
+    mutate_project_registry(w['server'].registry_path, operation='fixture_parent_removal',
+        reducer=lambda data: data.update(goals=[{**g, 'domain': 'source-read'}
+            for g in data['goals'] if g['id'] != 'research-owner']))
+    directory = request('/status.json?view=workspace-directory')
+    assert {goal['id'] for goal in directory['goals']} == {'other-owner', 'other-solver'}
+    local = request('/status.json?goal_id=other-owner')
+    assert [goal['id'] for goal in local['run_history']['goals']] == ['other-owner']
+    assert request('/status.json?goal_id=other-solver')['run_history']['goals'][0]['id'] == 'other-solver'
+    assert len(request('/api/chat/goal-sources')['goals']) == 1
+    retained = json.loads(w['server'].registry_path.read_text())
+    assert len(retained['goal_source_links']) == 2
+    with pytest.raises(HTTPError):
+        request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    assert json.loads(w['server'].registry_path.read_text()) == retained
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'goal_id': 'solver-goal',
+        'source_namespace': GoalSource.parse(raw).namespace})
+    assert len(json.loads(w['server'].registry_path.read_text())['goal_source_links']) == 1
+    assert source_registry.read_bytes() == before and not w['count'].exists()

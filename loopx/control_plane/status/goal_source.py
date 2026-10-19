@@ -394,8 +394,15 @@ class GoalSourceCatalog:
                 links.append(link)
             return links
 
+        def admitted(registry):
+            links = proposed(registry)
+            rows = linked_source_goals({**registry, "goal_source_links": links})
+            if not any(row["id"] == source.goal_id for row in rows):
+                raise SourceScopeError("Choose an existing local parent")
+            return links
+
         before = load_registry(self.registry_path)
-        linked_source_goals({**before, "goal_source_links": proposed(before)})
+        admitted(before)
         # Qualify original membership after metadata admission, before writing.
         reader = GoalSourceReader(source, history_projector=lambda rows, **_: rows)
         rows = reader.goals(source.goal_id, fresh=True)["items"]
@@ -405,8 +412,7 @@ class GoalSourceCatalog:
             raise SourceScopeError("Choose a registered original Goal")
 
         def apply(registry):
-            registry["goal_source_links"] = proposed(registry)
-            linked_source_goals(registry)
+            registry["goal_source_links"] = admitted(registry)
 
         mutate_project_registry(self.registry_path, operation="goal_source_links", reducer=apply)
         return {"ok": True, "goals": linked_source_goals(load_registry(self.registry_path))}

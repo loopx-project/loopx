@@ -12,13 +12,22 @@ test('an existing source Goal keeps its native id under the local parent', () =>
     source_access: {label: 'Original experiment', namespace: 'a'.repeat(64), read_only: true}}]);
 });
 
-test('unknown parents, local collisions and ambiguous original ids are refused', () => {
+test('ambiguous original ids and invalid namespaces are refused', () => {
   for (const input of [
-    {local_goal_ids: [], links: [link()]},
-    {local_goal_ids: ['research-parent', 'original-solver'], links: [link()]},
     {local_goal_ids: ['research-parent'], links: [link(), {...link(), namespace: 'b'.repeat(64)}]},
     {local_goal_ids: ['research-parent'], links: [{...link(), namespace: 'unverified'}]},
   ]) assert.throws(() => projectGoalSourceLinks(input));
+});
+
+test('a removed parent hides only its retained reference', () => {
+  const other = {...link(), goal_id: 'other-solver', parent_goal_id: 'other-parent', namespace: 'b'.repeat(64)};
+  assert.deepEqual(projectGoalSourceLinks({local_goal_ids: ['other-parent'], links: [link(), other]}).goals,
+    projectGoalSourceLinks({local_goal_ids: ['other-parent'], links: [other]}).goals);
+});
+
+test('a native local Goal takes precedence over a retained source reference', () => {
+  assert.deepEqual(projectGoalSourceLinks({local_goal_ids: ['research-parent', 'original-solver'],
+    links: [link()]}), {goals: []});
 });
 
 test('the empty catalog preserves the local-only directory', () => {
