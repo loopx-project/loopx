@@ -58,7 +58,10 @@ The MCP entry validates original JSON values before the SDK can coerce them:
 offsets and image indices must be integers, excluding booleans, numeric strings
 and floats. A supplied digest must be a lowercase 64-character SHA-256 string
 or JSON `null` for an initial read; the string `"null"` is rejected. Invalid
-parameters do not start a network observation or worker. Qualification exercises
+parameter types, digest formats and static ranges are rejected before a network
+observation or worker starts. An offset beyond the actual source length or an
+image index absent from that source requires reading the source before rejection.
+Qualification exercises
 the production MCP registration with a real SDK client, including these rejected
 values, valid text continuation, changed-source rejection and image content.
 
