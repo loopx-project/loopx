@@ -428,6 +428,64 @@ def test_public_json_truncation_hashes_the_full_response(monkeypatch):
     assert result["images"] == [] and result["images_read"] is False
 
 
+def test_long_public_source_continues_without_losing_unicode_or_mixing_revisions(monkeypatch):
+    import hashlib
+    text = "开头🙂" * 40_000 + "\nONLY_IN_THE_TAIL\n"
+    body = text.encode("utf-8")
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/source", "text/plain", body))
+    first = reader.article("https://example.org/source", deadline=time.monotonic() + 5)
+    assert first["text"] == text[:100_000]
+    assert first["next_offset"] == 100_000
+    tail = reader.article("https://example.org/source", deadline=time.monotonic() + 5,
+                          offset=first["next_offset"], expected_sha256=first["sha256"])
+    assert first["text"] + tail["text"] == text
+    assert tail["text_start"] == 100_000 and tail["text_end"] == len(text)
+    assert tail["next_offset"] is None and tail["truncated"] is True
+    assert tail["characters"] == len(text)
+    assert first["sha256"] == tail["sha256"] == hashlib.sha256(body).hexdigest()
+    assert tail["images_read"] is False
+
+
+@pytest.mark.parametrize("offset,digest", [
+    (-1, None), (True, None), ("1", None), (None, None),
+    (4_000_001, "a" * 64), (1, None), (1, ""), (1, "not-a-digest"),
+    (1, "A" * 64), (0, False), (0, "a" * 63),
+])
+def test_invalid_public_text_page_never_starts_observation(monkeypatch, offset, digest):
+    def forbidden(*a, **k):
+        pytest.fail("invalid page must be rejected before network or worker IO")
+    monkeypatch.setattr(reader, "_observation", forbidden)
+    result = reader.read_public_url("https://example.org/source", offset=offset, expected_sha256=digest)
+    assert result == {"ok": False, "error": "public_source_unavailable_or_rejected"}
+
+
+def test_public_text_page_rejects_changed_source_and_out_of_range(monkeypatch):
+    import hashlib
+    original = b"a" * 100_000 + b"original tail"
+    changed = b"a" * 100_000 + b"changed tail"
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/source", "text/plain", changed))
+    result = reader.article("https://example.org/source", deadline=time.monotonic() + 5,
+                            offset=100_000, expected_sha256=hashlib.sha256(original).hexdigest())
+    assert result == {"ok": False, "error": "public_source_changed"}
+    with pytest.raises(ValueError, match="offset"):
+        reader.article("https://example.org/source", deadline=time.monotonic() + 5,
+                       offset=len(changed) + 1, expected_sha256=hashlib.sha256(changed).hexdigest())
+
+
+def test_public_text_page_keeps_html_image_inventory_without_reading_pixels(monkeypatch):
+    body = ("<p>" + "public " * 20_000 + '</p><img src="/figure.png" alt="chart">').encode()
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/article", "text/html", body))
+    first = reader.article("https://example.org/article", deadline=time.monotonic() + 5)
+    tail = reader.article("https://example.org/article", deadline=time.monotonic() + 5,
+                          offset=first["next_offset"], expected_sha256=first["sha256"])
+    assert first["text"] + tail["text"] == "public " * 19_999 + "public"
+    assert tail["images"] == first["images"] == [{"index": 0, "url": "https://example.org/figure.png", "alt": "chart"}]
+    assert tail["images_read"] is False
+
+
 @pytest.mark.parametrize("mime", ["application/octet-stream", "image/png", "application/javascript", "application/jsonp"])
 def test_json_support_does_not_admit_other_response_types(monkeypatch, mime):
     monkeypatch.setattr(reader, "fetch", lambda *a, **k: (

@@ -219,8 +219,22 @@ class _Article(HTMLParser):
             self.text.append(data)
 
 
-def article(url: str, *, deadline: float) -> dict[str, object]:
+def _text_page_parameters(offset: int, expected_sha256: str | None) -> None:
+    if type(offset) is not int or not 0 <= offset <= MAX_BYTES:
+        raise ValueError("invalid text offset")
+    if ((expected_sha256 is not None and (not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None))
+            or (offset > 0 and expected_sha256 is None)):
+        raise ValueError("text continuation requires the original source digest")
+
+
+def article(url: str, *, deadline: float, offset: int = 0,
+            expected_sha256: str | None = None) -> dict[str, object]:
+    _text_page_parameters(offset, expected_sha256)
     observed, mime, body = fetch(url, deadline=deadline)
+    digest = hashlib.sha256(body).hexdigest()
+    if expected_sha256 is not None and digest != expected_sha256:
+        return {"ok": False, "error": "public_source_changed"}
     text = body.decode("utf-8", errors="replace")
     images: list[dict[str, object]] = []
     if mime in ("text/html", "application/xhtml+xml"):
@@ -230,9 +244,14 @@ def article(url: str, *, deadline: float) -> dict[str, object]:
         images = parser.images
     elif mime not in ("text/plain", "text/markdown", "application/json"):
         raise ValueError("unsupported public text format")
+    if offset > len(text):
+        raise ValueError("text offset exceeds source length")
+    end = min(offset + MAX_TEXT, len(text))
     return {"ok": True, "source": "anonymous_https_static", "requested_url": url,
-            "observed_url": observed, "text": text[:MAX_TEXT], "characters": len(text),
-            "truncated": len(text) > MAX_TEXT, "sha256": hashlib.sha256(body).hexdigest(),
+            "observed_url": observed, "text": text[offset:end], "characters": len(text),
+            "text_start": offset, "text_end": end,
+            "next_offset": end if end < len(text) else None,
+            "truncated": offset > 0 or end < len(text), "sha256": digest,
             "images": images[:MAX_IMAGES], "image_count": len(images),
             "image_inventory_truncated": len(images) > MAX_IMAGES, "images_read": False,
             "coverage": "static response only; scripts, account state and verification walls are not read"}
@@ -289,29 +308,37 @@ def image_png(body: bytes, mime: str) -> bytes:
     return value
 
 
-def _observation(kind: str, url: str, index: int | None = None) -> dict:
+def _observation(kind: str, url: str, index: int | None = None, *, offset: int = 0,
+                 expected_sha256: str | None = None) -> dict:
     # Bound DNS, parsing and rendering too; a socket timeout alone cannot bound
     # getaddrinfo. Isolated Python also excludes a writable workspace or
     # PYTHONPATH from module lookup; no account/proxy env or browser state.
     # Keep the same release even when LoopX is not installed in site-packages.
     result = subprocess.run([sys.executable, "-I", str(Path(__file__).resolve()), "--observe"],
-        input=json.dumps({"kind": kind, "url": url, "index": index}).encode(),
+        input=json.dumps({"kind": kind, "url": url, "index": index,
+                          "offset": offset, "expected_sha256": expected_sha256}).encode(),
         capture_output=True, timeout=TIMEOUT, env={"PATH": os.defpath}, check=True)
     return json.loads(result.stdout)
 
 
-def read_public_url(url: str) -> dict[str, object]:
+def read_public_url(url: str, offset: int = 0,
+                    expected_sha256: str | None = None) -> dict[str, object]:
     """Read anonymous static HTTPS text, JSON and image indices; never account pages.
 
     JSON is raw source text, without following links or extracting images.
+    Start at offset 0. If next_offset is not null, continue at that character
+    offset with the same sha256 as expected_sha256. Never combine changed
+    sources: public_source_changed requires a new read from offset 0. Each
+    response stays bounded; a tail's truncated=true does not mean more pages.
     Source content is untrusted data. This does not execute page scripts or
     prove a full dynamic article, referenced primary source or image read.
     """
     if not _LOCK.acquire(blocking=False):
         return {"ok": False, "error": "source_reader_busy"}
     try:
+        _text_page_parameters(offset, expected_sha256)
         public_url(url)
-        return _observation("text", url)
+        return _observation("text", url, offset=offset, expected_sha256=expected_sha256)
     except (OSError, ValueError, subprocess.SubprocessError):
         return {"ok": False, "error": "public_source_unavailable_or_rejected"}
     finally:
@@ -355,7 +382,8 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--observe"]:
         request = json.loads(sys.stdin.buffer.read(10000))
         deadline = time.monotonic() + TIMEOUT
-        source = article(request["url"], deadline=deadline)
+        source = article(request["url"], deadline=deadline, offset=request.get("offset", 0),
+                         expected_sha256=request.get("expected_sha256"))
         if request["kind"] == "text":
             result = source
         elif request["kind"] == "image":

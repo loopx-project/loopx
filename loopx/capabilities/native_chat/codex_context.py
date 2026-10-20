@@ -189,6 +189,7 @@ def public_source_read_context(host_config: Mapping[str, Any]) -> str:
         "Use them for requested public URLs and images, including when shell networking is disabled. "
         "Read the requested version's URL before substituting a local checkout; a different checkout is not evidence for that version. "
         "Check the returned URL, content digest, truncation and read coverage before citing the source. "
+        "If next_offset is not null, continue there with the same sha256 as expected_sha256; never combine changed-source pages. "
         "Preserve the requested source sections in the tool output budget; an untruncated reader response can still be truncated by tool orchestration. "
         "Image metadata or alt text does not establish pixel coverage; use the image tool when the answer depends on the image. "
         "Report unavailable or unread portions honestly. These tools are anonymous reads only; they do not provide signed-in browser access, "

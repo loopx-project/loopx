@@ -42,6 +42,19 @@ digest and URL. Text/alt labels do not prove pixels were read, and static HTML
 does not prove a dynamic article or a verification wall was fully read. The
 Agent must report missing coverage and inspect rendered labels and arrows.
 
+Long text can be read without raising the per-response limit. Start with
+`read_public_url(url)`, then call
+`read_public_url(url, offset=next_offset, expected_sha256=sha256)` using the
+previous response's values. Offsets count decoded text characters, including
+Unicode characters. `text_start` and `text_end` describe the returned range;
+`next_offset=null` means there is no later page. A nonzero-offset response is
+still `truncated=true` because it omits the prefix. Only contiguous ranges from
+zero through `characters`, all with the same source digest, establish complete
+text coverage. Every call independently performs the existing anonymous fetch
+and address checks. A changed digest returns `public_source_changed` without
+text; restart from zero instead of mixing revisions. Invalid offsets, missing
+continuation digests and out-of-range positions fail without a text result.
+
 The provider sends no cookies, account headers, proxy settings or caller-defined
 headers. Every destination and redirect must resolve entirely to globally
 routable addresses; the checked address is pinned to the TLS connection while
