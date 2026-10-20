@@ -576,7 +576,10 @@ changes no scheduler admission, execution grant, default or host effect.
 Real packaged transport qualification remains separate from live model outcomes,
 App adoption and the three convergence acceptances below.
 
-Remaining implementation Todos, in dependency order:
+The requirement-delivery (#5844), complete closeout-clause (#6337) and original
+Host decision-capture (#6350) source repairs have merged. Preserve those results;
+their completion does not close M7.4, R5 or the three acceptance streams below.
+Continue in this order using the existing owners and checkpoints:
 
 | Todo | Observable outcome and decisive acceptance |
 |---|---|
@@ -595,6 +598,28 @@ legacy cached-result recovery and terminal readback preserve original receipts.
 This closes the producer-to-detail transport gap only. Live models, packaged
 App/Lark, later authority checks and the remaining convergence matrix retain
 their independent acceptance; no Python projection is retired by this slice.
+
+The first ordinary-CLI consolidation replaces an exactly identical
+`heartbeat_recommendation.blocked_priority_fallback` mirror with
+`blocked_priority_fallback_ref="$.blocked_priority_fallback"`. The complete root
+fact, notification, execution obligation and original capture remain intact;
+different mirrors are retained, including Boolean/number differences. The existing
+`--include-detail agent-todos` view retains the legacy mirror. File/SQLite CLI
+tests cover same-capture action dimensions and no-debit replay. Original source
+hashes intentionally distinguish renderings; this does not change signature
+coverage or make a rendered view a substitute for the original capture.
+Legacy-field access stays in the existing packet owner; the CLI invokes its
+projection function without adding another legacy migration consumer.
+
+Next, inventory authorized real Goal captures across active work, peer/replan,
+wait/recovery and optional-capability shapes, then map each retained clause to
+its shared typed owner and actual consumer. Migrate one complete caller family
+before retiring its replaced projection. Compare the same captured decision
+through full/thin heartbeat and Turn, counting required detail reads, tokens,
+serialization/IO, latency and resource growth. Byte savings from this mirror
+removal qualify only that rendering delta; model quality, complete costs,
+installed App/Lark adoption and migration defaults still require their own
+evidence. Keep private source material out of public fixtures and checkpoints.
 
 The earlier cost slice reproduced a regression-budget gap, rather than a
 missing fixture alias or permission to remove required context. Comparing

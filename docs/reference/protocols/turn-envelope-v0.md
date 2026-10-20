@@ -51,12 +51,28 @@ not verify file integrity or make saved admission current. Missing, malformed,
 or mismatched files require recovery, never automatic guard replay. Consumers already referring to `full_decision`, such as compacted capability
 context and peer diagnostics, now read this same observation. Scheduler-specific
 legacy detail requests are unchanged. Replan obligations and fresh selection/lease/quota checks retain their existing owners.
-Without capture, the historical full-decision route and all default outputs are
-unchanged. This opt-in detail link does not change action-signature coverage.
+Without capture, the historical full-decision route remains available. Enabling
+capture does not enable TurnEnvelope or change admission/settlement defaults.
+This opt-in detail link does not change action-signature coverage.
 
 中文：同时开启短包和完整 decision 保存时，详情入口读取本次保存的文件，不再
 为补读上下文重跑 guard。读取前核对身份和源哈希；旧观察不提供新的执行权限。
 文件损坏或丢失不能自动重跑，选 Todo、lease 变化等仍需按原契约重新准入。
+
+The default ordinary quota CLI view may replace an exactly identical nested
+`heartbeat_recommendation.blocked_priority_fallback` diagnostic with
+`blocked_priority_fallback_ref="$.blocked_priority_fallback"`. Read the complete
+root field in that same packet; resolving this reference needs no new guard or
+detail command. Different mirrors remain inline. Raw decisions, saved captures
+and the existing `--include-detail agent-todos` view retain their original shape.
+Action dimensions remain equivalent; the raw source hash still identifies the
+specific original rendering and must not be substituted across views.
+The existing packet owner supplies this compatibility projection, keeping the
+CLI from becoming another reader of the legacy guidance field.
+
+中文：普通 quota CLI 热路径将完全相同的 fallback 副本改为本包根字段引用，完整
+事实仍在当前包内，不需再次执行 guard。不同副本和既有详细视图保留；原始决定与
+capture 不变。动作维度等价不意味着不同渲染可以共用原始 source hash。
 
 ### Native Turn Host capture
 

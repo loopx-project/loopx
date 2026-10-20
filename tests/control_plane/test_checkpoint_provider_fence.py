@@ -15,7 +15,9 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.effect_runtime import EffectRuntimeConflict
 from loopx.control_plane.goals import checkpoint_context_io as context_io
 from loopx.control_plane.projects.registry_codec import (
+    ProjectRegistryProtocolError,
     load_project_registry,
+    load_registry as load_runtime_registry,
     source_session_registry_transaction,
 )
 from tests.control_plane.test_checkpoint_read_context import _missing
@@ -162,7 +164,7 @@ def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
     tmp_path,
     monkeypatch,
 ):
-    from loopx import state_refresh
+    from loopx import history, state_refresh
 
     current = _missing(tmp_path / "current")
     stale = _missing(tmp_path / "stale")
@@ -173,8 +175,14 @@ def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
 
     monkeypatch.setattr(context_io, "load_registry", load_project_registry)
     monkeypatch.setattr(state_refresh, "load_registry", load_project_registry)
+    # This fixture exercises the exact-source commit fence below runtime
+    # admission. Include late-bound Goal-facts reads in that fixture seam;
+    # the real generic reader must still refuse this lifecycle-only profile.
+    monkeypatch.setattr(history, "load_registry", load_project_registry)
 
     _, current_runtime, current_registry, _, _, current_original = current
+    with pytest.raises(ProjectRegistryProtocolError, match="lifecycle-only profile"):
+        load_runtime_registry(current_registry)
     current_context = context_io.read_checkpoint_context(
         registry_path=current_registry,
         runtime_root_override=str(current_runtime),
@@ -199,6 +207,17 @@ def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
         .splitlines()[-1]
     )
     assert committed_row["goal_ref"] == goal_ref
+    current_index = current_runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    committed_bytes = current_index.read_bytes()
+    replay = refresh(
+        current_registry,
+        current_runtime,
+        current_context["read_context_id"],
+        goal_ref=goal_ref,
+    )
+    assert replay["idempotent_replay"] is True
+    assert current_index.read_bytes() == committed_bytes
+    assert _spend_run_count(current_runtime) == 0
 
     _, stale_runtime, stale_registry, _, _, _ = stale
     stale_context = context_io.read_checkpoint_context(
@@ -225,6 +244,7 @@ def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
         )
     assert rejected.value.diagnostic_code == "stale_goal_instance"
     assert stale_index.read_bytes() == before
+    assert _spend_run_count(stale_runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

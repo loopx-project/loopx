@@ -167,28 +167,54 @@ def test_real_cli_frontier_preserves_canonical_counts_after_display_loss(tmp_pat
     initialize_canonical_authority(runtime, goal["id"], build_todo_runtime_shadow_projection(
         goal_id=goal["id"], todos=fields["agent_todos"]["items"], handoff_mode="soft_claim"),
         state_path=state, provider=provider)
-    state.unlink()
+    original_state = state.read_bytes()
+    quota_args = ("quota", "should-run", "--goal-id", goal["id"],
+        "--agent-id", "agent-a", "--scan-path", str(tmp_path), "--include-detail", "agent-todos")
     try:
+        code, intact = run_json_cli_result(*quota_args, registry_path=registry, runtime_root=runtime)
+        assert code == 0, intact
+        state.unlink()
         code, listed = run_json_cli_result("todo", "list", "--goal-id", goal["id"], "--role", "agent",
             "--limit", "1", "--thin", registry_path=registry, runtime_root=runtime)
         assert code == 0, listed
         assert len(listed["todos"]) == 1
         assert listed["agent_todos"]["deferred_work_counts"]["ready"] == 12
-        code, packet = run_json_cli_result("quota", "should-run", "--goal-id", goal["id"],
-            "--agent-id", "agent-a", "--scan-path", str(tmp_path), "--include-detail", "agent-todos",
-            registry_path=registry, runtime_root=runtime)
-        assert code == 0, packet
+        code, packet = run_json_cli_result(*quota_args, registry_path=registry, runtime_root=runtime)
+        # Canonical work survives display loss, but counts cannot supply the
+        # missing Goal intent or authorize execution.
+        assert code == 1, packet
+        assert packet["status_health_ok"] is False
+        assert packet["should_run"] is False
+        assert packet["normal_delivery_allowed"] is False
         frontier = packet["goal_frontier_projection"]
         assert frontier["normalized_progress"]["agent_advancement_open_count"] == 12
         assert frontier["deferred_successors"]["ready_count"] == 12
         assert frontier["deferred_successors"]["blocked_count"] == 0
         assert frontier["deferred_successors"]["counts_complete"] is True
+        for field in ("normalized_progress", "deferred_successors"):
+            assert frontier[field] == intact["goal_frontier_projection"][field]
         assert not state.exists()
-        (runtime / "authority" / f"{provider}-v0").rename(runtime / "unavailable-provider")
+        state.write_bytes(original_state)
+        code, recovered = run_json_cli_result(*quota_args, registry_path=registry, runtime_root=runtime)
+        assert code == 0, recovered
+        assert state.read_bytes() == original_state
+        for field in ("normalized_progress", "deferred_successors"):
+            assert recovered["goal_frontier_projection"][field] == frontier[field]
+        state.unlink()
+        authority = runtime / "authority" / f"{provider}-v0"
+        unavailable = runtime / "unavailable-provider"
+        authority.rename(unavailable)
         code, failed = run_json_cli_result("todo", "list", "--goal-id", goal["id"],
             registry_path=registry, runtime_root=runtime)
         assert code != 0
         assert failed["legacy_fallback_used"] is False
+        assert not state.exists()
+        unavailable.rename(authority)
+        code, restored = run_json_cli_result("todo", "list", "--goal-id", goal["id"], "--role", "agent",
+            "--limit", "1", "--thin", registry_path=registry, runtime_root=runtime)
+        assert code == 0, restored
+        assert len(restored["todos"]) == 1
+        assert restored["agent_todos"]["deferred_work_counts"]["ready"] == 12
         assert not state.exists()
     finally:
         restart_effect_runtime()

@@ -53,6 +53,23 @@ terminal upgrade retains its thirty-second interactive check budget.
 The existing update panel shows the same native maintenance phases and recovery
 actions. Main is the latest complete signed build, which can lag Git HEAD.
 
+Release archive downloads share one native transfer policy for manual updates
+and background preparation: a ten-second connection deadline, thirty seconds
+without a response read, and a thirty-minute total ceiling. Steady progress may
+continue beyond thirty seconds; stalled headers or body reads remain bounded.
+The archive client limits apply only after feed discovery; the feed keeps its
+existing check deadline (45 seconds manually, 30 seconds in the background).
+Signature verification still precedes cache publication or installation.
+Progress and failures use the
+existing update panel; background IO does not hold the service supervisor or
+restart a running workspace.
+
+手动与后台下载复用原生更新器：连接上限十秒、单次读取无响应上限三十秒、完整下载
+上限三十分钟。持续有进展的下载可超过三十秒；下载的连接和读取期限仅在清单检查后
+启用，清单仍保留手动四十五秒、后台三十秒的原期限。签名通过后
+才写入准备缓存或安装。现有更新面板显示进度与失败，后台下载不阻塞服务监督或重启
+正在使用的工作区。
+
 Startup automatically uses the newest qualified local runtime it can establish.
 It compares package versions; equal versions with source revisions use ancestry
 from the fixed official GitHub repository. Installation time and lexical SHA
@@ -301,8 +318,8 @@ workspace startup. A manual **Check for updates** allows 45 seconds for the same
 official feed, including redirects; the panel keeps showing its checking state
 while the existing workspace remains readable.
 A timeout remains an explicit retryable error, never a claim that the App is
-current. The separate 30-second download/signature-verification deadline and
-installation/recovery boundaries are unchanged.
+current. Archive downloads use the separate connection, idle-read and total
+deadlines described above. Installation and recovery boundaries are unchanged.
 
 Published macOS preview artifacts use ad-hoc code signing to verify bundle
 integrity without requiring an Apple Developer account. They are not signed
@@ -451,6 +468,26 @@ cd ..
 ./scripts/dashboard.sh build
 npm run build
 ```
+
+The updater's real loopback HTTP/signature checks run with `cargo test`. Its
+slow-transfer regressions deliberately exceed thirty seconds and are opt-in:
+
+```sh
+cargo test --lib maintenance::transfer_tests -- --ignored --nocapture --skip released_archive
+LOOPX_TEST_SIGNED_ARCHIVE="/path/to/LoopX.app.tar.gz" cargo test --lib \
+  released_archive_survives_slow_native_transport_and_cache_reopen -- --ignored --nocapture
+```
+
+They cover manual feed headers and bodies arriving between 30 and 45 seconds,
+a progressing signed download, stalled archive headers and a mid-body stall
+through the same native download owner, while service recovery remains usable.
+The window runtime is a test runtime; the transport and signature verifier are
+real. The ordinary fixture's signed bytes are not an installable App. The
+artifact-backed check additionally transfers a complete released archive and
+reopens its verified cache using the shipped public key; keep its `.sig` file
+beside it. Neither check installs the archive or qualifies signed App
+replacement, installed adoption or a real network's throughput. Never point
+them at a live registry or workspace.
 
 To qualify the native supervisor against an actual installed Core, first build
 the runtime bundle as above with `LOOPX_USAGE_PING=0`, then run from `src-tauri`:

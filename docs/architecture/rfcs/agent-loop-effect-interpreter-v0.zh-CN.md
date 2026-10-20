@@ -394,7 +394,9 @@ TurnEnvelope 投影，不能只用未绑定的合成 argv。适配器只为递�
 不改变 scheduler 准入、执行授权、默认值或宿主效果；打包后的传输验证不代表
 live 模型结果、App 采用或以下三项收敛验收完成。
 
-后续实施 Todo 按依赖顺序推进：
+完整要求交付（#5844）、完整收尾条款（#6337）和原始 Host 决策捕获（#6350）的
+源码修复已合入。保留这些成果；它们的完成不关闭 M7.4、R5 或下列三条验收线。
+后续沿既有 owner 和 checkpoint 按此顺序推进：
 
 | Todo | 可观察结果与决定性验收 |
 |---|---|
@@ -409,6 +411,22 @@ fixture。只读规划与可选 quota capture 默认值不变，原生执行 Tur
 证据。证据缺失或不匹配拒绝再次调用 Host；legacy 缓存结果恢复与终态读回保留原 receipt。
 这只关闭 producer 到 detail 的传输缺口。真实模型、打包 App/Lark、后续 authority 检查
 及其余收敛矩阵仍独立验收，本切片不退役任何 Python 投影。
+
+首个普通 CLI 整合将完全相同的
+`heartbeat_recommendation.blocked_priority_fallback` 副本替换为
+`blocked_priority_fallback_ref="$.blocked_priority_fallback"`。根字段的完整事实、
+通知、执行义务和原始 capture 保留；不同副本继续保留，包括 Boolean 与数字的差异。
+既有 `--include-detail agent-todos` 视图保留原副本。真实 File/SQLite CLI 覆盖同次
+捕获的动作维度及无扣费重放。原始 source hash 本就区分不同渲染；本批不改变签名
+覆盖，也不让渲染视图替代原始 capture。
+旧字段访问保留在既有 packet owner；CLI 调用其投影函数，不增加待迁移的旧字段消费者。
+
+下一步先调查获准真实 Goal 的活跃工作、peer/replan、等待/恢复和可选能力形态，
+将每条保留义务映射到共享 typed owner 与实际消费者，再完成一族调用方迁移，最后
+退役其旧投影。用同次捕获决策比较 full/thin heartbeat 与 Turn，将必需详情补读、
+token、序列化/IO、延迟及资源增长一并计入。此次移除副本的字节节省只证明该渲染
+差异；模型质量、完整成本、安装态 App/Lark 采用和迁移默认仍需独立证据。真实私有
+来源不进入公开 fixture 或 checkpoint。
 
 此前成本切片已复现回归预算缺口，不能归因于 fixture alias，也不授权删掉
 必需上下文。`aa87cc019` 与 `fc411c878` 使用相同公共 CLI fixture、临时 alias

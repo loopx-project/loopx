@@ -11,6 +11,10 @@ use std::{
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+#[cfg(test)]
+#[path = "maintenance_transfer_tests.rs"]
+mod transfer_tests;
+
 #[derive(Default)]
 pub struct Maintenance {
     busy: AtomicBool,
@@ -604,11 +608,7 @@ async fn perform(
         } else {
             "up_to_date"
         };
-        *state.pending.lock().unwrap() = update.map(|mut update| {
-            // A quick availability check must not become the download budget.
-            update.timeout = Some(Duration::from_secs(30));
-            (channel.to_string(), update)
-        });
+        *state.pending.lock().unwrap() = update.map(|update| (channel.to_string(), update));
         return Ok(state.publish(phase, details));
     }
     if action == "rollback" {
@@ -654,19 +654,14 @@ async fn perform(
     let bytes = if let Some(cached) = cached {
         cached.bytes
     } else {
-        update
-            .download(
-                |chunk, total| {
-                    received += chunk as u64;
-                    state.publish(
-                        "downloading",
-                        json!({"received":received,"total":total,"version":update.version}),
-                    );
-                },
-                || {},
-            )
-            .await
-            .map_err(|_| "update_download_or_signature_failed")?
+        download_update(&update, |chunk, total| {
+            received += chunk as u64;
+            state.publish(
+                "downloading",
+                json!({"received":received,"total":total,"version":update.version}),
+            );
+        })
+        .await?
     };
     let target = update.version.clone();
     install_verified_app(app, target, move || {
@@ -696,14 +691,37 @@ fn updater_public_key(app: &AppHandle) -> Result<&str, String> {
         .ok_or_else(|| "update_unavailable".into())
 }
 
-async fn find_update(
-    app: &AppHandle,
+async fn download_update(
+    update: &Update,
+    on_chunk: impl FnMut(usize, Option<u64>),
+) -> Result<Vec<u8>, String> {
+    let mut update = update.clone();
+    // A release archive can take minutes while making steady progress. Keep
+    // a finite overall bound, separate from the feed's short request deadline
+    // and the client's per-read idle deadline. Both manual and background
+    // callers still use the native updater's signature verification.
+    update.timeout = Some(Duration::from_secs(30 * 60));
+    update
+        .download(on_chunk, || {})
+        .await
+        .map_err(|_| "update_download_or_signature_failed".into())
+}
+
+async fn find_update<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     channel: &str,
     url: tauri::Url,
     timeout: Duration,
 ) -> Result<Option<Update>, String> {
     let channel = channel.to_owned();
-    app.updater_builder()
+    // The native updater retains this callback for both check and download.
+    // Enable the archive-only policy after check completes, so its connection
+    // and idle limits cannot shorten the feed's own request deadline. Each
+    // returned Update (and its clones) retains only this request's marker.
+    let archive_client = std::sync::Arc::new(AtomicBool::new(false));
+    let configure_archive = archive_client.clone();
+    let update = app
+        .updater_builder()
         .version_comparator(move |current, remote| {
             crate::prepared_update::is_newer(
                 &current.to_string(),
@@ -714,11 +732,22 @@ async fn find_update(
         .endpoints(vec![url])
         .map_err(|_| "update_unavailable")?
         .timeout(timeout)
+        .configure_client(move |client| {
+            if configure_archive.load(Ordering::Acquire) {
+                client
+                    .connect_timeout(Duration::from_secs(10))
+                    .read_timeout(Duration::from_secs(30))
+            } else {
+                client
+            }
+        })
         .build()
         .map_err(|_| "update_unavailable")?
         .check()
         .await
-        .map_err(|error| check_error(error).to_string())
+        .map_err(|error| check_error(error).to_string())?;
+    archive_client.store(true, Ordering::Release);
+    Ok(update)
 }
 
 async fn install_verified_app(
@@ -1128,14 +1157,13 @@ pub fn start_background_update(app: &AppHandle) {
             async {
                 find_update(&handle, channel, endpoint(channel)?, Duration::from_secs(30)).await
             },
-            |mut update| async {
-                update.timeout = Some(Duration::from_secs(30));
+            |update| async {
                 let mut received = 0u64;
-                let bytes = update.download(|chunk, total| {
+                let bytes = download_update(&update, |chunk, total| {
                     received += chunk as u64;
                     state.publish_background(generation, "downloading",
                         json!({"channel":channel,"version":update.version,"received":received,"total":total}));
-                }, || {}).await.map_err(|_| "update_download_or_signature_failed")?;
+                }).await?;
                 let root = prepared_directory(&handle)?;
                 let app = handle.clone();
                 tauri::async_runtime::spawn_blocking(move || {

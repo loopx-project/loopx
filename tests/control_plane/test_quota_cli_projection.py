@@ -17,6 +17,37 @@ from loopx.presentation.renderers.quota_markdown import (
 )
 
 
+@pytest.mark.parametrize("mirror", ["shared", "identical", "different", "boolean-number", "missing-root"])
+def test_fallback_reference_preserves_complete_same_packet_facts(mirror: str) -> None:
+    fallback = {"notify_user": False, "blocked_items": [
+        {"text": "保留完整原因和恢复条件。" * 200, "reason": "Wait for the original dependency"},
+    ], "selected_executable": {"todo_id": "todo_fallback", "claimed_by": "worker"}}
+    nested = fallback if mirror == "shared" else deepcopy(fallback)
+    if mirror == "different":
+        nested["blocked_items"][0]["reason"] = "A different dependency"
+    elif mirror == "boolean-number":
+        nested["notify_user"] = 0
+    payload = {"heartbeat_recommendation": {"notify": "DONT_NOTIFY", "agent_must_attempt": True,
+                                             "blocked_priority_fallback": nested}}
+    if mirror != "missing-root":
+        payload["blocked_priority_fallback"] = fallback
+    original = deepcopy(payload)
+    compact = compact_quota_should_run_cli_payload(payload)
+    recommendation = compact["heartbeat_recommendation"]
+    if mirror in {"shared", "identical"}:
+        assert "blocked_priority_fallback" not in recommendation
+        assert recommendation["blocked_priority_fallback_ref"] == "$.blocked_priority_fallback"
+        assert compact["blocked_priority_fallback"] == fallback
+        assert recommendation["agent_must_attempt"] is True
+        assert recommendation["notify"] == "DONT_NOTIFY"
+        assert len(json.dumps(compact, ensure_ascii=False)) < len(json.dumps(original, ensure_ascii=False))
+    else:
+        assert recommendation["blocked_priority_fallback"] == nested
+        assert "blocked_priority_fallback_ref" not in recommendation
+    assert payload == original
+    assert compact_quota_should_run_cli_payload(payload, include_todo_summary_detail=True) == original
+
+
 @pytest.mark.parametrize("inline", ["absent", "identical", "different", "wrong-step"])
 def test_replan_authoring_is_available_without_another_read(inline: str) -> None:
     authoring = {"schema_version": "goal_vision_replan_contract_v0",

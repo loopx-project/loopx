@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .decision_summary import compact_quota_decision
+from .should_run_packet import reference_duplicate_fallback_guidance
 
 QUOTA_CLI_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_todo_summary_compaction_v0"
@@ -790,6 +791,7 @@ def compact_quota_should_run_cli_payload(
             compact = dict(compact)
             compact["goal_route_hint"] = _compact_goal_route_hint(goal_route_hint)
         compact = _compact_shadowed_action_projections(compact)
+        compact = reference_duplicate_fallback_guidance(compact)
     agent_lane_next_action = compact.get("agent_lane_next_action")
     if isinstance(agent_lane_next_action, dict) and "content_revision" in agent_lane_next_action:
         compact = dict(compact)
