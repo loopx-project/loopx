@@ -113,7 +113,10 @@ def test_recovery_discovery_never_observes_provider_but_admission_still_does(ste
 @pytest.mark.parametrize("fault", [None, "revoked", "source-changed", "native-effect", "unknown-native",
     "reservation-crash", "post-enqueue-crash", "transport-sync-crash", "existing-return",
     "foreign-native-thread", "wrong-native-turn", "policy-native-proof", "steered", "native-goal", "current-context"])
-def test_existing_scanner_automatically_continues_legacy_failure_and_returns_original(steward, monkeypatch, fault):
+@pytest.mark.parametrize("message_type", ["text", "post"])
+def test_existing_scanner_automatically_continues_legacy_failure_and_returns_original(
+    steward, monkeypatch, fault, message_type,
+):
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
     from loopx.chat_manager import MANAGER_CONTEXT_VERSION
 
@@ -124,7 +127,7 @@ def test_existing_scanner_automatically_continues_legacy_failure_and_returns_ori
     # protocol inventory below is independently covered in test_chat_agent.
     source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
     fake.write_text(source)
-    event = provider.event("steward-app", "legacy-overfull", "typed terminal failure")
+    event = provider.event("steward-app", "legacy-overfull", "typed terminal failure", kind=message_type)
     assert transport.admit("steward-app", event)["status"] == "durably_accepted"
     row = next(r for r in transport.core.pending() if r.get("request_ref") == identity_ref(binding["provider_ref"], event["message_id"]))
     failed = finish(runtime, row)
@@ -285,6 +288,46 @@ def test_current_context_host_failure_gets_one_proven_continuation(steward, monk
     assert not any(r["method"] == "thread/inject_items" for r in requests)
     assert failed_path.read_bytes() == failed_bytes
     assert json.loads(path.read_text())["deliveries"]["terminal"] == notice
+    assert len(store.list_sessions()) == 1
+
+
+@pytest.mark.parametrize("fault", [None, "type-changed", "missing-rendering", "missing-attachment-inventory",
+    "provider-edited", "admitted-edited", "transport-media", "native-media", "attachment-failure"])
+def test_recovery_source_readback_requires_original_text_only_post(steward, fault):
+    store, runtime, provider, transport, binding, capture, _ = steward
+    text = " \n**Continue**\n\n1. Keep the original task.\n2. 保留原始条件。\n "
+    event = provider.event("steward-app", "frozen-post", text, kind="post")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    assert finish(runtime, row)["status"] == "completed"
+    record = json.loads((transport.root / (ref + ".json")).read_text())
+    if fault == "type-changed":
+        provider.messages[event["message_id"]]["msg_type"] = "text"
+    elif fault == "missing-rendering":
+        record.pop("source_content")
+    elif fault == "missing-attachment-inventory":
+        record.pop("attachments")
+    elif fault == "provider-edited":
+        provider.messages[event["message_id"]]["content"] = text + "edited"
+    elif fault == "admitted-edited":
+        row["message"] = "A different instruction"
+        (transport.core.root / (ref + ".json")).write_text(json.dumps(row))
+    elif fault == "transport-media":
+        record["attachments"] = [{"id": "original-image"}]
+    elif fault == "native-media":
+        row["attachments"] = [{"id": "original-image"}]
+        (transport.core.root / (ref + ".json")).write_text(json.dumps(row))
+    elif fault == "attachment-failure":
+        record["attachment_notice"] = "Original attachment read failed"
+    selected = transport.bindings.resolve(binding_id=binding["binding_id"],
+        **record["source"], include_observation=True)
+    before_requests, before_writes = capture.read_bytes(), list(provider.writes)
+    observed = transport._recovery_source_observation(record, selected)
+    assert (observed is not None) is (fault is None)
+    if observed:
+        assert observed["content"] == text
+    assert capture.read_bytes() == before_requests and provider.writes == before_writes
     assert len(store.list_sessions()) == 1
 
 

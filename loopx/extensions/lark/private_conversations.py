@@ -1043,8 +1043,24 @@ class LarkPrivateConversations:
         # Resume the admitted text, never an edited/replaced source. Keep the
         # original reply-context text when admission had added verified ancestry.
         # An unavailable rendering is unknown, not permission to guess a body.
-        if (source is None or record["event"].get("message_type") != "text"
-                or not isinstance(source.get("content"), str) or source["content"] != expected):
+        if source is None:
+            return None
+        message_type = record["event"].get("message_type")
+        if source.get("msg_type", source.get("message_type")) != message_type:
+            return None
+        if message_type == "post":
+            # A text-only post already froze its provider rendering at intake.
+            # Require that exact source and the same stripped model input; do
+            # not download resources or treat a partial media caption as text.
+            frozen = record.get("source_content")
+            if (record.get("attachments") != [] or native.get("attachments")
+                    or record.get("attachment_notice") or not isinstance(frozen, str)
+                    or frozen.strip() != expected):
+                return None
+            expected = frozen
+        elif message_type != "text":
+            return None
+        if not isinstance(source.get("content"), str) or source["content"] != expected:
             return None
         return dict(source)
 
