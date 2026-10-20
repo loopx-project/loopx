@@ -1,16 +1,18 @@
-"""Retain the legacy research recipe while ordinary runs select their own scope."""
+"""An explicit benchmark research preset using existing Goal and Todo owners."""
 from __future__ import annotations
+
+from uuid import uuid4
 
 
 def runtime_execution_guidance(env: dict[str, str]) -> str:
-    """Expand only the selected producer or the unchanged legacy prompt."""
+    """Select the research preset or independent observation guidance."""
     from .research_probe import execution_observation_guidance, resolve_execution_observation
 
-    legacy = env.get("LOOPX_RESEARCH_LOOP") == "1"
+    research_preset = env.get("LOOPX_RESEARCH_LOOP") == "1"
     producer = resolve_execution_observation(
-        env.get("LOOPX_EXECUTION_OBSERVATION"), research_loop=legacy,
+        env.get("LOOPX_EXECUTION_OBSERVATION"), research_loop=research_preset,
     )
-    if legacy:
+    if research_preset:
         return research_execution_guidance()
     return execution_observation_guidance() if producer is not None else ""
 
@@ -36,37 +38,69 @@ async def prepare_research_continuation(runtime, environment, *, cwd):
         raise ValueError("research continuation requires its initial candidate stage")
     listed = await runtime._loopx(environment, ["todo", "list", "--goal-id", runtime.goal_id,
         "--role", "agent"], cwd=cwd)
+    initial_todo = next((todo for todo in listed["todos"] if todo["todo_id"] == initial), None)
+    if initial_todo is None:
+        raise ValueError("research continuation requires its retained initial candidate stage")
     matches = [todo for todo in listed["todos"] if todo.get("target_key") == "research-continuation"]
     if len(matches) > 1:
         raise ValueError("research continuation identity is ambiguous")
     if matches:
-        current = matches[0]
-        if current.get("claimed_by") != runtime.agent_id:
+        research = matches[0]
+        if research.get("claimed_by") != runtime.agent_id:
             raise ValueError("research continuation belongs to another Agent")
-        return current  # Never reopen completed work or clear a real wait on preparation.
-    research = await runtime._loopx(environment, [
-        "todo", "add", "--goal-id", runtime.goal_id, "--role", "agent",
-        "--claimed-by", runtime.agent_id, "--task-class", "advancement_task",
-        "--action-kind", "benchmark_task", "--target-key", "research-continuation",
-        "--status", "deferred", "--resume-when", "todo_done:" + initial,
-        "--text", f"[P1] Improve the original research objective in {runtime._task_document} through "
-        "complete, evidence-driven experiments. Preserve the best validated candidate. Use released "
-        "results and actual resource diagnostics to choose between a local repair and a different "
-        "mechanism; retain negative results. Candidate correctness and a successful submission settle "
-        "only that candidate stage. Close this research work only with evidence against the original "
-        "objective and remaining useful authorized work. Explicit user Stop, the original budget limit "
-        "and genuine blockers remain valid stops; do not manufacture work or run merely to fill time.",
-        "--execute"], cwd=cwd)
-    await runtime._loopx(environment, ["todo", "update", "--goal-id", runtime.goal_id,
-        "--agent-id", runtime.agent_id, "--todo-id", initial,
-        "--successor-todo-id", research["todo_id"], "--execute"], cwd=cwd)
-    await runtime._loopx(environment, ["refresh-state", "--goal-id", runtime.goal_id,
-        "--agent-id", runtime.agent_id, "--classification", "research_scope_initialized",
-        "--delivery-batch-scale", "single_surface", "--delivery-outcome", "surface_only",
-        "--vision-state", "active", "--vision-advancement-policy", "as_needed",
-        "--vision-summary", "Build a strong initial candidate, then execute evidence-driven improvements while retaining the best validated artifact.",
-        "--vision-acceptance", "Candidate validity settles its stage, not the original research objective. Respect user Stop, original budget and genuine blockers; justify research closeout from remaining useful authorized work.",
-        "--no-global-sync", "--suppress-external-sinks"], cwd=cwd)
+        if (research["todo_id"] in initial_todo.get("successor_todo_ids", [])
+                or research.get("status") != "deferred"
+                or research.get("resume_when") != "todo_done:" + initial):
+            return research  # Never reopen work, clear waits or replace later Vision.
+    else:
+        research = await runtime._loopx(environment, [
+            "todo", "add", "--goal-id", runtime.goal_id, "--role", "agent",
+            "--claimed-by", runtime.agent_id, "--task-class", "advancement_task",
+            "--action-kind", "benchmark_task", "--target-key", "research-continuation",
+            "--status", "deferred", "--resume-when", "todo_done:" + initial,
+            "--text", f"[P1] Improve the original research objective in {runtime._task_document} through "
+            "complete, evidence-driven experiments. Preserve the best validated candidate. Use released "
+            "results and actual resource diagnostics to choose between a local repair and a different "
+            "mechanism; retain negative results. Candidate correctness and a successful submission settle "
+            "only that candidate stage. Close this research work only with evidence against the original "
+            "objective and remaining useful authorized work. Explicit user Stop, the original budget limit "
+            "and genuine blockers remain valid stops; do not manufacture work or run merely to fill time.",
+            "--execute"], cwd=cwd)
+    binding = ["--goal-id", runtime.goal_id, "--todo-id", initial]
+    mode = await runtime._loopx(environment, ["handoff-mode", "show", "--goal-id",
+        runtime.goal_id], cwd=cwd)
+    lease = None
+    proof = []
+    if mode["handoff_mode"] == "hard_lease":
+        observed = await runtime._loopx(environment, ["task-lease", "inspect", *binding], cwd=cwd)
+        version = observed["lease"]["version"] if observed.get("lease") else 0
+        # A failed update releases this attempt. A retry must acquire a fresh
+        # grant, never borrow another execution's proof or reuse a retired key.
+        key = "research-preparation-" + uuid4().hex
+        acquired = await runtime._loopx(environment, ["task-lease", "acquire", *binding,
+            "--owner", runtime.agent_id, "--idempotency-key", key,
+            "--expected-version", str(version)], cwd=cwd)
+        lease = acquired["lease"]
+        proof = ["--task-lease-idempotency-key", key,
+            "--task-lease-expected-version", str(lease["version"])]
+    try:
+        # Publish scope before the edge: an interrupted preparation with a
+        # missing edge reuses this Todo, while a complete edge preserves later Vision.
+        await runtime._loopx(environment, ["refresh-state", "--goal-id", runtime.goal_id,
+            "--agent-id", runtime.agent_id, "--classification", "research_scope_initialized",
+            "--delivery-batch-scale", "single_surface", "--delivery-outcome", "surface_only",
+            "--vision-state", "active", "--vision-advancement-policy", "as_needed",
+            "--vision-summary", "Build a strong initial candidate, then execute evidence-driven improvements while retaining the best validated artifact.",
+            "--vision-acceptance", "Candidate validity settles its stage, not the original research objective. Respect user Stop, original budget and genuine blockers; justify research closeout from remaining useful authorized work.",
+            "--no-global-sync", "--suppress-external-sinks"], cwd=cwd)
+        await runtime._loopx(environment, ["todo", "update", *binding,
+            "--agent-id", runtime.agent_id, "--successor-todo-id", research["todo_id"],
+            *proof, "--execute"], cwd=cwd)
+    finally:
+        if lease is not None:
+            await runtime._loopx(environment, ["task-lease", "release", *binding,
+                "--owner", runtime.agent_id, "--idempotency-key", lease["idempotency_key"],
+                "--expected-version", str(lease["version"])], cwd=cwd)
     return research
 
 

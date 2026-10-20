@@ -18,13 +18,14 @@ import time
 
 
 def resolve_execution_observation(producer, *, research_loop=False):
-    """Resolve a local producer; the legacy recipe retains its own task scope."""
+    """Resolve a producer; the research preset already includes local_probe."""
     if producer not in (None, "local_probe"):
         raise ValueError("execution_observation must be omitted or 'local_probe'")
     if research_loop and producer is not None:
         raise ValueError(
-            "execution_observation cannot be combined with the legacy research_loop treatment; "
-            "omit research_loop to choose task_entry and stride_strategy independently"
+            "research_loop already includes the local_probe producer; "
+            "omit execution_observation for the research preset, or omit research_loop "
+            "to choose task_entry and stride_strategy independently"
         )
     return "local_probe" if research_loop else producer
 

@@ -163,8 +163,6 @@ class BenchmarkCodex(CodexOffline):
                                           or not task_objective.strip()):
             raise ValueError("Task objective must be a non-empty string")
         self.task_objective = task_objective
-        if self.research_loop and self.task_objective is None:
-            self.task_objective = "Complete the current benchmark task through validated LoopX Todos."
         super().__init__(*args, **kwargs)
 
     def _turn_envelope_receipt(self) -> dict:

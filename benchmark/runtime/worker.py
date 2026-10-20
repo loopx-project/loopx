@@ -382,9 +382,9 @@ def run_once(env: dict[str, str]) -> dict:
         raise ValueError("invalid task-entry stage")
     from .research_probe import resolve_execution_observation
 
-    legacy_research = env.get("LOOPX_RESEARCH_LOOP") == "1"
+    research_preset = env.get("LOOPX_RESEARCH_LOOP") == "1"
     observation_producer = resolve_execution_observation(
-        env.get("LOOPX_EXECUTION_OBSERVATION"), research_loop=legacy_research,
+        env.get("LOOPX_EXECUTION_OBSERVATION"), research_loop=research_preset,
     )
     if observation_producer is not None and execution.mode != "heartbeat":
         raise ValueError("execution_observation requires heartbeat execution")
@@ -402,7 +402,7 @@ def run_once(env: dict[str, str]) -> dict:
         "task_entry": execution.task_entry,
         **({"execution_observation": observation_producer}
            if observation_producer is not None else {}),
-        **({"research_loop": True} if legacy_research else {}),
+        **({"research_loop": True} if research_preset else {}),
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
         "stage": stage,
