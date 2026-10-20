@@ -367,6 +367,8 @@ def _error_tail(exc: BaseException) -> dict[str, str]:
 
 
 def run_once(env: dict[str, str]) -> dict:
+    if env.get("LOOPX_RESEARCH_LOOP", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_RESEARCH_LOOP must be 0 or 1")
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
     execution = Execution(
@@ -394,6 +396,7 @@ def run_once(env: dict[str, str]) -> dict:
         "mode": execution.mode,
         "context": execution.context,
         "task_entry": execution.task_entry,
+        **({"research_loop": True} if env.get("LOOPX_RESEARCH_LOOP") == "1" else {}),
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
         "stage": stage,
@@ -402,6 +405,7 @@ def run_once(env: dict[str, str]) -> dict:
         "timed_out": False,
     }
     session_wake = None
+    request_guard = None
     checkpoint_context = ExitStack()
     pending_path = (
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
@@ -471,6 +475,12 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.checkpoint import capture_before_replan
 
             body = capture_before_replan(env, receipt, body)
+        if env.get("LOOPX_RESEARCH_LOOP") == "1":
+            from .research_request_guard import ResearchRequestGuard
+
+            if execution.mode != "heartbeat":
+                raise ValueError("research request guard requires heartbeat execution")
+            request_guard = checkpoint_context.enter_context(ResearchRequestGuard(env, receipt, wake).serve())
         with (wake / "stderr.log").open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr)
@@ -503,17 +513,27 @@ def run_once(env: dict[str, str]) -> dict:
                                    else execution.timeout_seconds + allowance)
                     if checkpoint_wake.listener is not None:
                         receipt["return_code"] = checkpoint_wake.run(
-                            execution, body, wake, session_wake, stdout, stderr, timeout)
+                            execution, body, wake, session_wake, stdout, stderr, timeout,
+                            **({"request_guard": request_guard} if request_guard is not None else {}))
                         receipt["ok"] = receipt["return_code"] == 0
                     else:
+                        if request_guard is not None:
+                            command = request_guard.command(command)
                         with child_process(command, env=env, stdout=stdout, stderr=stderr,
                                 goal_admission=session_wake.admission if session_wake is not None else None,
                                 check_current_launch=heartbeat_launch_check(env, session_wake)) as process:
                             if session_wake is not None:
                                 receipt["host_invoked"] = True
+                            if request_guard is not None:
+                                request_guard.bind(process, env, session_wake)
                             process.communicate(input=body, timeout=timeout)
                             receipt["return_code"] = process.returncode
                             receipt["ok"] = process.returncode == 0
+                if request_guard is not None and request_guard.refused and stage == "execute":
+                    # The wake returns to its original scheduler for a current
+                    # wait/stop/recovery read; native interruption is not work
+                    # success and never manufactures a settlement.
+                    receipt["ok"] = not request_guard.admission_error
                 if stage == "plan" and receipt["ok"]:
                     from benchmark.runtime.planning import task_plan_packet, validate_plan_readback
 

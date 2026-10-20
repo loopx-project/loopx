@@ -10,11 +10,17 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
+import socket
+import sys
 import threading
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+import time
+import uuid
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 from urllib.parse import SplitResult, urlsplit
 
 
@@ -27,6 +33,10 @@ class RunnerOwnedProviderGateway:
 
 
 _DEFAULT_ALLOWED_PATHS = ("/responses", "/responses/compact")
+# An authority lifetime may hold the Goal writer lock (whose ordinary wait is
+# five seconds). Bound its network send independently of long model responses;
+# gateways without an authority lifetime retain their existing timeout policy.
+_GUARDED_SEND_TIMEOUT_SEC = 1.0
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -44,6 +54,35 @@ _CLIENT_CREDENTIAL_HEADERS = {
     "proxy-authorization",
     "x-api-key",
 }
+
+
+class ProviderGatewayRequestRejected(RuntimeError):
+    """The caller's existing admission owner refused this new provider effect."""
+
+
+def _observed_id(value):
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value) else None
+
+
+def _native_request_identity(headers):
+    # Codex supplies Turn metadata separately from the Responses body. Decode
+    # only the identity fields observed at the native request boundary; never
+    # retain its installation, user, model, prompt or environment metadata.
+    raw = headers.get("x-codex-turn-metadata", "")
+    try:
+        metadata = json.loads(raw) if len(raw) <= 8192 else {}
+    except (ValueError, TypeError):
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    def identity(*values):
+        observed = {_observed_id(value) for value in values} - {None}
+        return next(iter(observed)) if len(observed) == 1 else None
+    return {
+        "native_session_id": identity(headers.get("session-id"), headers.get("session_id"), metadata.get("session_id")),
+        "native_thread_id": identity(headers.get("thread-id"), metadata.get("thread_id")),
+        "native_turn_id": identity(headers.get("x-codex-turn-id"), metadata.get("turn_id")),
+    }
 
 
 def _validated_upstream(value: str) -> SplitResult:
@@ -77,15 +116,56 @@ def _validated_allowed_paths(values: Sequence[str]) -> tuple[str, ...]:
 
 
 def _upstream_connection(
-    parsed: SplitResult, *, timeout_sec: float
+    parsed: SplitResult, *, timeout_sec: float, proxy: SplitResult | None = None
 ) -> http.client.HTTPConnection:
     host = parsed.hostname
     if host is None:  # Defensive narrowing; _validated_upstream rejects this.
         raise ValueError("upstream_base_url must include a host")
     port = parsed.port
+    if proxy is not None:
+        if parsed.scheme == "https":
+            connection = http.client.HTTPSConnection(proxy.hostname, proxy.port or 80, timeout=timeout_sec)
+            connection.set_tunnel(host, port or 443)
+            return connection
+        return http.client.HTTPConnection(proxy.hostname, proxy.port or 80, timeout=timeout_sec)
     if parsed.scheme == "https":
         return http.client.HTTPSConnection(host, port, timeout=timeout_sec)
     return http.client.HTTPConnection(host, port, timeout=timeout_sec)
+
+
+@contextmanager
+def _bounded_request_send(connection: http.client.HTTPConnection, timeout_sec: float):
+    """Give headers and the in-memory body one shared transport deadline."""
+    sock = connection.sock
+    if sock is None:
+        raise http.client.NotConnected()
+    deadline = time.monotonic() + timeout_sec
+    original_timeout, original_send = sock.gettimeout(), connection.send
+
+    def send(data):
+        # HTTPConnection supplies encoded headers and our in-memory bytes body.
+        # Keep its audit event, but own the partial-write loop: SSLSocket's
+        # sendall can otherwise give successive SSL writes a fresh timeout.
+        sys.audit("http.client.send", connection, data)
+        with memoryview(data) as view:
+            offset = 0
+            while offset < len(view):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("provider request send deadline exhausted")
+                sock.settimeout(remaining)
+                sent = sock.send(view[offset:])
+                if sent <= 0:
+                    raise ConnectionError("provider connection closed during send")
+                offset += sent
+
+    connection.send = send
+    try:
+        yield
+    finally:
+        connection.send = original_send
+        if connection.sock is sock:
+            sock.settimeout(original_timeout)
 
 
 @contextmanager
@@ -96,24 +176,64 @@ def serve_runner_owned_provider_gateway(
     allowed_paths: Sequence[str] = _DEFAULT_ALLOWED_PATHS,
     request_timeout_sec: float = 600,
     max_request_bytes: int = 64 * 1024 * 1024,
+    upstream_proxy_url: str | None = None,
+    request_lifetime: Callable[[dict], AbstractContextManager] | None = None,
+    observe_request: Callable[[dict], None] | None = None,
 ) -> Iterator[RunnerOwnedProviderGateway]:
     """Serve a loopback-only Responses API gateway for one benchmark run.
 
     The returned URL and request surface contain no upstream credential. The
     caller owns the stronger process/filesystem boundary between this gateway
     and the agent runtime.
+
+    A request_lifetime factory captures the caller binding when a connection is
+    accepted, before request lines, headers, bodies or upstream connections can
+    wait. It receives the request ID first; parsed metadata is added before its
+    context is entered for an admitted POST. Capture must retain no authority
+    locks and perform no admission effects; those belong in the context.
+    Guarded headers and body share a one-second send budget; response reads
+    still use request_timeout_sec, as do unguarded requests.
     """
 
     upstream = _validated_upstream(upstream_base_url)
+    proxy = urlsplit(upstream_proxy_url) if upstream_proxy_url else None
+    if proxy is not None and (proxy.scheme != "http" or not proxy.hostname or proxy.username or proxy.password
+                             or proxy.query or proxy.fragment or proxy.path not in ("", "/")):
+        raise ValueError("upstream proxy must be an explicit credential-free HTTP proxy")
     token = str(upstream_bearer_token)
     if not token.strip():
         raise ValueError("upstream_bearer_token must be non-empty")
     if request_timeout_sec <= 0 or max_request_bytes <= 0:
         raise ValueError("gateway limits must be positive")
     admitted_paths = _validated_allowed_paths(allowed_paths)
+    bindings: dict[socket.socket, tuple[dict[str, Any], AbstractContextManager | Exception]] = {}
+    bindings_lock = threading.Lock()
+
+    class GatewayServer(ThreadingHTTPServer):
+        def get_request(self):
+            connection, address = super().get_request()
+            if request_lifetime is not None:
+                observed = {"request_id": "request-" + uuid.uuid4().hex}
+                try:
+                    captured = request_lifetime(observed)
+                except Exception as error:
+                    captured = error
+                with bindings_lock:
+                    bindings[connection] = observed, captured
+            return connection, address
+
+        def shutdown_request(self, request):
+            with bindings_lock:
+                bindings.pop(request, None)
+            super().shutdown_request(request)
 
     class GatewayHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.0"
+
+        def setup(self) -> None:
+            with bindings_lock:
+                self.captured_binding = bindings.pop(self.request, None)
+            super().setup()
 
         def log_message(self, _format: str, *args: object) -> None:
             return
@@ -142,28 +262,66 @@ def serve_runner_owned_provider_gateway(
             if content_length < 0 or content_length > max_request_bytes:
                 self._json_error(413, "provider_gateway_request_size_invalid")
                 return
-            body = self.rfile.read(content_length)
-            upstream_path = f"{upstream.path.rstrip('/')}{requested.path}"
-            if requested.query:
-                upstream_path = f"{upstream_path}?{requested.query}"
-            headers = {
-                key: value
-                for key, value in self.headers.items()
-                if key.lower()
-                not in {
-                    *_HOP_BY_HOP_HEADERS,
-                    *_CLIENT_CREDENTIAL_HEADERS,
-                    "content-length",
-                    "host",
-                }
-            }
-            headers["Authorization"] = f"Bearer {token}"
-            headers["Content-Length"] = str(len(body))
-            connection = _upstream_connection(upstream, timeout_sec=request_timeout_sec)
+            observed = (self.captured_binding[0] if self.captured_binding is not None
+                else {"request_id": "request-" + uuid.uuid4().hex})
+            request_id = observed["request_id"]
+            observed.update({"path": requested.path,
+                # Only explicitly received transport identities; no inference
+                # from timestamps, messages, tokens or request body contents.
+                "client_request_id": _observed_id(self.headers.get("x-client-request-id") or self.headers.get("x-request-id")),
+                **_native_request_identity(self.headers),
+                "upstream_request_id": None, "forwarded": False, "status": None,
+                "response_bytes": 0})
+            started = time.monotonic()
+            connection = None
             response_started = False
             try:
-                connection.request("POST", upstream_path, body=body, headers=headers)
+                lifetime = self.captured_binding[1] if self.captured_binding is not None else nullcontext()
+                if isinstance(lifetime, Exception):
+                    raise lifetime
+                body = self.rfile.read(content_length)
+                upstream_path = f"{upstream.path.rstrip('/')}{requested.path}"
+                if requested.query:
+                    upstream_path = f"{upstream_path}?{requested.query}"
+                if proxy is not None and upstream.scheme == "http":
+                    upstream_path = f"{upstream.scheme}://{upstream.netloc}{upstream_path}"
+                headers = {
+                    key: value
+                    for key, value in self.headers.items()
+                    if key.lower()
+                    not in {
+                        *_HOP_BY_HOP_HEADERS,
+                        *_CLIENT_CREDENTIAL_HEADERS,
+                        "content-length",
+                        "host",
+                    }
+                }
+                headers["Authorization"] = f"Bearer {token}"
+                headers["Content-Length"] = str(len(body))
+                if observe_request is not None:
+                    headers["X-LoopX-Request-Id"] = request_id
+                connection = _upstream_connection(upstream, timeout_sec=request_timeout_sec, proxy=proxy)
+                if request_lifetime is not None:
+                    # Pin the request's owner before any slow connection work,
+                    # then leave DNS/TCP/CONNECT/TLS outside its authority lock.
+                    # Reconnection during POST would reintroduce that lock hold.
+                    connection.connect()
+                    connection.auto_open = 0
+                with lifetime:
+                    # Keep the caller's original lifetime/authority through the
+                    # actual send, not through the potentially long response.
+                    observed["forwarded"] = None  # A send failure may still have reached the upstream.
+                    if observe_request is not None:
+                        observe_request({**observed, "event": "dispatch"})
+                    send_lifetime = (_bounded_request_send(connection,
+                        min(request_timeout_sec, _GUARDED_SEND_TIMEOUT_SEC))
+                        if request_lifetime is not None else nullcontext())
+                    with send_lifetime:
+                        connection.request("POST", upstream_path, body=body, headers=headers)
+                    observed["forwarded"] = True
                 response = connection.getresponse()
+                observed["status"] = response.status
+                observed["upstream_request_id"] = _observed_id(response.getheader("x-request-id"))
                 self.send_response(response.status, response.reason)
                 for key, value in response.getheaders():
                     if key.lower() not in {
@@ -173,21 +331,28 @@ def serve_runner_owned_provider_gateway(
                         self.send_header(key, value)
                 self.end_headers()
                 response_started = True
-                while chunk := response.read(64 * 1024):
+                while chunk := response.read1(64 * 1024):
+                    observed["response_bytes"] += len(chunk)
                     self.wfile.write(chunk)
                     self.wfile.flush()
+            except ProviderGatewayRequestRejected:
+                observed["status"] = 409
+                self._json_error(409, "provider_gateway_current_admission_refused")
             except (OSError, http.client.HTTPException):
                 if not response_started and not self.wfile.closed:
                     self._json_error(502, "provider_gateway_upstream_unavailable")
                 else:
                     self.close_connection = True
             finally:
-                connection.close()
+                if connection is not None:
+                    connection.close()
+                if observe_request is not None:
+                    observe_request({**observed, "event": "finished", "elapsed_seconds": time.monotonic() - started})
 
         def do_GET(self) -> None:
             self._json_error(405, "provider_gateway_method_not_admitted")
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
+    server = GatewayServer(("127.0.0.1", 0), GatewayHandler)
     server.daemon_threads = True
     thread = threading.Thread(
         target=server.serve_forever,

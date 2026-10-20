@@ -183,7 +183,7 @@ class CheckpointWake:
                 "deadline_epoch_ms": window * 1000,
             }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
 
-    def run(self, execution, body, wake, session_wake, stdout, stderr, timeout):
+    def run(self, execution, body, wake, session_wake, stdout, stderr, timeout, *, request_guard=None):
         from .worker import child_process, heartbeat_launch_check, native_command
         from .sessions import BenchmarkSessionWake
 
@@ -194,12 +194,16 @@ class CheckpointWake:
             if remaining <= 0:
                 raise subprocess.TimeoutExpired("checkpoint source wake", timeout)
             command = native_command(launch_env, execution, "execute", wake, session_wake)
+            if request_guard is not None:
+                command = request_guard.command(command)
             continuation = None
             with child_process(command, env=launch_env, stdout=stdout, stderr=stderr,
                                goal_admission=session_wake.admission if session_wake is not None else None,
                                check_current_launch=heartbeat_launch_check(
                                    launch_env, session_wake, original_quota=original_quota)) as process:
                 self.receipt["host_invoked"] = True
+                if request_guard is not None:
+                    request_guard.bind(process, launch_env, session_wake, original_quota=original_quota)
                 process.stdin.write(body)
                 process.stdin.close()
                 while process.poll() is None:
