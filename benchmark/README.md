@@ -47,12 +47,11 @@ by itself establish a C2 uplift claim.
 ## Current work
 
 - [Execution observations through ordinary Goal planning](runtime/EXECUTION_OBSERVATIONS.md)
-  describes two experiment choices: independent local measurements with ordinary
-  planning/stride selection, and an explicit preset with retained research
-  successor work. It also covers both entries' complete initial Goal objective
-  and the preset's initialization costs, including real lease writes without
-  model calls or work Turns. Neither a single validation nor configuration
-  parity proves research equivalence or efficiency.
+  covers independent local measurements with ordinary Goal/Todo planning and
+  stride selection, complete initial Goal retention, and migration from the
+  removed `research_loop` preset. Historical trials keep their original versions
+  and treatment definitions. Engineering checks do not establish autonomous
+  research benefit or efficiency.
 - **LHTB result highlight:** GPT-5.6 Sol + LoopX 1.0.3 Heartbeat reaches
   **0.4948 mean reward** on 46 tasks: **+17.3% vs Plain Codex** and
   **+10.6% vs native Codex Goal**. Strict solves are 7/46, matching Plain and
