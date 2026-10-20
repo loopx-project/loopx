@@ -94,6 +94,12 @@ permitted. Downgrading code must preserve journals and captures; deleting them
 is not rollback. This transport qualification does not establish live model,
 packaged App/Lark or overall convergence acceptance.
 
+Repair and replan diagnostics remain in the journal's typed `host_result`,
+including its summary and follow-up action. They do not implicitly replace Todo
+notes or evidence, even when settlement succeeds. Semantic refusal and cached
+result recovery must preserve that task context; explicit Todo lifecycle
+operations retain their existing authority and validation.
+
 中文：原生 `turn run-once --execute` 在启动 Host 前保存完整原始决策，实际短包详情
 与失败重试均读取该快照，预览不写入。Turn 身份来自原 journal，不伪造 heartbeat
 准入记录。旧观察不授予新权限；缺失、损坏或身份／哈希不符时拒绝重新启动 Host。

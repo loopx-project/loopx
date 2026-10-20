@@ -17,7 +17,6 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority
 from loopx.cli import main
 from loopx.cli_commands.turn_todo_writeback import (
-    write_turn_repair_update,
     write_turn_validated_completion,
 )
 from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
@@ -25,6 +24,7 @@ from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
 from loopx.control_plane.quota import monitor_poll
+from loopx.control_plane.todos.mutation_api import update_goal_todo
 from loopx.control_plane.scheduler.monitor_poll_writeback import (
     write_monitor_poll_todo_state,
 )
@@ -319,7 +319,7 @@ def test_read_only_quota_still_collects_unmigrated_state(
     assert context.status_payload["runtime_root"] == str(runtime_override)
 
 
-def test_turn_repair_update_blocked_without_canonical_override(
+def test_explicit_todo_update_blocked_without_canonical_override(
     tmp_path: Path,
 ) -> None:
     registry, state, runtime_registry, runtime_override = (
@@ -328,7 +328,7 @@ def test_turn_repair_update_blocked_without_canonical_override(
     before = state.read_bytes()
 
     with pytest.raises(CanonicalAuthorityRequired) as error:
-        write_turn_repair_update(
+        update_goal_todo(
             registry_path=registry,
             runtime_root_arg=str(runtime_override),
             goal_id=GOAL_ID,

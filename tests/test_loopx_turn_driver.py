@@ -3425,10 +3425,6 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
         spend_quota_slot as real_spend_quota_slot,
     )
 
-    from loopx.cli_commands.turn_todo_writeback import (
-        update_goal_todo as real_update_goal_todo,
-    )
-
     project, runtime, registry = _write_live_fixture(tmp_path)
     state_path = (
         project
@@ -3466,7 +3462,7 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     )
     refresh_workspace_paths: list[Path | None] = []
     spend_workspace_paths: list[Path | None] = []
-    updated_todo_ids: list[str] = []
+    refresh_todo_ids: list[str] = []
 
     def adaptive_turn_envelope(*args: object, **kwargs: object) -> dict[str, object]:
         envelope = real_build_turn_envelope(*args, **kwargs)
@@ -3484,15 +3480,12 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
 
     def recording_refresh_state_run(*args: object, **kwargs: object) -> dict[str, object]:
         refresh_workspace_paths.append(kwargs.get("delivery_workspace_path"))
+        refresh_todo_ids.append(str(kwargs.get("todo_id") or ""))
         return real_refresh_state_run(*args, **kwargs)
 
     def recording_spend_quota_slot(*args: object, **kwargs: object) -> dict[str, object]:
         spend_workspace_paths.append(kwargs.get("workspace_path"))
         return real_spend_quota_slot(*args, **kwargs)
-
-    def recording_update_goal_todo(*args: object, **kwargs: object) -> dict[str, object]:
-        updated_todo_ids.append(str(kwargs.get("todo_id") or ""))
-        return real_update_goal_todo(*args, **kwargs)
 
     def fake_codex_host(request: dict[str, object], **_kwargs: object) -> dict[str, object]:
         return {
@@ -3524,10 +3517,6 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     monkeypatch.setattr(
         "loopx.cli_commands.turn_run_once.spend_quota_slot",
         recording_spend_quota_slot,
-    )
-    monkeypatch.setattr(
-        "loopx.cli_commands.turn_todo_writeback.update_goal_todo",
-        recording_update_goal_todo,
     )
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -3571,9 +3560,7 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert payload["effects"]["quota_spent"] is True
     assert refresh_workspace_paths == [project]
     assert spend_workspace_paths == [project]
-    assert updated_todo_ids == (
-        [] if result_kind == "validated_progress" else ["todo_fixture0001"]
-    )
+    assert refresh_todo_ids == ["todo_fixture0001"]
     state = (
         project
         / ".codex"
@@ -3588,8 +3575,8 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert journal["host_result"]["next_action"] == "Run one revised public fixture check"
     assert journal["host_result"]["recommended_action"] != journal["host_result"]["next_action"]
     assert "Run one revised public fixture check" not in state
-    if result_kind != "validated_progress":
-        assert f"LoopX%20Turn%20{result_kind}" in state
+    assert journal["host_result"]["summary"] == "One public fixture advanced."
+    assert "One%20public%20fixture%20advanced" not in state
 
 
 def test_turn_run_once_codex_cli_wires_validated_reflection_post_settlement(

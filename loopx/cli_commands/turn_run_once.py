@@ -54,10 +54,7 @@ from .turn_decision import collect_turn_status_payload
 from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
-from .turn_todo_writeback import (
-    write_turn_repair_update,
-    write_turn_validated_completion,
-)
+from .turn_todo_writeback import write_turn_validated_completion
 
 EXACT_SETTLEMENT_READBACK_NOT_FOUND = (
     "exact settlement readback unexpectedly returned not-found"
@@ -263,15 +260,8 @@ def execute_turn_run_once(
                     raise ValueError(
                         f"{result_kind} requires one selected todo for typed writeback"
                     )
-                write_turn_repair_update(
-                    registry_path=registry_path,
-                    runtime_root_arg=runtime_root_arg,
-                    goal_id=args.goal_id,
-                    todo_id=todo_id,
-                    note=str(result.get("summary") or result["classification"]),
-                    evidence=f"LoopX Turn {result_kind}: {result['next_action']}",
-                    agent_id=args.agent_id,
-                )
+            # Diagnostics already live in the journal's typed host_result.
+            # Do not overwrite task context before refresh can reject a result.
             refresh = refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,

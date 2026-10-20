@@ -4,39 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
-
-
-def write_turn_repair_update(
-    *,
-    registry_path: Path,
-    runtime_root_arg: str | None,
-    goal_id: str,
-    todo_id: str,
-    note: str,
-    evidence: str,
-    agent_id: str | None,
-) -> None:
-    """Record one repair-required Todo note under the effective runtime root.
-
-    ``runtime_root_arg`` is required on purpose: the Turn settlement must
-    hand down the same ``--runtime-root`` override the dispatch resolved, so
-    the canonical provider route and its maintenance guard cannot split from
-    the Turn writeback path.
-    """
-
-    update_goal_todo(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        todo_id=todo_id,
-        role="agent",
-        note=note,
-        evidence=evidence,
-        agent_id=agent_id,
-        project=None,
-        dry_run=False,
-        runtime_root_arg=runtime_root_arg,
-    )
+from ..control_plane.todos.mutation_api import complete_goal_todo
 
 
 def write_turn_validated_completion(
