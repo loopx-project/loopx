@@ -172,6 +172,60 @@ def test_agent_only_no_followup_closes_explicit_empty_user_source() -> None:
     assert goal_frontier_is_terminal_no_followup(projection=projection) is True
 
 
+@pytest.mark.parametrize("readback", ["legacy", "current"])
+@pytest.mark.parametrize("acceptance_status", ["unverified", "failed", "accepted"])
+def test_no_followup_requires_current_checks_across_readback_versions(
+    readback: str, acceptance_status: str,
+) -> None:
+    parsed = _closed_todo_sources()
+    contract = {
+        "criteria": [{"id": "calculator", "description": "Validate the complete calculator result."}],
+        "tasks": [{"todo_id": "todo_fix", "state": "ready", "applicable": True}],
+        "status": acceptance_status,
+    }
+    if readback == "legacy":
+        contract["enabled"] = True
+    parsed["agent_todos"]["goal_acceptance_contract"] = contract
+    status = quota_status_payload(
+        goal_id="goal-terminal-test", status="active",
+        recommended_action="Inspect current verification of the completed calculator result.",
+        user_todos=parsed["user_todos"], agent_todos=parsed["agent_todos"],
+    )
+
+    decision = build_quota_should_run(status, goal_id="goal-terminal-test")
+
+    projection = decision["goal_frontier_projection"]
+    assert goal_frontier_is_terminal_no_followup(projection=projection) is (acceptance_status == "accepted")
+    if acceptance_status == "accepted":
+        assert projection["source_completeness"]["goal_acceptance"] == "accepted"
+    else:
+        assert projection.get("terminal_state") is None
+    # A failed or missing whole-Goal verification cannot manufacture another
+    # empty delivery after the work closed. Preserve its original evidence.
+    assert decision["should_run"] is False
+
+
+@pytest.mark.parametrize("pending_gap", [False, True])
+def test_default_outcome_without_checks_uses_its_existing_frontier(pending_gap: bool) -> None:
+    parsed = _closed_todo_sources()
+    gaps = [{"kind": "goal_outcome_uncovered", "outcome_id": "calculator",
+             "requirement_ids": ["explanation"]}] if pending_gap else []
+    agent_summary = summarize_user_todos_for_quota(parsed["agent_todos"])
+    agent_summary["goal_acceptance_contract"] = {
+        "outcome_requirements": {"outcomes": [], "acceptance_gaps": gaps},
+    }
+
+    projection = build_goal_frontier_projection_from_summaries(
+        goal_id="goal-terminal-test", agent_id=None,
+        user_todo_summary=summarize_user_todos_for_quota(parsed["user_todos"]),
+        agent_todo_summary=agent_summary, work_lane_contract=None,
+        replan_obligation=None, acceptance_gaps=gaps,
+    )
+
+    assert "goal_acceptance" not in projection.get("source_completeness", {})
+    assert goal_frontier_is_terminal_no_followup(projection=projection) is (not pending_gap)
+
+
 def test_watch_only_monitor_does_not_block_terminal_convergence() -> None:
     state_text = """\
 ## User Todo / Owner Review Reading Queue

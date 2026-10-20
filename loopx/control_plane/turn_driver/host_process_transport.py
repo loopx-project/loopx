@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -223,11 +224,14 @@ def run_host_process(
     on_stderr: Callable[[str], None] | None = None,
     delegated_lease: dict[str, Any] | None = None,
     environment: dict[str, str] | None = None,
+    launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
 ) -> dict[str, Any]:
     """Keep the control pipe open until exit; EOF cancels the owned process group.
 
     Callbacks observe transient chunks. They must not persist raw Host output.
     TS owns deadlines, byte budgets, termination and the final observation.
+    An owning admission guard covers request delivery through spawn observation,
+    then releases before Host output; it must never lock the entire Host run.
     """
     command = list(argv)
     if sys.platform == "win32":
@@ -281,7 +285,10 @@ def run_host_process(
         assert proc.stdin is not None and proc.stdout is not None
         result = None
         record = None
+        launch_scope = ExitStack()
         try:
+            if launch_guard is not None:
+                launch_scope.enter_context(launch_guard())
             if record_path is not None:
                 # Written before the request, so no Host exists that the record
                 # does not name; a record that cannot be written launches nothing.
@@ -313,6 +320,7 @@ def run_host_process(
                         record.update(phase="spawned", host_pid=event["pid"],
                                       process_group=group if isinstance(group, int) else None)
                         _write_host_process_record(record_path, record)
+                    launch_scope.close()
                 elif kind in {"stdout", "stderr"} and isinstance(event.get("text"), str):
                     consume = on_stdout if kind == "stdout" else on_stderr
                     if consume is not None:
@@ -325,9 +333,11 @@ def run_host_process(
                     "spawn_failed",
                 }:
                     result = event
+                    launch_scope.close()
                 else:
                     raise RuntimeError("Invalid managed Host process observation")
         finally:
+            launch_scope.close()
             # Also runs on callback failure / Ctrl-C. Do not kill the supervisor
             # before it has had a chance to terminate its owned Host group.
             proc.stdin.close()

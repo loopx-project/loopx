@@ -697,8 +697,11 @@ adoption, restoration or improved results. These are refinements of the existing
 Agent questions, not new decision fields, score thresholds or settlement gates;
 the strategy remains default-off. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
-continuation with one feasible different approach that could affect that
-component, including complete cost. A changed auxiliary mechanism can be useful,
+continuation with plausible alternatives that change the limiting assumption or
+mechanism, including complete cost. A stalled route calls for a discriminating
+experiment across those explanations, not only more local parameter changes.
+Distinguish an unexecuted intervention, failed transfer and insufficient tested
+route potential; each calls for different evidence. A changed auxiliary mechanism can be useful,
 but its novelty does not establish that it addresses the remaining gap. Local or
 synthetic improvement needs applicable transfer evidence; repeated identical
 outcomes are not new information. Prefer the smallest coverage that resolves the
@@ -825,18 +828,36 @@ projection/review semantics. Both historical v1 decision shapes retain read
 compatibility, but cannot discharge a fresh enabled review. Frozen workers retain
 their exact source. Pin implementation revisions for comparisons; do not
 reinterpret old decisions. The policy seam can evolve when evidence warrants it, without maintaining speculative variants.
-For an enabled periodic review, every settlement path now requires a current,
+For an enabled periodic review or an existing observed-stall review
+(`typed_progress_repeat`, `no_progress_streak`, `repeated_action_loop`,
+`external_progress_review_drift`), every settlement path requires a current,
 source-bound stride decision. Typed progress, successor and terminal results
 remain valid evidence/outcomes, while a bare Todo successor transition cannot
-stand in for the review. This closes the decision-recording gap; it does not
-establish that the proposed action was adopted or improved the Goal.
+stand in for the review. An evidenced path decision can retain unfinished useful
+work without a fabricated new progress identifier or Todo. Explicit acceptance
+and capability outcome restrictions still apply; default-off and other sources
+retain their prior exit policies. No new detector, threshold or action is added.
+
+The frozen [EdgeBench diagnostic window](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)
+reports 902 completed native turns and no submissions over one post-hoc selected
+230-minute window. This motivates checking whether review changes subsequent
+work, but does not identify the cause or establish a general stagnation rate;
+zero `apply_patch` calls cannot exclude writes through shell commands.
+
+Real File/SQLite CLI coverage now takes an existing typed-progress stall through
+decision rejection/recovery, an executed comparison of local choice, reverse
+priority and joint assignment under one fixed objective, result readback and the
+next executable transfer-validation Todo. The current decision can retain the
+original Todo; comparison results, not a new label, choose the next mechanism.
+This proves the scripted control path, not model adoption or EdgeBench score gain.
+Existing negative-result and later-work followthrough coverage remains necessary.
 The effective review cadence remains owned by the
 [Goal Vision/replan contract](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
 and Goal/device configuration. Six effective work Turns is the default; enabling
 the stride strategy for one Goal inherits its live review cadence, and only an
 explicit Goal cadence override pins a separate count or unit. The cadence is not
 Todo size, an experiment boundary or a mandatory route switch; this refinement
-changes neither counting nor discharge. Matched continuation must qualify actual
+does not change counting. Matched continuation must qualify actual
 adoption, target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical

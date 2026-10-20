@@ -230,7 +230,13 @@ events=[build_explore_node_event(goal_id=goal,node_id=f'hit-{index}',title=f'Syn
     summary='Pointer regression only',parent_id='hit-0' if index else None,
     recorded_at='2026-01-01T00:00:00Z' if index<9 else '2026-01-01T18:00:00Z') for index in range(10)]
 events.append(build_explore_finding_event(goal_id=goal,finding_id='negative',node_id='hit-6',
-    title='Synthetic negative',summary='Negative pointer regression',status='refuted',recorded_at='2026-01-01T00:00:00Z'))
+    title='Synthetic negative',summary='Negative pointer regression',status='refuted',recorded_at='2026-01-01T00:00:00Z',
+    evidence_refs=['probe:synthetic'], execution_observation={
+        'schema_version':'explore_execution_observation_v0','candidate_sha256':'a'*64,
+        'input_revision':'synthetic-v1','planned_method_id':'scheduler','executed_method_id':'mask-selection',
+        'change_reason':'The control isolated a different first intervention.',
+        'elapsed_seconds':0.2,'limit_seconds':30,'search_iterations':None,'exit_code':0,
+        'stop_reason':'process_exit:0','evidence_refs':['probe:synthetic']}))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Synthetic pointer regression','events':events}))
 `,fixture],{cwd:repoRoot});
       collisionOwner=await startHistoryOwner(fixture);
@@ -289,6 +295,11 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
         await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         const detail = history.locator('.research-history-detail');
         await detail.waitFor();
+        await detail.getByText('实际执行与资源观测', {exact:true}).click();
+        assert(await detail.getByText('scheduler → mask-selection', {exact:true}).isVisible());
+        assert(await detail.getByText('未测量', {exact:true}).isVisible(), 'Unknown iterations must not become zero');
+        assert(await detail.getByText('0.2 / 30', {exact:true}).isVisible());
+        await page.screenshot({path:resolve(outputDir, `research-execution-${viewport.width}.png`), animations:'disabled'});
         assert.deepEqual(selectedNodes(),ids);
         assert(ids.includes('hit-6'));
         await detail.getByRole('heading',{name:'Synthetic hit target 6',exact:true}).waitFor();

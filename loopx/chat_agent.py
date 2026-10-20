@@ -10,7 +10,7 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -686,6 +686,9 @@ class CodexChatAgentSession:
     _command_items_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _host_model_auth: Any = field(default=None, repr=False)
     _public_source_read_context: str = field(default="", repr=False)
+    _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
+        default=None, repr=False
+    )
 
     @classmethod
     def start(
@@ -709,6 +712,7 @@ class CodexChatAgentSession:
         reasoning_effort: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
         host_config: dict[str, Any] | None = None,
+        launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
         _compatibility_catalog_path: Path | None = None,
     ) -> "CodexChatAgentSession":
         resolved = shutil.which(codex_bin)
@@ -816,27 +820,38 @@ class CodexChatAgentSession:
                 ]
             )
         command.extend(["--listen", "stdio://"])
+        process = None
         try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(root),
-                env=runtime_env,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
-                start_new_session=isolate_process_tree and os.name == "posix",
-            )
-        except OSError as exc:
-            raise CodexChatAgentError(
-                "Codex app-server could not start",
-                gate=_host_tool_gate(
-                    "Codex app-server could not start for LoopX Chat.",
-                    "Verify the Codex CLI installation and app-server support.",
-                ),
-            ) from exc
+            # The admitting caller owns this short launch fence. Native startup
+            # RPCs and model execution must not hold the Goal writer lock.
+            with launch_guard() if launch_guard is not None else nullcontext():
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        cwd=str(root),
+                        env=runtime_env,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        encoding="utf-8",
+                        bufsize=1,
+                        start_new_session=isolate_process_tree and os.name == "posix",
+                    )
+                except OSError as exc:
+                    raise CodexChatAgentError(
+                        "Codex app-server could not start",
+                        gate=_host_tool_gate(
+                            "Codex app-server could not start for LoopX Chat.",
+                            "Verify the Codex CLI installation and app-server support.",
+                        ),
+                    ) from exc
+        except BaseException:
+            # A guard can fail on exit after Popen succeeded, before a Session
+            # exists to own cleanup. Reap that same process on this path too.
+            if process is not None:
+                cls._close_process(process, process_tree_owned=isolate_process_tree)
+            raise
 
         messages: "queue.Queue[dict[str, Any] | Exception]" = queue.Queue()
         assert process.stdout is not None
@@ -862,6 +877,7 @@ class CodexChatAgentSession:
             model=model,
             reasoning_effort=reasoning_effort,
             model_catalog_compatibility_applied=_compatibility_catalog_path is not None,
+            _launch_guard=launch_guard,
         )
         try:
             session._request(
@@ -1067,6 +1083,7 @@ class CodexChatAgentSession:
                     reasoning_effort=reasoning_effort,
                     dynamic_tools=dynamic_tools,
                     host_config=host_config,
+                    launch_guard=launch_guard,
                     _compatibility_catalog_path=catalog_path,
                 )
         except Exception:
@@ -1082,13 +1099,17 @@ class CodexChatAgentSession:
             ),
         )
 
-    def _write(self, payload: dict[str, Any]) -> None:
+    def _write(
+        self, payload: dict[str, Any], *,
+        write_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    ) -> None:
         if self.process.stdin is None:
             raise self._runtime_error("Codex app-server input stream is closed.")
         try:
             with self._write_lock:
-                self.process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
-                self.process.stdin.flush()
+                with write_guard() if write_guard is not None else nullcontext():
+                    self.process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                    self.process.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
             raise self._runtime_error(
                 "Codex app-server input stream closed unexpectedly."
@@ -1248,6 +1269,7 @@ class CodexChatAgentSession:
         *,
         request_id: int | None = None,
         deadline: float | None = None,
+        write_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> dict[str, Any]:
         if request_id is None:
             with self._request_id_lock:
@@ -1257,7 +1279,14 @@ class CodexChatAgentSession:
         with self._response_waiters_lock:
             self._response_waiters[request_id] = waiter
         try:
-            self._write({"id": request_id, "method": method, "params": params})
+            # A per-Turn guard replaces the session default. Acquire it only
+            # inside the actual write, after waiting for the native write lock.
+            if write_guard is None and method == "turn/start":
+                write_guard = self._launch_guard
+            self._write(
+                {"id": request_id, "method": method, "params": params},
+                **({"write_guard": write_guard} if write_guard is not None else {}),
+            )
             response_deadline = time.monotonic() + self.response_timeout_sec
             deadline = min(deadline, response_deadline) if deadline is not None else response_deadline
             while True:
@@ -1621,6 +1650,7 @@ class CodexChatAgentSession:
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         output_schema: dict[str, Any] | None = None,
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
+        turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> dict[str, Any]:
         text = " ".join(str(user_message or "").split())
         if not text:
@@ -1649,6 +1679,9 @@ class CodexChatAgentSession:
             image_url = str(attachment.get("data_url") or "")
             if image_url:
                 turn_input.append({"type": "image", "url": image_url, "detail": "auto"})
+        # A running app-server is not permission for a new native Turn. Hold
+        # the caller's fence through its write, then release before waiting for
+        # the native acknowledgement or model output.
         turn_result = self._request(
             "turn/start",
             {
@@ -1664,6 +1697,7 @@ class CodexChatAgentSession:
                 ),
             },
             request_id=request_id,
+            **({"write_guard": turn_start_guard} if turn_start_guard is not None else {}),
         )
         turn_id = _extract_id(turn_result, "turn", "turnId")
         self.current_turn_id = turn_id
@@ -1885,19 +1919,23 @@ class CodexChatAgentSession:
         )
 
     def close(self) -> None:
-        if self.process_tree_owned:
+        self._close_process(self.process, process_tree_owned=self.process_tree_owned)
+
+    @staticmethod
+    def _close_process(process: subprocess.Popen[str], *, process_tree_owned: bool) -> None:
+        if process_tree_owned:
             from .extensions.process_runtime import terminate_process_tree
 
-            terminate_process_tree(self.process, grace_seconds=0.1)
+            terminate_process_tree(process, grace_seconds=0.1)
             return
-        if self.process.poll() is not None:
+        if process.poll() is not None:
             return
-        self.process.terminate()
+        process.terminate()
         try:
-            self.process.wait(timeout=2)
+            process.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=2)
+            process.kill()
+            process.wait(timeout=2)
 
     def __enter__(self) -> "CodexChatAgentSession":
         return self

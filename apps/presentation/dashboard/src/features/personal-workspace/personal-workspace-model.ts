@@ -168,6 +168,14 @@ export type WorkspaceGoal = {
   /** Bounded, safe text from this Goal's declared source document. */
   objective?: string | null;
   acceptanceObservation?: GoalAcceptanceObservation | null;
+  /** Driver readback only; it never changes Goal activation or grants work. */
+  workerObservations?: {
+    read_status: "read" | "stale" | "unreadable";
+    rows: Array<{
+      agent_id: string; status: "replan_paused" | "replan_outcome_unknown";
+      obligation_id: string; turn_instance_id: string | null; observed_at: string;
+    }>;
+  } | null;
   loadState?: "loading" | "error";
   loadError?: WorkspaceLoadError;
   activationState: "active" | "stopped";

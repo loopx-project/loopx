@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
-from dataclasses import dataclass
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -15,6 +15,7 @@ from ..effect_runtime import effect_runtime_result
 from ..projects.registry_codec import (
     SOURCE_SESSION_PROFILE_ID,
     load_project_registry,
+    project_registry_transaction,
 )
 from ..effect_program import TurnProviderStepKind
 from .activation import goal_activation_state
@@ -228,6 +229,43 @@ def capture_first_party_host_goal_ref(
         )
 
 
+def _legacy_launch_authority(registry: Mapping[str, Any], goal_id: str) -> dict[str, Any]:
+    goals = registry.get("goals")
+    if (registry.get("profile_id") == SOURCE_SESSION_PROFILE_ID or not isinstance(goals, list)
+            or any(not isinstance(goal, Mapping) for goal in goals)):
+        return {"kind": "unavailable"}
+    matches = [goal for goal in goals if goal.get("id") == goal_id]
+    if len(matches) != 1:
+        return {"kind": "absent"}
+    goal = matches[0]
+    try:
+        activation = goal_activation_state(goal).value
+    except ValueError:
+        return {"kind": "unavailable"}
+    return {"kind": "present", "goal_id": goal_id, "activation_state": activation,
+            "registration_status": goal.get("status", "active")}
+
+
+def _legacy_source_registry(
+    registry: Mapping[str, Any], goal_id: str, requested_registry: Path,
+) -> Path | None:
+    goals = registry.get("goals")
+    if not isinstance(goals, list):
+        return None
+    matches = [goal for goal in goals if isinstance(goal, Mapping) and goal.get("id") == goal_id]
+    if len(matches) != 1:
+        return None
+    source = matches[0].get("source_registry")
+    if source is None or source == "":
+        return None
+    if not isinstance(source, str) or not source.strip():
+        raise FirstPartyHostRuntimeRejected("goal_authority_unavailable")
+    resolved = Path(source.strip()).expanduser().resolve()
+    if resolved == requested_registry:
+        raise FirstPartyHostRuntimeRejected("goal_authority_unavailable")
+    return resolved
+
+
 @dataclass(frozen=True, slots=True)
 class FirstPartyHostGoalAdmission:
     """Keep exact Host-state I/O inside one source Goal lifetime guard."""
@@ -236,6 +274,9 @@ class FirstPartyHostGoalAdmission:
     goal_id: str
     planned_goal_ref: object | None
     source_profile: bool
+    legacy_registry_witness: Mapping[str, str] | None = None
+    legacy_source_admission: FirstPartyHostGoalAdmission | None = None
+    launch_decision_reader: Callable[[Path], Mapping[str, Any]] | None = None
 
     @classmethod
     def for_plan(
@@ -244,31 +285,85 @@ class FirstPartyHostGoalAdmission:
         registry_path: Path,
         goal_id: str,
         planned_goal_ref: object | None,
+        capture_launch_authority: bool = True,
     ) -> FirstPartyHostGoalAdmission:
         requested_registry = registry_path.expanduser().resolve()
         require_goal_id(goal_id)
         source_profile = planned_goal_ref is not None
+        legacy_registry_witness = None
+        legacy_source_admission = None
         if not source_profile and requested_registry.is_file():
             source_profile = (
                 load_project_registry(requested_registry).get("profile_id")
                 == SOURCE_SESSION_PROFILE_ID
             )
+            if not source_profile and capture_launch_authority:
+                with project_registry_transaction(
+                    requested_registry, operation="first_party_host_launch_capture",
+                ) as transaction:
+                    legacy_registry_witness = transaction.source_read_witness()
+                    source_registry = _legacy_source_registry(
+                        transaction.payload_copy(), goal_id, requested_registry,
+                    )
+                if source_registry is not None:
+                    try:
+                        with project_registry_transaction(
+                            source_registry, operation="first_party_host_launch_source_capture",
+                        ) as transaction:
+                            # The existing source route names its owning project,
+                            # not another mirror. Reject cycles/chains before any
+                            # nested lifetime lock, including a self reference.
+                            if _legacy_source_registry(transaction.payload_copy(), goal_id, source_registry) is not None:
+                                raise FirstPartyHostRuntimeRejected("goal_authority_unavailable")
+                            legacy_source_admission = cls(
+                                registry_path=source_registry, goal_id=goal_id,
+                                planned_goal_ref=None, source_profile=False,
+                                legacy_registry_witness=transaction.source_read_witness(),
+                            )
+                    except (OSError, TypeError, ValueError) as exc:
+                        raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
         return cls(
             registry_path=requested_registry,
             goal_id=goal_id,
             planned_goal_ref=planned_goal_ref,
             source_profile=source_profile,
+            legacy_registry_witness=legacy_registry_witness,
+            legacy_source_admission=legacy_source_admission,
         )
 
     @property
     def enabled(self) -> bool:
         return self.source_profile
 
+    def with_launch_decision(
+        self, reader: Callable[[Path], Mapping[str, Any]],
+    ) -> FirstPartyHostGoalAdmission:
+        """Bind a legacy Turn's existing read-only quota owner to launch.
+
+        Source and mirror must each read their own current authority. The
+        reader retains the original Turn/Todo/settlement identity; it cannot
+        replace the plan or issue a receipt while checking it.
+        """
+        if self.source_profile:
+            # The lifecycle-only profile has its existing exact lifetime seam;
+            # runtime admission rejects it before business/Host execution.
+            # Its quota reader takes index -> source locks and cannot be
+            # nested inside that lifetime's source guard.
+            return self
+        return replace(
+            self, launch_decision_reader=reader,
+            legacy_source_admission=(self.legacy_source_admission.with_launch_decision(reader)
+                if self.legacy_source_admission is not None else None),
+        )
+
     def _decision(
         self,
         operation: str,
         *,
         host_state: Mapping[str, Any] | None = None,
+        launch_authority: Mapping[str, Any] | None = None,
+        registry_witness: Mapping[str, str] | None = None,
+        launch_decision: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         decision = effect_runtime_result(
             "goal.first_party_host_runtime.decide",
@@ -278,11 +373,15 @@ class FirstPartyHostGoalAdmission:
                 ),
                 "operation": operation,
                 "planned_goal_ref": self.planned_goal_ref,
-                "authority": source_goal_authority(
+                "authority": dict(launch_authority) if launch_authority is not None else source_goal_authority(
                     self.registry_path,
                     self.goal_id,
                 ),
                 **({"host_state": host_state} if host_state is not None else {}),
+                **({"launch_decision": dict(launch_decision)} if launch_decision is not None else {}),
+                **({"goal_id": self.goal_id, "registry_path": str(self.registry_path),
+                    "planned_registry_witness": self.legacy_registry_witness,
+                    "registry_witness": dict(registry_witness)} if registry_witness is not None else {}),
             },
         )
         if not isinstance(decision, dict):
@@ -342,6 +441,39 @@ class FirstPartyHostGoalAdmission:
             operation=operation,
         ):
             self._decision("require_current")
+            yield
+
+    @contextmanager
+    def launch_lifetime(self, *, operation: str) -> Iterator[None]:
+        """Recheck the original launch authority under its existing writer lock.
+
+        Legacy registries have no exact Goal instance identity. Their original
+        byte witness can reject stale admission without promoting an alias to
+        one; a changed registry requires a fresh plan. A caller with the original
+        Turn binding supplies its full current admission check. This lifecycle
+        witness alone does not certify quota/health. Hold only through dispatch.
+        """
+        if self.source_profile:
+            with self.current_lifetime(operation=operation):
+                yield
+            return
+        with ExitStack() as scope:
+            if self.legacy_source_admission is not None:
+                # Activation writes source then global projection under these
+                # same locks. A failed mirror sync must not hide a source stop.
+                scope.enter_context(self.legacy_source_admission.launch_lifetime(operation=operation))
+            try:
+                transaction = scope.enter_context(project_registry_transaction(
+                    self.registry_path, operation=operation,
+                ))
+            except (OSError, TypeError, ValueError) as exc:
+                raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
+            self._decision(
+                "launch", launch_authority=_legacy_launch_authority(transaction.payload_copy(), self.goal_id),
+                registry_witness=transaction.source_read_witness(),
+                launch_decision=(self.launch_decision_reader(self.registry_path)
+                    if self.launch_decision_reader is not None else None),
+            )
             yield
 
     @contextmanager

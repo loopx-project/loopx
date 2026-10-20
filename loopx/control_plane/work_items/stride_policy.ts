@@ -7,6 +7,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringLiteral} from "../runtime_decode.ts";
 import {normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
+import {PLANNING_TODO_ID} from "./planning_relations.ts";
 
 export function normalizeStrideStrategy(value: unknown): string {
   if (value === undefined) return schema.default;
@@ -26,6 +27,9 @@ const decisionValueReview = {
   route_distance: "Name the remaining authoritative goal gap, its limiting component and the plausible headroom. " +
     "Keep the retained best artifact as the comparison anchor and check whether subsequent work actually implements the proposed mechanism change. " +
     "Compare a different approach that can affect that component. Distinguish an unexecuted intervention, failed transfer and insufficient route potential: they imply different next experiments. " +
+    "When evidence weakens the current route, generate a small set of genuinely different explanations or approaches before selecting one: consider representation, decomposition, search method or information source where relevant. " +
+    "Contrast their predictions and full costs, then choose a discriminating experiment; parameter variants of the same mechanism are not independent alternatives. " +
+    "Missing feedback is a wait or evidence gap, not proof of route failure or exhausted alternatives. " +
     "A changed auxiliary mechanism alone does not show that it addresses the gap.",
   validation_scope: "Use evidence applicable to the limiting outcome and changed mechanism. " +
     "Bind comparisons to the artifact version, input conditions and original budget, and distinguish when feedback became available from when work was submitted. " +
@@ -86,6 +90,35 @@ function refs(value: unknown, label: string): string[] {
     throw new EffectRuntimeRequestError(`${label} requires at most three distinct public-safe evidence references`);
   }
   return value as string[];
+}
+function selectedCandidate(value: unknown): JsonObject {
+  const input = requireJsonObject(value, "explore_review.selected_candidate");
+  exactFields(input, ["todo_id", "node_id", "finding_id", "source_sha256"], "selected_candidate");
+  const todo = requireNonEmptyString(input.todo_id, "selected_candidate.todo_id");
+  if (!PLANNING_TODO_ID.test(todo)) throw new EffectRuntimeRequestError("selected_candidate requires a public Todo id");
+  const node = refs([input.node_id], "selected_candidate.node_id")[0];
+  const finding = refs([input.finding_id], "selected_candidate.finding_id")[0];
+  const digest = requireNonEmptyString(input.source_sha256, "selected_candidate.source_sha256");
+  if (!BARE_SHA256_PATTERN.test(digest)) throw new EffectRuntimeRequestError("selected_candidate requires the exact source digest");
+  return {todo_id: todo, node_id: node, finding_id: finding, source_sha256: digest};
+}
+function comparisonCandidates(value: unknown): JsonObject[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 20) throw new EffectRuntimeRequestError("comparison_candidates must be a bounded source page");
+  return value.map(value => {
+    const card = requireJsonObject(value, "comparison candidate");
+    exactFields(card, ["todo_id", "outcomes"], "comparison candidate");
+    if (!Array.isArray(card.outcomes) || !card.outcomes.length || card.outcomes.length > 3) {
+      throw new EffectRuntimeRequestError("comparison candidate requires at most three scoped outcomes");
+    }
+    const outcomes = card.outcomes.map(value => {
+      const outcome = requireJsonObject(value, "comparison outcome");
+      exactFields(outcome, ["node_id", "finding_id", "source_sha256"], "comparison outcome");
+      const checked = selectedCandidate({todo_id: card.todo_id, ...outcome});
+      return {node_id: checked.node_id, finding_id: checked.finding_id, source_sha256: checked.source_sha256};
+    });
+    return {todo_id: card.todo_id, outcomes};
+  });
 }
 
 /** Agent interpretations are structured claims, not certified evidence or authority. */
@@ -164,7 +197,7 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
   }
   if (input.explore_review != null) {
     const review = requireJsonObject(input.explore_review, "stride_decision.explore_review");
-    exactFields(review, ["revision", "disposition", "considered_refs", "reason", ...(!historical ? ["result_pages"] : [])], "explore_review");
+    exactFields(review, ["revision", "disposition", "considered_refs", "reason", ...(!historical ? ["result_pages", "selected_candidate"] : [])], "explore_review");
     if (review.revision !== null && !BARE_SHA256_PATTERN.test(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
     requireStringLiteral(review.disposition, decisionSchema.explore_dispositions, "explore_review.disposition");
     const considered = refs(review.considered_refs, "explore_review.considered_refs");
@@ -179,6 +212,14 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
       const pages = normalizeExploreResultPages(review.result_pages);
       (output.explore_review as JsonObject).result_pages = pages;
       usage["stride_decision.explore_review.result_pages"] = JSON.stringify(pages).length;
+    }
+    if (Object.hasOwn(review, "selected_candidate")) {
+      const candidate = selectedCandidate(review.selected_candidate);
+      if (review.disposition !== "used" || review.revision === null || !considered.includes(String(candidate.finding_id))) {
+        throw new EffectRuntimeRequestError("selected_candidate requires used, cited Explore evidence");
+      }
+      (output.explore_review as JsonObject).selected_candidate = candidate;
+      usage["stride_decision.explore_review.selected_candidate"] = JSON.stringify(candidate).length;
     }
   }
   return [output, usage];
@@ -231,6 +272,7 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
   const findings = Array.isArray(graph?.writeback_results) ? graph.writeback_results as JsonObject[] : [];
   const recent = Array.isArray(graph?.recent_findings) ? graph.recent_findings as JsonObject[] : [];
   const branches = Array.isArray(harness?.selected_branches) ? harness.selected_branches as JsonObject[] : [];
+  const candidates = source.harness_enabled === true ? comparisonCandidates(harness?.comparison_candidates) : [];
   const audits = branches.flatMap(branch => {
     const audit = branch.typed_evidence_audit as JsonObject | undefined;
     return Array.isArray(audit?.findings) ? audit.findings as JsonObject[] : [];
@@ -239,6 +281,7 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
   for (const row of [...findings, ...audits, ...recent]) {
     const id = requireNonEmptyString(row.finding_id, "Explore finding id");
     if (!byId.has(id)) byId.set(id, {finding_id: id, node_id: row.node_id, status: row.status,
+      ...(row.execution_observation ? {execution_observation: row.execution_observation} : {}),
       source_sha256: typeof row.source_sha256 === "string" ? row.source_sha256
         : createHash("sha256").update(JSON.stringify(row)).digest("hex")});
   }
@@ -246,8 +289,11 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
     // Planner scores/counts and unrelated pool churn do not alter a cited
     // finding's source. Bind the actual bounded evidence, not the whole view.
     revision: createHash("sha256").update(JSON.stringify([goal, agent, source.graph_enabled,
-      source.harness_enabled, [...byId.values()].slice(0, 6)])).digest("hex"),
+      source.harness_enabled, [...byId.values()].slice(0, 6), ...(candidates.length ? [candidates] : [])])).digest("hex"),
     finding_refs: [...byId.values()].slice(0, 6),
+    ...(candidates.length ? {comparison_candidates: candidates} : {}),
+    ...(harness?.omitted_comparison_candidates !== undefined ? {
+      omitted_comparison_candidates: harness.omitted_comparison_candidates} : {}),
     branches: branches.slice(0, 3).map(branch => ({todo_id: branch.todo_id,
       selection_status: branch.selection_status, actionable_open: branch.actionable_open})),
     omitted_finding_refs: Math.max(0, byId.size - 6),
@@ -258,7 +304,7 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
 }
 
 /** Context binding checks shape and declared provenance, never truth of Agent claims. */
-export function strideReviewMismatch(decision: JsonObject, context: JsonObject, sourceReview?: unknown): string | null {
+export function strideReviewMismatch(decision: JsonObject, context: JsonObject, sourceReview?: unknown, todoDelta?: unknown): string | null {
   const follow = context.decision_followthrough as JsonObject | undefined;
   const previous = follow?.previous_decision as JsonObject | undefined;
   const review = decision.previous_review as JsonObject | undefined;
@@ -318,6 +364,8 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
   }
   if (explore.disposition === "unavailable") return "Available Explore evidence cannot be declared unreadable.";
   const allowed = new Set((basis.finding_refs as JsonObject[]).map(row => row.finding_id));
+  const candidates = comparisonCandidates(basis.comparison_candidates);
+  for (const card of candidates) for (const outcome of card.outcomes as JsonObject[]) allowed.add(outcome.finding_id);
   const deliveredPages = Array.isArray(context.explore_result_pages) ? context.explore_result_pages as JsonObject[] : [];
   for (const page of (explore.result_pages ?? []) as JsonObject[]) {
     const resolved = deliveredPages.find(row => row.revision === page.revision &&
@@ -326,8 +374,21 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
       return "Explore result pages require current source replay; reread global pages under the original Turn.";
     }
     for (const ref of resolved.finding_refs as string[]) allowed.add(ref);
+    candidates.push(...comparisonCandidates(resolved.comparison_candidates));
   }
   if (considered.some(ref => !allowed.has(ref))) return "Explore review cites an undelivered or foreign finding.";
+  if (explore.selected_candidate != null) {
+    const selected = selectedCandidate(explore.selected_candidate);
+    if (!candidates.some(card => card.todo_id === selected.todo_id && (card.outcomes as JsonObject[]).some(outcome =>
+      ["node_id", "finding_id", "source_sha256"].every(key => outcome[key] === selected[key])))) {
+      return "Selected candidate requires the current Todo's explicit link to the exact scoped result; reread changed sources.";
+    }
+    // The existing Vision Todo plan and followthrough owner retain execution
+    // lineage. This optional claim cannot invent work or grant its admission.
+    if (!Array.isArray(todoDelta) || !todoDelta.includes(`retain:${selected.todo_id}`)) {
+      return "Selected candidate must be retained as the same existing Todo in agent_vision.todo_delta.";
+    }
+  }
   return null;
 }
 
@@ -359,10 +420,20 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
     ...(follow ? {decision_followthrough: follow} : {}),
     previous_review_options: {adoption: decisionSchema.adoption_options, information_gain: decisionSchema.information_options, goal_gain: decisionSchema.gain_options},
     explore_basis: context.explore_basis ?? null, explore_dispositions: decisionSchema.explore_dispositions,
+    ...(basis?.harness_enabled === true ? {
+      selected_candidate_option: {
+        attachment: "explore_review.selected_candidate",
+        fields: ["todo_id", "node_id", "finding_id", "source_sha256"],
+        rule: "Optionally bind the next probe to an exact comparison_candidates Todo/outcome, cite that finding with disposition=used, and retain the same existing Todo in agent_vision.todo_delta. " +
+          "For an omitted alternative, read the existing global result pages and attach their coordinates in result_pages; current Todo links are replayed with those results. " +
+          "Cards share the page limit: expand --result-limit up to 20 for multiple Todos linked to one result. omitted_comparison_candidates discloses the remaining bound; omission does not mean ineligible. " +
+          "Choose continuation, a different mechanism or verification from the evidence; this source binding does not certify novelty, execution or utility and grants no admission.",
+      },
+    } : {}),
     minimal_example: example,
     attachment: "agent_vision.stride_decision", requires_evidence_linked_path: true,
     required_on_periodic_review: true,
-    rule: "Every due periodic review with this strategy enabled must record a stride decision before settlement, including when a typed progress, successor, blocker or terminal outcome is also reported. " +
+    rule: "Every due periodic review and observed-stall review (typed_progress_repeat, no_progress_streak, repeated_action_loop or external_progress_review_drift) with this strategy enabled must record a stride decision before settlement, including when a typed progress, successor, blocker or terminal outcome is also reported. " +
       "The decision requires an evidence-linked Vision path (including a terminal stop when supported by evidence), an explicit grow/switch/verify action and a concrete plan/reason for each axis. " +
       "Grow expands a supported route; switch names the reference method and changed mechanism; verify resolves a named grow-or-switch question. Size every action for a coherent accepted deliverable or complete interpretable experiment, including ordinary engineering and maintenance. Grow changes useful completed scope, not authority or settlement boundaries. " +
       "The minimal example demonstrates syntax, not the recommended action for the current evidence. " +

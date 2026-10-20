@@ -176,13 +176,17 @@ function decode(value: unknown): Request {
 
 /** Scope before ACK: a peer's acknowledgement cannot discharge this lane. */
 function historyWindow(request: Request): Run[] {
+  // These canonical writeback classes carry no accepted replan work. Older
+  // callers may omit them from their neutral inventory; neither their repeated
+  // observations nor their timestamps can create a replacement review duty.
+  const neutral = new Set([...request.neutral, "replan_noop", "repair_noop"]);
   const agent = request.agent ?? (request.operation === "all"
-    ? request.runs.find(run => !request.neutral.has(run.classification) && run.agent)?.agent : null);
+    ? request.runs.find(run => !neutral.has(run.classification) && run.agent)?.agent : null);
   const result: Run[] = [];
   for (const run of request.runs) {
     if (agent && run.agent && run.agent !== agent) continue;
     if (run.ack) break;
-    if (request.neutral.has(run.classification)) continue;
+    if (neutral.has(run.classification)) continue;
     result.push(run);
   }
   return result;
@@ -231,9 +235,11 @@ function progressTrigger(runs: readonly Run[], request: Request): Trigger | null
 }
 function periodicTrigger(runs: readonly Run[], request: Request, qualified?: ReadonlySet<string>): Trigger | null {
   const durable: Run[] = [];
-  // Monitor liveness receipts are durable, but only a material transition is
-  // work for the periodic direction review. Monitor-specific triggers still
-  // inspect every poll in the unfiltered history window.
+  // Monitor liveness and unsuccessful replan records are durable observations,
+  // not work for another periodic review. Counting a no-op would let a review
+  // rotate its own obligation merely by writing another record. Filter before
+  // Turn de-duplication so an actual work row from that Turn remains eligible;
+  // monitor-specific triggers still inspect the unfiltered history window.
   for (const run of distinctTurns(runs.filter(row => (!qualified ||
       (row.agent && row.turn && qualified.has(JSON.stringify([row.agent, row.turn])))) && row.classification &&
       (row.classification !== "quota_monitor_poll" || row.monitor.material === true)))) {

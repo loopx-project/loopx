@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from ..goals.acceptance_readback import configured_checks
 from .effective_action import EffectiveAction
 
 from collections.abc import Callable, Mapping
@@ -268,16 +270,43 @@ def _apply_selected_todo_guards(
         return route
     summary = prepared.agent_todo_summary or {}
     acceptance = summary.get("goal_acceptance_contract")
-    if isinstance(acceptance, dict) and acceptance.get("enabled") is True:
-        held_ids = acceptance.get("held_todo_ids") or []
-        held_selection = bool(selected_todo and selected_todo.get("todo_id") in held_ids)
-        # Native guards already filtered these lanes. Do not let a generic
-        # Goal recommendation recreate advancement permission from held work.
-        no_runnable_work = bool(held_ids) and not selected_todo and not any(
+    if isinstance(acceptance, dict) and configured_checks(acceptance) is not None:
+        # The typed owner retains completed/archived work. A failed preflight
+        # check on an empty Goal is not evidence that any work has happened;
+        # preserve its initial planning. A currently accepted result can still
+        # suppress redundant empty delivery without declaring the Goal complete.
+        has_existing_work_basis = bool(acceptance.get("tasks")) or acceptance.get("status") == "accepted"
+        no_executable_work = not selected_todo and not any(
             summary.get(field) for field in (
                 "first_executable_items", "executable_backlog_items", "monitor_due_items",
             )
         )
+        if (
+            route.normal_delivery_allowed
+            and not route.recovery_allowed
+            and prepared.receipt_bound_todo_id is None
+            and not prepared.inbox_priority_due
+            and has_existing_work_basis
+            and no_executable_work
+        ):
+            # An empty generic Goal recommendation cannot replace the owner's
+            # current acceptance scope with another paid work attempt. A local
+            # accepted scope also does not certify the entire Goal as complete.
+            # Original receipt recovery, admitted replan and actual independent
+            # work retain their own routes; this only removes new empty delivery.
+            prepared.normal_delivery_allowed = False
+            prepared.reason = (
+                f"Current scoped acceptance is {acceptance.get('status') or 'unavailable'}; "
+                "no executable work is available. Inspect the preserved contract "
+                "and results with loopx goal-acceptance inspect, then verify or "
+                "repair the existing requirement."
+            )
+            route = _resolve_quota_should_run_route(prepared)
+        held_ids = acceptance.get("held_todo_ids") or []
+        held_selection = bool(selected_todo and selected_todo.get("todo_id") in held_ids)
+        # Native guards already filtered these lanes. Do not let a generic
+        # Goal recommendation recreate advancement permission from held work.
+        no_runnable_work = bool(held_ids) and no_executable_work
         if (
             (route.normal_delivery_allowed or route.recovery_allowed)
             and not prepared.inbox_priority_due

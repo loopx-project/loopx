@@ -344,7 +344,8 @@ test("versioned stride advice is opt-in and never a semantic discharge", () => {
   const withStrategy = projectReplanSemantics({operation: "requirements", obligation: enabled});
   assert.deepEqual((withStrategy.planning_guidance as string[]).slice(0, 5), base.planning_guidance);
   assert.equal((withStrategy.planning_guidance as string[]).length, 6);
-  assert.deepEqual(withStrategy.required_any_of, base.required_any_of);
+  assert.deepEqual(withStrategy.required_any_of,
+    ["fresh_vision_path_outcome", ...(base.required_any_of as string[])]);
   assert.match((withStrategy.planning_guidance as string[])[5], /work size, route distance and validation breadth independently/);
   assert.match((withStrategy.planning_guidance as string[])[5], /Do not restart unfinished coherent work/);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: enabled,
@@ -401,6 +402,75 @@ test("vision ACK compares strict calendar timestamps at microsecond precision", 
       ack: {...ack, generated_at: "2026-02-30T00:00:00Z"},
       acceptance_gaps: [gap("2026-02-28T00:00:00Z")]}).acknowledged, false);
   }
+});
+
+test("a formal acceptance-hold ACK covers its exact owner basis after display updates", () => {
+  for (const kind of ["goal_acceptance_stale", "goal_acceptance_unbound"]) {
+    const revision = "a".repeat(64);
+    const gap = {kind, source: "goal_acceptance_contract", frontier_revision: revision,
+      generated_at: "2026-09-23T08:04:00Z"};
+    const delta = {accepted: true, obligation_id: "replan-1111111111111111",
+      outcomes: ["new_concrete_blocker"], satisfying_outcomes: ["new_concrete_blocker"],
+      trigger_kinds: [kind], trigger_checkpoints: [{kind, frontier_revision: revision}]};
+    const ack = {recorded: true, generated_at: "2026-09-23T08:03:00Z", semantic_delta: delta};
+    const request = {operation: "vision_ack", acceptance_gaps: [gap], ack};
+    assert.equal(projectReplanSemantics(request).acknowledged, true);
+    for (const changed of [
+      {...gap, frontier_revision: "b".repeat(64)},
+      {...gap, kind: "vision_acceptance_gap"},
+      {...gap, source: "unconfirmed_display"},
+    ]) assert.equal(projectReplanSemantics({...request, acceptance_gaps: [changed]}).acknowledged, false);
+    for (const changed of [
+      {recorded: false}, {generated_at: "2026-02-30T08:03:00Z"}, {generated_at: "2026-09-23T08:03:00"},
+      {semantic_delta: {...delta, accepted: false}}, {semantic_delta: {...delta, outcomes: []}},
+      {semantic_delta: {...delta, satisfying_outcomes: []}},
+      {semantic_delta: {...delta, trigger_kinds: ["vision_acceptance_gap"]}},
+      {semantic_delta: {...delta, trigger_checkpoints: [{kind, frontier_revision: "other"}]}},
+      {semantic_delta: {...delta, obligation_id: null}},
+    ]) assert.equal(projectReplanSemantics({...request, ack: {...ack, ...changed}}).acknowledged, false);
+    // A newly observed independent gap still requires its own current evidence.
+    assert.equal(projectReplanSemantics({...request,
+      acceptance_gaps: [gap, {kind: "vision_acceptance_gap", generated_at: gap.generated_at}]}).acknowledged, false);
+    assert.equal(projectReplanSemantics({...request,
+      acceptance_gaps: [gap, {kind: "vision_acceptance_gap", generated_at: ack.generated_at}]}).acknowledged, true);
+    // Historical ACKs without an obligation identity retain their old freshness rule.
+    assert.equal(projectReplanSemantics({...request, acceptance_gaps: [{...gap, generated_at: ack.generated_at}],
+      ack: {...ack, semantic_delta: {...delta, obligation_id: null}}}).acknowledged, true);
+  }
+});
+
+test("old hold checkpoints require exact source digest and original timestamp coverage", () => {
+  const kind = "goal_acceptance_unbound", old = "b".repeat(64);
+  const gap = {kind, source: "goal_acceptance_contract", frontier_revision: "a".repeat(64),
+    legacy_frontier_revision: old, generated_at: "2026-09-23T08:02:00Z"};
+  const delta = {accepted: true, obligation_id: "replan-1111111111111111",
+    outcomes: ["new_concrete_blocker"], satisfying_outcomes: ["new_concrete_blocker"],
+    trigger_kinds: [kind], trigger_checkpoints: [{kind, frontier_revision: old}]};
+  const ack = {recorded: true, generated_at: "2026-09-23T08:03:00Z", semantic_delta: delta};
+  const request = {operation: "vision_ack", acceptance_gaps: [gap], ack};
+  assert.equal(projectReplanSemantics(request).acknowledged, true);
+  for (const change of [{legacy_frontier_revision: "c".repeat(64)}, {source: "other"},
+    {generated_at: "2026-09-23T08:04:00Z"}, {generated_at: null}]) {
+    assert.equal(projectReplanSemantics({...request, acceptance_gaps: [{...gap, ...change}]}).acknowledged, false);
+  }
+});
+
+test("only a bound original receipt can select the source-derived legacy obligation", () => {
+  const original = "replan-1111111111111111";
+  const current = {obligation_id: "replan-2222222222222222", legacy_obligation_id: original,
+    triggers: [{kind: "goal_acceptance_unbound", frontier_revision: "a".repeat(64)}]};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    selected_obligation_id: original, current_obligation: current, replay_phase: "open", transition_candidates: []};
+  const bound = projectReplanSemantics(request).obligation as Record<string, unknown>;
+  assert.equal(bound.obligation_id, original);
+  assert.equal(bound.selection_binding, "heartbeat_receipt");
+  assert.equal(Object.hasOwn(bound, "settlement_action_packet"), false);
+  for (const changed of [{...request, guard_scoped: false},
+    {...request, current_obligation: {...current, legacy_obligation_id: "replan-3333333333333333"}},
+    {...request, current_obligation: {...current, triggers: [{kind: "periodic_review"}]}}]) {
+    assert.throws(() => projectReplanSemantics(changed), /identity conflicts/);
+  }
+  assert.deepEqual(projectReplanSemantics({...request, selected_obligation_id: null}).obligation, null);
 });
 
 

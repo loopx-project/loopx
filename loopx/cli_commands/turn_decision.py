@@ -31,6 +31,9 @@ from ..capabilities.periodic_report.pending_intent import (
 )
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.quota.turn_envelope import build_turn_envelope
+from ..control_plane.quota.settlement import SettlementIdentity
+from ..control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
+from ..control_plane.turn_driver.driver import build_loopx_turn_plan, selected_turn_todo
 from ..control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_turn,
 )
@@ -248,6 +251,131 @@ def build_fresh_turn_decision_owner(
         ),
         requested_todo_id=getattr(args, "todo_id", None),
     )
+
+
+def current_turn_host_launch_decision(
+    args: argparse.Namespace, *, registry_path: Path, runtime_root: Path,
+    identity: SettlementIdentity, replan_obligation_id: str | None,
+    planned_effective_action: object,
+    scheduler_execution_context: Mapping[str, Any],
+    operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
+    turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
+    """Re-read the original Turn's eligibility inside its launch lifetime.
+
+    The caller supplies the real receipt identity; a Host session or turn_key
+    cannot reconstruct it. This read neither creates another receipt nor
+    substitutes a newly selected task into the already planned Host request.
+    """
+    current = build_live_quota_should_run_decision(
+        collect_turn_status_payload(args, registry_path=registry_path,
+                                    runtime_root_arg=str(runtime_root)),
+        goal_id=identity.goal_id, agent_id=identity.agent_id,
+        available_capabilities=args.available_capabilities, include_scheduler_detail=False,
+        codex_app_current_rrule=None, registry_path=registry_path, runtime_root=runtime_root,
+        route_source=TURN_DECISION_ROUTE_SOURCE,
+        scheduler_execution_context=scheduler_execution_context,
+        operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+        bounded_research_frontier_projector=project_live_explore_composition_frontier,
+        receipt_bound_todo_id=identity.todo_id or None,
+        receipt_bound_replan_obligation_id=replan_obligation_id,
+        turn_instance_id=identity.turn_instance_id,
+        turn_start_hook_dispatch=turn_start_hook_dispatch,
+        workspace_path=Path(args.project).expanduser().resolve(), goal_ref=goal_ref,
+        interaction_projection_hooks=(periodic_report_pending_intent_interaction_hook(
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=identity.goal_id, agent_id=identity.agent_id,
+        ),),
+    )
+    launch = {"current": current, "planned_effective_action": planned_effective_action}
+    # The shared typed launch owner retains refusal precedence (including
+    # Stop/witness failures) and compares the original effective action.
+    if (current.get("should_run") is not True
+            or current.get("effective_action") != planned_effective_action):
+        return launch
+    current_envelope = build_turn_envelope(
+        current, scheduler_execution_context=scheduler_execution_context,
+    )
+    # Reuse the existing side-effect-free Host route projection, including
+    # delivery, user-gate and protocol checks. No plan/session is persisted.
+    route = build_loopx_turn_plan(
+        current_envelope, host=args.host, execution_mode=args.execution_mode,
+        scheduler_owner=args.scheduler_owner, turn_instance_id=identity.turn_instance_id,
+        goal_ref=goal_ref,
+    )["route"]
+    if route.get("would_invoke_host") is not True:
+        raise FirstPartyHostRuntimeRejected("goal_launch_not_allowed")
+    if selected_turn_todo(current_envelope).get("todo_id") != identity.todo_id:
+        raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
+    return launch
+
+
+def current_heartbeat_host_launch_decision(
+    *, registry_path: Path, runtime_root: Path, project: Path,
+    goal_id: str, agent_id: str, turn_instance_id: str,
+    original_quota: Mapping[str, Any] | None = None,
+    goal_ref: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
+    """Re-read one native heartbeat/initial-plan launch without minting a receipt.
+
+    Unlike an executing governed Turn, a first heartbeat or planning wake can
+    legitimately have no chosen Todo and no committed guard yet. Reuse the
+    public quota owner's original-selection reader and full live decision. A
+    checkpoint continuation additionally retains its exact held packet; its
+    committed binding cannot be replaced with the enclosing wake's identity.
+    Call only inside the Goal launch lifetime, immediately before native spawn.
+    """
+    from ..control_plane.quota.heartbeat_receipt import heartbeat_receipt_view
+    from ..control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
+    from ..turn_identity import normalize_turn_instance_id
+    from .quota_action_selection import load_requested_quota_action_selection
+
+    original_turn = normalize_turn_instance_id(turn_instance_id)
+    if original_turn is None:
+        raise FirstPartyHostRuntimeRejected("heartbeat_launch_turn_missing")
+    args = argparse.Namespace(
+        goal_id=goal_id, agent_id=agent_id, turn_instance_id=original_turn,
+        todo_id=None, codex_app=False, runtime_profile="generic_cli",
+        scan_path=[str(project)], scan_root=str(project), limit=0,
+        available_capabilities=["shell", "filesystem_write"],
+    )
+    selection = load_requested_quota_action_selection(
+        args, runtime_root=runtime_root, turn_instance_id=original_turn, goal_ref=goal_ref,
+    )
+    if original_quota is not None:
+        held = original_quota.get("heartbeat_receipt")
+        if (original_quota.get("goal_id") != goal_id or not isinstance(held, Mapping)
+                or held.get("turn_instance_id") != original_turn or selection.receipt is None):
+            raise FirstPartyHostRuntimeRejected("heartbeat_launch_original_receipt_missing")
+        current_receipt = heartbeat_receipt_view(
+            selection.receipt, turn_instance_id=original_turn, status="replayed",
+        )
+        if (not held.get("event_id") or current_receipt.get("event_id") != held.get("event_id")
+                or current_receipt.get("settlement_identity") != held.get("settlement_identity")):
+            raise FirstPartyHostRuntimeRejected("heartbeat_launch_original_binding_changed")
+    current = build_live_quota_should_run_decision(
+        collect_turn_status_payload(args, registry_path=registry_path, runtime_root_arg=str(runtime_root)),
+        goal_id=goal_id, agent_id=agent_id, available_capabilities=args.available_capabilities,
+        include_scheduler_detail=False, codex_app_current_rrule=None,
+        registry_path=registry_path, runtime_root=runtime_root,
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile("generic_cli"),
+        operator_inbox_urgency_projector=build_lark_operator_inbox_urgency_projector(runtime_root_arg=runtime_root),
+        bounded_research_frontier_projector=project_live_explore_composition_frontier,
+        receipt_bound_todo_id=selection.receipt_bound_todo_id,
+        receipt_bound_replan_obligation_id=selection.receipt_bound_replan_obligation_id,
+        retained_action_selection_todo_id=selection.retained_todo_id_for_decision,
+        turn_instance_id=original_turn, workspace_path=project, goal_ref=goal_ref,
+        interaction_projection_hooks=(periodic_report_pending_intent_interaction_hook(
+            registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id, agent_id=agent_id,
+        ),),
+    )
+    # Initial heartbeat/planning has not chosen an action yet. Its generic
+    # prompt asks the Host to consume the current decision after launch. A
+    # held continuation already has an action and cannot substitute another.
+    return {"current": current, "planned_effective_action": (
+        original_quota.get("effective_action") if original_quota is not None
+        else current.get("effective_action"))}
 
 
 def fresh_turn_envelope(

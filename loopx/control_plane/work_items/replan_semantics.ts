@@ -1,4 +1,5 @@
 import type { JsonObject } from "../effect_program.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
@@ -27,6 +28,7 @@ const VISION_TRIGGERS = new Set([
   "vision_acceptance_gap", "vision_checkpoint_missing", "vision_outcome_checkpoint_required",
   "vision_successor_required", "required_agent_vision_missing",
 ]);
+const ACCEPTANCE_HOLD_TRIGGERS = new Set(["goal_acceptance_stale", "goal_acceptance_unbound"]);
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
 export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
@@ -71,12 +73,15 @@ function isExternalReview(obligation: JsonObject): boolean {
   return triggerKinds(obligation).some(kind => EXTERNAL_REVIEW_TRIGGERS.has(kind));
 }
 
-// A due cadence review is a decision checkpoint. Typed progress may still be
-// its outcome, but cannot stand in for the review when the strategy is enabled.
-function requiresPeriodicStrideDecision(obligation: JsonObject, fallbackStrategy: unknown = "off"): boolean {
+// Existing cadence and observed-stall triggers become decision checkpoints
+// only for the opted-in strategy. This does not detect stalls or force a pivot.
+const STRIDE_REVIEW_TRIGGERS = new Set(["periodic_review_due", "typed_progress_repeat",
+  "no_progress_streak", "repeated_action_loop", "external_progress_review_drift"]);
+function requiresStrideDecision(obligation: JsonObject, fallbackStrategy: unknown = "off"): boolean {
   const context = object(obligation.replan_context);
   const strategy = Object.hasOwn(context, "stride_strategy") ? context.stride_strategy : fallbackStrategy;
-  return triggerKinds(obligation).includes("periodic_review_due") && normalizeStrideStrategy(strategy) !== "off";
+  return triggerKinds(obligation).some(kind => STRIDE_REVIEW_TRIGGERS.has(kind)) &&
+    normalizeStrideStrategy(strategy) !== "off";
 }
 
 /** Route only a revalidated canonical transition to its original Turn guard.
@@ -97,7 +102,7 @@ function projectTurnTransition(request: JsonObject): JsonObject {
       const candidateSource = object(value);
       const sourceObligation = object(candidateSource.obligation);
       if (sourceObligation.obligation_id !== selected) continue;
-      if (requiresPeriodicStrideDecision(sourceObligation, request.stride_strategy)) continue;
+      if (requiresStrideDecision(sourceObligation, request.stride_strategy)) continue;
       const ack = object(candidateSource.ack);
       const candidate = object(ack.semantic_delta);
       if (ack.schema_version === "autonomous_replan_ack_v0" &&
@@ -250,6 +255,12 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   if (current?.obligation_id === selected) {
     return {obligation: {...current, selection_binding: "heartbeat_receipt"}};
   }
+  // Only an existing receipt may use the exact legacy identity reconstructed
+  // from current canonical acceptance sources. Keep its original settlement.
+  if (request.guard_scoped && current?.legacy_obligation_id === selected &&
+      triggerKinds(current).some(kind => ACCEPTANCE_HOLD_TRIGGERS.has(kind))) {
+    return {obligation: {...current, obligation_id: selected, selection_binding: "heartbeat_receipt"}};
+  }
   throw new EffectRuntimeRequestError(
     "heartbeat receipt settlement identity conflicts with the current autonomous replan obligation",
     "heartbeat_receipt_identity_conflict",
@@ -259,7 +270,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
 /** One outcome policy for host projection and write-time discharge. */
 export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcome[] {
   const kinds = triggerKinds(obligation);
-  const acceptanceHold = kinds.some(kind => kind === "goal_acceptance_stale" || kind === "goal_acceptance_unbound");
+  const acceptanceHold = kinds.some(kind => ACCEPTANCE_HOLD_TRIGGERS.has(kind));
   const declared = strings(obligation.satisfying_semantic_outcomes);
   if (declared.length) {
     if (declared.some(value => !KNOWN_OUTCOMES.has(value))) {
@@ -279,9 +290,10 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
   // Periodic and long-chain reviews may retain existing runnable work. The
   // vision decision must close the checkpoint without manufacturing another
   // successor or progress identifier. Keep previously legal progress exits.
-  // An external progress review likewise lets the Agent keep its plan on
-  // evidence (a fresh vision path) or pivot with a typed progress delta.
-  return kinds.some(kind => kind === "long_todo_chain" ||
+  // An enabled stall review can also retain the unfinished useful experiment
+  // after a current evidenced decision, without inventing progress or a Todo.
+  // Explicit capability/acceptance outcome restrictions above still apply.
+  return requiresStrideDecision(obligation) || kinds.some(kind => kind === "long_todo_chain" ||
     kind === "periodic_review_due" || EXTERNAL_REVIEW_TRIGGERS.has(kind))
     ? ["fresh_vision_path_outcome", ...PROGRESS_OUTCOMES] : [...PROGRESS_OUTCOMES];
 }
@@ -319,8 +331,10 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
 }
 
 /** Vision gaps use their durable run or completed-chain source timestamp.
- * A patch label proves no relationship to a later run; equal timestamps cover
- * the atomic writeback without granting a permanent waiver for new gaps.
+ * Canonical acceptance holds instead have exact owner-revision checkpoints:
+ * a formal accepted obligation covers that same hold after a display edit.
+ * Other later evidence, a different checkpoint and legacy ACKs retain their
+ * source freshness requirements.
  */
 function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
   if (!Array.isArray(request.acceptance_gaps)) {
@@ -331,15 +345,35 @@ function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
   const timestamp = (value: unknown): bigint | null => typeof value === "string" &&
     /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? parseTodoTimestampMicros(value) : null;
   const acknowledgedAt = timestamp(ack.generated_at);
+  const outcomes = strings(delta.outcomes);
+  const satisfying = strings(delta.satisfying_outcomes);
+  const checkpoints = Array.isArray(delta.trigger_checkpoints) ? delta.trigger_checkpoints.map(object) : [];
+  const formalObligation = typeof delta.obligation_id === "string" && /^replan-[a-f0-9]{16}$/.test(delta.obligation_id);
   const gaps = request.acceptance_gaps.map(value => {
     const gap = object(value);
-    return timestamp(gap.generated_at ?? (gap.kind === "vision_outcome_checkpoint_required" &&
+    if (ACCEPTANCE_HOLD_TRIGGERS.has(String(gap.kind ?? ""))) {
+      const currentCheckpoint = checkpoints.some(checkpoint => checkpoint.kind === gap.kind &&
+        checkpoint.frontier_revision === gap.frontier_revision);
+      const legacyCheckpoint = formalObligation && gap.source === "goal_acceptance_contract" &&
+        typeof gap.legacy_frontier_revision === "string" && BARE_SHA256_PATTERN.test(gap.legacy_frontier_revision) &&
+        checkpoints.some(checkpoint => checkpoint.kind === gap.kind &&
+          checkpoint.frontier_revision === gap.legacy_frontier_revision);
+      if (!strings(delta.trigger_kinds).includes(String(gap.kind)) ||
+          typeof gap.frontier_revision !== "string" || !gap.frontier_revision ||
+          !(currentCheckpoint || legacyCheckpoint) ||
+          !outcomes.some(outcome => (outcome === "new_runnable_successor" || outcome === "new_concrete_blocker") &&
+            satisfying.includes(outcome))) return false;
+      if (currentCheckpoint && formalObligation && gap.source === "goal_acceptance_contract" &&
+          BARE_SHA256_PATTERN.test(gap.frontier_revision)) return true;
+    }
+    const observedAt = timestamp(gap.generated_at ?? (gap.kind === "vision_outcome_checkpoint_required" &&
       gap.source === "recent_completed_advancement_todo" ? gap.completed_at : null));
+    return observedAt !== null && acknowledgedAt !== null && observedAt <= acknowledgedAt;
   });
   return {acknowledged: ack.recorded === true && delta.accepted === true &&
-    strings(delta.outcomes).some(outcome => VISION_OUTCOMES.some(known => known === outcome)) &&
+    outcomes.some(outcome => VISION_OUTCOMES.some(known => known === outcome)) &&
     acknowledgedAt !== null &&
-    gaps.length > 0 && gaps.every(time => time !== null && time <= acknowledgedAt)};
+    gaps.length > 0 && gaps.every(covered => covered)};
 }
 
 export function projectReplanWriteback(value: unknown): JsonObject {
@@ -364,21 +398,21 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation === "receipt_bound_obligation") return preserveReceiptBoundObligation(request);
   const obligation = requireJsonObject(request.obligation, "obligation");
   if (request.operation === "transition_eligibility") {
-    return {allowed: !requiresPeriodicStrideDecision(obligation, request.stride_strategy)};
+    return {allowed: !requiresStrideDecision(obligation, request.stride_strategy)};
   }
   const required = requiredSemanticOutcomes(obligation);
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
     const strideControl = strideControlContract(object(obligation.replan_context), obligation.obligation_id);
     const writeback = writebackProjection(required, externalReview);
-    if (requiresPeriodicStrideDecision(obligation)) {
+    if (requiresStrideDecision(obligation)) {
       const contract = object(writeback.writeback_contract);
       writeback.cli_semantic_args = VISION_CLI_ARGS;
       writeback.writeback_contract = {...contract,
         preferred_input: "evidence_linked_vision_path",
         required_fields: [...new Set([...strings(contract.required_fields), "agent_vision.stride_decision"])],
         path_outcomes: [...FRESH_PATH_DISPOSITIONS, "stop"],
-        rule: "This due periodic review must record a current evidence-linked stride_decision before any typed progress, successor, blocker or terminal outcome can settle it. " +
+        rule: "This cadence or observed-stall review must record a current evidence-linked stride_decision before any typed progress, successor, blocker or terminal outcome can settle it. " +
           String(contract.rule ?? "")};
     }
     return {required_any_of: required, planning_guidance: [...REPLAN_PLANNING_GUIDANCE,
@@ -398,21 +432,22 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const context = object(obligation.replan_context);
   const [strideDecision] = normalizeStrideDecision(vision.stride_decision);
   const structuredReview = normalizeStrideStrategy(context.stride_strategy) !== "off";
-  const periodicStrideReview = requiresPeriodicStrideDecision(obligation);
+  const selectedComparison = object(strideDecision?.explore_review).selected_candidate != null;
+  const requiredStrideReview = requiresStrideDecision(obligation);
   const pathOutcome = String(path.outcome ?? "").trim();
   const evidenceLinkedPath = Boolean(String(patch.acceptance_summary ?? "").trim() &&
     (FRESH_PATH_DISPOSITIONS.has(pathOutcome) || pathOutcome === "stop") && strings(path.evidence_refs).length);
   const freshPath = evidenceLinkedPath && FRESH_PATH_DISPOSITIONS.has(pathOutcome);
   const independentStride = strideDecision?.schema_version === STRIDE_DECISION_SCHEMA;
-  const missingStride = structuredReview && (freshPath || periodicStrideReview) &&
+  const missingStride = structuredReview && (freshPath || requiredStrideReview) &&
     (!strideDecision || !independentStride);
-  const missingStridePath = periodicStrideReview && !evidenceLinkedPath;
-  const staleStride = !!strideDecision && structuredReview &&
+  const missingStridePath = requiredStrideReview && !evidenceLinkedPath;
+  const staleStride = !!strideDecision && (structuredReview || selectedComparison) &&
     strideDecision.reference_obligation_id !== obligation.obligation_id;
-  const reviewMismatch = strideDecision && structuredReview
-    ? periodicStrideReview && strideDecision.reference_context_id !== context.context_id
+  const reviewMismatch = strideDecision && (structuredReview || selectedComparison)
+    ? (requiredStrideReview || selectedComparison) && strideDecision.reference_context_id !== context.context_id
       ? "Stride decision must reference the delivered due-review context."
-      : strideReviewMismatch(strideDecision, context, request.stride_review_evidence)
+      : strideReviewMismatch(strideDecision, context, request.stride_review_evidence, vision.todo_delta)
     : null;
   let outcomes = strings(observation.delta_kinds);
   if (outcomes.some(value => (CAPABILITY_OUTCOMES as readonly string[]).includes(value))) {
@@ -443,7 +478,8 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     outcomes.push("fresh_vision_path_outcome");
   }
   if (staleStride || missingStride || reviewMismatch) outcomes = outcomes.filter(outcome => outcome !== "fresh_vision_path_outcome");
-  const satisfying = inconsistentTerminal || (periodicStrideReview && (missingStride || missingStridePath || staleStride || reviewMismatch))
+  const satisfying = inconsistentTerminal || (requiredStrideReview && (missingStride || missingStridePath || staleStride || reviewMismatch))
+    || (selectedComparison && (staleStride || reviewMismatch))
     ? [] : outcomes.filter(outcome => required.includes(outcome as SemanticOutcome));
   const replayRefused = (replayed || knownBlocker) && !satisfying.length && !inconsistentTerminal;
   const identityRefused = identityWithoutEvidence && !satisfying.length && !inconsistentTerminal;

@@ -41,7 +41,16 @@ from loopx.extensions.process_runtime import (  # noqa: E402
     CappedProcessResult,
     run_capped_process,
 )
+from loopx.file_lock import try_exclusive_file_lock, write_json_atomic  # noqa: E402
 from loopx.paths import global_registry_path  # noqa: E402
+from loopx.control_plane.goals.goal_ref_validation import exact_goal_ref  # noqa: E402
+from loopx.control_plane.quota.effective_action import EffectiveAction  # noqa: E402
+from loopx.control_plane.quota.effect_program import SettlementIdentity  # noqa: E402
+from loopx.control_plane.quota.settlement import read_heartbeat_settlement  # noqa: E402
+from loopx.control_plane.todos.contract import (  # noqa: E402
+    normalize_todo_claimed_by,
+    normalize_todo_replan_obligation_id,
+)
 
 SCHEDULER_DETAIL_KEY = "local_scheduler"
 LOCAL_SCHEDULER_STOP_DIRECTIVE = "stop"
@@ -205,9 +214,28 @@ def _load_state(path: Path | None) -> dict[str, Any]:
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
         return {}
-    return raw if isinstance(raw, dict) else {}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("worker state unreadable; recover the original state before waking") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("worker state must be an object")
+    count = raw.get("unchanged_count", 0)
+    if type(count) is not int or count < 0:
+        raise ValueError("worker unchanged_count must be a non-negative integer")
+    attempts = raw.get("replan_attempts", [])
+    if not isinstance(attempts, list):
+        raise ValueError("worker replan_attempts must be a list")
+    for attempt in attempts:
+        if (not isinstance(attempt, dict) or not isinstance(attempt.get("status"), str)
+                or attempt["status"] not in {"started", "returned", "unknown"}):
+            raise ValueError("worker replan attempt is invalid; recover the original work")
+        _attempt_scope(attempt)
+        if not normalize_todo_replan_obligation_id(attempt.get("obligation_id")):
+            raise ValueError("worker replan attempt is missing its original obligation")
+        if attempt.get("settlement_identity") is not None:
+            _attempt_settlement_identity(attempt)
+    return raw
 
 
 def _default_state_path(args: argparse.Namespace) -> Path:
@@ -223,7 +251,7 @@ def _default_state_path(args: argparse.Namespace) -> Path:
         {
             "registry": str(args.registry),
             "goal_id": str(args.goal_id),
-            "agent_id": str(args.agent_id),
+            "agent_id": normalize_todo_claimed_by(args.agent_id) or str(args.agent_id),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -241,11 +269,195 @@ def resolve_state_path(args: argparse.Namespace) -> Path:
 def _save_state(path: Path | None, state: dict[str, Any]) -> None:
     if path is None:
         return
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-    tmp.chmod(0o600)
-    os.replace(tmp, path)
+    # Dispatch intent must survive a process crash. Reuse the atomic writer's
+    # fsync and unique temporary file; a failed write cannot permit a wake.
+    write_json_atomic(path, state, mode=0o600, directory_mode=0o700,
+                      fsync_directory=True, indent=None, sort_keys=True)
+
+
+def _attempt_scope(value: dict[str, Any]) -> dict[str, Any]:
+    goal_id = value.get("goal_id")
+    registry = value.get("registry")
+    runtime_root = value.get("runtime_root")
+    if (not isinstance(goal_id, str) or not goal_id.strip()
+            or any(not isinstance(route, str) or not Path(route).is_absolute() for route in (registry, runtime_root))):
+        raise ValueError("worker replan attempt is missing its original runtime, registry and Goal")
+    goal_ref = None
+    if value.get("goal_ref") is not None:
+        ref = _mapping(value["goal_ref"])
+        goal_ref = exact_goal_ref(str(ref.get("goal_id") or ""), str(ref.get("goal_instance_id") or ""))
+        if goal_ref["goal_id"] != goal_id:
+            raise ValueError("worker replan GoalRef does not match its original Goal")
+    agent_id = value.get("agent_id")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        raise ValueError("worker replan attempt is missing its original agent")
+    agent_id = normalize_todo_claimed_by(agent_id)
+    if agent_id is None:
+        raise ValueError("worker replan attempt has an invalid original agent")
+    return {"registry": registry, "runtime_root": runtime_root,
+            "goal_id": goal_id, "goal_ref": goal_ref, "agent_id": agent_id}
+
+
+def _admission_scope(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    agent_id = _mapping(payload.get("agent_identity")).get("agent_id")
+    expected_agent = normalize_todo_claimed_by(args.agent_id)
+    if (not expected_agent or agent_id != expected_agent
+            or payload.get("goal_id", args.goal_id) != args.goal_id):
+        raise ValueError("worker scope does not match current admission")
+    runtime_root = payload.get("runtime_root")
+    if (not isinstance(runtime_root, str) or not Path(runtime_root).is_absolute()
+            or (args.runtime_root and Path(args.runtime_root).expanduser().resolve() != Path(runtime_root).resolve())):
+        raise ValueError("worker runtime does not match current admission")
+    # Ordinary executable registries currently provide no exact GoalRef. Keep
+    # their real alias scope; never invent a lifetime or reset it on log/id churn.
+    return _attempt_scope({"registry": str(Path(args.registry).expanduser().resolve()),
+                           "runtime_root": str(Path(runtime_root).resolve()),
+                           "goal_id": args.goal_id, "goal_ref": payload.get("goal_ref"),
+                           "agent_id": agent_id})
+
+
+def _same_replan_scope(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    a, b = _attempt_scope(left), _attempt_scope(right)
+    if any(a[key] != b[key] for key in ("registry", "runtime_root", "goal_id", "agent_id")):
+        return False
+    # Losing or gaining an exact identity is not proof that old work ended.
+    # Only two different, positively known lifetimes can separate this route.
+    return a["goal_ref"] is None or b["goal_ref"] is None or a["goal_ref"] == b["goal_ref"]
+
+
+def _attempt_settlement_identity(attempt: dict[str, Any]) -> SettlementIdentity:
+    try:
+        identity = SettlementIdentity.from_runtime_payload(attempt["settlement_identity"])
+    except (KeyError, RuntimeError) as exc:
+        raise ValueError("worker original settlement identity is invalid") from exc
+    if (identity.goal_id != attempt["goal_id"] or identity.agent_id != attempt["agent_id"]
+            or identity.todo_id is not None or identity.replan_obligation_id != attempt["obligation_id"]):
+        raise ValueError("worker original settlement identity does not match its replan")
+    return identity
+
+
+def _replan_attempt(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
+    if payload.get("effective_action") != EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value:
+        return None
+    obligation = _mapping(payload.get("autonomous_replan_obligation"))
+    # Original lifecycle settlement has its own journal and is not a new
+    # research decision. Do not substitute this local retry brake for it.
+    if obligation.get("resolution_mode") in {"todo_lifecycle_settlement", "receipt_bound_replan_settlement"}:
+        return None
+    obligation_id = normalize_todo_replan_obligation_id(obligation.get("obligation_id"))
+    scope = _admission_scope(payload, args)
+    if (obligation.get("required") is not True or not obligation_id
+            or obligation.get("agent_id") not in {None, scope["agent_id"]}):
+        raise ValueError("automatic replan requires its current Goal, agent and obligation identity")
+    attempt = {**scope, "obligation_id": obligation_id}
+    identity = _mapping(payload.get("heartbeat_receipt")).get("settlement_identity")
+    if identity is not None:
+        attempt["settlement_identity"] = identity
+        _attempt_settlement_identity(attempt)
+    return attempt
+
+
+def _pending_replan_attempt(state: dict[str, Any], payload: dict[str, Any], args: argparse.Namespace) -> bool:
+    """Unknown original effects cannot acquire another wake under a new id."""
+    unresolved = [attempt for attempt in state.get("replan_attempts", [])
+                  if attempt["status"] in {"started", "unknown"}]
+    if not unresolved:
+        return False
+    # Absence of a fresh lifecycle is not evidence that the old one ended.
+    scope = _admission_scope(payload, args)
+    return any(_same_replan_scope(attempt, scope) for attempt in unresolved)
+
+
+def _read_resolved_replan_attempts(state: dict[str, Any], payload: dict[str, Any], args: argparse.Namespace) -> bool:
+    """Only the original settlement owner can resolve a known lost response.
+
+    An opaque unbound shell command has no such proof. Leave it visibly unknown
+    instead of inferring a Turn from the latest row or dispatching a new command.
+    """
+    unresolved = [attempt for attempt in state.get("replan_attempts", [])
+                  if attempt["status"] in {"started", "unknown"} and attempt.get("settlement_identity")]
+    if not unresolved:
+        return False
+    scope = _admission_scope(payload, args)
+    changed = False
+    for attempt in unresolved:
+        if not _same_replan_scope(attempt, scope):
+            continue
+        original = _attempt_settlement_identity(attempt)
+        try:
+            readback = read_heartbeat_settlement(
+                Path(attempt["runtime_root"]), goal_id=original.goal_id, agent_id=original.agent_id, todo_id=None,
+                turn_instance_id=original.turn_instance_id, replan_obligation_id=original.replan_obligation_id,
+                resolve_original_binding=True, registry_path=Path(attempt["registry"]), goal_ref=attempt.get("goal_ref"))
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ValueError("original settlement readback unavailable; preserve the attempt and repair its source") from exc
+        if (readback is not None and readback.identity.failure is None
+                and readback.identity.value is not None and readback.identity.value.as_dict() == original.as_dict()
+                and readback.replay_phase == "settled" and readback.settlement.failure is None
+                and readback.settlement.value is not None):
+            attempt.update(status="returned", recovery="original_settlement_verified")
+            changed = True
+    return changed
+
+
+def _observe_worker_replan(
+    payload: dict[str, Any], args: argparse.Namespace,
+    attempt: dict[str, Any] | None, status: str | None,
+) -> None:
+    """Publish the driver's observation through its existing poll receipt.
+
+    This is readback only. Admission and original-result recovery never read
+    this receipt, and failure to publish cannot erase the durable attempt.
+    """
+    from loopx.agent_registry import load_goal_from_registry
+    from loopx.control_plane.goals.path_resolution import resolve_goal_local_path
+    from loopx.control_plane.quota.host_poll_receipts import record_host_poll_receipt
+
+    try:
+        registry = Path(args.registry).expanduser().resolve()
+        goal = load_goal_from_registry(registry, args.goal_id)
+        if goal is None:
+            return
+        state_path = resolve_goal_local_path(goal.get("state_file"), goal, fallback_base=registry.parent)
+        observation = None
+        if attempt is not None:
+            identity = _mapping(attempt.get("settlement_identity"))
+            observation = {
+                "status": status, "obligation_id": attempt["obligation_id"],
+                "turn_instance_id": identity.get("turn_instance_id"),
+                "runtime_root": attempt["runtime_root"],
+                "registry_goal_digest": attempt.get("registry_goal_digest"),
+            }
+            if "source_goal_observation_digest" in attempt:
+                observation["source_goal_observation_digest"] = attempt["source_goal_observation_digest"]
+            else:
+                # Older attempts bound only the selected registry view. Add
+                # source association only while that original view still
+                # matches; never rebind an old outcome to changed work.
+                current = _worker_goal_observation_digests(args)
+                if current.get("registry_goal_digest") and current["registry_goal_digest"] == attempt.get("registry_goal_digest"):
+                    observation["source_goal_observation_digest"] = current["source_goal_observation_digest"]
+        record_host_poll_receipt(goal, state_path, agent_id=normalize_todo_claimed_by(args.agent_id),
+                                 decision=payload, worker_observation=observation)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        _log("status=worker_observation_unavailable next=inspect_original_worker_state")
+
+
+def _worker_goal_observation_digests(args: argparse.Namespace) -> dict[str, str | None]:
+    """Capture an observation witness before dispatch, never an admission."""
+    from loopx.agent_registry import load_goal_from_registry
+    from loopx.history import goal_registry_digest, host_worker_goal_observation_digest
+
+    result: dict[str, str | None] = {"registry_goal_digest": None, "source_goal_observation_digest": None}
+    try:
+        registry = Path(args.registry).expanduser().resolve()
+        goal = load_goal_from_registry(registry, args.goal_id)
+        if goal is not None:
+            result.update(registry_goal_digest=goal_registry_digest(goal),
+                          source_goal_observation_digest=host_worker_goal_observation_digest(goal, registry_path=registry))
+    except (OSError, RuntimeError, TypeError, ValueError):
+        pass
+    return result
 
 
 def select_interval(
@@ -327,8 +539,30 @@ def run_worker(
     *,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    should_run_command = build_should_run_command(args)
     state_path = resolve_state_path(args)
+    try:
+        state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # One configured state route has one live synchronous consumer. A
+        # second service/cron invocation observes the owner and does no work.
+        with try_exclusive_file_lock(state_path, agent_id=normalize_todo_claimed_by(args.agent_id),
+                                     operation="external_scheduler_worker") as lock:
+            if lock is None:
+                _log("status=already_running next=observe_current_worker")
+                return 0
+            return _run_worker_locked(args, state_path=state_path, sleep=sleep)
+    except (OSError, ValueError) as exc:
+        reason = "worker state I/O failed; preserve original work" if isinstance(exc, OSError) else str(exc)
+        _log(f"status=state_error error={shlex.quote(reason)}")
+        return 2
+
+
+def _run_worker_locked(
+    args: argparse.Namespace,
+    *,
+    state_path: Path,
+    sleep: Callable[[float], None],
+) -> int:
+    should_run_command = build_should_run_command(args)
     once = bool(args.once)
 
     while True:
@@ -371,7 +605,7 @@ def run_worker(
                 )
                 _save_state(
                     state_path,
-                    {"reset_token": decision.reset_token, "unchanged_count": 0},
+                    {**state, "reset_token": decision.reset_token, "unchanged_count": 0},
                 )
                 return 0
 
@@ -381,6 +615,36 @@ def run_worker(
                 wake_failure_kind = None
                 wake_failed = False
                 if args.wake_cmd:
+                    if _read_resolved_replan_attempts(state, payload, args):
+                        _save_state(state_path, state)
+                    if _pending_replan_attempt(state, payload, args):
+                        scope = _admission_scope(payload, args)
+                        original = next(previous for previous in state["replan_attempts"]
+                                        if previous["status"] in {"started", "unknown"}
+                                        and _same_replan_scope(previous, scope))
+                        _observe_worker_replan(payload, args, original, "replan_outcome_unknown")
+                        _log("status=replan_outcome_unknown next=use_original_host_recovery "
+                             "goal_complete=false new_wake=false")
+                        return 2
+                    attempt = _replan_attempt(payload, args)
+                    if attempt is not None:
+                        attempts = state.setdefault("replan_attempts", [])
+                        original = next((previous for previous in attempts
+                                         if _same_replan_scope(previous, attempt)
+                                         and previous["obligation_id"] == attempt["obligation_id"]), None)
+                        if original is not None:
+                            _observe_worker_replan(payload, args, original, "replan_paused")
+                            _log("status=replan_paused reason=unresolved_original_obligation "
+                                 f"obligation={attempt['obligation_id']} "
+                                 "next=inspect_original_work_or_supply_concrete_direction "
+                                 "goal_complete=false new_wake=false")
+                            return 0
+                        attempt["status"] = "started"
+                        attempt.update(_worker_goal_observation_digests(args))
+                        attempts.append(attempt)
+                        _save_state(state_path, {**state, "reset_token": decision.reset_token,
+                                                "unchanged_count": unchanged_count})
+                    _observe_worker_replan(payload, args, None, None)
                     wake_result = _run_wake(
                         args.wake_cmd,
                         timeout_seconds=getattr(args, "wake_timeout_seconds", None),
@@ -388,10 +652,22 @@ def run_worker(
                     wake_rc = wake_result.returncode
                     wake_failure_kind = wake_result.failure_kind
                     stop_code = getattr(args, "wake_stop_exit_code", None)
+                    expected_stop = (stop_code is not None and wake_failure_kind is None
+                                     and wake_rc == stop_code)
+                    if attempt is not None:
+                        # This records process transport only. It is neither a
+                        # semantic ACK nor a completion/spend receipt.
+                        attempt.update(status="returned" if wake_failure_kind is None and
+                                       (wake_rc == 0 or expected_stop) else "unknown",
+                                       wake_rc=wake_rc, failure_kind=wake_failure_kind)
+                        _save_state(state_path, state)
+                        if attempt["status"] == "unknown":
+                            _observe_worker_replan(payload, args, attempt, "replan_outcome_unknown")
                     if (stop_code is not None and wake_failure_kind is None
                             and wake_rc == stop_code):
                         _log(f"status=wake_requested_stop wake_rc={wake_rc}")
                         _save_state(state_path, {
+                            **state,
                             "reset_token": decision.reset_token, "unchanged_count": 0,
                         })
                         return 0
@@ -409,6 +685,7 @@ def run_worker(
                     _save_state(
                         state_path,
                         {
+                            **state,
                             "reset_token": decision.reset_token,
                             "unchanged_count": unchanged_count,
                             "last_wake_rc": wake_rc,
@@ -491,6 +768,7 @@ def run_worker(
             _save_state(
                 state_path,
                 {
+                    **state,
                     "reset_token": decision.reset_token,
                     "unchanged_count": unchanged_count,
                 },
@@ -508,6 +786,7 @@ def run_worker(
         _save_state(
             state_path,
             {
+                **state,
                 "reset_token": decision.reset_token,
                 "unchanged_count": unchanged_count,
             },
@@ -523,7 +802,7 @@ def run_worker(
             sleep(max(5, interval_minutes * 60))
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, sleep: Callable[[float], None] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Scheduler-hint-aware external shell_worker for generic CLI loops.",
     )
@@ -588,7 +867,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.registry = str(global_registry_path())
         except ValueError as exc:
             parser.error(str(exc))
-    return run_worker(args)
+    return run_worker(args) if sleep is None else run_worker(args, sleep=sleep)
 
 
 if __name__ == "__main__":

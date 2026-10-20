@@ -43,11 +43,22 @@ def attach_receipt_replan_context(
     explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
     goal_acceptance_contract: Mapping[str, Any] | None,
     todo_items: Iterable[Mapping[str, Any]] | None = None,
+    receipt_bound_replan_obligation_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Contextualize pending receipt actions without borrowing a new frontier."""
     from .progress_observation import build_replan_context
 
     current = dict(current) if current else None
+    if current and receipt_bound_replan_obligation_id and current.get("legacy_obligation_id") == receipt_bound_replan_obligation_id:
+        # Resolve compatibility before computing context/delivery identities.
+        # The typed owner verifies the exact source-derived alias; no receipt
+        # or historical ACK is rewritten to the new digest.
+        current = project_replan_semantics({
+            "operation": "receipt_bound_obligation", "guard_scoped": True,
+            "selected_obligation_id": receipt_bound_replan_obligation_id,
+            "current_obligation": current, "transition_candidates": [],
+            "replay_phase": "open", "agent_id": agent_id,
+        })["obligation"]
     obligations = [current] if current else []
     pending = lifecycle_candidate if lifecycle_candidate and not lifecycle_candidate["lifecycle_settled"] else None
     if pending:

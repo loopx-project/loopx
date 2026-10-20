@@ -11,6 +11,31 @@ const attachment = {
   evidence_refs: ["validation:prefix", "validation:tail"],
 };
 
+const execution = {schema_version: "explore_execution_observation_v0",
+  candidate_sha256: "a".repeat(64), input_revision: attachment.input_revision,
+  planned_method_id: "scheduler", executed_method_id: "mask-selection",
+  change_reason: "The control identified mask selection as the first discriminating change.",
+  elapsed_seconds: 0.2, limit_seconds: 30, search_iterations: 2,
+  stop_reason: "process_exit:0; solver_report:search_cap", evidence_refs: attachment.evidence_refs};
+
+test("execution observations bind resources and changed methods without implying adoption", () => {
+  const normalized = normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: execution}});
+  assert.deepEqual(normalized.execution_observation, execution);
+  assert.deepEqual(normalizeExploreResultAttachment({attachment}), attachment);
+  const unknown = {...execution, elapsed_seconds: null, search_iterations: null, limit_seconds: null, stop_reason: null};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: unknown}}).execution_observation, unknown);
+  for (const mutation of [{change_reason: null}, {input_revision: "foreign-input"},
+    {search_iterations: -1}, {search_iterations: 1.1}, {elapsed_seconds: NaN}, {limit_seconds: 0},
+    {evidence_refs: ["foreign:probe"]}, {candidate_sha256: "finding-digest-is-not-code"},
+    {result_ref: attachment.evidence_refs[0]},
+    {result_ref: attachment.evidence_refs[0], result_candidate_sha256: "b".repeat(64)}]) {
+    assert.throws(() => normalizeExploreResultAttachment({attachment: {...attachment,
+      execution_observation: {...execution, ...mutation}}}));
+  }
+  const result = {...execution, result_ref: attachment.evidence_refs[0], result_candidate_sha256: execution.candidate_sha256};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: result}}).execution_observation, result);
+});
+
 test("question lifecycle is explicit, independent of finding status, and available on path capture", () => {
   const update = {status: "resolved"};
   const relations = [{to_node: "uniform-estimate", edge_type: "depends_on", summary: "Required before transfer."}];

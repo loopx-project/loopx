@@ -4,6 +4,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
+import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
 
 export const EXPLORE_RESULT_ATTACHMENT_SCHEMA = "explore_result_attachment_v0";
 export const EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA = "explore_result_from_path_delta_v0";
@@ -58,6 +59,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
       "Capture is optional, not a settlement obligation.",
       "A stopped route does not imply refuted status, and a score alone does not prove refutation.",
       "Keep raw logs local.",
+      "When an experiment has execution evidence, attach execution_observation: preserve its exact candidate and input version, planned versus executed method, change reason and measured resources. Missing measurements are null, not zero. A finding source digest is not an executable digest. Result evidence must name the candidate it actually evaluated, including delayed or regressing results; it does not certify current workspace quality or Goal completion.",
       "Observations allow 320 characters, interpretations 1200; the complete scoped summary is preserved within 2000 characters.",
     ].join(" "),
     // Blank evidence fields deliberately fail validation until the caller
@@ -72,7 +74,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
 }
 
 const FIELDS = ["schema_version", "node_id", "question", "applicability", "input_revision",
-  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations"];
+  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation"];
 // Reuse the persisted Explore node/edge vocabulary, distinct from finding status.
 const QUESTION_STATUSES = ["open", "exploring", "blocked", "resolved", "dead_end"] as const;
 const RELATION_TYPES = ["subtopic_of", "depends_on", "answers", "supports", "refutes", "leads_to"] as const;
@@ -153,6 +155,12 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     }
     return ref;
   });
+  const execution = Object.hasOwn(row, "execution_observation")
+    ? normalizeExploreExecutionObservation({observation: row.execution_observation}) : null;
+  if (execution && (execution.input_revision !== text(row.input_revision, "input_revision", 160)
+    || (execution.evidence_refs as string[]).some(ref => !refs.includes(ref)))) {
+    throw new EffectRuntimeRequestError("execution observation must retain this finding's input revision and evidence references");
+  }
   // Status reuses the existing finding vocabulary. The caller supplies the
   // interpretation; a failed prerequisite belongs in a tentative observation.
   return {schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA, node_id: node,
@@ -161,11 +169,12 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     observation: text(row.observation, "observation", 320),
     interpretation: text(row.interpretation, "interpretation", 1200),
     status: requireStringLiteral(row.status, ["tentative", "confirmed", "refuted"], "finding status"),
-    evidence_refs: [...new Set(refs)], ...evolutionFields(row, node)};
+    evidence_refs: [...new Set(refs)], ...evolutionFields(row, node),
+    ...(execution ? {execution_observation: execution} : {})};
 }
 /** Explicit reference, not inferred evidence. Preserve every route item verbatim. */
 function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedScope: unknown): JsonObject {
-  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations"];
+  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation"];
   if (Object.keys(row).some(key => !fields.includes(key))) {
     throw new EffectRuntimeRequestError("Explore path_delta attachment contains unknown fields");
   }

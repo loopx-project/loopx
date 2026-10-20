@@ -125,6 +125,9 @@ def qualify_action_selection(
     should_run: bool,
     normal_delivery_allowed: bool,
     delivery_preemptions: list[str],
+    scoped_fallback_todo_id: str | None = None,
+    quota_state: str | None = None,
+    goal_health_ok: bool = False,
 ) -> dict[str, Any]:
     """Adapt current Python projections into the TS-owned selection reducer."""
 
@@ -140,6 +143,9 @@ def qualify_action_selection(
                 "should_run": should_run,
                 "normal_delivery_allowed": normal_delivery_allowed,
                 "delivery_preemptions": delivery_preemptions,
+                "scoped_fallback_todo_id": scoped_fallback_todo_id,
+                "quota_state": quota_state,
+                "goal_health_ok": goal_health_ok,
             },
         )
     except EffectRuntimeRejected as exc:
@@ -159,6 +165,9 @@ def qualify_action_selection_from_inventory(
     should_run: bool,
     normal_delivery_allowed: bool,
     delivery_preemptions: list[str],
+    scoped_fallback_todo_id: str | None = None,
+    quota_state: str | None = None,
+    goal_health_ok: bool = False,
 ) -> dict[str, Any]:
     """Resolve the requested task class before invoking the typed reducer."""
 
@@ -186,6 +195,9 @@ def qualify_action_selection_from_inventory(
         should_run=should_run,
         normal_delivery_allowed=normal_delivery_allowed,
         delivery_preemptions=delivery_preemptions,
+        scoped_fallback_todo_id=scoped_fallback_todo_id,
+        quota_state=quota_state,
+        goal_health_ok=goal_health_ok,
     )
 
 

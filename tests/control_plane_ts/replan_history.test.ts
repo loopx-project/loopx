@@ -70,6 +70,33 @@ test("periodic review counts material work, not quiet monitor receipts", () => {
     "periodic_review_due");
 });
 
+test("unsuccessful replan records cannot create or rotate a periodic work obligation", () => {
+  for (const classification of ["replan_noop", "repair_noop"]) {
+    const noops = many(200, n => run(n + 20, {classification,
+      ignored_text: `A renamed review description ${n}`}));
+    const project = (rows: JsonObject[]) => trigger(rows, {operation: "periodic"});
+    assert.equal(project(noops), null);
+    assert.equal(trigger(noops.map(row => ({...row, progress: observation}))), null,
+      "legacy callers cannot turn repeated no-op observations into a progress duty");
+    assert.equal(project([...noops, ...many(19)]), null);
+    const original = project(many(20));
+    assert.ok(original);
+    assert.deepEqual(project([...noops, ...many(20)]), original,
+      "observing an unresolved review cannot move its work window");
+    // A no-op sharing a real work Turn must not hide that Turn's work row.
+    assert.deepEqual(project(many(20).flatMap(row => [{...row, classification}, row])), original);
+    // Settlement alone does not turn a no-op into eligible review work.
+    const qualified = new Set(noops.map(row => JSON.stringify([row.agent_id, row.turn_id])));
+    assert.equal(projectReplanHistory(request(noops, {operation: "periodic"}), qualified).trigger, null);
+  }
+  const negative = many(20, n => run(n, {classification: "validated_negative_result",
+    progress: {...observation, result_class: "advanced", fingerprint: `negative-${n}`}}));
+  assert.equal(trigger(negative, {operation: "periodic"})?.run_count, 20,
+    "a useful negative experiment still contributes work");
+  assert.equal(trigger(many(20, n => run(n, {classification: "repair_noop_followup"})),
+    {operation: "periodic"})?.run_count, 20, "only the canonical no-op classifications are neutral");
+});
+
 test("ACK is a lane-scoped cutoff, including an ACK sharing the newest turn id", () => {
   for (const operation of ["all", "progress", "periodic"]) {
     const material = many(25, n => run(n, { progress: observation }));

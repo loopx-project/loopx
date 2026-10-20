@@ -31,6 +31,7 @@ class SchedulerArbitration:
     mode: str
     errors: tuple[str, ...] = ()
     scheduled_recheck_after_seconds: int | None = None
+    pending_dependency_wait: bool = False
 
     @property
     def ok(self) -> bool:
@@ -60,8 +61,11 @@ class SchedulerArbitration:
         scheduled = projection.get("scheduled_recheck_after_seconds")
         if scheduled is not None and (type(scheduled) is not int or scheduled <= 0):
             raise TypeError("TypeScript scheduler scheduled recheck must be positive integer seconds")
+        pending_dependency = projection.get("pending_dependency_wait", False)
+        if type(pending_dependency) is not bool:
+            raise TypeError("TypeScript scheduler pending dependency wait must be boolean")
         return cls(SchedulerDisposition(projection["disposition"]), projection["reason_code"],
-                   projection["mode"], tuple(projection["errors"]), scheduled)
+                   projection["mode"], tuple(projection["errors"]), scheduled, pending_dependency)
 
 
 def _scheduler_arbitration_facts(

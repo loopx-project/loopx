@@ -21,6 +21,7 @@ from loopx.control_plane.turn_driver.codex_operation_host import (
     run_codex_operation_host,
 )
 from loopx.control_plane.turn_driver.host_failure import BuiltInHostError
+from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
 from test_loopx_turn_codex_cli import _request
 from test_loopx_turn_driver import _write_live_fixture
@@ -86,6 +87,18 @@ for line in sys.stdin:
         emit({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": json.dumps(answer)}})
         emit({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
 """
+
+
+def _registered_host_goal(tmp_path: Path) -> Path:
+    """Direct transport tests still require a registered live Goal at launch."""
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "schema_version": 1, "common_runtime_root": str(tmp_path / "runtime"),
+        "goals": [{"id": "fixture-goal", "status": "active", "repo": str(tmp_path),
+                   "quota": {"compute": 1, "window_hours": 24},
+                   "coordination": {"registered_agents": ["codex-fixture"]}}],
+    }))
+    return registry
 
 
 def _claimed_native_fixture(tmp_path: Path):
@@ -480,7 +493,7 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
     executable.chmod(0o700)
     options = {
         "runtime_root": tmp_path / "runtime",
-        "registry_path": tmp_path / "registry.json",
+        "registry_path": _registered_host_goal(tmp_path),
         "project": tmp_path,
         "codex_bin": str(executable),
         "model": "test-model",
@@ -606,6 +619,34 @@ def test_operation_host_refuses_unpinned_or_widened_profile_before_launch(
     assert not (tmp_path / "runtime").exists()
 
 
+@pytest.mark.parametrize("registered", [False, None])
+def test_operation_host_rejects_absent_goal_authority_before_native_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registered,
+) -> None:
+    from loopx import chat_agent
+
+    registry = tmp_path / "registry.json"
+    if registered is False:
+        registry.write_text(json.dumps({"schema_version": 1, "goals": []}))
+    executable = tmp_path / "fake-codex-operation"
+    executable.write_text(FAKE_SERVER)
+    executable.chmod(0o700)
+    start = chat_agent.subprocess.Popen
+
+    def forbidden_start(command, *args, **kwargs):
+        if command[0] == str(executable):
+            pytest.fail("missing Goal authority cannot create a native process")
+        return start(command, *args, **kwargs)
+
+    monkeypatch.setattr("loopx.chat_agent.subprocess.Popen", forbidden_start)
+    with pytest.raises(FirstPartyHostRuntimeRejected):
+        run_codex_operation_host(
+            _request(), registry_path=registry, runtime_root=tmp_path / "runtime",
+            project=tmp_path, codex_bin=str(executable), model="test-model",
+            reasoning_effort="xhigh",
+        )
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group qualification")
 @pytest.mark.parametrize("hang", [False, True])
 def test_owned_operation_host_reaps_descendants_on_success_and_timeout(
@@ -620,7 +661,7 @@ def test_owned_operation_host_reaps_descendants_on_success_and_timeout(
         monkeypatch.setenv("FAKE_OPERATION_HANG", "1")
     options = dict(
         runtime_root=tmp_path / "runtime",
-        registry_path=tmp_path / "registry.json",
+        registry_path=_registered_host_goal(tmp_path),
         project=tmp_path,
         codex_bin=str(executable),
         model="test-model",
@@ -673,7 +714,7 @@ def test_live_owned_app_server_native_tool_metadata(
     )
     options = dict(
         runtime_root=tmp_path / "runtime",
-        registry_path=tmp_path / "registry.json",
+        registry_path=_registered_host_goal(tmp_path),
         project=tmp_path,
         model=model,
         reasoning_effort=effort,

@@ -205,3 +205,214 @@ def test_typed_progress_cli_preserves_replan_authority(
         assert authority["todos"][0]["status"] == "open"
     finally:
         restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("comparison_binding", [False, True], ids=["original", "source_bound"])
+def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    comparison_binding: bool,
+) -> None:
+    """A real stall review reaches work and a later decision under one Goal.
+
+    The bounded assignment problem is synthetic, with an unchanged minimum-cost
+    objective. It tests the control path, not benchmark or model effectiveness.
+    """
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    registry = json.loads(fixture["registry"].read_text())
+    registry["goals"][0]["quota"]["allowed_slots"] = 8
+    fixture["registry"].write_text(json.dumps(registry))
+
+    def call(*args: str, expected_code: int = 0) -> dict:
+        return call_progress_cli(fixture, *args, expected_code=expected_code)
+
+    def guard(turn: str, *, todo: str | None = TODO) -> dict:
+        return call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--turn-instance-id", turn,
+            *(["--todo-id", todo] if todo else []), "--scan-path", str(fixture["project"]))
+
+    def spend(turn: str, *, todo: str | None = TODO, obligation: str | None = None) -> dict:
+        return call("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--turn-instance-id", turn, *(["--todo-id", todo] if todo else []),
+            *(["--replan-obligation-id", obligation] if obligation else []),
+            "--slots", "1", "--source", "heartbeat", "--execute")
+
+    try:
+        call("configure-goal", "--goal-id", GOAL, "--execution-replan-after-turns", "1",
+             "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        if comparison_binding:
+            call("configure-goal", "--goal-id", GOAL, "--explore-mode", "planning", "--execute")
+            call("explore", "node", "--goal-id", GOAL, "--agent-id", AGENT,
+                 "--node-id", "recorded-local-route", "--kind", "question",
+                 "--title", "Do the existing observations establish useful progress?")
+            call("explore", "finding", "--goal-id", GOAL, "--agent-id", AGENT,
+                 "--node", "recorded-local-route", "--finding-id", "finding-recorded-local",
+                 "--title", "The recorded local observations are unchanged.", "--status", "tentative",
+                 "--summary", "Only the fixture's recorded observations; alternate mechanisms remain untested.",
+                 "--tag", "writeback-result", "--evidence-ref", "evidence-existing")
+            call("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO,
+                 "--explore-result-node-ref", "recorded-local-route")
+        guard(TURN, todo=None)
+        admitted = guard(TURN)
+        obligation = admitted["autonomous_replan_obligation"]
+        assert [item["kind"] for item in obligation["triggers"]] == ["typed_progress_repeat"]
+        assert "fresh_vision_path_outcome" in obligation["replan_context"]["uncovered_frontier"]["required_any_of"]
+        assert admitted["replan_action_packet"]["uncovered_frontier"] == obligation["replan_context"]["uncovered_frontier"]
+        original_index = fixture["index"].read_bytes()
+        refused = call(*fixture["refresh"], expected_code=1)
+        assert refused["replan_transition"]["reason_code"] == "stride_decision_required"
+        assert fixture["index"].read_bytes() == original_index
+
+        control = admitted["replan_action_packet"]["stride_control"]
+        decision = {**control["minimal_example"], "basis": "unexplained_gap", "action": "verify",
+            "axes": {
+                "work_slice": {"plan": "Run and compare three complete assignment methods.",
+                               "reason": "Repeated local changes have not resolved the cost gap."},
+                "route_distance": {"plan": "Compare local choice, reverse priority and joint assignment.",
+                                   "reason": "Row interactions may defeat independent greedy choices."},
+                "validation_scope": {"plan": "Use the same costs and one-use-per-column constraint.",
+                                     "reason": "A changed objective cannot establish a better route."}},
+            "next_probe": {"scope": "One complete bounded assignment comparison.",
+                "prediction": "Joint choices can beat independent local choices.",
+                "minimum_evidence": "Executable methods, assignments, constraint checks and costs.",
+                "adoption_criterion": "A valid lower-cost assignment under the original objective.",
+                "cost_bound": "Three methods on a three-row fixture; at most six joint assignments."}}
+        choice = None
+        if comparison_binding:
+            basis = control["explore_basis"]
+            card = next(card for card in basis["comparison_candidates"] if card["todo_id"] == TODO)
+            choice = {"todo_id": TODO, **card["outcomes"][0]}
+            assert choice["finding_id"] == "finding-recorded-local"
+            decision["explore_review"] = {"revision": basis["revision"], "disposition": "used",
+                "considered_refs": [choice["finding_id"]], "selected_candidate": choice,
+                "reason": "Use the recorded outcome to compare mechanisms within the original unfinished task."}
+        packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+            "vision_patch": {"acceptance_summary": "The original minimum-cost validation remains open."},
+            "path_delta": {"outcome": "continue", "prior_assumption": "Local changes can resolve the gap.",
+                "observed_reality": "Repeated observations do not establish that explanation.",
+                "retained": ["Original objective and unfinished validation"],
+                "evidence_refs": ["evidence-existing"]},
+            "stride_decision": decision, "todo_delta": [f"retain:{TODO}"]}
+        vision = tmp_path / "comparison-review.json"
+        vision.write_text(json.dumps(packet))
+        refresh_args = ("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--todo-id", TODO, "--turn-instance-id", TURN, "--agent-vision-json", str(vision),
+            "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
+            "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks")
+        if comparison_binding:
+            # Reuse the admitted current context, but falsify only the source
+            # digest. The typed progress exit must not hide this mismatch.
+            current_source = _authority(fixture)
+            current_state = fixture["state"].read_bytes()
+            wrong = json.loads(json.dumps(packet))
+            digest = choice["source_sha256"]
+            wrong["stride_decision"]["explore_review"]["selected_candidate"]["source_sha256"] = (
+                ("0" if digest[0] != "0" else "1") + digest[1:])
+            vision.write_text(json.dumps(wrong))
+            refused = call(*refresh_args, "--progress-result-class", "advanced",
+                "--progress-probe-kind", "probe-independent", "--progress-evidence-id", "evidence-current",
+                expected_code=1)
+            assert "exact scoped result" in refused["error"], refused
+            assert fixture["index"].read_bytes() == original_index
+            assert fixture["state"].read_bytes() == current_state and _authority(fixture) == current_source
+            vision.write_text(json.dumps(packet))
+        accepted = call(*refresh_args)
+        assert accepted["autonomous_replan_ack"]["semantic_delta"]["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
+        if comparison_binding:
+            persisted = json.loads(Path(accepted["json_path"]).read_text())
+            assert persisted["agent_vision"]["stride_decision"]["explore_review"]["selected_candidate"] == choice
+            restart_effect_runtime(wait_for_exit=True)
+        assert call(*refresh_args)["appended"] is False
+        spend(TURN)
+
+        work_turn = "turn-executed-route-comparison"
+        selected = guard(work_turn)
+        assert selected["selected_todo"]["todo_id"] == TODO
+        artifact = fixture["project"] / "assignment-comparison.json"
+        subprocess.run([sys.executable, "-c", """
+import itertools, json, sys
+from pathlib import Path
+costs = [[1, 2, 9], [1, 9, 9], [9, 1, 2]]
+def greedy(order):
+    assignment, available = [None] * len(costs), set(range(len(costs)))
+    for row in order:
+        column = min(available, key=lambda column: (costs[row][column], column))
+        assignment[row] = column
+        available.remove(column)
+    return assignment
+def cost(assignment):
+    assert sorted(assignment) == list(range(len(costs)))
+    return sum(costs[row][column] for row, column in enumerate(assignment))
+assignments = {'local': greedy(range(3)), 'reverse_priority': greedy(range(2, -1, -1)),
+    'joint': min(itertools.permutations(range(3)), key=cost)}
+results = {name: {'assignment': list(value), 'cost': cost(value)} for name, value in assignments.items()}
+winner = min(results, key=lambda name: results[name]['cost'])
+Path(sys.argv[1]).write_text(json.dumps({'results': results, 'winner': winner,
+    'objective': 'minimum_total_cost', 'constraint': 'each_column_once'}))
+""", str(artifact)], check=True, cwd=fixture["project"], timeout=10)
+        measured = json.loads(artifact.read_text())
+        assert measured["results"]["local"]["cost"] == 12
+        assert measured["results"]["reverse_priority"]["cost"] == 11
+        assert measured["results"]["joint"]["cost"] == 5
+        assert measured["winner"] == "joint"
+        summary = "Local cost 12; reverse-priority cost 11; joint cost 5. Retain the joint result; validate transfer."
+        work = call("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--todo-id", TODO, "--turn-instance-id", work_turn,
+            "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
+            "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+            "--recommended-action", summary, "--no-global-sync", "--suppress-external-sinks")
+        spend(work_turn)
+
+        next_turn = "turn-review-executed-comparison"
+        next_guard = guard(next_turn, todo=None)
+        next_obligation = next_guard["autonomous_replan_obligation"]
+        follow = next_obligation["replan_context"]["decision_followthrough"]
+        planned = next(item for item in follow["planned_work"] if item["todo_id"] == TODO)
+        result_ref = planned["ordinary_evidence_refs"][0]
+        readback = call("history", "--goal-id", GOAL, "--agent-id", AGENT,
+                        "--evidence-ref", result_ref)["evidence"]
+        assert readback["recommended_action"] == summary
+        assert readback["generated_at"] == json.loads(Path(work["json_path"]).read_text())["generated_at"]
+        assert follow["execution_and_goal_gain"] == "unknown", "Synthetic provenance is not authoritative transfer"
+        if comparison_binding:
+            assert follow["previous_decision"]["stride_decision"]["explore_review"]["selected_candidate"] == choice
+
+        # The measured choice changes the next executable work, not just prose.
+        successor = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+            "--text", f"Validate transfer of {measured['winner']} assignment on independent costs",
+            "--task-class", "advancement_task", "--action-kind", "validate",
+            "--target-key", "joint-assignment-transfer", "--replan-obligation-id", next_obligation["obligation_id"])
+        next_guard = guard(next_turn, todo=successor["todo_id"])
+        next_control = next_guard["replan_action_packet"]["stride_control"]
+        next_decision = {**decision, "action": "switch", "basis": "useful_new_route",
+            "reference_context_id": next_control["reference_context_id"],
+            "reference_obligation_id": next_obligation["obligation_id"],
+            "previous_review": {"reference_decision_ref": follow["previous_decision"]["evidence_ref"],
+                "adoption": "executed", "information_gain": "new_evidence", "goal_gain": "unknown",
+                "evidence_refs": [result_ref], "lesson": "Joint choices improved this fixture; transfer remains unproven."}}
+        next_decision["axes"] = {**decision["axes"], "route_distance": {
+            "plan": "Carry joint assignment into an independent transfer check.",
+            "reason": "The paired experiment exposed the local-choice limitation."}}
+        if comparison_binding:
+            # B is new work justified by the actual comparison. The optional
+            # retained-A choice is not a routing command or evidence of B.
+            next_decision["explore_review"] = {"revision": next_control["explore_basis"]["revision"],
+                "disposition": "deferred", "considered_refs": [],
+                "reason": "Transfer remains untested; the next work uses the executed comparison's history evidence."}
+        packet = {**packet, "stride_decision": next_decision, "todo_delta": [f"create:{successor['todo_id']}"]}
+        vision.write_text(json.dumps(packet))
+        adopted = call("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--replan-obligation-id", next_obligation["obligation_id"], "--turn-instance-id", next_turn,
+            "--agent-vision-json", str(vision), "--classification", "bounded_replan_progress",
+            "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
+            "--no-global-sync", "--suppress-external-sinks")
+        assert adopted["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+        spend(next_turn, todo=None, obligation=next_obligation["obligation_id"])
+        if comparison_binding:
+            spent = [json.loads(line) for line in fixture["index"].read_text().splitlines()
+                     if json.loads(line).get("quota_spend_commit")]
+            assert len(spent) == 3
+            assert {row["turn_instance_id"] for row in spent} == {TURN, work_turn, next_turn}
+    finally:
+        restart_effect_runtime(wait_for_exit=True)

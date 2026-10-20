@@ -2,6 +2,16 @@
 
 Status: supported optional capability; default-off harness execution contract.
 
+Ordinary result writeback can include an optional `execution_observation`
+(`explore_execution_observation_v0`): exact candidate SHA-256 and input revision,
+planned/executed method ids and change reason, measured elapsed/limit seconds,
+search iterations, stop reason and opaque evidence refs. Unknown measurements
+are explicit nulls. Its refs and input revision must belong to the enclosing
+finding. Released `result_ref` requires a matching `result_candidate_sha256`.
+This records producer evidence, not verified execution or utility. Findings,
+replan context and the existing research-history detail retain it; omission
+preserves old events. See the [local probe producer](../../../benchmark/runtime/RESEARCH_LOOP.md).
+
 ## At a Glance
 
 Explore Harness is a supported, default-off optional capability for

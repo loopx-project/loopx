@@ -154,6 +154,11 @@ def compact_autonomous_replan_ack(run: dict[str, Any] | None) -> dict[str, Any] 
     generated_at = str(run.get("generated_at") or "").strip()
     if generated_at:
         result["generated_at"] = generated_at
+    todo_source = run.get("todo_source", normalized_ack.get("todo_source"))
+    if isinstance(todo_source, dict):
+        # Transport the original provider anchor, never a current-head alias.
+        # The canonical source reader validates it before legacy ACK recovery.
+        result["todo_source"] = dict(todo_source)
     return result
 
 

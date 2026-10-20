@@ -1,5 +1,10 @@
 # Native EdgeBench worker trials
 
+The explicit fresh-run [`--research-loop` treatment](../runtime/RESEARCH_LOOP.md)
+connects candidate-stage separation, per-request admission, actual local probe
+diagnostics and source-bound Explore feedback. It is not enabled for existing
+attempts or baselines and does not change scoring or extend budget.
+
 This research adapter calls SForge's native `run_agent`. Task images, prompts,
 submission cooldowns, judge isolation and scoring remain owned by the pinned
 EdgeBench checkout. Best-only adds host capture/admission scheduling; native and

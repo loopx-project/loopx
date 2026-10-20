@@ -15,11 +15,13 @@ from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
 
 class RecordingDockerBackend(DockerBackend):
     def __init__(self, *, log_dir: Path, logger, oauth_proxy: bool = False,
-                 blind_api_endpoint: tuple[str, int] | None = None, feedback=None, checkpoint=None, client=None):
+                 blind_api_endpoint: tuple[str, int] | None = None, feedback=None, checkpoint=None,
+                 research_feedback=None, client=None):
         super().__init__(client)
         self.log_dir, self.logger = log_dir, logger
         self.blind_api_endpoint = blind_api_endpoint
         self.feedback = feedback
+        self.research_feedback = research_feedback
         self.checkpoint = checkpoint
         self.execution_command = None
         self.execution_start_marker = None
@@ -35,6 +37,8 @@ class RecordingDockerBackend(DockerBackend):
         kwargs["extra_hosts"] = hosts
         if self.feedback is not None:
             self.feedback.bind(kwargs.get("environment"))
+        if self.research_feedback is not None:
+            self.research_feedback.bind(kwargs.get("environment"))
         if self.checkpoint is not None:
             self.checkpoint.bind(kwargs.get("environment"))
         kwargs["environment"] = self._agent_environment(kwargs.get("environment"))
@@ -73,6 +77,8 @@ class RecordingDockerBackend(DockerBackend):
                 self.checkpoint.close()
             if is_solver and self.feedback is not None:
                 self.feedback.pause()
+            if is_solver and self.research_feedback is not None:
+                self.research_feedback.pause()
 
     def create_network_isolation(self, handle, allowed_endpoints, logger):
         # ChatGPT login may refresh during an 18h run. Preserve the native
@@ -103,6 +109,8 @@ class RecordingDockerBackend(DockerBackend):
             self.checkpoint.close()
         if self.feedback is not None:
             self.feedback.close()
+        if self.research_feedback is not None:
+            self.research_feedback.close()
         if handle is not None:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             observations = []

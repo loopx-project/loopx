@@ -86,6 +86,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
           <p className="goal-overview-note">{goal.nextSentence}</p>
           {goal.agentSentence && goal.agentSentence !== goal.nextSentence ? <details className="goal-overview-agent-note"><summary>{copy.agentSummary}</summary><p className="goal-overview-note">{goal.agentSentence}</p></details> : null}
         </details>
+        <WorkerReadback goal={goal} zh={locale === "zh-CN"} onViewTasks={() => onView("tasks")}/>
         <GoalAcceptanceContractSection overview goalId={goal.goalId} contract={observation?.goal_acceptance_contract} copy={acceptanceCopy} current={review.usable} canManage={!readOnly && active && review.usable}/>
         {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}><small>{copy.execution} · {run.run.agentLabel}</small><ArrowRight aria-hidden size={15} /></button> : null}
       </section>
@@ -111,5 +112,33 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
       map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
     {readOnly ? <><p className="goal-overview-source-note">{copy.remote}</p><GoalAcceptanceObservationCard goal={goal} /></>
       : <DeliveryReviewContent review={review} hideWorkMap hideAcceptanceContract active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />}
+  </section>;
+}
+
+function WorkerReadback({goal, zh, onViewTasks}: {goal: WorkspaceGoal; zh: boolean; onViewTasks: () => void}) {
+  const source = goal.workerObservations;
+  if (!source) return null;
+  return <section className="goal-overview-worker-state" aria-label={zh ? "外部执行器状态" : "External worker status"}>
+    <h3>{zh ? "执行器最近的观察" : "Last worker observation"}</h3>
+    {source.read_status !== "read" ? <p role="status">{zh
+      ? "执行器记录缺失有效来源或与当前目标配置不一致。当前执行结果未知。"
+      : "The worker record is unreadable or does not match the current Goal configuration. Its current outcome is unknown."}</p> : null}
+    {source.rows.map(row => <div key={row.agent_id}>
+      <p><strong>{row.status === "replan_paused" ? (zh ? "需要方向，已暂停复核" : "Direction needed; review paused")
+        : (zh ? "原请求结果未知，已暂停新派发" : "Original outcome unknown; new dispatch paused")}</strong></p>
+      <p>{row.status === "replan_paused" ? (zh
+        ? "本次复核没有解决原义务。补充具体任务或相关结果，再重启执行器以检查当前准入。"
+        : "The review did not resolve its original obligation. Add concrete work or relevant results, then restart the worker to check current admission.") : (zh
+        ? "先核实原操作及其结算。已发送请求仍可能产生费用；新事件或重启不能证明原请求未执行。"
+        : "Check the original operation and its settlement first. An issued request may still incur costs; a new event or restart cannot prove it did not run.")}</p>
+      <p className="goal-overview-note">{zh ? "此记录不证明 Goal 达成；完整费用未知。" : "This record does not establish Goal completion. Complete costs are unknown."}</p>
+      <details><summary>{zh ? "原工作与观察时间" : "Original work and observation time"}</summary>
+        <dl><div><dt>Agent</dt><dd>{row.agent_id}</dd></div>
+          <div><dt>{zh ? "义务" : "Obligation"}</dt><dd>{row.obligation_id}</dd></div>
+          <div><dt>{zh ? "原回合" : "Original Turn"}</dt><dd>{row.turn_instance_id ?? (zh ? "未绑定，需原 Host 核实" : "Unbound; check the original Host")}</dd></div>
+          <div><dt>{zh ? "记录时间" : "Observed at"}</dt><dd><time dateTime={row.observed_at}>{row.observed_at}</time></dd></div></dl>
+      </details>
+    </div>)}
+    <button type="button" onClick={onViewTasks}>{zh ? "查看任务与依赖" : "View work and dependencies"}</button>
   </section>;
 }

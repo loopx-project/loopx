@@ -170,6 +170,12 @@ def todo_summaries_from_fields(
             agent_id=agent_id,
             item_limit=limit,
         )
+        # Rebuilding a display group must not discard its canonical acceptance
+        # source. Receipt-bound quota reentry consumes this provider-first list;
+        # work guards without their owner contract cannot reconstruct a hold.
+        acceptance = (raw_summary or {}).get("goal_acceptance_contract")
+        if isinstance(acceptance, dict):
+            summary["goal_acceptance_contract"] = acceptance
         if limit is not None:
             summary = compact_explicit_limit_todo_summary(
                 summary,

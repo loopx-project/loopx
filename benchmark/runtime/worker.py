@@ -10,7 +10,7 @@ import signal
 import subprocess
 import time
 import uuid
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 
@@ -85,27 +85,59 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         raise RuntimeError("formal LoopX heartbeat renderer is not ready")
     if not native_goal and payload.get("turn_instance_id") != turn_id:
         raise RuntimeError("heartbeat Turn identity mismatch")
-    return payload["task_body"].replace(
+    body = payload["task_body"].replace(
         "$HOME/.codex/loopx/registry.global.json", env["LOOPX_REGISTRY"]
     )
+    if env.get("LOOPX_RESEARCH_LOOP") == "1":
+        from .research_loop import research_execution_guidance
+
+        body += research_execution_guidance()
+    return body
 
 
 @contextmanager
-def child_process(command: list[str], *, env: dict[str, str], stdout, stderr):
-    process = subprocess.Popen(
-        command,
-        cwd=env["LOOPX_PROJECT"],
-        env=env,
-        stdin=subprocess.PIPE,
-        stdout=stdout,
-        stderr=stderr,
-        text=True,
-        start_new_session=True,
-    )
+def child_process(command: list[str], *, env: dict[str, str], stdout, stderr,
+                  goal_admission=None, check_current_launch=None):
+    process = None
     try:
+        if check_current_launch is not None and goal_admission is None:
+            raise ValueError("current Host launch check requires its original Goal admission")
+        if check_current_launch is not None:
+            goal_admission = goal_admission.with_launch_decision(check_current_launch)
+        # Session selection may precede rendering/capture. Serialize only actual
+        # launch with the existing Goal lifetime owner, never the whole model run.
+        with (goal_admission.launch_lifetime(operation="codex_agent_host_launch")
+              if goal_admission is not None else nullcontext()):
+            process = subprocess.Popen(
+                command,
+                cwd=env["LOOPX_PROJECT"],
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=stdout,
+                stderr=stderr,
+                text=True,
+                start_new_session=True,
+            )
         yield process
     finally:
-        _reap_child_process(process)
+        if process is not None:
+            _reap_child_process(process)
+
+
+def heartbeat_launch_check(env, session_wake, *, original_quota=None):
+    """Carry the Host's real Turn inputs into the product's current quota owner."""
+    if session_wake is None:
+        return None  # Plain/native-Goal transports have no LoopX heartbeat owner.
+    from loopx.cli_commands.turn_decision import current_heartbeat_host_launch_decision
+
+    def check(registry_path):
+        return current_heartbeat_host_launch_decision(
+            registry_path=registry_path, runtime_root=Path(env["LOOPX_RUNTIME_ROOT"]),
+            project=Path(env["LOOPX_PROJECT"]), goal_id=env["LOOPX_GOAL_ID"],
+            agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=env["LOOPX_TURN"],
+            original_quota=original_quota, goal_ref=session_wake.goal_ref,
+        )
+    return check
 
 
 def _reap_child_process(process):
@@ -335,6 +367,8 @@ def _error_tail(exc: BaseException) -> dict[str, str]:
 
 
 def run_once(env: dict[str, str]) -> dict:
+    if env.get("LOOPX_RESEARCH_LOOP", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_RESEARCH_LOOP must be 0 or 1")
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
     execution = Execution(
@@ -362,6 +396,7 @@ def run_once(env: dict[str, str]) -> dict:
         "mode": execution.mode,
         "context": execution.context,
         "task_entry": execution.task_entry,
+        **({"research_loop": True} if env.get("LOOPX_RESEARCH_LOOP") == "1" else {}),
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
         "stage": stage,
@@ -370,6 +405,7 @@ def run_once(env: dict[str, str]) -> dict:
         "timed_out": False,
     }
     session_wake = None
+    request_guard = None
     checkpoint_context = ExitStack()
     pending_path = (
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
@@ -430,6 +466,7 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.sessions import BenchmarkSessionWake
 
             session_wake = BenchmarkSessionWake(env, execution, receipt)
+            receipt["host_invoked"] = False
             if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_WARM_START"):
                 from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
 
@@ -438,6 +475,12 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.checkpoint import capture_before_replan
 
             body = capture_before_replan(env, receipt, body)
+        if env.get("LOOPX_RESEARCH_LOOP") == "1":
+            from .research_request_guard import ResearchRequestGuard
+
+            if execution.mode != "heartbeat":
+                raise ValueError("research request guard requires heartbeat execution")
+            request_guard = checkpoint_context.enter_context(ResearchRequestGuard(env, receipt, wake).serve())
         with (wake / "stderr.log").open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr)
@@ -470,13 +513,27 @@ def run_once(env: dict[str, str]) -> dict:
                                    else execution.timeout_seconds + allowance)
                     if checkpoint_wake.listener is not None:
                         receipt["return_code"] = checkpoint_wake.run(
-                            execution, body, wake, session_wake, stdout, stderr, timeout)
+                            execution, body, wake, session_wake, stdout, stderr, timeout,
+                            **({"request_guard": request_guard} if request_guard is not None else {}))
                         receipt["ok"] = receipt["return_code"] == 0
                     else:
-                        with child_process(command, env=env, stdout=stdout, stderr=stderr) as process:
+                        if request_guard is not None:
+                            command = request_guard.command(command)
+                        with child_process(command, env=env, stdout=stdout, stderr=stderr,
+                                goal_admission=session_wake.admission if session_wake is not None else None,
+                                check_current_launch=heartbeat_launch_check(env, session_wake)) as process:
+                            if session_wake is not None:
+                                receipt["host_invoked"] = True
+                            if request_guard is not None:
+                                request_guard.bind(process, env, session_wake)
                             process.communicate(input=body, timeout=timeout)
                             receipt["return_code"] = process.returncode
                             receipt["ok"] = process.returncode == 0
+                if request_guard is not None and request_guard.refused and stage == "execute":
+                    # The wake returns to its original scheduler for a current
+                    # wait/stop/recovery read; native interruption is not work
+                    # success and never manufactures a settlement.
+                    receipt["ok"] = not request_guard.admission_error
                 if stage == "plan" and receipt["ok"]:
                     from benchmark.runtime.planning import task_plan_packet, validate_plan_readback
 
@@ -511,7 +568,7 @@ def run_once(env: dict[str, str]) -> dict:
     finally:
         checkpoint_context.close()
         try:
-            if session_wake is not None:
+            if session_wake is not None and receipt.get("host_invoked") is True:
                 session_wake.observe(wake / "stdout.jsonl")
         except BaseException as exc:
             receipt.update(ok=False, **_error_tail(exc))

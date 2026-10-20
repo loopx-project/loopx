@@ -84,12 +84,187 @@ observe-only polls retain their interval, and failed wakes retain error backoff.
 Commands that finish without more useful work may opt into
 `--wake-stop-exit-code <1..255>`: that explicit child exit ends the worker
 normally, without Todo completion or quota spend. Omit the option to preserve
-ordinary nonzero-exit failure/backoff behavior. Timeout and output-limit
-failures cannot be converted into a normal stop by this option. The caller owns
+ordinary nonzero-exit failure/backoff behavior outside automatic replan. Timeout
+and output-limit failures cannot be converted into a normal stop by this option. The caller owns
 the meaning of its chosen code; the generic worker does not parse provider
 receipts or infer work completion from stdout.
 Stop signals and subprocess cleanup keep their existing behavior. This adapter
 does not override admission or reinterpret task eligibility.
+
+The same configured worker state route now has one live consumer and retains
+automatic replan dispatch attempts across restarts. A successful child exit
+does not resolve the original replan obligation: if fresh Core admission still
+names that obligation, the worker reports `replan_paused`, leaves the Goal
+incomplete, and does not dispatch another semantic review. Cadence resets,
+new observation contexts and intervening independent work do not erase the
+attempt. Original Todo lifecycle and receipt-bound settlement remain under
+their existing owners; they are not another semantic replan opportunity.
+
+An interrupted, timed-out or otherwise failed replan is retained as
+`replan_outcome_unknown`. A new obligation ID cannot make that original work
+safe to repeat. When the original admission actually supplied a settlement
+identity and the configured Host preserved it, the worker reads that exact
+Turn through the existing settlement owner. Only verified complete settlement
+permits further current work. Pending recovery stays on its original identity.
+An opaque unbound shell command supplies no such proof; use its original Host
+recovery and preserve the worker state. The worker does not infer a Turn from
+stdout or the latest log row, and deleting the state is not a recovery method.
+
+The existing host-poll receipt also publishes the worker's last paused or
+unknown observation in the Goal overview. It identifies the original Agent and
+obligation, retains a real Turn only when supplied by admission, and links to
+the Goal's tasks and dependencies. This observation is readback, not current
+admission or proof that a provider stopped charging. The page explicitly keeps
+complete costs unknown. A missing, corrupt or differently scoped association
+cannot display the old operation as current. Reading the observation and
+opening tasks do not dispatch work; the existing Stop control still uses the
+Goal lifecycle owner.
+
+Ordinary `--record-host-poll` distinguishes an absent receipt from an unreadable
+one. It may create an absent receipt, but preserves unreadable JSON, UTF-8,
+schema or Goal association bytes and reports the observation write as
+unsuccessful while returning the current quota decision.
+Readback therefore continues to show uncertainty after the next liveness poll.
+An explicit worker observation can restore its known original attempt; clearing
+an unreadable receipt cannot stand in for that evidence. This does not resolve
+the attempt or authorize another dispatch.
+
+New attempts also capture `source_goal_observation_digest`: a readback witness of the full
+source Goal and its registry route. The writer and reader share the existing
+source-to-global projection transformation, so synchronization metadata does
+not invalidate an observation. A changed source, Goal instance, configuration
+or runtime still makes it stale. The quota cache keeps its original full-row
+digest. Older observations retain their original, narrower raw-registry check;
+missing source proof is never reconstructed as current execution authority.
+
+The shared projection owner also preserves `preserve_attention_override`
+semantics: with the complete source Goal unchanged, mirror `synced_at` updates
+and the merge owner's consumption of `clear_attention_override` do not invalidate
+the observation. An older attempt can gain this stronger observation witness
+only while its original raw registry proof still matches. Lost proof is not
+guessed or rebound, and the durable attempt is never rewritten by this upgrade.
+
+普通存活轮询可以创建缺失的回执，但不能覆盖无法读取的回执。损坏的 JSON、
+UTF-8、schema 或 Goal 关联仍保留在原位置，观察写入明确失败，当前 quota 判断
+正常返回，页面继续显示未知。原 worker 可从持久 attempt 恢复观测，
+但这不证明原操作已经结束，
+也不允许再次派发。
+新观测绑定完整 source Goal 和原注册表路径，正常同步到 global 后仍可显示原
+Agent、义务和观测时间。同步时间变化不改变该来源；来源、实例、配置或运行环境
+真正变化时仍显示过期/未知。旧记录沿用原关联检查，不把缺失的来源证明补造成权限。
+投影继续复用 `preserve_attention_override` 等原合并规则；完整 source Goal 未变时，
+镜像的 `synced_at` 更新及合并过程中消费的 `clear_attention_override` 不使观察过期。
+只有旧 attempt 的原 raw registry 证明仍匹配，才可补强它的观察来源；不猜测重绑
+丢失的证明，也不因此改写持久派发身份。
+
+Scope includes the registry, runtime, Goal and Agent. Exact GoalRef is retained
+when supplied; executable legacy Goals keep their existing alias scope.
+Agent spelling follows Core's canonical identity in admission matching, the
+default state route, lock and observation. An accepted uppercase Agent alias
+and its canonical spelling therefore resume the same attempt. The original
+CLI input still goes to Core for its normal validation.
+Missing or newly supplied lifecycle metadata cannot reset an old attempt.
+Legacy alias reuse has no exact recreation guarantee. State corruption or
+write failure refuses a new wake. Separate state routes and distributed Hosts
+still require their existing shared execution/lease authority; the local lock
+is not a distributed exactly-once guarantee.
+
+This is a dispatch brake on existing replan work, not a new review model or
+provider budget. The configured Host still owns provider retries and token
+limits; `--wake-timeout-seconds` bounds this worker's process only when supplied,
+and the process output byte limit is not a token allowance. Unknown in-flight
+provider usage remains unknown. Ordinary admitted long work can use successive
+wakes, and a real negative experiment remains evidence for the original owner.
+
+First-party Codex CLI and benchmark Hosts also recheck their captured Goal
+authority at the actual process-launch boundary, including checkpoint resumes.
+The operation-equipped Codex app-server path uses the same admission at process
+creation and again before sending `turn/start`. The existing authority writer
+lock covers each launch/send boundary and is released before waiting for a
+provider response. A Goal stopped after session selection therefore cannot start
+a new Host or replace its saved session with an empty, unlaunched result.
+
+Source-session admission retains its exact Goal lifetime checks. Executable
+legacy registries instead compare their original registry byte witness under
+the existing registry writer lock and reuse the registry owner's legal active
+states, including `active-read-only`. This does not relax source-session status
+or identity checks. A changed registry requires a fresh plan, including when an unrelated registry
+configuration change invalidated the old witness. When a legacy global
+projection declares its source registry, launch checks both the original source
+and the projection in the existing source-then-projection writer-lock order.
+A committed source stop still rejects launch if projection synchronization
+failed and left an active mirror. Missing or cyclic source routes cannot grant
+launch permission. This conservative check does
+not create an exact Goal instance identity: byte-identical legacy replacement
+remains indistinguishable. Generic shell commands still require their own Host
+to provide an equivalent launch boundary.
+
+Codex operation tools 路径在创建 app-server 和发送 `turn/start` 前复用同一
+准入检查；只在这两个边界持有原 owner 的锁，等待模型响应前释放。这样 Stop
+既不会被另一条 Host 路径绕过，也不会被长时间持锁拖延。legacy 的合法
+`active-*` 状态复用原注册表规则，source-session 的生命周期校验保持严格。
+
+The executable `turn run-once` path also reruns its existing current quota and
+health decision under those same locks, against the actual source registry and
+the original Turn/Todo/replan selection. It creates no replacement receipt.
+Both plain exec and operation-tools launch obey that owner's refusal when
+mirror quota is stale or source state becomes unavailable. Benchmark heartbeat
+execution and heartbeat/turn initial planning reuse this quota owner before
+native process creation. Initial planning does not need a prior heartbeat
+receipt or Todo. An interrupted checkpoint source continuation carries its
+actual held guard's Turn and nonempty event ID into the same current decision,
+preserving the complete original settlement identity when present. It does not
+derive these inputs from prompt text or reuse the enclosing wake's Turn.
+The native session continues with the original selection and settlement rules.
+
+The existing health owner checks the current registry's declared `state_file`
+even when no global registry is available. A missing declared state therefore
+reaches the quota decision on local source routes; undeclared initial setup
+does not create a missing-state finding, and a global copy of the same finding
+is deduplicated. Launch follows that owner's decision, including any lawful
+health-repair action, rather than treating every health finding as an
+unconditional refusal.
+
+The launch reread retains the required inbox reads already dispatched for that
+same Turn. They cover only the material observed by that dispatch; later material
+still passes through the current quota owner's decision. If launch is refused,
+completed preflight synchronization remains reported, while the refusal itself
+creates no model Turn or quota debit.
+
+This full decision callback is qualified for executable legacy local, source
+and source-to-global routes. Source-session admission retains its separate
+lifecycle-only boundary; this qualification does not enable its CLI execution.
+Benchmark `plain`, `native-goal` and `loopx-goal` modes keep their existing owners
+and are outside this quota callback. Restoring an archived checkpoint uses the
+destination Goal's current guard, without importing the source Goal's claims,
+Turn or spend authority. A Todo-bound guard that owes closeout returns to its
+original process without capture or restart; completing that work is not a new
+checkpoint opportunity.
+
+可执行的 `turn run-once` 在同一锁范围内，使用真实 source 注册表重新运行既有
+quota/health 决策，并保持原 Turn、Todo、重规划选择；不会创建替代回执。
+原 quota/health owner 拒绝当前工作时，普通 exec 与 operation tools 都不能借
+旧镜像额度或新出现的源状态缺失启动。
+benchmark 的 heartbeat 执行，以及 heartbeat/turn 初始规划，也在创建原生进程
+前复用同一 quota owner；初始规划不要求已有 heartbeat 回执或 Todo。同一次 wake
+中被中断的 checkpoint 源会话，直接携带被截留 guard 的原 Turn、非空 event ID
+和已有的完整结算身份重新读取当前资格，不从提示文字提取身份，也不改用外层 wake 的
+Turn；原生会话按原选择和结算规则继续。
+当前注册表已声明的 `state_file` 由原健康检查 owner 核验，即使没有 global 注册表，
+状态缺失也会进入 quota 决策。尚未声明状态的初始设置不会因此产生缺失报告，global
+中的同一报告按原规则去重。启动遵守原 owner 的决定，也保留其允许的健康修复动作，
+不把所有健康异常都改成无条件拒绝。
+
+启动前重读保留同一 Turn 已派发的 inbox 必读结果，覆盖范围仅限该次派发实际
+观察到的材料；之后新增的材料仍由当前 quota owner 判断。启动被拒绝时，已完成
+的前置同步仍须如实报告；拒绝本身不会创建模型 Turn 或配额扣减。
+
+完整决策验证覆盖当前可执行的 legacy 本地、source 和 source/global 路径。
+source-session 保留独立的生命周期边界，这项验证不会启用其 CLI 执行；benchmark
+的 `plain`、`native-goal`、`loopx-goal` 模式继续使用各自原 owner，不属于这个 quota
+回调。从归档 checkpoint 恢复时，使用目的 Goal 的当前 guard，不导入源 Goal 的
+claim、Turn 或扣额权限。已有待结算义务的 Todo-bound guard 直接返回原进程继续
+收尾，不捕获或重启；完成这项工作不构成新的 checkpoint 机会。
 
 ## External Tool Extension Candidates
 

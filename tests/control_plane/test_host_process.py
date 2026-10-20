@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,56 @@ from loopx.control_plane.turn_driver.host_process_transport import (
     run_host_process,
 )
 from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
+
+
+def test_launch_guard_releases_before_running_host_output(tmp_path: Path) -> None:
+    held = []
+    observed = []
+
+    @contextmanager
+    def admission():
+        held.append(True)
+        try:
+            yield
+        finally:
+            held.pop()
+
+    def output(text: str) -> None:
+        # A running Host must not hold the owner lock and delay a user stop.
+        assert not held
+        observed.append(text)
+
+    result = run_host_process(
+        [sys.executable, "-c", "print('current work')"], project=tmp_path,
+        input_text="", timeout_seconds=5, launch_guard=admission, on_stdout=output,
+    )
+    assert result["returncode"] == 0 and observed and not held
+    failed = run_host_process(
+        [str(tmp_path / "absent-host")], project=tmp_path,
+        input_text="", timeout_seconds=5, launch_guard=admission,
+    )
+    assert failed["outcome"] == "spawn_failed" and not held
+
+
+def test_rejected_launch_guard_keeps_nonexecution_evidence(tmp_path: Path, monkeypatch) -> None:
+    from loopx.control_plane.turn_driver.host_process_transport import prepare_host_process_record
+
+    marker, record = tmp_path / "work", tmp_path / "host.json"
+    prepare_host_process_record(record)
+    before = record.read_bytes()
+    monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record))
+
+    @contextmanager
+    def stopped():
+        raise ValueError("Goal was stopped after planning")
+        yield
+
+    with pytest.raises(ValueError, match="stopped after planning"):
+        run_host_process(
+            [sys.executable, "-c", "from pathlib import Path;Path('work').touch()"],
+            project=tmp_path, input_text="", timeout_seconds=5, launch_guard=stopped,
+        )
+    assert not marker.exists() and record.read_bytes() == before
 
 
 def test_host_output_lines_bound_storage_and_use_lf() -> None:

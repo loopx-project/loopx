@@ -623,6 +623,8 @@ def build_heartbeat_prompt(
         payload.pop("expanded_prompt_command", None)
         payload.pop("compact_prompt_command", None)
         payload.pop("thin_prompt_command", None)
+        if payload.get("pr_review_pre_quota_command") is None:
+            payload.pop("pr_review_pre_quota_command", None)
     return payload
 def build_heartbeat_prompt_error_payload(
     *,

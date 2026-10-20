@@ -2,6 +2,13 @@
 
 状态：受支持的 optional capability；harness 执行契约默认关闭。
 
+普通结果写回可附带可选 `execution_observation`（`explore_execution_observation_v0`）：
+候选 SHA-256、输入版本、计划/实际方法标识、改向原因、实测耗时/上限、搜索次数、
+结束原因与证据引用。未测量项显式为 null；版本和引用必须与所属 finding 一致。
+已释放结果的 `result_ref` 必须有匹配的 `result_candidate_sha256`。该记录是来源证据，
+不认证执行真实性或收益；finding、replan 和既有研究历程详情保留相同信息，缺省仍兼容
+旧事件。参见[本地探针生产路径](../../../benchmark/runtime/RESEARCH_LOOP.md)。
+
 ## 概览
 
 LoopX Explore 是面向长程探索目标（软件研究、安全攻击面测绘、领域调研）的受支持、默认关闭的可选能力。它把“到处看看”变成有界、可观测、有门控的流程，包含三根支柱：

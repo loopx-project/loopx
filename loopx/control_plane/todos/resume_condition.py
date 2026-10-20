@@ -78,6 +78,8 @@ _RESUME_ITEM_FIELDS = (
     "resume_ready",
     "resume_monitor_generation",
     "material_change_generation",
+    "next_due_at",
+    "expires_at",
 )
 
 

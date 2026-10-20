@@ -3,6 +3,7 @@ import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {normalizeExploreResultPages} from "./explore_result_page.ts";
@@ -116,6 +117,30 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const resultNode = params.result_node == null ? null : requireNonEmptyString(params.result_node, "result_node");
   const resultRows = resultNode == null ? writebackResults : writebackResults.filter(row => row.node_id === resultNode);
   const nodeById = new Map(nodes.map(node => [node.node_id, node]));
+  // Bind current Todo links to the results on this page. Include the full
+  // planner's nonselected branches: a heuristic/batch budget cannot prevent
+  // the Agent from comparing a lower-ranked method. This grants no claim,
+  // lease, quota or execution permission; their existing owners still apply.
+  const comparisonCandidates = (page: JsonObject[], limit: number): JsonObject => {
+    if (!harness) return {};
+    const linkedCandidates = [...branches, ...rejected].flatMap(branch => {
+      if (typeof branch.todo_id !== "string" || !PLANNING_TODO_ID.test(branch.todo_id)
+        || branch.actionable_open !== true || branch.claimed_by && branch.claimed_by !== agent
+        || branch.typed_evidence_audit == null) return [];
+      const audit = requireJsonObject(branch.typed_evidence_audit, "Explore evidence audit");
+      const linked = new Set(requireStringArray(audit.requested_node_refs ?? [], "Explore node refs")
+        .filter(ref => nodeById.has(ref)));
+      const outcomes = page.filter(row => linked.has(String(row.node_id))).slice(0, 3);
+      return outcomes.length ? [{todo_id: branch.todo_id, outcomes}] : [];
+    });
+    if (!linkedCandidates.length) return {};
+    return {
+      comparison_candidates: linkedCandidates.slice(0, limit).map(card => ({todo_id: card.todo_id,
+        outcomes: card.outcomes.map(row => ({node_id: row.node_id, finding_id: row.finding_id,
+          source_sha256: createHash("sha256").update(JSON.stringify(row)).digest("hex")}))})),
+      omitted_comparison_candidates: Math.max(0, linkedCandidates.length - limit),
+    };
+  };
   const relationsByNode = new Map<unknown, JsonObject[]>();
   for (const edge of rows(projection.edges)) {
     for (const id of new Set([edge.from_node, edge.to_node])) {
@@ -157,9 +182,11 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       // context/read route; the replan owner refuses any unresolved citation.
       return [];
     }
-    return [{...page, finding_refs: resultRows.slice(Number(page.offset), Number(page.offset) + Number(page.limit))
-      .map(row => row.finding_id)}];
+    const found = resultRows.slice(Number(page.offset), Number(page.offset) + Number(page.limit));
+    return [{...page, finding_refs: found.map(row => row.finding_id),
+      ...comparisonCandidates(found, Number(page.limit))}];
   });
+  const visibleComparisons = comparisonCandidates(visibleResults, resultLimit);
   const remainingResults = Math.max(0, resultRows.length - resultOffset - visibleResults.length);
   const resultRead = (...args: string[]) => command("turn-context", "--agent-id", agent, ...args);
   const writeback = exploreResultWritebackAffordance();
@@ -178,6 +205,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       writeback_results: visibleResults
         .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
           summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT),
+          ...(row.execution_observation ? {execution_observation: row.execution_observation} : {}),
           ...currentQuestion(row),
           ...findingDigest(row, findingSources)})),
       result_page: {
@@ -210,6 +238,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       orchestration_gate: gate,
       candidate_count: plan.candidate_count ?? 0,
       selected_branches: branches.slice(0, 3).map(branch => branchContext(branch, findingSources)),
+      ...visibleComparisons,
       omitted_selected_branches: Math.max(0, branches.length - 3),
       rejected_candidates: rejected.slice(0, 3).map(branch => branchContext(branch)),
       omitted_rejected_candidates: Math.max(0,

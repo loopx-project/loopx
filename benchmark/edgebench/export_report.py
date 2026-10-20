@@ -29,6 +29,19 @@ def _validate_feedback_payload(runner, profile):
         raise ValueError("Unsupported feedback payload for this mode")
 
 
+def _validate_research_loop(runner, profile):
+    # Compare the original sources before the allowlisted settings projection
+    # can discard a one-sided flag. Historical absence remains distinct from
+    # an explicitly disabled treatment, and bool cannot be supplied as 0/1.
+    if ("research_loop" in runner) != ("research_loop" in profile):
+        raise ValueError("Settings profile disagrees with runtime: research_loop")
+    for source in (runner, profile):
+        if "research_loop" in source and type(source["research_loop"]) is not bool:
+            raise ValueError("research_loop must be a boolean")
+    if runner.get("research_loop") != profile.get("research_loop"):
+        raise ValueError("Settings profile disagrees with runtime: research_loop")
+
+
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -129,6 +142,7 @@ def _validate_run_data(row, config, summary, points):
             raise ValueError(f"Settings identity mismatch: {key}")
     runner, profile = config["runner"], config["worker_profile"]
     _validate_feedback_payload(runner, profile)
+    _validate_research_loop(runner, profile)
     if (
         runner["runner_commit"] != row["runner_revision"]
         or runner["model"] != row["model_id"]
@@ -254,6 +268,7 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if row.get("runner_revision") != receipt["runner_commit"]:
             raise ValueError("Board and runner revision disagree")
         _validate_feedback_payload(receipt, profile)
+        _validate_research_loop(receipt, profile)
         if receipt.get("planning_horizon_goal") != profile.get("planning_horizon_goal"):
             raise ValueError("Profile disagrees with runtime: planning_horizon_goal")
         for source in (receipt, profile):
@@ -337,6 +352,9 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if "planning_horizon_goal" in receipt:
             config["runner"]["planning_horizon_goal"] = receipt["planning_horizon_goal"]
             config["worker_profile"]["planning_horizon_goal"] = profile["planning_horizon_goal"]
+        if "research_loop" in receipt:
+            config["runner"]["research_loop"] = receipt["research_loop"]
+            config["worker_profile"]["research_loop"] = profile["research_loop"]
         if "stride_strategy" in receipt:
             config["runner"]["stride_strategy"] = receipt["stride_strategy"]
             config["worker_profile"]["stride_strategy"] = profile["stride_strategy"]

@@ -50,6 +50,65 @@ test("only a positively qualified unbound scheduled wait can omit observation", 
   assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, effective_action: "normal_run"}), {required: false});
 });
 
+for (const kind of ["todo_done", "monitor_changed"]) {
+  test(`only a known pending ${kind} source can omit unbound successor observation`, () => {
+    const todo = {todo_id: "todo_waiting", status: "open", role: "agent",
+      task_class: "advancement_task", resume_when: `${kind}:todo_dependency`, resume_monitor_generation: 3};
+    const source = {todo_id: "todo_dependency", status: "open", role: "agent",
+      task_class: kind === "todo_done" ? "advancement_task" : "continuous_monitor",
+      archive_state: "active", material_change_generation: 3,
+      next_due_at: "2099-01-01T00:00:00Z", expires_at: "2100-01-01T00:00:00Z"};
+    const evaluate = (sources: JsonObject[]) => (evaluateTodoResumeConditions({
+      schema_version: "todo_resume_evaluation_request_v0", items: [todo], source_items: sources,
+      evaluated_at: "2026-09-01T00:00:00Z",
+    }).conditions as JsonObject[])[0].condition as JsonObject;
+    const condition = evaluate([source]);
+    const wait = {schema_version: "goal_vision_wait_state_v0", state: "waiting",
+      reason_code: "exact_blocked_successor", automatic_resume: true, agent_id: "agent-a", waiting_todo_count: 1,
+      selected_todo_id: todo.todo_id, selected_todo_status: "open", selected_todo_claimed_by: "agent-a",
+      resume_when: todo.resume_when, resume_monitor_generation: todo.resume_monitor_generation,
+      resume_condition: condition};
+    const request = {effective_action: "agent_scope_wait", agent_id: "agent-a", vision_wait_state: wait};
+    const before = structuredClone(request);
+    for (const heartbeat_receipt of [undefined, {status: "committed"}, {status: "replayed"}]) {
+      assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, heartbeat_receipt}), {required: false});
+    }
+    assert.deepEqual(request, before);
+    const proofFields = kind === "todo_done"
+      ? ["target_status", "target_task_class", "target_archive_state", "target_todo_id"]
+      : ["target_status", "target_task_class", "baseline_generation", "material_change_generation", "target_todo_id",
+        "target_archive_state", "target_next_due_at", "target_expires_at", "evaluated_at", "clock_provider"];
+    const incomplete = proofFields.map(field => {
+      const copy = {...condition};
+      delete copy[field];
+      return {vision_wait_state: {...wait, resume_condition: copy}};
+    });
+    for (const patch of [
+      ...incomplete,
+      {vision_wait_state: {...wait, resume_condition: evaluate([])}},
+      {vision_wait_state: {...wait, resume_condition: evaluate([{...source, status: "done"}])}},
+      {vision_wait_state: {...wait, resume_condition: {...condition, target_todo_id: "todo_waiting"}}},
+      {vision_wait_state: {...wait, selected_todo_claimed_by: "other-agent"}},
+      {vision_wait_state: {...wait, waiting_todo_count: 2}},
+      {heartbeat_receipt: {status: "committed", settlement_identity: {todo_id: todo.todo_id}}},
+      {heartbeat_receipt: {status: "replayed", pending_action_selection: {}}},
+      {heartbeat_receipt: {status: "pending"}},
+      {agent_id: "other-agent"},
+      ...(kind === "monitor_changed" ? [
+        {vision_wait_state: {...wait, resume_monitor_generation: undefined}},
+        {vision_wait_state: {...wait, resume_monitor_generation: 2}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, material_change_generation: 4}])}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, next_due_at: undefined}])}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, expires_at: "2026-01-01T00:00:00Z"}])}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, expires_at: source.next_due_at}])}},
+        {vision_wait_state: {...wait, resume_condition: evaluate([{...source, archive_state: "archived"}])}},
+      ] : []),
+    ]) {
+      assert.deepEqual(projectBlockedSuccessorWaitObservation({...request, ...patch}), {required: true}, JSON.stringify(patch));
+    }
+  });
+}
+
 // The host-facing type cannot represent delivery without an agent attempt.
 // @ts-expect-error delivery requires must_attempt=true
 const invalidDeliveryChannel: AgentInteractionChannel = {

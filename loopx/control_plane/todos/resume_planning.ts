@@ -8,6 +8,7 @@ import {
 import {
   diagnoseTodoResumeCondition, type ResumeConditionDiagnosis,
   evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+  resumeConditionHasKnownPendingTarget,
 } from "./resume_condition.ts";
 
 export const RESUME_PLANNING_REQUEST = "todo_resume_planning_request_v0";
@@ -135,10 +136,12 @@ function successorWaits(resumeBlocked: readonly Item[], deferredItems: readonly 
   return ordered(unique([...resumeBlocked, ...deferredItems.filter((entry) => entry.payload.resume_ready === false)])
     .filter((entry) => {
       const lane = claimLane(entry, agent);
+      const condition = jsonObject(entry.payload.resume_condition);
       return entry.payload.task_class === "advancement_task" &&
         (lane === "current_agent" || lane === "unclaimed") && entry.resume !== null &&
-        jsonObject(entry.payload.resume_condition)?.satisfied === false &&
-        entry.diagnosis?.state === "pending" && entry.diagnosis.kind !== "monitor_changed";
+        condition?.satisfied === false && entry.diagnosis?.state === "pending" &&
+        (entry.diagnosis.kind !== "monitor_changed" ||
+          resumeConditionHasKnownPendingTarget(condition, entry.payload));
     }).map((entry) => ({ ...entry, payload: {
       ...entry.payload, resume_when: entry.resume, resume_ready: false,
     } }))).sort((a, b) => Number(b.claim === agent) - Number(a.claim === agent));

@@ -296,6 +296,12 @@ def run_codex_operation_host(
     }
     if request_source is not None:
         profile["operation_request"] = request_source.profile(source_route)
+    launch_admission = goal_admission
+    if launch_admission is None:
+        launch_admission = FirstPartyHostGoalAdmission.for_plan(
+            registry_path=registry_path, goal_id=lineage["goal_id"],
+            planned_goal_ref=request.get("goal_ref"),
+        )
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -380,6 +386,7 @@ def run_codex_operation_host(
             resume_thread_id=binding["session_id"] if binding else None,
             dynamic_tools=[OPERATION_TOOL],
             host_config=host_config,
+            launch_guard=lambda: launch_admission.launch_lifetime(operation="codex_operation_process_launch"),
             response_timeout_sec=30 if timeout_seconds is None else min(timeout_seconds, 30),
             hard_timeout_sec=timeout_seconds,
             idle_timeout_sec=180 if timeout_seconds is None else min(timeout_seconds, 180),
@@ -487,6 +494,7 @@ def run_codex_operation_host(
                if continuations else ""),
             output_schema=codex_cli_result_schema(request),
             on_event=on_event,
+            turn_start_guard=lambda: launch_admission.launch_lifetime(operation="codex_operation_turn_start"),
             **({"on_native_item": observe_child} if child_observer is not None else {}),
         )
         return result

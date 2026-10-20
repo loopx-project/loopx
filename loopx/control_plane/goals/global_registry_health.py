@@ -44,6 +44,28 @@ def collect_global_registry_health(
     parse_timestamp: Callable[[Any], datetime | None],
 ) -> dict[str, Any]:
     global_path = global_registry_path(runtime_root)
+    current_goals = registry_goals(current_registry)
+    current_state_findings: list[dict[str, Any]] = []
+    declared_state_count = 0
+    for goal in current_goals:
+        state_path = resolve_goal_local_path(
+            goal.get("state_file"), goal, fallback_base=registry_path.parent,
+        )
+        if state_path is None:
+            # Initial setup without a declared state has no missing-state fact.
+            continue
+        declared_state_count += 1
+        if not state_path.exists():
+            goal_id = str(goal.get("id") or "unknown-goal")
+            current_state_findings.append(global_registry_finding(
+                kind="state_file_missing", severity="action", goal_id=goal_id,
+                path=state_path, message=f"`{goal_id}` active state file is missing",
+                recommended_action=f"repair `{goal_id}` state_file or reconnect the project",
+            ))
+    current_checks = (
+        [f"current registry active state files checked: {declared_state_count}"]
+        if declared_state_count else []
+    )
     if not global_path.exists():
         return {
             "available": False,
@@ -52,9 +74,10 @@ def collect_global_registry_health(
             "registry": str(global_path),
             "current_registry": str(registry_path),
             "current_registry_is_global": False,
-            "summary": {"high": 0, "action": 0, "info": 0, "checks": 0, "findings": 0},
-            "findings": [],
-            "checks": [],
+            "summary": {"high": 0, "action": len(current_state_findings), "info": 0,
+                        "checks": len(current_checks), "findings": len(current_state_findings)},
+            "findings": current_state_findings,
+            "checks": current_checks,
         }
 
     try:
@@ -67,22 +90,22 @@ def collect_global_registry_health(
             "registry": str(global_path),
             "current_registry": str(registry_path),
             "current_registry_is_global": False,
-            "summary": {"high": 1, "action": 0, "info": 0, "checks": 1, "findings": 1},
+            "summary": {"high": 1, "action": len(current_state_findings), "info": 0,
+                        "checks": len(current_checks) + 1, "findings": len(current_state_findings) + 1},
             "findings": [global_registry_finding(
                 kind="global_registry_unreadable", severity="high",
                 message="global membership could not be read",
                 recommended_action="repair the global registry source and retry the projection",
-            )],
-            "checks": ["global registry readability"],
+            ), *current_state_findings],
+            "checks": ["global registry readability", *current_checks],
         }
     global_goals = registry_goals(global_registry)
-    current_goals = registry_goals(current_registry)
     current_ids = {str(goal.get("id")) for goal in current_goals if goal.get("id")}
     global_ids = [str(goal.get("id")) for goal in global_goals if goal.get("id")]
     global_id_set = set(global_ids)
     source_registries: set[str] = set()
     findings: list[dict[str, Any]] = []
-    checks: list[str] = []
+    checks: list[str] = list(current_checks)
 
     current_is_global = same_path(registry_path, global_path)
     id_counts = Counter(global_ids)
@@ -176,6 +199,18 @@ def collect_global_registry_health(
                     recommended_action=f"reconnect `{goal_id}` with a durable active goal state file",
                 )
             )
+
+    # Keep global diagnostics (including orphan guidance) when the same state
+    # is represented in both views. A current-only or changed path is still a
+    # local health fact, independent of global membership or sync freshness.
+    for finding in current_state_findings:
+        if not any(
+            existing.get("kind") == "state_file_missing"
+            and existing.get("goal_id") == finding["goal_id"]
+            and same_path(Path(existing["path"]), Path(finding["path"]))
+            for existing in findings
+        ):
+            findings.append(finding)
 
     missing_from_current = sorted(global_id_set - current_ids)
     if not current_is_global and missing_from_current:

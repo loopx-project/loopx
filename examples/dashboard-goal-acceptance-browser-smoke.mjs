@@ -58,7 +58,11 @@ try {
         goal.acceptance_observation = observation;
         await page.reload({waitUntil: "networkidle"});
         const navigation = page.getByRole("button", {name: "Open Goal navigation"});
-        if (await navigation.isVisible()) await navigation.click();
+        // The progressive workspace can finish its network requests before
+        // React has restored the narrow navigation. Wait for the actual user
+        // control instead of treating one early visibility sample as final.
+        await navigation.waitFor({state: "visible"});
+        await navigation.click();
         await page.locator(".personal-goal-link").first().click();
         await page.getByRole("button", {name: "Overview", exact: true}).click();
         const refreshedCard = page.locator(".personal-goal-acceptance");

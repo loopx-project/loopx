@@ -32,13 +32,19 @@ export function currentActionSelectionAdmission(
   const pending = selected.selection_binding === "pending_action_selection";
   const delivery = pending && packet.normal_delivery_allowed === true
     && agent.must_attempt && agent.delivery_allowed === true;
+  const fallback = jsonObject(jsonObject(packet.scoped_user_gate_fallback)?.selected_executable);
+  const scopedDelivery = pending && qualification.state === "qualified"
+    && selectionTodoId(qualification.requested_todo_id) === requestedTodoId
+    && selectionTodoId(fallback?.todo_id) === selectedId
+    && packet.safe_bypass_allowed === true && packet.safe_bypass_kind === "scoped_user_gate_fallback"
+    && agent.must_attempt && agent.delivery_allowed === true;
   const workspaceRepair = pending && packet.workspace_repair_allowed === true
     && packet.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR
     && agent.must_attempt && agent.delivery_allowed === false;
   const currentWork = !pending && agent.must_attempt;
   return {selected_todo_id: selectedId,
     admitted: selectedId !== null && selectedId === requestedTodoId
-      && packet.ok === true && packet.should_run === true && (delivery || workspaceRepair || currentWork)};
+      && packet.ok === true && packet.should_run === true && (delivery || scopedDelivery || workspaceRepair || currentWork)};
 }
 
 export function actionSelectionNeedsRecovery(packet: JsonObject, agent: AgentAdmissionFacts): boolean {

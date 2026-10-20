@@ -544,6 +544,17 @@ export const runGoalSchema = z.object({
   goal_objective: z.string().nullable().optional().catch(null),
   zcode_goal_eligible_agent_ids: z.array(z.string()).optional().default([]).catch([]),
   acceptance_observation: goalAcceptanceObservationSchema.optional().nullable().catch(null),
+  host_worker_observations: z.object({
+    goal_id: z.string(),
+    read_status: z.enum(["read", "stale", "unreadable"]),
+    rows: z.array(z.object({
+      agent_id: z.string(),
+      status: z.enum(["replan_paused", "replan_outcome_unknown"]),
+      obligation_id: z.string(),
+      turn_instance_id: z.string().nullable(),
+      observed_at: z.string(),
+    })),
+  }).optional().nullable().catch({goal_id: "", read_status: "unreadable", rows: []}),
   id: z.string(),
   activation_state: z.enum(["active", "stopped"]).optional().default("active"),
   display_name: z.string().optional().nullable(),

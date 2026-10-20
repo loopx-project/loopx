@@ -74,6 +74,7 @@ def _compact_resume_condition(value: Any) -> dict[str, Any]:
             "target_source_section",
             "target_task_class",
             "target_claimed_by",
+            "target_next_due_at",
             "capability",
             "provider",
             "scheduled_for",
@@ -81,10 +82,17 @@ def _compact_resume_condition(value: Any) -> dict[str, Any]:
             "clock_provider",
             "material_change",
             "material_change_generation",
+            "baseline_generation",
             "invalid_state",
         )
         if value.get(key) is not None
     }
+    if "target_archive_state" in value and value["target_archive_state"] is None:
+        # An explicitly unarchived source is positive evidence. An omitted
+        # source field must remain omitted for the typed resume owner.
+        compact["target_archive_state"] = None
+    if "target_expires_at" in value:
+        compact["target_expires_at"] = value["target_expires_at"]
     if value.get("kind") == "resume_at":
         # Keep the complete positive clock proof for the typed interaction
         # owner, including the explicit absence of an already-triggered receipt.
@@ -281,6 +289,7 @@ def build_goal_vision_wait_state(
             "selected_todo_priority": selected.get("priority"),
             "selected_todo_claimed_by": selected.get("claimed_by"),
             "resume_when": selected.get("resume_when"),
+            "resume_monitor_generation": selected.get("resume_monitor_generation"),
             "resume_condition": _compact_resume_condition(
                 selected.get("resume_condition")
             ),

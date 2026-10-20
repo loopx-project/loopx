@@ -5,6 +5,8 @@ import {buildVisionCheckpoint, VISION_REFRESH_REQUEST_SCHEMA} from "../../loopx/
 import {projectReplanSemantics} from "../../loopx/control_plane/work_items/replan_semantics.ts";
 
 const contextId = "replan-context-" + "a".repeat(24);
+const decisionReviewTriggers = ["periodic_review_due", "typed_progress_repeat",
+  "no_progress_streak", "repeated_action_loop", "external_progress_review_drift"];
 const proposal = {schema_version: "stride_decision_v2", strategy_version: "evidence_conditioned_v1",
   reference_context_id: contextId, reference_obligation_id: "replan-" + "a".repeat(16), basis: "unexplained_gap", action: "switch", axes: {
     work_slice: {plan: "Build the complete alternate engine and compare it with the incumbent.", reason: "A partial component cannot test the end-to-end explanation."},
@@ -108,6 +110,11 @@ test("goal-value questions are enabled review input, not persisted decisions or 
   assert.match(work, /recovering an avoidable initial quality deficit/);
   assert.match(route, /retained best artifact/);
   assert.match(route, /subsequent work actually implements/);
+  assert.match(route, /generate a small set of genuinely different explanations or approaches/);
+  assert.match(route, /representation, decomposition, search method or information source/);
+  assert.match(route, /Contrast their predictions and full costs/);
+  assert.match(route, /parameter variants of the same mechanism are not independent alternatives/);
+  assert.match(route, /Missing feedback is a wait or evidence gap/);
   assert.match(validation, /artifact version, input conditions/);
   assert.match(validation, /feedback became available/);
   assert.match(validation, /not proof of restoration or continued execution/);
@@ -161,9 +168,9 @@ test("an accepted schema and vector do not authorize work or certify gain; stale
   assert.equal(projectReplanSemantics({operation: "qualify", obligation, stride_decision: proposal}).accepted, false);
 });
 
-test("every enabled due review records stride even when progress, a successor or a blocker is the exit", () => {
+for (const kind of decisionReviewTriggers) test(`${kind} records stride even when progress, a successor or a blocker is the exit`, () => {
   const obligation = {obligation_id: proposal.reference_obligation_id,
-    triggers: [{kind: "periodic_review_due"}],
+    triggers: [{kind}],
     replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
   const authored = buildVisionCheckpoint(request).agent_vision;
   const withoutDecision = {...authored, stride_decision: undefined};
@@ -197,7 +204,7 @@ test("every enabled due review records stride even when progress, a successor or
   assert.equal(bareDecision.reason_code, "stride_path_evidence_required");
 });
 
-test("terminal due review can record stride without manufacturing a continuing path", () => {
+for (const kind of decisionReviewTriggers) test(`${kind} can record a terminal decision without manufacturing a continuing path`, () => {
   const terminalPacket = {...packet,
     state: "no_followup", path_delta: {...packet.path_delta, outcome: "stop"}};
   assert.throws(() => buildVisionCheckpoint({...request, agent_vision_packet: terminalPacket}), /stride_decision requires/);
@@ -206,7 +213,7 @@ test("terminal due review can record stride without manufacturing a continuing p
   const terminal = buildVisionCheckpoint({...request, allow_terminal_stride_path: true,
     agent_vision_packet: terminalPacket}).agent_vision;
   const obligation = {obligation_id: proposal.reference_obligation_id,
-    triggers: [{kind: "periodic_review_due"}],
+    triggers: [{kind}],
     replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
   const observation_delta = {delta_kinds: ["coverage_backed_no_followup"]};
   assert.equal(projectReplanSemantics({operation: "qualify", obligation, observation_delta,
@@ -215,9 +222,9 @@ test("terminal due review can record stride without manufacturing a continuing p
     agent_vision: terminal}).accepted, true);
 });
 
-test("a successor Todo transition cannot silently settle an enabled due review", () => {
+for (const kind of decisionReviewTriggers) test(`${kind} cannot be silently settled by a successor Todo transition`, () => {
   const obligation = {obligation_id: proposal.reference_obligation_id,
-    triggers: [{kind: "periodic_review_due"}]};
+    triggers: [{kind}]};
   const semantic_delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
     obligation_id: proposal.reference_obligation_id, successor_todo_id: "todo_successor",
     outcomes: ["new_runnable_successor"], satisfying_outcomes: ["new_runnable_successor"]};
@@ -235,6 +242,23 @@ test("a successor Todo transition cannot silently settle an enabled due review",
     selected_obligation_id: proposal.reference_obligation_id, current_obligation: obligation,
     transition_candidates: [candidate], replay_phase: "open", stride_strategy: "evidence_conditioned_v1"});
   assert.equal((bound.obligation as Record<string, unknown>).resolution_mode, undefined);
+});
+
+for (const kind of decisionReviewTriggers) test(`${kind} can retain useful work through an evidenced decision without inventing progress`, () => {
+  const obligation = {obligation_id: proposal.reference_obligation_id, triggers: [{kind}],
+    replan_context: {stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
+  const requirements = projectReplanSemantics({operation: "requirements", obligation});
+  assert.ok((requirements.required_any_of as string[]).includes("fresh_vision_path_outcome"));
+  assert.ok(((requirements.writeback_contract as Record<string, unknown>).required_fields as string[])
+    .includes("agent_vision.stride_decision"));
+  for (const action of ["grow", "switch", "verify"]) {
+    const vision = buildVisionCheckpoint({...request, agent_vision_packet: {...packet,
+      path_delta: {...packet.path_delta, outcome: "continue"},
+      stride_decision: {...proposal, action}}}).agent_vision;
+    const result = projectReplanSemantics({operation: "qualify", obligation, agent_vision: vision});
+    assert.equal(result.accepted, true, action);
+    assert.deepEqual(result.satisfying_outcomes, ["fresh_vision_path_outcome"]);
+  }
 });
 
 test("all three actions preserve independently planned complete work and validation", () => {

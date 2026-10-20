@@ -474,6 +474,8 @@ def _resolve_agent_lane_delivery_route(
     """Project candidates once, then let TypeScript own their delivery route."""
 
     if prepared.requested_action_todo_id is not None:
+        scoped_fallback = prepared.scoped_user_gate_fallback or {}
+        scoped_selected = scoped_fallback.get("selected_executable") or {}
         qualification = qualify_action_selection_from_inventory(
             requested_todo_id=prepared.requested_action_todo_id,
             candidate=prepared.requested_action_candidate,
@@ -481,6 +483,9 @@ def _resolve_agent_lane_delivery_route(
             should_run=should_run,
             normal_delivery_allowed=normal_delivery_allowed,
             delivery_preemptions=delivery_preemptions,
+            scoped_fallback_todo_id=normalize_todo_id(scoped_selected.get("todo_id")),
+            quota_state=prepared.state,
+            goal_health_ok=prepared.goal_health_ok,
         )
         prepared.action_selection_qualification = qualification
 
@@ -1114,6 +1119,11 @@ def _resolve_quota_should_run_route(
         should_run=should_run,
         normal_delivery_allowed=normal_delivery_allowed,
     )
+    if (prepared.action_selection_qualification or {}).get("state") == "qualified":
+        # The typed selection owner may admit this exact scoped fallback while
+        # the broader user-gated delivery lane remains closed. Keep selected
+        # workspace/boundary guards active without reopening normal delivery.
+        should_run = True
     agent_lane_next_action = _with_lane_recommendation(prepared, agent_lane_next_action)
     agent_scope_frontier = None
     agent_lane_frontier_hint = None
@@ -1141,10 +1151,15 @@ def _resolve_quota_should_run_route(
                 agent_todo_summary=prepared.agent_todo_summary,
                 agent_lane_next_action=agent_lane_next_action,
                 work_lane_contract=prepared.work_lane_contract,
-                candidate_should_run=bool(
-                    (should_run and normal_delivery_allowed)
-                    or ready_deferred_resume_candidates
-                ),
+                # A satisfied dependency is readiness, not admission. The
+                # existing scoped fallback above qualifies an independent
+                # successor under a user gate; an unqualified ready row must
+                # not resurrect delivery refused by the current quota owner.
+                candidate_should_run=bool(should_run and (
+                    normal_delivery_allowed
+                    or (ready_deferred_resume_candidates
+                        and prepared.goal_health_ok and state == "eligible")
+                )),
             )
         )
         if (

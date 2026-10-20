@@ -256,6 +256,30 @@ def ensure_replan_novelty_policy(
             default=str,
         ).encode("utf-8")
     ).hexdigest()[:16]
+    # The pre-stable acceptance checkpoint included the current Todo timestamp.
+    # Derive its exact original obligation from the same canonical trigger set.
+    # This preserves an already-admitted Turn only while its owner/source still
+    # matches; it does not mint an alternative identity for a fresh admission.
+    legacy_revisions = {
+        (trigger.get("kind"), trigger.get("frontier_revision")): trigger["legacy_frontier_revision"]
+        for trigger in normalized.get("triggers") or []
+        if isinstance(trigger, dict)
+        and trigger.get("kind") in {"goal_acceptance_stale", "goal_acceptance_unbound"}
+        and isinstance(trigger.get("legacy_frontier_revision"), str)
+    }
+    if legacy_revisions:
+        legacy_identity = [
+            {**trigger, "frontier_revision": legacy_revisions.get(
+                (trigger.get("kind"), trigger.get("frontier_revision")), trigger.get("frontier_revision"),
+            )} if "frontier_revision" in trigger else trigger
+            for trigger in trigger_identity
+        ]
+        normalized["legacy_obligation_id"] = "replan-" + hashlib.sha256(json.dumps(
+            {**identity_payload, "trigger_identity": legacy_identity},
+            sort_keys=True, ensure_ascii=True, default=str,
+        ).encode("utf-8")).hexdigest()[:16]
+    else:
+        normalized.pop("legacy_obligation_id", None)
     return normalized
 
 

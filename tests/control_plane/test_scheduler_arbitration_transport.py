@@ -33,6 +33,21 @@ def test_scheduled_recheck_codec_rejects_nonpositive_or_coerced_seconds(invalid)
             "scheduled_recheck_after_seconds": invalid})
 
 
+@pytest.mark.parametrize("invalid", [None, 0, 1, 1.5, "true", [], {}])
+def test_pending_dependency_codec_rejects_missing_or_coerced_proof(invalid):
+    with pytest.raises(TypeError, match="pending dependency wait"):
+        SchedulerArbitration.from_projection({"mode": "agent_scope_wait", "errors": [],
+            "disposition": "agent_scope_wait", "reason_code": "interaction_agent_scope_wait",
+            "pending_dependency_wait": invalid})
+
+
+def test_pending_dependency_codec_defaults_to_existing_bounded_supervision():
+    projection = {"mode": "agent_scope_wait", "errors": [], "disposition": "agent_scope_wait",
+        "reason_code": "interaction_agent_scope_wait"}
+    assert not SchedulerArbitration.from_projection(projection).pending_dependency_wait
+    assert SchedulerArbitration.from_projection({**projection, "pending_dependency_wait": True}).pending_dependency_wait
+
+
 def encoded_size(value: dict) -> int:
     return len(json.dumps(value, separators=(",", ":")).encode())
 

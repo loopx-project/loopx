@@ -70,8 +70,10 @@ def planning_env(tmp_path):
                     {
                         "id": "planning-goal",
                         "repo": str(project),
+                        "domain": "project",
                         "state_file": str(state),
                         "status": "active",
+                        "adapter": {"kind": "read_only_project_map_v0", "status": "connected-read-only"},
                         "coordination": {"registered_agents": ["planner"]},
                     }
                 ],
@@ -173,6 +175,37 @@ def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
     assert not list(
         Path(planning_env["LOOPX_RUNTIME_ROOT"]).rglob("benchmark-pending-turn.json")
     )
+
+
+def test_research_worker_routes_each_resume_without_changing_the_pinned_home(planning_env):
+    from tests.capabilities.test_provider_gateway import _recording_upstream
+
+    binary = Path(planning_env["CODEX_BIN"])
+    request = '''import urllib.request
+endpoint = json.loads(next(value.split("=", 1)[1] for value in sys.argv if value.startswith("model_providers.harbor.base_url=")))
+with urllib.request.urlopen(urllib.request.Request(endpoint + "/responses", data=b"{}", headers={
+    "session-id": "planning-fixture-session", "x-client-request-id": "fixture-client-request",
+    "x-codex-turn-metadata": json.dumps({"session_id": "planning-fixture-session", "turn_id": "fixture-native-turn"})}), timeout=30) as response:
+    assert json.load(response)["ok"]
+'''
+    binary.write_text(binary.read_text().replace("packet = json.loads(sys.stdin.read()", request + "packet = json.loads(sys.stdin.read()"))
+    planning_env.update(LOOPX_RESEARCH_LOOP="1", LOOPX_ITERATION_CONTEXT="resume", NO_PROXY="127.0.0.1,localhost")
+    with _recording_upstream() as (url, _observed):
+        planning_env["OPENAI_BASE_URL"] = url
+        first = run_once(planning_env)
+        config = (Path(planning_env["LOOPX_CODEX_HOME"]) / "config.toml").read_bytes()
+        second = run_once(planning_env)
+    assert first["ok"] and second["ok"] and second["session"]["action"] == "resume"
+    assert (Path(planning_env["LOOPX_CODEX_HOME"]) / "config.toml").read_bytes() == config
+    assert url.encode() in config
+    for receipt in (first, second):
+        assert receipt["research_loop"]
+        events = [json.loads(line) for line in (Path(planning_env["LOOPX_WAKE_LOG_DIR"]) /
+            receipt["turn_id"] / "provider-requests.jsonl").read_text().splitlines()]
+        finished = next(event for event in events if event["event"] == "finished")
+        assert finished["forwarded"] is True
+        assert finished["wake_id"] == receipt["turn_id"] == finished["loopx_turn_id"]
+        assert finished["native_turn_id"] == "fixture-native-turn"
 
 
 def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):

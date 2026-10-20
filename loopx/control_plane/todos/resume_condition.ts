@@ -159,6 +159,8 @@ function todoItem(value: unknown, label: string): TodoItem {
     "source_section",
     "claimed_by",
     "task_repository",
+    "next_due_at",
+    "expires_at",
   ] as const) {
     const normalized = optionalString(raw[field], `${label}.${field}`);
     if (normalized !== undefined) item[field] = normalized;
@@ -544,6 +546,17 @@ function conditionFor(
   condition.target_todo_id = spec.target;
   condition.target_status = monitor?.status ?? null;
   condition.target_task_class = monitor?.task_class ?? null;
+  if (monitor) {
+    // Source scheduling facts qualify quiet rechecks separately from the
+    // material-generation fence. They do not make the successor ready.
+    condition.target_archive_state = monitor.archive_state ?? null;
+    condition.target_next_due_at = monitor.next_due_at ?? null;
+    condition.target_expires_at = monitor.expires_at ?? null;
+    if (evaluatedAt) {
+      condition.evaluated_at = evaluatedAt.iso;
+      condition.clock_provider = "runtime_clock";
+    }
+  }
   condition.baseline_generation = baseline ?? null;
   condition.material_change_generation = generation;
   condition.generation_fence = "strictly_greater_than_baseline";
@@ -674,7 +687,7 @@ export function evaluateTodoResumeConditions(value: unknown): JsonObject {
     const spec = parseResumeWhen(item.resume_when);
     return spec?.kind === "resume_at" && (!requestedKinds || requestedKinds.has(spec.kind));
   });
-  const evaluatedAt = needsRuntimeClock ? resumeTimestamp(request.evaluated_at) : null;
+  const evaluatedAt = resumeTimestamp(request.evaluated_at);
   if (needsRuntimeClock && !evaluatedAt) {
     throw new EffectRuntimeRequestError(
       "todo_resume_evaluation_request.evaluated_at must be a timezone-aware RFC3339 timestamp",

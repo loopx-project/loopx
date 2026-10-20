@@ -134,7 +134,7 @@ const strideRequest = {...request, stride_strategy: "evidence_conditioned_v1"};
 test("unconsumed result survives later reviews and citations alone; recorded work closes only its source relation", () => {
   const first = reviewed(1);
   (first._source_facts as JsonObject).planned_todo_ids = ["todo-a"];
-  const result = {...subsequent(2), progress_observation: null};
+  const result = {...subsequent(2), progress_observation: null, delivery_outcome: "outcome_progress"};
   const ref = (projectReplanContext({...request, rows: [result]}).evidence as JsonObject[])[0].evidence_ref;
   const next = reviewed(3);
   (next._source_facts as JsonObject).planned_todo_ids = ["todo-b"];
@@ -146,7 +146,18 @@ test("unconsumed result survives later reviews and citations alone; recorded wor
   assert.equal(proposed.unresolved_count, 1);
   assert.equal((proposed.unresolved as JsonObject[])[0].evidence_ref, ref);
   assert.deepEqual(proposed.recorded_followthrough, []);
-  const actual = {...subsequent(4), todo_id: "todo-b", progress_observation: null};
+  // A later record is not necessarily work. Keep preparation and unknown
+  // legacy outcomes readable without consuming the result or creating a new
+  // pending research result from each status update.
+  for (const delivery_outcome of ["surface_only", null, "future_outcome"]) {
+    for (const progress_observation of [null, {...progress, work_item_id: "todo-b"}]) {
+      const status = {...subsequent(4), todo_id: "todo-b", delivery_outcome, progress_observation};
+      assert.deepEqual(readUse([first, result, next, status]), proposed);
+      assert.equal((projectReplanContext({...request, rows: [status]}).evidence as JsonObject[]).length, 1);
+    }
+  }
+  const actual = {...subsequent(4), todo_id: "todo-b", progress_observation: null,
+    delivery_outcome: "outcome_progress"};
   const adopted = readUse([first, result, next, actual]);
   assert.equal(adopted.unresolved_count, 1, "the next result remains available for the next decision");
   assert.notEqual((adopted.unresolved as JsonObject[])[0].evidence_ref, ref);
@@ -156,6 +167,15 @@ test("unconsumed result survives later reviews and citations alone; recorded wor
   assert.deepEqual(readUse([first, result, next, actual, actual]), adopted, "replay cannot consume or duplicate twice");
   const replayedResult = {...result, _source_facts: {...result._source_facts as JsonObject, history_position: 5}};
   assert.deepEqual(readUse([first, result, next, actual, replayedResult]), adopted, "a lost-response replay cannot resurrect consumed evidence");
+  // A negative experiment or a new concrete blocker can still inform a later
+  // decision. This relation must not require a positive scientific outcome.
+  for (const delivery_outcome of ["outcome_gap", "primary_goal_outcome"]) {
+    const use = readUse([first, result, next, {...actual, delivery_outcome}]);
+    assert.equal(use.recorded_followthrough_count, 1);
+    assert.equal((use.recorded_followthrough as JsonObject[])[0].result_evidence_ref, ref);
+  }
+  const metadata = {...result, delivery_outcome: "surface_only"};
+  assert.equal(readUse([first, metadata]), undefined, "metadata is not a new unresolved work result");
   const omitted = reviewed(3);
   (omitted._source_facts as JsonObject).planned_todo_ids = ["todo-b"];
   assert.equal(readUse([first, result, omitted]).unresolved_count, 1, "another review cannot silently drop an uncited result");
@@ -469,6 +489,22 @@ test("another lane or retired Goal instance never supplies current decision evid
   const current = {...valid, _source_facts: {...valid._source_facts, goal_ref: currentRef}};
   assert.deepEqual(((projectReplanContext({...strideRequest, goal_facts: {goal_ref: currentRef}, rows: [current]})
     .decision_followthrough as JsonObject).previous_decision as JsonObject).goal_ref, currentRef);
+});
+
+test("stall frontier projects its current strategy through the shared outcome owner", () => {
+  for (const kind of ["typed_progress_repeat", "no_progress_streak", "repeated_action_loop"]) {
+    const obligation = {...request.obligation, triggers: [{kind}],
+      replan_context: {stride_strategy: "off"}};
+    const enabled = projectReplanContext({...request, obligation, stride_strategy: "evidence_conditioned_v1"});
+    assert.ok(((enabled.uncovered_frontier as JsonObject).required_any_of as string[])
+      .includes("fresh_vision_path_outcome"));
+    const off = projectReplanContext({...request, obligation, stride_strategy: "off"});
+    assert.equal(((off.uncovered_frontier as JsonObject).required_any_of as string[])
+      .includes("fresh_vision_path_outcome"), false);
+    const restricted = projectReplanContext({...request, stride_strategy: "evidence_conditioned_v1",
+      obligation: {...obligation, satisfying_semantic_outcomes: ["new_runnable_successor"]}});
+    assert.deepEqual((restricted.uncovered_frontier as JsonObject).required_any_of, ["new_runnable_successor"]);
+  }
 });
 
 test("strategy off preserves context identity and selection despite decision transport facts", () => {

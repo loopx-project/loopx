@@ -205,3 +205,51 @@ test("unproven waits cannot relax finite scheduler supervision", () => {
       .scheduled_recheck_after_seconds, undefined);
   }
 });
+
+test("only a proven dependency wait keeps source polling alive without a Turn obligation", () => {
+  for (const kind of ["todo_done", "monitor_changed"]) {
+    const input = datedWait();
+    const wait = input.vision_wait_state as JsonObject;
+    const resume = `${kind}:todo_dependency`;
+    const condition = {schema_version: "todo_resume_condition_v0", kind, resume_when: resume,
+      target: "todo_dependency", target_todo_id: "todo_dependency", satisfied: false,
+      target_status: "open", target_archive_state: null,
+      target_task_class: kind === "todo_done" ? "advancement_task" : "continuous_monitor",
+      baseline_generation: 0, material_change_generation: 0,
+      target_next_due_at: "2099-01-01T00:00:00Z", target_expires_at: null,
+      evaluated_at: "2026-09-01T00:00:00Z", clock_provider: "runtime_clock"};
+    input.vision_wait_state = {...wait, resume_when: resume, resume_monitor_generation: 0, resume_condition: condition};
+    assert.deepEqual(projectSchedulerArbitration(input), {mode: "agent_scope_wait", errors: [],
+      disposition: "agent_scope_wait", reason_code: "interaction_agent_scope_wait", pending_dependency_wait: true});
+    const monitor = {...input, ...facts("monitor_quiet_skip", false, false, false, true),
+      effective_action: "monitor_quiet_skip"};
+    assert.deepEqual(projectSchedulerArbitration(monitor), {mode: "monitor_quiet_skip", errors: [],
+      disposition: "monitor_wait", reason_code: "interaction_monitor_quiet_wait", pending_dependency_wait: true});
+    for (const patch of [{vision_wait_state: undefined}, {heartbeat_receipt: {status: "pending"}},
+      {heartbeat_receipt: {status: "replayed", settlement_identity: {todo_id: "todo_scheduled"}}},
+      {cli_channel: {spend_allowed_now: true}}, facts("normal_run"),
+      facts("user_gate", true, false, false, false)]) {
+      assert.equal(projectSchedulerArbitration({...monitor, ...patch}).pending_dependency_wait, undefined);
+    }
+    const pending = input.vision_wait_state as JsonObject;
+    for (const patch of [
+      {vision_wait_state: {...pending, resume_condition: {...condition, target_status: undefined}}},
+      {vision_wait_state: {...pending, selected_todo_claimed_by: "another-agent"}},
+      {vision_wait_state: {...pending, waiting_todo_count: 2}},
+      {heartbeat_receipt: {status: "committed", settlement_identity: {todo_id: wait.selected_todo_id}}},
+      {heartbeat_receipt: {status: "replayed", pending_action_selection: {}}},
+      {effective_action: "normal_run"},
+      {cli_channel: {spend_allowed_now: true}},
+      {cli_channel: {spend_after_validation: true}},
+      facts("user_gate", true, false, false, false),
+      facts("monitor_quiet_skip", false, false, false, true),
+      facts("terminal_no_followup", false, false, false, true),
+      facts("successor_replan_required", false, true, false, false),
+      facts(),
+    ]) {
+      const result = projectSchedulerArbitration({...input, ...patch});
+      assert.equal(result.pending_dependency_wait, undefined, JSON.stringify(patch));
+      assert.equal(result.scheduled_recheck_after_seconds, undefined);
+    }
+  }
+});

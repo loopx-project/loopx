@@ -137,3 +137,12 @@
   .goal-overview .is-overview .goal-overview-criteria li { grid-template-columns: 16px minmax(0, 1fr); }
   .goal-overview .is-overview .goal-overview-criteria small { grid-column: 2; }
 }
+/* Driver observations remain separate from the Goal's activation and acceptance. */
+.goal-overview-worker-state { display: grid; gap: 8px; padding-block: 16px; border-block: 1px solid var(--pw-line); }
+.goal-overview-worker-state h3 { color: var(--pw-muted); font-size: var(--text-caption); font-weight: 500; line-height: var(--leading-caption); }
+.goal-overview-worker-state p { margin-block: .5rem; overflow-wrap: anywhere; }
+.goal-overview-worker-state details { margin-block: .5rem; }
+.goal-overview-worker-state dl { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.goal-overview-worker-state dt { font-weight: 600; }
+.goal-overview-worker-state dd { margin: .2rem 0 .6rem; overflow-wrap: anywhere; }
+.goal-overview-worker-state > button { justify-self: start; }

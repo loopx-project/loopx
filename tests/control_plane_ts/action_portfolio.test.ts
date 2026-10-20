@@ -459,6 +459,33 @@ test("only runnable replan-only deferral permits one inline guard reentry", () =
   }
 });
 
+test("only the current exact scoped fallback may bind through an operator gate", () => {
+  const selected = candidate("todo_independent001", "Validate the independent result.", "P1");
+  const request = {
+    schema_version: ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION,
+    requested_todo_id: selected.todo_id, candidate: selected,
+    should_run: false, normal_delivery_allowed: false,
+    delivery_preemptions: ["delivery_not_allowed"],
+    scoped_fallback_todo_id: selected.todo_id, quota_state: "operator_gate", goal_health_ok: true,
+  };
+  const allowed = qualifyActionSelection(request);
+  assert.equal(allowed.state, "qualified");
+  assert.equal((allowed.selected_todo as Record<string, unknown>).todo_id, selected.todo_id);
+  for (const patch of [
+    {scoped_fallback_todo_id: null}, {scoped_fallback_todo_id: "todo_gated001"},
+    {goal_health_ok: false}, {quota_state: "paused"}, {quota_state: "throttled"},
+    {quota_state: "unknown"}, {delivery_preemptions: []},
+    ...["heartbeat_receipt", "autonomous_replan", "blocking_work_lane", "control_repair",
+      "ready_deferred_successor_priority_preemption"].map(reason => ({
+        delivery_preemptions: [reason, "delivery_not_allowed"],
+      })),
+  ]) {
+    const denied = qualifyActionSelection({...request, ...patch});
+    assert.equal(denied.state, "deferred", JSON.stringify(patch));
+    assert.equal(denied.selected_todo, undefined);
+  }
+});
+
 test("pending selection rejects a Todo absent from the current eligible set", () => {
   assert.deepEqual(qualifyActionSelection({
     schema_version: ACTION_SELECTION_QUALIFICATION_REQUEST_SCHEMA_VERSION,

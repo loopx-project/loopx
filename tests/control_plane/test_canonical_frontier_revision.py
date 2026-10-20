@@ -33,7 +33,9 @@ def _commit_variant(paths, operation, todo_id):
         f"import {{canonicalAuthoritySha256}} from {json.dumps((module / 'authority_store_codec.ts').as_uri())};"
         "const s=await openLocalAuthorityStore(process.argv[1],process.argv[2]);const h=await s.loadAuthority();"
         "const t=h.head.todos.find(t=>t.todo_id===process.argv[4]);"
-        "if(process.argv[3]==='remove-exclusion')delete t.excluded_agents;else t.priority='P0';"
+        "if(process.argv[3]==='remove-exclusion')delete t.excluded_agents;"
+        "else if(process.argv[3]==='owned-body-edit')t.text='Prove the result for every integer, beyond the finite tested samples';"
+        "else t.priority='P0';"
         "h.head.todo_read_model.records_sha256=canonicalAuthoritySha256(h.head.todos);"
         "const r=await s.commitAuthority({expected_provider_revision:h.provider_revision,"
         "operation_id:process.argv[3],events:[],receipts:[],next_projection:h.head});"
@@ -112,7 +114,9 @@ def test_complex_canonical_frontier_ack_tracks_only_selectable_material_changes(
     assert observe(next_ack)[1].acknowledged
     _commit_variant(paths, "remove-exclusion", "todo_zz_frontier_029")
     assert observe(next_ack)[1].acknowledged is (ack_scope == "owned")
-    _commit_variant(paths, "owned-edit", "todo_zz_frontier_000")
+    _commit_variant(paths, "owned-display-edit", "todo_zz_frontier_000")
+    assert observe(next_ack)[1].acknowledged is (ack_scope == "owned")
+    _commit_variant(paths, "owned-body-edit", "todo_zz_frontier_000")
     assert not observe(next_ack)[1].acknowledged
     code, result = run_json_cli_result("quota", "should-run", "--goal-id", GOAL_ID,
         "--agent-id", "agent-a", registry_path=paths["registry"])

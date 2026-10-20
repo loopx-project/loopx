@@ -12,8 +12,11 @@ def worker_command(env: dict[str, str], *, python: str, source: str,
     wake = [python, "-m", "benchmark.runtime.worker"]
     if env["LOOPX_EXECUTION_MODE"] not in {"heartbeat", "turn"}:
         return wake
+    scheduler = ([python, "-m", "benchmark.runtime.research_scheduler"]
+                 if env.get("LOOPX_RESEARCH_LOOP") == "1" and env.get("LOOPX_RESEARCH_FEEDBACK_ROOT")
+                 else [python, f"{source}/scripts/external_scheduler_worker.py"])
     return [
-        python, f"{source}/scripts/external_scheduler_worker.py",
+        *scheduler,
         "--cli-bin", env["LOOPX_CLI"], "--registry", env["LOOPX_REGISTRY"],
         "--runtime-root", env["LOOPX_RUNTIME_ROOT"],
         "--runtime-profile", "generic_cli", "--goal-id", env["LOOPX_GOAL_ID"],

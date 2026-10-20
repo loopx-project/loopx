@@ -654,3 +654,60 @@ def test_report_rejects_unbound_horizon_setting(trial, receipt, profile):
         write(path, value)
     with pytest.raises(ValueError, match="planning_horizon_goal"):
         export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+
+
+@pytest.mark.parametrize("enabled", [None, False, True])
+def test_report_preserves_research_treatment_and_historical_absence(trial, enabled):
+    for name in ("runtime-receipt", "worker-profile"):
+        path = trial[3] / (name + ".json")
+        value = json.loads(path.read_text())
+        if enabled is not None:
+            value["research_loop"] = enabled
+        if enabled:
+            value["worker" if name == "runtime-receipt" else "profile"] = "heartbeat-explore"
+            value["feedback"] = "native"
+        write(path, value)
+    out = build(trial)
+    config = json.loads((out / "settings/run.json").read_text())
+    for owner in ("runner", "worker_profile"):
+        assert config[owner].get("research_loop") is enabled
+        assert ("research_loop" in config[owner]) is (enabled is not None)
+    assert verify(out)["verified"] is True
+
+
+@pytest.mark.parametrize("receipt,profile", [
+    ({}, {"research_loop": True}),
+    ({"research_loop": True}, {}),
+    ({}, {"research_loop": False}),
+    ({"research_loop": True}, {"research_loop": False}),
+    ({"research_loop": True}, {"research_loop": 1}),
+    ({"research_loop": "true"}, {"research_loop": "true"}),
+    ({"research_loop": None}, {"research_loop": None}),
+])
+def test_report_rejects_one_sided_or_invalid_raw_research_treatment_before_projection(trial, receipt, profile):
+    for name, fields in (("runtime-receipt", receipt), ("worker-profile", profile)):
+        path = trial[3] / (name + ".json")
+        value = json.loads(path.read_text())
+        value.update(fields)
+        write(path, value)
+    with pytest.raises(ValueError, match="research_loop"):
+        build(trial)
+    assert not trial[2].exists(), "a discarded source flag must not become a verified portable report"
+
+
+@pytest.mark.parametrize("runner,profile", [
+    ({}, {"research_loop": True}),
+    ({"research_loop": True}, {}),
+    ({"research_loop": True}, {"research_loop": 1}),
+    ({"research_loop": None}, {"research_loop": None}),
+])
+def test_rehashed_portable_research_treatment_still_requires_matching_booleans(trial, runner, profile):
+    out = build(trial)
+    path = out / "settings/run.json"
+    config = json.loads(path.read_text())
+    config["runner"].update(runner)
+    config["worker_profile"].update(profile)
+    write(path, config)
+    reseal(out, "settings/run.json")
+    with pytest.raises(ValueError, match="research_loop"):
+        verify(out)

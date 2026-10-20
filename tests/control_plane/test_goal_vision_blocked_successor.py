@@ -678,6 +678,9 @@ def test_exact_blocked_successor_defers_only_open_vision_gap(
     assert wait["resume_when"] == f"todo_done:{BLOCKER_ID}"
     assert wait["resume_condition"]["target_todo_id"] == BLOCKER_ID
     assert wait["resume_condition"]["satisfied"] is False
+    assert wait["resume_condition"]["target_status"] == "open"
+    assert wait["resume_condition"]["target_task_class"] == "advancement_task"
+    assert wait["resume_condition"]["target_archive_state"] == "active"
     assert wait["deferred_acceptance_gap_count"] == 1
     assert wait["automatic_resume"] is True
     assert guard["vision_wait_state"] == wait
@@ -690,11 +693,11 @@ def test_exact_blocked_successor_defers_only_open_vision_gap(
         "blocked_successor_resume_pending"
     )
     assert guard["interaction_contract"]["agent_channel"]["vision_wait_state"] == wait
-    assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is False
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
-    assert guard["interaction_contract"]["agent_channel"]["quiet_noop_allowed"] is False
+    assert guard["interaction_contract"]["agent_channel"]["quiet_noop_allowed"] is True
     cli_actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
-    assert "quota monitor-poll" in cli_actions[0]
+    assert not any("quota monitor-poll" in action for action in cli_actions)
     assert "quota should-run" in cli_actions[1]
     assert "protocol_action_packet" not in guard
     cli_wait = guard["interaction_contract"]["cli_channel"]["vision_wait_state"]

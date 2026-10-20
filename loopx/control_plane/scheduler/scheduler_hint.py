@@ -1180,6 +1180,7 @@ def _monitor_bounded_wait_profile(
     cadence_class: str,
     default_interval_minutes: int,
     max_interval_minutes: int,
+    unchanged_poll_limit: int | None = 3,
 ) -> dict[str, Any]:
     """Cap a wait profile to the tightest continuous-monitor wakeup."""
 
@@ -1205,8 +1206,8 @@ def _monitor_bounded_wait_profile(
             "app_automation_initial_rrule": rrule_for_minutes(initial_interval),
             "app_automation_max_interval_minutes": max_interval_minutes,
             "unchanged_poll_backoff_multiplier": 2,
-            "local_scheduler_unchanged_poll_limit": 3,
-            "claude_code_loop_unchanged_poll_limit": 3,
+            "local_scheduler_unchanged_poll_limit": unchanged_poll_limit,
+            "claude_code_loop_unchanged_poll_limit": unchanged_poll_limit,
             **monitor_plan["reset_profile"],
         }
         if isinstance(monitor_plan, dict)
@@ -1617,6 +1618,20 @@ def build_scheduler_hint(
                 claude_limit=None,
                 cadence_progression_override=progression,
             )
+        if arbitration.pending_dependency_wait:
+            return builder.build(
+                action="backoff_until_state_change",
+                cadence_class="agent_scope_wait",
+                reason=(
+                    "an exact successor has a registered pending dependency; keep quiet "
+                    "source rechecks and follow fresh admission gates when it changes"
+                ),
+                codex_interval=10,
+                codex_max=60,
+                cli_limit=None,
+                claude_limit=None,
+                cadence_progression_override=[10, 20, 30, 60],
+            )
         return builder.build(
             action="backoff_until_reassigned",
             cadence_class="agent_scope_wait",
@@ -1634,11 +1649,13 @@ def build_scheduler_hint(
         )
 
     if arbitration.disposition == SchedulerDisposition.MONITOR_WAIT:
+        unchanged_limit = None if arbitration.pending_dependency_wait else 3
         monitor_profile = _monitor_bounded_wait_profile(
             payload,
             cadence_class="monitor_wait",
             default_interval_minutes=MONITOR_WAIT_HOST_FLOOR_MINUTES,
             max_interval_minutes=60,
+            unchanged_poll_limit=unchanged_limit,
         )
         return builder.build(
             action="backoff_until_material_transition",
@@ -1647,8 +1664,8 @@ def build_scheduler_hint(
                 "monitor-only quiet polls should remain alive but use a slower "
                 "cadence until material evidence, a blocker, or replan obligation appears"
             ),
-            cli_limit=3,
-            claude_limit=3,
+            cli_limit=unchanged_limit,
+            claude_limit=unchanged_limit,
             **monitor_profile,
         )
 

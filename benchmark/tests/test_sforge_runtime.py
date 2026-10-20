@@ -94,6 +94,23 @@ def test_only_official_delegates_continuation_to_sforge(profile, resumes, monkey
         assert 'web_search="disabled"' in command
 
 
+def test_research_loop_uses_one_explicit_profile_and_rejects_conflicting_controls():
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    config = SForgeConfig(agent_model="fixture", agent_effort="high",
+        agent_api_base_url="https://model.example.invalid/v1", agent_api_key="fixture-credential")
+    worker = SForgeWorker(config, profile="heartbeat-explore", cwd="/task", research_loop=True)
+    assert worker.research_loop and worker.stride_strategy == "evidence_conditioned_v1"
+    for options in ({"stride_strategy": "off"}, {"profile": "official"}, {"warm_start": object()}):
+        with pytest.raises(ValueError):
+            SForgeWorker(config, **{"profile": "heartbeat-explore", "cwd": "/task", "research_loop": True, **options})
+    ordinary = SForgeWorker(config, profile="heartbeat-explore", cwd="/task")
+    assert ordinary.research_loop is False and ordinary.stride_strategy is None
+
+
 def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -401,6 +418,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_feedback = None
     backend.checkpoint = None
     backend.log_dir = tmp_path / "artifacts"
     backend.feedback = None
@@ -455,6 +473,7 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend, AllowedEndpoint
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_feedback = None
     backend.checkpoint = None
     backend.auth_ips = []
     backend.blind_api_endpoint = None
@@ -973,6 +992,7 @@ def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeyp
     from types import SimpleNamespace
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_feedback = None
     backend.checkpoint = None
     backend.log_dir = tmp_path / "collected"
     backend.blind_api_endpoint = None
@@ -1195,3 +1215,96 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
         args += ["--checkpoint-request", str(declaration)]
     with pytest.raises(RuntimeError, match="validated before model execution"):
         run.main(args)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_native_research_install_is_explicit_and_consumer_owner_excludes_credentials(tmp_path, monkeypatch, enabled):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.config import SForgeConfig
+    from sforge.harness.evolve_scripts import generate_submit_script
+    from benchmark.runtime.sforge import BenchmarkCodex, SForgeWorker
+    from benchmark.runtime.research_feedback_sync import FEEDBACK_ROOT, feedback_environment
+
+    async def installed(*_args):
+        pass  # Bound packaging/owner install; no network setup or model call.
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    native = generate_submit_script()
+    copied, calls, starts = {}, [], []
+    observer = SimpleNamespace(after_publish=None, start=lambda *args: starts.append(args))
+    def execute(_handle, command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(exit_code=0, output=native if command == ["cat", "/usr/local/bin/sforge-submit"] else "")
+    def copy(_handle, path, target):
+        copied[str(target)] = path.read_bytes()
+    backend = SimpleNamespace(research_feedback=observer, exec_run=execute, copy_to_container=copy)
+    worker = SForgeWorker(SForgeConfig(agent_model="synthetic-model", agent_effort="high",
+        agent_api_base_url="https://model.example.invalid/v1", agent_api_key="synthetic-provider-secret"),
+        profile="heartbeat-explore", cwd="/task", research_loop=enabled)
+    worker.install_stop_hook(backend, "synthetic-container", tmp_path, None)
+    env = worker.runtime._worker_env(cwd="/task")
+    script = copied.get("/usr/local/bin/sforge-submit")
+    if not enabled:
+        assert script is None and not calls
+        assert "LOOPX_RESEARCH_FEEDBACK_ROOT" not in env
+        worker._execution_command("synthetic-execution")
+        assert not starts and observer.after_publish is None
+        return
+    assert script and script.decode() != native
+    parsed = subprocess.run(["bash", "-n"], input=script, capture_output=True)
+    assert parsed.returncode == 0, parsed.stderr
+    assert env["LOOPX_RESEARCH_FEEDBACK_ROOT"] == FEEDBACK_ROOT
+    assert b"--wait-todo" in script and b"benchmark.runtime.research_submission" in script
+    assert b'sforge-submit --result' in script, "native read-only recovery remains available"
+    env.update(SFORGE_TOKEN="synthetic-native-secret", OPENAI_API_KEY="synthetic-provider-secret",
+               CODEX_AUTH_JSON_PATH="/synthetic-unused-auth.json")
+    consumer_calls = []
+    def consume(_handle, command, **kwargs):
+        consumer_calls.append((command, kwargs))
+        return SimpleNamespace(exit_code=0, timed_out=False)
+    backend.exec_run_with_timeout = consume
+    worker._prepare_native_research_consumer(env)
+    owner = json.loads(copied[FEEDBACK_ROOT + "/owner.json"])
+    assert not {"SFORGE_TOKEN", "OPENAI_API_KEY", "CODEX_AUTH_JSON_PATH"} & owner.keys()
+    assert "synthetic-provider-secret" not in json.dumps(owner)
+    root = tmp_path / "feedback-owner"
+    root.mkdir()
+    (root / "owner.json").write_text(json.dumps({**owner, "LOOPX_RESEARCH_FEEDBACK_ROOT": str(root)}))
+    restored = feedback_environment(root, base={"UNRELATED": "kept"})
+    assert restored["LOOPX_GOAL_ID"] == env["LOOPX_GOAL_ID"]
+    assert restored["LOOPX_AGENT_ID"] == env["LOOPX_AGENT_ID"]
+    assert restored["UNRELATED"] == "kept" and "OPENAI_API_KEY" not in restored
+    worker._execution_command("synthetic-execution")
+    assert starts == [(backend, "synthetic-container")]
+    observer.after_publish(backend, "synthetic-container", {})
+    [command, options] = consumer_calls[0]
+    assert "benchmark.runtime.research_feedback_sync" in command
+    assert command[:4] == ["timeout", "--signal=TERM", "--kill-after=5", "60s"]
+    assert options["timeout"] == 70
+    assert options["user"] == "agent" and options["environment"] == owner
+    backend.exec_run_with_timeout = lambda *_args, **_kwargs: SimpleNamespace(exit_code=1, timed_out=False)
+    with pytest.raises(RuntimeError, match="consumption is incomplete"):
+        observer.after_publish(backend, "synthetic-container", {})
+
+
+def test_native_research_installer_rejects_unobserved_or_changed_provider_before_execution(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    worker = SForgeWorker(SForgeConfig(agent_model="synthetic", agent_effort="high",
+        agent_api_base_url="https://model.example.invalid/v1", agent_api_key="synthetic-secret"),
+        profile="heartbeat-explore", cwd="/task", research_loop=True)
+    with pytest.raises(ValueError, match="accepted-snapshot observer"):
+        worker._install_native_research_feedback(SimpleNamespace(research_feedback=None), None)
+    missing_capability = SimpleNamespace(research_feedback=object(),
+        exec_run=lambda *_args, **_kwargs: SimpleNamespace(exit_code=1, output=""))
+    with pytest.raises(RuntimeError, match="matching Explore observer capability"):
+        worker._install_native_research_feedback(missing_capability, None)
+    unsupported = SimpleNamespace(research_feedback=object(),
+        exec_run=lambda *_args, **_kwargs: SimpleNamespace(exit_code=0, output="#!/bin/bash\nexit 0\n"))
+    with pytest.raises(ValueError, match="unsupported_native_submit_script_boundary"):
+        worker._install_native_research_feedback(unsupported, None)

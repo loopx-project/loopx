@@ -98,6 +98,22 @@ def test_legacy_ack_still_expires_with_the_material_run_window() -> None:
     assert visible["semantic_delta"]["obligation_id"] == LONG_CHAIN_OBLIGATION_ID
 
 
+def test_noop_review_records_do_not_expire_an_applicable_legacy_ack() -> None:
+    from loopx.control_plane.status.autonomous_replan_projection import (
+        latest_autonomous_replan_ack_for_projection as project_current_ack,
+    )
+
+    prior = _long_chain_ack_run(checkpoints=False)
+    for classification in ("replan_noop", "repair_noop"):
+        observations = [{**_material_run(index), "classification": classification}
+                        for index in range(AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW * 2)]
+        ack = project_current_ack([*observations, prior])
+        assert ack is not None
+        assert ack["semantic_delta"]["obligation_id"] == LONG_CHAIN_OBLIGATION_ID
+        actual_work = [_material_run(index) for index in range(AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW)]
+        assert project_current_ack([*observations, *actual_work, prior]) is None
+
+
 def _validated_agent_vision(path_outcome: str) -> dict[str, Any]:
     return normalize_goal_vision_packet(
         {

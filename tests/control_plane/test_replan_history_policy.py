@@ -107,6 +107,26 @@ def test_periodic_review_ignores_quiet_polls_but_counts_material_transitions() -
     assert periodic([material] + quiet + work)["triggers"][0]["kind"] == "periodic_review_due"
 
 
+def test_replan_noops_preserve_the_original_work_obligation_identity() -> None:
+    work = [run(n, turn=f"work-{n}") for n in range(20, 0, -1)]
+    original = obligation(work)
+    assert original is not None
+    for classification in ("replan_noop", "repair_noop"):
+        noops = [{**run(21, turn=f"review-{n}"), "classification": classification,
+                  "generated_at": f"2026-09-22T00:01:{n % 60:02d}Z",
+                  "health_check": f"Still considering the same question, wording {n}"}
+                 for n in range(200)]
+        assert obligation(noops) is None
+        assert obligation(noops + work[:-1]) is None
+        repeated = obligation(noops + work)
+        assert repeated is not None
+        assert repeated["obligation_id"] == original["obligation_id"]
+        assert repeated["triggers"] == original["triggers"]
+        typed_noops = [{**row, "progress_observation": observation()} for row in noops]
+        assert obligation(typed_noops) is None, "a control no-op cannot manufacture a progress-repeat duty"
+        assert obligation(typed_noops + work)["obligation_id"] == original["obligation_id"]
+
+
 def test_six_distinct_polls_retain_dead_monitor_contract() -> None:
     result = obligation([monitor(n, turn=f"poll-{n}") for n in range(6, 0, -1)])
     assert result is not None

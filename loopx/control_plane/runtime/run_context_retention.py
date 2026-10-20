@@ -14,6 +14,7 @@ from ..work_items.autonomous_replan_ack import (
     autonomous_replan_ack_recorded,
 )
 from ..work_items.autonomous_replan_obligation import run_history_agent_id
+from ..work_items.replan_history_codec import REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS
 from .time import now_utc_iso
 
 GOAL_SEMANTIC_HISTORY_SCHEMA_VERSION = "goal_semantic_history_v0"
@@ -322,8 +323,10 @@ def latest_runs_with_agent_context(
     material runs since its own last replan ACK, so a Goal with several active
     lanes can interleave more than ``limit`` peer records between two rows of a
     single lane and hide that lane's own threshold. The requesting lane keeps
-    the same ``AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK`` budget a single-lane Goal
-    would have, and the goal-wide rows stay in place.
+    the same ``AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK`` budget of non-neutral
+    records and accepted ACK boundaries. No-op reviews and accounting rows
+    cannot consume that budget before the typed history owner sees the work.
+    The goal-wide display rows stay in place, including recent neutral rows.
     """
 
     bounded = max(0, limit)
@@ -337,6 +340,10 @@ def latest_runs_with_agent_context(
         if attributed == agent_lane_id:
             lane_present = True
         elif attributed is not None:
+            continue
+        if (str(run.get("classification") or "").strip()
+                in REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS
+                and not autonomous_replan_ack_recorded(run)):
             continue
         lane_positions.append(position)
     if not lane_present:

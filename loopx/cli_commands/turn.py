@@ -85,6 +85,10 @@ def handle_turn_command(
             registry_path=registry_path,
             goal_id=args.goal_id,
             planned_goal_ref=goal_ref,
+            # This caller retains only source-profile admission. Legacy Host
+            # runners capture their launch witness when execution is requested;
+            # inspecting a plan must not create their registry writer lock.
+            capture_launch_authority=False,
         )
         strict_goal_admission = goal_admission if goal_admission.enabled else None
         if getattr(args, "codex_operation_tools", False) and args.host != "codex-cli":
@@ -146,6 +150,7 @@ def handle_turn_command(
                 registry_path=registry_path,
                 goal_id=args.goal_id,
                 planned_goal_ref=payload.get("goal_ref"),
+                capture_launch_authority=False,
             )
             strict_goal_admission = goal_admission if goal_admission.enabled else None
             if strict_goal_admission is not None:

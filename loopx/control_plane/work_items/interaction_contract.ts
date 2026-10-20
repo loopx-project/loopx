@@ -16,10 +16,13 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
 import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
+import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
+import { monitorIsActive } from "../todos/summary_lanes.ts";
 
-function exactBlockedSuccessorWait(request: JsonObject): JsonObject | null {
+function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): JsonObject | null {
   const wait = jsonObject(request.vision_wait_state);
-  const exact = request.effective_action === AgentScopeFrontierAction.AGENT_SCOPE_WAIT &&
+  const exact = (request.effective_action === AgentScopeFrontierAction.AGENT_SCOPE_WAIT ||
+    monitorWait && request.effective_action === EffectiveAction.MONITOR_QUIET_SKIP) &&
     wait?.schema_version === "goal_vision_wait_state_v0" && wait.state === "waiting" &&
     wait.reason_code === "exact_blocked_successor" && wait.automatic_resume === true &&
     typeof wait.selected_todo_id === "string" && !!wait.selected_todo_id &&
@@ -27,8 +30,24 @@ function exactBlockedSuccessorWait(request: JsonObject): JsonObject | null {
   return exact && wait ? wait : null;
 }
 
-/** Share the existing clock proof; a Turn binding always retains supervision. */
-function pendingDatedSuccessor(request: JsonObject, wait: JsonObject): JsonObject | null {
+function hasScheduledMonitorSource(condition: JsonObject): boolean {
+  const time = (value: unknown): number | null => {
+    const micros = typeof value === "string" ? parseTodoTimestampMicros(value) : null;
+    return micros === null ? null : Number(micros) / 1_000_000;
+  };
+  const observed = time(condition.evaluated_at), due = time(condition.target_next_due_at);
+  const expiry = time(condition.target_expires_at);
+  if (condition.clock_provider !== "runtime_clock" || observed === null || due === null ||
+      !(condition.target_archive_state === null || condition.target_archive_state === "active") ||
+      condition.target_expires_at !== null && expiry === null) return false;
+  // A Monitor must still be able to reach a poll. The ordinary quota owner
+  // retains due-work priority; an expired or unscheduled source cannot keep
+  // an unchanged external worker alive indefinitely.
+  return monitorIsActive({expiresAt: expiry}, observed) && monitorIsActive({expiresAt: expiry}, due);
+}
+
+/** Share the resume owner's source proof; a Turn binding retains supervision. */
+function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject): JsonObject | null {
   const receipt = jsonObject(request.heartbeat_receipt);
   const unbound = request.heartbeat_receipt == null || (!!receipt &&
     ["committed", "replayed"].includes(String(receipt.status)) &&
@@ -37,24 +56,27 @@ function pendingDatedSuccessor(request: JsonObject, wait: JsonObject): JsonObjec
   if (unbound && typeof request.agent_id === "string" && !!request.agent_id &&
       wait.agent_id === request.agent_id && wait.waiting_todo_count === 1 &&
       ["open", "deferred"].includes(String(wait.selected_todo_status)) &&
-      condition?.kind === "resume_at") {
+      (wait.selected_todo_claimed_by == null || wait.selected_todo_claimed_by === "" ||
+        wait.selected_todo_claimed_by === request.agent_id) &&
+      condition && ["resume_at", "todo_done", "monitor_changed"].includes(String(condition.kind))) {
     try {
       if (resumeConditionHasKnownPendingTarget(condition, {
         todo_id: wait.selected_todo_id, resume_when: wait.resume_when,
-      })) return condition;
+        resume_monitor_generation: wait.resume_monitor_generation,
+      }) && (condition.kind !== "monitor_changed" || hasScheduledMonitorSource(condition))) return condition;
     } catch {
-      // An incomplete or malformed clock proof cannot relax the contract.
+      // An incomplete or malformed source proof cannot relax the contract.
     }
   }
   return null;
 }
 
-/** A clock-backed wait needs no observation before its scheduled instant.
+/** A proven pending automatic successor needs only fresh source rechecks.
  * This read model never relaxes an existing Turn binding or settlement fence.
- * Dependency waits retain their bounded observation/replan policy. */
+ * Unknown dependencies retain their bounded observation/replan policy. */
 export function projectBlockedSuccessorWaitObservation(request: JsonObject): JsonObject {
   const wait = exactBlockedSuccessorWait(request);
-  return {required: !!wait && pendingDatedSuccessor(request, wait) === null};
+  return {required: !!wait && pendingAutomaticSuccessor(request, wait) === null};
 }
 
 export const INTERACTION_CONTRACT_SCHEMA_VERSION =
@@ -181,21 +203,24 @@ export function projectSchedulerArbitration(value: unknown): JsonObject {
   errors.push(...interactionConsistencyIssues(facts).map(issue => issue.code));
   const [disposition, reason] = schedulerDisposition(facts, modes,
     user.non_gating_notice === true && agent.wait_source === "turn_settlement");
-  const wait = exactBlockedSuccessorWait(request);
-  const condition = !errors.length && disposition === "agent_scope_wait" &&
+  const wait = exactBlockedSuccessorWait(request, disposition === "monitor_wait");
+  const waiting = disposition === "agent_scope_wait" &&
+      request.effective_action === AgentScopeFrontierAction.AGENT_SCOPE_WAIT ||
+    disposition === "monitor_wait" && request.effective_action === EffectiveAction.MONITOR_QUIET_SKIP;
+  const condition = !errors.length && waiting &&
     !facts.must_attempt && !facts.user_required && facts.quiet_noop_allowed &&
-    !facts.spend_allowed_now && !facts.spend_after_validation && wait &&
-    (wait.selected_todo_claimed_by == null || wait.selected_todo_claimed_by === "" ||
-      wait.selected_todo_claimed_by === request.agent_id)
-    ? pendingDatedSuccessor(request, wait) : null;
+    !facts.spend_allowed_now && !facts.spend_after_validation && wait
+    ? pendingAutomaticSuccessor(request, wait) : null;
   // The resume-condition owner has verified both timestamps and a future target.
   // This private duration bounds host rechecks; it grants no execution/spend.
-  const scheduled = condition ? {scheduled_recheck_after_seconds: Math.ceil(
+  const scheduled = disposition === "agent_scope_wait" && condition?.kind === "resume_at" ? {scheduled_recheck_after_seconds: Math.ceil(
     (Date.parse(String(condition.scheduled_for)) - Date.parse(String(condition.evaluated_at))) / 1000,
   )} : {};
+  const dependency = condition && ["todo_done", "monitor_changed"].includes(String(condition.kind))
+    ? {pending_dependency_wait: true} : {};
   return {mode, errors: [...new Set(errors)],
     disposition: errors.length ? "consistency_repair" : disposition,
-    reason_code: errors.length ? "scheduler_interaction_contract_inconsistent" : reason, ...scheduled};
+    reason_code: errors.length ? "scheduler_interaction_contract_inconsistent" : reason, ...scheduled, ...dependency};
 }
 
 function decodeUserChannel(value: unknown): UserInteractionChannel {

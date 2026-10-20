@@ -98,6 +98,7 @@ def _task_default(task_id: str, key: str, explicit: int | None, fallback: int) -
 
 
 def main(argv=None):
+    runner_started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", required=True)
     parser.add_argument("--tasks-dir", required=True, type=Path)
@@ -108,6 +109,8 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
+    parser.add_argument("--research-loop", action="store_true",
+                        help="Fresh heartbeat-explore treatment: separate candidate/research work, request admission and execution evidence")
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
@@ -205,6 +208,15 @@ def main(argv=None):
         parser.error("Warm continuation requires full native checkpoint capture, no periodic evaluation and effective-Turn cadence")
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
+    if args.research_loop and (args.worker != "heartbeat-explore" or args.feedback != "native"
+                              or args.restore_checkpoint is not None or not api_base_url):
+        parser.error("--research-loop requires a fresh heartbeat-explore native-feedback attempt and a custom model endpoint")
+    from benchmark.runtime.research_loop import research_stride_strategy
+
+    try:
+        args.stride_strategy = research_stride_strategy(args.research_loop, args.stride_strategy)
+    except ValueError as error:
+        parser.error(str(error))
     trial = args.log_dir / "runs" / args.run_id / args.task
     if args.restore_checkpoint is None:
         trial.mkdir(parents=True, exist_ok=False)
@@ -290,6 +302,7 @@ def main(argv=None):
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          workspace_instructions=workspace_instructions,
                          task_objective=task_objective,
+                         research_loop=args.research_loop,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          native_goal_continue=args.native_goal_continue,
@@ -317,6 +330,14 @@ def main(argv=None):
         judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
         admin_secret=get_admin_secret(args.log_dir), logger=logger, sampler=sampler,
     ) if args.feedback == "best-only" else None)
+    research_feedback = None
+    if args.research_loop:
+        from benchmark.edgebench.research_feedback import NativeResearchFeedback
+        from benchmark.runtime.research_feedback_sync import FEEDBACK_ROOT
+
+        research_feedback = NativeResearchFeedback(trial=trial, run_id=args.run_id, task_id=args.task,
+            judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
+            remote_root=FEEDBACK_ROOT, logger=logger)
     checkpoint = None
     if args.checkpoint_controller_file is not None:
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
@@ -326,6 +347,7 @@ def main(argv=None):
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
+                                     **({"research_feedback": research_feedback} if research_feedback is not None else {}),
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
@@ -372,6 +394,7 @@ def main(argv=None):
            if agent.replan_after_turns is not None else {}),
         **({"replan_after_completed_todos": agent.replan_after_todos}
            if agent.replan_after_todos is not None else {}),
+        **({"research_loop": True} if args.research_loop else {}),
         **({"planning_horizon_goal": args.planning_horizon_goal}
            if args.planning_horizon_goal is not None else {}),
         **({"stride_strategy": args.stride_strategy}
@@ -399,6 +422,8 @@ def main(argv=None):
     finally:
         if feedback is not None:
             feedback.close()
+        if research_feedback is not None:
+            research_feedback.close()
     # Native cancellation and swallowed Docker failures return runtime=0.
     # Observe the signal independently; never infer cancellation from output prose.
     execution = backend.execution_receipt or {}
@@ -415,6 +440,12 @@ def main(argv=None):
     _write_native_final_result(trial, result, status=status, agent=agent.name,
                                task=task.task_id, run_id=args.run_id,
                                model=args.model, effort=args.effort, feedback=args.feedback)
+    if args.research_loop:
+        from benchmark.edgebench.research_cost import summarize_research_cost
+        from benchmark.edgebench.research_feedback import canonical_json, write_bytes_atomic
+
+        cost = summarize_research_cost(trial, time.monotonic() - runner_started)
+        write_bytes_atomic(trial / "research-cost.json", canonical_json(cost))
     receipt_path.write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt))
     return 0 if status == "terminal" else 130 if status == "cancelled" else 1

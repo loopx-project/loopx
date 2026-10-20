@@ -286,7 +286,7 @@ def test_long_todo_chain_checkpoint_is_edge_triggered_and_rearms_on_change() -> 
 
     changed_items = deepcopy(source_items)
     changed_items[-1]["updated_at"] = "2026-08-22T09:10:00+08:00"
-    changed_items[-1]["priority"] = "P0"
+    changed_items[-1]["target_key"] = "experiment:authorized-new-probe"
     rearmed = _derive_long_chain(changed_items, latest_replan_ack=ack)
     assert rearmed is not None
     assert rearmed["obligation_id"] != original["obligation_id"]
@@ -298,13 +298,16 @@ def test_long_todo_chain_checkpoint_is_edge_triggered_and_rearms_on_change() -> 
 
 @pytest.mark.parametrize("change,rearms", [
     ("peer_claim", False), ("unclaimed_priority", False),
-    ("owned_priority", True), ("maintenance_timestamp", False),
+    ("owned_priority", False), ("owned_priority_marker", False),
+    ("owned_title", False), ("owned_text", True),
+    ("owned_target", True), ("maintenance_timestamp", False),
 ])
 def test_writeback_ack_preserves_owned_material_basis(change: str, rearms: bool) -> None:
     items = [*_long_chain_source_items(), {
         **_advancement("todo_unclaimed", ""),
         "updated_at": "2026-08-22T09:00:00+08:00",
     }]
+    items[0]["text"] = "Check five finite integer samples."
 
     def derive(rows, ack=None):
         owned = [row for row in rows if row.get("claimed_by") == "current-agent"]
@@ -335,10 +338,21 @@ def test_writeback_ack_preserves_owned_material_basis(change: str, rearms: bool)
         changed[-1]["priority"] = "P0"
     elif change == "owned_priority":
         changed[0]["priority"] = "P0"
+    elif change == "owned_priority_marker":
+        changed[0].update(priority="P0", text="[P0] Check five finite integer samples.")
+    elif change == "owned_title":
+        changed[0]["title"] = "Integer sample review"
+    elif change == "owned_text":
+        changed[0]["text"] = "Prove the result for every integer, beyond the finite tested samples."
+    elif change == "owned_target":
+        changed[0]["target_key"] = "experiment:authorized-new-probe"
     else:
         changed[0]["updated_at"] = "2026-08-22T10:00:00+08:00"
-    # The open Turn must keep its binding even before an ACK is recorded.
-    assert (derive(changed)["obligation_id"] != original["obligation_id"]) is rearms
+    # The open obligation and an accepted ACK use the same owned-work boundary.
+    current = derive(changed)
+    assert (current["obligation_id"] != original["obligation_id"]) is rearms
+    if change in {"owned_priority", "owned_priority_marker", "owned_title"}:
+        assert current["triggers"][0]["frontier_revision"] != original["triggers"][0]["frontier_revision"]
     assert (derive(changed, ack) is not None) is rearms
 
 
@@ -680,7 +694,7 @@ def test_long_chain_successor_transition_is_bound_to_current_frontier() -> None:
     assert original is not None
     changed_items = deepcopy(source_items)
     changed_items[-1]["updated_at"] = "2026-08-22T09:10:00+08:00"
-    changed_items[-1]["priority"] = "P0"
+    changed_items[-1]["target_key"] = "experiment:authorized-new-probe"
     rearmed = _derive_long_chain(changed_items)
     assert rearmed is not None
 

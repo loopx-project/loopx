@@ -133,6 +133,7 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
         ),
         evidence_refs=attachment["evidence_refs"],
         tags=["writeback-result"],
+        execution_observation=attachment.get("execution_observation"),
         recorded_at=recorded_at,
     )
     relations = [build_explore_edge_event(
@@ -251,6 +252,72 @@ def prepare_result_attachment(
     if not readback.get("ok"):
         raise ValueError("Explore Todo link was not admitted")
     return result
+
+
+def record_observer_result_attachment(
+    attachment, *, registry_path, runtime_root, goal_id, agent_id, todo_id,
+    source_id, recorded_at,
+):
+    """Record external facts without settling a model work Turn.
+
+    A runner or Monitor may finish real observation work while every model
+    Todo is waiting. It uses the same attachment codec, event log and Todo
+    link owner as ordinary writeback. It cannot spend a slot, acknowledge a
+    replan, evolve a research question or declare a Goal outcome. The caller
+    may complete its observation dependency only after this durable readback.
+    """
+    attachment = normalize_result_attachment(attachment)
+    if not isinstance(source_id, str) or not source_id or not isinstance(recorded_at, str) or not recorded_at:
+        raise ValueError("External observation requires stable source and observation-time identity")
+    if _evolves_question(attachment):
+        raise ValueError("External observation cannot decide question evolution")
+    _, graph, gate = _policy(registry_path, goal_id)
+    if not (graph or gate["enabled"]):
+        raise ValueError("External result observation requires enabled Explore evidence")
+    detail = list_goal_todos(registry_path=registry_path, runtime_root_arg=str(runtime_root),
+                            goal_id=goal_id, todo_id=todo_id)
+    todo = detail.get("todo")
+    if (not detail.get("matched") or detail.get("ambiguous") or not isinstance(todo, dict)
+            or todo.get("claimed_by") != agent_id or todo.get("task_class") != "advancement_task"
+            or todo.get("action_kind") != "observe" or todo.get("status") not in {"open", "done"}):
+        raise ValueError("External result must belong to the caller's finite observation Todo")
+    expected = _events(attachment, goal_id=goal_id, agent_id=agent_id,
+                       source_id=source_id, recorded_at=recorded_at)
+    path = explore_result_log_path(runtime_root, goal_id)
+    existing = load_explore_result_events_strict(path, goal_id=goal_id)
+    projection = build_explore_result_projection(existing, goal_id=goal_id)
+    for node in projection.get("nodes", []):
+        if node.get("node_id") == attachment["node_id"] and any(
+            node.get(key) != expected[0].get(key) for key in ("node_kind", "title", "summary")
+        ):
+            raise ValueError("External observation question conflicts with existing scope")
+    if expected[1] not in existing or attachment["node_id"] not in (todo.get("explore_result_node_refs") or []):
+        if todo.get("status") != "open":
+            raise ValueError("An already completed observation cannot acquire new result evidence")
+        # Reject a stable source identity being reused for different facts.
+        collisions = [row for row in existing if row.get("event_kind") == "finding"
+                      and row.get("result_id") == expected[1]["result_id"]]
+        if collisions and expected[1] not in collisions:
+            raise ValueError("External result source identity changed")
+        proof = _link_arguments(registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, node_id=attachment["node_id"])
+        if not update_goal_todo(**proof, dry_run=True).get("ok"):
+            raise ValueError("External observation Todo link was not admitted")
+        append_explore_result_events(path, expected, expected_goal_id=goal_id,
+            create_only_node_ids=[attachment["node_id"]],
+            expected_event_ids=[row["event_id"] for row in existing])
+        # The normal mutation rechecks claim/lease after append. A concurrent
+        # change leaves a replayable fact, never a falsely released dependency.
+        linked = update_goal_todo(**proof, dry_run=False)
+        if not linked.get("ok"):
+            raise ValueError("External observation Todo link is incomplete")
+    stored = load_explore_result_events_strict(path, goal_id=goal_id)
+    current = list_goal_todos(registry_path=registry_path, runtime_root_arg=str(runtime_root),
+        goal_id=goal_id, todo_id=todo_id).get("todo")
+    if (expected[1] not in stored or not isinstance(current, dict)
+            or attachment["node_id"] not in (current.get("explore_result_node_refs") or [])):
+        raise ValueError("External observation readback is incomplete")
+    return {"ok": True, "finding_id": expected[1]["result_id"], "node_id": attachment["node_id"]}
 
 
 def deliver_result_attachment(

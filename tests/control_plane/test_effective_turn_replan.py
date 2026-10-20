@@ -559,6 +559,31 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
          "--replan-obligation-id", next_obligation["obligation_id"], "--turn-instance-id", "stride-next-review",
          "--slots", "1", "--source", "heartbeat", "--execute")
+    # An unbound observation may name the declared work without claiming a Turn
+    # settlement. The public CLI rejects surface-only Turn settlement, but this
+    # ordinary status route must not consume the cited negative result either.
+    status_update = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--progress-work-item-id", next_successor["todo_id"], "--progress-result-class", "unchanged",
+        "--classification", "status_readback",
+        "--delivery-batch-scale", "single_surface", "--delivery-outcome", "surface_only",
+        "--recommended-action", "The next probe remains planned; no new experiment has run.",
+        "--vision-summary", "The accepted source comparison is still pending; this is a status clarification only.",
+        "--no-global-sync", "--suppress-external-sinks")
+    status_run = json.loads(Path(status_update["json_path"]).read_text())
+    assert status_run["delivery_outcome"] == "surface_only"
+    assert status_run["agent_vision"], "the ordinary source must enter the causal history replay"
+    from loopx.control_plane.work_items.replan_context_codec import project_replan_context
+    from loopx.history import load_index_snapshot
+
+    context = project_replan_context(goal_id=GOAL_ID, agent_id=AGENT_ID,
+        runs=load_index_snapshot(runtime / "goals" / GOAL_ID / "runs/index.jsonl",
+                                 include_artifact_status=False).records,
+        history_newest_first=False, stride_strategy="evidence_conditioned_v1")
+    assert any(row["coverage_ref"] == status_run["progress_observation"]["fingerprint"]
+               for row in context["decision_followthrough"]["observations"])
+    pending = context["decision_followthrough"]["work_result_use"]
+    assert any(row["evidence_ref"] == ordinary_ref for row in pending["unresolved"])
+    assert not any(row["result_evidence_ref"] == ordinary_ref for row in pending["recorded_followthrough"])
     for index in range(2):
         turn = f"adopted-probe-{index}"
         guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,

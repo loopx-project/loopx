@@ -21,6 +21,10 @@ from ..todos.resume_planning import build_todo_resume_planning_request
 
 REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS = {
     "quota_slot_spent", "quota_slot_voided", "delivery_completion_spend_accounted_v0",
+    # A rejected/no-change review is an observation, not new work that can
+    # trigger or expire another review. Reuse these canonical writeback values
+    # for history projection, retained ACK windows and lane selection alike.
+    "replan_noop", "repair_noop",
 }
 
 

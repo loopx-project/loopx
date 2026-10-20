@@ -2,12 +2,15 @@
  * Event kinds/statuses/relationships remain owned by Explore result_log.py.
  * Local display grouping must not turn parentage or time into supporting evidence.
  */
+import {normalizeExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
+import type {JsonObject} from "../runtime_decode.ts";
 export type ExploreHistoryEvent = {
   schema_version: string; event_id: string; goal_id: string; event_kind: string;
   result_id: string; recorded_at: string; title: string; summary: string;
   status: string; node_kind: string; blocked_reason: string; parent_id: string;
   node_id: string; from_node: string; to_node: string; edge_type: string;
   agent_id: string; run_id: string; evidence_refs: string[]; supersedes: string; confidence: number | null;
+  execution_observation?: JsonObject;
 };
 export type ExploreHistoryPage = {goal_id: string; items: ExploreHistoryEvent[]; total: number; next_cursor: string | null};
 export type ExploreHistoryNode = {id: string; latest: ExploreHistoryEvent; updates: ExploreHistoryEvent[]; findings: ExploreHistoryEvent[]; revisions: ExploreHistoryEvent[]};
@@ -58,6 +61,9 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
       ...Object.fromEntries(fields.map(key => [key, raw[key] ?? ""])),
       evidence_refs: [...(raw.evidence_refs as string[] | undefined ?? [])],
       confidence: typeof raw.confidence === "number" ? raw.confidence : null,
+      ...(raw.execution_observation === undefined ? {} : {
+        execution_observation: normalizeExploreExecutionObservation({observation: raw.execution_observation}),
+      }),
     } as ExploreHistoryEvent;
   });
   return {goal_id: goalId, items, total: page.total as number, next_cursor: page.next_cursor as string | null};

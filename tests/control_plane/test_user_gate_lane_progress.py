@@ -167,6 +167,7 @@ def test_unrelated_user_gate_allows_ready_deferred_successor_replan() -> None:
     assert selected["fallback_kind"] == "deferred_successor_replan"
     assert payload["decision"] == "successor_replan_required"
     assert payload["effective_action"] == "successor_replan_required"
+    assert payload["should_run"] is True
     assert payload["selected_todo"]["todo_id"] == "todo_ready_deferred"
     assert payload["interaction_contract"]["mode"] == "scoped_user_gate_fallback"
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is True
@@ -296,6 +297,8 @@ def test_blocking_user_gate_backs_off_instead_of_polling_as_active_work() -> Non
     )
 
     assert "scoped_user_gate_fallback" not in payload
+    assert payload["should_run"] is False
+    assert payload["effective_action"] == "operator_gate_notify"
     assert payload["interaction_contract"]["mode"] == "user_gate"
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is False
     expected_response_plan = {

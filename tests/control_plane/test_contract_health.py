@@ -15,11 +15,64 @@ from loopx.control_plane.quota.decision_summary import goal_status_health_ok
 from loopx.control_plane.quota.should_run import (
     _apply_missing_state_health_guidance,
 )
+from loopx.control_plane.status.registry_health_projection import collect_global_registry_health
 from loopx.quota import build_quota_should_run
 
 
 GOAL_A = "goal-a"
 GOAL_A_LONG = "goal-a-long"
+
+
+@pytest.mark.parametrize("global_state", ["absent", "unreadable", "empty", "mirrored"])
+def test_local_declared_missing_state_is_health_fact_without_global_membership(
+    tmp_path: Path, global_state: str,
+) -> None:
+    registry = tmp_path / "registry.json"
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    global_path = runtime / "registry.global.json"
+    payload = {"goals": [{"id": GOAL_A, "state_file": "missing.md"}]}
+    registry.write_text(json.dumps(payload))
+    if global_state == "unreadable":
+        global_path.write_text("{broken")
+    elif global_state == "empty":
+        global_path.write_text(json.dumps({"goals": []}))
+    elif global_state == "mirrored":
+        global_path.write_text(json.dumps({"goals": [{
+            "id": GOAL_A, "state_file": str(tmp_path / "missing.md"),
+            "source_registry": str(tmp_path / "missing-source.json"),
+        }]}))
+    health = collect_global_registry_health(
+        registry_path=registry, runtime_root=runtime, current_registry=payload,
+    )
+    missing = [finding for finding in health["findings"] if finding["kind"] == "state_file_missing"]
+    assert len(missing) == 1
+    assert missing[0]["path"] == str(tmp_path / "missing.md")
+    assert health["available"] is (global_state in {"empty", "mirrored"})
+    assert goal_status_health_ok({"global_registry": health}, goal_id=GOAL_A, fallback=True) is False
+    assert goal_status_health_ok({"global_registry": health}, goal_id=GOAL_A_LONG, fallback=True) is True
+    if global_state == "unreadable":
+        assert health["ok"] is False
+        assert any(finding["kind"] == "global_registry_unreadable" for finding in health["findings"])
+    if global_state == "mirrored":
+        assert "retire-global-goal" in missing[0]["recommended_action"]
+        assert any(finding["kind"] == "source_registry_missing" for finding in health["findings"])
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_initial_state_setup_does_not_invent_local_missing_state(
+    tmp_path: Path, declared: bool,
+) -> None:
+    state = tmp_path / "state.md"
+    state.write_text("# Initial Goal state\n")
+    payload = {"goals": [{"id": GOAL_A, **({"state_file": state.name} if declared else {})}]}
+    health = collect_global_registry_health(
+        registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+        current_registry=payload,
+    )
+    assert health["available"] is False and health["read_status"] == "missing"
+    assert health["findings"] == []
+    assert goal_status_health_ok({"global_registry": health}, goal_id=GOAL_A, fallback=True) is True
 
 
 def _write_state(path: Path, *, malformed_user_todo: bool) -> None:

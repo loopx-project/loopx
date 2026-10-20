@@ -75,9 +75,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const outcomeCopy: Record<string, string> = zh ? {replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定"} : {replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human"};
   const findingBody = (finding: ExploreHistoryEvent) => {
     const sections = parseExploreFindingSections(finding.summary);
-    if (!sections) return <p>{finding.summary}</p>;
-    const decision = sections.decision;
-    return <dl className="research-finding-sections">
+    const decision = sections?.decision;
+    const execution = finding.execution_observation;
+    const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
+    return <>{sections ? <dl className="research-finding-sections">
       <dt>{sectionCopy.observation}</dt><dd>{sections.observation}</dd>
       {decision ? <>
         <dt>{zh ? "决策" : "Decision"}</dt><dd><b className={`research-outcome is-${decision.outcome}`}>{outcomeCopy[decision.outcome] ?? decision.outcome}</b></dd>
@@ -85,7 +86,17 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       </> : <><dt>{sectionCopy.interpretation}</dt><dd>{sections.interpretation}</dd></>}
       <dt>{sectionCopy.applicability}</dt><dd className="is-muted">{sections.applicability}</dd>
       <dt>{sectionCopy.inputRevision}</dt><dd><code>{sections.inputRevision}</code></dd>
-    </dl>;
+    </dl> : <p>{finding.summary}</p>}{execution ? <details><summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</summary>
+      <dl className="research-finding-sections">
+        <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
+        {execution.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(execution.change_reason)}</dd></> : null}
+        <dt>{zh ? "运行秒数 / 上限秒数" : "Elapsed / limit seconds"}</dt><dd>{measured(execution.elapsed_seconds)} / {measured(execution.limit_seconds)}</dd>
+        <dt>{zh ? "搜索次数" : "Search iterations"}</dt><dd>{measured(execution.search_iterations)}</dd>
+        <dt>{zh ? "结束原因" : "Termination reason"}</dt><dd>{measured(execution.stop_reason)}</dd>
+        <dt>{zh ? "执行候选 SHA-256" : "Executed candidate SHA-256"}</dt><dd><code>{String(execution.candidate_sha256)}</code></dd>
+        {execution.result_ref ? <><dt>{zh ? "该候选的结果引用" : "Result for this candidate"}</dt><dd><code>{String(execution.result_ref)}</code></dd></> : null}
+      </dl><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p>
+    </details> : null}</>;
   };
   const findingElement = (finding: ExploreHistoryEvent) => <div className="research-recorded-finding" key={finding.event_id}><strong>{finding.title}</strong><small>{timeLabel(finding.recorded_at)} · {zh ? "来源标记" : "Source label"} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>{findingBody(finding)}{finding.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}</div>;
   const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{stateLabel(event.status)} · {event.title}{event.summary ? ` — ${event.summary}` : ""}</span>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;

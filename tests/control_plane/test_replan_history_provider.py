@@ -75,24 +75,28 @@ def test_explicit_completed_todo_fallback_retains_twenty_record_threshold(
         return result
 
     def obligation():
-        status = call("status", "--limit", "30", "--scan-path", str(paths["project"]))
+        status = call("status", "--agent-id", "agent-a", "--limit", "30",
+                      "--scan-path", str(paths["project"]))
         return next((obligation for row in status["attention_queue"]["items"]
                      if row["goal_id"] == GOAL_ID
                      if (obligation := row.get("autonomous_replan_obligations_by_agent", {})
                          .get("agent-a")) is not None), None)
 
-    def history(count, *, retry=False, peer=False):
+    def history(count, *, retry=False, peer=False, classification="bounded_iteration"):
         index.write_text("".join(json.dumps({
             "goal_id": GOAL_ID, "agent_id": "agent-b" if peer else "agent-a",
             "generated_at": f"2026-09-01T03:{n:02d}:00Z",
             "turn_instance_id": "one-retried-turn" if retry else f"turn-{n}",
-            "classification": "bounded_iteration", "delivery_outcome": "outcome_progress",
+            "classification": classification, "delivery_outcome": "outcome_progress",
         }) + "\n" for n in range(count)))
 
     history(20)
     assert obligation() is None, "unsettled history is not effective-Turn evidence"
     call("configure-goal", "--goal-id", GOAL_ID,
          "--execution-replan-after-todos", "5", "--execute")
+    for classification in ("replan_noop", "repair_noop"):
+        history(20, classification=classification)
+        assert obligation() is None, "unsuccessful reviews cannot create another periodic review"
     history(19)
     assert obligation() is None
     history(20, retry=True)
@@ -100,10 +104,24 @@ def test_explicit_completed_todo_fallback_retains_twenty_record_threshold(
     history(20, peer=True)
     assert obligation() is None, "a peer cannot trigger the current Agent's review"
     history(20)
-    trigger = obligation()["triggers"][0]
+    original = obligation()
+    trigger = original["triggers"][0]
     assert trigger["kind"] == "periodic_review_due"
     assert trigger["run_count"] == trigger["threshold"] == 20
     assert trigger["agent_id"] == "agent-a"
+    with index.open("a") as stream:
+        for n in range(200):
+            stream.write(json.dumps({
+                "goal_id": GOAL_ID, "agent_id": "agent-a",
+                "generated_at": f"2026-09-01T04:{n // 60:02d}:{n % 60:02d}Z",
+                "turn_instance_id": f"renamed-review-{n}",
+                "classification": "replan_noop" if n % 2 else "repair_noop",
+                "health_check": f"No new decision; revised description {n}.",
+                "delivery_outcome": "outcome_gap",
+            }) + "\n")
+    repeated = obligation()
+    assert repeated["obligation_id"] == original["obligation_id"]
+    assert repeated["triggers"] == original["triggers"]
     call("configure-goal", "--goal-id", GOAL_ID,
          "--clear-execution-replan-after-todos", "--execute")
     assert obligation() is None

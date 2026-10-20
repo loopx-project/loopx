@@ -284,9 +284,7 @@ def qualify_replan_writeback(
         effective_turn_cadence=effective_turn_cadence,
     )
     status_payload = {
-        **(dict(replan_source_route or {})
-           if ((registry_goal or {}).get("execution_profile") or {}).get("stride_strategy", "off") != "off"
-           else {}),
+        **dict(replan_source_route or {}),
         "run_history": {
             "goals": [
                 {
