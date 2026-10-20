@@ -120,6 +120,11 @@ that the evaluated snapshot matches the selected candidate and input revision.
 Attach the emitted `execution_observation` through normal Explore result
 writeback. Its input revision and evidence refs must belong to the enclosing
 finding; released results must identify the candidate actually evaluated.
+Finding refs, observation `evidence_refs` and `result_ref` share the existing
+Explore reference syntax, so an existing `validation:run/1` can be retained.
+Method ids keep their separate identifier rule. Producer selection leaves
+[the Goal's Explore mode](../../loopx/capabilities/explore/README.md#explore-harness-modes)
+unchanged; enable ordinary evidence writeback through that existing setting.
 Different planned/executed method ids require a change reason. Findings,
 replan and research-history details retain this same source. They do not
 certify method benefit or Goal completion. Missing observations preserve old
@@ -184,7 +189,11 @@ Core Goal 合同或证明模型已经能够自主正确接续。旧 `research_lo
 快照、候选和输入版本，计划/实际方法不同须记录理由。
 
 同一可选观测通过既有 Explore 写回、replan 和研究历程保留；输入版本与引用
-必须属于该 finding，不认证方法收益或 Goal 完成。旧事件缺失观测仍可读，
+必须属于该 finding，不认证方法收益或 Goal 完成。finding 引用与观测的
+`evidence_refs`、`result_ref` 共用既有 Explore 引用语法，可直接保留
+`validation:run/1` 这类原引用；方法 ID 仍使用独立规则。选择 producer 不改变
+Goal 的 Explore 模式；需要写回时，仍通过[既有设置](../../loopx/capabilities/explore/README.md#explore-harness-modes)
+开启普通证据能力。旧事件缺失观测仍可读，
 新事件需要支持该可选字段的 reader。`surface_only` 和未知历史 delivery
 不能消费实质结果或创建未解决实验；有用负结果和真实阻塞继续可作为证据。
 
