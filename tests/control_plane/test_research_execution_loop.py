@@ -332,7 +332,7 @@ def test_ordinary_entry_observes_an_existing_candidate_with_stride_off_and_prese
     output = project / "ordinary-observation.json"
     observed = run_probe(command=[sys.executable, str(candidate)], candidate_files=[candidate],
         output=output, input_revision="synthetic-input-v1", planned_method_id="supplied-candidate",
-        executed_method_id="supplied-candidate", evidence_ref="probe:ordinary", limit_seconds=30)
+        executed_method_id="supplied-candidate", evidence_ref="probe:ordinary/1", limit_seconds=30)
     assert observed["search_iterations"] is None and observed["exit_code"] == 0
     assert output.with_suffix(".json.stdout").read_text().strip() == "5"
     attachment = {"schema_version": "explore_result_attachment_v0", "question": "Does the supplied candidate satisfy this bounded check?",

@@ -5,6 +5,7 @@ import type {JsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
 
 export function normalizeExploreExecutionObservation(params: JsonObject): JsonObject {
   const row = requireJsonObject(params.observation, "execution observation");
@@ -25,6 +26,13 @@ export function normalizeExploreExecutionObservation(params: JsonObject): JsonOb
   const id = (value: unknown, field: string): string => {
     const result = text(value, field, 128);
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(result)) {
+      throw new EffectRuntimeRequestError(`${field} requires an opaque identifier`);
+    }
+    return result;
+  };
+  const evidenceRef = (value: unknown, field: string): string => {
+    const result = text(value, field, 128);
+    if (!isExploreEvidenceRef(result)) {
       throw new EffectRuntimeRequestError(`${field} requires an opaque identifier`);
     }
     return result;
@@ -59,7 +67,7 @@ export function normalizeExploreExecutionObservation(params: JsonObject): JsonOb
     limit_seconds: measured(row.limit_seconds, "limit_seconds", false, true),
     search_iterations: measured(row.search_iterations, "search_iterations", true),
     stop_reason: row.stop_reason === null ? null : text(row.stop_reason, "stop_reason", 160),
-    evidence_refs: [...new Set(row.evidence_refs.map(ref => id(ref, "execution evidence_ref")))].sort()};
+    evidence_refs: [...new Set(row.evidence_refs.map(ref => evidenceRef(ref, "execution evidence_ref")))].sort()};
   if (Object.hasOwn(row, "exit_code")) {
     if (row.exit_code !== null && (typeof row.exit_code !== "number" || !Number.isSafeInteger(row.exit_code))) {
       throw new EffectRuntimeRequestError("exit_code requires an integer process status or null");
@@ -67,7 +75,7 @@ export function normalizeExploreExecutionObservation(params: JsonObject): JsonOb
     result.exit_code = row.exit_code;
   }
   if (Object.hasOwn(row, "result_ref") || Object.hasOwn(row, "result_candidate_sha256")) {
-    result.result_ref = id(row.result_ref, "result_ref");
+    result.result_ref = evidenceRef(row.result_ref, "result_ref");
     result.result_candidate_sha256 = sha(row.result_candidate_sha256);
     if (result.result_candidate_sha256 !== result.candidate_sha256
       || !(result.evidence_refs as string[]).includes(String(result.result_ref))) {

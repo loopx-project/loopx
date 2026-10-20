@@ -5,6 +5,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
+import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
 
 export const EXPLORE_RESULT_ATTACHMENT_SCHEMA = "explore_result_attachment_v0";
 export const EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA = "explore_result_from_path_delta_v0";
@@ -150,7 +151,7 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
   }
   const refs = row.evidence_refs.map(value => {
     const ref = text(value, "evidence_ref", 128);
-    if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(ref)) {
+    if (!isExploreEvidenceRef(ref)) {
       throw new EffectRuntimeRequestError("evidence_ref must be an opaque identifier, not file content");
     }
     return ref;

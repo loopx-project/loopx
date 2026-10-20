@@ -36,6 +36,43 @@ test("execution observations bind resources and changed methods without implying
   assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: result}}).execution_observation, result);
 });
 
+test("execution observations reuse the finding's existing evidence references", () => {
+  const refs = ["validation:run/1", "result:released/1"];
+  const ordinary = {...attachment, evidence_refs: refs};
+  const observed = {...execution, evidence_refs: refs, result_ref: refs[1],
+    result_candidate_sha256: execution.candidate_sha256};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: ordinary}), ordinary);
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...ordinary, execution_observation: observed}}),
+    {...ordinary, execution_observation: {...observed, evidence_refs: [...refs].sort()}});
+});
+
+test("execution reference compatibility preserves attribution, text bounds and method identifiers", () => {
+  const refs = ["validation:run/1", "result:released/1"];
+  const ordinary = {...attachment, evidence_refs: refs};
+  const observed = {...execution, evidence_refs: refs};
+  const normalize = (mutation: Record<string, unknown>) => normalizeExploreResultAttachment({
+    attachment: {...ordinary, execution_observation: {...observed, ...mutation}}});
+  assert.throws(() => normalize({evidence_refs: ["validation:foreign/1"]}), /finding's input revision and evidence references/);
+  for (const mutation of [
+    {result_ref: "result:foreign/1", result_candidate_sha256: execution.candidate_sha256},
+    {result_ref: refs[1], result_candidate_sha256: "b".repeat(64)},
+  ]) assert.throws(() => normalize(mutation), /this executed candidate and an included evidence reference/);
+  for (const field of ["planned_method_id", "executed_method_id"]) {
+    assert.throws(() => normalize({[field]: "method/implementation"}), /opaque identifier/);
+  }
+  for (const invalid of ["validation:run/1\t", "v".repeat(129)]) {
+    assert.throws(() => normalize({evidence_refs: [invalid]}), /bounded single-line text/);
+    assert.throws(() => normalize({result_ref: invalid,
+      result_candidate_sha256: execution.candidate_sha256}), /bounded single-line text/);
+  }
+  assert.throws(() => normalize({evidence_refs: ["/absolute/probe"]}), /opaque identifier/);
+  const bounded = "v".repeat(128);
+  const maximum = {...execution, evidence_refs: [bounded], result_ref: bounded,
+    result_candidate_sha256: execution.candidate_sha256};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment,
+    evidence_refs: [bounded], execution_observation: maximum}}).execution_observation, maximum);
+});
+
 test("question lifecycle is explicit, independent of finding status, and available on path capture", () => {
   const update = {status: "resolved"};
   const relations = [{to_node: "uniform-estimate", edge_type: "depends_on", summary: "Required before transfer."}];
