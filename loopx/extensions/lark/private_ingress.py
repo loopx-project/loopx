@@ -252,7 +252,12 @@ class PrivateIngressObserver:
         # Re-read journals before declaring a gap, not the earlier snapshot.
         captured = set()
         for row in self._records():
-            if row.get("binding_id") == binding["binding_id"] and row.get("profile") == profile:
+            # A prior context binding can have captured this same provider
+            # source. Receipt existence is not current execution authority.
+            original = row["event"]
+            if (row.get("profile") == profile and row.get("source") == carrier["source"]
+                    and original.get("chat_type") == "p2p"
+                    and original.get("chat_id") == chat and original.get("sender_id") == owner):
                 captured.add(row["event"]["message_id"])
         gaps = {ref: dict(gap) for ref, gap in state.get("gaps", {}).items() if ref not in captured}
         prior_gaps = set(gaps)

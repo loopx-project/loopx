@@ -371,7 +371,7 @@ def test_fresh_grant_change_retains_same_source_coverage_without_replaying(sourc
     assert health["status"] == "gap" and health["last_complete_at"] == 1155.0
 
 
-@pytest.mark.parametrize("scenario", ["missing", "long_outage", "concurrent_observers", "historical"])
+@pytest.mark.parametrize("scenario", ["missing", "long_outage", "concurrent_observers", "historical", "historical_legacy"])
 def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary, monkeypatch, scenario):  # noqa: F811
     import http.client
     import time
@@ -394,6 +394,18 @@ def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary,
     missed = provider.event("notes-app", "missed", "Synthetic missed original")
     later = provider.event("notes-app", "later", "Synthetic live original")
     sources = []
+    if scenario == "historical_legacy":
+        # A real capture from an older conversation binding remains a capture
+        # of this exact App/owner source; it grants no current work permission.
+        path = next(p for p in transport.root.glob("*.json")
+                    if json.loads(p.read_text())["event"]["message_id"] == event["message_id"])
+        captured = json.loads(path.read_text())
+        captured["binding_id"] = "former-context-binding"
+        path.write_text(json.dumps(captured))
+        carrier = provider.event("notes-app", "current-carrier", "Synthetic current carrier")
+        assert transport.admit("notes-app", carrier)["status"] == "durably_accepted"
+        finish_group_turn(runtime, transport, message=carrier["content"])
+        sources.append((now - 4 * 86400, event))
 
     def history(args, cwd=None, timeout=None):
         if "+chat-messages-list" not in args:
@@ -457,7 +469,7 @@ def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary,
         assert not first.is_alive() and not second.is_alive() and errors == []
         clock[0] += 180
         transport.ingress.observe()  # The skipped observer catches up from A's cursor.
-    elif scenario == "historical":
+    elif scenario in {"historical", "historical_legacy"}:
         sources.append((now - 3 * 86400, missed))
         # This source predates the first live observation. It must be visible,
         # without reconnecting the live worker or acquiring execution authority.
@@ -573,3 +585,27 @@ def test_incomplete_historical_reads_preserve_the_committed_cursor_and_gaps(sour
     assert current["history"] == prior["history"] and current["gaps"] == prior["gaps"]
     assert current["last_complete_at"] == prior["last_complete_at"]
     assert current["status"] == "unavailable" and "private history error" not in json.dumps(current)
+
+
+@pytest.mark.parametrize("variant", ["same_source", "foreign_source", "foreign_chat", "foreign_owner", "foreign_profile", "group"])
+def test_older_binding_capture_requires_the_same_provider_owner_source(source_monitor, variant):
+    f = source_monitor
+    old = {**f.carrier, "binding_id": "older-binding", "status": "delivered",
+           "event": {**f.carrier["event"], "message_id": "om_missed"}}
+    if variant == "foreign_source":
+        old["source"] = {"source_ref": "different-app-source"}
+    elif variant == "foreign_chat":
+        old["event"]["chat_id"] = "oc_elsewhere"
+    elif variant == "foreign_owner":
+        old["event"]["sender_id"] = "ou_elsewhere"
+    elif variant == "foreign_profile":
+        old["profile"] = "different-app"
+    elif variant == "group":
+        old["event"]["chat_type"] = "group"
+    path = f.root / "older.json"
+    path.write_text(json.dumps(old))
+    before = path.read_bytes()
+    f.pages[0]["data"]["messages"] = [owner_source()]
+    assert f.monitor.observe() == ([] if variant == "same_source" else ["owner-app"])
+    assert f.monitor.health(f.binding["binding_id"])["source_gap_count"] == (0 if variant == "same_source" else 1)
+    assert path.read_bytes() == before
