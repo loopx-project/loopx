@@ -227,7 +227,8 @@ class PrivateIngressObserver:
         for _ in range(5 if not history["complete"] else 0):
             if cancelled():
                 raise OSError("source observation stopped")
-            page, more, token = self._page(profile, chat, history["end"], token=history["page_token"])
+            history_token = history["page_token"]
+            page, more, token = self._page(profile, chat, history["end"], token=history_token)
             messages.extend(page)
             if not more:
                 history.update(page_token=None, complete=True)
