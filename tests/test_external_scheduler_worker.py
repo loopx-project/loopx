@@ -670,6 +670,257 @@ def test_guarded_cli_restart_keeps_hard_failure_and_public_safe_liveness(tmp_pat
     assert "PRIVATE-SENTINEL" not in first.stdout + second.stdout + Path(args.state_file).read_text()
 
 
+@pytest.mark.parametrize("corrupt", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("terminal", [False, True])
+def test_cli_guard_state_switch_matrix(tmp_path, corrupt, enabled, terminal):
+    args, count = _guarded_host(tmp_path)
+    cli = Path(args.cli_bin)
+    payload = json.dumps(_hint_payload(should_run=True))
+    _write_executable(cli, f"#!{sys.executable}\nprint({payload!r})\n")
+    command = [sys.executable, str(SCRIPTS / "external_scheduler_worker.py"),
+               "--cli-bin", args.cli_bin, "--registry", args.registry,
+               "--goal-id", args.goal_id, "--agent-id", args.agent_id,
+               "--state-file", args.state_file, "--wake-cmd", args.wake_cmd, "--once"]
+    first = subprocess.run([*command, "--wake-host-failure"], capture_output=True,
+                           text=True, timeout=15)
+    assert first.returncode == 1 and count.read_text() == "1", first.stderr
+    if corrupt:
+        Path(args.state_file).write_text("broken-state")
+    if terminal:
+        payload = json.dumps(_hint_payload(should_run=False, local_scheduler_directive="stop"))
+        _write_executable(cli, f"#!{sys.executable}\nprint({payload!r})\n")
+    second = subprocess.run([*command, *(["--wake-host-failure"] if enabled else [])],
+                            capture_output=True, text=True, timeout=15)
+    assert count.read_text() == "1", second.stdout + second.stderr
+    assert second.returncode == (0 if terminal else 2), second.stderr
+    assert ("status=terminal" if terminal else "host_failure_hold") in second.stdout
+    if corrupt:
+        assert Path(args.state_file).read_text() == "broken-state"
+    assert "PRIVATE-SENTINEL" not in first.stdout + second.stdout
+
+
+@pytest.mark.parametrize("state_text", [None, "{}", "broken-state"])
+@pytest.mark.parametrize("ordinary_lock", [False, True])
+def test_never_guarded_cli_retains_ordinary_command_behavior(tmp_path, state_text, ordinary_lock):
+    count = tmp_path / "ordinary-calls"
+    cli = tmp_path / "quota"
+    payload = json.dumps(_hint_payload(should_run=True))
+    _write_executable(cli, f"#!{sys.executable}\nprint({payload!r})\n")
+    state = tmp_path / "state.json"
+    if state_text is not None:
+        state.write_text(state_text)
+    if ordinary_lock:
+        from loopx.file_lock import try_exclusive_file_lock
+        with try_exclusive_file_lock(state, operation="ordinary_fixture") as held:
+            assert held is not None
+    wake = shlex.join([sys.executable, "-c",
+                       f"from pathlib import Path; Path({str(count)!r}).write_text('called'); print('opaque success')"])
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPTS / "external_scheduler_worker.py"),
+         "--cli-bin", str(cli), "--registry", str(tmp_path / "registry"),
+         "--goal-id", "goal", "--agent-id", "agent", "--state-file", str(state),
+         "--wake-cmd", wake, "--once"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert completed.returncode == 0 and count.read_text() == "called", completed.stderr
+    assert "host_failure_hold" not in completed.stdout
+
+
+@pytest.mark.parametrize("replacement", [None, "broken-state"])
+def test_legacy_guarded_hold_cannot_downgrade_without_new_witness(tmp_path, monkeypatch, replacement):
+    args, count = _guarded_host(tmp_path)
+    args.once = True
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    assert worker.run_worker(args) == 1
+    # The predecessor retained only its primary state and original lock record.
+    Path(args.state_file + ".host-attempt").unlink()
+    state = Path(args.state_file)
+    if replacement is None:
+        state.unlink()
+    else:
+        state.write_text(replacement)
+    args.wake_host_failure = False
+    assert worker.run_worker(args) == 2
+    assert count.read_text() == "1"
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(
+        should_run=False, local_scheduler_directive="stop"))
+    assert worker.run_worker(args) == 0
+    assert (state.read_text() if state.exists() else None) == replacement
+
+
+@pytest.mark.parametrize("replacement", [None, "{}", "[]"])
+def test_pending_host_survives_missing_or_lost_primary_state(tmp_path, monkeypatch, replacement):
+    args, count = _guarded_host(tmp_path)
+    args.once = True
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    assert worker.run_worker(args) == 1
+    state = Path(args.state_file)
+    if replacement is None:
+        state.unlink()
+    else:
+        state.write_text(replacement)
+    args.wake_host_failure = False
+    assert worker.run_worker(args) == 2
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(
+        should_run=False, local_scheduler_directive="stop"))
+    assert worker.run_worker(args) == 0
+    assert count.read_text() == "1"
+    assert (state.read_text() if state.exists() else None) == replacement
+
+
+def test_pre_invocation_write_crash_is_held_after_disabling_adapter(tmp_path, monkeypatch):
+    args, count = _guarded_host(tmp_path)
+    state = Path(args.state_file)
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    save = worker._save_state
+    def interrupted(path, fields, **kwargs):
+        if path == state and fields.get("host_attempt", {}).get("status") == "started":
+            raise KeyboardInterrupt
+        return save(path, fields, **kwargs)
+    monkeypatch.setattr(worker, "_save_state", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        worker.run_worker(args)
+    monkeypatch.setattr(worker, "_save_state", save)
+    args.wake_host_failure = False
+    assert worker.run_worker(args) == 2
+    assert not count.exists()
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(
+        should_run=False, local_scheduler_directive="stop"))
+    assert worker.run_worker(args) == 0 and not count.exists()
+
+
+def test_interrupted_success_commit_cannot_replay_confirmed_host(tmp_path, monkeypatch):
+    args, count = _guarded_host(tmp_path, recover_at=1)
+    args.once = True
+    state = Path(args.state_file)
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    save = worker._save_state
+    def interrupted(path, fields, **kwargs):
+        if path != state and fields.get("pending") is False:
+            raise OSError("synthetic result commit failure")
+        return save(path, fields, **kwargs)
+    monkeypatch.setattr(worker, "_save_state", interrupted)
+    assert worker.run_worker(args) == 2
+    assert json.loads(state.read_text())["last_wake_status"] == "wake_ok"
+    monkeypatch.setattr(worker, "_save_state", save)
+    args.wake_host_failure = False
+    assert worker.run_worker(args) == 2
+    assert count.read_text() == "1"
+
+
+@pytest.mark.parametrize("witness", ["broken", "{}", "[]", '{"pending":"false"}'])
+def test_unreadable_pending_witness_cannot_authorize_transient_retry(tmp_path, monkeypatch, witness):
+    args, count = _guarded_host(tmp_path, kind="provider_capacity")
+    args.once = True
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    assert worker.run_worker(args, clock=lambda: 1000) == 1
+    Path(args.state_file + ".host-attempt").write_text(witness)
+    assert worker.run_worker(args, clock=lambda: 2000) == 2
+    assert count.read_text() == "1"
+
+
+def test_confirmed_success_allows_disabling_adapter_for_ordinary_command(tmp_path, monkeypatch):
+    args, count = _guarded_host(tmp_path, recover_at=1)
+    args.once = True
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    assert worker.run_worker(args) == 0
+    args.wake_host_failure = False
+    ordinary = tmp_path / "ordinary-invoked"
+    args.wake_cmd = shlex.join([sys.executable, "-c",
+        f"from pathlib import Path; Path({str(ordinary)!r}).touch(); print('opaque success')"])
+    assert worker.run_worker(args) == 0
+    assert ordinary.exists() and count.read_text() == "1"
+
+
+def test_worker_stop_readback_survives_unreadable_pending_witness(tmp_path, monkeypatch):
+    from loopx.extensions.process_runtime import CappedProcessResult
+    args, _ = _guarded_host(tmp_path)
+    args.wake_stop_exit_code = 75
+    calls = []
+    def stopped(*a, **kw):
+        calls.append(True)
+        return CappedProcessResult(75, b'{}', None)
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: _hint_payload(should_run=True))
+    monkeypatch.setattr(worker, "_run_wake", stopped)
+    assert worker.run_worker(args) == 0
+    Path(args.state_file + ".host-attempt").write_text("broken witness")
+    args.wake_host_failure = False
+    assert worker.run_worker(args) == 0
+    assert calls == [True]
+
+
+@pytest.mark.parametrize("state_text", [None, "{}"])
+def test_cli_flag_off_contender_cannot_dispatch_during_original_quota_read(tmp_path, state_text):
+    args, count = _guarded_host(tmp_path)
+    if state_text is not None:
+        Path(args.state_file).write_text(state_text)
+    ready, release = tmp_path / "ready", tmp_path / "release"
+    payload = json.dumps(_hint_payload(should_run=True))
+    _write_executable(Path(args.cli_bin), f"#!{sys.executable}\n" + f"""
+import os,pathlib,time
+if os.environ.get('FIXTURE_FIRST') == '1':
+    pathlib.Path({str(ready)!r}).touch()
+    while not pathlib.Path({str(release)!r}).exists():
+        time.sleep(.01)
+print({payload!r})
+""")
+    command = [sys.executable, str(SCRIPTS / "external_scheduler_worker.py"),
+               "--cli-bin", args.cli_bin, "--registry", args.registry,
+               "--goal-id", args.goal_id, "--agent-id", args.agent_id,
+               "--state-file", args.state_file, "--wake-cmd", args.wake_cmd, "--once"]
+    first = subprocess.Popen([*command, "--wake-host-failure"], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True,
+                             env={**os.environ, "FIXTURE_FIRST": "1"})
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists() and first.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert ready.exists()
+        second = subprocess.run(command, capture_output=True, text=True, timeout=15)
+        assert second.returncode == 2 and "worker_already_running" in second.stdout
+        assert not count.exists()
+    finally:
+        release.touch()
+        stdout, stderr = first.communicate(timeout=15)
+    assert first.returncode == 1 and count.read_text() == "1", stdout + stderr
+
+
+def test_cli_flag_off_contender_cannot_bypass_inflight_guard_lock(tmp_path):
+    args, count = _guarded_host(tmp_path)
+    ready, release = tmp_path / "ready", tmp_path / "release"
+    host = tmp_path / "host.py"
+    source = host.read_text().replace(
+        "counter.write_text(str(n))",
+        "counter.write_text(str(n))\n"
+        f"pathlib.Path({str(ready)!r}).touch()\n"
+        f"while not pathlib.Path({str(release)!r}).exists():\n"
+        "    __import__('time').sleep(.01)",
+    )
+    host.write_text(source)
+    payload = json.dumps(_hint_payload(should_run=True))
+    _write_executable(Path(args.cli_bin), f"#!{sys.executable}\nprint({payload!r})\n")
+    command = [sys.executable, str(SCRIPTS / "external_scheduler_worker.py"),
+               "--cli-bin", args.cli_bin, "--registry", args.registry,
+               "--goal-id", args.goal_id, "--agent-id", args.agent_id,
+               "--state-file", args.state_file, "--wake-cmd", args.wake_cmd, "--once"]
+    first = subprocess.Popen([*command, "--wake-host-failure"], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists() and first.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert ready.exists()
+        Path(args.state_file).write_text("broken-state")
+        second = subprocess.run(command, capture_output=True, text=True, timeout=15)
+        assert second.returncode == 2 and "worker_already_running" in second.stdout
+        assert count.read_text() == "1"
+    finally:
+        release.touch()
+        stdout, stderr = first.communicate(timeout=15)
+    assert first.returncode == 1, stdout + stderr
+
+
 def test_explicit_host_stop_is_readable_on_restart_without_new_dispatch(tmp_path, monkeypatch, capsys):
     from loopx.extensions.process_runtime import CappedProcessResult
     args, _ = _guarded_host(tmp_path)

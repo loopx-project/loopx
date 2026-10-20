@@ -22,6 +22,23 @@ authentication and unknown failures require the original Host's recovery;
 restarting, changing a Todo/reset token or removing the opt-in flag does not
 erase that hold. A configuration mismatch also stays held. Core Stop still
 wins, without declaring that the original effect was settled.
+The same lock also protects a content-free `<state-file>.host-attempt` witness.
+It is marked pending before the main started record and Host invocation, and
+resolved only after confirmed success is committed to the main state. A pending
+or unreadable witness keeps the guarded route even when the main JSON is damaged
+or missing and the flag is removed. Conflicting or interrupted writes hold
+without another Host call; Core Stop remains readable and preserves the evidence.
+Retain both files during recovery, upgrade and rollback. This is local process
+evidence, not a new Core state owner or a generic unlock. Once success is confirmed,
+disabling the flag retains ordinary command behavior; never-guarded paths are
+unchanged, including their existing treatment of damaged backoff state.
+For a predecessor without the witness, the matching Host-adapter lock record
+also retains the guarded route when its primary state is unreadable or missing.
+An unrelated ordinary lock does not enable the adapter. This compatibility
+readback never treats PID liveness as permission to dispatch or bypass the lock.
+The retained adapter lock also fences its initial Core read before intent is
+written; after confirmed success, flag-off commands keep their ordinary result
+handling under that fence.
 An explicitly configured `--wake-stop-exit-code` also remains a worker stop
 after restart, without another dispatch or a Goal-completion claim. It cannot
 clear a prior failed/unknown attempt, which is checked before invoking the Host.
