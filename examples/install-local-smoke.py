@@ -446,6 +446,7 @@ def main() -> int:
                 "references/heartbeat-hosts.md",
                 "references/handoff-and-feedback.md",
                 "references/materials-explore-quality.md",
+                "references/outcome-refinement.md",
             },
         )
         compact_skill_text = " ".join(skill_documents["SKILL.md"].split())
