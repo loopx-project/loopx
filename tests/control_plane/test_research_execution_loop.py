@@ -12,7 +12,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from benchmark.runtime.research_loop import prepare_research_continuation
 from benchmark.runtime.research_probe import run_probe
 from canonical_authority_fixture import isolate_sqlite_runtime
 import test_quota_settlement_cli as fixture
@@ -110,7 +109,7 @@ def test_probe_cli_preserves_a_failed_candidate_exit_and_its_observation(tmp_pat
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_candidate_stage_leaves_research_work_and_execution_reaches_next_context(tmp_path, monkeypatch, provider):
+def test_requested_followup_uses_ordinary_todos_and_execution_reaches_next_replan(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = fixture._write_fixture(tmp_path)
     configuration = json.loads(registry.read_text())
@@ -125,18 +124,17 @@ def test_candidate_stage_leaves_research_work_and_execution_reaches_next_context
             "ok", "error", "error_code", "effective_action", "reason", "blocker", "autonomous_replan_obligation")})
         return result
 
-    async def cli(_environment, args, **_kwargs):
-        return call(*args)
-
     call("configure-goal", "--goal-id", fixture.GOAL_ID, "--execution-replan-after-turns", "2",
         "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
-    owner = SimpleNamespace(_seeded_todo_id=fixture.TODO_ID, _loopx=cli,
-        goal_id=fixture.GOAL_ID, agent_id=fixture.AGENT_ID, _task_document="TASK.md")
-    root = asyncio.run(prepare_research_continuation(owner, None, cwd=str(project)))
-    original = registry.read_bytes()
-    again = asyncio.run(prepare_research_continuation(owner, None, cwd=str(project)))
-    assert again["todo_id"] == root["todo_id"]
-    assert registry.read_bytes() == original
+    # The actor records requested work through ordinary Todo operations. The
+    # observation producer neither creates these stages nor imposes a strategy.
+    root = call("todo", "add", "--goal-id", fixture.GOAL_ID, "--role", "agent",
+        "--claimed-by", fixture.AGENT_ID, "--task-class", "advancement_task",
+        "--action-kind", "validate", "--status", "deferred",
+        "--resume-when", "todo_done:" + fixture.TODO_ID,
+        "--text", "Compare the requested local mechanism after validating the supplied candidate.")
+    call("todo", "update", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
+        "--todo-id", fixture.TODO_ID, "--successor-todo-id", root["todo_id"], "--execute")
     call("todo", "complete", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
          "--todo-id", fixture.TODO_ID)
     binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)

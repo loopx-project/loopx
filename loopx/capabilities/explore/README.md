@@ -10,7 +10,7 @@ are explicit nulls. Its refs and input revision must belong to the enclosing
 finding. Released `result_ref` requires a matching `result_candidate_sha256`.
 This records producer evidence, not verified execution or utility. Findings,
 replan context and the existing research-history detail retain it; omission
-preserves old events. See the [local probe producer](../../../benchmark/runtime/RESEARCH_LOOP.md).
+preserves old events. See the [local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md).
 
 ## At a Glance
 

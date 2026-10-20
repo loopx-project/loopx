@@ -17,17 +17,25 @@ import subprocess
 import time
 
 
-def resolve_execution_observation(producer, *, research_loop=False):
-    """Resolve a producer; the research preset already includes local_probe."""
+def resolve_execution_observation(producer):
+    """Select measurements without prescribing task structure or strategy."""
     if producer not in (None, "local_probe"):
         raise ValueError("execution_observation must be omitted or 'local_probe'")
-    if research_loop and producer is not None:
+    return producer
+
+
+def execution_observation_from_env(env: dict[str, str]):
+    if "LOOPX_RESEARCH_LOOP" in env:
         raise ValueError(
-            "research_loop already includes the local_probe producer; "
-            "omit execution_observation for the research preset, or omit research_loop "
-            "to choose task_entry and stride_strategy independently"
+            "LOOPX_RESEARCH_LOOP has been removed; remove it from the worker environment. "
+            "Use ordinary Goal/Todo planning and select LOOPX_EXECUTION_OBSERVATION=local_probe "
+            "only when needed."
         )
-    return "local_probe" if research_loop else producer
+    return resolve_execution_observation(env.get("LOOPX_EXECUTION_OBSERVATION"))
+
+
+def runtime_execution_guidance(env: dict[str, str]) -> str:
+    return execution_observation_guidance() if execution_observation_from_env(env) else ""
 
 
 def execution_observation_guidance() -> str:
