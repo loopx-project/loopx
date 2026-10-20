@@ -51,6 +51,18 @@ def _observation(path: Path) -> dict[str, Any]:
             raise ValueError("private source observation time is invalid")
     if (state.get("last_complete_at") or 0) > (state.get("last_checked_at") or 0):
         raise ValueError("private source observation window is invalid")
+    history = state.get("history")
+    if history is not None:
+        if (not isinstance(history, dict) or type(history.get("complete")) is not bool
+                or type(history.get("end")) not in (int, float) or not math.isfinite(history["end"])
+                or not isinstance(history.get("seen_tokens"), list)
+                or any(not isinstance(token, str) or not token for token in history["seen_tokens"])
+                or len(set(history["seen_tokens"])) != len(history["seen_tokens"])
+                or (history.get("page_token") is not None
+                    and (not isinstance(history["page_token"], str) or not history["page_token"]
+                         or history["page_token"] not in history["seen_tokens"]))
+                or (history["complete"] and history.get("page_token") is not None)):
+            raise ValueError("private historical source observation is invalid")
     return state
 
 
@@ -70,6 +82,8 @@ class PrivateIngressObserver:
             state = {"status": IngressObservationStatus.UNAVAILABLE.value}
         gaps = state.get("gaps", {})
         status = state.get("status", IngressObservationStatus.UNOBSERVED.value)
+        if status == IngressObservationStatus.VERIFIED.value and not state.get("history", {}).get("complete"):
+            status = IngressObservationStatus.UNAVAILABLE.value
         if state.get("last_checked_at") is not None and time.time() - state["last_checked_at"] > 180:
             status = IngressObservationStatus.UNAVAILABLE.value
         return {
@@ -136,6 +150,24 @@ class PrivateIngressObserver:
             raise ValueError("private capture read is incomplete")
         return records
 
+    def _page(self, profile: str, chat: str, end: float, *, start: float | None = None,
+              token: str | None = None) -> tuple[list[Mapping[str, Any]], bool, str | None]:
+        transport = self.transport
+        args = ["im", "+chat-messages-list", "--as", "bot", "--chat-id", chat,
+                "--end", _iso(end), "--order", "asc", "--page-size", "50", "--no-reactions", "--format", "json"]
+        if start is not None:
+            args += ["--start", _iso(start)]
+        if token:
+            args += ["--page-token", token]
+        result = call(lambda argv, cwd, _timeout: transport.runner(argv, cwd, 5),
+                      lark_args(cli_bin=transport.cli_bin, profile=profile, tail=args))
+        if result.get("returncode") != 0:
+            raise OSError("source history unavailable")
+        page, more, token = _provider_page(json_payload(result))
+        if any(row.get("chat_id") != chat for row in page):
+            raise ValueError("provider history destination changed")
+        return page, more, token
+
     def _observe(self, binding: dict[str, Any], records: list[dict[str, Any]],
                  state: dict[str, Any], cancelled: Callable[[], bool]) -> bool:
         transport = self.transport
@@ -163,9 +195,8 @@ class PrivateIngressObserver:
             raise ValueError("history observation binding changed")
         now = time.time()
         end = now - 5  # Leave live stream/admission a short race window.
-        # Only the first observation is capped to one day. With a cursor, resume
-        # exactly there and advance at most one day per pass, so a longer
-        # outage is covered in contiguous segments instead of being skipped.
+        # Keep the live edge responsive. A separate bounded read below covers
+        # earlier history; neither cursor grants historical execution authority.
         cursor = state.get("last_complete_at")
         start = (float(cursor) - 60) if cursor is not None else (now - 86400)
         window_end = min(end, start + 86400)
@@ -177,20 +208,7 @@ class PrivateIngressObserver:
         for _ in range(20):
             if cancelled():
                 raise OSError("source observation stopped")
-            args = ["im", "+chat-messages-list", "--as", "bot", "--chat-id", chat,
-                    "--start", _iso(start), "--end", _iso(window_end), "--order", "asc",
-                    "--page-size", "50", "--no-reactions", "--format", "json"]
-            if token:
-                args += ["--page-token", token]
-            # Background readonly IO has a short budget. Keep the established
-            # transport error envelope without shortening effectful replies.
-            result = call(lambda argv, cwd, _timeout: transport.runner(argv, cwd, 5),
-                          lark_args(cli_bin=transport.cli_bin, profile=profile, tail=args))
-            if result.get("returncode") != 0:
-                raise OSError("source history unavailable")
-            page, more, token = _provider_page(json_payload(result))
-            if any(row.get("chat_id") != chat for row in page):
-                raise ValueError("provider history destination changed")
+            page, more, token = self._page(profile, chat, window_end, start=start, token=token)
             messages.extend(page)
             if not more:
                 break
@@ -199,6 +217,27 @@ class PrivateIngressObserver:
             seen_tokens.add(str(token))
         else:
             raise ValueError("bounded history observation remains incomplete")
+        live_refs = {row["message_id"] for row in messages}
+        # Bootstrap old receipts too: their live cursor says nothing about
+        # sources before the first one-day window. Pin the end while paging
+        # from the provider's beginning, then resume across process restarts.
+        history = dict(state.get("history") or {
+            "end": start, "page_token": None, "seen_tokens": [], "complete": False})
+        history_tokens = set(history["seen_tokens"])
+        for _ in range(5 if not history["complete"] else 0):
+            if cancelled():
+                raise OSError("source observation stopped")
+            page, more, token = self._page(profile, chat, history["end"], token=history["page_token"])
+            messages.extend(page)
+            if not more:
+                history.update(page_token=None, complete=True)
+                break
+            if token in history_tokens:
+                raise ValueError("historical source cursor repeated")
+            history_tokens.add(str(token))
+            history.update(page_token=token, seen_tokens=sorted(history_tokens))
+        if cancelled():
+            raise OSError("source observation stopped")
         current = next((row for row in transport.bindings.read()["bindings"]
                         if row["binding_id"] == binding["binding_id"]), None)
         if current != binding:
@@ -224,14 +263,14 @@ class PrivateIngressObserver:
             gaps.setdefault(row["message_id"], {"reply_observed": False})
         for ref, gap in gaps.items():
             gap["reply_observed"] = gap["reply_observed"] or ref in replies
-        reconnect = any(not gaps[ref]["reply_observed"] for ref in gaps.keys() - prior_gaps)
+        reconnect = any(not gaps[ref]["reply_observed"] for ref in (gaps.keys() - prior_gaps) & live_refs)
         # Only source identifiers and content-free observations persist. A
         # source missing from a later window is never silently forgotten.
         behind = window_end < end - 1
         state.update(source_fingerprint=fingerprint, last_checked_at=now,
                      last_complete_at=window_end,
-                     window_start=start, window_end=window_end, gaps=gaps,
+                     window_start=start, window_end=window_end, gaps=gaps, history=history,
                      status=(IngressObservationStatus.GAP if gaps
-                             else IngressObservationStatus.UNAVAILABLE if behind
+                             else IngressObservationStatus.UNAVAILABLE if behind or not history["complete"]
                              else IngressObservationStatus.VERIFIED).value)
         return reconnect

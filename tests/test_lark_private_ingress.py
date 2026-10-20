@@ -23,12 +23,15 @@ def source_monitor(tmp_path, monkeypatch):
     observed = {"bot_app_id": "cli_owner", "bot_open_id": "ou_bot"}
     pages = [{"ok": True, "identity": "bot", "data": {"messages": [], "has_more": False}}]
     calls = []
+    history_calls = []
+    history_pages = [{"ok": True, "identity": "bot", "data": {"messages": [], "has_more": False}}]
 
     def run(args, _cwd=None, _timeout=None):
-        calls.append(args)
         assert args[:3] == ["lark-cli", "--profile", "owner-app"]
         assert "+chat-messages-list" in args and args[args.index("--chat-id") + 1] == "oc_owner"
-        page = pages[min(len(calls) - 1, len(pages) - 1)]
+        selected_calls, selected_pages = (calls, pages) if "--start" in args else (history_calls, history_pages)
+        selected_calls.append(args)
+        page = selected_pages[min(len(selected_calls) - 1, len(selected_pages) - 1)]
         if callable(page):
             page = page()
         return {"returncode": 0, "stdout": json.dumps(page), "stderr": ""}
@@ -41,7 +44,8 @@ def source_monitor(tmp_path, monkeypatch):
     clock = [1100.0]
     monkeypatch.setattr("loopx.extensions.lark.private_ingress.time.time", lambda: clock[0])
     return SimpleNamespace(root=root, carrier=carrier, binding=binding, monitor=monitor,
-                           transport=transport, pages=pages, calls=calls, clock=clock)
+                           transport=transport, pages=pages, calls=calls, clock=clock,
+                           history_calls=history_calls, history_pages=history_pages)
 
 
 def owner_source(ref="om_missed", **extra):
@@ -367,7 +371,7 @@ def test_fresh_grant_change_retains_same_source_coverage_without_replaying(sourc
     assert health["status"] == "gap" and health["last_complete_at"] == 1155.0
 
 
-@pytest.mark.parametrize("scenario", ["missing", "long_outage", "concurrent_observers"])
+@pytest.mark.parametrize("scenario", ["missing", "long_outage", "concurrent_observers", "historical"])
 def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary, monkeypatch, scenario):  # noqa: F811
     import http.client
     import time
@@ -401,7 +405,7 @@ def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary,
         elif threading.current_thread().name == "second-observer":
             second_ready.set()
             assert first_done.wait(10)
-        start = datetime.fromisoformat(args[args.index("--start") + 1]).timestamp()
+        start = datetime.fromisoformat(args[args.index("--start") + 1]).timestamp() if "--start" in args else float("-inf")
         end = datetime.fromisoformat(args[args.index("--end") + 1]).timestamp()
         rows = [owner_source(source["message_id"], chat_id=source["chat_id"],
                             sender={"id": source["sender_id"], "sender_type": "user"})
@@ -453,6 +457,11 @@ def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary,
         assert not first.is_alive() and not second.is_alive() and errors == []
         clock[0] += 180
         transport.ingress.observe()  # The skipped observer catches up from A's cursor.
+    elif scenario == "historical":
+        sources.append((now - 3 * 86400, missed))
+        # This source predates the first live observation. It must be visible,
+        # without reconnecting the live worker or acquiring execution authority.
+        assert transport.ingress.observe() == []
     else:
         sources.append((now - 30, missed))
         assert transport.ingress.observe() == ["notes-app"]
@@ -497,3 +506,70 @@ def test_real_native_binding_and_http_keep_a_missed_source_out_of_core(ordinary,
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("legacy_cursor", [False, True])
+def test_sources_older_than_the_first_live_window_are_reconciled(source_monitor, legacy_cursor):
+    f = source_monitor
+    f.clock[0] = 200000.0
+    if legacy_cursor:
+        path = f.monitor._path(f.binding["binding_id"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"status": "verified", "gaps": {},
+                                   "last_checked_at": 199000.0, "last_complete_at": 198995.0}))
+    f.history_pages[0]["data"]["messages"] = [owner_source("om_old_unaccounted")]
+    assert f.monitor.observe() == []
+    health = f.monitor.health(f.binding["binding_id"])
+    assert health["status"] == "gap" and health["source_gap_count"] == 1
+    assert len(f.history_calls) == 1 and "--start" not in f.history_calls[0]
+    assert len(list(f.root.glob("*.json"))) == 1
+
+
+def test_historical_pages_resume_after_restart_without_starving_live_reads(source_monitor):
+    f = source_monitor
+    f.history_pages[:] = [{"ok": True, "data": {"messages": [], "has_more": True, "page_token": f"old-{n}"}}
+                          for n in range(7)]
+    f.history_pages.append({"ok": True, "data": {"messages": [owner_source("om_old_unaccounted")], "has_more": False}})
+    assert f.monitor.observe() == []
+    assert len(f.history_calls) == 5 and len(f.calls) == 1
+    assert f.monitor.health(f.binding["binding_id"])["status"] == "unavailable"
+    f.clock[0] += 60
+    restarted = PrivateIngressObserver(f.transport)
+    assert restarted.observe() == []
+    assert len(f.calls) == 2 and len(f.history_calls) == 8
+    assert f.history_calls[5][f.history_calls[5].index("--page-token") + 1] == "old-4"
+    assert f.history_calls[0][f.history_calls[0].index("--end") + 1] == f.history_calls[-1][f.history_calls[-1].index("--end") + 1]
+    assert restarted.health(f.binding["binding_id"])["source_gap_count"] == 1
+    f.clock[0] += 60
+    restarted.observe()
+    assert len(f.calls) == 3 and len(f.history_calls) == 8
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "cursor_loop", "revoked", "cancelled"])
+def test_incomplete_historical_reads_preserve_the_committed_cursor_and_gaps(source_monitor, failure):
+    f = source_monitor
+    f.history_pages[:] = [{"ok": True, "data": {"messages": [owner_source("om_old_unaccounted")],
+                                               "has_more": True, "page_token": f"old-{n}"}} for n in range(5)]
+    f.monitor.observe()
+    path = f.monitor._path(f.binding["binding_id"])
+    prior = json.loads(path.read_text())
+    cancelled = [False]
+    f.transport.bindings.read = lambda: {"bindings": [dict(f.binding)]}
+
+    def failed_page():
+        if failure == "revoked":
+            f.binding["enabled"] = False
+        if failure == "cancelled":
+            cancelled[0] = True
+            return {"ok": True, "data": {"messages": [], "has_more": False}}
+        if failure == "unavailable":
+            return {"ok": False, "error": {"message": "private history error"}}
+        return {"ok": True, "data": {"messages": [], "has_more": failure == "cursor_loop", "page_token": "old-2"}}
+
+    f.history_pages[:] = [failed_page]
+    f.clock[0] += 60
+    assert f.monitor.observe(cancelled=lambda: cancelled[0]) == []
+    current = json.loads(path.read_text())
+    assert current["history"] == prior["history"] and current["gaps"] == prior["gaps"]
+    assert current["last_complete_at"] == prior["last_complete_at"]
+    assert current["status"] == "unavailable" and "private history error" not in json.dumps(current)
