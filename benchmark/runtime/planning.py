@@ -36,7 +36,7 @@ def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
         value = float(env[key])
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{key} must be finite and positive")
-    from .research_loop import runtime_execution_guidance
+    from .research_probe import runtime_execution_guidance
 
     return ("$loopx\n\nBenchmark research planning guidance:\n" + _RESEARCH_PLANNING_GUIDANCE
             + runtime_execution_guidance(env)
