@@ -212,6 +212,22 @@ instead sets `closeout_kind=typed_blocked_writeback_no_spend` and settles the
 Turn without a quota debit. Todo completion and Goal acceptance retain their
 separate checks in both cases.
 
+An admitted advancement Todo can also become persistently `blocked` through
+its ordinary owner-authorized lifecycle. Its original Turn then offers the
+same blocked writeback command. The settlement owner freezes the current
+active blocked Todo as `quota_blocked_lifecycle_v0` and verifies the original
+Goal/Agent/Todo/Turn, typed blocker/evidence and durable receipts. No retry
+clock, producing worktree, execution or completion is inferred. The Todo stays
+blocked with its original completion validator; same-Turn replay closes once
+without debit, while a fresh Turn can select independent eligible work. A
+previously committed debit remains recorded.
+
+已准入的推进任务通过原 owner 生命周期转为长期 `blocked` 后，原 Turn 仍可用同一个
+typed blocked writeback 命令收尾。结算 owner 冻结当前 active blocked Todo，并核对原
+Goal/Agent/Todo/Turn、阻塞及证据和持久回执；不虚构重试时间，不要求产出 worktree，
+不授予执行或完成资格。原任务与完成验证器保留，重复收尾不扣额；新 Turn 可选择独立
+且合格的工作。已经提交的历史扣额不会被抹去。
+
 An autonomous-replan binding can also close without debit after its existing
 replan owner accepts a concrete blocker or evidence-linked path disposition.
 Readback must match the original selected obligation, Goal/Agent/Turn, typed

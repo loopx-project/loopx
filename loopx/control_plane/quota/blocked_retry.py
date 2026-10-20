@@ -27,7 +27,7 @@ def compact_settlement_wait_todos(
     facts = compact_todo_resume_items(items)
     bound_fields = (
         "resume_condition", "last_checked_at", "next_due_at", "result_hash",
-        "material_change", "cadence", "expires_at", "watch_only",
+        "material_change", "cadence", "expires_at", "watch_only", "done",
     )
     for source, row in zip((item for item in items if item.get("todo_id")), facts):
         if source.get("todo_id") == todo_id:

@@ -1,13 +1,14 @@
 import type { SettlementIdentity } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
-import { isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
+import { isBlockedLifecycleWait, isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
 
 /** Historical entry point for blocked no-spend qualification: an advancement
- * retry/causal wait or a canonical Monitor unavailable attempt. The latter
- * creates no retry clock and cannot be projected as an advancement wait. */
+ * retry/causal wait, blocked lifecycle or a Monitor unavailable attempt.
+ * A lifecycle/Monitor closeout creates no retry clock or execution grant. */
 export function isBoundedBlockedRetry(value: unknown, todoId: string | null): boolean {
   if (isCausalBlockedWait(value, todoId)) return true;
+  if (isBlockedLifecycleWait(value, todoId)) return true;
   if (isMonitorUnavailableWait(value, todoId)) return true;
   const retry = jsonObject(value);
   if (!retry || retry.schema_version !== "quota_blocked_retry_v0" ||

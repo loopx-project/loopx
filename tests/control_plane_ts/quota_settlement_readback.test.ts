@@ -1491,7 +1491,8 @@ test("does not pair a spend row with malformed persisted settlement identity", a
   }
 });
 
-test("causal no-spend closeout retains exact receipt identity and historical debits", async () => {
+for (const kind of ["causal", "lifecycle"]) {
+test(`${kind} no-spend closeout retains exact receipt identity and historical debits`, async () => {
   const target = { todo_id: "todo_dependency", role: "agent", status: "open",
     task_class: "continuous_monitor", material_change_generation: 2 };
   const waiting = { todo_id: todoId, role: "agent", status: "open",
@@ -1504,7 +1505,9 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
   const condition = (evaluated.conditions as Record<string, unknown>[])[0].condition;
   const proof = prepareBlockedWait({ schema_version: BLOCKED_WAIT_REQUEST_SCHEMA,
     todo_id: todoId, observed_at: "2026-09-24T10:00:00Z",
-    todos: [{ ...waiting, resume_condition: condition }, target] });
+    todos: kind === "lifecycle" ? [{todo_id: todoId, role: "agent", status: "blocked", done: false,
+      task_class: "advancement_task", archive_state: "active"}]
+      : [{ ...waiting, resume_condition: condition }, target] });
   const options = { writeback: true, writebackOutcome: "outcome_gap", blockedRetry: proof,
     progressObservation: { schema_version: "typed_progress_observation_v0",
       result_class: "blocked", work_item_id: todoId,
@@ -1515,7 +1518,7 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
     assert.equal((result.progress as any).state, "settled");
     assert.equal((result.progress as any).closeout_kind, "typed_blocked_writeback_no_spend");
     assert.equal(result.replay_phase, "settled");
-    // Frozen historical facts stay closed after a later dependency observation.
+    // Frozen historical facts stay closed after a later observation.
     await appendFile(join(runtime, "goals", goalId, "runs", "index.jsonl"),
       `${JSON.stringify({ classification: "quota_monitor_poll", goal_id: goalId,
         agent_id: agentId, todo_id: target.todo_id, turn_instance_id: "later-turn",
@@ -1541,7 +1544,8 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
   const missingWriteback = await fixture(options);
   const spent = await fixture({ ...options, spend: true });
   const malformed = await fixture({ ...options, blockedRetry: { ...proof,
-    waiting_todo: { ...waiting, resume_monitor_generation: 3 } } });
+    ...(kind === "lifecycle" ? {blocked_todo: {...proof.blocked_todo as object, status: "done"}}
+      : {waiting_todo: { ...waiting, resume_monitor_generation: 3 }}) } });
   try {
     assert.notEqual((await readQuotaSettlement(request(missing))).replay_phase, "settled");
     const log = join(missingWriteback, "goals", goalId, "rollout-event-log.jsonl");
@@ -1557,6 +1561,7 @@ test("causal no-spend closeout retains exact receipt identity and historical deb
       rm(path, { recursive: true, force: true })));
   }
 });
+}
 
 test("accepts only an attributable typed blocker as an outcome-gap writeback", async () => {
   const qualifiedRuntime = await fixture({

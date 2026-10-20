@@ -12,6 +12,7 @@ import {
 export const BLOCKED_WAIT_REQUEST_SCHEMA = "loopx_quota_blocked_wait_request_v0";
 const CAUSAL_WAIT_SCHEMA = "quota_blocked_causal_wait_v0";
 export const MONITOR_UNAVAILABLE_SCHEMA = "quota_monitor_unavailable_v0";
+const BLOCKED_LIFECYCLE_SCHEMA = "quota_blocked_lifecycle_v0";
 
 function reject(message: string): never {
   throw new EffectRuntimeRequestError(`typed blocked no-spend closeout ${message}`);
@@ -107,6 +108,19 @@ export function isMonitorUnavailableWait(value: unknown, todoId: string | null):
     timestamp(wait.observed_at) !== null;
 }
 
+/** Freeze an existing blocked advancement lifecycle, never a retry schedule.
+ * The settlement caller separately verifies the exact admission and blocked
+ * observation receipts. These facts grant no completion or execution. */
+export function isBlockedLifecycleWait(value: unknown, todoId: string | null): boolean {
+  const wait = jsonObject(value), todo = jsonObject(wait?.blocked_todo);
+  return !!wait && wait.schema_version === BLOCKED_LIFECYCLE_SCHEMA && wait.source === "todo" &&
+    !!todoId && wait.todo_id === todoId && todo?.todo_id === todoId &&
+    todo.role === "agent" && todo.task_class === "advancement_task" &&
+    todo.status === "blocked" && (todo.done === undefined || todo.done === false) &&
+    (todo.archive_state == null || todo.archive_state === "active") &&
+    wait.resume_when == null && wait.due_at == null && timestamp(wait.observed_at) !== null;
+}
+
 /** Preflight belongs to the same TS settlement owner as durable readback.
  * Python only transports the complete current Todo facts and observation clock. */
 export function prepareBlockedWait(value: unknown): JsonObject {
@@ -117,11 +131,20 @@ export function prepareBlockedWait(value: unknown): JsonObject {
   const todos = request.todos.map((value) => requireJsonObject(value, "blocked wait Todo"));
   const matches = todos.filter((todo) => todo.todo_id === request.todo_id);
   const todo = matches[0];
-  if (matches.length !== 1 || !todo || !["open", "deferred"].includes(String(todo.status))) {
+  if (matches.length !== 1 || !todo || !["open", "deferred", "blocked"].includes(String(todo.status))) {
     reject("requires the same unfinished Todo");
   }
   const observed = timestamp(request.observed_at);
   if (observed === null) reject("has an invalid timestamp");
+  if (todo.status === "blocked") {
+    const wait = {schema_version: BLOCKED_LIFECYCLE_SCHEMA, source: "todo",
+      todo_id: request.todo_id, observed_at: request.observed_at,
+      blocked_todo: {...retainedTodo(todo), ...(todo.done === undefined ? {} : {done: todo.done})}};
+    if (!isBlockedLifecycleWait(wait, String(request.todo_id))) {
+      reject("requires the same active blocked advancement Todo");
+    }
+    return wait;
+  }
   if (todo.task_class === "continuous_monitor") {
     if (todo.role !== "agent" || todo.status !== "open" ||
         (todo.archive_state != null && todo.archive_state !== "active")) {
@@ -214,6 +237,11 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
       request.monitor_phase === "poll_due") {
     const reason = "The Monitor bound to this Turn is blocked. Inspect its blocker and existing effects; only after verifying the blocker is resolved, restore the Monitor and re-enter this same Turn. A blocked status is not a poll receipt and does not authorize replan or independent work.";
     return boundRecovery(request, "lifecycle", reason);
+  }
+  if (todo.task_class === "advancement_task" && todo.status === "blocked") {
+    const wait = prepareBlockedWait({...request, schema_version: BLOCKED_WAIT_REQUEST_SCHEMA});
+    const reason = "The advancement Todo bound to this Turn is blocked. Inspect its existing effects and evidence, then close only this original attempt with a typed blocked writeback without spending. Keep the Todo blocked and its validator intact; no retry clock or execution is authorized. A fresh host Turn may select independent work.";
+    return boundRecovery(request, "blocked_writeback", reason, wait);
   }
   if (!["open", "deferred"].includes(String(todo.status)) ||
       todo.task_class !== "advancement_task" || todo.resume_ready !== false) return {status: "none"};
