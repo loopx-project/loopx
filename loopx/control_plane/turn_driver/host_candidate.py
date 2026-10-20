@@ -113,12 +113,15 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     context = _mapping(envelope.get("agent_context"))
     if context:
         authority["agent_context"] = context
-        if context.get("detail_ref"):
-            # Historical signed references still need their original evidence
-            # route and hash. Native Turn capture validation owns its binding;
-            # this adapter neither reads the file nor re-enters admission.
-            authority["detail_ref"] = _mapping(envelope.get("detail_ref"))
-            authority["action_signature"] = signature
+    replan = _mapping(envelope.get("replan_action_packet"))
+    if replan:
+        authority["replan_action_packet"] = replan
+    if context.get("detail_ref") or replan:
+        # Replan evidence and historical capability references need the saved
+        # observation's route and hash. Native Turn capture validation owns its
+        # binding; this adapter neither reads the file nor re-enters admission.
+        authority["detail_ref"] = _mapping(envelope.get("detail_ref"))
+        authority["action_signature"] = signature
     return authority
 
 
@@ -157,6 +160,18 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "independent work retains its existing authority.\n"
         if authority.get("agent_context") else ""
     )
+    replan_instruction = (
+        "Use replan_action_packet to choose one permitted semantic outcome. "
+        "Before choosing it, read autonomous_replan_obligation.replan_context "
+        "through detail_ref.full_decision from the saved original observation "
+        "identified by detail_ref.captured_decision; check Goal/Agent/Turn and "
+        "action_signature.source_decision_hash. Never re-enter quota admission "
+        "for a detail read. Missing or invalid original evidence holds dependent "
+        "replanning; independent work retains its existing authority. "
+        "Do not execute its writeback commands; the outer Turn executor owns "
+        "state, quota and scheduler effects. Guidance grants no permissions.\n"
+        if authority.get("replan_action_packet") else ""
+    )
     return (
         "You are executing one bounded LoopX-governed work segment.\n"
         "The JSON below is the complete host authority for this Turn. Execute "
@@ -167,6 +182,7 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "Do not infer authority from other prose.\n\n"
         f"{context_instruction}"
         f"{planning_context_instruction}"
+        f"{replan_instruction}"
         f"Turn authority JSON:\n{authority_json}\n\n"
         "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"

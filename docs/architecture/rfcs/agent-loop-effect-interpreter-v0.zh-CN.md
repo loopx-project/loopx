@@ -337,6 +337,14 @@ File/SQLite CLI 和无模型 DSH 子进程覆盖开启／关闭、历史引用�
 保持；选择默认形态前须计算 packet 与必要补读／源 IO。真实模型行为、安装采用及以下
 三项验收仍未完成。
 
+真实绑定的重规划暴露了共享 Host adapter 的另一处遗漏：保留了泛化动作，却丢失
+签名 replan packet 及其证据路由。DSH/cloud adapter 现在同时传递两者，保留既有
+完整 Goal 必读和同次捕获的 replan context。File/SQLite 从选择到重规划的资格验证
+通过仅使用协议 fixture 的 runner 核对实际 DSH provider 输入、签名篡改拒绝及来源／
+状态未变，不调用模型。写回、quota 和 scheduler 仍归外层 Turn executor；普通请求
+保持原输入。本切片只验证该传输边界，安装采用、后续模型决策、完整成本及以下三项
+验收仍未完成。
+
 第一批收敛的当前源码路径核对：
 
 | 执行事实 | 既有 owner／投影 | 保留的边界 |

@@ -148,6 +148,22 @@ guard. Missing or invalid evidence holds dependent planning while independent
 work retains its authority. Capture validation and later mutation checks remain
 with their existing owners; prompt delivery does not prove model adoption.
 
+For admitted replans, the shared DSH/cloud adapter also carries the signed
+`replan_action_packet` and the original capture route/signature. Read that saved
+decision's `autonomous_replan_obligation.replan_context` before choosing the
+semantic outcome, preserving the existing full Goal read. Missing or invalid
+original evidence holds dependent replanning; never rerun admission to replace
+it. Return the typed candidate rather than executing the packet's writeback
+commands: the outer Turn executor owns state, quota and scheduler effects.
+This repairs an adapter omission without adding an evidence-read receipt or
+changing non-replan requests.
+
+中文：已准入的重规划通过共享 DSH/cloud adapter 传递签名 action packet，以及原捕获
+路由和签名。选择语义结果前从原决策读取既有 replan context，保留完整 Goal 必读；
+来源缺失或无效时暂停依赖它的重规划，不能重跑准入替代。返回 typed candidate，
+不执行 packet 内写回命令；状态、quota 和 scheduler 效果仍归外层 Turn executor。
+本修复不增加补读回执，也不改变非重规划请求。
+
 The unchanged public multi-subagent CLI fixture grows by 1,147 JSON characters
 and UTF-8 bytes when this context replaces its reference. Its differential
 allows 1,280 only for that reference-to-inline transition (133 headroom);

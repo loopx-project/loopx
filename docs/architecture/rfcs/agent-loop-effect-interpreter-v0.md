@@ -482,6 +482,17 @@ File/SQLite CLI and a protocol-only DSH subprocess. Keep the 8 KiB warning and
 count packet plus necessary detail/source IO before choosing a default. Live
 model behavior, installed adoption and the three acceptances below remain open.
 
+A bound native replan exposed a further shared Host adapter omission: it kept
+the generic action but dropped the signed replan packet and its evidence route.
+The DSH/cloud adapter now forwards both, retaining the existing full Goal read
+and same-capture replan context. File/SQLite selection-to-replan qualification
+checks actual DSH provider input with a protocol-only runner, signed mutation
+refusal and unchanged source/state; it does not invoke a model. The outer Turn
+executor retains writeback/quota/scheduler ownership. Ordinary requests retain
+their previous input. This qualifies that transport boundary only; installed
+adoption, subsequent model decisions, complete costs and the three acceptances
+below remain open.
+
 Current source-path audit for the first convergence slice:
 
 | Execution fact | Existing owner / projection | Remaining boundary |
