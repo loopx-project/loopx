@@ -7,7 +7,7 @@
 结束原因与证据引用。未测量项显式为 null；版本和引用必须与所属 finding 一致。
 已释放结果的 `result_ref` 必须有匹配的 `result_candidate_sha256`。该记录是来源证据，
 不认证执行真实性或收益；finding、replan 和既有研究历程详情保留相同信息，缺省仍兼容
-旧事件。参见[本地探针生产路径](../../../benchmark/runtime/RESEARCH_LOOP.md)。
+旧事件。参见[本地探针生产路径](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md)。
 
 ## 概览
 

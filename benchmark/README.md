@@ -46,7 +46,7 @@ by itself establish a C2 uplift claim.
 
 ## Current work
 
-- [Execution observations and research preset](runtime/RESEARCH_LOOP.md)
+- [Execution observations through ordinary Goal planning](runtime/EXECUTION_OBSERVATIONS.md)
   describes two experiment choices: independent local measurements with ordinary
   planning/stride selection, and an explicit preset with retained research
   successor work. It also covers both entries' complete initial Goal objective
