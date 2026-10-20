@@ -36,12 +36,10 @@ def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
         value = float(env[key])
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{key} must be finite and positive")
-    research = ""
-    if env.get("LOOPX_RESEARCH_LOOP") == "1":
-        from .research_loop import research_execution_guidance
+    from .research_loop import runtime_execution_guidance
 
-        research = research_execution_guidance()
-    return ("$loopx\n\nBenchmark research planning guidance:\n" + _RESEARCH_PLANNING_GUIDANCE + research
+    return ("$loopx\n\nBenchmark research planning guidance:\n" + _RESEARCH_PLANNING_GUIDANCE
+            + runtime_execution_guidance(env)
             + "\n\nHost-supplied planning checkpoint:\n" + json.dumps(packet, ensure_ascii=False))
 
 

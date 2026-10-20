@@ -17,6 +17,33 @@ import subprocess
 import time
 
 
+def resolve_execution_observation(producer, *, research_loop=False):
+    """Resolve a local producer; the legacy recipe retains its own task scope."""
+    if producer not in (None, "local_probe"):
+        raise ValueError("execution_observation must be omitted or 'local_probe'")
+    if research_loop and producer is not None:
+        raise ValueError(
+            "execution_observation cannot be combined with the legacy research_loop treatment; "
+            "omit research_loop to choose task_entry and stride_strategy independently"
+        )
+    return "local_probe" if research_loop else producer
+
+
+def execution_observation_guidance() -> str:
+    return (
+        "\nLocal execution observations:\nReuse applicable evidence from an execution that already "
+        "matches the candidate and input revision. When decision-critical measurements are missing, "
+        "use `loopx-research-probe --help` to wrap the relevant local execution within its existing "
+        "budget. Do not repeat an experiment merely to produce an attachment. Retain actual host "
+        "elapsed time, exit or timeout, and selected-file hashes; keep unmeasured values unknown. "
+        "Method ids are producer declarations and optional solver counters are reports, not "
+        "independently verified execution. Attach available execution_observation through ordinary "
+        "Explore writeback with matching candidate, input revision and evidence refs. This tool "
+        "does not create work or decide completion: use the original Goal, current Todo acceptance "
+        "and ordinary continuation or replan, respecting Stop, budgets and genuine blockers.\n"
+    )
+
+
 def candidate_snapshot(paths: list[Path], workspace: Path) -> tuple[str, list[dict[str, str]]]:
     files = []
     for path in paths:

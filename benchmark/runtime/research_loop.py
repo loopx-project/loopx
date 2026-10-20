@@ -1,5 +1,18 @@
-"""Compose research scope with ordinary Todo/wait owners, not a second planner."""
+"""Retain the legacy research recipe while ordinary runs select their own scope."""
 from __future__ import annotations
+
+
+def runtime_execution_guidance(env: dict[str, str]) -> str:
+    """Expand only the selected producer or the unchanged legacy prompt."""
+    from .research_probe import execution_observation_guidance, resolve_execution_observation
+
+    legacy = env.get("LOOPX_RESEARCH_LOOP") == "1"
+    producer = resolve_execution_observation(
+        env.get("LOOPX_EXECUTION_OBSERVATION"), research_loop=legacy,
+    )
+    if legacy:
+        return research_execution_guidance()
+    return execution_observation_guidance() if producer is not None else ""
 
 
 def research_stride_strategy(enabled, strategy):

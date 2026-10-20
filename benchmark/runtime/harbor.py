@@ -74,6 +74,7 @@ class BenchmarkCodex(CodexOffline):
         native_goal_continue=False,
         task_objective=None,
         research_loop=False,
+        execution_observation=None,
         goal_id=_GOAL_ID,
         agent_id=_AGENT_ID,
         defer_codex_home=False,
@@ -129,6 +130,13 @@ class BenchmarkCodex(CodexOffline):
         if not isinstance(research_loop, bool) or (research_loop and self.execution.mode != "heartbeat"):
             raise ValueError("research_loop requires heartbeat execution")
         self.research_loop = research_loop
+        from .research_probe import resolve_execution_observation
+
+        self.execution_observation = resolve_execution_observation(
+            execution_observation, research_loop=research_loop,
+        )
+        if self.execution_observation is not None and self.execution.mode != "heartbeat":
+            raise ValueError("execution_observation requires heartbeat execution")
         self.checkpoint_request_path = None
         self._checkpoint_declaration = None
         if checkpoint_request is not None:
@@ -154,8 +162,9 @@ class BenchmarkCodex(CodexOffline):
         if task_objective is not None and (not isinstance(task_objective, str)
                                           or not task_objective.strip()):
             raise ValueError("Task objective must be a non-empty string")
-        self.task_objective = (task_objective if task_objective is not None else
-                              "Complete the current benchmark task through validated LoopX Todos.")
+        self.task_objective = task_objective
+        if self.research_loop and self.task_objective is None:
+            self.task_objective = "Complete the current benchmark task through validated LoopX Todos."
         super().__init__(*args, **kwargs)
 
     def _turn_envelope_receipt(self) -> dict:
@@ -334,7 +343,7 @@ class BenchmarkCodex(CodexOffline):
                 raise RuntimeError("LoopX doctor returned invalid JSON") from exc
             if doctor_payload.get("ok") is not True:
                 raise RuntimeError(f"LoopX doctor failed: {doctor_payload}")
-            if self.research_loop:
+            if self.execution_observation is not None:
                 wrapper = (f"#!/bin/sh\nexec env PYTHONPATH={shlex.quote(_SRC)} "
                            f"{_PYTHON}/bin/python3 -m benchmark.runtime.research_probe \"$@\"\n")
                 await self.exec_as_agent(environment,
@@ -349,6 +358,8 @@ class BenchmarkCodex(CodexOffline):
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
             **({"research_loop": True} if self.research_loop else {}),
+            **({"execution_observation": self.execution_observation}
+               if self.execution_observation is not None else {}),
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
             "home_scope": "trial",
@@ -456,7 +467,8 @@ class BenchmarkCodex(CodexOffline):
                     "--goal-id",
                     self.goal_id,
                     "--objective",
-                    self.task_objective,
+                    # Phase feedback can replace task.md, but not the original Goal.
+                    self.task_objective or instruction.strip(),
                     "--goal-doc",
                     _TASK_DOC,
                     "--adapter-kind",
@@ -608,6 +620,8 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_EXECUTION_MODE": self.execution.mode,
                 "LOOPX_TASK_ENTRY": self.execution.task_entry,
                 **({"LOOPX_RESEARCH_LOOP": "1"} if self.research_loop else {}),
+                **({"LOOPX_EXECUTION_OBSERVATION": self.execution_observation}
+                   if self.execution_observation is not None and not self.research_loop else {}),
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),

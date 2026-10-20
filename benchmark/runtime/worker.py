@@ -88,11 +88,9 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     body = payload["task_body"].replace(
         "$HOME/.codex/loopx/registry.global.json", env["LOOPX_REGISTRY"]
     )
-    if env.get("LOOPX_RESEARCH_LOOP") == "1":
-        from .research_loop import research_execution_guidance
+    from .research_loop import runtime_execution_guidance
 
-        body += research_execution_guidance()
-    return body
+    return body + runtime_execution_guidance(env)
 
 
 @contextmanager
@@ -382,6 +380,14 @@ def run_once(env: dict[str, str]) -> dict:
     stage = env.get("LOOPX_TASK_STAGE", "execute")
     if stage not in {"plan", "execute"} or (stage == "plan" and execution.task_entry != "loopx-planned"):
         raise ValueError("invalid task-entry stage")
+    from .research_probe import resolve_execution_observation
+
+    legacy_research = env.get("LOOPX_RESEARCH_LOOP") == "1"
+    observation_producer = resolve_execution_observation(
+        env.get("LOOPX_EXECUTION_OBSERVATION"), research_loop=legacy_research,
+    )
+    if observation_producer is not None and execution.mode != "heartbeat":
+        raise ValueError("execution_observation requires heartbeat execution")
     turn_id = f"wake-{time.time_ns()}-{uuid.uuid4().hex[:12]}"
     log_root = Path(env["LOOPX_WAKE_LOG_DIR"])
     wake = log_root / turn_id
@@ -394,6 +400,9 @@ def run_once(env: dict[str, str]) -> dict:
         "mode": execution.mode,
         "context": execution.context,
         "task_entry": execution.task_entry,
+        **({"execution_observation": observation_producer}
+           if observation_producer is not None else {}),
+        **({"research_loop": True} if legacy_research else {}),
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
         "stage": stage,
