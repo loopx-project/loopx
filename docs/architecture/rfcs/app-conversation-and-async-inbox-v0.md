@@ -1117,10 +1117,15 @@ Owner-private Lark connections also compare bounded provider history with native
 capture receipts in the existing background delivery scanner. This default
 observation starts within one minute and repeats one minute after completion;
 it uses the same verified App and an already-admitted owner destination. The
-initial lookback is bounded to a day; later complete windows overlap by a minute.
-Each pass reads at most 20 pages with a five-second history-page request budget;
-identity verification retains its existing timeout.
-Incomplete, failed, stale or changed-binding reads cannot advance coverage.
+initial live lookback is bounded to a day; later complete windows overlap by a
+minute. Each pass reads live sources first, up to 20 pages, then at most five
+older pages from the provider's beginning to a fixed boundary before the live
+window. A private pagination cursor resumes that historical read across restarts,
+including upgrades of receipts that only contain the live cursor. Incomplete
+historical pagination cannot report verified coverage. Each history-page request
+retains its five-second budget; identity verification retains its existing timeout.
+Failed, stale or changed-binding reads cannot advance coverage. A bounded,
+successful historical page batch may save its cursor without claiming completion.
 The private receipt retains every previously observed gap; absence from a later
 window does not close it. Group topics and other providers retain their own
 coverage contracts.
@@ -1137,7 +1142,8 @@ from live-listener readiness and pending execution. Its `ingress` observation
 uses `unobserved`, `verified`, `gap` and `unavailable`, with timestamps and counts,
 without source identifiers or bodies. An observed Bot reply does not establish
 native capture, a final answer or requester adoption. A newly observed unanswered
-gap may stop only this service's existing consumer once; the existing App lease
+live-window gap may stop only this service's existing consumer once; older-history
+discoveries do not trigger that reconnect. The existing App lease
 and refresh lifecycle own its replacement. History never enters Core admission,
 replies, retries or failed-Turn recovery. Reconnection is a live-path mitigation,
 not proof that a missing historical request ran or that provider loss was fixed.
