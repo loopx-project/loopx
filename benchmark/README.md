@@ -46,6 +46,11 @@ by itself establish a C2 uplift claim.
 
 ## Current work
 
+- [Execution observations and legacy research stages](runtime/RESEARCH_LOOP.md)
+  documents optional local measurements with ordinary heartbeat planning and
+  independent stride selection, retention of the complete first instruction as
+  an ordinary Goal's default objective, and compatibility for the old research
+  preset. Goal retention is repaired whether or not observations are selected.
 - **LHTB result highlight:** GPT-5.6 Sol + LoopX 1.0.3 Heartbeat reaches
   **0.4948 mean reward** on 46 tasks: **+17.3% vs Plain Codex** and
   **+10.6% vs native Codex Goal**. Strict solves are 7/46, matching Plain and
