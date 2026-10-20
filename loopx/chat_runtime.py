@@ -759,10 +759,12 @@ class ChatRuntimeController:
         with self.lock:
             return self.session_adapter_locks.setdefault(session_id, threading.Lock())
 
-    def _check_codex_home(self, session: dict[str, Any]) -> None:
+    def _check_codex_home(self, session: dict[str, Any]) -> Path:
         if session.get("agent_id") != "codex" or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
-            return
-        codex_context.require_session_home(codex_profile_home(self.codex_home, session.get("codex_chat_configuration") or {}), session)
+            return self.codex_home
+        selected = codex_context.session_base_home(self.codex_home, session)
+        codex_context.require_session_home(selected, session)
+        return selected
 
     def _ensure_adapter(
         self,
@@ -817,7 +819,7 @@ class ChatRuntimeController:
             objective = manager_agent_objective(
                 str(manager_runtime["runtime_profile"])
             )
-        self._check_codex_home(session)
+        selected_codex_home = self._check_codex_home(session)
         if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
             raise CodexChatAgentError(
                 "The attached host Session must be served by its existing host bridge.",
@@ -978,7 +980,7 @@ class ChatRuntimeController:
                     if session.get("agent_id") == "codex" else session.get("agent_model_id")
                 )) else {}), **({"reasoning_effort": session["requested_agent_reasoning_effort"]}
                                if session.get("requested_agent_reasoning_effort") else {})} or None,
-                codex_home_override=codex_profile_home(self.codex_home, session.get("codex_chat_configuration") or {}),
+                codex_home_override=selected_codex_home,
             )
             try:
                 # Recovery reads back the provider-restored configuration.
@@ -1015,7 +1017,7 @@ class ChatRuntimeController:
                 if session.get("agent_id") == "codex" and session.get("codex_home") is None:
                     # A legacy session is bound only after successful upstream resume,
                     # not when a service happens to start in a new environment.
-                    self.store.update_session(session_id, codex_home=str(codex_context.home_for_project(self.codex_home, session.get("project_context"))))
+                    self.store.update_session(session_id, codex_home=str(codex_context.home_for_project(selected_codex_home, session.get("project_context"))))
                 if is_manager_channel(session.get("channel_id")):
                     assert manager_runtime is not None
                     changes = {
