@@ -352,6 +352,11 @@ def read_public_url(url: str, offset: int = 0,
         _LOCK.release()
 
 
+def _image_index(index: int) -> None:
+    if type(index) is not int or not 0 <= index < MAX_IMAGES:
+        raise ValueError("invalid image index")
+
+
 def read_public_image(url: str, index: int) -> list:
     """Return actual PNG pixels of a static article image, not its caption.
 
@@ -362,8 +367,7 @@ def read_public_image(url: str, index: int) -> list:
     if not _LOCK.acquire(blocking=False):
         return [TextContent(type="text", text=json.dumps({"ok": False, "error": "source_reader_busy"}))]
     try:
-        if type(index) is not int or not 0 <= index < MAX_IMAGES:
-            raise ValueError("invalid image index")
+        _image_index(index)
         public_url(url)
         result = _observation("image", url, index)
         return [TextContent(type="text", text=json.dumps(result["metadata"])),
@@ -379,7 +383,27 @@ def read_public_image(url: str, index: int) -> list:
 
 def main() -> None:
     from mcp.server.fastmcp import FastMCP
-    server = FastMCP("loopx-public-source-read")
+    from mcp.types import TextContent
+
+    class PublicSourceServer(FastMCP):
+        async def call_tool(self, name, arguments):
+            # FastMCP coerces JSON strings, booleans and integral floats before
+            # calling a tool. Validate the original values, including "null"
+            # digests, before that conversion can erase a rejected input.
+            raw = arguments or {}
+            try:
+                if name == "read_public_url":
+                    _text_page_parameters(raw.get("offset", 0), raw.get("expected_sha256"))
+                elif name == "read_public_image":
+                    _image_index(raw.get("index"))
+            except ValueError:
+                if name == "read_public_url":
+                    return {"ok": False, "error": "public_source_unavailable_or_rejected"}
+                return [TextContent(type="text", text=json.dumps({"ok": False,
+                    "error": "public_image_unavailable_or_rejected"}))]
+            return await super().call_tool(name, arguments)
+
+    server = PublicSourceServer("loopx-public-source-read")
     server.tool()(read_public_url)
     server.tool()(read_public_image)
     server.run()
