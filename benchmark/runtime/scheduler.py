@@ -22,4 +22,5 @@ def worker_command(env: dict[str, str], *, python: str, source: str,
         "--wake-stop-exit-code", str(BUDGET_EXHAUSTED_EXIT_CODE),
         "--wake-timeout-seconds", str(host_timeout + 150),
         "--quota-timeout-seconds", "30", "--error-backoff-seconds", "15",
+        *(["--wake-host-failure"] if env["LOOPX_EXECUTION_MODE"] == "heartbeat" else []),
     ]

@@ -187,13 +187,18 @@ def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
     # Default: one Goal that declares completion ends the worker (no continuation).
     calls = []
     def one_round(suffix, timeout):
-        calls.append((suffix, timeout)); tick(100); return "complete"
+        calls.append((suffix, timeout))
+        tick(100)
+        return "complete"
     assert native_goal_rounds(one_round, budget_seconds=1000, continue_after_complete=False, clock=lambda: clock[0]) == (1, "complete")
     assert calls == [("", 1000)]
     # Opt-in: completed Goals are followed by continuation Goals until the reserve.
-    clock[0] = 0; calls.clear()
+    clock[0] = 0
+    calls.clear()
     def completing(suffix, timeout):
-        calls.append(suffix[:40]); tick(400); return "complete"
+        calls.append(suffix[:40])
+        tick(400)
+        return "complete"
     rounds, outcome = native_goal_rounds(completing, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0], reserve_seconds=300)
     assert (rounds, outcome) == (2, "complete")
     assert calls[0] == "" and calls[1].startswith("\n\nContinuation 1")
@@ -229,6 +234,126 @@ def test_process_failure_is_not_reported_as_success(tmp_path):
     receipt = run_once(env)
     assert receipt["ok"] is False
     assert receipt["return_code"] == 7
+
+
+@pytest.mark.parametrize("code,expected", [("insufficient_quota", "quota_exhausted"),
+                                           ("model_at_capacity", "provider_capacity"),
+                                           ("unrecognized", "unknown")])
+def test_heartbeat_real_native_process_preserves_content_free_host_failure(tmp_path, monkeypatch, code, expected):
+    import benchmark.runtime.worker as worker
+    import benchmark.runtime.sessions as sessions
+
+    env = worker_env(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    env.update(LOOPX_EXECUTION_MODE="heartbeat", LOOPX_SHARED_SKILLS=str(skills))
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    class Session:
+        session_id = "session-a"
+        def __init__(self, env, execution, receipt):
+            receipt["session"] = {"binding_scope": "agent", "session_id": self.session_id}
+        def observe(self, path):
+            assert path.is_file()
+    monkeypatch.setattr(sessions, "BenchmarkSessionWake", Session)
+    event = {"type": "turn.failed", "error": {"code": code, "message": "PRIVATE-SENTINEL"}}
+    Path(env["CODEX_BIN"]).write_text(
+        f"#!{sys.executable}\nimport json,sys\n"
+        f"print(json.dumps({event!r}))\n"
+        "sys.stdin.read();sys.exit(1)\n")
+    receipt = run_once(env)
+    assert receipt["ok"] is False and receipt["return_code"] == 1
+    assert receipt["host_failure"]["kind"] == expected
+    assert "PRIVATE-SENTINEL" not in json.dumps(receipt)
+
+
+def test_host_retry_session_mismatch_refuses_native_process(tmp_path, monkeypatch):
+    import benchmark.runtime.worker as worker
+    import benchmark.runtime.sessions as sessions
+
+    env = worker_env(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    env.update(LOOPX_EXECUTION_MODE="heartbeat", LOOPX_SHARED_SKILLS=str(skills),
+               LOOPX_HOST_RETRY_SESSION_ID="original-session")
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    class Session:
+        session_id = "replacement-session"
+        def __init__(self, *a):
+            pass
+        def observe(self, path):
+            assert not path.exists()
+    monkeypatch.setattr(sessions, "BenchmarkSessionWake", Session)
+    with pytest.raises(ValueError, match="original Codex session"):
+        run_once(env)
+    assert not list((tmp_path / "logs/wakes").glob("*/stdout.jsonl"))
+
+
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+def test_native_heartbeat_retry_uses_real_session_owner(tmp_path, monkeypatch, capsys, context):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.cli import main
+    import benchmark.runtime.worker as worker
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
+    assert main(["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime),
+                 "bootstrap", "--project", str(tmp_path), "--goal-id", "fixture-goal",
+                 "--objective", "Complete synthetic work.", "--adapter-kind", "read_only_project_map_v0",
+                 "--adapter-status", "connected-read-only", "--write-scope", "**", "--no-global-sync"]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"]
+    env = worker_env(tmp_path)
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    env.update(LOOPX_EXECUTION_MODE="heartbeat", LOOPX_ITERATION_CONTEXT=context,
+               LOOPX_SHARED_SKILLS=str(skills), LOOPX_REGISTRY=str(registry),
+               LOOPX_RUNTIME_ROOT=str(runtime), LOOPX_GOAL_ID="fixture-goal", LOOPX_AGENT_ID="agent")
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
+    arguments = tmp_path / "native-calls.jsonl"
+    Path(env["CODEX_BIN"]).write_text(f"#!{sys.executable}\n" + f"""
+import json,pathlib,sys
+with pathlib.Path({str(arguments)!r}).open('a') as log:
+    log.write(json.dumps(sys.argv[1:])+'\\n')
+print(json.dumps({{'type':'thread.started','thread_id':'original-native'}}))
+resuming = 'resume' in sys.argv
+print(json.dumps({{'type':'turn.completed'}} if resuming else
+                 {{'type':'turn.failed','error':{{'code':'model_at_capacity'}}}}))
+sys.stdin.read()
+sys.exit(0 if resuming else 1)
+""")
+    first = run_once(env)
+    assert first["host_failure"]["kind"] == "provider_capacity"
+    assert first["session"]["session_id"] == "original-native"
+    second = run_once({**env, "LOOPX_HOST_RETRY_SESSION_ID": "original-native"})
+    assert second["ok"] and second["session"]["action"] == "resume"
+    calls = [json.loads(line) for line in arguments.read_text().splitlines()]
+    assert "resume" not in calls[0]
+    assert calls[1][calls[1].index("resume") + 1:].count("original-native") == 1
+    # A valid but different expected binding cannot fork or invoke the Host.
+    with pytest.raises(ValueError, match="original Codex session"):
+        run_once({**env, "LOOPX_HOST_RETRY_SESSION_ID": "different-native"})
+    assert len(arguments.read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize("tail", ['{"type":', '[]', '\ufffd', 'x' * 1_048_577])
+def test_partial_native_exchange_stays_unknown_even_after_transient_error(tmp_path, tail):
+    from benchmark.runtime.worker import heartbeat_host_failure
+    event = {"type": "turn.failed", "error": {"code": "model_at_capacity"}}
+    (tmp_path / "stdout.jsonl").write_text(json.dumps(event) + "\n" + tail)
+    (tmp_path / "stderr.log").write_text("")
+    failure = heartbeat_host_failure(tmp_path, {"ok": False})
+    assert failure["kind"] == "unknown" and failure["retryable"] is False
+
+
+def test_native_scheduler_enables_host_failure_guard_only_on_heartbeat():
+    from benchmark.runtime.scheduler import worker_command
+    base = {"LOOPX_CLI": "loopx", "LOOPX_REGISTRY": "/synthetic/registry.json",
+            "LOOPX_RUNTIME_ROOT": "/synthetic/runtime", "LOOPX_GOAL_ID": "goal",
+            "LOOPX_AGENT_ID": "agent"}
+    for mode in ["plain", "native-goal", "turn", "heartbeat"]:
+        args = worker_command({**base, "LOOPX_EXECUTION_MODE": mode}, python="python",
+                              source="/synthetic/source", state_file="/synthetic/state.json", host_timeout=100)
+        assert ("--wake-host-failure" in args) is (mode == "heartbeat")
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX worker resource inheritance")

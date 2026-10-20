@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 from hashlib import sha256
 import json
+import math
 import os
 import shlex
 import signal
@@ -200,13 +201,19 @@ def run_quota_should_run(
     return payload
 
 
-def _load_state(path: Path | None) -> dict[str, Any]:
+def _load_state(path: Path | None, *, strict: bool = False) -> dict[str, Any]:
     if path is None:
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
         return {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        if strict:
+            raise ValueError("worker state is unreadable") from None
+        return {}
+    if strict and not isinstance(raw, dict):
+        raise ValueError("worker state is not an object")
     return raw if isinstance(raw, dict) else {}
 
 
@@ -238,8 +245,14 @@ def resolve_state_path(args: argparse.Namespace) -> Path:
     return _default_state_path(args)
 
 
-def _save_state(path: Path | None, state: dict[str, Any]) -> None:
+def _save_state(path: Path | None, state: dict[str, Any], *, durable: bool = False) -> None:
     if path is None:
+        return
+    if durable:
+        from loopx.file_lock import write_json_atomic
+
+        write_json_atomic(path, state, mode=0o600, directory_mode=0o700,
+                          fsync_directory=True, sort_keys=True)
         return
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -270,14 +283,99 @@ def _shell_argv(command: str) -> list[str]:
     return ["/bin/sh", "-c", command]
 
 
-def _run_wake(command: str, *, timeout_seconds: float | None) -> CappedProcessResult:
+def _run_wake(command: str, *, timeout_seconds: float | None,
+              environment: dict[str, str] | None = None) -> CappedProcessResult:
     return run_capped_process(
         _shell_argv(command),
         stdin=b"",
         timeout_seconds=None if timeout_seconds is None else max(0.01, timeout_seconds),
         output_limit_bytes=PROCESS_OUTPUT_LIMIT_BYTES,
         termination_grace_seconds=10,
+        env=environment,
     )
+
+
+def _host_scope(args: argparse.Namespace) -> str:
+    """Private transport scope; Todo/reset-token changes cannot reset a failure."""
+    source = [str(Path(args.registry).expanduser().resolve()), args.runtime_root,
+              args.goal_id, args.agent_id, args.wake_cmd, getattr(args, "wake_stop_exit_code", None),
+              *[os.environ.get(k, "") for k in ("CODEX_HOME", "MODEL_NAME",
+                  "LOOPX_CODEX_HOME", "CODEX_BIN", "LOOPX_PROJECT", "CODEX_WIRE_API",
+                  "LOOPX_ITERATION_CONTEXT", "LOOPX_CODEX_SANDBOX", "LOOPX_EXECUTION_MODE",
+                  "REASONING_EFFORT", "OPENAI_BASE_URL", "LOOPX_EXPECTED_COMMIT",
+                  "LOOPX_EXPECTED_RUNNER_COMMIT")]]
+    return sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
+
+
+def _host_attempt(state: dict[str, Any], scope: str) -> dict[str, Any]:
+    """Validate local IO state; retry kinds/limits stay with the Host owner."""
+    from loopx.control_plane.turn_driver.host_failure import normalize_host_failure_record
+    from loopx.control_plane.turn_driver.codex_sessions import _valid_session_id
+
+    if "host_attempt" not in state:
+        return {}
+    prior = state["host_attempt"]
+    if not isinstance(prior, dict) or prior.get("scope") != scope:
+        raise ValueError("Host attempt scope is unresolved")
+    count = prior.get("attempt")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise ValueError("Host attempt count is invalid")
+    if prior.get("status") == "started":
+        return prior
+    if prior.get("status") == "stopped":
+        code = prior.get("stop_exit_code")
+        if isinstance(code, bool) or not isinstance(code, int):
+            raise ValueError("Host stop result is invalid")
+        return prior
+    if prior.get("status") != "failed":
+        raise ValueError("Host attempt status is invalid")
+    failure = normalize_host_failure_record(prior.get("host_failure"))
+    due = prior.get("not_before")
+    if (failure["attempt"] != count or isinstance(due, bool)
+            or not isinstance(due, (int, float)) or not math.isfinite(due) or due < 0):
+        raise ValueError("Host attempt result is invalid")
+    if prior.get("session_id") is not None and _valid_session_id(prior["session_id"]) != prior["session_id"]:
+        raise ValueError("Host attempt session is invalid")
+    return prior
+
+
+def _host_result(result: CappedProcessResult, attempt: dict[str, Any], now: float) -> dict[str, Any] | None:
+    """Consume only the configured Host's content-free failure receipt."""
+    from loopx.control_plane.turn_driver.codex_sessions import _valid_session_id
+    from loopx.control_plane.turn_driver.host_failure import (
+        build_host_failure_record, normalize_host_failure_record,
+    )
+
+    try:
+        receipt = json.loads(result.stdout)
+        if not isinstance(receipt, dict):
+            raise ValueError("not an object")
+    except (ValueError, UnicodeError):
+        receipt = {}
+    session = _mapping(receipt.get("session"))
+    candidate = session.get("session_id")
+    session_id = (_valid_session_id(candidate)
+                  if session.get("binding_scope") == "agent" and isinstance(candidate, str) else None)
+    if session_id != candidate:
+        session_id = None
+    same_session = not attempt.get("session_id") or attempt["session_id"] == session_id
+    if (result.failure_kind is None and result.returncode == 0 and receipt.get("ok") is True
+            and not receipt.get("timed_out") and not receipt.get("error_kind")
+            and "host_failure" not in receipt and session_id and same_session):
+        return None
+    kind = "unknown"
+    if (result.failure_kind is None and result.returncode != 0 and receipt.get("ok") is False
+            and not receipt.get("timed_out") and not receipt.get("error_kind") and same_session):
+        try:
+            failure = normalize_host_failure_record(receipt.get("host_failure"))
+            if failure["attempt"] == 1:
+                kind = failure["kind"]
+        except (ValueError, TypeError):
+            pass
+    failure = build_host_failure_record(kind, attempt=attempt["attempt"])
+    return {**attempt, "status": "failed", "host_failure": failure,
+            "session_id": attempt.get("session_id") or session_id,
+            "not_before": now + failure.get("retry", {}).get("backoff_seconds", 0)}
 
 
 def build_should_run_command(args: argparse.Namespace) -> list[str]:
@@ -326,15 +424,53 @@ def run_worker(
     args: argparse.Namespace,
     *,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.time,
+) -> int:
+    opted_in = bool(getattr(args, "wake_host_failure", False))
+    retained = "host_attempt" in _load_state(resolve_state_path(args))
+    if not opted_in and not retained:
+        return _run_worker(args, sleep=sleep, clock=clock, host_guard=False)
+    from loopx.file_lock import try_exclusive_file_lock
+
+    try:
+        with try_exclusive_file_lock(resolve_state_path(args).resolve(), agent_id=args.agent_id,
+                                     operation="external_worker_host") as held:
+            if held is None:
+                _log("status=host_failure_hold kind=unknown reason=worker_already_running")
+                return 2
+            return _run_worker(args, sleep=sleep, clock=clock, host_guard=True)
+    except (OSError, ValueError):
+        _log("status=host_failure_hold kind=unknown reason=state_or_original_result_unresolved")
+        return 2
+
+
+def _run_worker(
+    args: argparse.Namespace, *, sleep: Callable[[float], None], clock: Callable[[], float],
+    host_guard: bool,
 ) -> int:
     should_run_command = build_should_run_command(args)
     state_path = resolve_state_path(args)
+    if host_guard:
+        state_path = state_path.resolve()
     once = bool(args.once)
+    scope = _host_scope(args) if host_guard else ""
 
     while True:
-        state = _load_state(state_path)
-        previous_token = str(state.get("reset_token") or "")
-        unchanged_count = int(state.get("unchanged_count") or 0)
+        state_unreadable = False
+        try:
+            state = _load_state(state_path, strict=host_guard)
+            previous_token = str(state.get("reset_token") or "")
+            unchanged_count = int(state.get("unchanged_count") or 0)
+            prior = _host_attempt(state, scope) if host_guard else {}
+        except (ValueError, TypeError, OverflowError):
+            if not host_guard:
+                raise
+            # Unknown local evidence forbids dispatch, not Core observation.
+            state, previous_token, unchanged_count, prior = {}, "", 0, {}
+            state_unreadable = True
+
+        def save(fields: dict[str, Any]) -> None:
+            _save_state(state_path, {**state, **fields} if host_guard else fields, durable=host_guard)
 
         try:
             payload = run_quota_should_run(
@@ -369,10 +505,18 @@ def run_worker(
                     f"action={decision.action} class={decision.cadence_class} "
                     f"reason={shlex.quote(decision.reason)}"
                 )
-                _save_state(
-                    state_path,
-                    {"reset_token": decision.reset_token, "unchanged_count": 0},
-                )
+                if not state_unreadable:
+                    save({"reset_token": decision.reset_token, "unchanged_count": 0})
+                return 0
+
+            if state_unreadable:
+                _log("status=host_failure_hold kind=unknown reason=state_unreadable "
+                     "goal_complete=false new_wake=false")
+                return 2
+
+            if prior.get("status") == "stopped":
+                _log(f"status=wake_requested_stop wake_rc={prior['stop_exit_code']} "
+                     "replayed=true goal_complete=false new_wake=false")
                 return 0
 
             if decision.should_run:
@@ -381,9 +525,34 @@ def run_worker(
                 wake_failure_kind = None
                 wake_failed = False
                 if args.wake_cmd:
+                    environment = None
+                    if host_guard:
+                        from loopx.control_plane.turn_driver.host_failure import host_failure_retry_available
+
+                        if prior and (not getattr(args, "wake_host_failure", False)
+                                      or prior["status"] == "started" or not prior.get("session_id")
+                                      or not host_failure_retry_available(prior["host_failure"])):
+                            kind = _mapping(prior.get("host_failure")).get("kind", "unknown")
+                            _log(f"status=host_failure_hold kind={kind} attempt={prior['attempt']} "
+                                 "next=original_host_recovery goal_complete=false new_wake=false")
+                            return 2
+                        delay = max(0, prior.get("not_before", 0) - clock())
+                        if delay:
+                            _log(f"status=host_failure_backoff seconds={delay:.3f} new_wake=false")
+                            if once:
+                                return 2
+                            sleep(min(delay, 60.0))
+                            retry_after_error = True
+                            break
+                        state["host_attempt"] = {"scope": scope, "status": "started",
+                            "attempt": prior.get("attempt", 0) + 1,
+                            "session_id": prior.get("session_id")}
+                        save({})
+                        environment = {**os.environ, "LOOPX_HOST_RETRY_SESSION_ID": prior.get("session_id") or ""}
                     wake_result = _run_wake(
                         args.wake_cmd,
                         timeout_seconds=getattr(args, "wake_timeout_seconds", None),
+                        **({"environment": environment} if host_guard else {}),
                     )
                     wake_rc = wake_result.returncode
                     wake_failure_kind = wake_result.failure_kind
@@ -391,11 +560,26 @@ def run_worker(
                     if (stop_code is not None and wake_failure_kind is None
                             and wake_rc == stop_code):
                         _log(f"status=wake_requested_stop wake_rc={wake_rc}")
-                        _save_state(state_path, {
+                        if host_guard:
+                            state["host_attempt"].update(status="stopped", stop_exit_code=wake_rc)
+                        save({
                             "reset_token": decision.reset_token, "unchanged_count": 0,
+                            **({"last_wake_rc": wake_rc, "last_wake_status": "wake_requested_stop"}
+                               if host_guard else {}),
                         })
                         return 0
                     wake_failed = wake_failure_kind is not None or wake_rc != 0
+                    if host_guard:
+                        failure = _host_result(wake_result, state["host_attempt"], clock())
+                        if failure is None:
+                            state.pop("host_attempt", None)
+                        else:
+                            state["host_attempt"] = failure
+                            wake_failed = True
+                        state.update(last_wake_rc=wake_rc,
+                                     last_wake_status="wake_failed" if wake_failed else "wake_ok",
+                                     last_wake_failure_kind=wake_failure_kind)
+                        save({})
                     wake_status = "wake_failed" if wake_failed else "wake_ok"
                 _log(
                     f"status=should_run {wake_status} "
@@ -406,22 +590,22 @@ def run_worker(
                     + (f" wake_rc={wake_rc}" if wake_rc is not None else "")
                 )
                 if wake_failed:
-                    _save_state(
-                        state_path,
-                        {
+                    save({
                             "reset_token": decision.reset_token,
                             "unchanged_count": unchanged_count,
                             "last_wake_rc": wake_rc,
                             "last_wake_status": "wake_failed",
                             "last_wake_failure_kind": wake_failure_kind,
-                        },
-                    )
+                        })
                     if once:
                         return (
                             int(wake_rc)
                             if wake_failure_kind is None and wake_rc
                             else 2
                         )
+                    if host_guard:
+                        retry_after_error = True
+                        break
                     _log(
                         "status=wake_failed_backoff "
                         f"backoff_seconds={max(5, int(args.error_backoff_seconds))}"
@@ -488,13 +672,10 @@ def run_worker(
                     decision = final_decision
                     continue
 
-            _save_state(
-                state_path,
-                {
+            save({
                     "reset_token": decision.reset_token,
                     "unchanged_count": unchanged_count,
-                },
-            )
+                })
             _log(
                 "status=stop_after_unchanged_limit "
                 f"unchanged_limit={decision.unchanged_limit} "
@@ -505,13 +686,10 @@ def run_worker(
         if retry_after_error:
             continue
 
-        _save_state(
-            state_path,
-            {
+        save({
                 "reset_token": decision.reset_token,
                 "unchanged_count": unchanged_count,
-            },
-        )
+            })
 
         if once:
             return 0
@@ -550,6 +728,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--wake-cmd",
         help="Optional shell command to run when should_run is true. "
         "Without it the worker is observe-only.",
+    )
+    parser.add_argument(
+        "--wake-host-failure", action="store_true",
+        help="Opt in to the configured Host JSON receipt (ok, session, host_failure). "
+             "Persist bounded same-session retries; unknown/hard failures require original Host recovery. "
+             "No model/account switching or Goal settlement is performed.",
     )
     parser.add_argument(
         "--wake-stop-exit-code",
