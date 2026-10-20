@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -37,6 +38,121 @@ def test_task_entry_defaults_to_planning_only_for_loopx_modes(mode):
     expected = "loopx-planned" if mode in {"heartbeat", "turn", "loopx-goal"} else "seeded-todo"
     assert Execution(**kwargs).task_entry == expected
     assert Execution(**kwargs, task_entry="seeded-todo").task_entry == "seeded-todo"
+
+
+@pytest.mark.parametrize("entry", ["loopx-planned", "seeded-todo"])
+@pytest.mark.parametrize("strategy", [None, "off", "evidence_conditioned_v1"])
+def test_execution_observation_keeps_task_entry_and_stride_independent(tmp_path, entry, strategy):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", task_entry=entry,
+        stride_strategy=strategy, execution_observation="local_probe")
+    env = agent._worker_env(cwd=str(tmp_path))
+    assert agent.execution.task_entry == entry
+    assert agent.stride_strategy == strategy
+    assert agent.research_loop is False
+    assert env["LOOPX_EXECUTION_OBSERVATION"] == "local_probe"
+    assert "LOOPX_RESEARCH_LOOP" not in env
+
+
+@pytest.mark.parametrize("settings", [
+    {"execution_observation": True},
+    {"execution_observation": False},
+    {"execution_observation": ""},
+    {"execution_observation": "unavailable-producer"},
+    {"execution_observation": "local_probe", "execution_mode": "plain"},
+    {"execution_observation": "local_probe", "execution_mode": "native-goal"},
+    {"execution_observation": "local_probe", "execution_mode": "loopx-goal"},
+    {"execution_observation": "local_probe", "execution_mode": "turn",
+     "validation_command": ["python", "validate.py"]},
+    {"execution_observation": "local_probe", "research_loop": True},
+])
+def test_execution_observation_rejects_ambiguous_or_unsupported_treatments(tmp_path, settings):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    with pytest.raises(ValueError, match="execution_observation"):
+        BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+
+
+def test_legacy_research_treatment_and_ordinary_default_remain_distinct(tmp_path):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+    from benchmark.runtime.planning import render_planning_prompt
+    from benchmark.runtime.research_loop import research_execution_guidance
+
+    ordinary = BenchmarkCodex(logs_dir=tmp_path / "ordinary", model_name="fixture")
+    plain_env = ordinary._worker_env(cwd=str(tmp_path))
+    assert "LOOPX_RESEARCH_LOOP" not in plain_env
+    assert "LOOPX_EXECUTION_OBSERVATION" not in plain_env
+    assert ordinary.stride_strategy is None
+    legacy = BenchmarkCodex(logs_dir=tmp_path / "legacy", model_name="fixture", research_loop=True)
+    legacy_env = legacy._worker_env(cwd=str(tmp_path))
+    assert legacy_env["LOOPX_RESEARCH_LOOP"] == "1"
+    assert legacy.stride_strategy == "evidence_conditioned_v1"
+    packet = {"input_digest": "original", "text": "Test the supplied candidate."}
+    ordinary_prompt = render_planning_prompt(packet, plain_env)
+    old_guidance = research_execution_guidance()
+    legacy_prompt = render_planning_prompt(packet, legacy_env)
+    assert legacy_prompt.count(old_guidance) == 1
+    assert legacy_prompt.replace(old_guidance, "") == ordinary_prompt
+    with pytest.raises(ValueError, match="research_loop"):
+        BenchmarkCodex(logs_dir=tmp_path / "conflicting", model_name="fixture",
+            research_loop=True, stride_strategy="off")
+
+
+@pytest.mark.parametrize("selection", [
+    {"LOOPX_EXECUTION_OBSERVATION": "unknown"},
+    {"LOOPX_EXECUTION_OBSERVATION": "local_probe", "LOOPX_EXECUTION_MODE": "plain"},
+    {"LOOPX_EXECUTION_OBSERVATION": "local_probe", "LOOPX_RESEARCH_LOOP": "1"},
+])
+def test_raw_worker_rejects_invalid_observation_before_creating_a_wake(tmp_path, selection):
+    wakes = tmp_path / "wakes"
+    with pytest.raises(ValueError, match="execution_observation|LOOPX_EXECUTION_OBSERVATION"):
+        run_once({"LOOPX_EXECUTION_MODE": "heartbeat", "LOOPX_WAKE_LOG_DIR": str(wakes), **selection})
+    assert not wakes.exists()
+
+
+@pytest.mark.parametrize("settings,legacy", [({}, False), ({"execution_observation": "local_probe"}, False),
+    ({"research_loop": True}, True)])
+def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_path, monkeypatch, settings, legacy):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+    commands = []
+
+    async def no_op(*args, **kwargs):
+        pass
+
+    async def stage(*args, **kwargs):
+        agent._runner_commit = "fixture"
+        return "fixture"
+
+    async def execute(*args, **kwargs):
+        commands.append(kwargs["command"])
+        return SimpleNamespace(stdout='{"ok":true}', stderr="", return_code=0)
+
+    async def task_exec(**kwargs):
+        return SimpleNamespace(stdout="/usr/local/bin:/usr/bin:/bin", return_code=0)
+
+    for key in ("LOOPX_SRC_DIR", "LOOPX_PORTABLE_PYTHON", "LOOPX_NODE_DIR"):
+        monkeypatch.setenv(key, str(tmp_path))
+    monkeypatch.setattr(CodexOffline, "install", no_op)
+    monkeypatch.setattr(agent, "_stage_source", stage)
+    monkeypatch.setattr(agent, "exec_as_root", execute)
+    monkeypatch.setattr(agent, "exec_as_agent", execute)
+    monkeypatch.setattr(agent, "_get_env", lambda key: None)
+    asyncio.run(agent.install(SimpleNamespace(default_user="fixture", upload_dir=no_op, exec=task_exec)))
+    selected = bool(settings)
+    assert any("-m benchmark.runtime.research_probe" in command for command in commands) is selected
+    command = next(command for command in commands if "> /logs/agent/loopx-install.json" in command)
+    receipt = json.loads(shlex.split(command)[2])
+    assert receipt.get("execution_observation") == ("local_probe" if selected else None)
+    assert receipt.get("research_loop", False) is legacy
+    assert receipt["task_entry"] == "loopx-planned"
+    assert receipt.get("stride_strategy") == ("evidence_conditioned_v1" if legacy else None)
 
 
 @pytest.fixture
@@ -200,19 +316,26 @@ def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
     )
 
 
-def test_planner_keeps_host_clock_out_of_model_input_and_preserves_task_identity(planning_env):
+@pytest.mark.parametrize("producer", [None, "local_probe"])
+def test_planner_keeps_host_clock_out_of_model_input_and_preserves_task_identity(planning_env, producer):
     from benchmark.runtime.planning import task_plan_packet
+    from benchmark.runtime.research_probe import execution_observation_guidance
     from benchmark.runtime.worker import loopx_command
 
     deadline = str(time.time() + 600)
     env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
+    if producer is not None:
+        env["LOOPX_EXECUTION_OBSERVATION"] = producer
     before = task_plan_packet(env, loopx_command(env))
     receipt = run_once(env)
     assert receipt["ok"] and receipt["planning"]["state_readback_verified"]
+    assert receipt.get("execution_observation") == producer
     body = next(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/planning-input.json")).read_text()
     assert deadline not in body
     assert "Host execution window" not in body
     assert "Existing execution reserve" not in body
+    assert body.count(execution_observation_guidance()) == int(producer is not None)
+    assert "Research-loop execution evidence:" not in body
     packet = json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1])
     assert packet == before
     assert receipt["planning"]["input_digest"] == before["input_digest"]
@@ -320,6 +443,75 @@ def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(
         "--clear-waiting-on" not in args and "--agent-work-mode" not in args
         for args in calls
     )
+
+
+@pytest.mark.parametrize("producer,objective", [(None, None), ("local_probe", None),
+    ("local_probe", "Validate the supplied candidate once.")])
+def test_observed_planning_bootstraps_the_full_task_without_prescribing_candidate_stages(tmp_path, monkeypatch, producer, objective):
+    pytest.importorskip("harbor")
+    from benchmark.runtime import harbor
+    from benchmark.runtime.planning import task_plan_packet
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.goals.active_state_metadata import split_state_frontmatter
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, control, home = (tmp_path / name for name in ("project", "control", "home"))
+    for directory in (project, control, home):
+        directory.mkdir()
+    candidate = project / "solution.py"
+    candidate.write_text("print(5)\n")
+    before = candidate.read_bytes()
+    cli = tmp_path / "loopx"
+    cli.write_text(f"#!{sys.executable}\nfrom loopx.cli import main\nraise SystemExit(main())\n")
+    cli.chmod(0o755)
+    for key, value in {"_CONTROL": control, "_TASK_DOC": control / "task.md",
+        "_REGISTRY": control / "registry.json", "_LOOPX_RUNTIME": tmp_path / "runtime",
+        "_CLI": cli, "_SRC": Path(__file__).resolve().parents[2]}.items():
+        monkeypatch.setattr(harbor, key, str(value))
+    env = dict(os.environ) | {"HOME": str(home), "CODEX_HOME": str(home / "codex"),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2]), "LOOPX_USAGE_PING": "0"}
+
+    class Environment:
+        async def exec(self, command, *, env=None, cwd=None, **kwargs):
+            result = subprocess.run(["/bin/bash", "-c", command], env=env,
+                cwd=cwd, text=True, capture_output=True, timeout=90)
+            return SimpleNamespace(return_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
+
+        async def upload_file(self, source, target):
+            Path(target).write_bytes(Path(source).read_bytes())
+
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path / "logs", model_name="fixture",
+        execution_observation=producer, stride_strategy="off", task_objective=objective)
+    monkeypatch.setattr(agent, "_profile_env", lambda: env)
+    task = ("Start from the supplied solution.py and compare one alternative against it.\n"
+        "First preserve correctness, then minimize operations. Retain useful negative results.\n"
+        "The final comparison must keep both priorities and this trailing requirement.")
+    try:
+        asyncio.run(agent._prepare_phase(Environment(), task, cwd=str(project)))
+        registry = json.loads(Path(harbor._REGISTRY).read_text())
+        state = Path(registry["goals"][0]["state_file"])
+        if not state.is_absolute():
+            state = project / state
+        assert split_state_frontmatter(state.read_text())[0]["objective"] == (objective or task)
+        worker_env = agent._worker_env(cwd=str(project))
+        packet = task_plan_packet(worker_env, [str(cli), "--format", "json",
+            "--registry", harbor._REGISTRY, "--runtime-root", harbor._LOOPX_RUNTIME])
+        assert packet["text"].endswith(task + "\n")
+        assert packet["existing_todos"] == []
+        assert packet["execution_handoff"]["spends_quota"] is False
+        agent._phase_number += 1
+        feedback = "Released feedback is available; retain the original priorities and constraints."
+        asyncio.run(agent._prepare_phase(Environment(), feedback, cwd=str(project)))
+        next_packet = task_plan_packet(agent._worker_env(cwd=str(project)), [str(cli), "--format", "json",
+            "--registry", harbor._REGISTRY, "--runtime-root", harbor._LOOPX_RUNTIME])
+        assert next_packet["text"].endswith(feedback + "\n")
+        assert next_packet["existing_todos"] == []
+        assert split_state_frontmatter(state.read_text())[0]["objective"] == (objective or task)
+        assert candidate.read_bytes() == before
+    finally:
+        from loopx.control_plane.effect_runtime import restart_effect_runtime
+
+        restart_effect_runtime(wait_for_exit=True)
 
 
 @pytest.mark.parametrize("status", ["ready", "blocked"])
@@ -808,9 +1000,14 @@ def test_sforge_planning_entry_stops_retrying_after_the_attempt_limit(planning_e
 
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
-def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_env, context):
+@pytest.mark.parametrize("producer", [None, "local_probe"])
+def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_env, context, producer):
     """Exercise the real worker/heartbeat CLI and capture its model transport input."""
+    from benchmark.runtime.research_probe import execution_observation_guidance
+
     env = planning_env | {"LOOPX_ITERATION_CONTEXT": context}
+    if producer is not None:
+        env["LOOPX_EXECUTION_OBSERVATION"] = producer
     assert run_once(env)["ok"]
     binary = Path(env["CODEX_BIN"])
     binary.write_text(
@@ -828,6 +1025,7 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_
                          "LOOPX_CODEX_TURN_TIMEOUT_SEC": "120"}
         receipt = run_once(current)
         assert receipt["ok"]
+        assert receipt.get("execution_observation") == producer
         body = (Path(env["LOOPX_CODEX_HOME"]) / "execute-input.txt").read_text()
         assert deadline not in body
         assert "Absolute phase deadline" not in body
@@ -836,6 +1034,8 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_
         assert "Existing execution reserve" not in body
         assert "The Host enforces runtime limits externally" not in body
         assert "heartbeat-prompt" in body or "quota" in body
+        assert body.count(execution_observation_guidance()) == int(producer is not None)
+        assert "Research-loop execution evidence:" not in body
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt
         assert current["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline

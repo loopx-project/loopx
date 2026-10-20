@@ -257,3 +257,128 @@ def test_candidate_stage_leaves_research_work_and_execution_reaches_next_context
     assert revised["candidate_sha256"] != observed["candidate_sha256"]
     assert revised["search_iterations"] == 5
     assert (project / "next-observation.json.stdout").read_text().strip() == "1"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ordinary_entry_observes_an_existing_candidate_with_stride_off_and_preserves_stops(tmp_path, monkeypatch, provider):
+    """Cross the adapter, real authority/CLI and process boundaries without a research stage."""
+    pytest.importorskip("harbor")
+    from benchmark.runtime import harbor
+    from benchmark.runtime.worker import heartbeat_body
+    from benchmark.runtime.research_probe import execution_observation_guidance
+    from loopx.capabilities.explore.result_log import (
+        explore_result_log_path, load_explore_result_events_strict, explore_history_rows,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    task = "Validate the supplied candidate once against the original correctness and resource requirements."
+    state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace("Settle one standard Codex App delivery.", task))
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    monkeypatch.chdir(project)
+    candidate = project / "candidate.py"
+    candidate.write_text("print(sum(x*x for x in (1, 2)))\n")
+    original_candidate = candidate.read_bytes()
+    control = tmp_path / "control"
+    control.mkdir()
+    cli_path = tmp_path / "loopx"
+    cli_path.write_text(f"#!{sys.executable}\nfrom loopx.cli import main\nraise SystemExit(main())\n")
+    cli_path.chmod(0o755)
+    for name, value in {"_CONTROL": control, "_TASK_DOC": control / "task.md",
+        "_REGISTRY": registry, "_LOOPX_RUNTIME": runtime, "_CLI": cli_path,
+        "_SRC": fixture.REPO_ROOT}.items():
+        monkeypatch.setattr(harbor, name, str(value))
+
+    def call(*args):
+        code, result = fixture._run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0, result
+        return result
+
+    class Environment:
+        async def exec(self, command, *, env=None, cwd=None, **kwargs):
+            result = subprocess.run(["/bin/bash", "-c", command], env=env,
+                cwd=cwd, text=True, capture_output=True, timeout=90)
+            return SimpleNamespace(return_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
+
+        async def upload_file(self, source, target):
+            Path(target).write_bytes(Path(source).read_bytes())
+
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path / "logs", model_name="fixture",
+        goal_id=fixture.GOAL_ID, agent_id=fixture.AGENT_ID,
+        execution_observation="local_probe", stride_strategy="off")
+    env = dict(os.environ)
+    monkeypatch.setattr(agent, "_profile_env", lambda: env)
+    environment = Environment()
+    asyncio.run(agent._prepare_phase(environment, task, cwd=str(project)))
+    worker_env = agent._worker_env(cwd=str(project))
+    assert worker_env["LOOPX_EXECUTION_OBSERVATION"] == "local_probe"
+    assert "LOOPX_RESEARCH_LOOP" not in worker_env
+    binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
+    listed = call("todo", "list", "--goal-id", fixture.GOAL_ID, "--role", "agent")
+    assert [todo["todo_id"] for todo in listed["todos"]] == [fixture.TODO_ID]
+    assert all(todo.get("target_key") != "research-continuation" for todo in listed["todos"])
+    configured = call("configure-goal", "--goal-id", fixture.GOAL_ID)
+    assert configured["after"]["execution_profile"]["stride_strategy"] == "off"
+    assert candidate.read_bytes() == original_candidate
+    call("configure-goal", "--goal-id", fixture.GOAL_ID, "--explore-graph-enabled", "--execute")
+    work_turn = "ordinary-local-observation"
+    guard = call("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
+        "--todo-id", fixture.TODO_ID, "--turn-instance-id", work_turn)
+    assert guard["should_run"] and guard["selected_todo"]["todo_id"] == fixture.TODO_ID
+    prompt = heartbeat_body(worker_env, work_turn, native_goal=False)
+    assert prompt.count(execution_observation_guidance()) == 1
+    assert "Research-loop execution evidence:" not in prompt
+    output = project / "ordinary-observation.json"
+    observed = run_probe(command=[sys.executable, str(candidate)], candidate_files=[candidate],
+        output=output, input_revision="synthetic-input-v1", planned_method_id="supplied-candidate",
+        executed_method_id="supplied-candidate", evidence_ref="probe:ordinary", limit_seconds=30)
+    assert observed["search_iterations"] is None and observed["exit_code"] == 0
+    assert output.with_suffix(".json.stdout").read_text().strip() == "5"
+    attachment = {"schema_version": "explore_result_attachment_v0", "question": "Does the supplied candidate satisfy this bounded check?",
+        "applicability": "Synthetic public inputs only", "input_revision": observed["input_revision"],
+        "observation": "The existing candidate returned five; unreported search counts remain unknown.",
+        "interpretation": "Retain this scoped check without inventing further optimization work.",
+        "status": "tentative", "evidence_refs": observed["evidence_refs"], "execution_observation": observed}
+    attachment_path = project / "ordinary-result.json"
+    attachment_path.write_text(json.dumps(attachment))
+    result = call("refresh-state", *binding, "--todo-id", fixture.TODO_ID,
+        "--turn-instance-id", work_turn, "--classification", "validated_probe",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--vision-state", "active", "--vision-summary", task,
+        "--vision-acceptance", "Retain measured evidence against the original requested requirements.",
+        "--explore-result-json", str(attachment_path), "--no-global-sync", "--suppress-external-sinks")
+    assert result["explore_result_delivery"]["ok"]
+    context = call("explore", "turn-context", *binding)
+    [finding] = context["graph"]["writeback_results"]
+    assert finding["execution_observation"] == observed
+    history = explore_result_log_path(runtime, fixture.GOAL_ID)
+    rows = explore_history_rows(load_explore_result_events_strict(history, goal_id=fixture.GOAL_ID), goal_id=fixture.GOAL_ID)
+    assert next(row for row in rows if row["event_kind"] == "finding")["execution_observation"] == observed
+    evidence_bytes, history_bytes = output.read_bytes(), history.read_bytes()
+    call("quota", "spend-slot", *binding, "--todo-id", fixture.TODO_ID,
+        "--turn-instance-id", work_turn, "--slots", "1", "--source", "heartbeat", "--execute")
+
+    # A new input phase is not evidence that a real wait or an explicit Stop ended.
+    resume_when = "resume_at:2099-01-01T00:00:00Z"
+    call("todo", "update", *binding, "--todo-id", fixture.TODO_ID, "--status", "deferred",
+        "--resume-when", resume_when, "--reason", "Wait for the scheduled external observation.", "--execute")
+    call("configure-goal", "--goal-id", fixture.GOAL_ID, "--waiting-on", "external_evidence", "--execute")
+    asyncio.run(agent._prepare_phase(environment, "Additional context for the same task.", cwd=str(project)))
+    assert json.loads(registry.read_text())["goals"][0]["waiting_on"] == "external_evidence"
+    waiting_todo = call("todo", "list", *binding, "--todo-id", fixture.TODO_ID)["todo"]
+    assert waiting_todo["status"] == "deferred" and waiting_todo["resume_when"] == resume_when
+    call("todo", "update", *binding, "--todo-id", fixture.TODO_ID, "--status", "open",
+        "--clear-resume-when", "--reason", "The fixture now supplies the requested observation.", "--execute")
+    call("configure-goal", "--goal-id", fixture.GOAL_ID, "--clear-waiting-on", "--quota-compute", "0", "--execute")
+    asyncio.run(agent._prepare_phase(environment, "Context received while stopped.", cwd=str(project)))
+    stopped = call("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
+        "--turn-instance-id", "ordinary-still-stopped")
+    assert stopped["should_run"] is False and stopped["normal_delivery_allowed"] is False
+    retained = call("todo", "list", *binding, "--todo-id", fixture.TODO_ID)
+    assert retained["authority_read"]["source_authority"] == f"{provider}_v0"
+    assert retained["todo"]["status"] == "open" and not retained["todo"].get("successor_todo_ids")
+    assert [todo["todo_id"] for todo in call("todo", "list", "--goal-id", fixture.GOAL_ID,
+        "--role", "agent")["todos"]] == [fixture.TODO_ID]
+    assert candidate.read_bytes() == original_candidate
+    assert output.read_bytes() == evidence_bytes and history.read_bytes() == history_bytes
