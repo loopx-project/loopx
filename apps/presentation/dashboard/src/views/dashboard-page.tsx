@@ -2084,7 +2084,7 @@ function PersonalGoalHome({
         channelId: `goal.${goal.goalId}`,
         goalId: goal.goalId,
       });
-      return { goalId: goal.goalId, session: listed.sessions[0] ?? null };
+      return { goalId: goal.goalId, session: currentChannelSession(listed, goal.agentId) };
     })).then((rows) => {
       if (cancelled) return;
       setRuntimeBindings((current) => {

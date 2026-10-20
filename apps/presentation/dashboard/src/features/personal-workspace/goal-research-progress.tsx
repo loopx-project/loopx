@@ -121,16 +121,27 @@ export function ResearchProgress({pack: p, packs, selectedId, error, zh, onSelec
                 {unavailable ? <span className="research-effect-verdict">{unavailable}</span> : null}
                 {notes.length ? <small>{notes.join(" · ")}</small> : null}
               </summary>
-              <div className="research-effect-evidence"><p>{label[zh ? 2 : 3]}</p>
-                {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
-                {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
-                {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
+              <div className="research-effect-evidence">
+                <div className="research-effect-help"><span>{zh ? "逐项判读" : "Episode judgments"}</span><ContextHelp label={`${label[zh ? 0 : 1]} · ${zh ? "判读口径" : "Interpretation"}`}>
+                  <p>{label[zh ? 2 : 3]}</p>
+                  {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
+                  {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
+                  {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
+                </ContextHelp></div>
                 {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episode.question}</li>)}</ul></div> : null}
-                {assessments.map(assessment => <article key={assessment.episode_id}>
-                  <h4>{p.episodes?.find(episode => episode.id === assessment.episode_id)?.question ?? assessment.episode_id}</h4>
-                  <span>{verdictLabel(metric, assessment.verdict, zh)}</span><p>{assessment.reason}</p>
-                  <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
-                </article>)}
+                <div className="research-assessments">{assessments.map(assessment => {
+                  const episode = p.episodes?.find(item => item.id === assessment.episode_id);
+                  // Use the declared identity, not a guessed title extracted
+                  // from the question. The complete source wording stays below.
+                  return <details className="research-assessment" key={assessment.episode_id}>
+                    <summary><span className="research-assessment-name">{assessment.episode_id}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
+                    <div className="research-assessment-body">
+                      {episode ? <p className="research-assessment-question">{episode.question}</p> : null}
+                      <p>{assessment.reason}</p>
+                      <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
+                    </div>
+                  </details>;
+                })}</div>
                 {!row?.eligible ? <p>{zh ? "所选片段没有此指标的适用判读；未记作零。" : "No eligible judgment for this metric in the selected episodes; not recorded as zero."}</p> : null}
               </div>
             </details>;

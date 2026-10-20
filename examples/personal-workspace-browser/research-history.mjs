@@ -65,6 +65,25 @@ function analysisReadback(selected = "a") {
   return snapshot;
 }
 
+// Repeated question templates are valid source data. Presentation must keep
+// their complete wording readable without repeating it in every collapsed row.
+function comparisonReadback() {
+  const snapshot = analysisReadback(), p = snapshot.pack;
+  const names = ["variant-alpha", "variant-beta", "variant-gamma", "edge-aware"];
+  p.episode_count = 4;
+  p.episodes = names.map(id => ({id,
+    question: `${id} 的实验是否检验原始目标，并被后续候选选择实际采用？负结果、控制差异与未知分别保留。`,
+    source_ids: ["source"], eligible_metrics: p.result.metrics.map(row => row.metric)}));
+  p.result.metrics = p.result.metrics.map(row => ({...row, yes: 1, no: 0, unknown: 3, eligible: 4, assessed_fraction: .25, missing_data_bounds: [.25, 1]}));
+  p.result.assessments = p.result.metrics.flatMap(({metric}) => names.map((episode_id, index) => ({
+    episode_id, metric, verdict: index === 3 ? "yes" : "unknown",
+    reason: index === 3 ? "Synthetic evidence connects the intervention to the measured bottleneck."
+      : "Synthetic evidence identifies the candidate, but does not establish the intervention or its relationship to the bottleneck.",
+    citations: [{source_id: "source", first_line: 1, last_line: 2}],
+  })));
+  return snapshot;
+}
+
 export async function startHistoryOwner(fixture) {
   const fixtures = Array.isArray(fixture) ? fixture : fixture ? [fixture] : [];
   const child = spawn(resolveTestPython(), ["-u", "examples/personal-workspace-browser/research-history-backend.py", ...fixtures.flatMap(path => ["--fixture", path])],
@@ -105,7 +124,7 @@ export const researchHistoryScenario = {
     let unavailable = false;
     let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
     let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
-    let unavailableAnalysis = false, episodeMetadataLimit = null;
+    let unavailableAnalysis = false, episodeMetadataLimit = null, comparisonFixture = false;
     let analysisWrites = 0;
     try {
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_, page) => {
@@ -124,7 +143,7 @@ export const researchHistoryScenario = {
 
           const selected = ["b", "c", "d"].find(id => query.get("pack_id") === id.repeat(64)) ?? "a";
           if (holdOldAnalysis && selected === "a") {slowStarted(); await new Promise(resolve => {releaseOld = resolve;});}
-          const readback = analysisReadback(selected);
+          const readback = comparisonFixture ? comparisonReadback() : analysisReadback(selected);
           if (episodeMetadataLimit === 0) delete readback.pack.episodes;
           else if (episodeMetadataLimit !== null) readback.pack.episodes = readback.pack.episodes.slice(-episodeMetadataLimit);
           await route.fulfill(unavailableAnalysis && selected === "a"
@@ -369,7 +388,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
       const effects = progress.locator('.research-effect-metrics');
       await effects.waitFor();
-      assert.equal(await effects.locator('details').count(), 6, 'All six analyzer metrics are primary without opening analysis or cost details');
+      assert.equal(await effects.locator('.research-effect-metric').count(), 6, 'All six analyzer metrics are primary without opening analysis or cost details');
       assert.equal(await progress.locator('.research-progress-basis').evaluate(e => e.open), false, 'Sources and cost share one secondary disclosure by default');
       // Optional methodology must be reachable without crowding the results,
       // changing counts or invoking analysis. Exercise the same disclosure with
@@ -405,7 +424,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.setViewportSize({width: 1440, height: 1000});
       await progress.evaluate(element => element.scrollIntoView({block: 'start'}));
       await page.screenshot({path: resolve(outputDir, 'research-effect-viewport.png'), animations: 'disabled'});
-      const metricGeometry = await effects.locator('details > summary').evaluateAll(elements => elements.map(element => ({
+      const metricGeometry = await effects.locator('.research-effect-metric > summary').evaluateAll(elements => elements.map(element => ({
         top: Math.round(element.getBoundingClientRect().top),
         labelSize: parseFloat(getComputedStyle(element.querySelector('.research-effect-title')).fontSize),
         numberSize: parseFloat(getComputedStyle(element.querySelector('.research-effect-number')).fontSize),
@@ -422,9 +441,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.screenshot({path: resolve(outputDir, 'research-effect-mobile-viewport.png'), animations: 'disabled'});
       await page.setViewportSize({width: 1280, height: 900});
       await page.screenshot({path: resolve(outputDir, 'research-eligibility-desktop.png'), animations: 'disabled'});
-      assert.match(await benefitMetric.locator('summary').innerText(), /不适用 1/,
+      assert.match(await benefitMetric.locator(':scope > summary').innerText(), /不适用 1/,
         'The sample includes a second episode explicitly excluded from this metric');
-      await benefitMetric.locator('summary').click();
+      await benefitMetric.locator(':scope > summary').click();
+      await benefitMetric.locator('.research-assessment > summary').click();
       assert.match(await benefitMetric.innerText(), /original-objective utility was not tested/);
       assert.match(await benefitMetric.locator('.research-effect-excluded').innerText(), /Was the later decision informed by this evidence\?/,
         'One expansion identifies the declared exclusion rather than requiring the selection-rule prose');
@@ -499,8 +519,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
         episodeMetadataLimit = limit;
         await page.reload({waitUntil: 'networkidle'});
         await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
-        assert.match(await benefitMetric.locator('summary').innerText(), /0 \/ 1/);
-        assert.doesNotMatch(await benefitMetric.locator('summary').innerText(), /不适用/,
+        assert.match(await benefitMetric.locator(':scope > summary').innerText(), /0 \/ 1/);
+        assert.doesNotMatch(await benefitMetric.locator(':scope > summary').innerText(), /不适用/,
           'Partial or absent metadata cannot establish exclusions from the arithmetic count gap');
         assert.match(await effects.locator('[data-metric="evidence_adoption"] > summary').innerText(), /未知 1/);
       }
@@ -509,9 +529,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.reload({waitUntil: 'networkidle'});
       const englishBenefit = page.locator('.research-progress [data-metric="benefit_test"]');
       await englishBenefit.waitFor();
-      assert.match(await englishBenefit.locator('summary').innerText(), /Ineligible 1/);
-      await englishBenefit.locator('summary').focus();
-      await englishBenefit.locator('summary').press('Enter');
+      assert.match(await englishBenefit.locator(':scope > summary').innerText(), /Ineligible 1/);
+      await englishBenefit.locator(':scope > summary').focus();
+      await englishBenefit.locator(':scope > summary').press('Enter');
       assert.match(await englishBenefit.locator('.research-effect-excluded').innerText(), /Was the later decision informed/);
       await page.evaluate(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
       await page.reload({waitUntil: 'networkidle'});
@@ -545,7 +565,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await citedOriginal.press('Escape');
       await history.getByRole('button', {name: '关闭分析', exact: true}).click();
       await basis.locator(':scope > summary').click();
-      await benefitMetric.locator('summary').click();
+      await benefitMetric.locator(':scope > summary').click();
       assert.match(await progress.innerText(), /0 \/ 1/);
       assert.match(await progress.innerText(), /1 \/ 2/);
       await page.setViewportSize({width:1280,height:900});
@@ -661,6 +681,46 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.reload({waitUntil: "networkidle"});
       await history.getByRole("status").filter({hasText: "0 / 0"}).waitFor();
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
+
+      comparisonFixture = true;
+      await progress.locator('select').selectOption('a'.repeat(64));
+      await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
+      await page.reload({waitUntil: "networkidle"});
+      const comparison = progress.locator('[data-metric="goal_alignment"]');
+      await comparison.locator(':scope > summary').click();
+      assert.match(await comparison.locator(':scope > summary').innerText(), /1 \/ 4.*未知 3/s);
+      const rows = comparison.locator('.research-assessment');
+      assert.equal(await rows.count(), 4);
+      assert.deepEqual(await rows.locator(':scope > summary').allTextContents(), [
+        'variant-alpha证据不足', 'variant-beta证据不足', 'variant-gamma证据不足', 'edge-aware有依据',
+      ], 'Comparable identities and judgments precede repeated questions, reasons and citations');
+      assert.equal(await rows.locator('.research-assessment-body:visible').count(), 0);
+      assert.equal(await comparison.locator('.research-effect-citations button:visible').count(), 0);
+      const interpretation = comparison.getByRole('button', {name: '目标关联 · 判读口径', exact: true});
+      await interpretation.focus();
+      await comparison.getByRole('tooltip').waitFor({state: 'visible'});
+      assert.match(await comparison.getByRole('tooltip').innerText(), /25%.*25%–100%/s);
+      await page.keyboard.press('Escape');
+      await page.setViewportSize({width: 1440, height: 1000});
+      await progress.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, 'research-assessment-comparison.png'), animations: 'disabled'});
+      const firstRow = rows.first().locator(':scope > summary');
+      await firstRow.focus(); await firstRow.press('Enter');
+      assert.match(await rows.first().innerText(), /variant-alpha 的实验是否检验原始目标/);
+      assert.match(await rows.first().innerText(), /does not establish the intervention/);
+      const comparisonCitation = rows.first().getByRole('button', {name: /source.*行 1–2/});
+      await comparisonCitation.click();
+      await citedOriginal.waitFor(); await citedOriginal.press('Escape');
+      assert.equal(await comparisonCitation.evaluate(element => element === document.activeElement), true,
+        'Returning from original evidence restores the exact expanded row');
+      await firstRow.press('Enter');
+      await page.setViewportSize({width: 390, height: 844});
+      await comparison.scrollIntoViewIfNeeded();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: resolve(outputDir, 'research-assessment-comparison-mobile.png'), animations: 'disabled'});
+      await rows.last().locator(':scope > summary').click();
+      await rows.last().getByText(/Synthetic evidence connects/).waitFor();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       assert.equal(analysisWrites, 0, "Cached, reload, switch and keyboard reading never request execution");
       assert.equal(api.turnRequests.length, 0, "Reading the graph cannot start an Agent");
       return {note: "Three unchanged real checkpoint histories through production HTTP + packaged UI; per-Goal complete pagination, genuine negative evidence, no invented edges, reload/back/forward, mobile and failed refresh. Separate synthetic coincident-target regression; no benchmark qualification or model dispatch.",

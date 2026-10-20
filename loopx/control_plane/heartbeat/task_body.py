@@ -643,7 +643,8 @@ LOOPX_TURN=<current_time_iso>
 ```
 {SCOPE_BOUNDED_WORK_RULE}
 Observed capabilities -> --available-capability, never a user gate.
-Apply `scheduler` as projected; read the saved full decision for exact ACK args.
+Apply `scheduler` as projected using inline ACK argv. Read saved scheduler detail
+only for a needed missing/truncated/referenced command; failure argv only after host update failure.
 Exact monitor settlement=no refresh/spend; auxiliary poll continues work.
 Validate work; execute `writeback.settlement_plan` and `writeback.next_cli_actions` with
 their exact identity. Do not guess commands from abbreviated previews.

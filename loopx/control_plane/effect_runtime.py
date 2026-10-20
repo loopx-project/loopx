@@ -50,6 +50,7 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
     "todo.context.page",
     "work_item.context.project",
     "work_item.interaction_reads.project",
+    "scheduler.hint.project",
     "work_item.task_graph.goal_topology",
     "work_item.replan_semantics.project",
     "quota.settlement.read",

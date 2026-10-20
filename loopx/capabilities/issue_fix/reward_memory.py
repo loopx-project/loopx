@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping
 from datetime import time
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...domain_packs.issue_fix import REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN
 from ..context_providers.base import ContextProvider
 from ..reward_memory.application import RewardMemoryApplier
 from ..reward_memory.candidate_review import build_issue_fix_reward_memory_candidate
@@ -47,8 +47,6 @@ ISSUE_FIX_REWARD_MEMORY_EVENT_SCHEMA_VERSION = "issue_fix_reward_memory_event_v0
 ISSUE_FIX_REWARD_MEMORY_EXECUTION_EVIDENCE_SCHEMA_VERSION = (
     "issue_fix_reward_memory_execution_evidence_v0"
 )
-
-_LOCAL_TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 
 _EVENT_FIELDS = {
     "schema_version",
@@ -613,8 +611,8 @@ def _reviewer_notification_delivery_policy(value: object) -> dict[str, Any]:
     end = str(allowed_local_time.get("end") or "").strip()
     if (
         not timezone_name
-        or not _LOCAL_TIME_PATTERN.fullmatch(start)
-        or not _LOCAL_TIME_PATTERN.fullmatch(end)
+        or not REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN.fullmatch(start)
+        or not REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN.fullmatch(end)
         or start == end
         or value.get("outside_window") != "queue_without_send"
     ):

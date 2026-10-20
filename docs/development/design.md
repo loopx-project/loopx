@@ -141,6 +141,14 @@ source, method and limitation paragraphs before adding another note.
   per-cell footnotes. On wide screens, use a compact value band so the related
   graph or result remains nearby; reflow on narrower screens. Merge optional
   source, method and cost material into the existing disclosure where practical.
+- In an expanded assessment, make items comparable before asking the owner to
+  read their evidence: one compact row per declared item, with its identity and
+  actual judgment. Show the shared interpretation once on demand. Expand an
+  individual row for its complete question, verbatim rationale and source links;
+  do not repeat a long question template, full rationale and button wall for
+  every item. Use declared identities rather than extracting guessed labels
+  from prose. Keep unknowns, exclusions and denominators visible at the metric,
+  and preserve keyboard and touch access to the full evidence.
 
 For example, research metrics can show “19 episodes · purposive sample ·
 uncalibrated” once, with a nearby explanation of yes/eligible counts and unknowns.

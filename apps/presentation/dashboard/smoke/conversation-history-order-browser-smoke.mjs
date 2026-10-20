@@ -6,7 +6,7 @@ const dashboardDir = fileURLToPath(new URL("..", import.meta.url));
 const port = Number(process.env.LOOPX_HISTORY_ORDER_PORT ?? "5298");
 const origin = `http://127.0.0.1:${port}`;
 const server = startViteDashboardServer({ dashboardDir, port });
-const scenarios = ["late-backfill", "failed-backfill", "backfill-during-refresh", "refresh-after-backfill", "overlapping-refreshes", "scope-switch", "scope-return", "retry-progress"];
+const scenarios = ["late-backfill", "failed-backfill", "backfill-during-refresh", "refresh-after-backfill", "overlapping-refreshes", "scope-switch", "scope-return", "retry-progress", "closed-first", "closed-only", "failed-current"];
 
 function session(id, goal, version = 0) {
   return { session_id: id, goal_id: goal, agent_id: "codex", adapter_kind: "codex_app_server",
@@ -17,7 +17,8 @@ function session(id, goal, version = 0) {
 
 function snapshot(id, goal, version) {
   const current = session(id, goal, id.startsWith("current") ? version : 0);
-  const texts = [goal === "b" ? "GOAL_B" : id.startsWith("archive") ? "ARCHIVE_BASE" : "CURRENT_BASE"];
+  const texts = [goal === "b" ? "GOAL_B" : id.startsWith("closed") ? "CLOSED_BASE" : id.startsWith("archive") ? "ARCHIVE_BASE" : "CURRENT_BASE"];
+  if (id.startsWith("closed")) Object.assign(current, { status: "closed", resumable: false, active_turn_id: null });
   if (version && goal === "a") texts.push(`${id.startsWith("archive") ? "ARCHIVE" : "CURRENT"}_${version}`);
   return { ok: true, schema_version: "loopx_chat_store_v1", session: current,
     active_turn: current.active_turn_id ? { turn_id: current.active_turn_id, status: "running", response: null } : null,
@@ -50,11 +51,17 @@ try {
       const url = new URL(route.request().url());
       if (url.pathname === "/api/chat/sessions") {
         const goal = url.searchParams.get("goal_id");
-        return route.fulfill({ json: { ok: true, schema_version: "loopx_chat_session_list_v1", sessions: goal === "b"
-          ? [session("current-b", "b")] : [session("current-a", "a", version), session("archive-a", "a")] } });
+        const closed = { ...session("closed-a", "a"), status: "closed", resumable: false };
+        let sessions = goal === "b" ? [session("current-b", "b")]
+          : [session("current-a", "a", version), session("archive-a", "a")];
+        if (scenario === "closed-first") sessions.unshift(closed);
+        if (scenario === "closed-only") sessions = [closed];
+        if (scenario === "failed-current") sessions = [{ ...session("current-a", "a"), status: "resume_failed", resumable: false }];
+        return route.fulfill({ json: { ok: true, schema_version: "loopx_chat_session_list_v1", sessions } });
       }
       const id = url.pathname.split("/").at(-1), goal = id === "current-b" ? "b" : "a";
       const response = snapshot(id, goal, version);
+      if (scenario === "failed-current") Object.assign(response.session, { status: "resume_failed", resumable: false });
       if (id === "archive-a" && mode === "retry") {
         oldStarted.resolve();
         await oldRead.promise;
@@ -91,6 +98,16 @@ try {
     };
     try {
       await page.goto(`${origin}/smoke/conversation-history-order-smoke.html`);
+      if (scenario === "closed-only" || scenario === "failed-current") {
+        await ready();
+        const observed = await state();
+        assert.equal(observed.sessionId, scenario === "closed-only" ? null : "current-a");
+        assert.equal(observed.status, scenario === "closed-only" ? undefined : "resume_failed");
+        assert.deepEqual(observed.texts, [scenario === "closed-only" ? "CLOSED_BASE" : "CURRENT_BASE"]);
+        assert.deepEqual(errors, []);
+        console.log(`history-read-order: PASS ${scenario}`);
+        continue;
+      }
       await page.waitForFunction(() => JSON.parse(document.querySelector("output")?.textContent ?? "{}").phase === "partial");
       if (scenario === "backfill-during-refresh") {
         await refresh(true); await retry();
@@ -131,6 +148,10 @@ try {
         assert.ok(observed.texts.includes(`CURRENT_${expectedVersion}`), `${scenario}: preserve the refreshed answer`);
         assert.ok(observed.texts.includes("CURRENT_BASE"), `${scenario}: preserve earlier history`);
         assert.ok(observed.texts.includes("ARCHIVE_BASE"), `${scenario}: missing history still recovers`);
+        if (scenario === "closed-first") {
+          assert.equal(observed.sessionId, "current-a");
+          assert.ok(observed.texts.includes("CLOSED_BASE"), "Closed history stays readable alongside the current Session");
+        }
       }
       assert.deepEqual(errors, []);
       console.log(`history-read-order: PASS ${scenario}`);

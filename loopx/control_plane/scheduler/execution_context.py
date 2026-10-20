@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -51,23 +50,8 @@ class SchedulerRuntimeProfile(str, Enum):
     GENERIC_CLI_OUTER_CONTROLLER = "outer_controller"
 
 
-class GoalRuntimeContinuationDisposition(str, Enum):
-    CONTINUE_NOW = "continue_now"
-    DEFER = "defer"
-    COMPLETE = "complete"
 
 
-GOAL_RUNTIME_DEFER_ACTIONS = frozenset(
-    {
-        "backoff_agent_monitor_only",
-        "backoff_until_fresh_evidence",
-        "backoff_until_material_transition",
-        "backoff_until_reassigned",
-        "backoff_until_state_change",
-        "backoff_waiting_for_user",
-        "repair_interaction_contract_projection",
-    }
-)
 
 
 NATIVE_GOAL_RUNTIME_PROFILES = frozenset(
@@ -511,181 +495,12 @@ def build_goal_runtime_continuation(
     *,
     frontier_recheck_after_seconds: int | None = None,
 ) -> dict[str, Any]:
-    action = str(scheduler_hint.get("action") or "")
-    if action in {"run_now", "preserve_current_schedule"}:
-        # Replay does not complete or block a native Goal. Its next iteration
-        # must consult quota with a fresh identity, not repeat this closed Turn.
-        disposition = GoalRuntimeContinuationDisposition.CONTINUE_NOW
-    elif action == "stop_until_explicit_resume":
-        disposition = GoalRuntimeContinuationDisposition.COMPLETE
-    elif action in GOAL_RUNTIME_DEFER_ACTIONS:
-        disposition = GoalRuntimeContinuationDisposition.DEFER
-    else:
-        raise ValueError(f"unsupported Goal runtime scheduler action: {action or 'missing'}")
+    from .scheduler_hint import _project_hint
 
-    continuation = {
-        "schema_version": GOAL_RUNTIME_CONTINUATION_SCHEMA_VERSION,
-        "disposition": disposition.value,
-    }
-    if disposition is GoalRuntimeContinuationDisposition.DEFER:
-        if (
-            isinstance(frontier_recheck_after_seconds, int)
-            and frontier_recheck_after_seconds > 0
-        ):
-            continuation["recheck_after_seconds"] = frontier_recheck_after_seconds
-            continuation["recheck_source"] = "frontier_earliest_material_transition"
-        else:
-            host_cadence = scheduler_hint.get("app_automation")
-            if not isinstance(host_cadence, Mapping):
-                host_cadence = scheduler_hint.get("codex_app")
-            host_cadence = host_cadence if isinstance(host_cadence, Mapping) else {}
-            recommended_interval = host_cadence.get("recommended_interval_minutes")
-            if not isinstance(recommended_interval, int) or recommended_interval <= 0:
-                raise ValueError(
-                    "deferred Goal runtime continuation requires a positive recheck interval"
-                )
-            continuation["recheck_after_seconds"] = recommended_interval * 60
-        continuation["wake_policy"] = "state_change_or_deadline"
-    return continuation
-
-
-def apply_scheduler_execution_context(
-    result: dict[str, Any],
-    resolution: SchedulerExecutionContextResolution,
-    *,
-    frontier_recheck_after_seconds: int | None = None,
-) -> dict[str, Any]:
-    """Scope a generic cadence hint to the selected runtime owner."""
-
-    if not resolution.ok or resolution.context is None:
-        raise ValueError("cannot apply an invalid scheduler execution context")
-    context = resolution.context
-
-    app_automation = (
-        result.get("app_automation")
-        if isinstance(result.get("app_automation"), dict)
-        else {}
+    return _project_hint(
+        "continuation",
+        {
+            "hint": dict(scheduler_hint),
+            "frontier_recheck_after_seconds": frontier_recheck_after_seconds,
+        },
     )
-    if context.app_automation_applicable:
-        app_automation["applicability"] = "applicable"
-        app_automation["host_surface"] = context.host_surface.value
-        backoff = (
-            app_automation.get("stateful_backoff")
-            if isinstance(app_automation.get("stateful_backoff"), dict)
-            else {}
-        )
-        apply_needed = (
-            backoff.get("apply_needed") is True
-            or app_automation.get("host_action_required") is True
-        )
-        ack_needed = backoff.get("ack_needed") is True
-        result["app_automation"] = app_automation
-        if context.host_surface is HostSurface.CODEX_APP:
-            codex_app = result.get("codex_app")
-            if not isinstance(codex_app, dict):
-                # Stateless stop/pause packets do not pass through the stateful
-                # compatibility builder. Keep their legacy view independent so
-                # later route binding cannot mutate the canonical packet.
-                result["codex_app"] = copy.deepcopy(app_automation)
-            reset_policy = result.get("reset_policy")
-            if isinstance(reset_policy, dict):
-                reset_policy["codex_app_initial_interval_minutes"] = (
-                    reset_policy.get("app_automation_initial_interval_minutes")
-                )
-                reset_policy["codex_app_initial_rrule"] = reset_policy.get(
-                    "app_automation_initial_rrule"
-                )
-            cold_path = result.get("cold_path_detail")
-            reset_detail = (
-                cold_path.get("reset_policy_detail")
-                if isinstance(cold_path, dict)
-                and isinstance(cold_path.get("reset_policy_detail"), dict)
-                else None
-            )
-            if reset_detail is not None:
-                reset_detail["codex_app_initial_interval_minutes"] = (
-                    reset_detail.get("app_automation_initial_interval_minutes")
-                )
-                reset_detail["codex_app_initial_rrule"] = reset_detail.get(
-                    "app_automation_initial_rrule"
-                )
-                reset_detail["codex_app_tool"] = reset_detail.get(
-                    "app_automation_tool"
-                )
-                reset_detail["codex_app_apply"] = reset_detail.get(
-                    "app_automation_apply"
-                )
-        else:
-            result.pop("codex_app", None)
-        execution_phase = {
-            "schema_version": "scheduler_execution_phase_v0",
-            "host_surface": context.host_surface.value,
-            "scheduler_owner": context.scheduler_owner.value,
-            "disposition": (
-                "host_action_required" if apply_needed or ack_needed else "not_required"
-            ),
-            "completed": not (apply_needed or ack_needed),
-            "apply_needed": apply_needed,
-            "ack_needed": ack_needed,
-            "acknowledged": False,
-        }
-        cold_path = result.get("cold_path_detail")
-        if isinstance(cold_path, dict):
-            cold_path["execution_context"] = resolution.projection()
-            cold_path["execution_phase"] = execution_phase
-        return result
-
-    goal_runtime_continuation = (
-        build_goal_runtime_continuation(
-            result,
-            frontier_recheck_after_seconds=frontier_recheck_after_seconds,
-        )
-        if context.scheduler_owner is SchedulerOwner.GOAL_RUNTIME
-        else None
-    )
-
-    result["execution_context"] = resolution.projection()
-    not_applicable = {
-        "applicability": "not_applicable",
-        "reason_code": f"cadence_owned_by_{context.scheduler_owner.value}",
-        "apply": "none",
-        "host_action": "none",
-        "ack_required": False,
-        "no_spend_for_cadence_change": True,
-    }
-    # Preserve the historical non-App response exactly. Provider-neutral App
-    # automation is emitted only when a real App host owns the cadence; adding
-    # it to unrelated CLI/Goal-runtime responses would duplicate a negative
-    # projection and expand every agent-facing payload.
-    result.pop("app_automation", None)
-    result["codex_app"] = not_applicable
-    reset_policy = result.get("reset_policy")
-    if isinstance(reset_policy, dict):
-        for key in tuple(reset_policy):
-            if key.startswith(("app_automation_", "codex_app_")):
-                reset_policy.pop(key, None)
-    cold_path = result.get("cold_path_detail")
-    if isinstance(cold_path, dict):
-        cold_path.pop("stateful_backoff_detail", None)
-        reset_detail = cold_path.get("reset_policy_detail")
-        if isinstance(reset_detail, dict):
-            for key in tuple(reset_detail):
-                if key.startswith(("app_automation_", "codex_app_")):
-                    reset_detail.pop(key, None)
-    owner = context.scheduler_owner.value
-    result["execution_phase"] = {
-        "schema_version": "scheduler_execution_phase_v0",
-        "host_surface": context.host_surface.value,
-        "scheduler_owner": owner,
-        "disposition": f"{owner}_owned",
-        "completed": True,
-        "apply_needed": False,
-        "ack_needed": False,
-        "acknowledged": False,
-        "completion_reason": (
-            "selected scheduler owner requires no Codex App apply or ACK"
-        ),
-    }
-    if goal_runtime_continuation is not None:
-        result["goal_runtime_continuation"] = goal_runtime_continuation
-    return result

@@ -4,19 +4,18 @@ The shape ``^[a-z][a-z0-9_.-]{0,127}$`` answers one question -- is this
 identifier a lowercase public-safe slug -- and on the base revision seven modules
 compiled it themselves: ``periodic_report/core.py``, ``issue_fix/periodic_report.py``
 and ``control_plane/handoff/review_batch.py``, plus four files inside
-``capabilities/periodic_report`` that this slice declares instead of converting.
+``capabilities/periodic_report``.
+
+Those four files were declared by file and count instead of being converted
+because another branch was rewriting their import blocks at the time. That
+branch is no longer in flight, so they are converted here and the declaration
+budget is empty: every module that states the shape must now be the owner or a
+module that imports the owner's object.
 
 Decisions are made on the folded value, not the spelling: a regex built at module
 level, inside a function, or by concatenating same-file string constants is
 reported, and a construction whose value cannot be folded has to be declared with
 its file and count.
-
-The four declared sites are ``adapters.py``, ``archive.py``, ``audience.py`` and
-``bindings.py``.  They are not converted here because their import blocks are
-being rewritten by an open branch of the same author, so a seventh edit would
-only create a conflict between two pending pull requests.  Converting one means
-deleting its entry, and a declared file whose count moves fails the guard either
-way.
 """
 
 from __future__ import annotations
@@ -29,7 +28,13 @@ import pytest
 
 from loopx import public_safe_text
 from loopx.capabilities.issue_fix import periodic_report as issue_fix_report
-from loopx.capabilities.periodic_report import core
+from loopx.capabilities.periodic_report import (
+    adapters,
+    archive,
+    audience,
+    bindings,
+    core,
+)
 from loopx.control_plane.handoff import review_batch
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -37,16 +42,29 @@ OWNER_PATH = "loopx/public_safe_text.py"
 SLUG_BODY = r"^[a-z][a-z0-9_.-]{0,127}$"
 SLUG_INNER = SLUG_BODY[1:-1]
 
-DECLARED_INDIVIDUAL_SITES: dict[str, int] = {
-    "loopx/capabilities/periodic_report/adapters.py": 1,
-    "loopx/capabilities/periodic_report/archive.py": 1,
-    "loopx/capabilities/periodic_report/audience.py": 1,
-    "loopx/capabilities/periodic_report/bindings.py": 1,
-}
+# Sites still allowed to state the shape locally, per file and count.  Empty:
+# every converted module imports the owner instead.
+DECLARED_INDIVIDUAL_SITES: dict[str, int] = {}
 # A construction whose value this scan cannot fold, per file.  None today.
 DECLARED_UNFOLDABLE_SITES: dict[str, int] = {}
 
 CONSUMERS: dict[str, tuple[ModuleType, str]] = {
+    "loopx/capabilities/periodic_report/adapters.py": (
+        adapters,
+        "PUBLIC_SAFE_SLUG_PATTERN",
+    ),
+    "loopx/capabilities/periodic_report/archive.py": (
+        archive,
+        "PUBLIC_SAFE_SLUG_PATTERN",
+    ),
+    "loopx/capabilities/periodic_report/audience.py": (
+        audience,
+        "PUBLIC_SAFE_SLUG_PATTERN",
+    ),
+    "loopx/capabilities/periodic_report/bindings.py": (
+        bindings,
+        "PUBLIC_SAFE_SLUG_PATTERN",
+    ),
     "loopx/capabilities/periodic_report/core.py": (core, "PUBLIC_SAFE_SLUG_PATTERN"),
     "loopx/capabilities/issue_fix/periodic_report.py": (
         issue_fix_report,
@@ -284,12 +302,32 @@ def test_no_other_module_compiles_the_slug_shape() -> None:
     assert offender_rows(collect(REPO_ROOT)) == []
 
 
-def test_declared_sites_are_exactly_the_four_in_flight_files() -> None:
+def modules_importing_the_owner() -> set[str]:
+    importing: set[str] = set()
+    for path in sorted((REPO_ROOT / "loopx").rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and any(
+                alias.name == "PUBLIC_SAFE_SLUG_PATTERN" for alias in node.names
+            ):
+                importing.add(path.relative_to(REPO_ROOT).as_posix())
+    return importing
+
+
+def test_every_slug_site_is_the_owner_or_a_converted_consumer() -> None:
     rows = collect(REPO_ROOT)
-    declared_found = sorted(
-        str(row["file"]) for row in rows if str(row["file"]) in DECLARED_INDIVIDUAL_SITES
-    )
-    assert declared_found == sorted(DECLARED_INDIVIDUAL_SITES)
+    owner_or_consumer = {OWNER_PATH, *CONSUMERS}
+    stray = sorted({str(row["file"]) for row in rows} - owner_or_consumer)
+    assert DECLARED_INDIVIDUAL_SITES == {}
+    assert stray == []
+
+
+def test_every_module_that_imports_the_owner_is_a_declared_consumer() -> None:
+    importing = modules_importing_the_owner() - {OWNER_PATH}
+    assert sorted(importing) == sorted(CONSUMERS)
 
 
 def test_owner_states_the_shape_as_the_recorded_literal() -> None:
@@ -451,20 +489,18 @@ def test_unfoldable_probe_is_forced_into_the_open() -> None:
 
 
 def test_declared_counts_are_enforced_in_both_directions() -> None:
-    rows = collect(REPO_ROOT)
-    assert offender_rows(rows) == []
-    retired = [row for row in rows if str(row["file"]) !=
-               "loopx/capabilities/periodic_report/audience.py"]
-    assert offender_rows(retired) == [
+    declared = {"loopx/capabilities/periodic_report/audience.py": 1}
+    assert offender_rows([], declared=declared) == [
         "loopx/capabilities/periodic_report/audience.py declares 1 site(s), found 0"
     ]
-    doubled = rows + [
+    doubled = [
         {
             "file": "loopx/capabilities/periodic_report/audience.py",
-            "line": 99,
+            "line": line,
             "kind": "slug_shape",
         }
+        for line in (99, 100)
     ]
-    assert offender_rows(doubled) == [
+    assert offender_rows(doubled, declared=declared) == [
         "loopx/capabilities/periodic_report/audience.py declares 1 site(s), found 2"
     ]

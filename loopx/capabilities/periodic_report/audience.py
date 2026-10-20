@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .core import _reject_raw_keys
 from ...control_plane.digest_envelope import sha256_envelope
+from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
 
 AUDIENCE_POLICY_SCHEMA = "periodic_report_audience_policy_v0"
 AUDIENCE_RECIPIENT_SCHEMA = "periodic_report_audience_recipient_v0"
@@ -14,7 +14,6 @@ AUDIENCE_ROUTING_RULE_SCHEMA = "periodic_report_audience_routing_rule_v0"
 ANNOUNCEMENT_PLAN_SCHEMA = "periodic_report_announcement_plan_v0"
 
 _DOCUMENT_SCHEMA = "periodic_report_document_v0"
-_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _VISIBILITIES = {"primary", "supporting"}
 _RULE_SELECTORS = {
     "source_ids",
@@ -48,7 +47,7 @@ def _text(value: object, label: str, *, maximum: int = 128) -> str:
 
 def _token(value: object, label: str) -> str:
     token = _text(value, label).lower()
-    if not _TOKEN_RE.fullmatch(token):
+    if not PUBLIC_SAFE_SLUG_PATTERN.fullmatch(token):
         raise ValueError(f"{label} must be a lower-snake-like public token")
     return token
 

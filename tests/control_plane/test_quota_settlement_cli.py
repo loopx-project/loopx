@@ -7238,6 +7238,123 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
     assert resumed_turn["selected_todo"]["todo_id"] == DUE_MONITOR_TODO_ID
 
 
+@pytest.mark.parametrize("source_unavailable", [False, True])
+def test_bound_recovery_does_not_infer_missing_original_todo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_unavailable: bool,
+) -> None:
+    from loopx.control_plane.quota import unsettled_host_turn as recovery
+    from loopx.control_plane.todos import list_readback
+
+    def read(**kwargs):
+        if kwargs.get("todo_id"):
+            if source_unavailable:
+                raise ValueError("exact source unavailable")
+            return {"todo": None}
+        return {"todos": []}
+
+    monkeypatch.setattr(list_readback, "list_goal_todos", read)
+    monkeypatch.setattr(recovery, "effect_runtime_result", lambda *args, **kwargs: pytest.fail("unknown source reached the decision owner"))
+    payload = {"ok": True}
+    with pytest.raises(ValueError, match="exact source unavailable|original receipt-bound Todo cannot be read"):
+        recovery.apply_receipt_bound_wait_recovery(
+            payload, registry_path=tmp_path / "registry.json", runtime_root=tmp_path,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID,
+            available_capabilities=[], scheduler_execution_context=None,
+        )
+    assert payload == {"ok": True}
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("archived_with_alternatives", [False, True])
+def test_completed_todo_reentry_preserves_original_settlement_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, archived_with_alternatives: bool,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state_path = _configure_read_only_todo(project)
+    if archived_with_alternatives:
+        _configure_selectable_alternative(project)
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    guard_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
+    )
+    rc, admitted = _run_cli(registry_path, runtime, *guard_args, "--todo-id", TODO_ID)
+    assert rc == 0, admitted
+    original_plan = admitted["interaction_contract"]["cli_channel"]["settlement_plan"]
+    rc, completed = _run_cli(
+        registry_path, runtime, "todo", "complete", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", TURN_ID, "--evidence", "evidence:verified-read-only-result",
+    )
+    assert rc == 0, completed
+    assert completed["changed"] is True
+    assert completed["completion_continuation"] == "active_goal"
+    assert _spend_run_count(runtime) == 0
+    if archived_with_alternatives:
+        rc, archived = _run_cli(
+            registry_path, runtime, "todo", "archive-completed", "--goal-id", GOAL_ID,
+            "--role", "agent", "--max-active-done", "0", "--execute",
+        )
+        assert rc == 0, archived
+        rc, refused = _run_cli(
+            registry_path, runtime, *guard_args, "--todo-id", ALTERNATIVE_TODO_ID,
+        )
+        assert rc == 1, refused
+        assert refused["error_code"] == "heartbeat_receipt_identity_conflict"
+    completed_state = state_path.read_bytes()
+
+    rc, resumed = _run_cli(registry_path, runtime, *guard_args)
+    assert rc == 0, resumed
+    cli = resumed["interaction_contract"]["cli_channel"]
+    plan = cli.get("settlement_plan")
+    assert plan is not None, resumed
+    assert plan["identity"] == original_plan["identity"]
+    assert resumed["heartbeat_receipt"]["settlement_identity"] == plan["identity"]
+    assert not resumed["normal_delivery_allowed"]
+    assert not resumed["interaction_contract"]["agent_channel"]["delivery_allowed"]
+    assert resumed.get("selected_todo") is None
+    assert cli["spend_allowed_now"] is False
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert state_path.read_bytes() == completed_state
+    commands = {step["kind"]: step["command_template"] for step in plan["ordered_steps"]}
+    assert cli["next_cli_actions"] == [commands["durable_writeback"], commands["quota_spend"]]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+    envelope = build_turn_envelope(resumed)
+    assert envelope["writeback"]["settlement_plan"] == plan
+    assert envelope["writeback"]["next_cli_actions"] == cli["next_cli_actions"]
+    assert envelope["writeback"]["spend_allowed_now"] is False
+    refresh = commands["durable_writeback"].replace(
+        "<validated_progress>", "completed_read_only_result",
+    ).replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+    refresh += (
+        " --vision-state vision_closed"
+        " --vision-acceptance 'The verified read-only result is durably recorded.'"
+        " --no-global-sync --suppress-external-sinks"
+    )
+    rc, written = _run_generated_cli(refresh, registry_path=registry_path)
+    assert rc == 0, written
+    rc, replayed = _run_generated_cli(refresh, registry_path=registry_path)
+    assert rc == 0, replayed
+    assert _classification_count(runtime, "completed_read_only_result") == 1
+    rc, owed = _run_cli(registry_path, runtime, *guard_args)
+    assert rc == 0, owed
+    assert owed["unsettled_host_turn_recovery"]["repair"] == "quota_spend"
+    assert owed["settlement_owed"]["todo_id"] == TODO_ID
+    for command in (owed["settlement_owed"]["command"], commands["quota_spend"]):
+        rc, spent = _run_generated_cli(command, registry_path=registry_path)
+        assert rc == 0, spent
+    assert _spend_run_count(runtime) == 1
+    rc, settled = _run_cli(registry_path, runtime, *guard_args)
+    assert rc == 0, settled
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["interaction_contract"]["agent_channel"]["must_attempt"] is False
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_read_only_settlement_omits_non_causal_delivery_workspace(
     tmp_path: Path,

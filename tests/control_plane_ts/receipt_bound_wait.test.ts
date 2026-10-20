@@ -76,6 +76,71 @@ test("a deferred Todo closes its original Turn rather than selecting a replaceme
   assert.equal(recovery.turn_instance_id, "host-turn-1");
 });
 
+function completedRequest() {
+  const input = {...request(), replay_phase: "settlement_pending",
+    settlement_progress: {schema_version: "quota_settlement_progress_v0",
+      state: "writeback_required", next_step: "durable_writeback"}};
+  input.todos[0]!.status = "done";
+  return input;
+}
+
+for (const state of ["writeback_required", "writeback_receipt_required"]) {
+  for (const archive_state of ["active", "archive"]) {
+    test(`verified completion retains ${state} for its ${archive_state} original row`, () => {
+      const input = completedRequest();
+      input.settlement_progress.state = state;
+      input.todos[0]!.archive_state = archive_state;
+      const before = structuredClone(input);
+      const result = projectReceiptBoundWait(input);
+      const recovery = result.recovery as Record<string, unknown>;
+      assert.equal(recovery.repair, "durable_writeback");
+      assert.equal(recovery.binding_id, input.todo_id);
+      assert.equal(recovery.turn_instance_id, input.turn_instance_id);
+      const obligation = result.obligation as Record<string, unknown>;
+      assert.equal(obligation.delivery_allowed, false);
+      assert.equal(obligation.spend_allowed_now, undefined);
+      assert.deepEqual(input, before);
+    });
+  }
+}
+
+for (const replay_phase of [null, "open", "settled", "unknown"]) {
+  test(`completion status without verified pending phase ${replay_phase} grants no recovery`, () => {
+    assert.deepEqual(projectReceiptBoundWait({...completedRequest(), replay_phase}), {status: "none"});
+  });
+}
+
+test("archival cannot hide the original completed Turn's verified spend duty", () => {
+  const input = completedRequest();
+  input.todos[0]!.archive_state = "archive";
+  input.settlement_progress = {schema_version: "quota_settlement_progress_v0",
+    state: "spend_required", next_step: "quota_spend"};
+  const result = projectReceiptBoundWait(input);
+  assert.equal((result.recovery as Record<string, unknown>).repair, "quota_spend");
+  assert.equal((result.obligation as Record<string, unknown>).delivery_allowed, false);
+});
+
+for (const progress of [null, {},
+  {schema_version: "other", state: "writeback_required", next_step: "durable_writeback"},
+  {schema_version: "quota_settlement_progress_v0", state: "identity_required", next_step: "durable_writeback"},
+  {schema_version: "quota_settlement_progress_v0", state: "writeback_required", next_step: "quota_spend"},
+  {schema_version: "quota_settlement_progress_v0", state: "settled", next_step: null},
+]) {
+  test(`completion with unknown or incompatible progress ${JSON.stringify(progress)} grants no recovery`, () => {
+    assert.deepEqual(projectReceiptBoundWait({...completedRequest(), settlement_progress: progress}), {status: "none"});
+  });
+}
+
+for (const patch of [{claimed_by: "agent-b"}, {role: "user"}, {task_class: "continuous_monitor"}]) {
+  test(`a mismatched completed row ${JSON.stringify(patch)} cannot borrow settlement recovery`, () => {
+    const input = completedRequest();
+    Object.assign(input.todos[0]!, patch);
+    assert.deepEqual(projectReceiptBoundWait(input), {status: "none"});
+    assert.deepEqual(projectReceiptBoundWait({...input, todos: []}), {status: "none"});
+    assert.deepEqual(projectReceiptBoundWait({...input, todos: [input.todos[0], input.todos[0]]}), {status: "none"});
+  });
+}
+
 for (const state of ["spend_required", "spend_receipt_required"]) {
   test(`${state} preserves durable writeback before projecting a later dependency wait`, () => {
     const input = {...request(), settlement_progress: {schema_version: "quota_settlement_progress_v0",

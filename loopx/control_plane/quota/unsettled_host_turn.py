@@ -22,6 +22,7 @@ from ..effect_runtime import (
 from ..scheduler.execution_context import SchedulerExecutionContextResolution
 from ..todos.todo_semantics import todo_item_task_class
 from ..work_items.interaction_contract import (
+    _scoped_cli_args,
     build_interaction_contract,
 )
 from .error_codes import (
@@ -29,7 +30,12 @@ from .error_codes import (
     HeartbeatReceiptIdentityConflictError,
 )
 from .accounting_admission import quota_accounting_admission
-from .effect_program import ReceiptBoundReplayPhase
+from .effect_program import (
+    ReceiptBoundReplayPhase,
+    SettlementStepKind,
+    build_turn_scoped_cli_settlement_plan,
+    settlement_step_command,
+)
 
 UNSETTLED_HOST_TURN_RECOVERY_SCHEMA_VERSION = "unsettled_host_turn_recovery_v0"
 
@@ -359,6 +365,7 @@ def apply_receipt_bound_wait_recovery(
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
     monitor_phase: str | None = None,
     settlement_progress: dict[str, Any] | None = None,
+    replay_phase: ReceiptBoundReplayPhase | None = None,
 ) -> bool:
     """Read full provider facts only when a replay lost its executable binding."""
     from ..todos.list_readback import list_goal_todos
@@ -370,13 +377,23 @@ def apply_receipt_bound_wait_recovery(
     )
     # Keep transitive dependencies from this coherent read. A direct-target
     # slice loses longer cycles; compact facts keep prose out of the RPC.
-    items = compact_settlement_wait_todos(source["todos"], todo_id=todo_id)
+    source_items = source["todos"]
+    if not any(item.get("todo_id") == todo_id for item in source_items):
+        bound = _bound_todo_item(
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, todo_id=todo_id,
+        )
+        if bound is None:
+            raise ValueError("The original receipt-bound Todo cannot be read; recover its lifecycle before settling this Turn")
+        source_items = [*source_items, bound]
+    items = compact_settlement_wait_todos(source_items, todo_id=todo_id)
     verdict = effect_runtime_result("quota.settlement.read", {
         "schema_version": "loopx_quota_receipt_bound_wait_request_v0",
         "todos": items, "todo_id": todo_id, "agent_id": agent_id,
         "turn_instance_id": turn_instance_id, "observed_at": now_utc_iso(),
         "monitor_phase": monitor_phase,
         "settlement_progress": settlement_progress,
+        "replay_phase": replay_phase.value if replay_phase else None,
     }, large_local_snapshot=True)
     if verdict.get("status") == "none":
         return False
@@ -388,9 +405,39 @@ def apply_receipt_bound_wait_recovery(
     from .settlement_precedence import clear_quota_action_projections
 
     clear_quota_action_projections(payload)
-    return _apply_recovery_projection(payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
+    _apply_recovery_projection(payload, verdict=verdict, registry_path=registry_path, runtime_root=runtime_root,
         current_turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context)
+    if verdict["recovery"].get("repair") == "durable_writeback":
+        # Transport the typed recovery through the existing command owner. A
+        # completed Todo is not an executable selected_todo or a new grant.
+        from ..work_items.action_selection_contract import render_cli_command_prefix
+
+        assert settlement_progress is not None
+        plan = build_turn_scoped_cli_settlement_plan(
+            goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+            turn_instance_id=turn_instance_id,
+            command_prefix=render_cli_command_prefix(
+                registry_path=str(registry_path), runtime_root=str(runtime_root),
+            ),
+            scoped_cli_args=_scoped_cli_args(
+                {"agent_id": agent_id}, available_capabilities=available_capabilities,
+            ),
+            lifecycle_actor_args="",
+            quota_spend_source=settlement_progress["quota_spend_source"],
+            goal_ref=payload.get("goal_ref"),
+        ).as_dict()
+        cli = payload["interaction_contract"]["cli_channel"]
+        cli.update({
+            "settlement_plan": plan,
+            "next_cli_actions": [
+                settlement_step_command(plan, kind)
+                for kind in (SettlementStepKind.DURABLE_WRITEBACK, SettlementStepKind.QUOTA_SPEND)
+            ],
+            "spend_after_validation": True,
+            "quota_spend_source": settlement_progress["quota_spend_source"],
+        })
+    return True
 
 
 def _apply_recovery_projection(

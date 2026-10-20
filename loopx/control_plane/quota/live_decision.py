@@ -754,6 +754,7 @@ def build_live_quota_should_run_decision(
             scheduler_execution_context=resolved_context,
             monitor_phase=(receipt_bound_monitor_phase.value if receipt_bound_monitor_phase else None),
             settlement_progress=settlement_readback.progress if settlement_readback else None,
+            replay_phase=receipt_bound_replay_phase,
         )
     if hook_dispatch["failures"]:
         payload["capability_hook_dispatch"] = {

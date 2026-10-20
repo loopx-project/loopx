@@ -3,6 +3,7 @@ import json
 import os
 import shlex
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -13,9 +14,11 @@ import pytest
 from benchmark.runtime.codex import Execution
 from benchmark.runtime.worker import heartbeat_body
 from loopx.heartbeat_prompt import build_heartbeat_prompt
+from tests.control_plane.cli_output_fixture import stable_budget_fixture_root
 from tests.control_plane.test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TURN_ID, ALTERNATIVE_TODO_ID, REPO_ROOT,
+    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, ALTERNATIVE_TODO_ID, REPO_ROOT,
     _write_fixture, _configure_selectable_alternative, _run_cli,
+    _initialize_fixture_authority,
     _run_generated_cli, _heartbeat_receipt_count, _spend_run_count,
 )
 
@@ -38,14 +41,105 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
     assert 'writeback.settlement_plan.ordered_steps' in payload['task_body']
     assert 'When present, read inline `agent_context` before planning.' in payload['task_body']
     assert 'an `agent_context.detail_ref`' in payload['task_body']
+    assert 'using inline ACK argv' in payload['task_body']
+    assert 'needed missing/truncated/referenced command' in payload['task_body']
+    assert 'failure argv only after host update failure' in payload['task_body']
     assert '--decision-output-root' in payload['thin_prompt_command']
     assert '--turn-envelope' in payload['thin_prompt_command']
+    # The captured allowance must neither leak into ordinary thin nor disable
+    # overflow diagnostics, including when Reward Memory is absent.
+    no_memory = dict(args, reward_memory_enabled=False)
+    ordinary = build_heartbeat_prompt(**no_memory)
+    captured_only = build_heartbeat_prompt(**no_memory, decision_output_root=tmp_path)
+    assert ordinary['interface_budget']['max_chars'] == 4_200
+    assert captured_only['interface_budget']['max_chars'] == 4_200
+    oversized = build_heartbeat_prompt(
+        **no_memory, decision_output_root=tmp_path, turn_envelope=True,
+        agent_scopes=[letter * 320 for letter in 'stu'],
+    )
+    assert oversized['interface_budget']['max_chars'] == 4_600
+    assert oversized['interface_budget']['within_budget'] is False
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),
                       dict(runtime_profile='codex_app_ssh_goal')):
         with pytest.raises(ValueError):
             build_heartbeat_prompt(**(args | overrides), decision_output_root=tmp_path)
     with pytest.raises(ValueError, match='existing directory'):
         build_heartbeat_prompt(**args, decision_output_root=tmp_path / 'missing')
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_captured_scheduler_ack_is_inline_and_failure_detail_stays_on_original_source(
+    tmp_path, monkeypatch, provider,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    capture = tmp_path / 'capture'
+    code, envelope = _run_cli(registry, runtime, 'quota', 'should-run',
+        '--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--todo-id', TODO_ID,
+        '--turn-instance-id', TURN_ID, '--codex-app', '--turn-envelope',
+        '--decision-output-dir', str(capture), cwd=project)
+    assert code == 0, envelope
+    original = (capture / 'decision.json').read_bytes()
+    source = json.loads(original)['scheduler_hint']['app_automation']
+    projected = envelope['scheduler']['app_automation']
+    assert projected['ack_cli_args'] == source['ack_hint']['cli_args']
+    assert 'ack_cli_args_detail_ref' not in projected
+    assert projected['failure_cli_args_detail_ref']['detail_ref'] == (
+        'full_decision.scheduler_hint.app_automation.failure_hint.cli_args'
+    )
+    before = _heartbeat_receipt_count(runtime, TURN_ID)
+    read = subprocess.run(shlex.split(envelope['detail_ref']['full_decision']),
+        capture_output=True, check=True).stdout
+    assert read == original
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == before
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('scope_chars', [0, 320])
+def test_bound_captured_prompt_fits_budget_without_reward_memory(
+    tmp_path, monkeypatch, provider, scope_chars,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # Match the public budget workload independently of pytest/runner path length.
+    # Both runtime and capture routes remain present and count toward the body.
+    with stable_budget_fixture_root(tmp_path) as base:
+        root = (base / ('p' * (128 - len(str(base.resolve())) - 1))).resolve()
+        assert len(str(root)) == 128
+        project, runtime, registry = _write_fixture(root)
+        _initialize_fixture_authority(project, runtime, provider=provider)
+        capture = root / 'capture'
+        capture.mkdir()
+        argv = [
+            sys.executable, '-m', 'loopx.entrypoint', '--format', 'json',
+            '--registry', str(registry), '--runtime-root', str(runtime),
+            'heartbeat-prompt', '--thin', '--turn-envelope',
+            '--decision-output-root', str(capture), '--runtime-profile', 'generic_cli',
+            '--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--turn-instance-id', TURN_ID,
+        ]
+        if scope_chars:
+            argv.extend(['--agent-scope', 's' * scope_chars])
+        result = subprocess.run(
+            argv, cwd=project, capture_output=True, text=True, check=True,
+            env={**os.environ, 'PYTHONPATH': str(REPO_ROOT)},
+        )
+        payload = json.loads(result.stdout)
+        body = payload['task_body']
+        assert '--reward-memory-reflection-json' not in body
+        assert str(runtime) in body and str(capture) in body
+        assert payload['turn_instance_id'] == TURN_ID
+        assert payload['interface_budget']['max_chars'] == 4_600
+        assert payload['interface_budget']['within_budget'], payload['interface_budget']
+        assert len(result.stdout) <= 5_400  # Shipped Agent JSON, not generator metadata.
+        assert 'using inline ACK argv' in body
+        assert 'needed missing/truncated/referenced command' in body
+        assert 'failure argv only after host update failure' in body
+        assert 'same-invocation observation, not fresh admission' in body
+        assert 'goal_acceptance' in body  # Retain the complete outcome guidance too.
 
 
 @pytest.mark.parametrize('mode', ['plain', 'native-goal', 'loopx-goal', 'turn'])
@@ -107,7 +201,6 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path,
     guard = next(line for line in block.splitlines() if 'quota should-run' in line)
     guard = guard.replace('${LOOPX_TURN:?}', TURN_ID)
     argv = shlex.split(guard)
-    import subprocess
     result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True)
     first = json.loads(result.stdout)
     assert result.returncode == 0, first

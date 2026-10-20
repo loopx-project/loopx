@@ -16,6 +16,7 @@ from .reward_memory import (
     reviewer_notification_before_send_gate,
 )
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
+from ...domain_packs.issue_fix import REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN
 
 
 ISSUE_FIX_REVIEWER_NOTIFICATION_SINKS_INPUT_SCHEMA_VERSION = (
@@ -34,7 +35,6 @@ ISSUE_FIX_REVIEWER_NOTIFICATION_LEGACY_QUEUE_RECEIPT_SCHEMA_VERSION = (
     "issue_fix_reviewer_notification_queue_receipt_v0"
 )
 SAFE_LOCAL_KEY_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,100}")
-LOCAL_TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 
 CommandRunner = Callable[[Sequence[str]], Mapping[str, Any]]
 NotificationSinkAdapter = Callable[..., dict[str, Any]]
@@ -334,8 +334,8 @@ def _delivery_window_decision(
     start_text = str(allowed_local_time.get("start") or "").strip()
     end_text = str(allowed_local_time.get("end") or "").strip()
     if (
-        not LOCAL_TIME_PATTERN.fullmatch(start_text)
-        or not LOCAL_TIME_PATTERN.fullmatch(end_text)
+        not REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN.fullmatch(start_text)
+        or not REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN.fullmatch(end_text)
         or start_text == end_text
         or policy.get("outside_window") != "queue_without_send"
     ):
@@ -545,8 +545,12 @@ def validate_issue_fix_reviewer_notification_sinks_result(
             or receipt.get("summary_policy_status")
             not in {"reward_memory_verified", "sink_config"}
             or not isinstance(window, Mapping)
-            or not LOCAL_TIME_PATTERN.fullmatch(str(window.get("start") or ""))
-            or not LOCAL_TIME_PATTERN.fullmatch(str(window.get("end") or ""))
+            or not REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN.fullmatch(
+                str(window.get("start") or "")
+            )
+            or not REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN.fullmatch(
+                str(window.get("end") or "")
+            )
         ):
             errors.append("queued receipt is invalid")
             continue

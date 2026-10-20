@@ -589,6 +589,7 @@ def build_heartbeat_prompt(
             brief=brief,
             thin=thin,
             native_goal_host=native_goal_host,
+            captured_envelope=turn_envelope,
         ),
         "task_body": task_body,
     }

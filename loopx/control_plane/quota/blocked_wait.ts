@@ -223,10 +223,22 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   const matches = todos.filter(row => row.todo_id === request.todo_id);
   const todo = matches[0];
   if (matches.length !== 1 || !todo || todo.role !== "agent" ||
-      todo.archive_state !== "active" || (todo.claimed_by && todo.claimed_by !== request.agent_id)) {
+      (todo.claimed_by && todo.claimed_by !== request.agent_id)) {
     return {status: "none"};
   }
   const progress = jsonObject(request.settlement_progress);
+  // Ordinary completion is a validation receipt, not Turn settlement. The
+  // verified replay phase, rather than terminal Todo status alone, owns this
+  // recovery even after the row leaves the active presentation lane.
+  const completedSettlement = todo.status === "done" && todo.task_class === "advancement_task" &&
+      request.replay_phase === "settlement_pending" &&
+      progress?.schema_version === "quota_settlement_progress_v0";
+  if (completedSettlement && progress?.next_step === "durable_writeback" &&
+      (progress.state === "writeback_required" || progress.state === "writeback_receipt_required")) {
+    const reason = "The original Todo's completion is verified, but its Turn still owes durable writeback and settlement. Record only the validated original result, then spend once for that same identity. Inspect existing effects before retrying; do not repeat completed work, invent a successor, or rebind this Turn.";
+    return boundRecovery(request, "durable_writeback", reason);
+  }
+  if (todo.archive_state !== "active" && !completedSettlement) return {status: "none"};
   if (progress?.schema_version === "quota_settlement_progress_v0" &&
       progress.next_step === "quota_spend" &&
       (progress.state === "spend_required" || progress.state === "spend_receipt_required")) {
@@ -262,10 +274,10 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
 
 /** Recovery routes preserve the existing binding and grant no independent work. */
 function boundRecovery(
-  request: JsonObject, repair: "lifecycle" | "blocked_writeback" | "quota_spend" | "dependency", reason: string, wait?: JsonObject,
+  request: JsonObject, repair: "lifecycle" | "blocked_writeback" | "durable_writeback" | "quota_spend" | "dependency", reason: string, wait?: JsonObject,
 ): JsonObject {
   const obligation = repair === "blocked_writeback"
-    ? "close_bound_wait_without_spend" : repair === "quota_spend"
+    ? "close_bound_wait_without_spend" : repair === "quota_spend" || repair === "durable_writeback"
     ? "settle_bound_turn" : repair === "dependency"
     ? "repair_bound_dependency" : "repair_bound_monitor_lifecycle";
   return {
@@ -279,7 +291,9 @@ function boundRecovery(
       contract_obligation: obligation, must_attempt_work: true,
       delivery_allowed: false, notify: "DONT_NOTIFY",
       ...(repair === "quota_spend" ? {spend_allowed_now: true} : {}),
-      spend_policy: repair === "quota_spend"
+      spend_policy: repair === "durable_writeback"
+        ? "settle the original completed Todo after validated writeback; no independent work"
+        : repair === "quota_spend"
         ? "settle the original verified writeback once; no independent work or new writeback"
         : "no spend for blocked closeout",
       reason_code: repair === "blocked_writeback" ? "receipt_bound_pending_wait" : "unsettled_host_turn",

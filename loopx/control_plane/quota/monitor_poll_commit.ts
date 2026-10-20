@@ -1,6 +1,7 @@
 import {decodeTaskLeaseProof, type TaskLeaseProof} from "../coordination/task_lease_proof.ts";
 import {monitorPollRequestHash} from "../coordination/todo_monitor_poll.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
+import { readMonitorHeartbeatRecommendation, monitorHeartbeatDecisionFields } from "./turn_envelope.ts";
 import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
 import { access, readFile, rm } from "node:fs/promises";
@@ -97,7 +98,6 @@ interface MonitorDecision extends JsonObject {
   recommended_action: string | null;
   reason: string | null;
   requires_user_action: boolean;
-  heartbeat_recommendation: JsonObject;
   work_lane_contract: JsonObject;
   external_evidence_observation: JsonObject;
   vision_wait_state: JsonObject;
@@ -309,10 +309,7 @@ function decisionObject(value: unknown): MonitorDecision {
       decision.requires_user_action,
       "decision.requires_user_action",
     ),
-    heartbeat_recommendation: nullableObject(
-      decision.heartbeat_recommendation,
-      "decision.heartbeat_recommendation",
-    ),
+    ...monitorHeartbeatDecisionFields(decision),
     work_lane_contract: nullableObject(
       decision.work_lane_contract,
       "decision.work_lane_contract",
@@ -684,7 +681,7 @@ async function admission(request: MonitorRequest, historicalAdmission = false): 
     );
   }
   if (
-    request.decision.heartbeat_recommendation.recommended_mode !==
+    readMonitorHeartbeatRecommendation(request.decision).recommended_mode !==
       "monitor_quiet_until_material_transition" &&
     !external && !due && !blocked
   ) {
@@ -844,8 +841,9 @@ function buildRecord(request: MonitorRequest, allowed: Admission): JsonObject {
     kind = "due monitor";
     prefix = "due_monitor";
   }
-  const recommendationReason = typeof request.decision.heartbeat_recommendation.reason === "string"
-    ? request.decision.heartbeat_recommendation.reason
+  const heartbeat = readMonitorHeartbeatRecommendation(request.decision);
+  const recommendationReason = typeof heartbeat.reason === "string"
+    ? heartbeat.reason
     : null;
   let monitorMode: string;
   let defaultReason: string;

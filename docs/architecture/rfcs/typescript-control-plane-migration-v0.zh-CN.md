@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-19
+- Last revised：2026-10-20
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -14,6 +14,23 @@
 
 ---
 
+
+### Scheduler hint 投影
+
+完整 scheduler hint 由 `scheduler/hint.ts` 通过一次
+`scheduler.hint.project` 请求投影，包括暂停和无效上下文结果。
+它在进程内组合既有 cadence 与 backoff owner，再投影 runtime 归属、
+monitor/retry 等待、reset identity 和两个 App 视图。
+Python builder 和 App 兼容组合逻辑已退役。Python 保留既有 execution-context
+解码器、Todo frontier 源投影、timestamp 与 identity JSON codec，
+以及最终有界 zlib/base64 CLI 编码。编码不再请求第二次 native 判定。
+其他 quota 观察、interaction arbitration 和 scheduler-state 读取仍是独立操作；
+这里不声称整个 quota 命令只有一次请求。
+
+具名 Python ACK/failure 和 continuation import 保留 transport facade；
+它们在兼容调用者迁移后退出。交付前仍须分别验证不变的 reset-token 与
+follow-up wire 契约、真实 runtime transport、已安装调用者，以及匹配的完整
+SQLite CLI 性能。仅减少请求次数不能证明性能收益。
 
 ### 产品对话与通用异步 inbox
 

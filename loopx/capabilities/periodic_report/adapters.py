@@ -17,6 +17,7 @@ from .core import (
 )
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...control_plane.digest_envelope import sha256_envelope
+from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
 
 
 SOURCE_RESULT_SCHEMA = "periodic_report_source_result_v0"
@@ -26,7 +27,6 @@ EDITORIAL_ORCHESTRATION_SCHEMA = "periodic_report_editorial_orchestration_v0"
 ARTIFACT_SCHEMA = "periodic_report_artifact_v0"
 SINK_RESULT_SCHEMA = "periodic_report_sink_result_v0"
 
-_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _ITEM_CONTENT_KINDS = {
     "capability_change",
     "coverage",
@@ -81,7 +81,7 @@ def _optional_text(
 
 def _token(value: object, label: str) -> str:
     token = _text(value, label, maximum=128).lower()
-    if not _TOKEN_RE.fullmatch(token):
+    if not PUBLIC_SAFE_SLUG_PATTERN.fullmatch(token):
         raise ValueError(f"{label} must be a lower-snake-like public token")
     return token
 

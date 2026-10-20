@@ -5,8 +5,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from loopx.control_plane.scheduler import scheduler_hint as scheduler_hint_module
-from loopx.control_plane.scheduler.scheduler_hint import (
-    _user_gate_notification_cooldown,
+from loopx.control_plane.scheduler.arbitration import (
+    SchedulerArbitration,
+    SchedulerDisposition,
+)
+from loopx.control_plane.scheduler.state import (
+    SCHEDULER_HOST_UPDATE_FAILURE_SCHEMA_VERSION,
 )
 
 
@@ -41,13 +45,29 @@ def test_user_gate_notification_cooldown_timing(monkeypatch, case: dict) -> None
     monkeypatch.setattr(scheduler_hint_module, "now_utc", lambda: CURRENT_TIME)
     failed_at = CURRENT_TIME - timedelta(minutes=case["elapsed_minutes"])
 
-    cooldown = _user_gate_notification_cooldown(
-        cadence_class="human_gate",
-        host_failure_suppressed=True,
-        current_interval_minutes=30,
-        effective_host_rrule="FREQ=MINUTELY;INTERVAL=3",
-        recorded_host_failure={"failed_at": failed_at.isoformat()},
+    hint = scheduler_hint_module.build_scheduler_hint(
+        {"heartbeat_recommendation": {"recommended_mode": "human_gate"}},
+        arbitration=SchedulerArbitration(
+            SchedulerDisposition.HUMAN_GATE, "human_gate", "human_gate"
+        ),
+        scheduler_execution_context={
+            "host_surface": "codex_app",
+            "scheduler_owner": "host_automation",
+            "execution_mode": "hosted_automation",
+        },
+        codex_app_current_rrule="FREQ=MINUTELY;INTERVAL=3",
+        codex_app_scheduler_state={
+            "host_update_failure": {
+                "schema_version": SCHEDULER_HOST_UPDATE_FAILURE_SCHEMA_VERSION,
+                "target_rrule": "FREQ=MINUTELY;INTERVAL=30",
+                "observed_host_rrule": "FREQ=MINUTELY;INTERVAL=3",
+                "failure_kind": "host_tool_failure",
+                "failure_count": 1,
+                "failed_at": failed_at.isoformat(),
+            }
+        },
     )
+    cooldown = hint.get("user_gate_notification_cooldown")
 
     assert cooldown is not None
     assert cooldown["cooldown_minutes"] == 30

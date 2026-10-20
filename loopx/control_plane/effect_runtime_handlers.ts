@@ -334,6 +334,7 @@ export function createEffectRuntimeHandlers(
     ["goal.long_todo_chain.evaluate", lazyHandler(() => import("./todos/frontier_revision.ts"), ({evaluateLongTodoChain}) => evaluateLongTodoChain)],
     ["todo.external_wait.plan", lazyHandler(() => import("./todos/resume_condition.ts"), ({planTodoExternalWaitTransition}) => planTodoExternalWaitTransition)],
     ["scheduler.state_transition.evaluate", lazyHandler(() => import("./scheduler/state_transition_rules.ts"), ({evaluateSchedulerStateTransition}) => evaluateSchedulerStateTransition)],
+    ["scheduler.hint.project", lazyHandler(() => import("./scheduler/hint.ts"), ({projectSchedulerHint}) => projectSchedulerHint)],
     ["quota.automation_cadence.manage", lazyHandler(() => import("./quota/automation_cadence.ts"), ({manageAutomationCadence}) => manageAutomationCadence)],
     ["quota.automation_cadence.admit", lazyHandler(() => import("./quota/automation_cadence.ts"), ({admitAutomationStart}) => admitAutomationStart)],
     ["quota.automation_cadence.confirm_start", lazyHandler(() => import("./quota/automation_cadence.ts"), ({confirmAutomationStart}) => confirmAutomationStart)],

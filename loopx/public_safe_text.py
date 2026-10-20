@@ -356,11 +356,11 @@ MODULE_QUALIFIED_SURFACE_PATTERN = re.compile(
 )
 
 
-# One definition for "this identifier is a lowercase public-safe slug". Four
-# periodic-report surfaces and one hand-off validator each compiled the same
-# shape locally; the four report files are being edited by another branch of
-# mine right now, so this slice converts the three free ones and the guard
-# declares the other four by file and count.
+# One definition for "this identifier is a lowercase public-safe slug". Seven
+# modules - four periodic-report surfaces, the issue-fix report and a hand-off
+# validator - compiled the same shape locally; every one of them now imports
+# this object, and tests/architecture/test_public_safe_slug_owner.py rejects a
+# new local copy.
 PUBLIC_SAFE_SLUG_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 
 

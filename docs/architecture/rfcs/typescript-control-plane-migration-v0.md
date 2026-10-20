@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-19
+- Last revised: 2026-10-20
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -14,6 +14,25 @@
   English version are semantic mirrors. A difference between them is a defect.
 
 ---
+
+### Scheduler hint projection
+
+The complete scheduler hint is projected by `scheduler/hint.ts` in one
+`scheduler.hint.project` request, including paused and invalid-context outcomes.
+It composes the existing cadence and backoff owners in process, then projects
+runtime ownership, monitor/retry waits, reset identities and both App views.
+The Python builder and App compatibility composer are retired. Python retains
+the existing execution-context decoder, Todo frontier source projection,
+timestamp and identity JSON codecs, and final bounded zlib/base64 CLI encoding.
+Encoding does not request another native decision. Other quota observations,
+interaction arbitration and scheduler-state reads remain separate operations;
+this does not claim one request for the whole quota command.
+
+Named Python ACK/failure and continuation imports remain transport facades;
+they exit when their compatibility callers migrate. The unchanged reset-token
+and follow-up wire contracts, real runtime transport, installed callers and
+matched complete SQLite CLI performance must qualify independently before
+delivery. Fewer requests alone do not establish a performance gain.
 
 ### Product conversations and asynchronous inbox
 

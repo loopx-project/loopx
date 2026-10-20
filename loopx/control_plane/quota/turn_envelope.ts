@@ -20,6 +20,26 @@ export const ACTION_SIGNATURE_COVERAGE_V0 = "turn_envelope_action_dimensions_v0"
 export const ACTION_SIGNATURE_COVERAGE_V1 = "turn_envelope_action_dimensions_v1";
 export const ACTION_SIGNATURE_COVERAGE_V2 = "turn_envelope_action_dimensions_v2";
 export const ACTION_SIGNATURE_COVERAGE_V3 = "turn_envelope_action_dimensions_v3";
+
+export const SCHEDULER_QUOTA_IDENTITY_KEYS = ["goal_id", "agent_identity.agent_id", "effective_action", "heartbeat_recommendation.recommended_mode", "interaction_contract.mode"];
+
+export function schedulerQuotaContext(payload: JsonObject) {
+  return {
+    recommended_mode: String(object(payload.heartbeat_recommendation).recommended_mode || ""),
+    spend_policy: object(payload.automation_liveness).spend_policy
+      || object(payload.execution_obligation).spend_policy
+      || object(payload.heartbeat_recommendation).spend_policy || null,
+  };
+}
+
+export function readMonitorHeartbeatRecommendation(decision: JsonObject): JsonObject {
+  return decision.heartbeat_recommendation == null ? {}
+    : requireJsonObject(decision.heartbeat_recommendation, "decision.heartbeat_recommendation");
+}
+
+export function monitorHeartbeatDecisionFields(decision: JsonObject): JsonObject {
+  return {heartbeat_recommendation: readMonitorHeartbeatRecommendation(decision)};
+}
 export const ACTION_SIGNATURE_COVERAGE_V4 = "turn_envelope_action_dimensions_v4";
 export const ACTION_SIGNATURE_COVERAGE_V5 = "turn_envelope_action_dimensions_v5";
 export const ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0;

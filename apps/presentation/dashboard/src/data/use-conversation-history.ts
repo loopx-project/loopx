@@ -10,9 +10,9 @@ type HistoryState = {
 
 export type ConversationHistoryStatus = Pick<ReturnType<typeof useConversationHistory>, "phase" | "reading" | "sendBlocked" | "retry">;
 
-/** The newest Session a channel read found for one executor. */
-export function currentChannelSession(history: ChatHistory | null, agentId: string) {
-  return history?.sessions.find((session) => session.agent_id === agentId) ?? null;
+/** Closed Sessions remain history, but cannot own a channel's current controls. */
+export function currentChannelSession(history: Pick<ChatHistory, "sessions"> | null, agentId: string) {
+  return history?.sessions.find((session) => session.agent_id === agentId && session.status !== "closed") ?? null;
 }
 
 /** Read recovery shared by steward and Goal conversations; never executes a Turn. */

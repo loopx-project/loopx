@@ -409,6 +409,52 @@ three affected JSON surfaces; dense-to-dense changes retain ordinary limits.
 
 ### Native fixture qualification
 
+The opt-in captured TurnEnvelope heartbeat has a separate 400-character body
+allowance above ordinary thin: 4,600 without Reward Memory. It retains complete
+runtime/capture routes, same-invocation recovery, inline ACK conditions and the
+outcome guidance. Ordinary thin and capture-only thin remain at 4,200; the
+optional Reward Memory allowance remains 640. Native Goal's 4,000-character hard
+limit, other mode limits, JSON/key/line budgets and execution authority do not change.
+
+The original no-memory review input at `e552168e3` / `9197abd8d` measured
+3,551 / 3,653 against 3,600, a real historical failure. The independently
+reproduced native CLI workload below binds Goal/Agent/Turn, registry and runtime,
+uses a 128-character absolute root and an existing capture directory, and keeps
+all paths in the output. File and SQLite give the same measurements:
+
+| No-memory captured thin body | Default scope | 320-character scope |
+| --- | --- | --- |
+| Original base `e552168e3`, ceiling 3,600 | 3,587, pass | 3,887, overflow |
+| Original head `9197abd8d`, ceiling 3,600 | 3,689, overflow | 3,989, overflow |
+| Target main `82b1a8c72`, ceiling 4,200 | 4,110, pass | 4,410, overflow |
+| Inline ACK + complete current guidance, ceiling 4,600 | 4,212, pass | 4,512, pass |
+
+The 102-character ACK instruction delta survives the newer outcome rollout;
+simply adopting main's 4,200 ceiling still leaves the default bound input 12
+characters over. Keeping that ceiling fails this workload; no lossless removal
+of the actor, conditions, same-capture provenance or existing outcome obligations
+was established. The bounded opt-in allowance preserves those useful clauses
+with 88 characters of scoped headroom. Longer routes/scopes still report
+overflow; this is not an arbitrary-input guarantee. Compact Agent JSON is
+4,719 / 5,019 characters (381 scoped headroom under the unchanged 5,400
+envelope ceiling); emitted stdout including its newline is 4,720 / 5,020
+characters and 4,724 / 5,024 UTF-8 bytes. Both bodies have 38 lines and both
+payloads have seven top-level keys. The ordinary emitted thin matrix keeps its separate 4,500
+ceiling. Characters, UTF-8 bytes and model tokens are distinct; these measurements
+do not establish model compliance or total-cost improvement.
+
+可选 captured TurnEnvelope 的 thin 正文单独增加 400 字符展示余量，无 Reward
+Memory 时为 4,600；普通和仅 capture 的 thin 仍为 4,200，可选 memory 余量仍为
+640。完整路径、同次捕获、ACK 条件和成果要求均保留。原评审 3,551／3,653 对
+3,600 的失败保留；上表独立真实 CLI 在相同 128 字符根路径、默认／320 字符范围下
+复现原回归，并区分新 main 的既有超限。仅同步 main 仍使默认绑定输入超出 12 字符；
+未证明可无损删除必要条款，因此仅增加这项可选展示余量，范围输入余量为 88。
+紧凑 Agent JSON 为 4,719／5,019，沿用 5,400 上限，后者余量 381；含末尾换行的
+实际 stdout 为 4,720／5,020 字符、4,724／5,024 UTF-8 字节；正文均为 38 行，
+payload 均为七个顶层键。普通 thin
+输出矩阵仍受独立的 4,500 上限约束。更长输入仍如实告警；native Goal 硬限制、
+其他模式、结构／行数、执行额度和权限均不变，也不宣称模型遵从或完整成本收益。
+
 The current outcome rollout also affects the complete thin body and emitted
 JSON, measured independently. On the same public CLI fixture at main
 `4f6e20a13`, normalized body characters are 3,306 before / 3,829 after; the

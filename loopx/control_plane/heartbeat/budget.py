@@ -23,6 +23,11 @@ INTERFACE_BUDGET_CHARS = {
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]
 
+# Opt-in captured envelopes retain transport routes and same-capture recovery.
+# The no-memory, 128-char-root/320-char-scope CLI body measures 4,512 chars.
+# Keep its 4,600-char presentation allowance separate from ordinary thin.
+CAPTURED_ENVELOPE_PROMPT_HEADROOM_CHARS = 400
+
 # Reward Memory's outcome contract is intentionally readable rather than
 # squeezed into the ordinary heartbeat allowance.  Keep this fixed and tied to
 # the generated contract marker so feature-off prompts retain the old budget.
@@ -72,6 +77,7 @@ def build_interface_budget(
     brief: bool = False,
     thin: bool = False,
     native_goal_host: bool = False,
+    captured_envelope: bool = False,
 ) -> dict[str, Any]:
     mode = (
         "visible_goal"
@@ -87,7 +93,16 @@ def build_interface_budget(
         if mode != "visible_goal" and _REWARD_MEMORY_PROMPT_MARKER in task_body
         else 0
     )
-    max_chars = INTERFACE_BUDGET_CHARS[mode] + reward_memory_headroom
+    captured_envelope_headroom = (
+        CAPTURED_ENVELOPE_PROMPT_HEADROOM_CHARS
+        if mode == "thin" and captured_envelope
+        else 0
+    )
+    max_chars = (
+        INTERFACE_BUDGET_CHARS[mode]
+        + reward_memory_headroom
+        + captured_envelope_headroom
+    )
     return {
         "mode": mode,
         "char_count": len(task_body),
