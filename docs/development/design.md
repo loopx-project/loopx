@@ -123,6 +123,11 @@ source, method and limitation paragraphs before adding another note.
   readable when the pointer enters it, dismiss with Escape or an outside click,
   fit a narrow viewport, and not trigger the operation it explains. Do not rely
   on a native `title` alone, color alone or hover-only access.
+- After loading a requested source or detail asynchronously, bring the mounted
+  content into view and move keyboard focus there. Opening its parent must not
+  compete for that focus. Closing returns to the exact originating control;
+  a late response after closing or changing scope must not reopen the detail.
+  Check immediate and delayed responses on desktop and narrow screens.
 - Preserve actual unknowns, denominators, negative results and evidence links.
   Reduce explanatory noise without replacing missing evidence with a reassuring
   summary. Keep chart keys that are necessary to decode the marks visible.

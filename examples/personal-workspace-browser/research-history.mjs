@@ -104,6 +104,7 @@ export const researchHistoryScenario = {
     const pages = [];
     let unavailable = false;
     let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
+    let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
     let unavailableAnalysis = false, episodeMetadataLimit = null;
     let analysisWrites = 0;
     try {
@@ -112,10 +113,14 @@ export const researchHistoryScenario = {
           if (route.request().method() !== "GET") {analysisWrites++; return route.fulfill({status: 403, json: {error: "Read-only presentation fixture"}});}
           if (!analysisFixture) return route.fulfill({json: {ok: true, catalog: {availability: "unavailable", reason_code: "no_available_pack", default_pack_id: null, packs: []}, pack: null}});
           const query = new URL(route.request().url()).searchParams;
-          if (new URL(route.request().url()).pathname.endsWith('/citation')) return route.fulfill({json: {
-            source_id: 'source', first_line: 1, last_line: 2, artifact: 'facts.txt', applicability: 'current',
-            text: 'Synthetic original evidence.\nDiagnostic measurements do not test native utility.'
-          }});
+          if (new URL(route.request().url()).pathname.endsWith('/citation')) {
+            if (holdCitation) {citationStarted(); await new Promise(resolve => {releaseCitation = resolve;});}
+            if (failedCitation) return route.fulfill({status: 503, json: {error: 'Synthetic citation transport unavailable'}});
+            return route.fulfill({json: {
+              source_id: 'source', first_line: 1, last_line: 2, artifact: 'facts.txt', applicability: 'current',
+              text: 'Synthetic original evidence.\nDiagnostic measurements do not test native utility.'
+            }});
+          }
 
           const selected = ["b", "c", "d"].find(id => query.get("pack_id") === id.repeat(64)) ?? "a";
           if (holdOldAnalysis && selected === "a") {slowStarted(); await new Promise(resolve => {releaseOld = resolve;});}
@@ -422,12 +427,57 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await effects.locator('[data-metric="evidence_adoption"]').innerText(), /未知 1/);
 
       assert.equal(await history.getByRole("region", {name: "轨迹深度分析", exact: true}).count(), 0, "Expanding existing effects never opens or executes model analysis");
-      await benefitMetric.getByRole('button', {name: /source.*行 1–2/}).click();
+      const sourceTrigger = benefitMetric.getByRole('button', {name: /source.*行 1–2/});
+      await sourceTrigger.click();
       const citedOriginal = history.getByRole('region', {name: '引用原文', exact: true});
-      await citedOriginal.waitFor();
+      await citedOriginal.getByText(/Diagnostic measurements/).waitFor();
       assert.match(await citedOriginal.innerText(), /Diagnostic measurements do not test native utility/);
+      const sourceReached = () => page.waitForFunction(() => {
+        const source = document.querySelector('[aria-label="引用原文"]');
+        const rect = source?.getBoundingClientRect();
+        return source === document.activeElement && rect.top >= 0 && rect.bottom <= innerHeight;
+      });
+      await sourceReached();
+      await citedOriginal.press('Escape');
+      await page.waitForFunction(() => document.activeElement?.closest('[data-metric="benefit_test"]'));
+      assert(await sourceTrigger.evaluate(element => element === document.activeElement), 'Closing the source returns to the exact citation trigger');
+      await page.setViewportSize({width: 390, height: 844});
+      holdCitation = true;
+      const citationPending = new Promise(resolve => {citationStarted = resolve;});
+      await sourceTrigger.click();
+      await citationPending;
+      await sourceReached();
+      assert.match(await citedOriginal.innerText(), /正在读取引用原文/);
+      releaseCitation();
+      await citedOriginal.getByText(/Diagnostic measurements/).waitFor();
+      await sourceReached();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await citedOriginal.press('Escape');
+      // A late response after closing analysis must not reopen it or steal focus.
+      const lateCitation = new Promise(resolve => {citationStarted = resolve;});
+      await sourceTrigger.click();
+      await lateCitation;
+      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      const citationDelivered = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/citation'));
+      releaseCitation();
+      await citationDelivered;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      holdCitation = false;
+      assert.equal(await citedOriginal.count(), 0);
+      await page.waitForFunction(() => document.activeElement?.getAttribute('aria-expanded') === 'false' && /查看分析/.test(document.activeElement.textContent));
+      failedCitation = true;
+      await sourceTrigger.click();
+      await citedOriginal.getByRole('alert').waitFor();
+      await sourceReached();
+      assert.match(await citedOriginal.innerText(), /Synthetic citation transport unavailable/);
+      await citedOriginal.press('Escape');
+      failedCitation = false;
+      await sourceTrigger.click();
+      await citedOriginal.getByText(/Diagnostic measurements/).waitFor();
+      await sourceReached();
       await citedOriginal.press('Escape');
       await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await page.setViewportSize({width: 1280, height: 900});
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await progress.getByText("100", {exact: true}).count(), 1, "Uncached input is shown without charging cache twice");
       assert.match(await progress.innerText(), /1,?100.*1,?000/s);
@@ -464,7 +514,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.keyboard.press('Escape');
       await improvement.locator('summary').click();
       await improvement.getByRole('button', {name: '查看原文', exact: true}).click();
-      await citedOriginal.waitFor();
+      await citedOriginal.getByText(/Synthetic original evidence/).waitFor();
       await citedOriginal.press('Escape');
       await history.getByRole('button', {name: '关闭分析', exact: true}).click();
       await improvement.locator('summary').click();
