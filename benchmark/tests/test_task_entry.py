@@ -76,7 +76,7 @@ def test_execution_observation_rejects_ambiguous_or_unsupported_treatments(tmp_p
         BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
 
 
-def test_legacy_research_treatment_and_ordinary_default_remain_distinct(tmp_path):
+def test_research_preset_and_ordinary_default_remain_distinct(tmp_path):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
     from benchmark.runtime.planning import render_planning_prompt
@@ -87,16 +87,16 @@ def test_legacy_research_treatment_and_ordinary_default_remain_distinct(tmp_path
     assert "LOOPX_RESEARCH_LOOP" not in plain_env
     assert "LOOPX_EXECUTION_OBSERVATION" not in plain_env
     assert ordinary.stride_strategy is None
-    legacy = BenchmarkCodex(logs_dir=tmp_path / "legacy", model_name="fixture", research_loop=True)
-    legacy_env = legacy._worker_env(cwd=str(tmp_path))
-    assert legacy_env["LOOPX_RESEARCH_LOOP"] == "1"
-    assert legacy.stride_strategy == "evidence_conditioned_v1"
+    preset = BenchmarkCodex(logs_dir=tmp_path / "preset", model_name="fixture", research_loop=True)
+    preset_env = preset._worker_env(cwd=str(tmp_path))
+    assert preset_env["LOOPX_RESEARCH_LOOP"] == "1"
+    assert preset.stride_strategy == "evidence_conditioned_v1"
     packet = {"input_digest": "original", "text": "Test the supplied candidate."}
     ordinary_prompt = render_planning_prompt(packet, plain_env)
-    old_guidance = research_execution_guidance()
-    legacy_prompt = render_planning_prompt(packet, legacy_env)
-    assert legacy_prompt.count(old_guidance) == 1
-    assert legacy_prompt.replace(old_guidance, "") == ordinary_prompt
+    preset_guidance = research_execution_guidance()
+    preset_prompt = render_planning_prompt(packet, preset_env)
+    assert preset_prompt.count(preset_guidance) == 1
+    assert preset_prompt.replace(preset_guidance, "") == ordinary_prompt
     with pytest.raises(ValueError, match="research_loop"):
         BenchmarkCodex(logs_dir=tmp_path / "conflicting", model_name="fixture",
             research_loop=True, stride_strategy="off")
@@ -114,9 +114,9 @@ def test_raw_worker_rejects_invalid_observation_before_creating_a_wake(tmp_path,
     assert not wakes.exists()
 
 
-@pytest.mark.parametrize("settings,legacy", [({}, False), ({"execution_observation": "local_probe"}, False),
+@pytest.mark.parametrize("settings,research_preset", [({}, False), ({"execution_observation": "local_probe"}, False),
     ({"research_loop": True}, True)])
-def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_path, monkeypatch, settings, legacy):
+def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_path, monkeypatch, settings, research_preset):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
 
@@ -150,9 +150,9 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
     command = next(command for command in commands if "> /logs/agent/loopx-install.json" in command)
     receipt = json.loads(shlex.split(command)[2])
     assert receipt.get("execution_observation") == ("local_probe" if selected else None)
-    assert receipt.get("research_loop", False) is legacy
+    assert receipt.get("research_loop", False) is research_preset
     assert receipt["task_entry"] == "loopx-planned"
-    assert receipt.get("stride_strategy") == ("evidence_conditioned_v1" if legacy else None)
+    assert receipt.get("stride_strategy") == ("evidence_conditioned_v1" if research_preset else None)
 
 
 @pytest.fixture
@@ -445,9 +445,18 @@ def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(
     )
 
 
-@pytest.mark.parametrize("producer,objective", [(None, None), ("local_probe", None),
-    ("local_probe", "Validate the supplied candidate once.")])
-def test_observed_planning_bootstraps_the_full_task_without_prescribing_candidate_stages(tmp_path, monkeypatch, producer, objective):
+@pytest.mark.parametrize("producer,objective,research_preset", [
+    pytest.param(None, None, False, id="ordinary-default"),
+    pytest.param("local_probe", None, False, id="ordinary-observed"),
+    pytest.param("local_probe", "Validate the supplied candidate once.", False,
+        id="ordinary-objective"),
+    pytest.param(None, None, True, id="preset-default"),
+    pytest.param(None, "Compare a validated alternative against the supplied candidate.", True,
+        id="preset-objective"),
+])
+def test_goal_bootstrap_preserves_original_objective_and_selected_task_structure(
+    tmp_path, monkeypatch, producer, objective, research_preset
+):
     pytest.importorskip("harbor")
     from benchmark.runtime import harbor
     from benchmark.runtime.planning import task_plan_packet
@@ -470,9 +479,16 @@ def test_observed_planning_bootstraps_the_full_task_without_prescribing_candidat
         monkeypatch.setattr(harbor, key, str(value))
     env = dict(os.environ) | {"HOME": str(home), "CODEX_HOME": str(home / "codex"),
         "PYTHONPATH": str(Path(__file__).resolve().parents[2]), "LOOPX_USAGE_PING": "0"}
+    interrupt_successor = research_preset and objective is not None
 
     class Environment:
         async def exec(self, command, *, env=None, cwd=None, **kwargs):
+            nonlocal interrupt_successor
+            if interrupt_successor and "--successor-todo-id" in shlex.split(command):
+                interrupt_successor = False
+                # The two Todos are real durable writes; only this transport
+                # attempt fails before the edge update reaches the CLI.
+                raise RuntimeError("Simulated successor-update transmission failure")
             result = subprocess.run(["/bin/bash", "-c", command], env=env,
                 cwd=cwd, text=True, capture_output=True, timeout=90)
             return SimpleNamespace(return_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
@@ -481,12 +497,30 @@ def test_observed_planning_bootstraps_the_full_task_without_prescribing_candidat
             Path(target).write_bytes(Path(source).read_bytes())
 
     agent = harbor.BenchmarkCodex(logs_dir=tmp_path / "logs", model_name="fixture",
-        execution_observation=producer, stride_strategy="off", task_objective=objective)
+        research_loop=research_preset, execution_observation=producer,
+        stride_strategy=None if research_preset else "off", task_objective=objective)
     monkeypatch.setattr(agent, "_profile_env", lambda: env)
     task = ("Start from the supplied solution.py and compare one alternative against it.\n"
         "First preserve correctness, then minimize operations. Retain useful negative results.\n"
         "The final comparison must keep both priorities and this trailing requirement.")
+
+    def call(*args):
+        return asyncio.run(agent._loopx(Environment(), list(args), cwd=str(project)))
+
     try:
+        if research_preset and objective is not None:
+            with pytest.raises(RuntimeError, match="successor-update transmission failure"):
+                asyncio.run(agent._prepare_phase(Environment(), task, cwd=str(project)))
+            partial = call("todo", "list", "--goal-id", agent.goal_id, "--role", "agent")
+            interrupted_todos = {todo["todo_id"]: todo for todo in partial["todos"]}
+            assert len(interrupted_todos) == 2
+            assert not interrupted_todos[agent._seeded_todo_id].get("successor_todo_ids")
+            [interrupted_research] = [todo for todo in interrupted_todos.values()
+                if todo.get("target_key") == "research-continuation"]
+            assert interrupted_research["status"] == "deferred"
+            interrupted_lease = call("task-lease", "inspect", "--goal-id", agent.goal_id,
+                "--todo-id", agent._seeded_todo_id)["lease"]
+            assert interrupted_lease["status"] == "released"
         asyncio.run(agent._prepare_phase(Environment(), task, cwd=str(project)))
         registry = json.loads(Path(harbor._REGISTRY).read_text())
         state = Path(registry["goals"][0]["state_file"])
@@ -497,7 +531,36 @@ def test_observed_planning_bootstraps_the_full_task_without_prescribing_candidat
         packet = task_plan_packet(worker_env, [str(cli), "--format", "json",
             "--registry", harbor._REGISTRY, "--runtime-root", harbor._LOOPX_RUNTIME])
         assert packet["text"].endswith(task + "\n")
-        assert packet["existing_todos"] == []
+        if research_preset:
+            assert call("handoff-mode", "show", "--goal-id", agent.goal_id)["handoff_mode"] == "hard_lease"
+            listed = call("todo", "list", "--goal-id", agent.goal_id, "--role", "agent")
+            todos = {todo["todo_id"]: todo for todo in listed["todos"]}
+            assert len(todos) == 2
+            initial = todos[agent._seeded_todo_id]
+            [research] = [todo for todo in todos.values()
+                if todo.get("target_key") == "research-continuation"]
+            assert initial["status"] == "open"
+            assert initial["successor_todo_ids"] == [research["todo_id"]]
+            assert research["claimed_by"] == agent.agent_id
+            assert research["status"] == "deferred"
+            assert research["resume_when"] == "todo_done:" + initial["todo_id"]
+            assert agent._task_document in research["text"]
+            linked_lease = call("task-lease", "inspect", "--goal-id", agent.goal_id,
+                "--todo-id", initial["todo_id"])["lease"]
+            assert linked_lease["status"] == "released"
+            if objective is not None:
+                assert todos.keys() == interrupted_todos.keys()
+                assert research["todo_id"] == interrupted_research["todo_id"]
+                assert linked_lease["version"] > interrupted_lease["version"]
+                assert linked_lease["idempotency_key"] != interrupted_lease["idempotency_key"]
+                resume_when = "resume_at:2099-01-01T00:00:00Z"
+                call("todo", "update", "--goal-id", agent.goal_id, "--agent-id", agent.agent_id,
+                    "--todo-id", initial["todo_id"], "--status", "blocked", "--resume-when", resume_when,
+                    "--reason", "Wait for the scheduled external observation.", "--execute")
+                call("configure-goal", "--goal-id", agent.goal_id,
+                    "--waiting-on", "external_evidence", "--execute")
+        else:
+            assert packet["existing_todos"] == []
         assert packet["execution_handoff"]["spends_quota"] is False
         agent._phase_number += 1
         feedback = "Released feedback is available; retain the original priorities and constraints."
@@ -505,13 +568,55 @@ def test_observed_planning_bootstraps_the_full_task_without_prescribing_candidat
         next_packet = task_plan_packet(agent._worker_env(cwd=str(project)), [str(cli), "--format", "json",
             "--registry", harbor._REGISTRY, "--runtime-root", harbor._LOOPX_RUNTIME])
         assert next_packet["text"].endswith(feedback + "\n")
-        assert next_packet["existing_todos"] == []
+        if research_preset:
+            next_listed = call("todo", "list", "--goal-id", agent.goal_id, "--role", "agent")
+            next_todos = {todo["todo_id"]: todo for todo in next_listed["todos"]}
+            assert next_todos.keys() == todos.keys()
+            assert next_todos[initial["todo_id"]]["successor_todo_ids"] == [research["todo_id"]]
+            next_research = next_todos[research["todo_id"]]
+            for field in ("target_key", "claimed_by", "status", "resume_when", "text"):
+                assert next_research[field] == research[field]
+            next_lease = call("task-lease", "inspect", "--goal-id", agent.goal_id,
+                "--todo-id", initial["todo_id"])["lease"]
+            assert next_lease["status"] == "released" and next_lease["version"] == linked_lease["version"]
+            if objective is not None:
+                assert next_todos[initial["todo_id"]]["status"] == "blocked"
+                assert next_todos[initial["todo_id"]]["resume_when"] == resume_when
+                assert json.loads(Path(harbor._REGISTRY).read_text())["goals"][0]["waiting_on"] == "external_evidence"
+        else:
+            assert next_packet["existing_todos"] == []
         assert split_state_frontmatter(state.read_text())[0]["objective"] == (objective or task)
         assert candidate.read_bytes() == before
     finally:
         from loopx.control_plane.effect_runtime import restart_effect_runtime
 
         restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.parametrize("status,resume_when", [
+    pytest.param("open", None, id="research-already-open"),
+    pytest.param("done", None, id="research-completed"),
+    pytest.param("deferred", "resume_at:2099-01-01T00:00:00Z", id="research-waiting"),
+    pytest.param("deferred", "todo_done:prior-initial", id="different-initial-stage"),
+])
+def test_research_preset_reentry_preserves_existing_research_without_relinking(status, resume_when):
+    from benchmark.runtime.research_loop import prepare_research_continuation
+
+    research = {"todo_id": "retained-research", "target_key": "research-continuation",
+        "claimed_by": "fixture-agent", "status": status, "resume_when": resume_when}
+    calls = []
+
+    async def call(environment, args, *, cwd):
+        calls.append(args)
+        assert args[:2] == ["todo", "list"], "Existing research cannot trigger preparation effects"
+        return {"todos": [{"todo_id": "current-initial", "status": "open",
+            "claimed_by": "fixture-agent", "successor_todo_ids": []}, research]}
+
+    owner = SimpleNamespace(_seeded_todo_id="current-initial", _loopx=call,
+        goal_id="fixture-goal", agent_id="fixture-agent", _task_document="task-phase-001.md")
+    retained = asyncio.run(prepare_research_continuation(owner, None, cwd="."))
+    assert retained == research
+    assert calls == [["todo", "list", "--goal-id", owner.goal_id, "--role", "agent"]]
 
 
 @pytest.mark.parametrize("status", ["ready", "blocked"])
