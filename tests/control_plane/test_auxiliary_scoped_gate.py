@@ -98,7 +98,14 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
                 blocks_agent=AGENT_ID, agent_id=AGENT_ID)
         rc, current = _run_cli(registry, runtime, *guard_args)
         if gate_change == "primary_blocked":
-            assert rc == 1 and current["error_code"] == "heartbeat_receipt_identity_conflict", current
+            # A blocked primary still owes its original Turn a no-spend
+            # closeout. Recovery is not renewed delivery or monitor admission.
+            assert rc == 0, current
+            assert current["effective_action"] == "unsettled_host_turn_recovery"
+            assert current["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+            assert current["execution_obligation"]["delivery_allowed"] is False
+            assert current["execution_obligation"]["contract_obligation"] == "close_bound_wait_without_spend"
+            assert "auxiliary_monitor_poll" not in current["interaction_contract"]["cli_channel"]
         else:
             assert rc == 0, current
             offered = current["interaction_contract"]["cli_channel"].get("auxiliary_monitor_poll", {})
@@ -111,6 +118,24 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
         assert _spend_run_count(runtime) == 0
         row = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=DUE_MONITOR_TODO_ID)["todo"]
         assert row.get("result_hash") is None
+        if gate_change == "primary_blocked":
+            refresh_args = ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                "--todo-id", TODO_ID, "--turn-instance-id", turn,
+                "--classification", "blocked_primary_observation_denied",
+                "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_gap",
+                "--progress-result-class", "blocked", "--progress-blocker-id", "blocker:primary-unavailable",
+                "--progress-evidence-id", "evidence:auxiliary-observation-denied",
+                "--no-global-sync", "--suppress-external-sinks")
+            for replay in (False, True):
+                rc, closed = _run_cli(registry, runtime, *refresh_args, cwd=project)
+                assert rc == 0, closed
+                assert closed["settlement_progress"]["state"] == "settled"
+                assert closed["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+                if replay:
+                    assert closed["idempotent_replay"] is True
+            assert _spend_run_count(runtime) == 0
+            primary = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=TODO_ID)["todo"]
+            assert primary["status"] == "blocked"
         return
     rc, observed = emitted()
     assert rc == 0, observed

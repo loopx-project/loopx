@@ -688,6 +688,20 @@ the live quota-backed queue item for the same `goal_id` when one exists, under
 `global_registry_shadow_findings`, so stale source shadows do not become a second
 quota health blocker while the fact remains visible in `global_registry.findings`.
 
+A Goal can therefore have both a health finding and a live read-model item in
+`attention_queue.items`. Match the required projection as well as `goal_id`:
+the first row for a Goal is not necessarily its Todo or Goal-channel view.
+When the declared Goal document is missing, available canonical Todo, lease and
+acceptance observations remain readable; the `state_file_missing` finding still
+blocks automatic delivery. Readback never reconstructs the document or replaces
+its intent and stop conditions. Restoring the document permits a fresh admission
+check; provider failure still refuses stale display fallback.
+
+同一个 Goal 可以同时有健康告警和权威状态的只读投影。读取 Todo 或 Goal channel
+时须同时匹配 `goal_id` 和所需投影字段，不能假定第一行就是该视图。Goal 文档缺失时，
+可用的 canonical Todo、lease 和验收仍可回读，但不授予自动执行，也不重建文档；恢复
+文档后重新准入，provider 不可用时继续拒绝旧显示数据回退。
+
 ## Contract Health
 
 `contract.ok=false` means the UI should show a blocking health state before

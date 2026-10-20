@@ -32,8 +32,7 @@ def test_real_quota_capability_gate_does_not_enable_repair_outputs(tmp_path, mon
         projection, _ = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime,
                                                              state_path=state, registry_path=registry)
         initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
-        state.unlink()
-    before = state.read_bytes() if state.exists() else None
+    before = state.read_bytes()
     authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     args = ["quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
             "--include-detail", "agent-todos", "--scan-path", str(tmp_path)]
@@ -48,5 +47,26 @@ def test_real_quota_capability_gate_does_not_enable_repair_outputs(tmp_path, mon
     ids = [row["todo_id"] for row in gate["runnable_candidates"]]
     assert ids == (["todo_external", "todo_repair"] if network_available else ["todo_repair"])
     assert gate["repair_candidate_count"] == (0 if network_available else 1)
-    assert (state.read_bytes() if state.exists() else None) == before
+    assert state.read_bytes() == before
+
+    # Capability availability cannot replace the Goal's missing intent and
+    # stop conditions. Canonical Todos remain readable without granting work.
+    state.unlink()
+    code, missing = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime)
+    assert code == 1, missing
+    assert missing["status_health_ok"] is False
+    assert missing["should_run"] is False
+    assert missing["normal_delivery_allowed"] is False
+    assert missing["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert not state.exists(), "observation must not reconstruct the Goal document"
+    if provider != "markdown":
+        code, listed = run_json_cli_result("todo", "list", "--goal-id", "goal-a",
+                                          registry_path=registry, runtime_root=runtime)
+        assert code == 0, listed
+        assert {row["todo_id"] for row in listed["todos"]} == {"todo_external", "todo_repair", "todo_owner"}
+    state.write_bytes(before)
+    code, recovered = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime)
+    assert code == 0, recovered
+    assert [row["todo_id"] for row in recovered["capability_gate"]["runnable_candidates"]] == ids
+    assert state.read_bytes() == before
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a") == authority
