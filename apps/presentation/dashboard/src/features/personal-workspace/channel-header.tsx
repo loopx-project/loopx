@@ -160,7 +160,7 @@ export function ChannelHeader({
     : null;
 
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
-    <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
+    <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{selectedGoal?.title === readOnlySourceLabel ? null : readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
   ) : <>
     {ordinaryConversation ? <WorkspaceSelect
             ariaLabel={t("header.selectChatRuntime")}

@@ -67,7 +67,11 @@ try {
     assert.match(goal, /goal-only-model/);
     assert.match(goal, /Fast/);
     assert.doesNotMatch(goal, /gpt-6\.1-sol/, "Goal readback does not inherit the steward model");
-    assertions += 30;
+    const linked = header("idle", { readOnlySourceLabel: "Historical run", selectedGoal: { goalId: "source-case", title: "Historical run", agentLanes: [] } });
+    const sourceBadge = linked.match(/class="personal-read-only-source"[^>]*>(.*?)<\/span>/)?.[1] ?? "";
+    assert.match(sourceBadge, new RegExp(locale === "zh-CN" ? "只读" : "Read only"));
+    assert.doesNotMatch(sourceBadge, /Historical run/, "The source badge does not repeat the visible Goal title");
+    assertions += 32;
   }
   console.log(`Chat model/header: ${assertions} bilingual model, defaults and accessible refresh assertions passed (SSR only)`);
 } finally { globalThis.window = originalWindow; }

@@ -109,7 +109,7 @@ export function GoalSidebar({
         <button type="button" aria-label={t("sidebar.moveUp", { goal: goal.title })} disabled={siblingGroups.get(tree.parents.get(goal.goalId) ?? null)?.[0]?.goalId === goal.goalId} onClick={() => ordering.moveBy(goal.goalId, -1)}><ArrowUp aria-hidden="true" size={13} /></button>
         <button type="button" aria-label={t("sidebar.moveDown", { goal: goal.title })} disabled={siblingGroups.get(tree.parents.get(goal.goalId) ?? null)?.at(-1)?.goalId === goal.goalId} onClick={() => ordering.moveBy(goal.goalId, 1)}><ArrowDown aria-hidden="true" size={13} /></button>
       </div> : null}
-      {onRequestGoalLifecycle && lifecycleOperationEnabled(stopped ? "resume" : "stop") ? (
+      {!goal.sourceAccess?.readOnly && onRequestGoalLifecycle && lifecycleOperationEnabled(stopped ? "resume" : "stop") ? (
         <>
           <button
             aria-label={`${stopped ? t("sidebar.resume") : t("sidebar.stop")} ${goal.title}`}

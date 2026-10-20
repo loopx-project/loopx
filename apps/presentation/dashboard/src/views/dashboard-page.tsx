@@ -1128,7 +1128,7 @@ function buildPersonalHomeModel(
           modelConfig: goal.spawn_policy?.model_config,
         },
       } : {}),
-      title: personalGoalTitle(goal.id, goal.display_name),
+      title: personalGoalTitle(goal.id, goal.source_access?.label ?? goal.display_name),
       usage: (() => {
         const goalUsage = usageById.get(goal.id);
         return goalUsage ? {

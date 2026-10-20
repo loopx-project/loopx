@@ -25,7 +25,7 @@ const directorySchema = z.object({
   contract: directoryContractSchema.optional(),
 });
 export type WorkspaceDirectory = z.infer<typeof directorySchema>;
-export type WorkspaceLoadError = "timeout" | "network" | "service" | "access" | "revision" | "scope" | "invalid";
+export type WorkspaceLoadError = "timeout" | "network" | "service" | "source" | "access" | "revision" | "scope" | "invalid";
 export type WorkspaceReadScope = "all" | "missing";
 export type WorkspaceProgress = {
   directory: WorkspaceDirectory;
@@ -124,7 +124,7 @@ export function directoryStatusPayload(directory: WorkspaceDirectory): StatusPay
   });
 }
 
-async function statusFailure(response: Response, signal: AbortSignal): Promise<"access" | "service"> {
+async function statusFailure(response: Response, signal: AbortSignal): Promise<"access" | "source" | "service"> {
   if (!response.body) return "service";
   const reader = response.body.getReader();
   const cancel = () => { void reader.cancel().catch(() => {}); };
@@ -143,9 +143,12 @@ async function statusFailure(response: Response, signal: AbortSignal): Promise<"
       size += value.byteLength;
     }
     const payload: unknown = JSON.parse(new TextDecoder().decode(bytes.subarray(0, size)));
-    return payload !== null && typeof payload === "object" && !Array.isArray(payload)
-      && "error_code" in payload && payload.error_code === "workspace_status_access_denied"
-      ? "access" : "service";
+    if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
+      && "error_code" in payload) {
+      if (payload.error_code === "workspace_status_access_denied") return "access";
+      if (payload.error_code === "goal_source_unavailable") return "source";
+    }
+    return "service";
   } catch {
     // Parsing/transport errors after 5xx headers stay service errors; aborts keep their meaning.
     signal.throwIfAborted();

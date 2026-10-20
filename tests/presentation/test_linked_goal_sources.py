@@ -172,6 +172,38 @@ def test_app_source_links_reject_other_origins_unknown_parents_and_identity_coll
         request('/api/chat/research-analysis?goal_id=solver-goal&source_namespace=' + 'f' * 64)
 
 
+def test_source_failure_preserves_links_peers_and_native_recovery(workspace):
+    w = workspace
+    raw, request, before = native_source(w)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    bound = w['server'].registry_path.read_bytes()
+    source_registry = Path(raw['registry'])
+    request('/status.json?goal_id=solver-goal')
+    # A real native CLI failure, including private stderr, must not become a
+    # generic workspace failure or borrow a local Goal's snapshot.
+    source_registry.unlink()
+    reader = w['server'].goal_source_catalog.resolve('solver-goal')[1]
+    reader._read_at = 0
+    with pytest.raises(HTTPError) as unavailable:
+        request('/status.json?goal_id=solver-goal')
+    assert unavailable.value.code == 503
+    error = json.load(unavailable.value)
+    assert error['error_code'] == 'goal_source_unavailable'
+    assert str(w['tmp_path']) not in json.dumps(error)
+    assert w['server'].registry_path.read_bytes() == bound
+    assert len(request('/api/chat/goal-sources')['goals']) == 1
+    assert request('/status.json?goal_id=other-owner')['run_history']['goals'][0]['id'] == 'other-owner'
+    missing = json.loads(before[source_registry])
+    missing['goals'] = []
+    source_registry.write_text(json.dumps(missing))
+    with pytest.raises(HTTPError) as removed:
+        request('/status.json?goal_id=solver-goal')
+    assert removed.value.code == 409
+    source_registry.write_bytes(before[source_registry])
+    assert request('/status.json?goal_id=solver-goal')['run_history']['goals'][0]['registry_member']
+    assert not w['count'].exists()
+
+
 def test_original_task_detail_cannot_follow_a_replaced_source(workspace):
     raw, request, _ = native_source(workspace)
     request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})

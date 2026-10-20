@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -225,12 +226,22 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     return
             linked = None
             if goal_id and registry.get("goal_source_links"):
+                from .control_plane.status.goal_source import SourceScopeError
                 from .presentation.goal_source_routing import goal_source_catalog
                 catalog = goal_source_catalog(self.server)
                 if delivery_review and catalog.resolve(goal_id, registry):
                     self._send_error("Execution review belongs to the original Goal runtime.", status=403)
                     return
-                linked = catalog.status(goal_id, registry)
+                try:
+                    linked = catalog.status(goal_id, registry)
+                except SourceScopeError:
+                    self._send_error("The original Goal is no longer available in this source.",
+                                     status=409)
+                    return
+                except (OSError, subprocess.SubprocessError):
+                    self._send_error("The original Goal source is unavailable; its link is preserved.",
+                                     status=503, error_code="goal_source_unavailable")
+                    return
             projection = linked if linked is not None else collect_status(
                 registry_path=self.server.registry_path,
                 # The Chat service already starts on an absent registry as an

@@ -130,6 +130,26 @@ cache. Source loss must stay local to the affected Goal and must not launch a
 model or strand the rest of the App. Native liveness, causal value and missing
 relations cannot be supplied by the local parent or an analysis result.
 
+Use the link's display label consistently after native status loads, while
+preserving the original Goal objective, id and Tasks. Two runs can have the
+same native title; loading their evidence must not erase their distinguishing
+labels. Read-only linked Goals offer no local stop, resume or delete control.
+An unavailable source has a source-specific error and an explicit retry,
+without repeating ordinary service-restart retries or affecting other Goals.
+
+When a disposable source has stopped, an owner-authorized retained runtime can
+remain the original historical source. Verify its original registry membership,
+canonical store identity and complete native history through the existing reader
+before replacing the lost connection. Read the retained registry/runtime in place;
+do not create or rename an execution Goal, restart a solver, or rewrite its state
+to make the display work. Label the link as historical, preserve the source bytes,
+and retain the old namespace's artifacts. Admit the replacement through the same
+source-link owner; its new physical namespace must invalidate old cursors and
+analysis selection. Re-register an existing evidence pack only after verifying
+its original run/window, hashes and literal excerpts. Neither recovery nor
+registration starts analysis or turns an old native measurement into a current
+or countable study result.
+
 ## Task-first delivery / 从用户任务开始
 
 Use the existing task/PR delivery brief, not a second checklist or approval form.

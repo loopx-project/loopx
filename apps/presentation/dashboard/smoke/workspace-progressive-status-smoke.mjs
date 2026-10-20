@@ -116,6 +116,7 @@ try {
     "even an out-of-scope preferred Goal must not broaden actual state reads");
   assert.equal(loaded.length, 3);
   await check("access", () => json(access), ["access"], 1);
+  await check("original source unavailable", () => json({ error_code: "goal_source_unavailable" }, 503), ["source"], 1);
   for (const body of [null, {}, [], { error_code: "future_code" }, { error_code: 5 }, { error: "permission denied" }]) {
     await check("unknown envelope", () => json(body), ["service"], 3);
   }
