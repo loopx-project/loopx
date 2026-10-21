@@ -70,6 +70,7 @@ class ChatExternalConversations:
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
             "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
                 "steering_observed": any(event.get("kind") == "turn.steered"
                     for event in store.events_after(session["session_id"], turn["turn_id"], None)),
                 "native_observation": observation, "source_verified": source_verified},
@@ -83,8 +84,9 @@ class ChatExternalConversations:
             if row.get("status") != "accepted":
                 return False
             recovery = row.get("context_recovery")
-            if recovery and row.get("turn_id") != recovery["failed_turn_id"]:
-                return not row.get("delivery_verified")
+            if (recovery and row.get("turn_id") != recovery["failed_turn_id"]
+                    and not row.get("delivery_verified")):
+                return True
             if not row.get("delivery_verified"):
                 return False
             turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
@@ -127,11 +129,17 @@ class ChatExternalConversations:
                 if not plan.get("recovery_eligible"):
                     return row
                 recovery = row.get("context_recovery")
-                if recovery is None:
+                if recovery is None or recovery.get("client_turn_id") != plan["client_turn_id"]:
+                    if recovery is not None:
+                        row.setdefault("context_recovery_history", []).append(deepcopy(recovery))
                     recovery = {"version": MANAGER_CONTEXT_VERSION, "failed_turn_id": row["turn_id"],
                         "native_observation": proof, "source_observation": source,
                         "client_turn_id": plan["client_turn_id"],
                         "failure_notice_delivery_verified": row["delivery_verified"]}
+                    if plan.get("routing_attempt") is not None:
+                        recovery.update(routing_attempt=plan["routing_attempt"],
+                            presentation_key=f"{MANAGER_CONTEXT_VERSION}.routing.{plan['routing_attempt']}",
+                            not_before=plan["not_before"])
                     row["context_recovery"] = recovery
                     _atomic_write_json(path, row)
                 # Freeze correlation before the existing queue can dispatch.
@@ -147,7 +155,7 @@ class ChatExternalConversations:
             return row
 
     def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
-        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*", str(turn.get("client_turn_id") or ""))
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-routing-[1-3])?", str(turn.get("client_turn_id") or ""))
         if match is None:
             return None
         row = self.read_request(match[1])

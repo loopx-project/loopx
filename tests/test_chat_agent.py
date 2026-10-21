@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from loopx.capabilities.native_chat.codex_adapter import failed_request_readback
+
 import contextlib
 import io
 import json
@@ -425,13 +427,65 @@ def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp
         session.messages.put({"id": packet["id"], "result": result})
 
     monkeypatch.setattr(session, "_write", write)
-    proof = session.failed_request_readback("failed")
+    proof = failed_request_readback(session, "failed")
     if fault in {None, "older", "host-other"}:
         assert proof == {"thread_id": "original-thread", "turn_id": "failed",
             "only_original_user_item": True, "codex_error_info": "other" if fault == "host-other" else "contextWindowExceeded"}
     else:
         assert proof is None
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}
+
+
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("fault", [None, "tool", "answer", "unknown", "correction", "older", "changed", "duplicate"])
+def test_routing_failure_readback_allows_only_native_compaction_before_execution(tmp_path, monkeypatch, compact, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="routing-thread", work_dir=tmp_path, response_timeout_sec=.2)
+    reads = 0
+
+    def write(packet):
+        nonlocal reads
+        if packet["method"] == "thread/turns/list":
+            reads += 1
+            message = ("Error running remote compact task: " if compact else "") + "workspace routing discovery timed out"
+            if fault == "changed" and reads > 1:
+                message = "different private error"
+            rows = [{"id": "failed", "status": "failed", "error": {"codexErrorInfo": "other", "message": message}}]
+            if fault == "older":
+                rows.insert(0, {"id": "newer", "status": "completed"})
+            result = {"data": rows}
+        else:
+            items = [{"turnId": "failed", "item": {"id": "user", "type": "userMessage"}}]
+            if compact:
+                items.append({"turnId": "failed", "item": {"id": "compact", "type": "contextCompaction"}})
+            kind = {"tool": "commandExecution", "answer": "agentMessage", "unknown": "futureItem",
+                "correction": "userMessage", "duplicate": "contextCompaction"}.get(fault)
+            if kind:
+                items.append({"turnId": "failed", "item": {"id": "user" if fault == "duplicate" else "extra", "type": kind}})
+            # Exercise the complete paginated inventory, including late tools.
+            cursor = packet["params"].get("cursor")
+            result = {"data": items[1:] if cursor else items[:1],
+                "nextCursor": "next" if len(items) > 1 and not cursor else None}
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    proof = failed_request_readback(session, "failed")
+    if fault is None:
+        assert proof == {"thread_id": "routing-thread", "turn_id": "failed",
+            "only_original_user_item": not compact, "only_pre_execution_items": True,
+            "codex_error_info": "other", "pre_execution_routing_timeout": True}
+        error = chat_agent._terminal_turn_error({"codexErrorInfo": "other", "message":
+            ("Error running remote compact task: " if compact else "") + "workspace routing discovery timed out"}, "fallback")
+        assert error.error_code == "upstream_transport_failure" and error.native_routing_timeout
+    else:
+        assert proof is None
+
+
+@pytest.mark.parametrize("message", [None, {}, [], "workspace routing discovery timed out: extra", "unknown"])
+def test_routing_diagnostic_is_an_exact_provider_diagnostic(message):
+    error = {"codexErrorInfo": "other", "message": message}
+    assert not chat_agent._routing_discovery_timeout(error)
+    assert chat_agent._terminal_turn_error(error, "fallback").error_code == "host_gate"
 
 
 def test_stop_cancels_completed_and_late_command_items_but_preserves_older_terminal(tmp_path, monkeypatch):

@@ -477,14 +477,18 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || current.upstream_mode !== "chat" || current.status === "closed"
       || current.session_mode === "attached_host") return no;
   const selected = binding(params.binding);
-  if (selected.context_kind !== "steward" || selected.audience === "group") return no;
-  const saved = normalizeStewardContext(current.steward_context);
+  if (selected.audience === "group") return no;
+  const steward = selected.context_kind === "steward";
+  if (selected.executor_endpoint_id !== "codex" || current.goal_id !== (steward ? "loopx-manager" : null)) return no;
+  const saved = steward ? normalizeStewardContext(current.steward_context)
+    : normalizeProjectContext(current.project_context);
   const source = requireJsonObject(row.source, "original conversation source");
   if (row.binding_id !== selected.binding_id || saved.binding_id !== selected.binding_id
       || saved.source_ref !== source.source_ref || saved.provider_ref !== selected.provider_ref
       || saved.operator_ref !== selected.operator_ref || source.sender_ref !== selected.operator_ref
       || source.private_human_message !== true
-      || current.channel_id !== `manager.external.native.${selected.binding_id}.${saved.source_ref}`) return no;
+      || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
+      || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
@@ -492,6 +496,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded"].includes(String(failed.error_code))
       || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
+  const routing = planRoutingRecovery(recovery, row, current, failed, previous, version);
+  if (routing !== null) return routing;
+  if (!steward) return no;
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
   if (previous && (previous.version !== version || previous.failed_turn_id !== row.turn_id
       || previous.client_turn_id !== client)) return no;
@@ -526,6 +533,45 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     }
   }
   return {...candidate, recovery_eligible: transient};
+}
+
+/** Routing outages outlive one worker or context migration. Reserve at most
+ * three separately correlated continuations, with a persisted failure clock.
+ * Provider IO must prove a latest, terminal, pre-execution request every time.
+ */
+function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, previous: JsonObject | null, version: number): JsonObject | null {
+  if (!["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
+  // An unfinished older reservation must finish under its original identity.
+  if (previous?.failed_turn_id === failed.turn_id && previous.routing_attempt === undefined) return null;
+  const observed = recovery.native_observation == null ? null
+    : requireJsonObject(recovery.native_observation, "native failure readback");
+  if (observed && observed.pre_execution_routing_timeout !== true) return null;
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const reserved = previous?.failed_turn_id === failed.turn_id;
+  const priorAttempt = previous?.routing_attempt ?? 0;
+  if (!Number.isSafeInteger(priorAttempt) || Number(priorAttempt) < 0) return no;
+  const attempt = Number(priorAttempt) + (reserved ? 0 : 1);
+  if (attempt < 1 || attempt > 3 || typeof current.upstream_thread_id !== "string"
+      || !current.upstream_thread_id || current.active_turn_id != null || current.status !== "ready") return no;
+  const now = typeof recovery.observed_at === "string" ? Date.parse(recovery.observed_at) : NaN;
+  const completed = typeof failed.completed_at === "string" ? Date.parse(failed.completed_at) : NaN;
+  const notBefore = completed + 60_000 * 2 ** (attempt - 1);
+  if (!Number.isFinite(now) || !Number.isFinite(completed) || now < notBefore) {
+    // Preserve the existing context-migration path when no routing diagnostic
+    // has been established. A proven routing timeout always obeys backoff.
+    return observed ? no : null;
+  }
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-routing-${attempt}`;
+  if (reserved && (previous?.client_turn_id !== client || previous.version !== version)) return no;
+  const candidate = {...no, recovery_candidate: true, client_turn_id: client,
+    routing_attempt: attempt, not_before: new Date(notBefore).toISOString(),
+    session_id: current.session_id, failed_turn_id: failed.turn_id,
+    native_thread_ids: [sessionIdentity(current.upstream_thread_id, "current native thread")]};
+  if (!observed) return candidate;
+  return {...candidate, recovery_eligible: recovery.source_verified === true
+    && observed.thread_id === current.upstream_thread_id && observed.turn_id === failed.upstream_turn_id
+    && observed.codex_error_info === "other" && observed.only_pre_execution_items === true};
 }
 
 /** A labelled observation of the same authorized context and canonical queue.
