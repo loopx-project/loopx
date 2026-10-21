@@ -437,8 +437,9 @@ def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp
 
 
 @pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("fault", [None, "tool", "answer", "unknown", "correction", "older", "changed", "duplicate"])
-def test_routing_failure_readback_allows_only_native_compaction_before_execution(tmp_path, monkeypatch, compact, fault):
+def test_routing_failure_readback_allows_only_native_compaction_before_execution(tmp_path, monkeypatch, compact, reverse, fault):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="routing-thread", work_dir=tmp_path, response_timeout_sec=.2)
     reads = 0
@@ -462,6 +463,8 @@ def test_routing_failure_readback_allows_only_native_compaction_before_execution
                 "correction": "userMessage", "duplicate": "contextCompaction"}.get(fault)
             if kind:
                 items.append({"turnId": "failed", "item": {"id": "user" if fault == "duplicate" else "extra", "type": kind}})
+            if reverse:
+                items.reverse()
             # Exercise the complete paginated inventory, including late tools.
             cursor = packet["params"].get("cursor")
             result = {"data": items[1:] if cursor else items[:1],

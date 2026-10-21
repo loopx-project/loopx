@@ -74,6 +74,12 @@ for (const kind of ["project", "steward"]) {
       assert.notEqual(planBoundConversationRequest({...packet,
         current_session: {...session, ...change}}).recovery_eligible, true);
     }
+    if (kind === "project") {
+      assert.equal(planBoundConversationRequest({...packet,
+        binding: {...selected, audience: "group", group_refs: ["1".repeat(24)]}}).recovery_eligible, false);
+      assert.equal(planBoundConversationRequest({...packet,
+        binding: {...selected, grant: "workspace_write"}}).recovery_eligible, false);
+    }
   });
 }
 
