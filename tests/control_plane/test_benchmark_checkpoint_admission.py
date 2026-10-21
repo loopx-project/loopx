@@ -115,7 +115,8 @@ Path("checkpoint-settlement.json").write_text(json.dumps({"refresh":updated,"spe
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop", "original_event_changed", None])
+@pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop",
+    "original_event_changed", "original_settlement_changed", "original_action_changed", None])
 def test_checkpoint_resume_rechecks_current_source_with_original_guard(tmp_path, monkeypatch, provider, refusal):
     _run_checkpoint(tmp_path, monkeypatch, provider, refusal=refusal, todo_bound=False)
 
@@ -210,6 +211,14 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
                 # unbound receipt merely because both have no selected Todo.
                 held["quota"] = {**held["quota"], "heartbeat_receipt": {
                     **original_receipt, "event_id": "different-committed-guard-event"}}
+            elif refusal == "original_settlement_changed":
+                original_receipt = held["quota"]["heartbeat_receipt"]
+                assert original_receipt["settlement_identity"]
+                held["quota"] = {**held["quota"], "heartbeat_receipt": {
+                    **original_receipt, "settlement_identity": {
+                        **original_receipt["settlement_identity"], "effect_id": "different-original-effect"}}}
+            elif refusal == "original_action_changed":
+                held["quota"] = {**held["quota"], "effective_action": "skip"}
             return captured
 
         monkeypatch.setattr(hook, "_capture", captured_then_changed)
@@ -246,7 +255,8 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
         assert error is not None and {
             "source_compute_zero":"goal_launch_not_allowed", "missing_state":"goal_launch_not_allowed",
             "stop":"goal_stopped", "original_event_changed":"heartbeat_launch_original_binding_changed",
-            "public_scope_violation":"goal_launch_not_allowed",
+            "original_settlement_changed":"heartbeat_launch_original_binding_changed",
+            "original_action_changed":"goal_launch_not_allowed",
         }[refusal] in str(error)
         assert not (project / "checkpoint-business.json").exists()
         assert fixture._heartbeat_receipt_events(runtime, HELD_TURN) == observations["events"]
