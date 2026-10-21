@@ -288,14 +288,17 @@ def _epoch_rfc3339(value: object) -> str:
     if isinstance(value, bool):
         raise LarkDocumentCommentProviderError("comment_timestamp_invalid")
     token = str(value).strip()
-    if not token.isdigit():
+    if not (token.isascii() and token.isdigit()):
         raise LarkDocumentCommentProviderError("comment_timestamp_invalid")
     precision = {13: 1_000, 16: 1_000_000}.get(len(token))
     if precision is None:
         precision = 1 if len(token) <= 10 else None
     if precision is None:
         raise LarkDocumentCommentProviderError("comment_timestamp_invalid")
-    numeric = int(token)
+    try:
+        numeric = int(token)
+    except (TypeError, ValueError) as exc:
+        raise LarkDocumentCommentProviderError("comment_timestamp_invalid") from exc
     seconds, remainder = divmod(numeric, precision)
     try:
         parsed = datetime.fromtimestamp(seconds, tz=UTC) + timedelta(

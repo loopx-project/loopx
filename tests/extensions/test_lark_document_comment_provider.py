@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from loopx.extensions.external_connector_provider import (
     build_document_comment_connector_registration,
     capture_document_comment_provider_page,
@@ -472,6 +474,11 @@ def test_lark_provider_rejects_boolean_comment_timestamp(tmp_path: Path) -> None
 
 def test_lark_document_comment_timestamp_accepts_microsecond_epoch():
     assert _epoch_rfc3339("1700000000123456") == "2023-11-14T22:13:20.123456Z"
+
+
+def test_lark_document_comment_timestamp_rejects_non_ascii_digits():
+    with pytest.raises(LarkDocumentCommentProviderError, match="comment_timestamp_invalid"):
+        _epoch_rfc3339("1700000000²")
 
 
 def test_lark_document_comment_callsite_runs_read_effect_reply_readback_ack(
