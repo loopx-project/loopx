@@ -37,10 +37,11 @@ def test_original_scanner_recovers_across_another_failure_and_restart(steward, m
     old_notice = json.loads(path.read_text())["deliveries"]["terminal"]
     old_body = dict(provider.messages[old_notice["attempt"]["message_ref"]])
 
+    clock = [datetime.now(timezone.utc) + timedelta(seconds=61)]
     class AfterBackoff(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime.now(timezone.utc) + timedelta(hours=1)
+            return clock[0]
 
     monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
     monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **kw: None
@@ -80,12 +81,13 @@ def test_original_scanner_recovers_across_another_failure_and_restart(steward, m
     assert finish(runtime, continued)["status"] == "failed"
     first.reconcile_request(path)
     assert first.core.read_request(ref)["delivery_verified"]
-    assert first.core.context_recovery_candidate(ref), first.core._context_recovery_plan(first.core.read_request(ref), discovery_only=True)
+    assert not first.core.context_recovery_candidate(ref)  # The next backoff survives a scanner restart.
     first_notice = json.loads(path.read_text())["deliveries"][presentation_phase(continued, "terminal")]
     second_failed = store._turn_path(continued["session_id"], continued["turn_id"])
     second_bytes = second_failed.read_bytes()
     runtime.adapters.pop(original["session_id"]).close_session()
     fake.write_text(source.replace('if "typed terminal failure" in json.dumps(request.get("params") or {}):', 'if False:'))
+    clock[0] += timedelta(minutes=5)
     second = restarted_worker()
     second.reconcile()
     recovered = second.core.read_request(ref)
