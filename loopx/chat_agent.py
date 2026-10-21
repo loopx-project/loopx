@@ -1352,10 +1352,18 @@ class CodexChatAgentSession:
                 try:
                     message = waiter.get_nowait()
                 except queue.Empty:
-                    # A streaming reader can route this RPC response while holding
-                    # the fence. Recheck our waiter instead of waiting for an event.
-                    if not self._message_dispatch_lock.acquire(timeout=0.1):
-                        continue
+                    # The reader can route our response while retaining the
+                    # dispatch fence for its next event. Wait on the response,
+                    # which wakes immediately, rather than on that reader's lock.
+                    if not self._message_dispatch_lock.acquire(blocking=False):
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            continue
+                        try:
+                            message = waiter.get(timeout=min(0.1, remaining))
+                        except queue.Empty:
+                            continue
+                        break
                     try:
                         try:
                             message = waiter.get_nowait()
@@ -1394,21 +1402,22 @@ class CodexChatAgentSession:
                                 continue
                     finally:
                         self._message_dispatch_lock.release()
-                if message.get("id") == request_id:
-                    if message.get("error"):
-                        if method in {
-                            "thread/start",
-                            "thread/resume",
-                        } and _is_legacy_model_catalog_error(message.get("error")):
-                            raise _LegacyModelCatalogSchemaError
-                        raise self._runtime_error(
-                            f"Codex app-server rejected {method}."
-                        )
-                    result = message.get("result")
-                    return result if isinstance(result, dict) else {}
-                raise self._runtime_error(
-                    "Codex app-server returned an unexpected response."
-                )
+                break
+            if message.get("id") == request_id:
+                if message.get("error"):
+                    if method in {
+                        "thread/start",
+                        "thread/resume",
+                    } and _is_legacy_model_catalog_error(message.get("error")):
+                        raise _LegacyModelCatalogSchemaError
+                    raise self._runtime_error(
+                        f"Codex app-server rejected {method}."
+                    )
+                result = message.get("result")
+                return result if isinstance(result, dict) else {}
+            raise self._runtime_error(
+                "Codex app-server returned an unexpected response."
+            )
         finally:
             with self._response_waiters_lock:
                 self._response_waiters.pop(request_id, None)

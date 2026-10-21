@@ -49,6 +49,64 @@ def test_silent_event_reader_releases_dispatch_fence_for_control_receipt(tmp_pat
     assert not errors and arrived == [{"method": "turn/completed", "params": {"turnId": "original"}}]
 
 
+@pytest.mark.parametrize("reply_kind", ["success", "rejected", "legacy-catalog"])
+def test_routed_control_receipt_wakes_before_reader_releases_dispatch_fence(
+    tmp_path, monkeypatch, reply_kind,
+):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="synthetic-thread", work_dir=tmp_path,
+        response_timeout_sec=.06)
+    reading, release_reader = threading.Event(), threading.Event()
+    original_next, original_route = session._next_message, session._route_response
+    errors = []
+
+    def next_message(**kwargs):
+        reading.set()  # _next_event already owns the real dispatch fence.
+        return original_next(**kwargs)
+
+    def route(message):
+        routed = original_route(message)
+        if routed:
+            # A quiet reader can retain the fence after routing the receipt.
+            # No later model event should be needed to finish this RPC.
+            assert release_reader.wait(2)
+        return routed
+
+    def events():
+        try:
+            session._next_event(deadline=time.monotonic() + 3)
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(session, "_next_message", next_message)
+    monkeypatch.setattr(session, "_route_response", route)
+    reply = {"result": {"data": []}}
+    if reply_kind == "rejected":
+        reply = {"error": {"message": "rejected"}}
+    elif reply_kind == "legacy-catalog":
+        reply = {"error": {"message": "model_catalog_json missing field base_instructions"}}
+    monkeypatch.setattr(session, "_write", lambda packet: session.messages.put(
+        {"id": packet["id"], **reply}))
+    reader = threading.Thread(target=events)
+    reader.start()
+    try:
+        assert reading.wait(1)
+        if reply_kind == "legacy-catalog":
+            with pytest.raises(chat_agent._LegacyModelCatalogSchemaError):
+                session._request("thread/resume", {"threadId": session.thread_id})
+        elif reply_kind == "rejected":
+            with pytest.raises(chat_agent.CodexChatAgentError, match="rejected"):
+                session._request("thread/turns/list", {"threadId": session.thread_id})
+        else:
+            assert session._request("thread/turns/list", {"threadId": session.thread_id}) == {"data": []}
+        assert not release_reader.is_set() and not session._response_waiters
+    finally:
+        release_reader.set()
+        session.messages.put({"method": "turn/completed", "params": {"turnId": "original"}})
+        reader.join(timeout=4)
+    assert not errors and not reader.is_alive()
+
+
 class _FakeAppServerProcess:
     def __init__(self, *, config_response=None, model_provider=None, thread_id="thread-loopx-chat", thread_response=None) -> None:
         responses = [
@@ -76,6 +134,20 @@ class _FakeAppServerProcess:
 
     def kill(self) -> None:
         self.returncode = -1
+
+
+def _stub_app_server_process(monkeypatch, process, *, launched=None):
+    # Limit host stubs to this adapter. Effect's lazy Node discovery/launch must
+    # keep real stdlib modules even when this case is the worker's first call.
+    monkeypatch.setattr(chat_agent, "shutil", SimpleNamespace(**{
+        **vars(chat_agent.shutil), "which": lambda _: "codex"}))
+    def popen(*args, **kwargs):
+        if launched is not None:
+            launched.append(kwargs)
+        return process
+
+    monkeypatch.setattr(chat_agent, "subprocess", SimpleNamespace(**{
+        **vars(chat_agent.subprocess), "Popen": popen}))
 
 
 @pytest.mark.parametrize("phase", ["write", "flush"])
@@ -1006,10 +1078,8 @@ def test_owner_project_git_writes_use_native_permissions_without_isolated_accoun
         "sandbox": {"type": "workspaceWrite", "writableRoots": [approved, *expected_roots]},
     })
     monkeypatch.setenv("SYNTHETIC_OWNER_ENV", "retained")
-    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
     launched = []
-    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **kw:
-        launched.append(kw) or process)
+    _stub_app_server_process(monkeypatch, process, launched=launched)
     host_config = {"features": {"apps": True}, "mcp_servers": {"owner": {"enabled": True}}}
     original_config = json.loads(json.dumps(host_config))
     home = tmp_path / "owner-codex"
@@ -1062,8 +1132,7 @@ def test_owner_git_permissions_require_valid_configuration_and_native_readback(m
                                      "writableRoots": (str(tmp_path / ".git") if fault == "invalid-native-roots"
                                                        else [str(tmp_path / ".git")] if fault == "missing-skills-root"
                                                        else ["/other"] if fault == "foreign-root" else [])}})
-    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
-    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **kw: process)
+    _stub_app_server_process(monkeypatch, process)
     with pytest.raises(chat_agent.CodexChatAgentError, match="Invalid|did not apply"):
         chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
             goal_id=None, objective="project", project_context=ChatProjectContexts([tmp_path]).available()[0],
