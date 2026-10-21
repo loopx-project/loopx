@@ -6,6 +6,7 @@ import {requireJsonObject, requireNonEmptyString, requireStringArray, requireStr
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
+import {normalizeExploreMeasurements} from "./explore_measurements.ts";
 
 export const EXPLORE_RESULT_ATTACHMENT_SCHEMA = "explore_result_attachment_v0";
 export const EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA = "explore_result_from_path_delta_v0";
@@ -35,6 +36,10 @@ export function exploreResultWritebackAffordance(): JsonObject {
       relations: [{to_node: "<existing-node-id>", edge_type: "depends_on",
         summary: "<observed prerequisite; omit relations when none changed>"}],
     },
+    optional_measurement_example: {measurements: [{metric: "accuracy", value: 0.82,
+      unit: "ratio", higher_is_better: true, comparison_scope: "validation:fixed-budget-v1",
+      input_revision: "dataset-v1", evaluation_ref: "evaluator:validation-v1",
+      candidate_ref: "candidate:revision-2", evidence_ref: "result:validation-2"}]},
     guidance: [
       "After validating reusable evidence, put explore_result in the vision JSON already submitted with --agent-vision-json.",
       "For an open Todo under hard_lease, keep the active task lease through refresh-state and Explore graph/Todo-link delivery; release only after explore_result_delivery.ok=true.",
@@ -60,6 +65,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
       "Capture is optional, not a settlement obligation.",
       "A stopped route does not imply refuted status, and a score alone does not prove refutation.",
       "Keep raw logs local.",
+      "Attach measurements when an evaluation returns quantitative evidence: include its metric, unit, explicit direction, candidate and result reference. Use the same comparison_scope only for the same task, evaluator, model/resource budget and evaluation conditions; separate local proxies from native results. The measurement input revision and evidence reference must match this result. Use null for an unmeasured value. Read measurement_feedback before repeating a measured route: compare the latest recorded candidate with its same-scope best, investigate regressions and retain useful alternatives; a score does not itself close or authorize work.",
       "When an experiment has execution evidence, attach execution_observation: preserve its exact candidate and input version, planned versus executed method, change reason and measured resources. Missing measurements are null, not zero. A finding source digest is not an executable digest. Result evidence must name the candidate it actually evaluated, including delayed or regressing results; it does not certify current workspace quality or Goal completion.",
       "Observations allow 320 characters, interpretations 1200; the complete scoped summary is preserved within 2000 characters.",
     ].join(" "),
@@ -75,7 +81,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
 }
 
 const FIELDS = ["schema_version", "node_id", "question", "applicability", "input_revision",
-  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation"];
+  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements"];
 // Reuse the persisted Explore node/edge vocabulary, distinct from finding status.
 const QUESTION_STATUSES = ["open", "exploring", "blocked", "resolved", "dead_end"] as const;
 const RELATION_TYPES = ["subtopic_of", "depends_on", "answers", "supports", "refutes", "leads_to"] as const;
@@ -158,6 +164,11 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
   });
   const execution = Object.hasOwn(row, "execution_observation")
     ? normalizeExploreExecutionObservation({observation: row.execution_observation}) : null;
+  const measurements = Object.hasOwn(row, "measurements") ? normalizeExploreMeasurements(row.measurements) : null;
+  if (measurements?.some(item => item.input_revision !== text(row.input_revision, "input_revision", 160)
+    || !refs.includes(item.evidence_ref))) {
+    throw new EffectRuntimeRequestError("measurements must retain this finding's input revision and evidence references");
+  }
   if (execution && (execution.input_revision !== text(row.input_revision, "input_revision", 160)
     || (execution.evidence_refs as string[]).some(ref => !refs.includes(ref)))) {
     throw new EffectRuntimeRequestError("execution observation must retain this finding's input revision and evidence references");
@@ -171,11 +182,12 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     interpretation: text(row.interpretation, "interpretation", 1200),
     status: requireStringLiteral(row.status, ["tentative", "confirmed", "refuted"], "finding status"),
     evidence_refs: [...new Set(refs)], ...evolutionFields(row, node),
-    ...(execution ? {execution_observation: execution} : {})};
+    ...(execution ? {execution_observation: execution} : {}),
+    ...(measurements ? {measurements} : {})};
 }
 /** Explicit reference, not inferred evidence. Preserve every route item verbatim. */
 function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedScope: unknown): JsonObject {
-  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation"];
+  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements"];
   if (Object.keys(row).some(key => !fields.includes(key))) {
     throw new EffectRuntimeRequestError("Explore path_delta attachment contains unknown fields");
   }

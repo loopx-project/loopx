@@ -134,6 +134,7 @@ def register_explore_commands(
     finding.add_argument("--status", choices=sorted(FINDING_STATUSES))
     finding.add_argument("--summary", help="Optional compact public-safe detail.")
     finding.add_argument("--confidence", type=float, help="0..1 confidence.")
+    finding.add_argument("--measurements-json", help="JSON file containing one to eight sourced measurements for this node.")
     _add_common_record_args(finding)
 
     summary = sub.add_parser(
@@ -578,6 +579,8 @@ def handle_explore_command(
                 evidence_refs=args.evidence_ref,
                 tags=args.tag,
                 supersedes=args.supersedes,
+                measurements=(json.loads(Path(args.measurements_json).read_text(encoding="utf-8"))
+                              if args.measurements_json else None),
             )
             payload = _append_event_payload(event, runtime_root=runtime_root, goal_id=args.goal_id)
         elif args.explore_command == "observe":

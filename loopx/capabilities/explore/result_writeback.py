@@ -134,6 +134,7 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
         evidence_refs=attachment["evidence_refs"],
         tags=["writeback-result"],
         execution_observation=attachment.get("execution_observation"),
+        measurements=attachment.get("measurements"),
         recorded_at=recorded_at,
     )
     relations = [build_explore_edge_event(

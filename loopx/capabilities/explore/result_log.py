@@ -350,6 +350,7 @@ def build_explore_finding_event(
     supersedes: str | None = None,
     recorded_at: str | None = None,
     execution_observation: Mapping[str, Any] | None = None,
+    measurements: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     safe_goal_id = _safe_goal_id(goal_id)
     safe_title = _compact_text(title, limit=TITLE_LIMIT, field="title")
@@ -387,6 +388,15 @@ def build_explore_finding_event(
         if any(ref not in event.get("evidence_refs", []) for ref in observed["evidence_refs"]):
             raise ValueError("execution evidence must be included in the finding's evidence_refs")
         event["execution_observation"] = observed
+    if measurements is not None:
+        from .measurements import normalize_measurements
+
+        if not node_id:
+            raise ValueError("measurements require an explicit node")
+        measured = normalize_measurements(measurements)
+        if any(item["evidence_ref"] not in event.get("evidence_refs", []) for item in measured):
+            raise ValueError("measurement evidence must be included in the finding's evidence_refs")
+        event["measurements"] = measured
     event["event_id"] = _event_id(event)
     return event
 
@@ -506,6 +516,7 @@ def validate_explore_result_event(
             tags=payload.get("tags"),
             supersedes=payload.get("supersedes"),
             execution_observation=payload.get("execution_observation"),
+            measurements=payload.get("measurements"),
         )
     if summary:
         rebuilt["summary"] = summary
@@ -728,7 +739,7 @@ def explore_history_rows(events, *, goal_id=None):
         "schema_version", "event_id", "goal_id", "event_kind", "result_id",
         "recorded_at", "title", "summary", "status", "node_kind",
         "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
-        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation",
+        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation", "measurements",
     )
     return [{key: event[key] for key in fields if key in event} for event in events]
 
@@ -830,6 +841,7 @@ def _materialized_parent_edges(
 def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
     return {
         **({"execution_observation": event["execution_observation"]} if "execution_observation" in event else {}),
+        **({"measurements": event["measurements"]} if "measurements" in event else {}),
         "finding_id": str(event.get("result_id") or ""),
         "finding": str(event.get("title") or ""),
         "summary": str(event.get("summary") or ""),

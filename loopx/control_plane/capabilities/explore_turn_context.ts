@@ -7,6 +7,7 @@ import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {normalizeExploreResultPages} from "./explore_result_page.ts";
+import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
@@ -115,6 +116,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("Use result_limit 1..20 and a nonnegative result_offset");
   }
   const resultNode = params.result_node == null ? null : requireNonEmptyString(params.result_node, "result_node");
+  const measurementFeedback = projectExploreMeasurementFeedback(findings)
+    .filter(item => resultNode === null || item.node_id === resultNode)
+    .sort((a, b) => Number(selectedRefs.has(b.node_id)) - Number(selectedRefs.has(a.node_id)));
   const resultRows = resultNode == null ? writebackResults : writebackResults.filter(row => row.node_id === resultNode);
   const nodeById = new Map(nodes.map(node => [node.node_id, node]));
   // Bind current Todo links to the results on this page. Include the full
@@ -206,6 +210,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
         .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
           summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT),
           ...(row.execution_observation ? {execution_observation: row.execution_observation} : {}),
+          ...(row.measurements ? {measurements: row.measurements} : {}),
           ...currentQuestion(row),
           ...findingDigest(row, findingSources)})),
       result_page: {
@@ -230,6 +235,12 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       optional_question_evolution_example: writeback.optional_question_evolution_example,
       result_writeback_guidance: writeback.guidance,
       result_attachment_template: writeback.attachment_template,
+      optional_measurement_example: writeback.optional_measurement_example,
+      ...(measurementFeedback.length ? {
+        measurement_feedback: measurementFeedback.slice(0, 3),
+        omitted_measurement_feedback: Math.max(0, measurementFeedback.length - 3),
+        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Read omitted evidence with the existing node result page.",
+      } : {}),
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),
       record_finding_template: command("finding", "--node", "<node-id>", "--title", "<evidence-backed result>", "--status", "<tentative|confirmed|refuted>"),
       guidance: "Use result_page.next_command for omitted results or node_command_template for a question; --result-limit can expand each page up to 20. Use existing evidence before repeating a route. Record meaningful hypotheses and supported or refuted results with stable node ids. Fill templates from actual evidence; do not create ceremonial nodes or infer findings from a score alone.",

@@ -9,6 +9,32 @@
 不认证执行真实性或收益；finding、replan 和既有研究历程详情保留相同信息，缺省仍兼容
 旧事件。参见[本地探针生产路径](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md)。
 
+## 量化结论
+
+普通结果附件可附带 `measurements`，保存到既有节点所属的 finding。关系图和
+研究历程详情保留分数；`explore turn-context` 将有界的 `measurement_feedback`
+交给下一轮。手动记录使用 `explore finding --node <id> --evidence-ref result:a
+--measurements-json measurements.json`，文件包含一至八项：
+
+```json
+[{"metric":"quality","value":8,"unit":"points","higher_is_better":true,
+  "comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
+  "evaluation_ref":"evaluator:v1","candidate_ref":"candidate:a","evidence_ref":"result:a"}]
+```
+
+结果引用必须属于 finding 的 `evidence_refs`；普通附件还要求相同 `input_revision`。
+每个受评测候选使用新 finding id，仅纠正同一结论时复用 id。未测量显式记为 `null`，
+零分和负分仍为有效测量。
+
+只有节点、指标、单位、方向、比较范围、输入版本和评测器全部一致时才比较。
+任务、模型或资源预算、评测条件改变时，生产者必须更换比较范围；原生评测与本地
+代理指标分别记录。Explore 校验声明的比较键，不认证声明真实性。它在上下文裁剪前
+计算最近记录的测量、历史最佳候选及来源、相对先前最佳的方向归一化改善幅度。
+纠正结论会在比较中替换旧版本，原始版本仍可在历史中读取；计数表示记录数，
+不表示独立试验次数。下一轮指导使用这些反馈排查退步、回看更好候选，再决定是否
+重复尝试。best 不代表当前保留版本、因果收益、验收通过或执行授权；是否实际采用
+并产生收益，仍需后续工作和证据确认。自动分支排序保持原有行为。
+
 ## 概览
 
 LoopX Explore 是面向长程探索目标（软件研究、安全攻击面测绘、领域调研）的受支持、默认关闭的可选能力。它把“到处看看”变成有界、可观测、有门控的流程，包含三根支柱：

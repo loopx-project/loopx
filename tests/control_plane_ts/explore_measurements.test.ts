@@ -1,0 +1,103 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {normalizeExploreMeasurements, projectExploreMeasurementFeedback} from "../../loopx/control_plane/capabilities/explore_measurements.ts";
+import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
+import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
+import {parseExploreHistoryPage, projectExploreHistory} from "../../loopx/control_plane/presentation/explore_history.ts";
+
+const metric = {metric: "quality", value: 8, unit: "points", higher_is_better: true,
+  comparison_scope: "validation:budget-v1", input_revision: "dataset-v1",
+  evaluation_ref: "evaluator:v1", candidate_ref: "candidate:a", evidence_ref: "result:a"};
+const finding = (id: string, value: number | null, extra = {}) => ({finding_id: id, node_id: "question-a",
+  measurements: [{...metric, value, candidate_ref: `candidate:${id}`, evidence_ref: `result:${id}`, ...extra}]});
+
+test("quantitative evidence keeps zero, negatives and unknown distinct and rejects fabricated shapes", () => {
+  for (const value of [0, -3, null]) assert.equal(normalizeExploreMeasurements([{...metric, value}])[0].value, value);
+  for (const mutation of [{value: NaN}, {value: Infinity}, {value: "8"}, {value: false},
+    {higher_is_better: "yes"}, {evidence_ref: "/local/result"}, {comparison_scope: ""},
+    {candidate_ref: "file:///local/candidate"}, {metric: "quality\nscore"}, {unregistered: true}]) {
+    assert.throws(() => normalizeExploreMeasurements([{...metric, ...mutation}]));
+  }
+  assert.throws(() => normalizeExploreMeasurements([metric, metric]), /duplicated/);
+  assert.throws(() => normalizeExploreMeasurements([]));
+});
+
+test("regression returns the earlier best candidate and useful signed feedback, including lower-is-better", () => {
+  const input = [finding("new", 6), finding("best", 9), finding("first", 8)];
+  const before = JSON.stringify(input);
+  const [feedback] = projectExploreMeasurementFeedback(input);
+  assert.equal(feedback.latest.measurement.value, 6);
+  assert.equal(feedback.best?.candidate_ref, "candidate:best");
+  assert.equal(feedback.best?.evidence_ref, "result:best");
+  assert.equal(feedback.improvement, -3);
+  const [lower] = projectExploreMeasurementFeedback(input.map(row => ({...row,
+    measurements: row.measurements.map(item => ({...item, higher_is_better: false}))})));
+  assert.equal(lower.improvement, 2);
+  assert.equal(lower.best?.value, 6);
+  assert.equal(JSON.stringify(input), before, "projection cannot change the evidence");
+  const [missing] = projectExploreMeasurementFeedback([finding("unknown", null), ...input]);
+  assert.equal(missing.improvement, null);
+  assert.equal(missing.latest.measurement.value, null);
+  assert.equal(missing.best?.value, 9);
+  assert.equal(missing.unknown_count, 1);
+});
+
+test("a shared label is insufficient to compare metrics across inputs, evaluators, units, direction or scope", () => {
+  for (const extra of [{input_revision: "dataset-v2"}, {evaluation_ref: "evaluator:proxy"},
+    {unit: "percent"}, {higher_is_better: false}, {comparison_scope: "validation:larger-budget"}]) {
+    const groups = projectExploreMeasurementFeedback([finding("foreign", 99, extra), finding("first", 8)]);
+    assert.equal(groups.length, 2);
+    assert.ok(groups.every(group => group.previous_best === null && group.improvement === null));
+  }
+  assert.equal(projectExploreMeasurementFeedback([{...finding("other", 99), node_id: "other-question"}, finding("first", 8)]).length, 2);
+  assert.deepEqual(projectExploreMeasurementFeedback([{finding_id: "legacy", node_id: "question-a"}]), []);
+});
+
+test("ordinary result capture binds measurements to its actual input and source, leaving status explicit", () => {
+  const attachment = {schema_version: "explore_result_attachment_v0", question: "Does this method improve quality?",
+    applicability: "Fixed public validation sample", input_revision: metric.input_revision,
+    observation: "Quality is 8 points.", interpretation: "Compare the next candidate against this result.",
+    status: "tentative", evidence_refs: [metric.evidence_ref], measurements: [metric]};
+  assert.equal(normalizeExploreResultAttachment({attachment}).status, "tentative");
+  for (const extra of [{input_revision: "foreign-data"}, {evidence_ref: "result:foreign"}]) {
+    assert.throws(() => normalizeExploreResultAttachment({attachment: {...attachment,
+      measurements: [{...metric, ...extra}]}}), /finding's input revision and evidence/);
+  }
+  const path = {schema_version: "explore_result_from_path_delta_v0", question: attachment.question,
+    applicability: attachment.applicability, input_revision: metric.input_revision,
+    status: "tentative", measurements: [metric]};
+  const result = normalizeExploreResultAttachment({attachment: path, vision_packet: {path_delta: {
+    prior_assumption: "Quality is not yet measured.", observed_reality: attachment.observation, outcome: "continue", retained: ["Use the same validation protocol"],
+    evidence_refs: [metric.evidence_ref]}}});
+  assert.deepEqual(result.measurements, [metric]);
+});
+
+test("next-turn budgets retain a selected route's older best and permit a scoped read of omitted nodes", () => {
+  const findings = [0, 1, 2, 3].map(index => ({...finding(`foreign-${index}`, 99), node_id: `other-${index}`}));
+  findings.push(finding("latest", 6), finding("best", 9), finding("initial", 8));
+  const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
+    graph_enabled: true, harness_gate: {enabled: true},
+    projection: {findings}, plan: {selected_branches: [{typed_evidence_audit: {requested_node_refs: ["question-a"]}}]}};
+  const graph = projectExploreTurnContext(request).graph as Record<string, any>;
+  assert.equal(graph.measurement_feedback.length, 3);
+  assert.equal(graph.omitted_measurement_feedback, 2);
+  assert.equal(graph.measurement_feedback[0].best.candidate_ref, "candidate:best");
+  assert.equal(graph.measurement_feedback[0].improvement, -3);
+  const scoped = projectExploreTurnContext({...request, result_node: "other-3"}).graph as Record<string, any>;
+  assert.equal(scoped.measurement_feedback.length, 1);
+  assert.equal(scoped.measurement_feedback[0].node_id, "other-3");
+});
+
+test("history keeps corrected measurement sources while comparisons use current findings", () => {
+  const row = (id: string, result: string, value: number) => ({schema_version: "loopx_explore_result_event_v0",
+    goal_id: "research", event_kind: "finding", event_id: id, result_id: result, node_id: "question-a",
+    title: "Measured candidate", recorded_at: "2026-01-01T00:00:00Z", status: "tentative", measurements: [{...metric, value}]});
+  const rows = [row("original", "corrected", 100), row("independent", "second", 9), row("correction", "corrected", 6)];
+  const page = parseExploreHistoryPage({ok: true, goal_id: "research", items: rows, total: 3, next_cursor: null}, "research");
+  const history = projectExploreHistory(page.items, "research");
+  const feedback = projectExploreMeasurementFeedback(history.findings.map(item => ({...item, finding_id: item.result_id})));
+  assert.equal(history.events[0].measurements?.[0].value, 100);
+  assert.equal(feedback[0].best?.value, 9, "a superseded measurement cannot remain the best");
+  assert.equal(feedback[0].measured_count, 2);
+  assert.deepEqual(parseExploreHistoryPage({ok: true, goal_id: "research", items: [], total: 0, next_cursor: null}, "research").items, []);
+});

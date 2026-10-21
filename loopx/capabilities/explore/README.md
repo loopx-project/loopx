@@ -12,6 +12,39 @@ This records producer evidence, not verified execution or utility. Findings,
 replan context and the existing research-history detail retain it; omission
 preserves old events. See the [local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md).
 
+## Quantitative findings
+
+An ordinary result attachment can include `measurements`, saved on its existing
+node-linked finding. The graph and research-history detail retain the values;
+`explore turn-context` supplies bounded `measurement_feedback` to the next turn.
+Manual capture uses `explore finding --node <id> --evidence-ref result:a
+--measurements-json measurements.json`. The file contains one to eight items:
+
+```json
+[{"metric":"quality","value":8,"unit":"points","higher_is_better":true,
+  "comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
+  "evaluation_ref":"evaluator:v1","candidate_ref":"candidate:a","evidence_ref":"result:a"}]
+```
+
+Each result reference must belong to the finding's `evidence_refs`; ordinary
+attachments also require the same `input_revision`. Use a new finding id per
+evaluated candidate, and reuse an id only to correct that finding. Missing values
+are explicit `null`; zero and negative values remain valid measurements.
+
+Comparisons require the same node, metric, unit, direction, comparison scope,
+input revision and evaluator. Producers must change the scope when task,
+model/resource budget or evaluation conditions change, and separate native
+evaluation from local proxies. Explore validates the declared comparison keys,
+not their truth. It computes the latest recorded measurement, historical best
+candidate/source and direction-adjusted improvement against the prior best,
+before applying the context's display limit. Corrected findings replace earlier
+versions in comparisons; original versions remain in history. Counts are records,
+not independent trials. The next-turn guidance uses this feedback to investigate
+regressions or revisit better candidates before repeating work. Best does not
+identify the current retained candidate, establish causality, satisfy acceptance
+or authorize execution. Actual adoption and outcome benefit require subsequent
+work and evidence; automatic branch rankings remain unchanged.
+
 ## At a Glance
 
 Explore Harness is a supported, default-off optional capability for
