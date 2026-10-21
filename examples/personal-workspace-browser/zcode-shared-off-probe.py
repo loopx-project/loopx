@@ -168,7 +168,6 @@ record(
     {
         "registry": str(registry),
         "runtime": str(root / "runtime"),
-        "scan_roots": [],
         "goal_filter": "shared-off",
     },
     lambda: collect_status(

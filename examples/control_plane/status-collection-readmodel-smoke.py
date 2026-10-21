@@ -91,11 +91,10 @@ def scrub_volatile(value: Any) -> Any:
     return value
 
 
-def assert_wrapper_parity(registry_path: Path, runtime_root: Path, scan_root: Path) -> None:
+def assert_wrapper_parity(registry_path: Path, runtime_root: Path) -> None:
     kwargs: dict[str, Any] = {
         "registry_path": registry_path,
         "runtime_root_override": str(runtime_root),
-        "scan_roots": [scan_root],
         "limit": 3,
         "include_task_graph": True,
         "goal_id": GOAL_ID,
@@ -279,7 +278,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as raw_root:
         root = Path(raw_root)
         registry_path = write_registry(root)
-        assert_wrapper_parity(registry_path, root / "runtime", root / "project")
+        assert_wrapper_parity(registry_path, root / "runtime")
     assert_context_orchestration()
     print("status-collection-readmodel-smoke ok")
 

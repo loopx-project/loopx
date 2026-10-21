@@ -568,8 +568,6 @@ def test_scheduler_ack_collects_the_periodic_should_run_lookback(
         use_current_hint=False,
         dry_run=False,
         execute=False,
-        scan_root=".",
-        scan_path=[],
         limit=5,
         format="json",
     )

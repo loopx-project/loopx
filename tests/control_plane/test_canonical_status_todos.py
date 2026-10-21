@@ -356,8 +356,7 @@ def test_whole_status_reuses_the_contract_snapshot_and_refreshes_next_request(
 
     monkeypatch.setattr(status_module, 'build_attention_queue', remove_then_project)
     arguments = dict(registry_path=registry, runtime_root_override=str(runtime),
-                     scan_roots=[], limit=5, goal_id=goal['id'],
-                     include_public_boundary_scan=False)
+                     limit=5, goal_id=goal['id'])
     payload = status_module.collect_status(**arguments)
     assert len(reads) == 1
     queue = next(item for item in payload['attention_queue']['items'] if item['goal_id'] == goal['id'])

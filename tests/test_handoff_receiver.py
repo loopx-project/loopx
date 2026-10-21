@@ -295,8 +295,6 @@ def test_handoff_only_does_not_construct_review_packet(monkeypatch, capsys, tmp_
         action_kind=None,
         review_url=None,
         agent_id=None,
-        scan_path=[],
-        scan_root=".",
         limit=5,
         available_capabilities=None,
     )

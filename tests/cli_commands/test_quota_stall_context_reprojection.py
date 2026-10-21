@@ -67,7 +67,7 @@ def test_quiet_cli_retains_turn_start_evidence_after_stall_writeback(
         )],
     )
     context = QuotaCommandContext(
-        runtime_root=tmp_path, scan_roots=[], status_limit=1, status_goal_id=goal,
+        runtime_root=tmp_path, status_limit=1, status_goal_id=goal,
         status_payload=status, cache_metadata=None, scheduler_context=None,
         operator_inbox_urgency_projector=lambda **kwargs: {},
         detail_sections=frozenset(), heartbeat_turn_id=turn,

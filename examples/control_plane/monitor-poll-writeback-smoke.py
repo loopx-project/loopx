@@ -1255,8 +1255,6 @@ def assert_cli_monitor_poll_uses_should_run_lookback() -> None:
         identity_signature=None,
         dry_run=True,
         execute=False,
-        scan_root=str(REPO_ROOT),
-        scan_path=[],
         limit=5,
         format="json",
     )

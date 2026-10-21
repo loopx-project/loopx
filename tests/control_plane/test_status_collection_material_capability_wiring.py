@@ -292,7 +292,6 @@ def test_status_projection_cache_separates_capability_envelopes(
     kwargs = {
         "registry_path": tmp_path / "registry.json",
         "runtime_root": tmp_path / "runtime",
-        "scan_roots": [tmp_path],
         "limit": 5,
         "include_task_graph": False,
         "goal_id": GOAL_ID,
