@@ -992,7 +992,8 @@ callers retain their existing identity and lease rules; mixed explicit/automatic
 calls do not gain a global single-Turn guarantee. MCP completion and vision
 recovery restore the admitted identity; the older deterministic host identity
 remains a compatibility fallback when there is no default work admission.
-Legacy Markdown uses its existing writer locks; File/SQLite use their existing
+Legacy Markdown is read-only and rejects Todo mutations with
+`canonical_authority_required`; File/SQLite use their existing
 typed Todo head/CAS owner. PostgreSQL result-only reads use the provider head and
 identity, with the final check on the native Todo transaction head. Source-session
 remains a lifecycle-only profile under its existing runtime admission restriction.
@@ -1007,8 +1008,8 @@ repair a completed result's pending direction; use `review_task_vision` and the
 original completion intent for that recovery. Resume unfinished work through
 `should_run` when ready and revalidate a retained candidate on changed facts.
 
-Default entrypoint qualification currently covers local-registry Legacy Markdown,
-File and SQLite. PostgreSQL has native result transaction/head/CAS conformance;
+Default mutating entrypoint qualification targets local-registry File and SQLite;
+Legacy Markdown coverage is limited to reads and rejected writes. PostgreSQL has native result transaction/head/CAS conformance;
 the ordinary Python CLI/MCP/managed runtime does not supply the existing
 service-owned PostgreSQL factory. A PostgreSQL selector therefore fails closed
 without legacy fallback; this slice does not add that product integration.
@@ -1325,7 +1326,7 @@ committed metadata against the bound Todo; an arbitrary settled-looking flag is
 not admission authority. The File/SQLite public tests retain wrong-identity,
 missing-proof and replay negatives.
 
-Local-registry Legacy Markdown, File and SQLite caller coverage is distinct from
+Local-registry File/SQLite caller coverage and Legacy Markdown read/rejection coverage are distinct from
 PostgreSQL native head/CAS conformance. Service-owned PostgreSQL first-delivery
 factory integration remains outside this qualification. Lark contract tests use
 synthetic transports; live delivery and the four legacy recovery routes remain

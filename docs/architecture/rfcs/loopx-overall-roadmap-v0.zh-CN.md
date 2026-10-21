@@ -940,21 +940,9 @@ lifecycle。
 见[验收合同](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)。
 这修复局部恢复缺口，不代表 R1/R2 协同整体验收完成。
 
-**R1 首次交付检查点。** 新的普通 CLI/MCP/managed 工作准入在执行前持久化原始结果依据，
-并由既有 Todo owner 强制验证其新鲜度。默认身份获取恢复未完成的原 Turn；
-已结算工作释放后才获取新的工作身份。相关 Todo、依赖、验收及来源变化要求重新验证候选，
-无关 revision 不触发失效。原成功回执在响应丢失和冷恢复后保留。legacy Markdown 复用原锁；
-File/SQLite 与 PostgreSQL 结果事务保留其类型化 head/CAS owner。见
-[操作协议](../../reference/protocols/goal-vision-replan-contract-v0.md#opt-in-first-delivery-freshness)。
-新的已支持准入同时持久化默认的当前 Agent 检查点续跑合同。必需检查点读取真实的提交后
-完整 frontier；MCP 将其交给当前工具调用者，managed 执行则恢复原 Host/session。
-未完成结果保留原回执并复用既有 supplement owner。相关方向变化只要求重新判断方向，
-保留成功结果和一次扣额。普通终态完成在检查点及扣额后复用原 Turn 的既有升级路径。
-历史 result-only、显式 first-delivery 和 supplement Turn 保留各自已持久化的合同。
-完整的 frontier 变化恢复、打包 frontend/Lark 旅程、混合版本回滚和真实模型效用，仍是未完成的
-首阶段验收。source-session 仍只支持生命周期操作，普通 Python PostgreSQL 执行仍缺少
-服务 owner 提供的 factory。独立 reviewer 需要另行注册的可选合同。这些默认行为不关闭 R1，
-不认证 Goal 已完成，不建立分布式原子性，也不证明模型结果收益。
+**R1 首次交付检查点。** 新的普通 CLI/MCP/托管执行在工作前持久化原始结果依据，由现有 Todo owner 在提交时检查新鲜度。默认身份恢复未完成的 Turn；结算后才释放新的工作身份。相关 Todo、依赖、验收和来源变化要求重新验证候选结果，无关修订不会触发。成功回执支持响应丢失和冷恢复。Legacy Markdown 只读，不能授权 Todo 写入；File/SQLite 与 PostgreSQL 结果事务沿用类型化 head/CAS owner。见[操作协议](../../reference/protocols/goal-vision-replan-contract-v0.md#opt-in-first-delivery-freshness)。
+
+新的受支持准入还保存当前 Agent 的默认 checkpoint 续跑契约。需要检查点时读取结果提交后的完整任务前沿；MCP 返回给当前工具调用者，托管执行恢复原 Host/session。非完成结果保留原回执并使用现有补充 owner。相关方向变化只重做方向判断，保留成功结果和单次扣费。普通终态完成在 checkpoint 与扣费后使用同一 Turn 的升级路径。历史 result-only、显式 first-delivery 及 supplement Turn 沿用保存的契约。完整的前沿变化恢复、打包前端/Lark 旅程、混合版本回滚与真实模型效用仍是未完成的一阶段验收。Source-session 仍只支持生命周期；普通 Python PostgreSQL 执行仍缺少 service-owned factory。独立 reviewer 需要单独注册的可选契约。这些默认值不关闭 R1、不认证 Goal 完成，也不证明分布式原子性或模型收益。
 
 **R1 事务检查点。** 团队计划准入与整批规划现在归 `work_items/team_plan.ts`。确认后，全部已准入 lane 与持久操作回执一次提交；身份由 proposal + lane 决定，不再由 Todo 文本决定。File/SQLite 权威复用现有 CAS 与回执 owner；legacy Markdown 在原有 fence 和锁内同时写入任务和不可变回执。同一操作重试只读历史结果，接收者后来修改、完成或删除任务也不会触发重建。提交前失败不会留下部分 lane；canonical 展示投递仍 pending 时，Chat 必须恢复后才能报告验证成功。卡片列出部分分配及缺口；quota/stop 是参考，显式强制声明会被拒绝。Agent 发起的结算在 journal 首次写入时绑定同一状态基线并在结算时重读；基线缺失或已变动、或全部 lane 均为缺口的计划，记录为类型化的失败回执，不创建 Todo，重放结果不变。
 

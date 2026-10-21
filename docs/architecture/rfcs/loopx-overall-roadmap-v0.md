@@ -1445,8 +1445,8 @@ the existing Todo owner. Default identity acquisition restores the unfinished
 Turn; settled work releases a new work identity. Relevant Todo, dependencies,
 acceptance and source changes require candidate revalidation, while unrelated
 revisions do not. Original successful receipts survive response loss and cold
-recovery. Legacy Markdown uses its existing locks; File/SQLite and PostgreSQL
-result transactions retain their typed head/CAS owner. See the
+recovery. Legacy Markdown is read-only and cannot authorize Todo mutations;
+File/SQLite and PostgreSQL result transactions retain their typed head/CAS owner. See the
 [operating protocol](../../reference/protocols/goal-vision-replan-contract-v0.md#opt-in-first-delivery-freshness).
 New supported admissions also persist the default current-Agent checkpoint
 continuation contract. Required checkpoints use the actual post-result/full
