@@ -372,6 +372,23 @@ def _profile_event_lane(
 ) -> tuple[str, ...]:
     """Only serialize transport work; actual ingress re-reads its authority."""
 
+    private_config = dict(snapshot.get("private_profiles") or {}).get(profile)
+    if isinstance(private_config, Mapping):
+        from .conversation_identity import lark_private_source
+
+        try:
+            source = lark_private_source(
+                provider_ref=private_config["provider_ref"], event=event
+            )
+        except (KeyError, TypeError, ValueError):
+            pass  # Malformed hints retain the conservative unmatched lane.
+        else:
+            # Native profiles bypass legacy Goal routing at admission too.
+            # Use the same App/chat/topic (or private sender) source shape for
+            # scheduling, never a grant or a persisted Session selection. Core
+            # still verifies the provider and acquires its fresh source fence.
+            return ("private." + source["source_ref"],)
+
     scoped, _status = _profile_event_route(
         profile=profile, snapshot=snapshot, event=event
     )
