@@ -152,3 +152,27 @@ def run_post_settlement_callback(
     if receipt is not None:
         journal["post_settlement"] = receipt
         persist_journal(journal)
+
+
+def recover_post_settlement(
+    *,
+    plan: Mapping[str, Any],
+    post_settlement: PostSettlement | None,
+    journal: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project current owner readback while preserving the terminal tombstone.
+
+    This path has no journal writer or business-settlement adapter. Recovery
+    uses the original result and capability effect identity, never a new host.
+    """
+    if journal.get("status") != "committed" or not isinstance(
+        journal.get("post_settlement"), Mapping
+    ):
+        return {}
+    receipt = post_settlement_receipt(
+        plan=plan,
+        result=dict(journal.get("host_result") or {}),
+        post_settlement=post_settlement,
+        journal=journal,
+    )
+    return {"post_settlement_recovery": receipt} if receipt is not None else {}

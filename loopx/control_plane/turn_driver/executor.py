@@ -57,7 +57,7 @@ from .recovery import (
     build_turn_recovery_audit,
     require_turn_recovery_continuation,
 )
-from .post_settlement import PostSettlement, post_settlement_receipt, run_post_settlement_callback
+from .post_settlement import PostSettlement, recover_post_settlement, run_post_settlement_callback
 from .capability_context import project_turn_context, capability_result_fields
 from .session_recovery import (
     SessionBindingResolver,
@@ -1545,16 +1545,9 @@ def run_loopx_turn_once(
                     replayed=True,
                     effects=empty_effects,
                 )
-                # The terminal journal remains a tombstone. Optional recovery
-                # uses the original capability owner's durable receipt/identity;
-                # it neither rewrites business state nor repeats settlement.
-                if journal.get("status") == "committed" and isinstance(journal.get("post_settlement"), Mapping):
-                    recovered = post_settlement_receipt(
-                        plan=plan, result=dict(journal.get("host_result") or {}),
-                        post_settlement=post_settlement, journal=journal,
-                    )
-                    if recovered is not None:
-                        payload["post_settlement_recovery"] = recovered
+                payload.update(recover_post_settlement(
+                    plan=plan, post_settlement=post_settlement, journal=journal,
+                ))
                 payload["recovery"] = build_turn_recovery_audit(
                     recovery_decision,
                     journal,
