@@ -150,11 +150,12 @@ def active_state_todo_fields(
             preferred_todo_ids=preferred_todo_ids,
             rollout_events=events,
         )
-    # Transport the Goal document's declared objective, independently of the
-    # optional acceptance contract. This is display content, never a write basis
-    # or a target inferred from Todos, progress, model output or a contract.
+    # An explicit canonical objective revision owns current intent. A scoped
+    # check objective still cannot substitute for Goal intent. Keep this status
+    # field as display content; admission uses the native revision and guard.
+    revised_objective = ((acceptance or {}).get("goal_objective") or {}).get("objective") if canonical is not None else None
     fields["goal_objective"] = public_safe_compact_text(
-        parse_state_frontmatter(state_text).get("objective"), limit=1000,
+        revised_objective or parse_state_frontmatter(state_text).get("objective"), limit=1000,
     )
     issue_meta_surface = parse_issue_meta_surface(state_text)
     if issue_meta_surface:

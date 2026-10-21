@@ -40,6 +40,7 @@ from ..agents.agent_scope_frontier import (
 from ..goals.goal_frontier import (
     AUTONOMOUS_REPLAN_REQUIRED_MODE,
 )
+from ..goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 from ..quota.decision_summary import (
     quota_decision_agent_id,
     refine_quota_recommended_action,
@@ -836,7 +837,7 @@ def _planning_projections(
         blocked_priority_fallback=prepared.blocked_priority_fallback,
         goal_frontier_projection=prepared.goal_frontier_projection,
         source_status=prepared.status_payload,
-        planning_horizon_goal=(prepared.project_asset.get("execution_profile") or {}).get("planning_horizon_goal", False),
+        planning_horizon_goal=(prepared.project_asset.get("execution_profile") or {}).get("planning_horizon_goal", DEFAULT_PLANNING_HORIZON_GOAL),
         replan_selection_context=(
             {
                 "has_turn_identity": bool(turn_instance_id),

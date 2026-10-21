@@ -942,6 +942,11 @@ Acceptance 与 operational-objective commit 不是第一个 runtime 切片；它
 需求证据和单独评审的 automated policy/verifier contract。Permission 扩张或越出
 root intent 不能自动 commit，除非 Goal 创建时已经精确委托该 class。
 
+新增提案中的[当前执行目标切片](goal-outcome-refinement-v0.zh-CN.md#current-operating-objective)
+用 owner 显式应用与各 Agent 独立采用处理过期声明，不开启根意图、验收或权限的
+自动修改。既有不可变 work-template intent 及其 revision 语义不变；执行目标
+历史使用独立版本合同，不把旧 `intent_basis` 回执追认为新权威。
+
 ## 11. 验证矩阵
 
 测试至少必须证明：

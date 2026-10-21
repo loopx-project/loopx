@@ -385,6 +385,7 @@ export function createEffectRuntimeHandlers(
     ["goal.acceptance.oracle.plan", lazyHandler(() => import("./goals/acceptance_oracle.ts"), ({planAcceptanceOracle}) => planAcceptanceOracle)],
     ["goal.acceptance.oracle.observe", lazyHandler(() => import("./goals/acceptance_oracle.ts"), ({observeAcceptanceOracles}) => observeAcceptanceOracles)],
     ["goal.acceptance.refine", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({refineLocalGoalAcceptanceOutcome}) => refineLocalGoalAcceptanceOutcome)],
+    ["goal.acceptance.objective", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({updateLocalGoalObjective}) => updateLocalGoalObjective)],
     ["goal.acceptance.inspect", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({inspectLocalGoalAcceptance}) => inspectLocalGoalAcceptance)],
     ["goal.acceptance.configure", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({commitLocalGoalAcceptance}) => commitLocalGoalAcceptance)],
     ["goal.acceptance.verify.commit", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({commitLocalGoalAcceptanceVerification}) => commitLocalGoalAcceptanceVerification)],

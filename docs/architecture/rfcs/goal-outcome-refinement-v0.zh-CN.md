@@ -37,6 +37,68 @@
 
 ## 普通用户消息
 
+<a id="current-operating-objective"></a>
+
+### 当前执行目标
+
+原始声明可能已经不能描述当前工作；读到文件最新字节不代表语义仍然有效。
+R4 Goal owner 在既有 canonical authority 中增加有界、由 owner 应用的执行目标
+修订。`goal_objective_revision_v0` 是 `goals/goal_objective.ts` 拥有的新共享规划
+合同，不是新能力或 provider。File/SQLite 复用本机传输；PostgreSQL 的共享 lease
+准入也使用同一 TS 规则。Python 只适配 CLI、宿主和提案 IO。
+
+当前目标、原因和不透明来源引用形成带摘要的有序历史。保留原始声明、根目标的
+non-goals、验收、权限、预算、停止条件及现有 Todo/lease；不能借修订扩大权限或
+逃离原始承诺。改变这些承诺仍需对应的受治理操作或新 Goal 生命周期。Outcome
+refinement 仍是追加式操作，不能暗中改写已有 requirement。
+
+正常对话指引要求 Agent 在明确用户方向使旧目标失效时准备修订。原生
+`loopx_collaboration` 提供 `prepare_goal_objective`，由宿主绑定 Goal、Agent 和
+来源 Turn。准备复用既有 `goal.update` 审阅/应用通道，不修改 Goal。
+**Goal 设置 → 任务所有权 → 当前目标与修订** 可以审阅 Agent 提案或填写新目标，
+应用后读回当前正文及每位 Agent 的采用状态。其他宽泛的 `goal.update` 操作仍
+不可执行；提案、来源标签和文档中的文字不授予 owner 权限。
+
+CLI 使用 `goal-acceptance prepare-objective --goal-id GOAL --agent-id AGENT
+--document revision.json --operation-id ID --execute`；JSON 包含 `objective`、
+`reason`、`source_ref`。这里的 execute 只保存提案。有权限的本机 owner 可使用
+`revise-objective`，传同样的正文、稳定操作编号和 inspect 返回的
+`--expected-provider-revision`；不传 `--execute` 只预览。Agent actor 被拒绝，
+不能省略身份冒充 owner。
+
+生效版本进入普通 Todo/status、工作上下文、horizon 和 replan 读取。团队计划已
+绑定 canonical provider revision，旧计划会因目标变化失效。未采用版本的 Agent
+进入既有 frontier/replan 缺口；原生成员新 start、新 claim 和
+lease acquisition 会拒绝其新执行。在途 Turn 的恢复、续租和释放保留。这是下一次
+执行的边界，不是中途打断或新调度器，也不会额外唤醒 Agent。
+
+每个 Agent 先通过普通 Todo/Vision 操作对齐自己的工作，再执行带自身身份的
+`goal-acceptance inspect`，用 `revision`、`digest`、`work_digest`（返回的
+`objective_work_digest`）、`review_summary`、当前 provider revision 和稳定操作
+编号调用 `adopt-objective`。原生工具对应 `adopt_goal_objective`。采用记录不是
+成功证据或权限，普通 Vision ACK 不能代替它。已采用的 Agent 可以独立继续，
+不用等全员；修订后才登记的新 Agent 也必须在取得工作前采用。CAS 防止并发覆盖，
+丢失响应恢复原回执，旧采用操作重放不能确认新版本。旧的配置检查结果在目标
+变化后转为 stale；后继 Goal 实例不能自动继承旧目标。
+
+修订只用于必要的方向变化，不是每轮维护。普通进展、Todo／路线调整、诊断反馈和
+措辞润色不应生成共享目标新版本。相同目标的待审提案复用，不反复打扰 owner 或轮询。
+owner 判断语义必要性；运行时拒绝相同或仅空白不同的目标，不伪装成语义等价检测器。
+重复采用当前版本不写 provider revision；工作变化或其他 Agent 的采用不会使已确认
+状态失效。owner 预览绑定将生效的目标摘要，因此无关工作／同伴写入无需重新审阅，
+但目标、来源或生命周期变化仍会使旧审阅失效。
+
+升级不自动创建修订，也不凭年龄判断过期。未修订 Goal 的执行规则保留；新增
+通用指引只在实际用户纠正时适用。采用后普通 Turn 不重复 ACK。历史有容量上限，
+不会静默裁剪。写入前可回退代码；写入后保留读取与准入围栏，使用新的 owner
+修订回退方向，不能删除历史。
+
+验收覆盖真实提案/应用、另一 Agent 的读取/采用、并发基线、旧响应恢复、在途
+结算及新执行拒绝，以及打包 UI。脚本调用原生工具证明已交付的调用/生效链路，
+不证明模型总能识别语义过期。模型遵循、已安装宿主采用、真实 Lark 交付和匹配
+benchmark 收益仍需分别验证。Lark 对话 worker 复用原生工具合同；不改 topic 名，
+不发送消息，不新增修改权限。
+
 绑定 Goal 的 Agent 根据真实宿主上下文，区分直接人类请求、心跳、引用文档、
 工具结果和同伴消息。不能靠关键词推断用户权限或重要性。推进重要新成果或
 实质纠正前，复用内联成果上下文（缺失时才查询）、细化对应条目，再经正常 Todo 操作关联工作。
@@ -219,6 +281,68 @@ Python 决策归属。
 worker owner 负责，本基础切片不交付此行为。使用该 worker 的配对比较必须在
 两臂冻结相同派发行为，保留重复调用成本。原有 Host／native 混合断言不能用
 仅原生路径通过来宣称已资格化。
+
+## 未完成工作中的复盘连续性
+
+关联的未完成 Todo 表示已有工作覆盖，不能证明进展或要求满足。既有类型化进展与
+有效 Turn 复盘机制可以审视同一条未关闭 Todo；`goal_outcome_uncovered` 保持
+“没有关联工作”的较窄语义，以及已有 blocked／deferred 等待规则。不增加计时器、
+分数阈值、强制 Todo 关闭或定期审计。
+
+此前 replan 来源适配会丢弃默认成果，仅保留已配置检查的七项摘要字段。普通工作
+上下文已有完整验收读取，专门的 replan `core_goal` 与 Goal 规划视野却没有。
+现在两者复用同一 owner 投影的完整读取，保留累计要求、自查来源、关联工作、
+检查结果及生命周期／新鲜度事实，移除一份有损字段清单。Python 只传输来源，
+既有 TypeScript owner 继续决策，不新增能力、provider、持久词汇或 UI 操作。
+
+默认 replan 引导 Agent 即使工作未关闭，也要对照证据复盘未满足要求；没有结构化
+成果或配置检查时同样适用。
+最强首次交付仍是目标，诊断性验证与可用反馈是增强交付的手段。Todo 未关闭、
+局部测试重复通过或指标持平，本身均不能证明进展或探索耗尽；有价值的负结果
+仍可支持继续工作。这是 Agent 引导，不新增机器强制的成功或停止规则。
+
+通过 File／SQLite CLI 的细化 → 停滞／周期复盘 → 实际产物修复 → 有据回写 →
+一次结算 → 原 Todo 继续执行验证该连接。同时核对 TurnEnvelope 工作上下文的
+同份验收来源，拒绝无证据复盘，保留重试身份，区分配置检查与默认自查。无声明
+准入行为、等待规则、频率、可选 stride 门槛和根 Goal 完成权限保持。验收存在时，
+更完整的验收输入会增加字节，简短默认引导也会改变普通 replan 包；这不证明延迟、
+token 或分数收益。Agent 仍可能漏报或误判进展，实际采用与配对任务结果继续由
+S11 验收。
+
+EdgeBench heartbeat worker 沿用默认每六个有效 Turn 的复盘频率，不依赖 Todo
+完成或配置检查。Runner 不会自动登记支撑成果，也不会把后台原生评分转换为 Core
+验收。因此默认复盘引导不能依赖这些可选事实；Agent 登记后再完整保留对应来源。
+原生自动采样、对 solver 可见的反馈、评分及 worker 停止规则仍归 benchmark
+provider 所有，本改动不开放隐藏反馈。
+
+新增引导保留全部旧条款，增加 212 个文本字节。同一 CLI 夹具的 crowded quota
+增加 213 个 JSON 字符，Turn plan 增加 216，起初均超过原增长限制。既有续行
+观察器只对完整旧文案到新文案的一次转换给予 224 字符／字节额度，不增加行数或
+结构额度；缺失条款、已升级基线、其他载体或超额增长仍拒绝。两个 Host 夹具的
+引导从 1,772 增至 1,984 字节，对应局部文案上限从 1,800 调为 2,000。
+上述仅引导文案变更保留 CLI／运行绝对预算；这是实测输入成本。
+
+### 选择工作前的 Goal 上下文
+
+原始 Goal 与已登记验收现在默认进入适用的选工作前规划视野。这是上下文变化，
+不增加规划轮次或调度规则。五项工作摘要及明确的完整性／详情入口保持有界；
+看到 Goal 不代表摘要覆盖全部工作。既有配置 owner 保留显式 false 用于回滚与
+对照。平铺的可执行任务同样展示有界工作视野；没有登记依赖或缺口，不能证明排序
+合理，也不能据此隐藏该视野。摘要标明遗漏与完整读取入口，不把五项任务当成全部
+计划。TurnEnvelope 在引用更短时引用同包中完全相同的已选工作正文，保留其他工作
+及完整性说明。设置页把该选项移入高级设置，保留机器／Goal 优先级和稀疏继承值，读取
+不重写持久配置。EdgeBench heartbeat worker 在工作前固定并记录解析后的布尔值，
+包括省略 CLI 选项的情况；历史回执保持原样。TurnEnvelope 引用已有且完全相同
+的内联验收来源，避免重复正文；内容不一致时保留各自证据。
+源码／默认行为验证与已安装版本／模型采用仍需分别验证。
+
+同一公开夹具中，small Turn plan 从 8,077 增至 9,370 字符，多 Agent quota JSON
+从 20,805 增至 23,745。后者起初超过 23,000 字符上限及既有 horizon 迁移的
+2,800 紧凑字符增长额度。增加部分包含 Goal 上下文及原本未展示的有界工作摘要；
+舍弃后者会隐藏有价值的平铺任务上下文。保留这些内容，仅将该绝对上限调为 24,000，
+一次性 horizon 迁移的紧凑额度调为 3,000；超额和同 schema 持续增长仍拒绝。
+其他上限、每 Todo 增长及 8 KiB envelope 警告不变。
+这验证输入成本取舍，不证明 token、延迟或模型质量收益。
 
 ## 决定性验收
 

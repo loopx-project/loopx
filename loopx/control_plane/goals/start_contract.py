@@ -50,7 +50,11 @@ def goal_planner_contract(*, fine_grained: bool = False) -> dict[str, Any]:
         "default_task_class": "advancement_task",
         "required_fields": ["priority", "text", "task_class", "action_kind"],
         "public_safe_only": True,
-        "budget_policy": "minimum sufficient plan; no fixed-count filler",
+        "budget_policy": (
+            "minimum sufficient plan: next step and decisive validation; no fixed-count "
+            "filler or exhaustive decomposition. Diagnostics and feedback may come first "
+            "to strengthen delivery; replan uncertain later work."
+        ),
         "first_delivery_guidance": _FIRST_DELIVERY_GUIDANCE,
     }
     if fine_grained:

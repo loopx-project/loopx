@@ -180,6 +180,13 @@ typed admission decisions and stop recovery retain their existing owners.
 File/Core tests qualify the transaction and its rejection/replay boundaries;
 real provider read timings alone do not qualify the full stop reply or Web SLA.
 
+A control prefixed by a structured Bot mention uses the same bounded read path.
+The event's rendered name or mention key only suggests which source to read;
+the raw leading mention must resolve to the freshly observed App and produce
+the same exact command. Prose, another Bot's mention or a mismatched hint cannot
+supply control authority. The original rendered message stays unchanged for
+exact replay and legacy journals.
+
 A completed, target-frozen stop on a locally enabled group binding reads its two
 original provider messages while Core freshly resolves the binding and App
 identity. Both readonly observations must finish successfully before source,

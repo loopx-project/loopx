@@ -99,10 +99,12 @@ export function projectCoreGoal(value: unknown): JsonObject {
   for (const objective of [active, registered]) {
     if (objective != null && typeof objective !== "string") throw new EffectRuntimeRequestError("Goal objective must be text");
   }
-  const objective = active || registered || null;
   const acceptance = facts.acceptance_contract == null ? null
     : requireJsonObject(facts.acceptance_contract, "goal_acceptance_contract");
-  return {objective, objective_source: active ? "active_state" : registered ? "registry" : null,
+  const revised = objectOrNull(acceptance?.goal_objective);
+  const objective = revised ? requireNonEmptyString(revised.objective, "revised Goal objective") : active || registered || null;
+  return {objective, objective_source: revised ? "canonical_revision" : active ? "active_state" : registered ? "registry" : null,
+    ...(revised ? {objective_revision: revised.revision, objective_digest: revised.digest} : {}),
     objective_missing: objective === null, acceptance_contract: acceptance,
     ...(facts.goal_read_action == null ? {} : {
       read_action: requireNonEmptyString(facts.goal_read_action, "goal_facts.goal_read_action"),

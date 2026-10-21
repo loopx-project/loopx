@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from ..configuration_transaction import configuration_payload_revision
-from ..control_plane.goals.goal_vision_policy import MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
+from ..control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL, MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
 from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
 
 from .progress_review.policy import (
@@ -130,7 +130,7 @@ def capability_configuration_editor(
                        maximum=MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD, required=True,
                        description="Effective Turns: 1–6; completed Todos: 1–5. Effective Turns require accepted work settlement. Retries and observation-only polls do not count."),
                 _field("planning_horizon_goal", "Show Goal in planning horizon", "boolean",
-                       description="Default off. Include the full original Goal and acceptance before choosing work; replan Goal reading, stride and execution authority are unchanged."),
+                       description="Default on. Include the original Goal and acceptance before choosing work. Advanced opt-out for rollback or comparisons; does not change replan, stride or execution authority."),
                 _field("stride_strategy", "Stride strategy", "select",
                        options=list(stride_strategy_options()),
                        description="Off retains ordinary review. Evidence-conditioned v1 independently reviews work-slice size, route changes and validation scope; fresh Vision path reviews require a structured proposal, without automatic execution."),
@@ -654,6 +654,14 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
             **goal_override,
         }
         entry["effective_value_policy"] = "goal_stride_over_live_review_cadence"
+    if entry["capability_id"] == "todo_replan_cadence":
+        # Resolve the new default in the read model, including legacy machine
+        # values and atomic Goal cadence overrides. Keep stored/current values
+        # sparse: reading Settings must never pin or migrate an override.
+        goal_override = None if goal_override is None else {
+            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL, **goal_override}
+        machine_default = None if machine_default is None else {
+            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL, **machine_default}
     entry["effective_configuration"] = resolve_capability_configuration(
         str(entry["capability_id"]),
         goal_override=goal_override,

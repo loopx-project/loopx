@@ -17,6 +17,7 @@ from harbor.models.trajectories import FinalMetrics, Trajectory
 from harbor.utils.trajectory_utils import format_trajectory_json
 
 from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
@@ -128,7 +129,10 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("planning_horizon_goal must be a boolean")
             if not self.execution.uses_loopx:
                 raise ValueError("planning_horizon_goal requires a LoopX execution mode")
-        self.planning_horizon_goal = planning_horizon_goal
+        self.planning_horizon_goal = (
+            DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
+            else planning_horizon_goal
+        )
         from .research_probe import resolve_execution_observation
 
         self.execution_observation = resolve_execution_observation(execution_observation)
@@ -526,8 +530,8 @@ class BenchmarkCodex(CodexOffline):
             raise RuntimeError(
                 f"replan cadence readback mismatch for {key}: expected {expected}, got {configured!r}"
             )
-        actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal", False)
-        if actual_horizon != (self.planning_horizon_goal or False):
+        actual_horizon = configured_state.get("execution_profile", {}).get("planning_horizon_goal")
+        if type(actual_horizon) is not bool or actual_horizon != self.planning_horizon_goal:
             raise RuntimeError("planning_horizon_goal readback mismatch")
         strategy = configured_state.get("execution_profile", {}).get("stride_strategy", "off")
         if strategy != (self.stride_strategy or "off"):

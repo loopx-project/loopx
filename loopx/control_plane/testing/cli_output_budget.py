@@ -150,7 +150,9 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # objective/evidence guidance; small and multi-agent paths unchanged.
             # Per-Todo and fixed semantic growth are accounted for separately.
             "crowded": {"json": 40_000, "markdown": 7_800},
-            "multi_agent": {"json": 23_000, "markdown": 7_000},
+            # Default Goal + flat work view: matched fixture 20,805 -> 23,745.
+            # Keep the bounded alternatives and their omission/detail facts.
+            "multi_agent": {"json": 24_000, "markdown": 7_000},
         },
         max_lines={
             "small": {"json": 600, "markdown": 140},

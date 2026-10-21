@@ -17,9 +17,15 @@ export const outcomeRequirementsSchema = z.object({schema_version: z.literal("lo
   })),
 });
 export type OutcomeRequirements = z.infer<typeof outcomeRequirementsSchema>;
+export const goalObjectiveSchema = z.object({revision: z.number().int().positive(), digest: z.string(), objective: z.string(),
+  original_objective: z.string(), reason: z.string(), source_ref: z.string(),
+  peer_adoption: z.array(z.object({agent_id: z.string(), revision: z.number().nullable(), current: z.boolean()})),
+  acceptance_gaps: z.array(z.record(z.string(), z.unknown())),
+});
 // Both configured checks and the default outcome projection retain the native
 // lifetime identity. A cached editor must not follow a reused Goal id.
 const goalAcceptanceSource = {
+  goal_objective: goalObjectiveSchema.optional(),
   lifecycle_state: z.string().optional(),
   goal_ref: z.object({goal_id: z.string(), goal_instance_id: z.string()}).nullable().optional(),
 };

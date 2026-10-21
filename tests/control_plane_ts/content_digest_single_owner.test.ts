@@ -134,6 +134,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/goals/first_party_host_runtime.ts",
   "control_plane/goals/goal_amendment_authority.ts",
   "control_plane/goals/goal_amendment_proposal.ts",
+  "control_plane/goals/goal_objective.ts",
   "control_plane/goals/operator_actions.ts",
   "control_plane/goals/outcome_requirements.ts",
   "control_plane/goals/shared_goal_alignment.ts",

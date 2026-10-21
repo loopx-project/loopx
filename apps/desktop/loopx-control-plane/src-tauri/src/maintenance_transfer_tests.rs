@@ -63,6 +63,10 @@ impl Server {
                     let text = String::from_utf8_lossy(&request[..size]);
                     let path = text.split_whitespace().nth(1).unwrap_or("");
                     let mode = path.trim_start_matches('/').trim_start_matches("feed/");
+                    if !path.starts_with("/feed/") && mode == "not-found" {
+                        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        return;
+                    }
                     if (!path.starts_with("/feed/") && mode == "headers") || mode == "feed-stall" {
                         pause(&done, Duration::from_secs(40));
                         return;
@@ -147,7 +151,12 @@ fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
     let app = app(KEY);
     let server = Server::new();
     tauri::async_runtime::block_on(async {
-        for mode in ["fast", "tampered", "truncated"] {
+        for (mode, expected_error) in [
+            ("fast", None),
+            ("tampered", Some("update_signature_invalid")),
+            ("truncated", Some("update_network_failed")),
+            ("not-found", Some("update_download_failed")),
+        ] {
             let update = find_update(
                 app.handle(),
                 "stable",
@@ -158,8 +167,8 @@ fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
             .unwrap()
             .unwrap();
             let result = download_update(&update, |_, _| {}).await;
-            if mode != "fast" {
-                assert!(result.is_err(), "invalid archive was accepted: {mode}");
+            if let Some(expected) = expected_error {
+                assert_eq!(result.unwrap_err(), expected, "archive mode: {mode}");
                 continue;
             }
             let bytes = result.unwrap();
@@ -177,6 +186,44 @@ fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
                 .unwrap()
                 .unwrap();
             assert_eq!(prepared.bytes, BODY);
+        }
+    });
+}
+
+#[test]
+fn background_download_failures_keep_their_cause_without_blocking_local_services() {
+    let app = app(KEY);
+    let server = Server::new();
+    tauri::async_runtime::block_on(async {
+        for (mode, expected) in [
+            ("tampered", "update_signature_invalid"),
+            ("truncated", "update_network_failed"),
+            ("not-found", "update_download_failed"),
+        ] {
+            let state = Maintenance::default();
+            state.publish("ready", json!({}));
+            let generation = state.admit_background_update().unwrap();
+            let result = state
+                .run_background_update(
+                    generation,
+                    "stable",
+                    find_update(
+                        app.handle(),
+                        "stable",
+                        server.feed(mode),
+                        Duration::from_secs(2),
+                    ),
+                    |update| async move {
+                        download_update(&update, |_, _| {}).await?;
+                        panic!("a rejected archive cannot be published to the cache");
+                    },
+                )
+                .await;
+            assert_eq!(result.unwrap_err(), expected);
+            assert_eq!(state.status_snapshot()["details"]["code"], expected);
+            assert_eq!(state.status_snapshot()["details"]["background"], true);
+            assert_eq!(state.recover_connected(|| 1), Some(1));
+            assert!(state.pending.lock().unwrap().is_none());
         }
     });
 }
@@ -292,7 +339,10 @@ fn stalled_update_transfer_remains_bounded() {
         .unwrap()
         .unwrap();
         let start = Instant::now();
-        assert!(tauri::async_runtime::block_on(download_update(&update, |_, _| {})).is_err());
+        assert_eq!(
+            tauri::async_runtime::block_on(download_update(&update, |_, _| {})).unwrap_err(),
+            "update_download_timeout"
+        );
         assert!(
             start.elapsed() < Duration::from_secs(35),
             "stalled {mode} transfer was not bounded"

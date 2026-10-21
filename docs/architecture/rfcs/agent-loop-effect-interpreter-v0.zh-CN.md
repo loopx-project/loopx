@@ -376,6 +376,26 @@ candidate 适配器也传递此前遗漏的签名限制，原范围／workspace 
 必需文本可以超出并警告。这只关闭传输遗漏，不代表三项收敛验收通过，也不授权退役仍
 活跃的 Python/host adapter。
 
+沿 capsule 追到实际共享 Host 输入又暴露一处丢失：DSH／云端只传递其中的
+unavailable-context 字段，签名有效的 audit 没有到达 provider。适配器现传递既有
+audit 及原捕获路由／哈希。真实 File/SQLite 普通工作与 replan 捕获通过无模型 DSH
+子进程验证有序义务、继续执行的 judge、非证明条件、签名拒绝及来源／状态未变。
+同次核对还发现工作资格丢失：capsule 过滤了成果底线／退化规则，该 Host 又遗漏整份
+既有 execution profile。typed 投影现完整保留，Host 直接传递。携带该 profile 的新
+material result 返回公开安全的 typed `work_evidence` 与 `validation_evidence`
+数组，并保留实际 delivery scale／outcome；外层 executor 验证并保留两组证据及分类。
+原生来源 oracle 和签名篡改覆盖这些规则。两种契约都不存在的 prompt 保持原输入，旧
+journal replay 保持可读；所有状态、quota 和 scheduler 效果仍归外层 executor。本批
+只验证该调用方的条款交付，不证明模型遵守、安装采用或完整成本收益。应计入恢复要求
+的成本；旧的不完整输入不能作为已验收的效率基线。
+
+完整 execution profile 在原有 96 行公开 CLI 夹具中，令普通 Turn plan 增加
+138–142 个 JSON 字符／UTF-8 字节，不增加行数。原 base/head 差分超过 64／70
+字符和 128 字节增长额度，仍按原失败保留。仅当旧四字段 profile 补齐成果底线和
+退化字段、签名覆盖不变且无其他 JSON 结构变化时，给予一次性 160 字符／字节额度。
+已经完整、只补部分或无关变化均不适用。绝对预算、行数、夹具人口、完整来源／Host
+条款验证及生产 8 KiB 诊断保持。本结果说明必要展示成本，不代表模型 token 或效率收益。
+
 统一工作上下文现在由既有 TS interaction owner 选择并满足必读，注册的 Python
 adapter 核验来源，在普通 heartbeat/quota 与签名 envelope 中返回完整当前任务来源，
 无需启用 TurnEnvelope。混合 Goal 文件仍必须经渐进式路径全文读取，不能按历史标题

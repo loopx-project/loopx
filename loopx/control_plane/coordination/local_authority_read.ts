@@ -185,7 +185,7 @@ export async function readLocalCoordinationTodoSource(
       provider_revision: revision, cursor, store_identity: identity.store_identity,
       todos: projection.todo_ids.map((todoId) => projection.todos.get(todoId)!),
       todo_ids: projection.todo_ids, todo_read_model: todoReadModel,
-      ...(!configuredGoalChecks(acceptance) && !acceptance.outcome_requirements ? {} : {
+      ...(!configuredGoalChecks(acceptance) && !acceptance.outcome_requirements && !acceptance.goal_objective ? {} : {
         goal_acceptance_contract: acceptance,
         goal_acceptance_work_guards: projectGoalAcceptanceWorkGuards(
           transaction.projection, goalId, projection.todo_ids),
@@ -324,7 +324,7 @@ export async function listLocalCoordinationTodos(
       todos: projection.todo_ids.map((todoId) => projection.todos.get(todoId)!),
       todo_ids: projection.todo_ids,
       todo_read_model: todoReadModel,
-      ...(!configuredGoalChecks(acceptance) && !acceptance.outcome_requirements ? {} : {goal_acceptance_contract: acceptance,
+      ...(!configuredGoalChecks(acceptance) && !acceptance.outcome_requirements && !acceptance.goal_objective ? {} : {goal_acceptance_contract: acceptance,
         goal_acceptance_work_guards: projectGoalAcceptanceWorkGuards(head.head, goalId, projection.todo_ids)}),
       ...(oracleObservationBasis === null ? {} : {goal_acceptance_oracle_observation_basis: oracleObservationBasis}),
       ...(leaseIndex === null ? {} : {

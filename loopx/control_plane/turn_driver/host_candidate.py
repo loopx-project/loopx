@@ -15,6 +15,7 @@ from ..quota.turn_envelope import turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
+from .executor import HOST_RESULT_EVIDENCE_LIMITS
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
 LOOPX_TURN_RESULT_SCHEMA = "loopx_turn_result_v0"
@@ -57,6 +58,13 @@ def _canonical_hash(value: Any) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return "sha256:" + sha256(encoded).hexdigest()
+
+
+def _execution_profile_present(request: Mapping[str, Any]) -> bool:
+    envelope = _mapping(request.get("turn_envelope"))
+    capsule = _mapping(envelope.get("contract_capsule"))
+    profile = capsule.get("execution_profile")
+    return isinstance(profile, Mapping) and bool(profile)
 
 
 def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -109,19 +117,21 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
             selected = {**selected, "text": action.get("recommended_action")}
             selected.pop("text_ref")
         authority["selected_todo"] = selected
-    unavailable = _mapping(_mapping(envelope.get("contract_capsule")).get("unavailable_context"))
-    if unavailable:
-        authority["unavailable_context"] = unavailable
+    capsule = _mapping(envelope.get("contract_capsule"))
+    for field in ("unavailable_context", "vision_continuation_audit", "execution_profile"):
+        value = _mapping(capsule.get(field))
+        if value:
+            authority[field] = value
     context = _mapping(envelope.get("agent_context"))
     if context:
         authority["agent_context"] = context
     replan = _mapping(envelope.get("replan_action_packet"))
     if replan:
         authority["replan_action_packet"] = replan
-    if context.get("detail_ref") or replan:
-        # Replan evidence and historical capability references need the saved
-        # observation's route and hash. Native Turn capture validation owns its
-        # binding; this adapter neither reads the file nor re-enters admission.
+    if context.get("detail_ref") or replan or authority.get("vision_continuation_audit"):
+        # Replan/acceptance evidence and historical capability references need
+        # the saved observation's route and hash. Native capture validation owns
+        # its binding; this adapter neither reads it nor re-enters admission.
         authority["detail_ref"] = _mapping(envelope.get("detail_ref"))
         authority["action_signature"] = signature
     return authority
@@ -174,6 +184,26 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "state, quota and scheduler effects. Guidance grants no permissions.\n"
         if authority.get("replan_action_packet") else ""
     )
+    acceptance_instruction = (
+        "Read vision_continuation_audit before judging Goal acceptance or proposing "
+        "closeout; preserve its ordered required_before_closeout, evidence requirements "
+        "and current vision_gap_judge. Selected Todo completion alone cannot close the Goal. "
+        "For additional acceptance or coverage evidence, use detail_ref.full_decision "
+        "only for the saved original observation identified by detail_ref.captured_decision; "
+        "check its Goal/Agent/Turn and action_signature.source_decision_hash. "
+        "Never re-enter quota admission for a detail read. Missing or invalid evidence "
+        "holds dependent closure; independent work retains its existing authority. "
+        "Do not execute its state or scheduler commands; report the semantic result "
+        "for the outer Turn executor. The audit grants no new authority.\n"
+        if authority.get("vision_continuation_audit") else ""
+    )
+    work_instruction = (
+        "Use execution_profile to size and qualify the work, including its required "
+        "artifact, validation, outcome and degradation rules. Return the work and "
+        "validation evidence; state writeback and quota effects belong to the outer "
+        "Turn executor. The profile grants no new permissions.\n"
+        if authority.get("execution_profile") else ""
+    )
     return (
         "You are executing one bounded LoopX-governed work segment.\n"
         "The JSON below is the complete host authority for this Turn. Execute "
@@ -185,6 +215,8 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         f"{context_instruction}"
         f"{planning_context_instruction}"
         f"{replan_instruction}"
+        f"{acceptance_instruction}"
+        f"{work_instruction}"
         f"Turn authority JSON:\n{authority_json}\n\n"
         "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"
@@ -215,6 +247,16 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "iteration_failed when this iteration failed without authorizing a "
         "retry or successor. "
         "Do not include raw transcripts, credentials, or absolute local paths."
+        + (
+            " Because execution_profile is present, every material result must "
+            "also return work_evidence and validation_evidence as separate arrays "
+            "of 1-8 short public-safe strings (<=240 characters each, <=1200 "
+            "characters total per field). Name the artifact or observation as work "
+            "evidence and the command or readback that checked it as validation "
+            "evidence. Omit both fields for wait, user_action_required and "
+            "iteration_failed."
+            if authority.get("execution_profile") else ""
+        )
     )
 
 
@@ -321,6 +363,29 @@ def build_result(
                 limit=TEXT_LIMITS["vision_unchanged_reason"],
             ),
         }
+    if kind in MATERIAL_KINDS and _execution_profile_present(request):
+        missing_evidence = [
+            field for field in HOST_RESULT_EVIDENCE_LIMITS
+            if field not in candidate
+        ]
+        if missing_evidence:
+            return {
+                "schema_version": LOOPX_TURN_RESULT_SCHEMA,
+                "turn_key": turn_key,
+                "result_kind": "wait",
+                "completed_phases": list(COMPLETED_PHASES),
+                "classification": "missing_host_execution_evidence",
+                "next_action": _bounded(
+                    f"{host_name} returned a material result without required "
+                    + " and ".join(missing_evidence)
+                    + "; rerun with typed public-safe work and validation evidence.",
+                    limit=TEXT_LIMITS["next_action"],
+                ),
+                "vision_unchanged_reason": _bounded(
+                    "host adapter could not accept material work without typed evidence",
+                    limit=TEXT_LIMITS["vision_unchanged_reason"],
+                ),
+            }
     result: dict[str, Any] = {
         "schema_version": LOOPX_TURN_RESULT_SCHEMA,
         "turn_key": turn_key,
@@ -337,13 +402,17 @@ def build_result(
         text = value.strip() if isinstance(value, str) else value
         if text or (value is not None and not isinstance(value, str)):
             result[field] = text
-
     if kind in MATERIAL_KINDS:
         _complete_material_fields(result, candidate, kind)
     for field in ("path_delta_mode", "agent_vision_json"):
         if field in candidate:
             # Preserve the structured executor input verbatim. The executor
             # owns type, size, JSON and semantic validation.
+            result[field] = candidate[field]
+    for field in HOST_RESULT_EVIDENCE_LIMITS:
+        if field in candidate:
+            # Preserve the bounded evidence value for the executor's typed
+            # validation and durable host-result readback.
             result[field] = candidate[field]
 
     has_path_delta = "path_delta_mode" in candidate or "agent_vision_json" in candidate

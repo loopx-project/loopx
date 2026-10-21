@@ -112,15 +112,20 @@ export function validateMediaPlan(input: unknown) {
   if (new Set(assets.map(asset => asset.id)).size !== assets.length) fail("Duplicate source reference");
   const shots = array(raw.shots, 30).map(value => {
     const shot = object(value);
-    fields(shot, ["id", "kind", "seconds", "title", "body", "nodes", "asset_id", "start_seconds", "source_ref", "boundary", "scene"]);
+    fields(shot, ["id", "kind", "seconds", "title", "body", "nodes", "asset_id", "start_seconds", "source_ref", "boundary", "scene", "framing"]);
     const kind = shot.kind;
     if (typeof kind !== "string" || !["title", "diagram", "excerpt", "blender"].includes(kind)) fail("Unsupported shot kind");
+    // Composition-local presentation vocabulary; omitted/editorial retains the
+    // original canonical bytes. It changes neither source nor publication scope.
+    if (shot.framing !== undefined && shot.framing !== "editorial" && shot.framing !== "full_frame") fail("Unsupported shot framing");
+    if (shot.framing !== undefined && kind !== "excerpt" && kind !== "blender") fail("Framing requires an excerpt or Blender shot");
+    const framing = shot.framing === "full_frame" ? {framing: "full_frame" as const} : {};
     if (kind !== "blender" && shot.scene !== undefined) fail("Scene geometry requires a Blender shot");
     const base = {id: token(shot.id), kind, seconds: number(shot.seconds, 1, 30), title: text(shot.title, 100),
-      body: shot.body == null || shot.body === "" ? "" : text(shot.body, 300), source_ref: text(shot.source_ref, 240), boundary: text(shot.boundary, 180)};
+      body: shot.body == null || shot.body === "" ? "" : text(shot.body, 300), source_ref: text(shot.source_ref, 240), boundary: text(shot.boundary, 180), ...framing};
     if ((kind === "excerpt" || kind === "blender") && base.body) fail("Excerpt and Blender shots do not support body text; use a title, boundary or timed captions");
     if (kind === "blender") {
-      fields(shot, ["id", "kind", "seconds", "title", "body", "source_ref", "boundary", "scene"]);
+      fields(shot, ["id", "kind", "seconds", "title", "body", "source_ref", "boundary", "scene", "framing"]);
       const frames = number(base.seconds * fps, 12, 120, true);
       return {...base, scene: blenderScene(shot.scene, frames)};
     }
@@ -200,6 +205,9 @@ export function validateMediaResult(input: unknown) {
   }) : [];
   if (spatial.length !== expectedScenes.length || Boolean(files["blender-project.zip"]) !== Boolean(expectedScenes.length)) fail("Blender project output is missing or out of scope");
   const narration = object(qa.narration);
+  const expectedFullFrame = array(request.full_frame_shots ?? [], 30).map(token);
+  const fullFrame = array(qa.full_frame_shots ?? [], 30).map(token);
+  if (new Set(fullFrame).size !== fullFrame.length || stable(fullFrame) !== stable(expectedFullFrame)) fail("Renderer did not verify the requested full-frame shots; upgrade the local media provider");
   if (!["silent", "supplied", "system_speech"].includes(String(narration.mode)) || narration.mode !== request.narration_mode) fail("Narration result differs from the admitted plan");
   if (narration.mode !== "silent" && !files["narration.wav"]) fail("Narration output is missing");
   const audioMetrics = narration.mode === "silent" ? {} : {
@@ -209,6 +217,7 @@ export function validateMediaResult(input: unknown) {
   return {ok: true, protocol: MEDIA_PROTOCOL, plan_digest: request.plan_digest, files,
     qa: {full_decode: "passed", frames: qa.frames, width: qa.width, height: qa.height, fps: qa.fps,
       source_hashes_verified: true, narration: {mode: narration.mode, ...audioMetrics, subjective_listening: "not_tested"},
+      ...(fullFrame.length ? {full_frame_shots: fullFrame} : {}),
       ...(spatial.length ? {blender_scenes: spatial} : {}),
       audience_understanding: "not_tested", creative_review: "not_tested"},
     cost: {render_wall_seconds: number(cost.render_wall_seconds, 0, 120)}, publish_authorized: false};

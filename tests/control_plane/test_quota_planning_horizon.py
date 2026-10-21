@@ -158,7 +158,8 @@ def test_snapshot_flat_backlog_stays_in_action_portfolio_without_horizon() -> No
     assert "planning_horizon" not in packet
 
 
-def test_preselection_horizon_and_replan_share_current_goal_sources(tmp_path: Path) -> None:
+@pytest.mark.parametrize("enabled", [None, True])
+def test_default_preselection_horizon_and_replan_share_current_goal_sources(tmp_path: Path, enabled) -> None:
     from loopx.control_plane.work_items.replan_context_codec import project_replan_context
 
     project = tmp_path / "project with spaces"
@@ -174,7 +175,8 @@ def test_preselection_horizon_and_replan_share_current_goal_sources(tmp_path: Pa
     }]}))
     status = planning_horizon_strategic_context_status()
     status.update(registry=str(registry), runtime_root=str(runtime))
-    status["attention_queue"]["items"][0]["project_asset"]["execution_profile"] = {"planning_horizon_goal": True}
+    if enabled is not None:
+        status["attention_queue"]["items"][0]["project_asset"]["execution_profile"] = {"planning_horizon_goal": enabled}
     def read_packet():
         return build_quota_should_run(status, goal_id=GOAL_ID, agent_id=AGENT_ID,
                                      turn_instance_id="turn-goal-horizon")
@@ -219,7 +221,6 @@ def test_real_cli_exposes_goal_before_selection_without_granting_delivery(tmp_pa
 
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
     index.write_text("")
-    call("configure-goal", "--goal-id", GOAL, "--execution-planning-horizon-goal", "--execute")
     for number in range(2):
         call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
              "--text", f"Validate independent source {number}.", "--task-class", "advancement_task",
@@ -406,17 +407,15 @@ def test_task_graph_reads_deferred_nodes_from_the_shared_planning_source() -> No
     assert deferred["todo_id"] in todo_ids
 
 
-@pytest.mark.parametrize("enabled", [False, None])
-def test_disabled_goal_projection_does_not_read_goal_sources(monkeypatch, enabled):
+def test_explicitly_disabled_goal_projection_does_not_read_goal_sources(monkeypatch):
     from loopx.control_plane.work_items import replan_context_codec
     def forbidden(*args, **kwargs):
         raise AssertionError("disabled horizon must not load Goal documents")
     monkeypatch.setattr(replan_context_codec, "goal_context_facts", forbidden)
     status = planning_horizon_strategic_context_status()
     status["registry"] = "/unreadable/registry.json"
-    if enabled is not None:
-        status["attention_queue"]["items"][0]["project_asset"]["execution_profile"] = {"planning_horizon_goal": enabled}
+    status["attention_queue"]["items"][0]["project_asset"]["execution_profile"] = {"planning_horizon_goal": False}
     packet = build_quota_should_run(status, goal_id=GOAL_ID, agent_id=AGENT_ID,
-                                   turn_instance_id="horizon-default-off")
+                                   turn_instance_id="horizon-explicit-off")
     assert "core_goal" not in packet["planning_horizon"]
     assert packet["planning_horizon"]["selection_contract"]["horizon_changes_selection"] is False

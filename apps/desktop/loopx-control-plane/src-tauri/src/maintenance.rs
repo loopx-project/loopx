@@ -402,6 +402,21 @@ fn check_error(error: tauri_plugin_updater::Error) -> &'static str {
         _ => "update_check_failed",
     }
 }
+
+fn download_error(error: tauri_plugin_updater::Error) -> &'static str {
+    use tauri_plugin_updater::Error;
+    match error {
+        Error::Reqwest(error) if error.is_timeout() => "update_download_timeout",
+        Error::Reqwest(_) => "update_network_failed",
+        // The pinned updater uses Network for a non-success archive response.
+        // Do not expose its URL/status message or mislabel it as a bad signature.
+        Error::Network(_) => "update_download_failed",
+        Error::Minisign(_) | Error::Base64(_) | Error::SignatureUtf8(_) => {
+            "update_signature_invalid"
+        }
+        _ => "update_download_or_signature_failed",
+    }
+}
 // Environment telemetry for the recovery diagnostics: coarse, non-PII facts
 // that separate "fresh Mac without a usable Python" from OS-specific defects.
 // No paths, environment variables or process output beyond the probed version.
@@ -704,7 +719,7 @@ async fn download_update(
     update
         .download(on_chunk, || {})
         .await
-        .map_err(|_| "update_download_or_signature_failed".into())
+        .map_err(|error| download_error(error).into())
 }
 
 async fn find_update<R: tauri::Runtime>(

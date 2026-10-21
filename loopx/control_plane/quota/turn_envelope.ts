@@ -67,7 +67,6 @@ const CONTRACT_CAPSULE_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "selected_next_due_at", "non_runnable_non_monitor_count",
     "material_transition", "action",
   ],
-  execution_profile: ["cadence", "minimum_scale", "spend_rule", "must_include"],
   execution_obligation: [
     "kind", "contract", "contract_obligation", "must_attempt_work",
     "notify_is_execution_gate", "delivery_allowed", "reason",
@@ -538,6 +537,12 @@ function contractCapsule(
   }
   const unavailableContext = projectTurnStartUnavailableContext(payload.turn_start_capability_hook_dispatch);
   if (unavailableContext) capsule.unavailable_context = unavailableContext;
+  // Work qualification is behavioral context, including its outcome and
+  // degradation rules. Display-field filtering must not weaken that contract.
+  const executionProfile = object(payload.execution_profile);
+  if (Object.keys(executionProfile).length > 0) {
+    capsule.execution_profile = structuredClone(executionProfile);
+  }
   // These existing source fields govern evidence and continuation, rather
   // than summarize display text. Preserve every clause, order, empty value
   // and current judge without copying the detailed acceptance-gap ledger.
@@ -795,6 +800,43 @@ function turnActionProjection(payload: JsonObject, protocolActionFields: JsonObj
     compactHorizon.detail_refs_ref = PLANNING_HORIZON_DETAIL_REFS_REF;
     action.planning_horizon = compactHorizon;
     projection.action = action;
+  }
+  // Goal acceptance already travels in work context. Reuse that exact inline
+  // source when present; a different scope/revision or an unavailable source
+  // must retain the horizon's complete evidence instead of a dangling ref.
+  const currentHorizon = object(action.planning_horizon);
+  const core = object(currentHorizon.core_goal);
+  // Keep the full bounded work view, reusing only identical text already
+  // carried by this signed action. Short text is cheaper to leave inline.
+  const selected = object(action.selected_todo);
+  const selectedTextRef = typeof selected.text === "string" ? "$.action.selected_todo.text"
+    : selected.text_ref === "action.recommended_action" ? "$.action.recommended_action" : null;
+  const selectedText = typeof selected.text === "string" ? selected.text : action.recommended_action;
+  if (Object.keys(core).length > 0 && selectedTextRef && Array.isArray(currentHorizon.work_items)) {
+    action.planning_horizon = {...currentHorizon, work_items: currentHorizon.work_items.map(value => {
+      const item = object(value);
+      if (item.todo_id !== selected.todo_id || typeof item.text !== "string"
+        || item.text !== selectedText || item.text.length <= selectedTextRef.length + 4) return value;
+      const {text: _text, ...rest} = item;
+      return {...rest, text_ref: selectedTextRef};
+    })};
+    projection.action = action;
+  }
+  const acceptance = object(core.acceptance_contract);
+  const sources = object(projection.work_context).sources;
+  if (Object.keys(acceptance).length > 0 && Array.isArray(sources)) {
+    const index = sources.findIndex((value) => {
+      const source = object(value);
+      return source.source === "goal_acceptance"
+        && canonicalHash(object(object(source.content).goal_acceptance_contract)) === canonicalHash(acceptance);
+    });
+    if (index >= 0) {
+      const compactCore = {...core};
+      delete compactCore.acceptance_contract;
+      compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
+      action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+      projection.action = action;
+    }
   }
   // The context owner already bounds these contributions. Replacing them with
   // a reference makes a small contribution require the entire saved decision.

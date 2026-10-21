@@ -142,6 +142,26 @@ def refine_goal_outcome(
         "refinement": refinement, "dry_run": not execute}, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
 
 
+def update_goal_objective(
+    *, registry_path: Path, goal_id: str, document: dict[str, Any], operation: str,
+    expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
+    runtime_root: str | None = None, execute: bool = False, review_objective_digest: str | None = None,
+) -> dict[str, Any]:
+    """Adapt explicit owner revisions or a registered Agent's own adoption."""
+    from ..work_items.replan_context_codec import goal_context_facts
+
+    route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    goal = load_goal_from_registry(registry_path, goal_id)
+    if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
+        raise ValueError("Objective updates require an active Goal")
+    return _result("goal.acceptance.objective", {**route, "actor_agent_id": agent_id,
+        "expected_provider_revision": expected_provider_revision, "operation_id": operation_id,
+        "operation": operation, "document": document, "dry_run": not execute,
+        **({"review_objective_digest": review_objective_digest} if review_objective_digest is not None else {}),
+        "source_objective": goal_context_facts({"registry": str(registry_path)}, goal_id, None),
+        "registered_agents": registered_agent_ids_for_goal(goal)}, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+
+
 def inspect_goal_acceptance(
     *,
     registry_path: Path,
@@ -157,6 +177,7 @@ def inspect_goal_acceptance(
     basis = _result(
         _INSPECT_METHOD,
         {**_routing(registry_path, goal_id, runtime_root, agent_id),
+         **({"agent_id": agent_id} if agent_id is not None else {}),
          **({"todo_id": todo_id} if todo_id is not None else {}),
          **({"include_work_details": False} if not include_work_details else {})},
     )
@@ -471,6 +492,8 @@ def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:
         "dry_run",
         "operation_id",
         "goal_acceptance_contract",
+        "objective_work_digest",
+        "goal_objective_guard",
         "reason_code",
     )
     return {"ok": True, **{key: value[key] for key in keys if key in value}}

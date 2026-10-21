@@ -3,11 +3,14 @@
 `quota_planning_horizon_v0` is the bounded, read-only context that lets an
 agent reason beyond one locally selected Todo without inlining LoopX's full
 Todo store or task graph. It is present on the default `quota should-run` path
-when a planning choice has strategic context. The optional `planning_horizon_goal`
-setting is **off by default**. When enabled it carries the current `core_goal`
+when a planning choice has strategic context. The `planning_horizon_goal`
+setting is **on by default**. It carries the current `core_goal`
 before work selection, including for a single local Todo or flat backlog.
-When disabled, the existing strategic-context condition and projection are
-unchanged. Flat runnable alternatives remain owned by `action_portfolio`.
+The bounded work summary remains visible for a flat runnable backlog: missing
+declared dependencies or gaps do not establish that work ordering is sound.
+Completeness and detail references make omitted work explicit. Action selection
+still belongs to `action_portfolio`. When disabled, the previous
+strategic-context condition and projection are unchanged.
 
 The problem it addresses is narrower than scheduling. A selected regression
 gate can be locally runnable while the strategic path also contains a facts
@@ -46,23 +49,28 @@ available, `core_goal.read_action` reads the same complete Goal state, with the
 source path shell-quoted. A corrected source is read on the next planning
 projection; no copied objective needs synchronization.
 
-This extends planning context only after explicit opt-in. Existing Todo selection,
+This changes the default preselection context, including single-Todo and flat
+backlog cases; an explicit false retains the previous projection and skips the
+extra Goal-document read. Existing Todo selection,
 claim/lease, admission, replan precedence and settlement authority remain
 unchanged. Goal text is scoped decision input; public export remains a separate
 boundary. The complete original objective is not shortened to the Todo display
 budget. Transport-size warnings remain visible rather than discarding its tail.
 
-## Enable, Read Back And Disable
+## Default, Read Back And Advanced Opt-Out
 
 The existing **Goal review and stride** capability editor in Settings →
-Capabilities exposes **Show Goal in planning horizon** at machine and Goal scope.
+Capabilities → **Advanced settings** exposes **Show Goal in planning horizon**
+at machine and Goal scope. Ordinary use requires no configuration step.
 Use its preview, apply and readback flow. Its optional boolean is stored in the
 existing `execution_profile.planning_horizon_goal`; no new capability or Goal
 store is introduced. The v2 machine review configuration accepts the same
-optional boolean; omission preserves its previous shape and disabled default.
+optional boolean; omission preserves its stored shape and now resolves to on.
 As with stride, a Goal with an explicit review cadence uses its own configuration;
 a sparse Goal switch inherits the live interval. An explicit false overrides a
-machine opt-in. Clearing a Goal override restores the applicable inherited value.
+machine value. Clearing a Goal override restores the applicable inherited value.
+The form shows effective values without pinning an unchanged inherited horizon
+when another field is saved. Explicit JSON true/false remains an override.
 
 ```sh
 loopx configure-goal --goal-id example --execution-planning-horizon-goal --execute
@@ -71,8 +79,8 @@ loopx quota should-run --goal-id example --agent-id researcher --format json
 loopx configure-goal --goal-id example --no-execution-planning-horizon-goal --execute
 ```
 
-The quota readback contains `planning_horizon.core_goal` only when this projection
-is enabled and a preselection planning projection is applicable. It is not added
+The quota readback contains `planning_horizon.core_goal` when this projection
+is enabled (the default) and a preselection planning projection is applicable. It is not added
 to receipt-bound replays or ineligible work merely to repeat the Goal. Disabling
 skips the extra Goal-document read. Replan continues to read its existing Goal
 context independently. TurnEnvelope, stride, execution permission and quota are
@@ -210,6 +218,14 @@ may replace the repeated `detail_refs` object with
 `detail_refs_ref="$.detail_ref"`. The Turn envelope's top-level cold path then
 owns those reads. This is transport compaction only: it does not change the
 TypeScript reducer output, completeness accounting, or action authority.
+If the exact same acceptance contract is already inline in
+`work_context.sources`, `core_goal.acceptance_contract_ref` points to that source
+instead of repeating its body. The referenced content remains signed. Different
+scopes/revisions and unavailable sources retain the full inline contract.
+For the Goal-bearing horizon, an identical selected-work description may use
+`text_ref` to the envelope's selected Todo text or recommended action when
+that reference is smaller. Other work, completeness and mismatched text stay
+inline; the reference target remains covered by the action signature.
 
 ## Relation Semantics
 
@@ -253,7 +269,8 @@ A conforming implementation must prove:
 - portfolio, horizon, and agent-Todo detail consume the same typed inventory;
 - task graph consumes the same canonical Todo selector, plus terminal evidence
   rows, without acquiring agent-scoped selection or claim authority;
-- omitted/false settings retain the prior horizon and skip extra Goal reads;
+- omitted settings expose the original Goal; explicit false retains the prior
+  horizon and skips extra Goal reads;
 - when enabled, the same current Goal reaches preselection horizon and replan, with original
   trailing constraints and source readback intact;
 - missing, corrected and fallback sources stay explicit; scoped acceptance and

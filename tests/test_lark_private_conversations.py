@@ -749,6 +749,73 @@ def test_group_mentioned_controls_bypass_model_turns(ordinary, command):  # noqa
         runtime.close()
 
 
+@pytest.mark.parametrize("command", ["/stop", "/status", "/help", "/new"])
+def test_admitted_topic_mentioned_control_uses_verified_pair(ordinary, command):  # noqa: F811
+    store, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("mentioned-fast-root",
+                              "Explain the project" if command == "/new" else "wait for interrupt")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        original = transport.core.pending()[0]
+        if command == "/new":
+            finish_group_turn(runtime, transport, message=root["content"])
+        else:
+            deadline = time.monotonic() + 5
+            while store.load_turn(original["session_id"], original["turn_id"])["status"] != "running":
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+        event = provider.topic("mentioned-fast-control", "@Renamed assistant " + command,
+                               root=root["message_id"])
+        event["mentions"] = [{"name": "Renamed assistant", "key": "@_user_1", "id": "ou_notes_app_bot"}]
+        provider.messages[event["message_id"]].update(
+            body={"content": json.dumps({"text": "@_user_1 " + command})},
+            mentions=event["mentions"])
+        provider.calls.clear()
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        calls = list(provider.calls)
+        assert not any("+messages-mget" in args for args in calls)
+        reads = [args for args in calls if "GET" in args]
+        assert len(reads) == 1 and reads[0][reads[0].index("GET") + 1].endswith("/mget")
+        assert json.loads(reads[0][reads[0].index("--params") + 1]) == {
+            "message_ids": [event["message_id"], root["message_id"]]}
+        request = next(row for row in transport.core.pending() if row["command"] == command[1:])
+        assert request["session_id"] == original["session_id"]
+        assert request["message"] == event["content"]
+        # Rendered names and wire keys are not persisted as a replacement
+        # message; replay still reads current authority and the same raw pair.
+        assert transport.admit("notes-app", event)["status"] == "command_recorded"
+        assert transport.core.read_request(request["request_ref"]) == request
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("canonical_text,identity,expected", [
+    ("Explain this public project", "ou_notes_app_bot", None),
+    ("@_user_1 /help", "ou_notes_app_bot", "help"),
+    ("@_user_1 /stop", "ou_other_bot", None),
+])
+def test_admitted_topic_mention_hint_cannot_supply_control_authority(
+    ordinary, canonical_text, identity, expected,  # noqa: F811
+):
+    _, runtime, provider, transport = connect_group(ordinary)
+    try:
+        root = provider.topic("untrusted-fast-root", "Explain this public project")
+        assert transport.admit("notes-app", root)["status"] == "durably_accepted"
+        event = provider.topic("untrusted-fast-control", "@Renamed assistant /stop", root=root["message_id"])
+        event["mentions"] = [{"name": "Renamed assistant", "key": "@_user_1", "id": "ou_notes_app_bot"}]
+        provider.messages[event["message_id"]].update(
+            body={"content": json.dumps({"text": canonical_text})},
+            mentions=[{"name": "Renamed assistant", "key": "@_user_1", "id": identity}])
+        result = transport.admit("notes-app", event)
+        assert result["status"] == ("command_recorded" if expected else "durably_accepted")
+        request = transport.core.read_request(identity_ref(
+            transport._binding("notes-app")["provider_ref"], event["message_id"]))
+        assert request["command"] == expected
+        assert request["command"] != "stop"
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("raw_text,identity,key", [
     ("@_user_1 /stop", "ou_steward_app_bot", "@_user_1"),
     ("@notes-app /stop", "ou_notes_app_bot", "@_user_1"),

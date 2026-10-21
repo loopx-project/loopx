@@ -85,6 +85,39 @@ test("caption admission preserves plain text and refuses structural paragraph se
 
 const spatialBrief = () => JSON.parse(readFileSync(new URL("../../packages/loopx-media/examples/blender-handoff.json", import.meta.url), "utf8"));
 
+test("full-frame is an explicit, source-bound spatial choice; editorial defaults retain their digest", () => {
+  const original = spatialBrief(), before = plan({plan: original});
+  original.shots[1].framing = "editorial";
+  assert.deepEqual(plan({plan: original}), before);
+  original.shots[1].framing = "full_frame";
+  const framed = plan({plan: original});
+  assert.notEqual(framed.plan_digest, before.plan_digest);
+  assert.equal(framed.plan.shots[1]?.framing, "full_frame");
+  assert.equal(plan({plan: framed.plan}).plan_digest, framed.plan_digest);
+  for (const bad of ["cover", null, ["full_frame"], true]) {
+    original.shots[1].framing = bad;
+    assert.throws(() => plan({plan: original}), /framing/);
+  }
+  const diagram = {...brief(), shots: [{...brief().shots[0], framing: "full_frame"}]};
+  assert.throws(() => plan({plan: diagram}), /requires an excerpt or Blender/);
+});
+
+test("an older provider cannot silently ignore full-frame framing and return ready", () => {
+  const expected = {plan_digest: "sha256:" + "a".repeat(64), frame_count: 12, width: 640, height: 360, fps: 12, narration_mode: "silent"};
+  const output = {ok: true, protocol: "content_ops_media_renderer_v0", plan_digest: expected.plan_digest,
+    files: Object.fromEntries(["video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt"].map(name => [name, {sha256: "b".repeat(64), bytes: 16}])),
+    qa: {full_decode: "passed", frames: 12, width: 640, height: 360, fps: 12, source_hashes_verified: true, narration: {mode: "silent"}},
+    cost: {render_wall_seconds: 1}, publish_authorized: false};
+  assert.equal("full_frame_shots" in result({...expected, result: output}).qa, false);
+  assert.throws(() => result({...expected, full_frame_shots: ["view"], result: output}), /upgrade/);
+  for (const ids of [["other"], ["view", "view"], []]) {
+    assert.throws(() => result({...expected, full_frame_shots: ["view"], result: {...output, qa: {...output.qa, full_frame_shots: ids}}}), /full-frame/);
+  }
+  const revised = {...output, qa: {...output.qa, full_frame_shots: ["view"]}};
+  assert.deepEqual(result({...expected, full_frame_shots: ["view"], result: revised}).qa.full_frame_shots, ["view"]);
+  assert.throws(() => result({...expected, result: revised}), /full-frame/);
+});
+
 test("spatial shots refuse body text instead of producing a movie that loses a qualifier", () => {
   const excerpt = {...brief(), assets: [{id: "still", kind: "image", path: "source.png", sha256: "a".repeat(64), source_ref: "synthetic:still", visibility: "local_private"}],
     shots: [{id: "view", kind: "excerpt", seconds: 6, title: "Source", asset_id: "still", source_ref: "synthetic:still", boundary: "Illustration"}]};

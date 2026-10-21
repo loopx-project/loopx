@@ -5,7 +5,7 @@ import "./content-media-workbench.css";
 type Provider = {status: string; enabled: boolean | null; next_action: string | null};
 type Composition = {
   composition_id: string; revision: number; status: string; title: string; duration_seconds: number;
-  shots: {title: string; seconds: number; kind: string; boundary: string; source_ref: string}[];
+  shots: {title: string; seconds: number; kind: string; boundary: string; source_ref: string; framing?: "full_frame"}[];
   result: {files: Record<string, {sha256: string; bytes: number}>; qa: {frames: number; full_decode: string; narration: {mode: string}; blender_scenes?: {project_reopened: boolean}[]}; cost: {render_wall_seconds: number}} | null;
   provider: Provider;
 };
@@ -84,9 +84,9 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
             {selected.result.files["blender-project.zip"] ? <a href={file("blender-project.zip")} download="blender-project.zip">{copy("Blender 工程与画面", "Blender project and passes")}</a> : null}</div>
           <p>{copy("完整解码通过", "Full decode passed")} · {selected.result.qa.frames} {copy("帧", "frames")} · {copy("渲染耗时", "Render time")} {selected.result.cost.render_wall_seconds}s</p>
           {selected.result.qa.blender_scenes?.length ? <p>{copy("三维工程已重新打开并检查，颜色与深度帧完整。", "The 3D project was reopened and checked; color and depth frames are complete.")}</p> : null}
-        </> : <ol className="content-media-timeline">{selected.shots.map((shot, i) => <li key={i}><span>{shot.title}</span><small>{shot.seconds}s · {shot.boundary}</small></li>)}</ol>}
+        </> : <ol className="content-media-timeline">{selected.shots.map((shot, i) => <li key={i}><span>{shot.title}</span><small>{shot.seconds}s · {shot.framing === "full_frame" ? copy("大画面 · ", "Full frame · ") : ""}{shot.boundary}</small></li>)}</ol>}
         {["failed", "damaged"].includes(selected.status) ? <p>{hasBlender ? copy("请让 Agent 检查 Blender 依赖、场景范围与制作时限。修复本机依赖后可重试；修改场景需保存新修订。", "Ask your Agent to check the Blender extra, scene bounds and render time. Retry after dependency repair; save a new revision for scene changes.") : copy("请让 Agent 检查素材、字体和配音时长；修改脚本后保存新修订，或修复本机依赖后重试。", "Ask your Agent to check sources, fonts and narration timing. Save a new revision for story changes, or repair the local dependencies and retry.")}</p> : null}
-        <details><summary>{copy("来源与检查", "Sources and checks")}</summary><ul>{selected.shots.map((shot, i) => <li key={i}>{shot.title} — {shot.boundary}<br /><small>{shot.source_ref}</small></li>)}</ul>
+        <details><summary>{copy("来源与检查", "Sources and checks")}</summary><ul>{selected.shots.map((shot, i) => <li key={i}>{shot.title} — {shot.framing === "full_frame" ? copy("大画面 · ", "Full frame · ") : ""}{shot.boundary}<br /><small>{shot.source_ref}</small></li>)}</ul>
           <p>{copy("本机私有作品。编码通过不代表创意质量、理解效果或发布许可；请观看并试听。", "Private local work. Encoding does not establish creative quality, audience understanding or publication approval. Watch and listen before sharing.")}</p></details>
       </div></div> : null}
   </section>;

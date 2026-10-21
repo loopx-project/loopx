@@ -1,4 +1,5 @@
 import {GoalAcceptanceContractSection} from "./goal-acceptance-contract";
+import {GoalObjectiveSettings} from "./goal-objective-settings";
 import {goalAcceptanceContractCopy} from "./delivery-review-copy";
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Bot, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2 } from "lucide-react";
@@ -255,6 +256,7 @@ export function WorkspaceSettingsPage({
                 onChanged();
               }} />
               <GoalAmendmentSettings goalId={selectedGoal.goalId} />
+              <GoalObjectiveSettings goalId={selectedGoal.goalId} />
               <GoalDirectionSettings goalId={selectedGoal.goalId} />
               <GoalAcceptanceContractSection goalId={selectedGoal.goalId} current canManage management copy={goalAcceptanceContractCopy[locale]} />
         </div> : null}

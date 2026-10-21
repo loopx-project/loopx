@@ -20,6 +20,24 @@ const obligation = {triggers: [{kind: "required_agent_vision_missing"}]};
 const vision = {vision_patch: {acceptance_summary: "Observed permission boundary"},
   path_delta: {outcome: "continue", evidence_refs: ["evidence-permission"]}};
 
+test("open-work review guidance does not require configured checks or outcome declarations", () => {
+  for (const kind of ["typed_progress_repeat", "periodic_review_due", "goal_outcome_uncovered"]) {
+    for (const stride_strategy of ["off", "evidence_conditioned_v1"]) {
+      const source = {obligation_id: "replan-1111111111111111", triggers: [{kind}],
+        replan_context: {stride_strategy}};
+      const project = (current: boolean | null) => projectReplanSemantics({operation: "requirements", obligation: {
+        ...source, replan_context: {...source.replan_context, core_goal: {acceptance_contract: current === null ? null : {
+          outcome_requirements: {current_lifetime: current, outcomes: [], acceptance_gaps: []}}}}}});
+      const ordinary = project(null), retired = project(false), current = project(true);
+      assert.deepEqual(retired, ordinary);
+      assert.deepEqual(current, ordinary, "default review and its authority do not depend on an outcome declaration");
+      const guidance = (ordinary.planning_guidance as string[]).join(" ");
+      for (const clause of ["even with open Todos", "Strongest first delivery", "diagnostic validation",
+        "Flat metrics alone prove neither progress nor exhaustion", "scope negative results"]) assert.ok(guidance.includes(clause));
+    }
+  }
+});
+
 test("a revalidated successor receipt settles only its exact original Turn guard", () => {
   const id = "replan-1111111111111111";
   const delta = {schema_version: "replan_semantic_delta_v0", accepted: true,

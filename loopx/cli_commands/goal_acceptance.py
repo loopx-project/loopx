@@ -13,6 +13,7 @@ from ..control_plane.goals.acceptance import (
     GoalAcceptanceRejected,
     configure_goal_acceptance,
     refine_goal_outcome,
+    update_goal_objective,
     inspect_goal_acceptance,
     public_goal_acceptance,
     verify_goal_acceptance,
@@ -22,31 +23,31 @@ from ..control_plane.goals.acceptance import (
 def register_goal_acceptance_command(subparsers: Any, add_format: Any) -> None:
     parser = subparsers.add_parser(
         "goal-acceptance",
-        help="Retain outcome requirements, review evidence and optionally run configured checks.",
+        help="Read Goal intent, prepare revisions, adopt current intent, refine outcomes or run configured checks.",
     )
     add_format(parser)
-    parser.add_argument("action", type=lambda value: "clear-checks" if value == "disable" else value, choices=("inspect", "prepare", "configure", "verify", "clear-checks", "refine"))
+    parser.add_argument("action", type=lambda value: "clear-checks" if value == "disable" else value, choices=("inspect", "prepare", "configure", "verify", "clear-checks", "refine", "prepare-objective", "revise-objective", "adopt-objective"))
     parser.add_argument("--goal-id", required=True)
     parser.add_argument(
         "--agent-id",
-        help="Registered caller; Agents may inspect, prepare or verify, or refine their own outcomes; preparation/refinement never approves or executes checks.",
+        help="Registered caller; Agents may prepare objective revisions, adopt only for themselves, refine outcomes or inspect/verify checks. Shared objective revision requires the owner.",
     )
     parser.add_argument(
         "--document",
         type=Path,
-        help="Outcome refinement or check plan. Checks may reference outcome_id and requirement IDs; configure requires the owner.",
+        help="Objective revision/adoption, outcome refinement or check plan; see the selected action contract.",
     )
     parser.add_argument(
         "--expected-provider-revision",
-        help="Exact revision from inspect; required by configure/clear-checks/refine.",
+        help="Exact revision from inspect; required by configure/clear-checks/refine/revise-objective/adopt-objective.",
     )
     parser.add_argument(
-        "--operation-id", help="Stable identity for an unchanged configuration retry."
+        "--operation-id", help="Stable identity for an unchanged operation retry."
     )
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="With refine, retain requirements and optional Agent evidence review; with prepare, save a reviewable plan only; with configure/clear-checks/verify, apply the named operation. Otherwise preview only.",
+        help="With prepare or prepare-objective, save a reviewable proposal only. For other mutations, apply the named operation. Otherwise preview only.",
     )
 
 
@@ -60,6 +61,14 @@ def render_goal_acceptance(payload: dict[str, Any]) -> str:
     if payload.get("provider_revision"):
         lines.append(f"- provider revision: {payload['provider_revision']}")
     contract = payload.get("goal_acceptance_contract") or {}
+    objective = contract.get("goal_objective")
+    if objective:
+        lines.extend([f"- current Goal objective (revision {objective['revision']}): {objective['objective']}",
+            f"- revision reason: {objective['reason']}"])
+        for peer in objective["peer_adoption"]:
+            lines.append(f"- {peer['agent_id']}: " + ("current revision adopted" if peer["current"] else "own work review and adopt-objective required before new execution"))
+    if payload.get("objective_work_digest"):
+        lines.append(f"- own work digest: {payload['objective_work_digest']}")
     lines.append("- requirements and evidence review: available by default")
     if not configured_checks(contract):
         lines.append("- automated checks: not configured")
@@ -110,7 +119,19 @@ def handle_goal_acceptance_command(
             "runtime_root": runtime_root_arg,
             "agent_id": args.agent_id,
         }
-        if args.action == "refine":
+        if args.action in {"revise-objective", "adopt-objective"}:
+            if args.document is None or not args.operation_id or not args.expected_provider_revision:
+                raise ValueError("objective updates require --document, --operation-id and --expected-provider-revision from inspect")
+            document = json.loads(args.document.read_text(encoding="utf-8"))
+            payload = public_goal_acceptance(update_goal_objective(**common, operation=args.action,
+                document=document, operation_id=args.operation_id, expected_provider_revision=args.expected_provider_revision, execute=args.execute))
+        elif args.action == "prepare-objective":
+            from ..control_plane.goals.goal_objective_actions import prepare_objective_revision
+            if args.document is None or not args.operation_id or args.expected_provider_revision:
+                raise ValueError("prepare-objective requires --document and --operation-id; it reads the current basis")
+            document = json.loads(args.document.read_text(encoding="utf-8"))
+            payload = prepare_objective_revision(**common, document=document, operation_id=args.operation_id, execute=args.execute)
+        elif args.action == "refine":
             if args.document is None or not args.operation_id or not args.expected_provider_revision:
                 raise ValueError("refine requires --document, --operation-id and --expected-provider-revision from inspect")
             refinement = json.loads(args.document.read_text(encoding="utf-8"))

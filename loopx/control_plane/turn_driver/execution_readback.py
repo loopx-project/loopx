@@ -34,6 +34,13 @@ def execution_payload(
         journal.get("completed_phases") or []
     )
     recovery = journal.get("recovery_audit")
+    host_result = _mapping(journal.get("host_result"))
+    host_evidence = {
+        field: list(host_result[field])
+        for field in ("work_evidence", "validation_evidence")
+        if isinstance(host_result.get(field), list)
+        and host_result[field]
+    }
     return {
         "ok": journal.get("status")
         in {
@@ -59,6 +66,7 @@ def execution_payload(
             "would_invoke_host": plan["route"]["would_invoke_host"],
         }} if not execute else {}),
         "result_kind": journal.get("result_kind"),
+        **({"host_evidence": host_evidence} if host_evidence else {}),
         "validation": journal.get("task_validation"),
         **({"validation_stage": journal["validation_stage"]} if journal.get("validation_stage") else {}),
         "receipt": journal.get("receipt"),

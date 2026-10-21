@@ -51,6 +51,96 @@ promote every message, housekeeping action or intermediate step.
 
 ## Ordinary user messages
 
+<a id="current-operating-objective"></a>
+
+### Current operating objective
+
+The original declaration can become an obsolete description of current work.
+Reading the latest file bytes does not establish semantic freshness. R4's Goal
+owner now proposes a bounded, owner-applied operating-objective revision in the
+existing canonical authority. `goal_objective_revision_v0` is a new shared
+planning contract owned by `goals/goal_objective.ts`, not a new capability or
+provider. File/SQLite remain the ordinary local transports; shared lease
+admission uses the same typed rule on PostgreSQL. Python adapts CLI, host and
+proposal IO; it does not decide revision/adoption semantics.
+
+The current objective, reason and opaque source reference form an ordered,
+digest-linked history. The original declaration, root non-goals, acceptance,
+permissions, budgets, stops, existing Todos and leases are retained. This does
+not authorize a purpose outside those commitments. Changing those commitments
+requires their existing governed authority or a new Goal lifetime. Outcome
+refinement remains append-only; it cannot silently rewrite a requirement.
+
+The normal conversation guidance directs an Agent to prepare a revision when
+explicit user direction invalidates the recorded objective. The native
+`loopx_collaboration` tool exposes `prepare_goal_objective`, and fixes its
+Goal/Agent/source Turn instead of accepting caller-supplied routing. Preparation
+uses the existing `goal.update` review/apply channel, with no Goal effect.
+**Goal settings → Task ownership → Current objective and revisions** lets the
+owner review an Agent's proposal or enter a revision, apply it and read back the
+actual current text and each peer's adoption. Other broad `goal.update` effects
+remain unavailable. A proposal, a source label or prose in a document cannot
+authorize an owner effect.
+
+CLI preparation uses `goal-acceptance prepare-objective --goal-id GOAL
+--agent-id AGENT --document revision.json --operation-id ID --execute`, where
+the document contains `objective`, `reason` and `source_ref`. `--execute` here
+saves the proposal only. An authorized local owner can use `revise-objective`
+with the same document, a stable operation id and `--expected-provider-revision`
+from `goal-acceptance inspect`; it previews unless `--execute` is supplied.
+It rejects Agent actors. Never use the owner spelling to impersonate authority.
+
+Once applied, the canonical objective is carried through normal Todo/status,
+work context, planning horizon and replan reads. Team plans already bind the
+canonical provider revision, so an older plan cannot survive an objective
+change. Unadopted peers receive an existing frontier/replan gap; native member
+starts and new canonical claims/lease acquisitions reject
+unadopted execution. Old active Turn recovery, lease renewal and release remain
+available. This is a next-execution boundary, not a mid-Turn interrupt or a new
+scheduler/wake system.
+
+Each peer reconciles its own work through normal Todo/Vision operations, reads
+`goal-acceptance inspect --goal-id GOAL --agent-id AGENT`, then records
+`adopt-objective` with `revision`, `digest`, `work_digest` (the returned
+`objective_work_digest`) and `review_summary`, the current provider revision
+and its own stable operation id. Native callers use `adopt_goal_objective`.
+Adoption is a recorded work review, not proof of successful work or permission.
+An ordinary Vision ACK cannot substitute for it. One peer can continue after
+adopting while others remain pending. A later peer must adopt before acquiring
+work even if it was not registered at revision time. Competing writes use CAS;
+lost replies recover the original receipt, and replaying an older adoption
+cannot acknowledge a later revision. Old configured verification becomes stale
+against a changed objective. A successor lifetime cannot inherit its
+predecessor's objective implicitly.
+
+Revisions are exceptional direction changes, not per-Turn maintenance. Ordinary
+progress, Todo/route changes, diagnostic feedback and wording polish do not
+justify a new shared objective. Agents reuse a pending proposal for the same
+objective rather than prompting the owner again or polling. The owner reviews
+semantic necessity; the runtime rejects identical/whitespace-only objectives
+but does not pretend to detect semantic equivalence. An unchanged repeated
+adoption does not write a provider revision. Work changes and peer adoption
+never invalidate an Agent's already-current objective adoption. Owner previews
+bind the prospective objective digest, so unrelated work/peer writes need no
+new review; changed objective/source/lifetime still invalidates that review.
+
+No revision is inferred from age or installed automatically on upgrade.
+Unchanged Goals retain their existing execution rules; the additional general
+guidance is conditional on an actual user correction. After adoption, ordinary
+Turns do not require another acknowledgement. Stored revision history is bounded
+and never silently pruned. Before adoption, revert the code if necessary; after
+records exist, retain readers and admission fences, and roll back intent with a
+new owner-reviewed revision rather than deleting history.
+
+Validation must cover real proposal/apply, a second Agent's reads/adoption,
+competing bases, old-response recovery, in-flight settlement and new-execution
+refusal on the actual stores, plus the packaged UI. Scripted native tool calls
+qualify the shipped tool/effect path; they do not prove a model will always
+recognize stale semantics. Model adherence, installed-host adoption, live Lark
+delivery and matched benchmark benefit remain separate qualification. Lark
+conversation workers reuse the native tool contract; this change does not
+rename topics, send messages or introduce a separate amendment authority.
+
 The bound Agent distinguishes a direct human request from heartbeat instructions,
 quoted documents, tool results and peer messages using the actual host context.
 No substring classifier infers user authority or importance. Before continuing a
@@ -293,6 +383,91 @@ of unresolved external-worker attempts remains with its worker owner; it is not
 delivered by this foundation. A comparison using that worker must freeze the
 same dispatch behavior in both arms and retain any repeated-call costs. The
 earlier mixed Host/native assertion is not qualified by a native-only pass.
+
+## Open-work review continuity
+
+An unfinished linked Todo covers work; it does not prove progress or satisfaction.
+The existing typed-progress and effective-Turn review mechanisms can review that
+same open Todo. `goal_outcome_uncovered` retains its narrower no-linked-work
+meaning, including existing blocked/deferred waits. No additional timer, score
+threshold, forced Todo closure or periodic audit is introduced.
+
+The replan source codec previously omitted default outcomes and retained only
+seven configured-check summary fields. Ordinary work context already carried
+the complete acceptance readback; the dedicated replan `core_goal` and
+Goal planning horizon did not. Both now reuse that same owner-projected readback,
+including cumulative requirements, self-review provenance, linked work, check
+results and lifetime/freshness facts. This removes a lossy parallel field list;
+Python transports the source and existing TypeScript owners retain decisions.
+No new capability, provider, persisted vocabulary or UI operation is added.
+
+Default replan guidance asks the Agent to review unmet requirements even with
+open work, including when no structured outcomes or checks exist. Strongest
+first delivery remains the objective;
+diagnostic validation and available feedback are means to strengthen it. An open
+Todo, repeated local pass or flat metric alone proves neither progress nor
+exhaustion. Useful negative findings remain valid reasons to continue. This is
+Agent guidance, not a new machine-enforced success or stop rule.
+
+Qualify this seam through File/SQLite CLI refinement → stall/cadence review →
+actual artifact repair → evidence writeback → one settlement → continued open
+Todo. Check the same acceptance source in TurnEnvelope work context, reject
+evidence-free review, preserve retry identity and distinguish configured checks
+from default self-assessment. Existing no-declaration admission, wait rules,
+cadence, optional stride gates and root completion authority remain unchanged.
+More complete acceptance input costs bytes when acceptance exists; the brief
+default guidance also changes ordinary replan packets. Neither is
+a latency, token or score improvement claim. The Agent may still miss or misjudge
+progress; actual adoption and matched task outcomes remain S11 qualification.
+
+The EdgeBench heartbeat workers use the existing default six-effective-Turn
+cadence, independent of Todo completion or configured checks. They do not
+automatically declare supporting outcomes or translate background native scores
+into Core acceptance. Default review guidance therefore must not depend on those
+optional facts. Source preservation applies when the Agent has recorded them.
+Native automatic sampling, solver-visible feedback, scoring and worker stop rules
+remain with the benchmark provider; no hidden feedback is made available here.
+
+The guidance addition preserves every previous clause and adds 212 text bytes.
+On the same CLI fixture, crowded quota grows by 213 JSON characters and Turn
+plan by 216; both initially fail the existing growth limits. The existing
+continuation observer qualifies only the complete old-to-new wording once with
+224 characters/bytes, no added lines or shapes. Missing clauses, an upgraded
+baseline, other carriers and excess growth retain ordinary rejection. The two
+host fixtures' guidance costs 1,984 bytes instead of 1,772, so their scoped
+advice ceiling becomes 2,000 instead of 1,800. That guidance-only change retains
+the absolute CLI/runtime budgets; this is a measured input cost.
+
+### Goal context before work selection
+
+The original Goal and recorded acceptance now enter applicable preselection
+horizons by default. This is a context change, not another planning round or a
+new scheduling rule. The five-work-item summary and explicit completeness/detail
+paths remain bounded; seeing the Goal does not make that summary exhaustive.
+Flat runnable backlogs also receive the bounded work view. Missing declared
+dependencies or gaps do not establish sound ordering; they must not hide that
+view. The summary reports omissions and a complete-read route, not a claim that
+its five items are the whole plan. TurnEnvelope references identical selected
+work text when the reference is smaller, retaining other work and completeness.
+The existing configuration owner retains an explicit false for rollback and
+comparisons. Settings moves this control into Advanced settings, preserves
+machine/Goal precedence and sparse inherited values, and does not rewrite
+persisted configurations on read. EdgeBench heartbeat workers pin and record
+the resolved boolean before work, including for omitted CLI options; existing
+receipts remain historical. TurnEnvelope references an identical inline
+acceptance source instead of repeating its body, retaining mismatched evidence.
+Source/default qualification remains separate from installed/model adoption.
+
+Matched public fixtures measure 8,077 → 9,370 characters for small Turn plan and
+20,805 → 23,745 for multi-Agent quota JSON. The latter initially exceeds the
+23,000-character ceiling and existing horizon migration's 2,800 compact growth
+allowance. The increase includes Goal context and a previously absent bounded
+work summary; discarding the latter would hide useful flat-backlog context.
+Retain it and change only that absolute ceiling to 24,000 and the one-time
+horizon migration's compact allowance to 3,000. Excess and same-schema growth
+remain rejected; other ceilings, per-Todo growth and the 8 KiB envelope warning
+are unchanged.
+This qualifies the input-cost tradeoff, not token, latency or model-quality gains.
 
 ## Decisive acceptance
 

@@ -672,6 +672,7 @@ Lark 传输 owner，本切片不再重复修改它。
 
 - **当前工作与完整义务：** 遵循 [alignment RFC §3.7](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md#37-当前工作与-goal-要求)。跨重规划、压缩、重启和 Agent 交接保留 criterion 身份与覆盖关系；只有授权且留痕的 amendment 可改变承诺。经 R5 复用既有 Goal acceptance 与 Todo owner。全局收口前验证证据内容、范围和时效，局部 `no_followup` 不足以结清目标。共享 Goal/当前任务读取前置之外的部分仍未完成；模型实际采用的资格归 S11。
 - **成果连续性切片：** [默认细化与自查](goal-outcome-refinement-v0.zh-CN.md) 保留原始意图和累计要求，复用内联工作上下文，把有变化的证据合并进正常写回。未覆盖要求进入现有 replan，局部自查不改变根目标停止／预算权威。Rebase 后的基础组合验收／ACK 兼容、已配置检查、累计成果与未覆盖成果重规划；外部 worker 尝试去重及 Explore 方法选择仍由各自 owner 负责。只增式 File／SQLite 与打包 UI 验证，同 S11 模型采用及匹配 EdgeBench 收益分开记录；这里不发起实验。
+- **执行目标过期：** [owner 修订与逐 Agent 采用](goal-outcome-refinement-v0.zh-CN.md#current-operating-objective) 复用 Goal update 和验收传输，由 Agent 准备、owner 应用。Canonical 上下文优先于旧文件展示；各 Agent 在新执行前独立对齐，在途恢复保留。原始承诺及受保护修改权限不变。脚本 CLI／原生工具和真实存储验证不代表模型识别能力、已安装宿主或线上协作已验收。
 - **Owner：** alignment RFC Stage 3–5；TS Goal/work-graph owner。
 - **先收口：** `intent_basis` 仅是现有 source-facts digest；保留兼容 reader，真正引入 intent revision 时单独版本化并盘点 producer/reader。不得改名后假装历史回执拥有新语义。
 - **交付次序：** 明确 root intent/permissions/acceptance/stop 的 authority；先做保持 intent 的一个 work-graph commit class。普通 Todo 编辑仍走现有 owner，不能给每次 add 强加 amendment 流程。跨共享承诺修改才消费有范围 policy、必要的 verifier、精确 CAS 与 lease-impact disposition。

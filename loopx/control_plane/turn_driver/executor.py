@@ -103,6 +103,10 @@ HOST_RESULT_TEXT_LIMITS = (
     ("vision_unchanged_reason", 240),
     ("summary", 400),
 )
+HOST_RESULT_EVIDENCE_LIMITS = {
+    "work_evidence": (8, 240, 1_200),
+    "validation_evidence": (8, 240, 1_200),
+}
 MATERIAL_HOST_RESULT_KINDS = {
     LoopXTurnResultKind.VALIDATED_PROGRESS,
     LoopXTurnResultKind.VALIDATED_COMPLETION,
@@ -124,6 +128,7 @@ HOST_RESULT_FIELDS = {
     "agent_vision_json",
     "summary",
     "reward_memory_reflection_json",
+    *HOST_RESULT_EVIDENCE_LIMITS,
 }
 
 
@@ -242,6 +247,51 @@ def _bounded_public_text(
         errors.append(str(exc))
         return None
     return text
+
+
+def _bounded_public_evidence(
+    result: Mapping[str, Any],
+    field: str,
+    *,
+    required: bool,
+    errors: list[str],
+) -> list[str] | None:
+    max_items, max_item_chars, max_total_chars = HOST_RESULT_EVIDENCE_LIMITS[field]
+    raw = result.get(field)
+    if raw is None:
+        if required:
+            errors.append(
+                f"{field} is required for a material host result carrying "
+                "execution_profile"
+            )
+        return None
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        errors.append(f"{field} must be an array of strings")
+        return None
+    evidence = [item.strip() for item in raw]
+    if not evidence or any(not item for item in evidence):
+        errors.append(f"{field} must contain 1-{max_items} non-empty strings")
+        return None
+    if len(evidence) > max_items:
+        errors.append(f"{field} must contain at most {max_items} items")
+        return None
+    if any(len(item) > max_item_chars for item in evidence):
+        errors.append(
+            f"{field} items must contain at most {max_item_chars} characters"
+        )
+        return None
+    if sum(len(item) for item in evidence) > max_total_chars:
+        errors.append(
+            f"{field} must contain at most {max_total_chars} characters total"
+        )
+        return None
+    for index, item in enumerate(evidence):
+        try:
+            validate_public_safe_text(f"host_result.{field}[{index}]", item)
+        except ValueError as exc:
+            errors.append(str(exc))
+            return None
+    return evidence
 
 
 def _normalize_host_path_delta(
@@ -450,6 +500,16 @@ def validate_loopx_turn_host_result(
         except ValueError as exc:
             errors.append(str(exc))
 
+        for field in HOST_RESULT_EVIDENCE_LIMITS:
+            evidence = _bounded_public_evidence(
+                result,
+                field,
+                required=False,
+                errors=errors,
+            )
+            if evidence is not None:
+                normalized[field] = evidence
+
         unchanged_reason = str(normalized.get("vision_unchanged_reason") or "")
         path_delta_mode, agent_vision = _normalize_host_path_delta(
             plan,
@@ -473,9 +533,11 @@ def validate_loopx_turn_host_result(
         str(result.get("path_delta_mode") or "").strip()
         or str(result.get("agent_vision_json") or "").strip()
         or (from_journal and "agent_vision" in result)
+        or any(field in result for field in HOST_RESULT_EVIDENCE_LIMITS)
     ):
         errors.append(
-            "non-material host results cannot declare path_delta_mode or agent_vision_json"
+            "non-material host results cannot declare path_delta_mode or "
+            "agent_vision_json, or work/validation evidence"
         )
     if subagent.subagent_execution_topology(plan) is not None:
         subagent.observe_subagent_host_result(plan, result, normalized, errors)
