@@ -37,7 +37,9 @@ model/resource budget or evaluation conditions change, and separate native
 evaluation from local proxies. Explore validates the declared comparison keys,
 not their truth. It computes the latest recorded measurement, historical best
 candidate/source and direction-adjusted improvement against the prior best,
-before applying the context's display limit. Corrected findings replace earlier
+before applying the context's display limit. Latest follows source-log append
+order, including tied or backfilled timestamps; its ordinal is derived, not
+another persisted fact. Corrected findings replace earlier
 versions in comparisons; original versions remain in history. Counts are records,
 not independent trials. The next-turn guidance uses this feedback to investigate
 regressions or revisit better candidates before repeating work. Best does not

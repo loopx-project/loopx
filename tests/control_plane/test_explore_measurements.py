@@ -110,3 +110,24 @@ def test_cli_capture_readback_and_malformed_history_recovery(tmp_path):
 def test_disabled_explore_does_not_offer_score_feedback(tmp_path):
     args = fixture(tmp_path, enabled=False)
     assert context(args)["graph"] is None
+
+
+@pytest.mark.parametrize("clock", ["tied", "backfilled"])
+def test_recorded_measurement_order_is_independent_of_source_clock(tmp_path, clock):
+    args = fixture(tmp_path)
+    for index, score in enumerate([8, 9, 6], start=1):
+        current = {**args, "turn_instance_id": f"turn-{index}"}
+        result = payload()
+        result["settlement_identity"]["effect_id"] = f"research:worker:turn-{index}"
+        result["generated_at"] = ("2026-01-01T00:00:00Z" if clock == "tied"
+                                  else f"2026-01-0{4-index}T00:00:00Z")
+        result["explore_result"]["measurements"] = [measurement(str(index), score)]
+        prepare_result_attachment(result["explore_result"], **current)
+        assert deliver_result_attachment(payload=result, **current)["ok"]
+    feedback = context(args)["graph"]["measurement_feedback"][0]
+    assert feedback["latest"]["measurement"]["value"] == 6
+    assert feedback["best"]["value"] == 9
+    assert feedback["improvement"] == -3
+    # The ordering ordinal is derived from the source log, not another stored fact.
+    log = explore_result_log_path(args["runtime_root"], "research")
+    assert all("recorded_order" not in json.loads(line) for line in log.read_text().splitlines())

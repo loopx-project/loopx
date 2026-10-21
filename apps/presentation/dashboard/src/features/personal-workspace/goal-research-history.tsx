@@ -9,7 +9,6 @@ import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
-import {projectExploreMeasurementFeedback} from "../../../../../../loopx/control_plane/capabilities/explore_measurements.js";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 
 type Selection = {nodes: string[]; day: string | null};
@@ -149,9 +148,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     catch (failure) {return {value: null, error: String(failure)};}
   }, [read.events, goalId]);
   const value = history.value;
-  const measurementFeedback = useMemo(() => projectExploreMeasurementFeedback((value?.findings ?? [])
-    .map(item => ({...item, finding_id: item.result_id}))
-    .sort((a, b) => b.recorded_at.localeCompare(a.recorded_at))), [value]);
+  const measurementFeedback = value?.measurementFeedback ?? [];
   const measurementSummary = (nodeId: string) => {
     const feedback = measurementFeedback.filter(item => item.node_id === nodeId);
     return feedback.length ? <ExploreMeasurements title={zh ? "最近记录与历史最佳" : "Latest recorded and historical best"}

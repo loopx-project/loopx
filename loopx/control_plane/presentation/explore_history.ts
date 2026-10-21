@@ -3,7 +3,7 @@
  * Local display grouping must not turn parentage or time into supporting evidence.
  */
 import {normalizeExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
-import {normalizeExploreMeasurements, type ExploreMeasurement} from "../capabilities/explore_measurements.ts";
+import {normalizeExploreMeasurements, projectExploreMeasurementFeedback, type ExploreMeasurement} from "../capabilities/explore_measurements.ts";
 import type {JsonObject} from "../runtime_decode.ts";
 export type ExploreHistoryEvent = {
   schema_version: string; event_id: string; goal_id: string; event_kind: string;
@@ -101,8 +101,13 @@ export function projectExploreHistory(events: readonly ExploreHistoryEvent[], go
   }
   const times = [...unique.values()].map(event => Date.parse(event.recorded_at)).filter(Number.isFinite);
   const links = [...edges.values()];
+  const recordedOrder = new Map([...unique.keys()].map((id, index) => [id, index]));
+  const measurementFeedback = projectExploreMeasurementFeedback([...findings.values()].map(event => ({
+    ...event, finding_id: event.result_id, recorded_order: recordedOrder.get(event.event_id),
+  })));
   return {
     events: [...unique.values()], nodes: [...nodes.values()], edges: links, findings: [...findings.values()],
+    ...(measurementFeedback.length ? {measurementFeedback} : {}),
     startAt: times.length ? new Date(Math.min(...times)).toISOString() : null,
     endAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
     unknownTimeCount: unique.size - times.length,

@@ -95,9 +95,35 @@ test("history keeps corrected measurement sources while comparisons use current 
   const rows = [row("original", "corrected", 100), row("independent", "second", 9), row("correction", "corrected", 6)];
   const page = parseExploreHistoryPage({ok: true, goal_id: "research", items: rows, total: 3, next_cursor: null}, "research");
   const history = projectExploreHistory(page.items, "research");
-  const feedback = projectExploreMeasurementFeedback(history.findings.map(item => ({...item, finding_id: item.result_id})));
+  const feedback = history.measurementFeedback!;
   assert.equal(history.events[0].measurements?.[0].value, 100);
   assert.equal(feedback[0].best?.value, 9, "a superseded measurement cannot remain the best");
+  assert.equal(feedback[0].latest.measurement.value, 6);
+  assert.equal(feedback[0].improvement, -3);
   assert.equal(feedback[0].measured_count, 2);
   assert.deepEqual(parseExploreHistoryPage({ok: true, goal_id: "research", items: [], total: 0, next_cursor: null}, "research").items, []);
+});
+
+test("history and next-turn feedback use append order across tied and backfilled source clocks", () => {
+  for (const clock of ["tied", "backfilled"]) {
+    const rows = [8, 9, 6].map((value, index) => ({schema_version: "loopx_explore_result_event_v0",
+      goal_id: "research", event_kind: "finding", event_id: `event-${index}`, result_id: `finding-${index}`,
+      node_id: "question-a", title: "Measured candidate", status: "tentative",
+      recorded_at: clock === "tied" ? "2026-01-01T00:00:00Z" : `2026-01-0${3-index}T00:00:00Z`,
+      measurements: [{...metric, value}]}));
+    const history = projectExploreHistory(parseExploreHistoryPage({ok: true, goal_id: "research",
+      items: rows, total: 3, next_cursor: null}, "research").items, "research");
+    const [feedback] = history.measurementFeedback!;
+    assert.equal(feedback.latest.measurement.value, 6);
+    assert.equal(feedback.best?.value, 9);
+    assert.equal(feedback.improvement, -3);
+    const projection = {findings: rows.map((row, recorded_order) => ({...row,
+      finding_id: row.result_id, recorded_order})).reverse()};
+    const context = projectExploreTurnContext({goal_id: "research", agent_id: "worker", route: ["loopx"],
+      graph_enabled: true, harness_gate: {enabled: false}, projection, plan: {}});
+    assert.deepEqual((context.graph as any).measurement_feedback[0], feedback);
+  }
+  assert.throws(() => projectExploreMeasurementFeedback([
+    {...finding("first", 8), recorded_order: 0}, {...finding("next", 9), recorded_order: 0},
+  ]), /unambiguous/);
 });

@@ -748,7 +748,7 @@ def _fold_by_result_id(
     events: Sequence[Mapping[str, Any]], *, event_kind: str
 ) -> list[dict[str, Any]]:
     folded: dict[str, dict[str, Any]] = {}
-    for event in events:
+    for recorded_order, event in enumerate(events):
         if event.get("event_kind") != event_kind:
             continue
         result_id = str(event.get("result_id") or "")
@@ -756,6 +756,7 @@ def _fold_by_result_id(
             continue
         prior = folded.get(result_id)
         view = dict(event)
+        view["_recorded_order"] = recorded_order
         view["first_recorded_at"] = (
             prior["first_recorded_at"] if prior else str(event.get("recorded_at") or "")
         )
@@ -841,7 +842,8 @@ def _materialized_parent_edges(
 def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
     return {
         **({"execution_observation": event["execution_observation"]} if "execution_observation" in event else {}),
-        **({"measurements": event["measurements"]} if "measurements" in event else {}),
+        **({"measurements": event["measurements"], "recorded_order": event["_recorded_order"]}
+           if "measurements" in event else {}),
         "finding_id": str(event.get("result_id") or ""),
         "finding": str(event.get("title") or ""),
         "summary": str(event.get("summary") or ""),

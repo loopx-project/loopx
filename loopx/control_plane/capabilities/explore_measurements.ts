@@ -67,15 +67,22 @@ function comparisonKey(node: string, metric: ExploreMeasurement): string {
     metric.comparison_scope, metric.input_revision, metric.evaluation_ref]);
 }
 
-/** Latest means latest recorded finding, never the current or retained candidate.
+/** Latest means latest appended finding, never the current or retained candidate.
  * Keep all matching evidence when computing best; presentation limits apply later.
  */
 export function projectExploreMeasurementFeedback(findings: readonly JsonObject[]): ExploreMeasurementFeedback[] {
   const groups = new Map<string, ExploreMeasurementFeedback>();
-  // Callers provide canonical newest-first findings. Reverse a copy without
-  // reordering the source by score; recorded order is not attempt order.
-  for (const finding of [...findings].reverse()) {
-    if (finding.measurements === undefined) continue;
+  const ordered = findings.filter(finding => finding.measurements !== undefined);
+  // Canonical readers derive this ordinal from append order; it is not stored
+  // or inferred from source timestamps, which can tie or arrive out of order.
+  if (ordered.some(finding => finding.recorded_order !== undefined)) {
+    if (ordered.some(finding => !Number.isSafeInteger(finding.recorded_order) || Number(finding.recorded_order) < 0)
+      || new Set(ordered.map(finding => finding.recorded_order)).size !== ordered.length) {
+      throw new EffectRuntimeRequestError("measurement source order must be complete and unambiguous");
+    }
+    ordered.sort((a, b) => Number(a.recorded_order) - Number(b.recorded_order));
+  } else ordered.reverse(); // Existing direct callers supply newest-first rows.
+  for (const finding of ordered) {
     const node = String(finding.node_id ?? ""), id = String(finding.finding_id ?? "");
     if (!node || !id) throw new EffectRuntimeRequestError("measurements require their node and finding identities");
     for (const measurement of normalizeExploreMeasurements(finding.measurements)) {
@@ -95,8 +102,8 @@ export function projectExploreMeasurementFeedback(findings: readonly JsonObject[
         unknown_count: (prior?.unknown_count ?? 0) + (point ? 0 : 1)});
     }
   }
-  const recency = new Map(findings.map((finding, index) => [String(finding.finding_id), index]));
-  return [...groups.values()].sort((a, b) => recency.get(a.latest.finding_id)! - recency.get(b.latest.finding_id)!);
+  const recency = new Map(ordered.map((finding, index) => [String(finding.finding_id), index]));
+  return [...groups.values()].sort((a, b) => recency.get(b.latest.finding_id)! - recency.get(a.latest.finding_id)!);
 }
 
 export function normalizeExploreMeasurementsRequest(params: JsonObject): JsonObject {
