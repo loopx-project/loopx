@@ -47,6 +47,12 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
     cycle: bool,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # Compare complete Todo readbacks at one observation time. Elapsed wall
+    # time changes the derived wait projection without mutating the Todo.
+    monkeypatch.setattr(
+        "loopx.control_plane.todos.resume_condition.now_utc_iso",
+        lambda: "2026-09-20T00:00:00Z",
+    )
     project, runtime, registry = _write_fixture(tmp_path)
     state = _configure_read_only_todo(project)
     _configure_selectable_alternative(project)
