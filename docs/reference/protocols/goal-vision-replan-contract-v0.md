@@ -692,8 +692,10 @@ not improved model decisions or net efficiency.
 
 With Explore planning and `evidence_conditioned_v1` enabled, the existing
 turn-context result page can include `comparison_candidates`. Each card links
-an actionable, own-or-unclaimed canonical Todo to up to three current results
-through that Todo's explicit Explore node references. An outcome contains
+an actionable, own-or-unclaimed canonical Todo to its current results on that
+page through explicit Explore node references. The default page has three
+results; an explicitly expanded page retains every linked result, up to the
+existing 20-result limit. An outcome contains
 `node_id`, `finding_id`, and `source_sha256`, the digest of the full scoped
 result. These links survive into `stride_control.explore_basis`; an Agent can
 compare the actual result contents before planning further work. Planner rank
@@ -769,7 +771,8 @@ beside linked Todo state.
 错源、已变化的结果或没有保留对应工作均不能借别的后继结果混过核验。上述已启用
 的周期或停滞复核均不能用单独的后继 ACK 代替当前决策；其他义务和关闭策略时
 保留原出口边界，后继 ACK 本身也不证明比较选择已被接受或执行。分页仍沿用
-既有坐标与最多 20 项的上限，同一结果关联过多 Todo 时明确显示省略数，不能声称
+既有坐标与最多 20 项的上限；默认页为三条，显式扩大后每张卡片保留该页全部关联
+结果。同一结果关联过多 Todo 时明确显示省略数，不能声称
 无限候选均可达。这是有来源的规划意图，不是调度命令；合法 B 任务可以执行，
 但不能凭 B 的结果声称所选 A 已执行。实际采用、机制差异和原验收仍需真实证据。
 受控实验比较停留原式、局部调参与结构语法搜索，评分调用预算相同；它证明原
