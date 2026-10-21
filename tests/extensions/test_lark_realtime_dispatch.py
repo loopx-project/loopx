@@ -304,6 +304,117 @@ def test_inactive_profile_keeps_the_native_listener_and_dispatch_off(
     assert not (tmp_path / "runtime").exists()
 
 
+@pytest.mark.parametrize("batch", [False, True])
+def test_native_group_topic_admission_does_not_block_another_topics_control(
+    tmp_path, batch
+):
+    # Native bindings have no legacy Goal/topic routing rows. A missing legacy
+    # route must not collapse every native topic in this group onto one lane.
+    snapshot = {"private_profiles": {"mew": {
+        "cli_bin": "fake-lark", "provider_ref": "a" * 24,
+    }}}
+    active, release, beta_done, followup = [threading.Event() for _ in range(4)]
+    order = []
+
+    def admit(profile, event):
+        assert profile == "mew"
+        message = event["message_id"]
+        order.append(message)
+        if message == "om_alpha_first":
+            active.set()
+            assert release.wait(5)
+        elif message == "om_alpha_followup":
+            followup.set()
+        else:
+            assert event["content"] == "/stop"
+            beta_done.set()
+        return {"status": "command_recorded"}
+
+    def native_event(message, topic="alpha"):
+        return {**_event(message, topic), "chat_type": "group", "message_type": "text"}
+
+    def lines():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        yield json.dumps(native_event("alpha_first"))
+        assert active.wait(5)
+        events = [native_event("alpha_followup"),
+                  {**native_event("beta_control", "beta"), "content": "/stop"}]
+        if batch:
+            yield json.dumps(events)
+        else:
+            yield from map(json.dumps, events)
+        yield "[event] exited (reason: timeout)\n"
+
+    def unexpected(*_args):
+        raise AssertionError("Native events must retain their native admission owner")
+
+    consumer, options = _start(tmp_path, snapshot, lines(), unexpected)
+    options["private_admitter"] = admit
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(runtime.stream_lark_goal_topic_profile, **options)
+        try:
+            assert beta_done.wait(1), "Another native topic's control waited for admission"
+            assert not followup.is_set(), "One topic lost its source FIFO"
+            assert not consumer.waited
+        finally:
+            release.set()
+        result = future.result(timeout=8)
+    assert result["event_count"] == 3
+    assert result["replied_count"] == 0  # Core delivery, not the legacy reply path.
+    assert order == ["om_alpha_first", "om_beta_control", "om_alpha_followup"]
+    assert not (tmp_path / "runtime").exists()
+
+
+def test_native_source_lanes_preserve_topic_and_private_sender_order(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    snapshot["private_profiles"] = {
+        "mew": {"provider_ref": "a" * 24},
+        "alias": {"provider_ref": "a" * 24},
+        "other": {"provider_ref": "b" * 24},
+    }
+
+    def unexpected(**_kwargs):
+        raise AssertionError("Native source scheduling must not select a legacy route")
+
+    monkeypatch.setattr(runtime, "_profile_event_route", unexpected)
+
+    def lane(event, profile="mew"):
+        return runtime._profile_event_lane(
+            profile=profile, snapshot=snapshot, event=event, runtime_root=tmp_path
+        )
+
+    group = {**_event("first"), "chat_type": "group"}
+    first = lane(group)
+    assert first == lane({**group, "message_id": "om_next", "sender_id": "ou_other"})
+    assert first == lane(group, "alias")  # Same verified App's source shape.
+    assert first != lane(group, "other")
+    assert first != lane({**group, "root_id": "om_topic_beta"})
+    assert first != lane({**group, "chat_id": "oc_other"})
+    # A group root and its replies keep FIFO. A private sender cannot shard its
+    # queue by supplying a different root; Core private source identity ignores it.
+    root = {**group, "root_id": "", "message_id": "om_topic_alpha"}
+    assert first == lane(root)
+    private = {**group, "chat_type": "p2p"}
+    assert lane(private) == lane({**private, "root_id": "om_fake", "message_id": "om_next"})
+    assert lane(private) != lane({**private, "sender_id": "ou_other"})
+    assert not (tmp_path / "runtime").exists()
+
+
+@pytest.mark.parametrize("invalid", [
+    {"sender_id": ""}, {"chat_id": "invalid"},
+    {"message_id": "../escape"}, {"root_id": "", "parent_id": "om_parent"},
+])
+def test_malformed_native_source_hint_keeps_conservative_lane(tmp_path, invalid):
+    snapshot = {"private_profiles": {"mew": {"provider_ref": "a" * 24}}}
+    event = {**_event("first"), "chat_type": "group", **invalid}
+    lane = runtime._profile_event_lane(
+        profile="mew", snapshot=snapshot, event=event, runtime_root=tmp_path
+    )
+    assert lane[0].startswith("unmatched.")
+    assert len(lane) == 1
+    assert not list(tmp_path.iterdir())
+
+
 def test_reader_failure_drains_active_work_and_cleans_up_without_accepting_buffered_input(
     tmp_path,
 ):
