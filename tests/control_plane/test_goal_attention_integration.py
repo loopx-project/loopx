@@ -99,7 +99,7 @@ def test_status_automatically_rebuilds_stale_run_routing(tmp_path, monkeypatch, 
     canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     for _ in range(2):
         status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-            scan_roots=[], goal_id="goal-a", limit=3)
+            goal_id="goal-a", limit=3)
         item = next(item for item in status["attention_queue"]["items"] if item["goal_id"] == "goal-a")
         if mixed_failure:
             assert item["status"] == "runtime_error"

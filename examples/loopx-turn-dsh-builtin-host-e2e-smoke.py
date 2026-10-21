@@ -73,8 +73,6 @@ def _builtin_argv(
         json.dumps(_base._validator_command()),
         "--validation-failure-kind",
         "repair_required",
-        "--scan-root",
-        str(registry.parent.parent),
         "--no-global-sync",
         "--timeout-seconds",
         str(timeout_seconds),

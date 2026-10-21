@@ -9,48 +9,9 @@ from loopx.cli import build_parser
 
 
 DEFAULT_PUBLIC_SCAN_COMMANDS = (
-    pytest.param(["status"], id="status"),
-    pytest.param(["diagnose"], id="diagnose"),
-    pytest.param(
-        ["review-packet", "--goal-id", "fixture-goal"],
-        id="review-packet",
-    ),
-    pytest.param(
-        ["quota", "should-run", "--goal-id", "fixture-goal"],
-        id="quota-should-run",
-    ),
-    pytest.param(["ready-score"], id="ready-score"),
-    pytest.param(["global-summary"], id="global-summary"),
-    pytest.param(["global-gates"], id="global-gates"),
-    pytest.param(["global-todos"], id="global-todos"),
-    pytest.param(["global-risks"], id="global-risks"),
     pytest.param(["serve-status"], id="serve-status"),
     pytest.param(["chat"], id="chat"),
     pytest.param(["dashboard"], id="dashboard"),
-    pytest.param(
-        [
-            "turn",
-            "plan",
-            "--goal-id",
-            "fixture-goal",
-            "--agent-id",
-            "fixture-agent",
-        ],
-        id="turn-plan",
-    ),
-    pytest.param(
-        [
-            "turn",
-            "run-once",
-            "--goal-id",
-            "fixture-goal",
-            "--agent-id",
-            "fixture-agent",
-            "--project",
-            ".",
-        ],
-        id="turn-run-once",
-    ),
 )
 
 

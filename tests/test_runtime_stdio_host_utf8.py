@@ -349,8 +349,6 @@ def test_delegation_preview_worker_reads_the_binding_request(
                     "todo",
                     "--project",
                     str(workspace),
-                    "--scan-root",
-                    str(workspace),
                 ],
             }
         ),

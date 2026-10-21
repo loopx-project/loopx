@@ -50,7 +50,7 @@ def test_ninth_capture_keeps_history_and_survives_real_cli_replay(tmp_path, prov
         prepare_result_attachment(ATTACHMENT, **{**args, "agent_id": "foreign"})
     assert log.read_bytes() == history
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-                        *binding, "--scan-path", str(project), cwd=project)
+                        *binding,  cwd=project)
     assert rc == 0, guard
     vision = tmp_path / "vision.json"
     vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",

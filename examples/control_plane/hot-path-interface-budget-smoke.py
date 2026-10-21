@@ -363,7 +363,6 @@ def assert_cadence_projection(
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=str(root / "runtime"),
-        scan_roots=[project],
         limit=5,
     )
     items = status_payload["attention_queue"]["items"]
@@ -402,7 +401,6 @@ def main() -> int:
         status_payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(root / "runtime"),
-            scan_roots=[project],
             limit=5,
         )
         assert "presentation_surfaces" not in status_payload, status_payload

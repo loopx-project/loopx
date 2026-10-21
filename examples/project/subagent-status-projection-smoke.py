@@ -139,7 +139,6 @@ def main() -> int:
         payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(runtime),
-            scan_roots=[registry_path.parent.parent],
             limit=5,
             include_goal_subagent_configuration=True,
         )

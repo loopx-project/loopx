@@ -39,7 +39,7 @@ def _native_wait_turn(tmp_path, monkeypatch, provider, *, claimed_by="agent-a"):
     argv = [
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--host", "generic-cli", "--project", str(project), "--scan-root", str(project),
+        "--host", "generic-cli", "--project", str(project),
         "--host-adapter-command-json", json.dumps([
             sys.executable, "-c", "from pathlib import Path; Path('host-started').touch(); "
             "raise AssertionError('business Host must remain paused')",
@@ -151,7 +151,7 @@ def test_read_only_and_unconfigured_turns_do_not_observe(tmp_path, monkeypatch, 
         argv.remove("--execute")
     else:
         argv = [*argv[:argv.index("turn")], "turn", "plan", "--goal-id", "goal-a",
-                "--agent-id", "agent-a", "--host", "generic-cli", "--scan-root", str(project),
+                "--agent-id", "agent-a", "--host", "generic-cli",
                 "--available-capability", "external_evidence_poll"]
     _, result = _invoke_turn(argv)
     assert _observation(result) is None
@@ -363,7 +363,7 @@ def test_native_turn_adopts_merge_then_replays_original_journal_once(tmp_path, m
     argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
             "--host", "dsh", "--dsh-runner", str(runner), "--project", str(project),
-            "--scan-root", str(project), "--available-capability", "external_evidence_poll",
+             "--available-capability", "external_evidence_poll",
             "--validation-command-json", json.dumps([sys.executable, "-c",
                 "from pathlib import Path; assert Path('validated-artifact').read_text() == 'continued'"]),
             "--no-global-sync", "--execute"]

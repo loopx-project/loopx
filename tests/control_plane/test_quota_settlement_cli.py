@@ -199,16 +199,6 @@ def _run_cli(
     *args: str,
     cwd: Path = REPO_ROOT,
 ) -> tuple[int, dict[str, Any]]:
-    # These status-backed fixture calls audit their synthetic project instead
-    # of the installed package. Keep scheduler protocols and explicit scans intact.
-    if (
-        args[:2] in (("quota", "should-run"), ("quota", "spend-slot"))
-        and registry_path.parent.name == ".loopx"
-        and not any(
-            arg.split("=", 1)[0] in {"--scan-path", "--scan-root"} for arg in args
-        )
-    ):
-        args = (*args, "--scan-path", str(registry_path.parent.parent))
     result = subprocess.run(
         [
             sys.executable,
@@ -694,7 +684,7 @@ def _bind_selected_replan_guard(
     rc, deferred = _run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", goal_id, "--agent-id", agent_id,
-        "--turn-instance-id", turn_instance_id, "--scan-path", str(project),
+        "--turn-instance-id", turn_instance_id,
         "--todo-id", todo_id,
     )
     if rc == 0:
@@ -815,8 +805,6 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert guard_rc == 0, guard
@@ -832,7 +820,7 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     for execute in (False, True):
         _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
                  "--slots", "1", "--source", "heartbeat", *binding,
-                 *(["--execute"] if execute else []), "--scan-path", str(project), cwd=project)
+                 *(["--execute"] if execute else []),  cwd=project)
         assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
 
     refresh_rc, refresh = _run_cli(
@@ -877,8 +865,6 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert spend_rc == 0, spend
@@ -892,7 +878,7 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     before_replay = cycles_path.read_bytes()
     replay_rc, replay = _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
                                  "--slots", "1", "--source", "heartbeat", *binding,
-                                 "--execute", "--scan-path", str(project), cwd=project)
+                                 "--execute",  cwd=project)
     assert replay_rc == 0 and replay["idempotent_replay"] is True
     assert cycles_path.read_bytes() == before_replay
     assert usage_ping.control("status", usage_path)["goal_preview"]["counters"][0]["measurement"] == "quota_cycle"
@@ -987,8 +973,6 @@ def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert guard_rc == 0, guard
@@ -1054,8 +1038,6 @@ def test_codex_app_refresh_stages_validated_memory_and_spend_finalizes_hook(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert spend_rc == 0, spend
@@ -1094,8 +1076,6 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert guard_rc == 0, guard
@@ -1238,8 +1218,6 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert spend_rc == 0, spend
@@ -1258,8 +1236,6 @@ def test_typed_outcome_gap_settles_exact_turn_without_becoming_progress(
         AGENT_ID,
         "--turn-instance-id",
         "turn-after-typed-blocker-settlement",
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert next_rc == 0, next_turn
@@ -1281,7 +1257,7 @@ def test_typed_blocked_retry_without_successor_defers_the_only_todo(
     )
     guard_rc, guard = _run_cli(
         registry_path, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project), cwd=project,
+        "--goal-id", GOAL_ID, *binding,  cwd=project,
     )
     assert guard_rc == 0, guard
     due_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(
@@ -1319,7 +1295,7 @@ def test_typed_blocked_retry_without_successor_defers_the_only_todo(
         registry_path, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--turn-instance-id", "turn-after-only-todo-blocked",
-        "--scan-path", str(project), cwd=project,
+         cwd=project,
     )
     assert next_rc == 0, next_turn
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
@@ -1340,8 +1316,6 @@ def test_scheduler_cache_misses_after_todo_state_changes_without_run(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     rc, initial = _run_cli(
         registry_path,
@@ -1426,8 +1400,6 @@ def test_scheduler_cache_tracks_todo_changes_beyond_display_limit(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     initial_rc, initial = _run_cli(
         registry_path,
@@ -1592,8 +1564,6 @@ def test_scheduler_malformed_cached_todo_rebuilds_without_authority_write(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     initial_rc, initial = _run_cli(
         registry_path,
@@ -1705,8 +1675,6 @@ def test_scheduler_cache_misses_after_goal_is_stopped_without_run(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     rc, initial = _run_cli(
         registry_path,
@@ -1764,8 +1732,6 @@ def test_scheduler_cache_misses_after_goal_configuration_changes_without_run(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     rc, initial = _run_cli(
         registry_path,
@@ -1857,14 +1823,14 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     )
     guard_rc, guard = _run_cli(
         registry_path, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project),
+        "--goal-id", GOAL_ID, *binding,
         "--write-projection-cache", cwd=project,
     )
     assert guard_rc == 0, guard
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
     cached_rc, cached_guard = _run_cli(
         registry_path, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project),
+        "--goal-id", GOAL_ID, *binding,
         "--use-projection-cache", cwd=project,
     )
     assert cached_rc == 0, cached_guard
@@ -1915,7 +1881,7 @@ def test_typed_blocked_retry_with_peer_hard_lease(
     spend_rc, spend = _run_cli(
         registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
         "--slots", "1", "--source", "heartbeat", "--execute", *binding,
-        "--scan-path", str(project), cwd=project,
+         cwd=project,
     )
     assert spend_rc == 0, spend
     assert spend["appended"] is False
@@ -1934,7 +1900,7 @@ def test_typed_blocked_retry_with_peer_hard_lease(
         registry_path, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--turn-instance-id", f"turn-after-hard-lease-blocker-{provider}",
-        "--scan-path", str(project), "--use-projection-cache", cwd=project,
+         "--use-projection-cache", cwd=project,
     )
     assert next_rc == 0, next_turn
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
@@ -2165,8 +2131,6 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
         AGENT_ID,
         "--turn-instance-id",
         first_turn_id,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert guard["selected_todo"]["todo_id"] == TODO_ID
@@ -2244,8 +2208,6 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
         AGENT_ID,
         "--turn-instance-id",
         "turn-settlement-continuation-2",
-        "--scan-path",
-        str(project),
     )
     assert second_guard_rc == 0, second_guard
     assert second_guard["selected_todo"]["todo_id"] == TODO_ID
@@ -2316,8 +2278,6 @@ def test_in_flight_progress_settles_while_completion_validation_todo_is_open(
         AGENT_ID,
         "--turn-instance-id",
         turn_id,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
 
@@ -2386,7 +2346,7 @@ def test_in_flight_progress_settles_while_completion_validation_todo_is_open(
     replay_rc, replay = _run_cli(
         registry_path, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--turn-instance-id", turn_id, "--scan-path", str(project),
+        "--turn-instance-id", turn_id,
     )
     assert replay_rc == 0, replay
     assert replay["should_run"] is False, replay
@@ -2490,8 +2450,6 @@ def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
         prior_turn_id,
         "--todo-id",
         TODO_ID,
-        "--scan-path",
-        str(project),
     )
     assert prior_rc == 0, prior
     assert prior["heartbeat_receipt"]["closeout_required"] is True
@@ -2522,8 +2480,6 @@ def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
         "--agent-id",
         AGENT_ID,
         "--begin-turn",
-        "--scan-path",
-        str(project),
     )
     assert recovery_rc == 0, recovery
     assert recovery["effective_action"] == "unsettled_host_turn_recovery"
@@ -2605,8 +2561,6 @@ def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
         current_turn_id,
         "--todo-id",
         ALTERNATIVE_TODO_ID,
-        "--scan-path",
-        str(project),
     )
     assert resumed_rc == 0, resumed
     assert resumed["effective_action"] != "unsettled_host_turn_recovery"
@@ -2649,8 +2603,6 @@ def test_recovery_guard_accepts_the_todo_it_must_settle(
         prior_turn_id,
         "--todo-id",
         TODO_ID,
-        "--scan-path",
-        str(project),
     )
     assert prior_rc == 0, prior
     assert prior["heartbeat_receipt"]["closeout_required"] is True
@@ -2669,8 +2621,6 @@ def test_recovery_guard_accepts_the_todo_it_must_settle(
         recovery_turn_id,
         "--todo-id",
         TODO_ID,
-        "--scan-path",
-        str(project),
     )
 
     assert recovery_rc == 0, recovery
@@ -2698,8 +2648,6 @@ def test_prior_turn_with_several_receipts_recovers_once(tmp_path: Path) -> None:
         prior_turn_id,
         "--todo-id",
         TODO_ID,
-        "--scan-path",
-        str(project),
     )
     assert prior_rc == 0, prior
     assert prior["heartbeat_receipt"]["closeout_required"] is True
@@ -2752,8 +2700,6 @@ def test_prior_turn_with_several_receipts_recovers_once(tmp_path: Path) -> None:
         "--agent-id",
         AGENT_ID,
         "--begin-turn",
-        "--scan-path",
-        str(project),
     )
     assert recovery_rc == 0, recovery
     assert recovery["effective_action"] == "unsettled_host_turn_recovery"
@@ -2884,8 +2830,6 @@ def test_prior_host_closeout_survives_hidden_todo_lifecycle(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     rc, prior = _run_cli(
         registry_path,
@@ -2989,8 +2933,6 @@ def test_prior_host_closeout_reads_archived_exact_todo(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     prior_turn_id = "turn-archived-closeout-prior"
     rc, prior = _run_cli(
@@ -3119,8 +3061,6 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         TODO_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
 
     assert guard_rc == 0, guard
@@ -3214,8 +3154,6 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         AGENT_ID,
         "--turn-instance-id",
         "turn-settlement-cli-successor",
-        "--scan-path",
-        str(project),
     )
     assert fresh_guard_rc == 0, fresh_guard
     assert fresh_guard["selected_todo"]["todo_id"] == successor_id
@@ -3232,8 +3170,6 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
     )
     spend_rc, spend = _run_cli(registry_path, runtime, *spend_args)
     replay_rc, replay = _run_cli(registry_path, runtime, *spend_args)
@@ -3260,8 +3196,6 @@ def test_standard_codex_app_settlement_is_receipted_and_idempotent(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
     assert settled_replay_rc == 0, settled_replay
     assert settled_replay["decision"] == "skip"
@@ -3364,8 +3298,6 @@ def _assert_material_monitor_writeback_can_add_workspace_before_spend(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert (
@@ -3469,8 +3401,6 @@ def _assert_material_monitor_writeback_can_add_workspace_before_spend(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert spend_rc == 0, spend
@@ -3532,8 +3462,6 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
 
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
@@ -3625,8 +3553,6 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
         AGENT_ID,
         "--available-capability",
         "network",
-        "--scan-path",
-        str(project),
     )
     assert successor_guard_rc == 0, successor_guard
     assert successor_guard["selected_todo"]["todo_id"] == successor_id
@@ -3642,8 +3568,6 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
     )
     spend_rc, spend = _run_cli(registry_path, runtime, *spend_args)
     spend_replay_rc, spend_replay = _run_cli(registry_path, runtime, *spend_args)
@@ -3673,8 +3597,6 @@ def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
 
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
@@ -3975,7 +3897,7 @@ def test_unclaimed_candidate_does_not_create_an_unsettled_work_obligation(
     original_state = state_path.read_bytes()
     guard_args = (
         "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--runtime-profile", profile, "--scan-path", str(project),
+        "--runtime-profile", profile,
     )
     for turn in ("turn-unclaimed-first", "turn-unclaimed-next"):
         rc, packet = _run_cli(
@@ -4032,8 +3954,6 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
         "--agent-id",
         AGENT_ID,
         "--begin-turn",
-        "--scan-path",
-        str(project),
     )
 
     assert guard_rc == 0, guard
@@ -4178,8 +4098,6 @@ def test_todo_guard_defers_replan_obligation_created_after_admission(
         "--agent-id",
         AGENT_ID,
         "--begin-turn",
-        "--scan-path",
-        str(project),
     )
 
     assert guard_rc == 0, guard
@@ -4239,8 +4157,6 @@ def test_legacy_todo_guard_keeps_current_replan_gate_strict(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
@@ -4317,8 +4233,6 @@ def test_visible_goal_unbound_spend_recovers_delivery_after_capability_replan(
         "--available-capability",
         "network",
         "--begin-turn",
-        "--scan-path",
-        str(project),
         cwd=project,
     )
 
@@ -4369,8 +4283,6 @@ def test_visible_goal_unbound_spend_recovers_delivery_after_capability_replan(
         "--execute",
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     spend_rc, spend = _run_cli(
         registry_path,
@@ -4418,8 +4330,6 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
@@ -4445,8 +4355,6 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
         "--execute",
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
     assert spend_rc == 1, spend
     assert spend["appended"] is False
@@ -4487,8 +4395,6 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
         "--agent-id",
         AGENT_ID,
         "--begin-turn",
-        "--scan-path",
-        str(project),
     )
 
     assert guard_rc == 1, guard
@@ -4512,7 +4418,7 @@ def test_host_owned_turn_executes_projected_selection_and_replays_identity(
     guard_args = (
         "quota", "should-run", "--runtime-profile", profile,
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--turn-instance-id", TURN_ID, "--scan-path", str(project),
+        "--turn-instance-id", TURN_ID,
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
@@ -4583,8 +4489,6 @@ def test_agent_can_select_eligible_todo_outside_bounded_suggestions(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     selected_rc, selected = _run_cli(
@@ -4649,8 +4553,6 @@ def test_agent_can_select_an_owned_todo_outside_every_bounded_lane(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     selected_rc, selected = _run_cli(
@@ -4706,8 +4608,6 @@ def test_same_turn_can_select_eligible_todo_created_after_unbound_receipt(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
@@ -4768,8 +4668,6 @@ def test_agent_selection_rejects_unprojected_todo(tmp_path: Path, profile: str) 
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     invalid_rc, invalid = _run_cli(
@@ -4826,8 +4724,6 @@ def test_unsuggested_selection_revalidates_current_capability_readiness(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
 
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
@@ -4868,8 +4764,6 @@ def test_first_call_rejected_selection_does_not_commit_a_false_receipt(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
         "--todo-id",
         "todo_not_projected",
     )
@@ -4907,8 +4801,6 @@ def test_first_call_agent_selection_is_qualified_before_receipt_commit(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
         "--todo-id",
         ALTERNATIVE_TODO_ID,
     )
@@ -4952,7 +4844,6 @@ def test_ready_deferred_priority_advises_but_does_not_veto_agent_choice(
     guard_args = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "turn-priority-choice",
-        "--scan-path", str(project),
     )
     if reentry:
         first_rc, first = _run_cli(registry_path, runtime, *guard_args)
@@ -5003,7 +4894,7 @@ def test_explicit_choice_survives_default_successor_replan_but_not_workspace_gat
         registry_path, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--turn-instance-id", "turn-explicit-over-default-replan",
-        "--scan-path", str(project), "--todo-id", ALTERNATIVE_TODO_ID,
+         "--todo-id", ALTERNATIVE_TODO_ID,
     )
     assert rc == 0, selected
     assert selected["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
@@ -5036,7 +4927,7 @@ def test_pending_deferred_p0_allows_independent_p1_selection(
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID,
         "--turn-instance-id", "turn-pending-deferred-p0-p1-fallback",
-        "--scan-path", str(project), "--todo-id", ALTERNATIVE_TODO_ID,
+         "--todo-id", ALTERNATIVE_TODO_ID,
     )
     assert rc == 0, payload
     assert payload["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
@@ -5086,7 +4977,6 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     guard = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn_id,
-        "--scan-path", str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
     assert first_rc == 0, first
@@ -5150,7 +5040,7 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--turn-instance-id", "turn-after-bound-p0-deferred",
-        "--scan-path", str(project), "--todo-id", ALTERNATIVE_TODO_ID,
+         "--todo-id", ALTERNATIVE_TODO_ID,
     )
     assert next_rc == 0, next_turn
     assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
@@ -5174,7 +5064,6 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     guard = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "due-successor-replay",
-        "--scan-path", str(project),
     )
     rc, first = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, first
@@ -5257,8 +5146,6 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
 
     first_rc, first = _run_cli(
@@ -5346,8 +5233,6 @@ def test_boundary_projection_repair_keeps_same_turn_alternative_selectable(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
 
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
@@ -5424,8 +5309,6 @@ def test_selection_added_after_pending_guard_reports_final_boundary(
         "--codex-app",
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
@@ -5519,8 +5402,6 @@ def test_pending_action_selection_does_not_preempt_newly_due_monitor(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
@@ -5580,8 +5461,6 @@ def test_pending_selection_periodic_review_uses_selected_counting_unit(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
@@ -5643,8 +5522,6 @@ def test_due_monitor_auxiliary_context_has_typed_selection_rejection(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
         "--available-capability",
         "network",
         "--available-capability",
@@ -5697,8 +5574,6 @@ def test_pending_action_selection_can_bind_exact_newly_due_monitor(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
@@ -5749,8 +5624,6 @@ def test_pending_action_selection_can_bind_exact_newly_due_monitor(
         "--available-capability",
         "external_evidence_poll",
         "--execute",
-        "--scan-path",
-        str(project),
     )
     poll_rc, poll = _run_cli(registry_path, runtime, *poll_args)
     poll_replay_rc, poll_replay = _run_cli(
@@ -5798,8 +5671,6 @@ def test_prior_monitor_turn_accepts_exact_committed_receipt(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
         "--available-capability",
         "network",
         "--available-capability",
@@ -5839,8 +5710,6 @@ def test_prior_monitor_turn_accepts_exact_committed_receipt(
         "--available-capability",
         "external_evidence_poll",
         "--execute",
-        "--scan-path",
-        str(project),
     )
     assert poll_rc == 0, poll
     assert poll["material_change"] is False
@@ -5874,8 +5743,6 @@ def test_prior_monitor_turn_recovery_rejects_wrong_identity_receipt(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
         "--available-capability",
         "network",
         "--available-capability",
@@ -5915,8 +5782,6 @@ def test_prior_monitor_turn_recovery_rejects_wrong_identity_receipt(
         "network",
         "--available-capability",
         "external_evidence_poll",
-        "--scan-path",
-        str(project),
     )
     assert preview_rc == 0, preview
     assert preview["dry_run"] is True
@@ -5983,8 +5848,6 @@ def test_receipt_bound_advancement_turn_records_multiple_due_monitors(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
         "--available-capability",
         "network",
         "--available-capability",
@@ -6028,8 +5891,6 @@ def test_receipt_bound_advancement_turn_records_multiple_due_monitors(
             "--available-capability",
             "external_evidence_poll",
             "--execute",
-            "--scan-path",
-            str(project),
         )
         poll_args.append(args)
         poll_rc, poll = _run_cli(registry_path, runtime, *args)
@@ -6107,8 +5968,6 @@ def test_pending_action_selection_does_not_commit_after_new_user_gate(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
@@ -6172,8 +6031,6 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
 
     assert guard_rc == 0, guard
@@ -6265,15 +6122,11 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
         registry_path,
         runtime,
         *spend_args,
-        "--scan-path",
-        str(project),
     )
     replay_rc, replay = _run_cli(
         registry_path,
         runtime,
         *spend_args,
-        "--scan-path",
-        str(project),
     )
 
     assert spend_rc == 0, spend
@@ -6298,8 +6151,6 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
 
     assert settled_rc == 0, settled
@@ -6356,8 +6207,6 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
         AGENT_ID,
         "--turn-instance-id",
         fresh_turn_id,
-        "--scan-path",
-        str(project),
     )
 
     assert fresh_rc == 0, fresh
@@ -6418,8 +6267,6 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
 
     assert guard_rc == 0, guard
@@ -6504,8 +6351,6 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
         cwd=external_evidence_dir,
     )
 
@@ -6537,8 +6382,6 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
         turn_instance_id,
         "--todo-id",
         SELECTED_REPLAN_TODO_ID,
-        "--scan-path",
-        str(project),
     )
 
     assert replay_rc == 0, replay
@@ -6568,8 +6411,6 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-path",
-        str(project),
     )
 
     assert unbound_rc == 0, unbound
@@ -6630,8 +6471,6 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
@@ -6725,8 +6564,6 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
         AGENT_ID,
         "--turn-instance-id",
         "turn-after-autonomous-replan-semantic-1",
-        "--scan-path",
-        str(project),
     )
     assert next_guard_rc == 0, next_guard
     assert next_guard.get("autonomous_replan_obligation") is None
@@ -6754,8 +6591,6 @@ def test_open_replan_rejects_missing_semantic_delta_before_durable_write(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
@@ -6813,8 +6648,6 @@ def test_runtime_capability_reentry_replays_bound_receipt_after_rejected_rebind(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
 
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
@@ -6881,8 +6714,6 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
 
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
@@ -6977,8 +6808,6 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
 
@@ -7072,8 +6901,6 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
 
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
@@ -7123,8 +6950,6 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
         AGENT_ID,
         "--turn-instance-id",
         "turn-settlement-cli-2",
-        "--scan-path",
-        str(project),
         *capability_args,
     )
     assert next_turn_rc == 0, next_turn
@@ -7203,8 +7028,6 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
     )
     spend_rc, spend = _run_cli(registry_path, runtime, *spend_args)
     spend_replay_rc, spend_replay = _run_cli(
@@ -7230,8 +7053,6 @@ def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
         AGENT_ID,
         "--turn-instance-id",
         "turn-settlement-cli-2",
-        "--scan-path",
-        str(project),
         *capability_args,
     )
     assert resumed_turn_rc == 0, resumed_turn
@@ -7440,8 +7261,6 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert guard["heartbeat_receipt"]["delivery_workspace_causality"] == {
@@ -7556,8 +7375,6 @@ def test_read_only_settlement_omits_non_causal_delivery_workspace(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
     )
     spend_rc, spend = _run_cli(registry_path, runtime, *spend_args)
     replay_rc, replay = _run_cli(registry_path, runtime, *spend_args)
@@ -7709,8 +7526,6 @@ def test_same_turn_terminal_receipt_replay_preempts_autonomous_replan(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
     binding = (
         "--agent-id",
@@ -7756,8 +7571,6 @@ def test_same_turn_terminal_receipt_replay_preempts_autonomous_replan(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
     )
     assert spend_rc == 0, spend
 
@@ -7821,8 +7634,6 @@ def test_settled_turn_defers_prior_unsettled_history_to_fresh_turn(
         TODO_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
     binding = (
         "--agent-id",
@@ -7870,8 +7681,6 @@ def test_settled_turn_defers_prior_unsettled_history_to_fresh_turn(
         "heartbeat",
         "--execute",
         *binding,
-        "--scan-path",
-        str(project),
     )
     assert spend_rc == 0, spend
 
@@ -7933,8 +7742,6 @@ def test_settled_turn_defers_prior_unsettled_history_to_fresh_turn(
         AGENT_ID,
         "--turn-instance-id",
         "turn-settlement-cli-2",
-        "--scan-path",
-        str(project),
     )
     fresh_rc, fresh = _run_cli(registry_path, runtime, *fresh_args)
     assert fresh_rc == 0, fresh

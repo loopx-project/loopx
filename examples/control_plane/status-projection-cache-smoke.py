@@ -189,8 +189,6 @@ def main() -> int:
         status_write = run_cli(
             registry_path,
             "status",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--write-projection-cache",
@@ -201,8 +199,6 @@ def main() -> int:
         status_cached = run_cli(
             registry_path,
             "status",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--use-projection-cache",
@@ -220,8 +216,6 @@ def main() -> int:
             AGENT_ID,
             "--available-capability",
             "shell",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--write-projection-cache",
@@ -240,8 +234,6 @@ def main() -> int:
             AGENT_ID,
             "--available-capability",
             "shell",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--use-projection-cache",
@@ -282,8 +274,6 @@ def main() -> int:
         live_status = run_cli(
             registry_path,
             "status",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
         )
@@ -301,8 +291,6 @@ def main() -> int:
             AGENT_ID,
             "--available-capability",
             "shell",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
         )
@@ -313,8 +301,6 @@ def main() -> int:
         stale_status = run_cli(
             registry_path,
             "status",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--use-projection-cache",
@@ -334,8 +320,6 @@ def main() -> int:
             AGENT_ID,
             "--available-capability",
             "shell",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--use-projection-cache",
@@ -354,8 +338,6 @@ def main() -> int:
         expired_status = run_cli(
             registry_path,
             "status",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--use-projection-cache",
@@ -373,8 +355,6 @@ def main() -> int:
             AGENT_ID,
             "--available-capability",
             "shell",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--use-projection-cache",
@@ -394,7 +374,7 @@ def main() -> int:
             path = Path(str(cache_metadata(previous)["path"]))
             damaged = b'{"payload":"\xe2\x82'
             path.write_bytes(damaged)
-            args = (*command, "--scan-path", str(public_doc), "--limit", "5")
+            args = (*command,  "--limit", "5")
             recovered = run_cli(registry_path, *args, "--use-projection-cache")
             assert recovered["ok"] is True, recovered
             assert cache_metadata(recovered)["hit"] is False, recovered
@@ -413,23 +393,19 @@ def main() -> int:
             assert successor_id in json.dumps(reused), reused
 
         public_doc.write_text(
-            f"Public leak probe must still be caught by default quota scan: {PRIVATE_DOC_MARKER}\n",
+            f"Synthetic outgoing content for explicit checking: {PRIVATE_DOC_MARKER}\n",
             encoding="utf-8",
         )
-        leak_payload, leak_returncode, leak_stderr = run_cli_result(
-            registry_path,
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_ID,
-            "--scan-path",
-            str(public_doc),
-            check=False,
+        execution = run_cli(
+            registry_path, "quota", "should-run", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID,
         )
-        assert leak_returncode != 0 or leak_payload.get("status_health_ok") is False, leak_payload
-        assert "status or contract health" in json.dumps(leak_payload) + leak_stderr, leak_payload
+        assert execution["status_health_ok"] is True, execution
+        leak_payload, leak_returncode, _ = run_cli_result(
+            registry_path, "check", "--scan-path", str(public_doc), check=False,
+        )
+        assert leak_returncode != 0 and not leak_payload["ok"], leak_payload
+        assert any("private_doc_url" in str(error) for error in leak_payload["errors"]), leak_payload
 
         cache_dir = runtime / "status-projection-cache"
         assert cache_dir.exists(), cache_dir
@@ -440,7 +416,6 @@ def main() -> int:
                     lambda index: write_status_projection_cache(
                         registry_path=registry_path,
                         runtime_root=runtime,
-                        scan_roots=[public_doc],
                         limit=5,
                         include_task_graph=False,
                         goal_id=GOAL_ID,

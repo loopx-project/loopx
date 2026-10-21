@@ -42,7 +42,7 @@ def test_blocked_lifecycle_closes_original_attempt_without_a_retry_clock(
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", f"blocked-lifecycle-{provider}")
     guard_args = ("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app",
-                  "--scan-path", str(project))
+                  )
     rc, guard = cli(*guard_args, *binding)
     assert rc == 0 and guard["heartbeat_receipt"]["closeout_required"], guard
     rc, acquired = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
@@ -90,7 +90,7 @@ def test_blocked_lifecycle_closes_original_attempt_without_a_retry_clock(
     rc, settled_guard = cli(*guard_args, *binding)
     assert rc == 0 and settled_guard["effective_action"] == "heartbeat_settled_skip", settled_guard
     rc, spent = cli("quota", "spend-slot", "--goal-id", GOAL_ID, *binding,
-                    "--slots", "1", "--source", "heartbeat", "--execute", "--scan-path", str(project))
+                    "--slots", "1", "--source", "heartbeat", "--execute", )
     assert rc == 0 and spent["appended"] is False, spent
     assert _spend_run_count(runtime) == 0
     rc, unchanged = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)

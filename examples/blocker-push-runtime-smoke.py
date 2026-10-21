@@ -147,7 +147,7 @@ def main() -> int:
         root = Path(tmp)
         registry, runtime_root, project, state_file = write_fixture(root)
 
-        status_payload = run_cli(registry, runtime_root, "status", "--scan-root", str(project))
+        status_payload = run_cli(registry, runtime_root, "status", )
         items = status_payload["attention_queue"]["items"]
         assert len(items) == 1, items
         item = items[0]
@@ -170,8 +170,6 @@ def main() -> int:
             "should-run",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(project),
         )
         assert decision["decision"] == "skip", decision
         assert decision["should_run"] is False, decision

@@ -38,7 +38,7 @@ def team(tmp_path, monkeypatch, request):
 def plan(root, actor, revision):
     return demo.cli(root, "turn", "plan", "--goal-id", demo.GOAL, "--agent-id", actor,
                     "--todo-id", todo_id(actor, revision), "--host", "dsh",
-                    "--scan-root", str(root / actor / revision))
+                    )
 
 
 def listed_results(root):

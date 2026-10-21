@@ -14,7 +14,6 @@ def test_real_cli_and_host_use_structured_contracts_without_packet(tmp_path: Pat
     guard = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "packet-retirement-cli",
-        "--scan-path", str(project),
     )
     code, payload = _run_cli(registry, runtime, *guard)
     assert code == 0, payload

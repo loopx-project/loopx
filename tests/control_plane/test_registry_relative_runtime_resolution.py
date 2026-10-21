@@ -111,8 +111,6 @@ def test_history_and_quota_anchor_relative_runtime_to_registry_project(
         "should-run",
         "--goal-id",
         "half-speed",
-        "--scan-path",
-        str(project),
         cwd=independent_worktree,
     )
 

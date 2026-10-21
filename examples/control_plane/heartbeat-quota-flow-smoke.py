@@ -643,8 +643,6 @@ def main() -> int:
             "--codex-app",
             "--goal-id",
             GOAL_ID,
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -699,8 +697,6 @@ def main() -> int:
             "--source",
             "heartbeat",
             "--execute",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -719,8 +715,6 @@ def main() -> int:
             "--codex-app",
             "--goal-id",
             GOAL_ID,
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -752,8 +746,6 @@ def main() -> int:
             "--codex-app",
             "--goal-id",
             GOAL_ID,
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -781,8 +773,6 @@ def main() -> int:
             GOAL_ID,
             "--agent-id",
             "codex-main-control",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -836,8 +826,6 @@ def main() -> int:
             "--turn-instance-id",
             "future-monitor-no-spend-turn",
             "--execute",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -861,8 +849,6 @@ def main() -> int:
             "--turn-instance-id",
             "future-monitor-no-spend-turn",
             "--execute",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -879,8 +865,6 @@ def main() -> int:
             GOAL_ID,
             "--agent-id",
             "codex-main-control",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -924,8 +908,6 @@ def main() -> int:
             "codex-main-control",
             "--turn-instance-id",
             "2026-07-23T03:00:00Z",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -940,8 +922,6 @@ def main() -> int:
             "codex-main-control",
             "--turn-instance-id",
             "2026-07-23T03:00:00Z",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -956,8 +936,6 @@ def main() -> int:
             "codex-main-control",
             "--turn-instance-id",
             "2026-07-23T03:03:00Z",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -995,8 +973,6 @@ def main() -> int:
             GOAL_ID,
             "--agent-id",
             "codex-main-control",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -1014,8 +990,6 @@ def main() -> int:
             GOAL_ID,
             "--agent-id",
             "codex-main-control",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -1037,8 +1011,6 @@ def main() -> int:
             "--turn-instance-id",
             "future-monitor-agent-lane-no-spend-turn",
             "--execute",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -1056,8 +1028,6 @@ def main() -> int:
             "--codex-app",
             "--goal-id",
             GOAL_ID,
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -1110,8 +1080,6 @@ def main() -> int:
             "--source",
             "heartbeat",
             "--execute",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -1138,8 +1106,6 @@ def main() -> int:
             "--codex-app",
             "--goal-id",
             GOAL_ID,
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -1161,8 +1127,6 @@ def main() -> int:
             "--source",
             "heartbeat",
             "--execute",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -1191,8 +1155,6 @@ def main() -> int:
             GOAL_ID,
             "--agent-id",
             "codex-side-bypass",
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )
@@ -1226,8 +1188,6 @@ def main() -> int:
             "--codex-app",
             "--goal-id",
             GOAL_ID,
-            "--scan-path",
-            str(project),
             registry_path=registry_path,
             runtime=runtime,
         )

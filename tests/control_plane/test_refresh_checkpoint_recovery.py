@@ -165,8 +165,6 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert rc == 0, guard
@@ -291,8 +289,6 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
         "--slots",
         "1",
         "--execute",
-        "--scan-path",
-        str(project),
     )
     for _ in range(2):
         rc, result = _run_cli(registry, runtime, *spend, cwd=project)
@@ -331,8 +327,6 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert rc == 0, guard
@@ -462,8 +456,6 @@ def test_invalid_supplement_leaves_original_writeback_intact(tmp_path: Path):
         "--goal-id",
         GOAL_ID,
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert rc == 0, guard

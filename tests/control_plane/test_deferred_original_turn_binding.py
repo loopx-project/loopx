@@ -84,7 +84,7 @@ def test_deferred_replay_keeps_original_binding_during_replan(
     monkeypatch.setattr(quota, "build_live_quota_should_run_decision", compact_status)
     capsys.readouterr()
     rc = main(["--format", "json", "--registry", str(registry),
-        "--runtime-root", str(runtime), *guard, "--scan-path", str(project)])
+        "--runtime-root", str(runtime), *guard, ])
     replay = json.loads(capsys.readouterr().out)
     assert rc == 0, replay
     assert replay["heartbeat_receipt"]["settlement_identity"] == identity

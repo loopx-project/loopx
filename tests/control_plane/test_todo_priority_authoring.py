@@ -73,7 +73,7 @@ def test_priority_authoring_round_trip(tmp_path, monkeypatch, provider):
     ordinary = cli("todo", "add", "--role", "agent", "--text", "Investigate P0 prose without declaring priority")
     assert read(ordinary["todo_id"])["priority"] == "P1"
     selected = cli("quota", "should-run", "--codex-app", "--agent-id", AGENT_ID,
-        "--todo-id", ordinary["todo_id"], "--turn-instance-id", "priority-selection", "--scan-path", str(project))
+        "--todo-id", ordinary["todo_id"], "--turn-instance-id", "priority-selection", )
     assert selected["should_run"] is True
     gate = cli("todo", "add", "--role", "user", "--task-class", "user_gate",
         "--blocks-agent", AGENT_ID, "--text", "Choose the blocking release option")

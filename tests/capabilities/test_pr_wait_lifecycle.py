@@ -118,7 +118,7 @@ def test_readonly_consumers_do_not_turn_permission_into_observation(tmp_path, mo
     dry.remove("--execute")
     _invoke_turn(dry)
     plan = [*prefix, "turn", "plan", "--goal-id", "goal-a", "--agent-id", "agent-a",
-            "--host", "generic-cli", "--scan-root", str(tmp_path / "project")]
+            "--host", "generic-cli", ]
     _invoke_turn(plan)
     for mode in ("--full", "--thin"):
         _invoke_turn([*prefix, "heartbeat-prompt", "--goal-id", "goal-a", "--agent-id", "agent-a",
@@ -188,7 +188,7 @@ def test_observer_failure_does_not_gate_independent_validated_work(tmp_path, mon
     )
     code, result = _invoke_turn(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-        "--host", "dsh", "--dsh-runner", str(runner), "--project", str(project), "--scan-root", str(project),
+        "--host", "dsh", "--dsh-runner", str(runner), "--project", str(project),
         "--todo-id", "todo_fixture0001", "--turn-instance-id", "independent-work",
         "--validation-command-json", json.dumps([sys.executable, "-c", "from pathlib import Path; "
             "assert Path('validated-artifact').read_text() == 'independent work accepted'"]),

@@ -16,7 +16,6 @@ from ..global_todos import (
     build_global_todos_error,
     render_global_todos_markdown,
 )
-from ..paths import default_public_scan_root
 from ..summary_all import (
     build_global_gates,
     build_global_gates_error,
@@ -31,9 +30,6 @@ PrintPayload = Callable[
     None,
 ]
 FormatSelector = Callable[..., str]
-def _scan_roots(args: argparse.Namespace) -> list[Path]:
-    scan_roots = [Path(item).expanduser() for item in args.scan_path]
-    return scan_roots or [Path(args.scan_root).expanduser()]
 
 
 def _add_current_manager_flags(
@@ -44,23 +40,6 @@ def _add_current_manager_flags(
 ) -> None:
     parser.add_argument("--agent-id", help=agent_help)
     parser.add_argument("--limit", type=int, default=8, help=limit_help)
-    parser.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help=(
-            "Public files to scan for obvious private material. "
-            "Defaults to the LoopX install root."
-        ),
-    )
-    parser.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help=(
-            "Specific public file or directory to scan. Repeatable. "
-            "Overrides --scan-root when set."
-        ),
-    )
 
 
 def register_summary_all_command(
@@ -209,7 +188,6 @@ def handle_summary_all_command(
             payload = build_global_risks(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
-                scan_roots=_scan_roots(args),
                 agent_id=args.agent_id,
                 time_range=args.time_range,
                 limit=max(1, args.limit),
@@ -223,7 +201,6 @@ def handle_summary_all_command(
             payload = build_global_gates(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
-                scan_roots=_scan_roots(args),
                 agent_id=args.agent_id,
                 limit=max(1, args.limit),
             )
@@ -236,7 +213,6 @@ def handle_summary_all_command(
             payload = build_global_todos(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
-                scan_roots=_scan_roots(args),
                 agent_id=args.agent_id,
                 limit=max(1, args.limit),
             )
@@ -249,7 +225,6 @@ def handle_summary_all_command(
         payload = build_summary_all(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=_scan_roots(args),
             agent_id=args.agent_id,
             time_range=args.time_range,
             limit=max(1, args.limit),

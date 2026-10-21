@@ -85,7 +85,7 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
 
     def guard(*extra, expected_exit=0):
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a", "--scan-path", str(tmp_path), *extra,
+            "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == expected_exit, json.dumps(packet, indent=2)
         return packet
@@ -157,7 +157,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
 
     def guard(*extra: str) -> dict:
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a", "--scan-path", str(tmp_path), *extra,
+            "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
         assert packet["should_run"] is True, packet.get("reason")
@@ -342,7 +342,6 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     args = build_parser().parse_args([
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "quota", "should-run", "--goal-id", "selected-race-goal", "--agent-id", "agent-a",
-        "--scan-path", str(tmp_path),
     ])
     packet: dict[str, object] = {}
 
@@ -420,7 +419,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     assert json.dumps(context).count(note) == 1
 
     code, turn = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a", "--scan-path", str(tmp_path), "--turn-envelope",
+        "--agent-id", "agent-a",  "--turn-envelope",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
     turn_context = turn["work_context"]

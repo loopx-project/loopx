@@ -842,7 +842,6 @@ class ChatActionService(
             status_payload = collect_status(
                 registry_path=self.registry_path,
                 runtime_root_override=str(runtime_root) if runtime_root else None,
-                scan_roots=[project],
                 limit=5,
                 goal_id=goal_id,
                 available_capabilities=(
@@ -850,7 +849,6 @@ class ChatActionService(
                     if self.runtime_controller is not None
                     else None
                 ),
-                include_public_boundary_scan=False,
             )
             guard = build_quota_should_run(
                 status_payload,

@@ -149,7 +149,7 @@ def test_typed_progress_cli_preserves_replan_authority(
     try:
         guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL,
                       "--agent-id", AGENT, "--turn-instance-id", TURN,
-                      "--scan-path", str(fixture["project"]))
+                      )
         initial = call_progress_cli(fixture, *guard_args)
         assert initial["decision"] == "autonomous_replan_required", initial
         bound = call_progress_cli(fixture, *guard_args, "--todo-id", TODO)
@@ -230,7 +230,7 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
     def guard(turn: str, *, todo: str | None = TODO) -> dict:
         return call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", turn,
-            *(["--todo-id", todo] if todo else []), "--scan-path", str(fixture["project"]))
+            *(["--todo-id", todo] if todo else []), )
 
     def spend(turn: str, *, todo: str | None = TODO, obligation: str | None = None) -> dict:
         return call("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,

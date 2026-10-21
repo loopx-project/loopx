@@ -110,10 +110,8 @@ def test_explicit_status_survives_conflicting_defaults(tmp_path: Path, monkeypat
         projection = collect_status(
             registry_path=registry,
             runtime_root_override=str(runtime),
-            scan_roots=[],
             limit=10,
             goal_id="goal-a",
-            include_public_boundary_scan=False,
         )
         assert any(goal["id"] == "goal-a" for goal in projection["run_history"]["goals"])
         assert set(runtime_projection_candidate_roots(source_runtime_root=runtime)) == {

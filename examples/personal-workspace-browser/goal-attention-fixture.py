@@ -37,7 +37,7 @@ def main() -> None:
                 "domain": "general", "status": "active", "authority_sources": [],
                 "adapter": {"kind": "test_v0", "status": "connected-read-only"}}]}), encoding="utf-8")
         payload = collect_status(registry_path=registry, runtime_root_override=str(root / "runtime"),
-            scan_roots=[], limit=5, include_public_boundary_scan=False)
+            limit=5)
         item = next(item for item in payload["attention_queue"]["items"] if item["goal_id"] == "progress-projection")
         assert item["user_todos"]["open_count"] == 21
         assert len(item["user_todos"]["items"]) == 12

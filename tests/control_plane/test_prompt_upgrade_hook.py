@@ -224,7 +224,7 @@ def test_real_quota_cli_exposes_hint_without_bypassing_health_gate(tmp_path, mon
     command = [sys.executable, "-m", "loopx.cli", "--format", "json",
         "--registry", str(registry), "--runtime-root", str(root),
         "quota", "should-run", "--goal-id", "fixture-goal", "--agent-id", "agent-a",
-        "--codex-app", "--scan-path", str(tmp_path / "STATE.md")]
+        "--codex-app", ]
     pending_result = subprocess.run(command, capture_output=True, text=True)
     pending = json.loads(pending_result.stdout)
     assert any(x.get("kind") == "automation_prompt_upgrade"

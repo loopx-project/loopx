@@ -133,7 +133,6 @@ def _collect(
     return status_collection.collect_status(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[tmp_path],
         limit=5,
         context=_context(
             tmp_path,
@@ -276,7 +275,6 @@ def test_stopped_scope_filters_goal_channel_rows_and_requests_archive_context(
     payload = status_collection.collect_status(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[tmp_path],
         limit=5,
         context=context,
         activation_state_filter="stopped",

@@ -370,7 +370,6 @@ def test_unchanged_due_poll_reloads_status_before_followthrough_decision(
     status_payload = collect_status(
         registry_path=registry,
         runtime_root_override=str(runtime),
-        scan_roots=[Path(__file__).resolve()],
         limit=20,
     )
     reloaded_status: dict | None = None
@@ -380,7 +379,6 @@ def test_unchanged_due_poll_reloads_status_before_followthrough_decision(
         reloaded_status = collect_status(
             registry_path=registry,
             runtime_root_override=str(runtime),
-            scan_roots=[Path(__file__).resolve()],
             limit=20,
         )
         return reloaded_status
@@ -1224,7 +1222,6 @@ def test_material_poll_reload_failure_reports_persisted_writeback(
     status_payload = collect_status(
         registry_path=registry,
         runtime_root_override=str(runtime),
-        scan_roots=[Path(__file__).resolve()],
         limit=20,
     )
 

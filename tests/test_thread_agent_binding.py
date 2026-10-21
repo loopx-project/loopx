@@ -947,8 +947,6 @@ def test_agent_directory_withholds_a_credential_shaped_thread_from_the_packet(
                 "goal",
                 "--agent-id",
                 "agent-a",
-                "--scan-path",
-                str(tmp_path),
             ]
         )
 

@@ -459,7 +459,6 @@ def assert_unhealthy_status_envelope(
         runtime=runtime,
         command="status",
         output_format="json",
-        command_args=["--scan-path", str(safe_input)],
         check=False,
     )
     status_payload = json.loads(status_proc.stdout)
@@ -472,7 +471,6 @@ def assert_unhealthy_status_envelope(
         runtime=runtime,
         command="global-gates",
         output_format="json",
-        command_args=["--scan-path", str(safe_input)],
         check=False,
     )
     assert gates_proc.returncode != 0, gates_proc
@@ -490,7 +488,6 @@ def assert_unhealthy_status_envelope(
         runtime=runtime,
         command="global-todos",
         output_format="json",
-        command_args=["--scan-path", str(safe_input)],
         check=False,
     )
     assert todos_proc.returncode != 0, todos_proc
@@ -507,7 +504,6 @@ def assert_unhealthy_status_envelope(
         runtime=runtime,
         command="global-risks",
         output_format="json",
-        command_args=["--scan-path", str(safe_input)],
         check=False,
     )
     assert risks_proc.returncode == 0, risks_proc
@@ -542,8 +538,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         gates_proc = run_cli(
@@ -556,8 +550,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         markdown_proc = run_cli(
@@ -570,8 +562,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         todos_proc = run_cli(
@@ -584,8 +574,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         todos_markdown_proc = run_cli(
@@ -598,8 +586,6 @@ def run_scenario(provider: str | None) -> None:
                 AGENT_ID,
                 "--limit",
                 "5",
-                "--scan-path",
-                str(safe_input),
             ],
         )
         risks_args = [
@@ -609,8 +595,6 @@ def run_scenario(provider: str | None) -> None:
             "1h",
             "--limit",
             "8",
-            "--scan-path",
-            str(risk_input),
         ]
         risks_proc = run_cli(
             registry=registry,

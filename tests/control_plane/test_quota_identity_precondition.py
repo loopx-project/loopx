@@ -82,8 +82,6 @@ def test_selected_registry_missing_roster_returns_typed_public_recovery(
             GOAL_ID,
             "--agent-id",
             AGENT_ID,
-            "--scan-path",
-            str(project),
         ]
     )
     payload = json.loads(capsys.readouterr().out)

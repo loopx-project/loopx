@@ -120,8 +120,6 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
         AGENT_ID,
         "--turn-instance-id",
         "resume-command-turn",
-        "--scan-path",
-        str(project),
     )
     assert rc == 0 and guard["effective_action"] == "successor_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == TODO_ID
@@ -224,8 +222,6 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
         "resume-command-turn",
         "--todo-id",
         TODO_ID,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0 and reentry["normal_delivery_allowed"], reentry
     assert (
@@ -243,7 +239,7 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     assert qualified["details"]["delivery_allowed"] is True
     rc, cold = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "resume-command-turn",
-        "--todo-id", TODO_ID, "--scan-path", str(project))
+        "--todo-id", TODO_ID, )
     assert rc == 0 and cold["heartbeat_receipt"]["status"] == "replayed", cold
     assert cold["heartbeat_receipt"]["event_id"] == qualified["event_id"]
     assert load_rollout_events(log_path) == events

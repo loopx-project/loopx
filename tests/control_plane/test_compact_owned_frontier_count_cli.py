@@ -36,7 +36,7 @@ def test_real_cli_owned_chain_is_independent_of_display_pressure(tmp_path, monke
             initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
         rc, result = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-            "--turn-instance-id", "turn-owned-count", "--scan-path", str(project))
+            "--turn-instance-id", "turn-owned-count", )
         assert rc == 0
         # The source contains exactly 15 owned advancement commitments in every
         # arm. The fixed replan threshold remains 15, not the display's length.

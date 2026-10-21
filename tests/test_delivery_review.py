@@ -154,8 +154,8 @@ def test_real_http_review_matches_cli_sources_without_canonical_writes(workspace
     assert {(node_todo[e["from_node_id"]], node_todo[e["to_node_id"]], e["relation"]) for e in goal_map["edges"]} == {
         ("todo_integrate", "todo_design", "continues"), ("todo_integrate", "todo_design", "depends_on")}
     assert goal_map["limits"]["topology_complete"] is True
-    canonical = collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[], limit=20,
-                               goal_id="release-demo", include_public_boundary_scan=False, include_task_graph=True)
+    canonical = collect_status(registry_path=registry, runtime_root_override=str(runtime), limit=20,
+                               goal_id="release-demo", include_task_graph=True)
     item = canonical["attention_queue"]["items"][0]
     assert review["graph"] == item["task_graph_projection"]
     assert review["acceptance"] == canonical["run_history"]["goals"][0]["acceptance_observation"]

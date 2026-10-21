@@ -245,7 +245,7 @@ def test_failed_quota_invocation_keeps_receipt_ack_and_exact_settlement(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", settlement.GOAL_ID, "--agent-id", settlement.AGENT_ID,
         "--todo-id", settlement.TODO_ID, "--turn-instance-id", settlement.TURN_ID,
-        "--begin-turn", "--scan-path", str(project), cwd=project,
+        "--begin-turn",  cwd=project,
     )
     assert code == 1 and rejected["error_code"] == "QUOTA_VALIDATION_FAILED", rejected
     log_path = runtime / "goals" / settlement.GOAL_ID / "rollout-event-log.jsonl"

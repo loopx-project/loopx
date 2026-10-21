@@ -655,13 +655,13 @@ refresh:
 
 ```bash
 loopx --format json status
-loopx status --scan-path README.md --scan-path docs/
+loopx check --scan-path README.md --scan-path docs/
 ```
 
-The default contract scan uses the LoopX install root, so running status
-from a private project directory does not accidentally scan local `.local`
-state. Pass `--scan-root` or `--scan-path` for a project only when that path is
-intended to be public-safe.
+Operational status defers public-boundary scanning and no longer accepts scan
+selection options. Use `loopx check --scan-root` or `--scan-path` for selected
+outgoing content. Execution authority and explicit disclosure checks keep their
+separate owners.
 
 For the React dashboard, serve that same status contract over loopback HTTP:
 

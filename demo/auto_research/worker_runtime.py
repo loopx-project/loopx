@@ -542,7 +542,6 @@ def load_auto_research_worker_frontier(
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
-        scan_roots=[workspace],
         limit=5,
         goal_id=goal_id,
     )

@@ -41,7 +41,6 @@ class DashHTTPServer(ThreadingHTTPServer):
 
     registry_path: Path
     runtime_root_override: str | None
-    scan_roots: list[Path]
     goal_id: str | None
     refresh_seconds: int
     verbose: bool
@@ -71,7 +70,6 @@ class DashRequestHandler(BaseHTTPRequestHandler):
         status_payload = collect_status(
             registry_path=self.server.registry_path,
             runtime_root_override=self.server.runtime_root_override,
-            scan_roots=self.server.scan_roots,
             limit=20,
             goal_id=self.server.goal_id,
         )
@@ -180,7 +178,6 @@ def serve_dash(
     *,
     registry_path: Path,
     runtime_root_override: str | None,
-    scan_roots: list[Path],
     host: str,
     port: int,
     goal_id: str | None = None,
@@ -194,7 +191,6 @@ def serve_dash(
     server = DashHTTPServer((host, port), DashRequestHandler)
     server.registry_path = registry_path
     server.runtime_root_override = runtime_root_override
-    server.scan_roots = scan_roots
     server.goal_id = goal_id
     server.refresh_seconds = max(1, int(refresh_seconds))
     server.verbose = verbose

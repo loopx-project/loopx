@@ -59,7 +59,7 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, mode, profile
     profile_args = [profile] if profile.startswith("--") else ["--runtime-profile", profile]
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID]
-    command = ["quota", "should-run", *profile_args, *binding, "--scan-path", str(project)]
+    command = ["quota", "should-run", *profile_args, *binding, ]
     rc, guard = _run_cli(path, runtime, *command, cwd=project)
     assert rc == 0, guard
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
@@ -103,7 +103,6 @@ def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path,
         sys.executable, "-m", "loopx.cli", "--registry", str(path),
         "--runtime-root", str(runtime), "--format", "json", "turn", "plan",
         "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-        "--scan-root", str(project),
     ], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     packet = json.loads(result.stdout)
@@ -127,7 +126,7 @@ def test_ordinary_cli_settlement_without_evidence_does_not_create_graph(tmp_path
     configure_goal(registry_path=path, goal_id=GOAL_ID, execute=True, explore_mode=mode)
     rc, guard = _run_cli(path, runtime, "quota", "should-run", "--codex-app",
                          "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
-                         "--turn-instance-id", TURN_ID, "--scan-path", str(project))
+                         "--turn-instance-id", TURN_ID, )
     assert rc == 0, guard
     steps = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
     assert steps[1]["optional_attachments"][0]["required"] is False

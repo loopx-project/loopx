@@ -148,7 +148,7 @@ def _argv(project, runtime, registry, native, phase):
         f"assert r['phase']=={phase!r} and r['value']=={5 if phase == 'S1' else 13}")
     return ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--host", "codex-cli", "--codex-bin", str(native),
-        "--goal-id", GOAL, "--agent-id", AGENT, "--project", str(project), "--scan-root", str(project),
+        "--goal-id", GOAL, "--agent-id", AGENT, "--project", str(project),
         "--iteration-context", "resume", "--validation-command-json", json.dumps([sys.executable, "-c", validation]),
         "--timeout-seconds", "120", "--no-global-sync", "--execute"]
 

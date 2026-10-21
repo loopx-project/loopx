@@ -126,8 +126,6 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
             AGENT_ID,
             "--turn-instance-id",
             turn,
-            "--scan-path",
-            str(project),
         )
         assert rc == 0, guard
         assert guard["selected_todo"]["todo_id"] == TODO_ID
@@ -200,8 +198,6 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
         AGENT_ID,
         "--turn-instance-id",
         "effective-turn-next",
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, next_guard
     obligation = next_guard.get("autonomous_replan_obligation")
@@ -255,7 +251,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     selected_rc, selected = _run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
-        "--turn-instance-id", "effective-turn-next", "--scan-path", str(project),
+        "--turn-instance-id", "effective-turn-next",
     )
     assert selected_rc == 0, selected
     contract = selected["replan_action_packet"]["writeback_contract"]
@@ -270,7 +266,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
         rc, envelope = _run_cli(
             registry, runtime, "quota", "should-run", "--codex-app", "--turn-envelope",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
-            "--turn-instance-id", "effective-turn-next", "--scan-path", str(project),
+            "--turn-instance-id", "effective-turn-next",
         )
         assert rc == 0, envelope
         assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
@@ -306,7 +302,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     rc, following = _run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
-        "--turn-instance-id", "after-periodic-review", "--scan-path", str(project),
+        "--turn-instance-id", "after-periodic-review",
     )
     assert rc == 0 and following["decision"] == "run", following
     assert following["selected_todo"]["status"] == "open"
@@ -358,7 +354,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         turn = f"stride-cadence-{index}"
         guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                      "--agent-id", AGENT_ID, "--turn-instance-id", turn,
-                     "--scan-path", str(project))
+                     )
         assert guard["selected_todo"]["todo_id"] == TODO_ID
         call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
              "--todo-id", TODO_ID, "--turn-instance-id", turn,
@@ -371,7 +367,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
 
     guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                  "--agent-id", AGENT_ID, "--turn-instance-id", "stride-due-review",
-                 "--scan-path", str(project))
+                 )
     obligation = guard["autonomous_replan_obligation"]
     assert "periodic_review_due" in {trigger["kind"] for trigger in obligation["triggers"]}
     assert guard["replan_action_packet"]["stride_control"]["required_on_periodic_review"] is True
@@ -398,7 +394,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     reread = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                   "--agent-id", AGENT_ID, "--todo-id", successor["todo_id"],
                   "--turn-instance-id", "stride-due-review",
-                  "--scan-path", str(project))
+                  )
     assert reread["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"] == obligation["obligation_id"]
     assert reread["autonomous_replan_obligation"]["obligation_id"] == obligation["obligation_id"]
     assert reread["autonomous_replan_obligation"].get("resolution_mode") != "receipt_bound_replan_settlement"
@@ -479,7 +475,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         turn = f"stride-followthrough-{index}"
         call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--todo-id", successor["todo_id"], "--turn-instance-id", turn,
-             "--scan-path", str(project))
+             )
         # Synthetic candidate work under the real selected Todo. A worse
         # result is still evidence; it must not be rewritten into goal gain.
         subprocess.run([sys.executable, "-c",
@@ -502,7 +498,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
          "--todo-id", successor["todo_id"])
     next_guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID,
-        "--turn-instance-id", "stride-next-review", "--scan-path", str(project))
+        "--turn-instance-id", "stride-next-review", )
     next_obligation = next_guard["autonomous_replan_obligation"]
     delivered_result = next_obligation["replan_context"]["decision_followthrough"]["ordinary_work"]["evidence"][0]
     observed_result = call("history", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -518,7 +514,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         "--target-key", "source-uncertainty", "--replan-obligation-id", next_obligation["obligation_id"])
     next_guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--todo-id", next_successor["todo_id"],
-        "--turn-instance-id", "stride-next-review", "--scan-path", str(project))
+        "--turn-instance-id", "stride-next-review", )
     next_obligation = next_guard["autonomous_replan_obligation"]
     next_control = next_guard["replan_action_packet"]["stride_control"]
     follow = next_obligation["replan_context"]["decision_followthrough"]
@@ -613,7 +609,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         turn = f"adopted-probe-{index}"
         guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", next_successor["todo_id"], "--turn-instance-id", turn,
-            "--scan-path", str(project))
+            )
         assert guard["selected_todo"]["todo_id"] == next_successor["todo_id"]
         subprocess.run([sys.executable, "-c",
             "import json,sys; from pathlib import Path; "
@@ -630,7 +626,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
             "--todo-id", next_successor["todo_id"], "--turn-instance-id", turn,
             "--slots", "1", "--source", "heartbeat", "--execute")
     final = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--turn-instance-id", "review-adopted-probe", "--scan-path", str(project))
+        "--agent-id", AGENT_ID, "--turn-instance-id", "review-adopted-probe", )
     use = final["autonomous_replan_obligation"]["replan_context"]["decision_followthrough"]["work_result_use"]
     assert any(row["result_evidence_ref"] == ordinary_ref and row["work_todo_id"] == next_successor["todo_id"]
                for row in use["recorded_followthrough"])
@@ -667,8 +663,6 @@ def test_verified_negative_work_counts_without_a_score_gain(tmp_path: Path) -> N
         "should-run",
         "--codex-app",
         *binding,
-        "--scan-path",
-        str(project),
         cwd=project,
     )
     assert rc == 0, guard

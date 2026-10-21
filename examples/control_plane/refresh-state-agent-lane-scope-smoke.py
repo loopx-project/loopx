@@ -318,7 +318,6 @@ def main() -> None:
             status = collect_status(
                 registry_path=registry_path,
                 runtime_root_override=str(runtime),
-                scan_roots=[project],
                 limit=5,
             )
             items = status["attention_queue"]["items"]
@@ -423,7 +422,6 @@ def main() -> None:
             primary_goal_status = collect_status(
                 registry_path=registry_path,
                 runtime_root_override=str(runtime),
-                scan_roots=[project],
                 limit=5,
             )
             primary_goal_item = next(

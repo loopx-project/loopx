@@ -155,14 +155,6 @@ def write_canary_todos(state_file: Path) -> None:
 
 def run_cli(registry_path: Path, runtime_root: Path, *args: str) -> dict[str, Any]:
     cli_args = list(args)
-    if (
-        cli_args
-        and cli_args[0] in STATUS_BACKED_COMMANDS
-        and "--scan-root" not in cli_args
-        and "--scan-path" not in cli_args
-    ):
-        # Keep public-boundary validation on the fixture project, not this source checkout.
-        cli_args.extend(["--scan-root", str(registry_path.parent.parent)])
     return run_json_cli(
         *cli_args,
         registry_path=registry_path,
@@ -597,8 +589,6 @@ def assert_same_agent_continuation_read_path(root: Path, *, provider: str) -> No
         registry_path,
         runtime_root,
         "status",
-        "--scan-root",
-        str(project),
         "--agent-id",
         AGENT_ID,
         "--limit",
@@ -709,8 +699,6 @@ def assert_same_agent_continuation_read_path(root: Path, *, provider: str) -> No
         registry_path,
         runtime_root,
         "status",
-        "--scan-root",
-        str(project),
         "--agent-id",
         AGENT_ID,
         "--limit",
@@ -753,8 +741,6 @@ def run_fixture_canary(root: Path, *, provider: str) -> None:
         registry_path,
         runtime_root,
         "status",
-        "--scan-root",
-        str(root / "project"),
         "--agent-id",
         AGENT_ID,
         "--limit",

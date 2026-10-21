@@ -23,7 +23,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
         _configure_selected_todo_replan_fixture(project, registry)
     turn = "turn-selection-preempted"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-             "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--scan-path", str(project))
+             "--agent-id", AGENT_ID, "--turn-instance-id", turn, )
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0, first
     assert first["decision"] == ("autonomous_replan_required" if initial_replan else "run")
@@ -133,7 +133,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     spend = next(c for c in cli["next_cli_actions"] if "spend-slot" in c)
     spend_args = _projected_cli_args(spend, turn_instance_id=turn)
     for replay in (False, True):
-        rc, result = _run_cli(registry, runtime, *spend_args, "--scan-path", str(project), cwd=project)
+        rc, result = _run_cli(registry, runtime, *spend_args,  cwd=project)
         assert rc == 0, result
         assert result["settlement_result"]["ok"]
         if replay:
@@ -172,7 +172,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
         _configure_selected_todo_replan_fixture(project, registry)
     turn = "turn-selection-recommendation-drift"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-             "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--scan-path", str(project))
+             "--agent-id", AGENT_ID, "--turn-instance-id", turn, )
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0, first
     assert first["interaction_contract"]["cli_channel"]["selection_required"]
@@ -284,7 +284,6 @@ def test_replan_preempts_unselected_todo_guards_on_selection_reentry(tmp_path, w
     guard = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn,
-        "--scan-path", str(project),
     )
     rc, first = _run_cli(registry, runtime, *guard, cwd=project)
     assert rc == 0, first
@@ -333,7 +332,7 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
     turn = "turn-inline-reentry-new-gate"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn,
-             "--scan-path", str(project))
+             )
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
     original = quota_cli.reconcile_requested_quota_action_selection
@@ -379,7 +378,7 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
                          "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                          "--todo-id", SELECTED_REPLAN_TODO_ID,
                          "--turn-instance-id", turn, "--source", "heartbeat",
-                         "--slots", "1", "--execute", "--scan-path", str(project))
+                         "--slots", "1", "--execute", )
     assert rc == 1 and spend["ok"] is False, spend
     assert _spend_run_count(runtime) == 0
 
@@ -390,7 +389,7 @@ def test_first_inline_result_has_matching_turn_envelope(tmp_path):
     turn = "turn-inline-envelope"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn,
-             "--scan-path", str(project))
+             )
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
     rc, envelope = _run_cli(registry, runtime, *guard,

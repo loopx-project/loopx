@@ -129,8 +129,6 @@ def quota_should_run(
         "--goal-id",
         GOAL_ID,
         *context_args,
-        "--scan-root",
-        str(project),
     )
 
 
@@ -210,7 +208,7 @@ def assert_adoption(provider: str) -> None:
                        "--todo-id", gate_id)["todo"]
         assert gate["text"] == USER_TODO and gate["global_gate"] is True, gate
 
-        status_after_todo = run_cli(root, registry_path, "status", "--scan-root", str(project))
+        status_after_todo = run_cli(root, registry_path, "status", )
         item_after_todo = attention_item(status_after_todo)
         assert item_after_todo["waiting_on"] == "controller", item_after_todo
         assert item_after_todo["user_todos"]["open_count"] == 1, item_after_todo
@@ -270,7 +268,7 @@ def assert_adoption(provider: str) -> None:
         ), approved_quota
         assert "--priority P1" in approved_quota["todo_write_hint"]["agent_todo_command_template"], approved_quota
 
-        packet = run_cli(root, registry_path, "review-packet", "--goal-id", GOAL_ID, "--scan-root", str(project))
+        packet = run_cli(root, registry_path, "review-packet", "--goal-id", GOAL_ID, )
         assert packet["ok"] is True, packet
         assert packet["kind"] == "codex", packet
         assert packet["operator_gate_approved_handoff"] is True, packet

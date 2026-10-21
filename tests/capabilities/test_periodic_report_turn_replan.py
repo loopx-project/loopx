@@ -144,7 +144,7 @@ def test_turn_milestone_intent_is_replay_stable(
         *base, "turn", "run-once", *host_args, "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--project", str(workspace),
         "--validation-command-json", json.dumps([sys.executable, "-c", validator]),
-        "--execution-mode", "isolated-headless", "--scan-root", str(project),
+        "--execution-mode", "isolated-headless",
         "--no-global-sync", "--execute",
     ]
     turn_module = None
@@ -178,7 +178,7 @@ def test_turn_milestone_intent_is_replay_stable(
         )
 
     first = _cli(args)
-    assert first["status"] == "committed" and first["result_kind"] == "replan_required"
+    assert first["status"] == "committed" and first["result_kind"] == "replan_required", first
     assert first["effects"]["host_invoked"] and first["effects"]["state_written"]
     assert first["effects"]["quota_spent"]
     assert (workspace / "host-count.txt").read_text(encoding="utf-8") == "1"

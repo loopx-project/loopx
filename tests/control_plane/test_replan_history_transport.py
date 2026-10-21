@@ -30,7 +30,7 @@ def test_large_history_refresh_replay_and_spend_once(tmp_path):
         return result
 
     guard = call("quota", "should-run", "--codex-app", *binding,
-                 "--scan-path", str(project))
+                 )
     assert guard["should_run"] is True
     refresh = ("refresh-state", *binding, "--classification", "validated_change",
                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
@@ -47,7 +47,7 @@ def test_large_history_refresh_replay_and_spend_once(tmp_path):
     assert replay["idempotent_replay"] is True
     assert index.read_bytes() == after
     spend = ("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat",
-             "--execute", "--scan-path", str(project))
+             "--execute", )
     assert call(*spend)["appended"] is True
     assert call(*spend)["appended"] is False
     assert _spend_run_count(runtime) == 1

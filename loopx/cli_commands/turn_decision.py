@@ -67,18 +67,13 @@ def collect_turn_status_payload(
 ) -> dict[str, Any]:
     """Read the live status the Turn decision is derived from."""
 
-    scan_roots = [Path(item).expanduser() for item in args.scan_path]
-    if not scan_roots:
-        scan_roots = [Path(args.scan_root).expanduser()]
     return collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
-        scan_roots=scan_roots,
         limit=max(max(0, args.limit), AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK),
         goal_id=args.goal_id,
         available_capabilities=args.available_capabilities,
         agent_lane_id=args.agent_id,
-        include_public_boundary_scan=False,
     )
 
 
@@ -338,9 +333,7 @@ def current_heartbeat_host_launch_decision(
     args = argparse.Namespace(
         goal_id=goal_id, agent_id=agent_id, turn_instance_id=original_turn,
         todo_id=None, codex_app=False, runtime_profile="generic_cli",
-        # Re-read execution authority, including held receipt identity. Public
-        # disclosure is independently checked by `loopx check`/premerge.
-        scan_path=[], scan_root=str(project), limit=0,
+        limit=0,
         available_capabilities=["shell", "filesystem_write"],
     )
     selection = load_requested_quota_action_selection(

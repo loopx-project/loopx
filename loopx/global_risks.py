@@ -20,7 +20,6 @@ class _CollectStatus(Protocol):
 		*,
 		registry_path: Path,
 		runtime_root_override: str | None,
-		scan_roots: list[Path],
 		limit: int,
 	) -> dict[str, Any]: ...
 
@@ -921,7 +920,6 @@ def build_global_risks(
 	*,
 	registry_path: Path,
 	runtime_root_override: str | None,
-	scan_roots: list[Path],
 	agent_id: str | None,
 	time_range: str,
 	limit: int,
@@ -933,7 +931,6 @@ def build_global_risks(
 		status_result: object = collect_status(
 			registry_path=registry_path,
 			runtime_root_override=runtime_root_override,
-			scan_roots=scan_roots,
 			limit=scan_limit,
 		)
 	except Exception as exc:

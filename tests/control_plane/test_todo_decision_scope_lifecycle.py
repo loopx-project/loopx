@@ -179,7 +179,6 @@ def test_completed_gate_consumes_scope_for_already_open_publication(
     status = collect_status(
         registry_path=registry,
         runtime_root_override=str(tmp_path / "runtime"),
-        scan_roots=[repo],
         limit=1,
         goal_id=GOAL_ID,
     )
@@ -230,7 +229,6 @@ def test_completed_broad_gate_projects_standing_authority_into_quota(
     status = collect_status(
         registry_path=registry,
         runtime_root_override=str(tmp_path / "runtime"),
-        scan_roots=[repo],
         limit=1,
         goal_id=GOAL_ID,
     )
@@ -359,7 +357,6 @@ def test_non_approval_gate_outcome_remains_a_durable_block(
     status = collect_status(
         registry_path=registry,
         runtime_root_override=str(tmp_path / "runtime"),
-        scan_roots=[repo],
         limit=1,
         goal_id=GOAL_ID,
     )

@@ -139,7 +139,7 @@ def test_requested_followup_uses_ordinary_todos_and_execution_reaches_next_repla
          "--todo-id", fixture.TODO_ID)
     binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
     current = call("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
-        "--turn-instance-id", "research-after-candidate", "--scan-path", str(project))
+        "--turn-instance-id", "research-after-candidate", )
     assert current["should_run"]
     assert current["selected_todo"]["todo_id"] == root["todo_id"]
     assert current.get("goal_terminal_state") is None
@@ -166,7 +166,7 @@ def test_requested_followup_uses_ordinary_todos_and_execution_reaches_next_repla
         "--slots", "1", "--source", "heartbeat", "--execute")
     work_turn = "research-local-probe"
     work_guard = call("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
-        "--todo-id", root["todo_id"], "--turn-instance-id", work_turn, "--scan-path", str(project))
+        "--todo-id", root["todo_id"], "--turn-instance-id", work_turn, )
     assert work_guard["should_run"] and work_guard["effective_action"] == "normal_run"
     call("configure-goal", "--goal-id", fixture.GOAL_ID, "--explore-graph-enabled", "--execute")
     observed = probe(project, monkeypatch)
@@ -204,7 +204,7 @@ def test_requested_followup_uses_ordinary_todos_and_execution_reaches_next_repla
     call("quota", "spend-slot", *binding, "--todo-id", root["todo_id"],
         "--turn-instance-id", work_turn, "--slots", "1", "--source", "heartbeat", "--execute")
     review = call("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
-        "--turn-instance-id", "review-resource-evidence", "--scan-path", str(project))
+        "--turn-instance-id", "review-resource-evidence", )
     assert "replan_action_packet" in review, {key: review.get(key) for key in (
         "should_run", "effective_action", "reason", "autonomous_replan_obligation", "effective_turn_replan")}
     control = review["replan_action_packet"]["stride_control"]
@@ -220,7 +220,7 @@ def test_requested_followup_uses_ordinary_todos_and_execution_reaches_next_repla
         "--text", "Vary the measured search cap while retaining the incumbent and the original method claim.")
     assert next_work["todo_id"] != root["todo_id"]
     review = call("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
-        "--todo-id", next_work["todo_id"], "--turn-instance-id", "review-resource-evidence", "--scan-path", str(project))
+        "--todo-id", next_work["todo_id"], "--turn-instance-id", "review-resource-evidence", )
     control = review["replan_action_packet"]["stride_control"]
     decision = control["minimal_example"]
     decision["explore_review"] = {"revision": control["explore_basis"]["revision"],
@@ -242,7 +242,7 @@ def test_requested_followup_uses_ordinary_todos_and_execution_reaches_next_repla
     assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"]
     call("quota", "spend-slot", *replan_binding, "--slots", "1", "--source", "heartbeat", "--execute")
     admitted = call("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
-        "--todo-id", next_work["todo_id"], "--turn-instance-id", "execute-search-control", "--scan-path", str(project))
+        "--todo-id", next_work["todo_id"], "--turn-instance-id", "execute-search-control", )
     assert admitted["should_run"] and admitted["selected_todo"]["todo_id"] == next_work["todo_id"]
     candidate = project / "candidate.py"
     candidate.write_text("import json,os; from pathlib import Path; "

@@ -46,8 +46,7 @@ def serve() -> None:
                 or Path(args.runtime_root).resolve() != bound.runtime_root.resolve()
                 or (args.goal_id, args.agent_id, args.todo_id)
                 != (bound.goal_id, bound.agent_id, bound.todo_id)
-                or Path(args.project).resolve() != workspace
-                or Path(args.scan_root).resolve() != workspace):
+                or Path(args.project).resolve() != workspace):
             raise ValueError("preview cannot execute or retarget bound work")
         with redirect_stdout(_BoundedOutput()) as output:
             code = main(full_argv)

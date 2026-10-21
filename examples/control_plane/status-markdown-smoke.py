@@ -97,7 +97,6 @@ def collect_fixture_status(root: Path, registry_path: Path) -> tuple[dict, str]:
     payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=str(root / "runtime"),
-        scan_roots=[root / "project"],
         limit=5,
     )
     return payload, render_status_markdown(payload)

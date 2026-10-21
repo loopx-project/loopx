@@ -26,12 +26,6 @@ USE_SUBPROCESS_CLI = False
 
 
 def _argv(args: tuple[str, ...], *, registry_path: Path, runtime: Path) -> list[str]:
-    project_root = registry_path.parent.parent
-    scan_path_args = (
-        ["--scan-path", str(project_root)]
-        if args and args[0] in {"status", "quota"}
-        else []
-    )
     return [
         "--registry",
         str(registry_path),
@@ -40,7 +34,6 @@ def _argv(args: tuple[str, ...], *, registry_path: Path, runtime: Path) -> list[
         "--format",
         "json",
         *args,
-        *scan_path_args,
     ]
 
 

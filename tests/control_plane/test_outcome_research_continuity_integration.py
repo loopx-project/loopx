@@ -85,7 +85,6 @@ def test_mixed_outcome_and_owner_ack_keeps_original_turn_after_new_generation(ac
 
     def guard(turn=None, **kwargs):
         return _call(run, "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
-            "--scan-path", str(project),
             *(("--codex-app", "--turn-instance-id", turn) if turn else ()), **kwargs)
 
     original = guard(TURN)

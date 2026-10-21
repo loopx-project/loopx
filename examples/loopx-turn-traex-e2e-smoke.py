@@ -211,8 +211,6 @@ def _base_argv(
         json.dumps(_validator_command()),
         "--validation-failure-kind",
         "repair_required",
-        "--scan-root",
-        str(registry.parent.parent),
         "--no-global-sync",
         "--timeout-seconds",
         str(timeout_seconds),

@@ -96,7 +96,7 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     assert missing == {**full, "tasks": []}, "missing work must not fall back to another binding"
 
     packet = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
-        "--scan-path", str(tmp_path))
+        )
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is True and channel["work_context"]["complete"] is True
     observed = next(row["content"] for row in channel["work_context"]["sources"]
@@ -147,12 +147,12 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--scan-path", str(tmp_path)])
+                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", ])
         failed = json.loads(output.getvalue())["interaction_contract"]["agent_channel"]
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_acceptance" for row in failed["required_reads"])
-    recovered = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--scan-path", str(tmp_path))
+    recovered = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", )
     assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 

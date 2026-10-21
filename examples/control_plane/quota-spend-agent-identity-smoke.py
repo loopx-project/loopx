@@ -43,8 +43,6 @@ def load_quota_plan_fixture() -> ModuleType:
 
 def run_quota(root: Path, registry_path: Path, runtime: Path, *args: str) -> tuple[dict, int]:
     quota_args = list(args)
-    if "--scan-root" not in quota_args and "--scan-path" not in quota_args:
-        quota_args.extend(["--scan-root", str(root)])
     result = subprocess.run(
         [
             sys.executable,
@@ -446,8 +444,6 @@ def main() -> int:
             "--source",
             "heartbeat",
             "--execute",
-            "--scan-path",
-            str(project),
         )
         before = unscoped_payload["before"]
         assert unscoped_code == 1, unscoped_payload
@@ -475,8 +471,6 @@ def main() -> int:
             "--execute",
             "--agent-id",
             agent_id,
-            "--scan-path",
-            str(project),
         )
         assert scoped_code == 0, scoped_payload
         assert scoped_payload["ok"] is True, scoped_payload

@@ -133,8 +133,6 @@ def test_real_turn_plan_cli_warns_without_state_writes(tmp_path, enabled):
         "loopx-turn-fixture",
         "--agent-id",
         "codex-fixture",
-        "--scan-root",
-        str(project),
     ]
     result = subprocess.run(command, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr

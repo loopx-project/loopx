@@ -5,7 +5,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..doctor import collect_doctor
-from ..paths import default_public_scan_root
 from ..quota import build_quota_should_run
 from ..ready_score import (
     build_ready_score_report,
@@ -21,9 +20,6 @@ PrintPayload = Callable[
 ]
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
-def _scan_roots(args: argparse.Namespace) -> list[Path]:
-    scan_roots = [Path(item).expanduser() for item in args.scan_path]
-    return scan_roots or [Path(args.scan_root).expanduser()]
 
 
 def register_ready_score_command(
@@ -44,17 +40,6 @@ def register_ready_score_command(
         "--agent-id",
         help="Registered agent id for identity-scoped quota and scheduler readiness.",
     )
-    parser.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help="Public files to scan through the status contract. Defaults to the LoopX install root.",
-    )
-    parser.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help="Specific public file or directory to scan through the status contract. Repeatable.",
-    )
     parser.add_argument("--limit", type=int, default=5)
 
 
@@ -69,12 +54,10 @@ def handle_ready_score_command(
     if args.command != "ready-score":
         return None
     doctor_payload = collect_doctor()
-    scan_roots = _scan_roots(args)
     limit = max(0, args.limit)
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
-        scan_roots=scan_roots,
         limit=limit,
         goal_id=args.goal_id,
     )
@@ -83,7 +66,6 @@ def handle_ready_score_command(
         status_payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=scan_roots,
             limit=limit,
             goal_id=selected_goal_id,
         )

@@ -504,7 +504,6 @@ def main() -> int:
             str(home) + arg[len("$HOME") :] if arg.startswith("$HOME/") else arg
             for arg in app_ssh_quota_argv
         ]
-        app_ssh_quota_argv.extend(["--scan-root", str(project)])
         app_ssh_quota_run = subprocess.run(
             app_ssh_quota_argv,
             cwd=project,

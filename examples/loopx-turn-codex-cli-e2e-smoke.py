@@ -225,8 +225,6 @@ def _base_argv(
         "workspace-write",
         "--validation-command-json",
         json.dumps(_validator_command(expected_marker)),
-        "--scan-root",
-        str(registry.parent.parent),
         "--no-global-sync",
         "--timeout-seconds",
         str(timeout_seconds),

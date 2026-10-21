@@ -20,7 +20,6 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
             registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
             "--turn-instance-id", turn, "--todo-id", TODO_ID,
-            "--scan-path", str(project),
         )
         assert rc == 0, result
         return result
@@ -57,7 +56,7 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
             registry, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", prior_turn, "--source", "heartbeat",
-            "--slots", "1", "--execute", "--scan-path", str(project),
+            "--slots", "1", "--execute",
         )
         assert rc == 0, spent
     assert _spend_run_count(runtime) == 1
@@ -78,7 +77,6 @@ def test_later_turn_refusal_names_the_earlier_turn_that_owes_closeout(tmp_path: 
             registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
             "--turn-instance-id", turn, "--todo-id", TODO_ID,
-            "--scan-path", str(project),
         )
         assert rc == 0, result
         return result
@@ -120,7 +118,7 @@ def test_later_turn_refusal_names_the_earlier_turn_that_owes_closeout(tmp_path: 
         registry, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", prior_turn, "--source", "heartbeat",
-        "--slots", "1", "--execute", "--scan-path", str(project),
+        "--slots", "1", "--execute",
     )
     assert rc == 0, spent
     rebound = guard(current_turn)

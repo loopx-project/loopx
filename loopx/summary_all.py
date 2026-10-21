@@ -460,7 +460,6 @@ def build_global_gates(
     *,
     registry_path: Path,
     runtime_root_override: str | None,
-    scan_roots: list[Path],
     agent_id: str | None,
     limit: int,
 ) -> dict[str, Any]:
@@ -468,7 +467,6 @@ def build_global_gates(
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_override,
-        scan_roots=scan_roots,
         limit=normalized_limit,
     )
     if status_payload.get("ok") is not True:
@@ -660,7 +658,6 @@ def build_summary_all(
     *,
     registry_path: Path,
     runtime_root_override: str | None,
-    scan_roots: list[Path],
     agent_id: str | None,
     time_range: str,
     limit: int,
@@ -670,7 +667,6 @@ def build_summary_all(
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_override,
-        scan_roots=scan_roots,
         limit=max(limit, 1),
         recent_run_limit=recent_progress_limit,
     )

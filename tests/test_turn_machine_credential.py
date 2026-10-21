@@ -40,7 +40,7 @@ def turn(project, runtime, registry, *options, action="plan"):
             "--registry", str(registry), "--runtime-root", str(runtime),
             "--format", "json", "turn", action,
             "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-            "--scan-root", str(project), *options,
+             *options,
         ])
     payload = json.loads(output.getvalue())
     assert KEY not in output.getvalue()

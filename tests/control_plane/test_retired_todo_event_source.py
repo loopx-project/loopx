@@ -257,7 +257,7 @@ def test_real_directory_lifecycle_uses_canonical_state_despite_stale_audit(tmp_p
         assert indexed["status"] == expected
         # This journey owns the synthetic project, not a repeated boundary scan
         # of the checkout that happens to be the CLI harness's working directory.
-        directory = cli("agent-directory", "--agent-id", agent, "--scan-path", str(tmp_path))
+        directory = cli("agent-directory", "--agent-id", agent, )
         work = next(row for row in directory["rows"] if row["agent_id"] == agent)["work"]
         if expected == "done":
             assert work is None
@@ -305,8 +305,6 @@ def test_real_directory_lifecycle_uses_canonical_state_despite_stale_audit(tmp_p
         for command in ("status", "agent-directory"):
             arguments = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
                 "--runtime-root", str(runtime), "--format", "json", command, "--goal-id", "goal-a"]
-            if command == "agent-directory":
-                arguments.extend(["--scan-path", str(tmp_path)])
             failure = subprocess.run(arguments,
                 capture_output=True, text=True, timeout=60)
             if failure.stdout.strip():

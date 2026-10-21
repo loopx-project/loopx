@@ -48,7 +48,7 @@ def test_current_source_replay_and_different_successor_do_not_certify_selected_w
     actor.probe(request, "retained")
 
     def guard(turn, todo=None):
-        return cli("quota", "should-run", *identity, "--codex-app", "--scan-path", str(project),
+        return cli("quota", "should-run", *identity, "--codex-app",
             "--turn-instance-id", turn, *(("--todo-id", todo) if todo else ()))
 
     turn = "comparison-a-plan-b-successor"

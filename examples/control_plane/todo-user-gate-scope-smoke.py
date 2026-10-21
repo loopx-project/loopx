@@ -364,7 +364,6 @@ def main() -> int:
         other_lane_only_status = collect_status(
             registry_path=registry,
             runtime_root_override=str(root / "runtime"),
-            scan_roots=[repo],
             limit=1,
             goal_id=GOAL_ID,
         )
@@ -516,7 +515,6 @@ def main() -> int:
         status_payload = collect_status(
             registry_path=registry,
             runtime_root_override=str(root / "runtime"),
-            scan_roots=[repo],
             limit=1,
             goal_id=GOAL_ID,
         )

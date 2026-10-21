@@ -184,8 +184,6 @@ def test_cli_should_run_reads_disposable_state_and_emits_v1(tmp_path):
             SCOPED_AGENT_ID,
             "--runtime-profile",
             "outer_controller",
-            "--scan-path",
-            str(project),
         ],
         cwd=Path(__file__).resolve().parents[2],
         capture_output=True,

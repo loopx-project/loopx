@@ -35,7 +35,7 @@ def test_real_quota_capability_gate_does_not_enable_repair_outputs(tmp_path, mon
     before = state.read_bytes()
     authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     args = ["quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-            "--include-detail", "agent-todos", "--scan-path", str(tmp_path)]
+            "--include-detail", "agent-todos", ]
     if network_available:
         args += ["--available-capability", "network"]
     code, packet = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime)

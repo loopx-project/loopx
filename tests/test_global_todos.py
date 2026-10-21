@@ -13,7 +13,6 @@ def build_payload(
     return global_todos.build_global_todos(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=agent_id,
         limit=limit,
     )

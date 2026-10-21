@@ -211,7 +211,7 @@ def _host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation_tools: bool
 def _run(registry: Path, runtime: Path, project: Path, host_arguments: list[str]):
     return _cli(registry, runtime,
         "turn", "run-once", "--goal-id", GOAL, "--agent-id", AGENT,
-        "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+        "--host", "codex-cli", "--project", str(project),
         "--codex-sandbox", "read-only", "--no-global-sync", "--iteration-context", "fresh",
         "--turn-instance-id", "launch-authority-fixture",
         "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]),

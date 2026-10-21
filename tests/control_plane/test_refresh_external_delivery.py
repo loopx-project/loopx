@@ -29,7 +29,7 @@ def session(tmp_path, monkeypatch, capsys):
         return json.loads(stdout)
 
     assert run(["quota", "should-run", "--codex-app", *binding,
-                "--scan-path", str(project)])["decision"] == "run"
+                ])["decision"] == "run"
     args = ["refresh-state", *binding, "--classification", "validated_change",
             "--delivery-outcome", "outcome_progress", "--no-global-sync"]
     journal = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"

@@ -244,10 +244,8 @@ def write_fixture(
 
 
 def run_cli(registry_path: Path, *args: str) -> dict:
-    scan_args = ["--scan-path", str(Path(__file__).resolve())] if args[:1] == ("quota",) else []
     return run_json_cli(
         *args,
-        *scan_args,
         registry_path=registry_path,
         runtime_root=runtime_root_from_registry(registry_path),
         cwd=REPO_ROOT,
@@ -256,10 +254,8 @@ def run_cli(registry_path: Path, *args: str) -> dict:
 
 
 def run_cli_expect_error(registry_path: Path, *args: str) -> dict:
-    scan_args = ["--scan-path", str(Path(__file__).resolve())] if args[:1] == ("quota",) else []
     returncode, payload = run_json_cli_result(
         *args,
-        *scan_args,
         registry_path=registry_path,
         runtime_root=runtime_root_from_registry(registry_path),
         cwd=REPO_ROOT,
@@ -278,8 +274,6 @@ def run_cli_markdown_expect_error(registry_path: Path, *args: str) -> str:
         "--runtime-root",
         str(runtime_root_from_registry(registry_path)),
         *args,
-        "--scan-path",
-        str(Path(__file__).resolve()),
     ]
     result = subprocess.run(
         command,
@@ -1056,7 +1050,6 @@ def assert_turn_scoped_monitor_poll_is_idempotent() -> None:
         status_payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(runtime_root),
-            scan_roots=[Path(__file__).resolve()],
             limit=AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
         )
         turn_id = "2026-07-23T02:33:00Z"

@@ -54,7 +54,6 @@ def status_projection_cache_key(
     *,
     registry_path: Path,
     runtime_root: Path,
-    scan_roots: list[Path],
     limit: int,
     include_task_graph: bool,
     goal_id: str | None,
@@ -66,7 +65,6 @@ def status_projection_cache_key(
         "collector": "collect_status",
         "registry_path": str(registry_path.expanduser().resolve()),
         "runtime_root": str(runtime_root.expanduser()),
-        "scan_roots": [str(path.expanduser().resolve()) for path in scan_roots],
         "limit": max(0, int(limit)),
         "include_task_graph": bool(include_task_graph),
         "goal_id": str(goal_id or "").strip() or None,
@@ -132,7 +130,6 @@ def status_projection_cache_metadata(
     *,
     registry_path: Path,
     runtime_root: Path,
-    scan_roots: list[Path],
     limit: int,
     include_task_graph: bool,
     goal_id: str | None,
@@ -143,7 +140,6 @@ def status_projection_cache_metadata(
     key = status_projection_cache_key(
         registry_path=registry_path,
         runtime_root=runtime_root,
-        scan_roots=scan_roots,
         limit=limit,
         include_task_graph=include_task_graph,
         goal_id=goal_id,
@@ -162,7 +158,6 @@ def status_projection_cache_metadata(
         "agent_lane_id": str(agent_lane_id or "").strip() or None,
         "limit": max(0, int(limit)),
         "include_task_graph": bool(include_task_graph),
-        "scan_roots": [str(path.expanduser()) for path in scan_roots],
         "available_capabilities": normalized_capabilities,
     }
 
@@ -171,7 +166,6 @@ def load_status_projection_cache(
     *,
     registry_path: Path,
     runtime_root: Path,
-    scan_roots: list[Path],
     limit: int,
     include_task_graph: bool,
     goal_id: str | None,
@@ -182,7 +176,6 @@ def load_status_projection_cache(
     metadata = status_projection_cache_metadata(
         registry_path=registry_path,
         runtime_root=runtime_root,
-        scan_roots=scan_roots,
         limit=limit,
         include_task_graph=include_task_graph,
         goal_id=goal_id,
@@ -246,7 +239,6 @@ def write_status_projection_cache(
     *,
     registry_path: Path,
     runtime_root: Path,
-    scan_roots: list[Path],
     limit: int,
     include_task_graph: bool,
     goal_id: str | None,
@@ -258,7 +250,6 @@ def write_status_projection_cache(
     metadata = status_projection_cache_metadata(
         registry_path=registry_path,
         runtime_root=runtime_root,
-        scan_roots=scan_roots,
         limit=limit,
         include_task_graph=include_task_graph,
         goal_id=goal_id,

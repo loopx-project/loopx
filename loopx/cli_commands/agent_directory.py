@@ -8,8 +8,6 @@ they get names its own limits instead of implying presence it cannot see.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from ..agent_registry import load_goal_from_registry
 from ..control_plane.agents.directory import build_peer_agent_directory
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError
@@ -30,12 +28,6 @@ def register_agent_directory(subparsers, add_format):
             "The calling Agent. Supplying it proves membership against the Goal "
             "registry; an unregistered caller receives a scope gap instead of rows."
         ),
-    )
-    parser.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help="Project root to scan for Goal state; defaults to the current directory.",
     )
     parser.add_argument(
         "--cursor",
@@ -64,11 +56,9 @@ def handle_agent_directory(args, registry_path, runtime_root, print_payload, out
         print_payload(payload, output_format(args), render_agent_directory)
         return 1
     try:
-        scan_roots = [Path(item).expanduser() for item in args.scan_path] or [Path.cwd()]
         status_payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(runtime_root) if runtime_root else args.runtime_root,
-            scan_roots=scan_roots,
             limit=AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
             goal_id=args.goal_id,
         )

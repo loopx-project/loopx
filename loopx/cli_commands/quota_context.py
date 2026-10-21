@@ -54,7 +54,6 @@ QUOTA_SCHEDULER_FOLLOWUP_COMMANDS = frozenset(
 @dataclass(frozen=True, slots=True)
 class QuotaCommandContext:
     runtime_root: Path
-    scan_roots: list[Path]
     status_limit: int
     status_goal_id: str | None
     status_payload: dict[str, object]
@@ -276,9 +275,6 @@ def prepare_quota_command_context(
     if begin_turn:
         heartbeat_turn_id = mint_turn_instance_id(prefix="guided-start")
 
-    scan_roots = [Path(item).expanduser() for item in args.scan_path]
-    if not scan_roots:
-        scan_roots = [Path(args.scan_root).expanduser()]
     try:
         requested_limit = int(getattr(args, "limit", 0))
     except (TypeError, ValueError):
@@ -312,7 +308,6 @@ def prepare_quota_command_context(
         status_payload, cache_metadata = load_status_projection_cache(
             registry_path=registry_path,
             runtime_root=runtime_root,
-            scan_roots=scan_roots,
             limit=status_limit,
             include_task_graph=False,
             goal_id=status_goal_id,
@@ -345,7 +340,6 @@ def prepare_quota_command_context(
         status_payload = collector(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=scan_roots,
             limit=status_limit,
             goal_id=status_goal_id,
             available_capabilities=args.available_capabilities,
@@ -355,7 +349,6 @@ def prepare_quota_command_context(
             cache_metadata = write_status_projection_cache(
                 registry_path=registry_path,
                 runtime_root=runtime_root,
-                scan_roots=scan_roots,
                 limit=status_limit,
                 include_task_graph=False,
                 goal_id=status_goal_id,
@@ -369,7 +362,6 @@ def prepare_quota_command_context(
 
     return QuotaCommandContext(
         runtime_root=runtime_root,
-        scan_roots=scan_roots,
         status_limit=status_limit,
         status_goal_id=status_goal_id,
         status_payload=status_payload,

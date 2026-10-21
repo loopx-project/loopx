@@ -384,10 +384,7 @@ describe('DSH admission-to-closeout integration', () => {
     expect(writeback.exitCode).toBe(0)
     expect(new Set(receiptEffectIds(writeback.payload))).toEqual(new Set([effectId]))
 
-    const spendArgs = [
-      ...executablePlanArgs(steps, 'quota_spend'),
-      '--scan-path', testFixture.project,
-    ]
+    const spendArgs = executablePlanArgs(steps, 'quota_spend')
     const spend = await runCli(testFixture, spendArgs)
     const spendReplay = await runCli(testFixture, spendArgs)
     expect(spend.exitCode).toBe(0)

@@ -146,7 +146,7 @@ def turn(root: Path, actor: str, revision: str, workspace: Path, validator: list
                "--turn-instance-id", actor + "-" + uuid.uuid4().hex,
                "--execution-mode", "isolated-headless", "--project", str(workspace),
                "--validation-command-json", json.dumps(validator), "--validation-failure-kind", "repair_required",
-               "--scan-root", str(workspace), "--no-global-sync", "--timeout-seconds", str(timeout),
+                "--no-global-sync", "--timeout-seconds", str(timeout),
                *host_args, "--execute", workspace=workspace, timeout=timeout + 60)
 
 

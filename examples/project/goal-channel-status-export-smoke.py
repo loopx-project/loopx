@@ -99,7 +99,6 @@ def main() -> int:
         payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(runtime),
-            scan_roots=[project],
             limit=5,
         )
 

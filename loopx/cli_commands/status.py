@@ -189,7 +189,6 @@ def handle_status_command(
     print_payload: PrintPayload,
 ) -> int:
     try:
-        scan_roots = _scan_roots(args)
         display_limit = max(0, args.limit)
         collection_limit = _status_collection_limit_for_agent_lane(
             requested_limit=display_limit,
@@ -205,7 +204,6 @@ def handle_status_command(
             payload, cache_metadata = load_status_projection_cache(
                 registry_path=registry_path,
                 runtime_root=runtime_root,
-                scan_roots=scan_roots,
                 limit=collection_limit,
                 include_task_graph=args.include_task_graph,
                 goal_id=args.goal_id,
@@ -217,7 +215,6 @@ def handle_status_command(
             payload = collect_status(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
-                scan_roots=scan_roots,
                 limit=collection_limit,
                 include_task_graph=args.include_task_graph,
                 goal_id=args.goal_id,
@@ -228,7 +225,6 @@ def handle_status_command(
                 cache_metadata = write_status_projection_cache(
                     registry_path=registry_path,
                     runtime_root=runtime_root,
-                    scan_roots=scan_roots,
                     limit=collection_limit,
                     include_task_graph=args.include_task_graph,
                     goal_id=args.goal_id,
@@ -857,7 +853,6 @@ def handle_diagnose_command(
         payload = collect_diagnosis(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=_scan_roots(args),
             limit=max(1, args.limit),
             goal_id=args.goal_id,
             agent_id=args.agent_id,
@@ -903,7 +898,6 @@ def handle_review_packet_command(
         status_payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
-            scan_roots=_scan_roots(args),
             limit=max(0, args.limit),
             include_task_graph=not args.handoff_only,
             goal_id=args.goal_id,

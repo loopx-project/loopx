@@ -67,7 +67,7 @@ def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, m
 
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", goal,
                   "--agent-id", actor, "--todo-id", todo, "--turn-instance-id", turn,
-                  "--scan-path", str(project))
+                  )
     lease_args = ("--goal-id", goal, "--todo-id", todo, "--owner", actor,
                   "--idempotency-key", "retained-work")
     try:
@@ -183,7 +183,7 @@ def test_file_sqlite_file_retains_new_todos_results_and_settled_turn(tmp_path, m
         # silently treat the added Todo as proof of Goal acceptance.
         next_work = run("quota", "should-run", "--codex-app", "--goal-id", goal,
                         "--agent-id", actor, "--turn-instance-id", "turn-after-provider-rollback",
-                        "--scan-path", str(project))
+                        )
         assert next_work["decision"] == "autonomous_replan_required"
         assert next_work["effective_action"] != "unsettled_host_turn_recovery"
         assert next_work["replan_action_packet"]["obligation_id"]

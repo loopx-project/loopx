@@ -73,7 +73,7 @@ def test_cli_restore_then_reacquire_preserves_acceptance_and_exact_retry(tmp_pat
     assert first["acquired"]
     turn_binding = ["--agent-id", "agent-a", "--todo-id", target,
                     "--turn-instance-id", "turn-restore-acceptance"]
-    guard = cli("quota", "should-run", "--codex-app", *turn_binding, "--scan-path", str(delivery))
+    guard = cli("quota", "should-run", "--codex-app", *turn_binding, )
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == target
     cli("todo", "update", "--todo-id", target, "--agent-id", "agent-a", "--clear-resume-when",
         "--task-lease-idempotency-key", "execution-one", "--task-lease-expected-version", "1")
@@ -128,7 +128,7 @@ def test_cli_restore_then_reacquire_preserves_acceptance_and_exact_retry(tmp_pat
     assert refresh["ok"]
     assert refresh["delivery_workspace"]["workspace_kind"] == "independent_git_worktree"
     spend_args = ["quota", "spend-slot", *turn_binding, "--slots", "1", "--source", "heartbeat",
-                  "--execute", "--scan-path", str(delivery)]
+                  "--execute", ]
     first_spend = cli(*spend_args)
     assert first_spend["settlement_result"]["ok"]
     assert cli(*restore)["status"] == "replayed"

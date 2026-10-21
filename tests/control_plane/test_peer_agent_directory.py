@@ -520,8 +520,6 @@ def test_cli_agent_directory_continues_with_cursor(tmp_path) -> None:
                     GOAL_ID,
                     "--agent-id",
                     registered[0],
-                    "--scan-path",
-                    str(tmp_path),
                     *extra,
                 ]
             )

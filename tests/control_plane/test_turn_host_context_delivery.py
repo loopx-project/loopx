@@ -132,7 +132,7 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     turn = "host-replan-turn"
     code, initial = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
-        "--codex-app", "--scan-path", str(project), cwd=project)
+        "--codex-app",  cwd=project)
     assert code == 0 and initial["decision"] == "autonomous_replan_required", initial
     _bind_selected_replan_guard(registry, runtime, project, turn)
     capture = tmp_path / "capture"

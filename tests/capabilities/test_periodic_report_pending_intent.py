@@ -77,7 +77,7 @@ def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, 
         no_host,
     )
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
-    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--scan-path", str(tmp_path)]
+    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, ]
     with monkeypatch.context() as read_only:
         read_only.setattr("loopx.cli_commands.lark_inbox.dispatch_goal_lark_turn_start_hooks", no_host)
         read_only.setattr("loopx.capabilities.periodic_report.cadence_runtime.extend_cadence_turn_start_dispatch", no_host)
@@ -843,7 +843,6 @@ def test_consumption_queues_authorized_delivery_and_exact_replay_does_not_duplic
     status = collect_status(
         registry_path=registry,
         runtime_root_override=str(runtime),
-        scan_roots=[registry.parent],
         limit=20,
         goal_id=GOAL_ID,
     )

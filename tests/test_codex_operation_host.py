@@ -559,7 +559,7 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     arguments = [
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-        "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+        "--host", "codex-cli", "--project", str(project),
         "--no-global-sync", "--codex-operation-tools", "--codex-bin", str(executable),
         "--codex-operation-source-route-json", json.dumps(selected_route),
         "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh",
@@ -593,7 +593,7 @@ def test_source_route_cli_requires_owned_operation_transport(tmp_path, capsys):
     rc = cli_main([
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-        "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+        "--host", "codex-cli", "--project", str(project),
         "--no-global-sync", "--codex-operation-source-route-json",
         json.dumps({"host_surface": "codex-app", "thread_id": "source-thread"}),
     ])

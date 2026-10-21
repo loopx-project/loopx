@@ -37,7 +37,7 @@ def test_open_validation_replan_retains_requirements_and_executes_repair(tmp_pat
     def guard(turn):
         return call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
             "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", turn,
-            "--scan-path", str(fixture["project"]))
+            )
 
     try:
         artifact = fixture["project"] / "artifact.txt"
@@ -62,7 +62,7 @@ def test_open_validation_replan_retains_requirements_and_executes_repair(tmp_pat
 
         before = inspect()
         call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
-            "--agent-id", AGENT, "--turn-instance-id", TURN, "--scan-path", str(fixture["project"]))
+            "--agent-id", AGENT, "--turn-instance-id", TURN, )
         admitted = guard(TURN)
         obligation = admitted["autonomous_replan_obligation"]
         assert [t["kind"] for t in obligation["triggers"]] == ["typed_progress_repeat"]
@@ -75,7 +75,7 @@ def test_open_validation_replan_retains_requirements_and_executes_repair(tmp_pat
         assert any("even with open Todos" in s for s in admitted["replan_action_packet"]["planning_guidance"])
         envelope = call("quota", "should-run", "--codex-app", "--turn-envelope", "--goal-id", GOAL,
             "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", TURN,
-            "--scan-path", str(fixture["project"]))
+            )
         delivered = next(source for source in envelope["work_context"]["sources"] if source["source"] == "goal_acceptance")
         assert acceptance == delivered["content"]["goal_acceptance_contract"]
         assert inspect() == before, "review admission does not rewrite acceptance"

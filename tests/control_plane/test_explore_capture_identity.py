@@ -36,7 +36,7 @@ def test_first_capture_allocates_identity_and_recovers_without_rewriting_scope(
     assert _run_cli(registry, runtime, "todo", "claim", "--claimed-by", AGENT_ID,
                     *binding[:-2], cwd=project)[0] == 0
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-                        *binding, "--scan-path", str(project), cwd=project)
+                        *binding,  cwd=project)
     assert rc == 0, guard
     attachment = deepcopy(ATTACHMENT)
     del attachment["node_id"]

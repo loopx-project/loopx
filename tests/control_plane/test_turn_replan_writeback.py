@@ -90,7 +90,7 @@ def _run_turn(project, runtime, registry, runner, *, turn=None, resume=None, fol
         "--project", str(project), "--dsh-runner", str(runner),
         "--dsh-home", str(project.parent / "dsh-home"),
         "--validation-command-json", json.dumps([sys.executable, "-c", validator]),
-        "--scan-root", str(project), "--no-global-sync", "--execute",
+         "--no-global-sync", "--execute",
         *(["--turn-instance-id", turn] if turn else []),
         *(["--resume-turn-key", resume] if resume else []), cwd=project)
 

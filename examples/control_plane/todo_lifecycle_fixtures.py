@@ -115,7 +115,6 @@ def run_fixture_cli(
     registry_path: Path,
     args: tuple[str, ...],
 ) -> tuple[int, dict]:
-    args = fixture_cli_args(registry_path, args)
     argv = [
         "--registry",
         str(registry_path),
@@ -138,16 +137,6 @@ def run_fixture_cli(
     assert isinstance(payload, dict), payload
     payload["_returncode"] = returncode
     return returncode, payload
-
-
-def fixture_cli_args(registry_path: Path, args: tuple[str, ...]) -> tuple[str, ...]:
-    if (
-        args[:1] == ("quota",)
-        and "--scan-path" not in args
-        and "--scan-root" not in args
-    ):
-        return (*args, "--scan-path", str(registry_path.parent.parent))
-    return args
 
 
 def parsed_items(state_file: Path) -> list[dict]:

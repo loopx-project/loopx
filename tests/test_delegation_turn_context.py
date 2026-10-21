@@ -123,7 +123,7 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
     link(root, registry, "research", "worker", receipt["request_id"], ["todo_artifact"], [])
     for turn_id in ("agenda-turn-one", "agenda-turn-two"):
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "research",
-            "--agent-id", "worker", "--scan-path", str(tmp_path), "--turn-instance-id", turn_id,
+            "--agent-id", "worker",  "--turn-instance-id", turn_id,
             "--turn-envelope", registry_path=registry, runtime_root=root)
         assert code == 0, packet
         source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")

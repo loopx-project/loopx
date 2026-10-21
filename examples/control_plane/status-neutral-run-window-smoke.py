@@ -265,7 +265,6 @@ def main() -> int:
         status = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(root / "runtime"),
-            scan_roots=[root / "project"],
             limit=5,
         )
         item = status["attention_queue"]["items"][0]
@@ -331,7 +330,6 @@ def main() -> int:
         diagnosis = collect_diagnosis(
             registry_path=registry_path,
             runtime_root_override=str(root / "runtime"),
-            scan_roots=[root / "project"],
             limit=5,
             goal_id=GOAL_ID,
         )
@@ -352,7 +350,6 @@ def main() -> int:
         status = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(root / "runtime"),
-            scan_roots=[root / "project"],
             limit=5,
         )
         item = status["attention_queue"]["items"][0]

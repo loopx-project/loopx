@@ -193,7 +193,6 @@ def main() -> None:
         payload = collect_status(
             registry_path=registry,
             runtime_root_override=str(runtime_root),
-            scan_roots=[repo_root],
             limit=5,
         )
         assert_no_local_paths(payload["attention_queue"])

@@ -431,8 +431,6 @@ def assert_cli_events(root: Path, provider: str) -> None:
         cli_goal_id,
         "--agent-id",
         "codex-main-control",
-        "--scan-root",
-        str(project),
         "--limit",
         "1",
         allow_failure=True,

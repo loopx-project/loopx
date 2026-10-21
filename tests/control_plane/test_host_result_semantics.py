@@ -61,7 +61,7 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
         "--host", "generic-cli", "--execution-mode", "isolated-headless", "--project", str(workspace),
         "--host-command-json", json.dumps([sys.executable, "-m", "loopx.dsh_goal_mode",
             "--workspace", str(workspace), "--dsh-home", str(tmp_path / "dsh-home"), "--dsh-runner", str(runner)]),
-        "--validation-command-json", json.dumps(validator), "--scan-root", str(project),
+        "--validation-command-json", json.dumps(validator),
         "--no-global-sync", "--timeout-seconds", "30"]
     code, failed = f._run_cli([*base, "--turn-instance-id", "invalid-result", "--execute"])
     assert code == 1 and not failed["ok"], failed

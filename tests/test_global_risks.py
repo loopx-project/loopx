@@ -27,7 +27,6 @@ def build_payload(
 	return global_risks.build_global_risks(
 		registry_path=tmp_path / "registry.json",
 		runtime_root_override=None,
-		scan_roots=[],
 		agent_id=agent_id,
 		time_range=time_range,
 		limit=limit,
@@ -906,12 +905,6 @@ def test_global_risks_cli_registers_only_the_canonical_command(
 			"agent-a",
 			"--limit",
 			"5",
-			"--scan-root",
-			str(tmp_path),
-			"--scan-path",
-			"first.md",
-			"--scan-path",
-			"second.md",
 		]
 	)
 
@@ -919,14 +912,12 @@ def test_global_risks_cli_registers_only_the_canonical_command(
 	assert args.time_range == "1h"
 	assert args.agent_id == "agent-a"
 	assert args.limit == 5
-	assert args.scan_root == str(tmp_path)
-	assert args.scan_path == ["first.md", "second.md"]
 
 	with pytest.raises(SystemExit) as help_exit:
 		build_parser().parse_args(["global-risks", "--help"])
 	assert help_exit.value.code == 0
 	help_text = capsys.readouterr().out
-	for flag in ("--time-range", "--agent-id", "--limit", "--scan-root", "--scan-path"):
+	for flag in ("--time-range", "--agent-id", "--limit"):
 		assert flag in help_text
 
 	with pytest.raises(SystemExit) as alias_exit:
@@ -961,8 +952,6 @@ def test_global_risks_cli_reports_unhealthy_status_with_zero_exit(
 		command="global-risks",
 		agent_id="agent-a",
 		limit=5,
-		scan_root=str(tmp_path),
-		scan_path=[str(tmp_path / "risk.md")],
 		time_range="1h",
 		format="json",
 	)
@@ -980,7 +969,6 @@ def test_global_risks_cli_reports_unhealthy_status_with_zero_exit(
 		{
 			"registry_path": tmp_path / "registry.json",
 			"runtime_root_override": None,
-			"scan_roots": [tmp_path / "risk.md"],
 			"agent_id": "agent-a",
 			"time_range": "1h",
 			"limit": 5,
@@ -1007,8 +995,6 @@ def test_global_risks_cli_returns_nonzero_for_compact_errors(
 		command="global-risks",
 		agent_id="agent-a",
 		limit=5,
-		scan_root=str(tmp_path),
-		scan_path=[],
 		time_range="24h",
 		format=format_name,
 	)
@@ -1042,8 +1028,6 @@ def test_global_risks_cli_wraps_only_outer_exceptions(monkeypatch, tmp_path) -> 
 		command="global-risks",
 		agent_id=None,
 		limit=5,
-		scan_root=str(tmp_path),
-		scan_path=[],
 		time_range="7d",
 		format="json",
 	)

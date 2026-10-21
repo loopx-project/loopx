@@ -222,8 +222,6 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         AGENT_ID,
         "--turn-instance-id",
         TURN_ID,
-        "--scan-path",
-        str(project),
     )
     assert guard_rc == 0, guard
     assert guard["decision"] == "autonomous_replan_required", guard
@@ -349,8 +347,6 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         registry_path,
         runtime,
         *_projected_cli_args(spend_command),
-        "--scan-path",
-        str(project),
     )
     assert spend_rc == 0, spend
     assert spend["settlement_result"]["ok"] is True, spend
@@ -387,8 +383,6 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
         AGENT_ID,
         "--turn-instance-id",
         "turn-amendment-lifecycle-2",
-        "--scan-path",
-        str(project),
     )
     assert settled_guard_rc == 0, settled_guard
     assert settled_guard.get("replan_action_packet") is None, settled_guard

@@ -65,9 +65,7 @@ def _status(registry_path: Path, **kwargs):
     return collect_status(
         registry_path=registry_path,
         runtime_root_override=None,
-        scan_roots=[],
         limit=5,
-        include_public_boundary_scan=False,
         **kwargs,
     )
 
@@ -571,7 +569,6 @@ def _cache_args(registry_path: Path) -> dict:
     return {
         "registry_path": registry_path,
         "runtime_root": registry_path.parents[1] / "runtime",
-        "scan_roots": [],
         "limit": 5,
         "include_task_graph": False,
         "goal_id": None,
@@ -688,7 +685,6 @@ def test_global_summary_from_a_project_registry_is_marked_incomplete(tmp_path: P
     payload = summary_all.build_summary_all(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -715,7 +711,6 @@ def test_global_summary_from_the_global_registry_is_complete(tmp_path: Path, mon
     payload = summary_all.build_summary_all(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -738,7 +733,6 @@ def test_global_gates_counts_unavailable_quota_and_missing_status_envelope(tmp_p
     payload = summary_all.build_global_gates(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         limit=5,
     )
@@ -778,7 +772,6 @@ def test_global_todos_discloses_global_membership_and_display_truncation(
     payload = global_todos.build_global_todos(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         limit=1,
     )
@@ -820,7 +813,6 @@ def test_global_todos_missing_status_envelope_and_failed_quota_alert(
     payload = global_todos.build_global_todos(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         limit=5,
     )
@@ -844,7 +836,6 @@ def test_global_todos_missing_attention_queue_alerts(
     envelope = global_todos.build_global_todos(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         limit=5,
     )["projection_envelope"]
@@ -865,7 +856,6 @@ def test_global_risks_inherits_status_and_discloses_missing_global_membership(
     payload = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -882,7 +872,6 @@ def test_global_risks_inherits_status_and_discloses_missing_global_membership(
     missing = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -910,7 +899,6 @@ def test_global_risks_scan_truncation_is_an_incomplete_coverage_alert(
     payload = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=1,
@@ -933,7 +921,6 @@ def test_global_risks_empty_contract_container_is_a_read_source(
     envelope = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -1000,7 +987,6 @@ def test_global_risks_discloses_unreadable_host_poll_receipts_and_recovers(
     unreadable = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -1033,7 +1019,6 @@ def test_global_risks_discloses_unreadable_host_poll_receipts_and_recovers(
     recovered = global_risks.build_global_risks(
         registry_path=tmp_path / ".loopx" / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,

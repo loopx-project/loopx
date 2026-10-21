@@ -533,7 +533,6 @@ def build_global_todos(
     *,
     registry_path: Path,
     runtime_root_override: str | None,
-    scan_roots: list[Path],
     agent_id: str | None,
     limit: int,
 ) -> dict[str, Any]:
@@ -542,7 +541,6 @@ def build_global_todos(
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_override,
-        scan_roots=scan_roots,
         limit=scan_limit,
     )
     status_read_at = now_utc_iso()

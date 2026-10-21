@@ -102,7 +102,6 @@ def run_demo(
     status_payload = collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[project],
         limit=5,
         goal_id=goal_id,
     )
@@ -147,7 +146,7 @@ def run_demo(
         "next_commands": [
             f"cd {project}",
             'registry="$PWD/.loopx/registry.json"',
-            'loopx --registry "$registry" status --scan-root "$PWD"',
+            'loopx --registry "$registry" status',
             f'loopx --registry "$registry" --format json quota should-run --goal-id {goal_id} --runtime-profile generic_cli',
         ],
         "dashboard_status_commands": [

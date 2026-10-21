@@ -59,7 +59,7 @@ def write(registry, runtime, **kwargs):
 
 def routes(registry, runtime, root):
     status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[root], limit=5, include_task_graph=True)
+        limit=5, include_task_graph=True)
     item = next(item for item in status["attention_queue"]["items"] if item["goal_id"] == "next-action-goal")
     return item, {r["agent_id"]: r for r in item.get("agent_next_actions", [])}
 

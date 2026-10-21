@@ -76,7 +76,7 @@ def test_explicit_completed_todo_fallback_retains_twenty_record_threshold(
 
     def obligation():
         status = call("status", "--agent-id", "agent-a", "--limit", "30",
-                      "--scan-path", str(paths["project"]))
+                      )
         return next((obligation for row in status["attention_queue"]["items"]
                      if row["goal_id"] == GOAL_ID
                      if (obligation := row.get("autonomous_replan_obligations_by_agent", {})

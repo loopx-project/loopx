@@ -77,7 +77,7 @@ def make_scheduler_fixture(
     ), state_path=state, provider=provider)
     context = ["--host-surface", "codex_app"] if scenario == "invalid_context" else ["--codex-app"]
     guard = ["quota", "should-run", *context, "--goal-id", GOAL, "--agent-id", AGENT,
-             "--turn-instance-id", TURN, "--scan-path", str(project)]
+             "--turn-instance-id", TURN, ]
     return {"project": project, "runtime": runtime, "registry": registry,
             "state": state, "guard": guard}
 

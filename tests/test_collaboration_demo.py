@@ -66,8 +66,6 @@ def test_demo_preparation_has_executable_independent_worktree(tmp_path):
             "dsh",
             "--execution-mode",
             "isolated-headless",
-            "--scan-root",
-            str(root / "agents/builder"),
         ],
         cwd=root / "agents/builder",
         check=True,

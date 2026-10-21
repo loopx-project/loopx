@@ -467,8 +467,6 @@ def _fresh_host_quota_read(
         CONTINUITY_AGENT_ID,
         "--runtime-profile",
         "ark_managed_agent_goal",
-        "--scan-root",
-        str(project),
         registry_path=registry,
         runtime_root=runtime,
     )

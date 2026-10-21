@@ -167,7 +167,7 @@ print(json.dumps({'type': 'thread.started', 'thread_id': 'fixture-memory-session
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
             "--host", "codex-cli", "--project", str(project), "--codex-bin", str(host),
             "--iteration-context", "fresh", "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]),
-            "--scan-root", str(project), "--no-global-sync", "--execute"])
+             "--no-global-sync", "--execute"])
     result = json.loads(output.getvalue())
     assert code == 0, result
     observed = json.loads(capture.read_text())

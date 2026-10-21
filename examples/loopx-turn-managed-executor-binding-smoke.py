@@ -196,8 +196,6 @@ def _plan_command(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-root",
-        str(project),
     ]
     return [*argv, "--host", host] if host else argv
 
@@ -228,8 +226,6 @@ def _run_once_command(
         instance,
         "--project",
         str(workspace),
-        "--scan-root",
-        str(project),
         "--no-global-sync",
         "--execute",
     ]

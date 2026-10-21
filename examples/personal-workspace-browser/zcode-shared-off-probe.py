@@ -174,10 +174,8 @@ record(
     lambda: collect_status(
         registry_path=registry,
         runtime_root_override=str(root / "runtime"),
-        scan_roots=[],
         limit=5,
         goal_id="shared-off",
-        include_public_boundary_scan=False,
     ),
     render_status_markdown,
 )

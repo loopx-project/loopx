@@ -187,8 +187,8 @@ def _primary_record_invocation(registry, runtime, monitor, turn):
     run_json_cli(*_primary_monitor_args("should-run", turn, monitor),
         registry_path=registry, runtime_root=runtime)
     status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[registry.parent.parent], limit=20,
-        goal_id=GOAL_ID, include_public_boundary_scan=False)
+        limit=20,
+        goal_id=GOAL_ID)
     return lambda: record_quota_monitor_poll(status, goal_id=GOAL_ID,
         registry_path=registry, execute=True, agent_id=AGENT_ID,
         todo_id=monitor["todo_id"], target_key="primary-target",

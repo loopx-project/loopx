@@ -205,8 +205,6 @@ def should_run(
         GOAL_ID,
         "--agent-id",
         PEER_ALPHA,
-        "--scan-path",
-        str(project),
         "--host-surface", "generic_cli", "--scheduler-owner", "none", "--execution-mode", "interactive",
         registry_path=registry_path,
         runtime=runtime,

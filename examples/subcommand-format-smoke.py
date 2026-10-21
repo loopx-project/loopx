@@ -159,8 +159,6 @@ def main() -> int:
             "json",
             "--limit",
             "1",
-            "--scan-root",
-            str(registry_path.parent.parent),
         )
         assert status["ok"] is True, status
         assert "attention_queue" in status, status

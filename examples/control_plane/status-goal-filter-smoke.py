@@ -120,8 +120,6 @@ def run_goal_command(
         command.extend(["--goal-id", goal_id])
     command.extend(
         [
-            "--scan-path",
-            str(project / "PUBLIC.md"),
             "--limit",
             "10",
             *extra,

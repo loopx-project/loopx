@@ -142,8 +142,6 @@ def test_executing_managed_turn_remembers_through_turn_start_hook(
             GOAL_ID,
             "--agent-id",
             AGENT_ID,
-            "--scan-path",
-            str(project),
             "--project",
             str(project),
             "--host",

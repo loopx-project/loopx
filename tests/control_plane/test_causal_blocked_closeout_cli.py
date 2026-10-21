@@ -83,7 +83,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", f"causal-blocked-{kind}-{provider}")
     rc, guard = cli("quota", "should-run", "--codex-app",
-                        "--goal-id", GOAL_ID, *binding, "--scan-path", str(project), cwd=project)
+                        "--goal-id", GOAL_ID, *binding,  cwd=project)
     assert rc == 0 and guard["should_run"] is True, guard
     rc, original = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0, original
@@ -128,7 +128,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
         assert rc == 0, current
         assert current["todo"]["resume_condition"]["invalid_state"] == "dependency_cycle"
         rc, recovery = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-                           *binding, "--scan-path", str(project))
+                           *binding, )
         assert rc == 0, recovery
         repair = recovery["unsettled_host_turn_recovery"]
         assert repair["repair"] == "dependency"
@@ -161,7 +161,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert _classification_count(runtime, "causal_wait_writeback") == 1
     rc, spend = cli("quota", "spend-slot", "--goal-id", GOAL_ID,
                         "--slots", "1", "--source", "heartbeat", "--execute", *binding,
-                        "--scan-path", str(project), cwd=project)
+                         cwd=project)
     assert rc == 0 and spend["appended"] is False, spend
     assert _spend_run_count(runtime) == 0
     rc, after = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
@@ -172,7 +172,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
     assert todo["completion_validation_sha256"] == digest
     rc, next_turn = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                             "--agent-id", AGENT_ID, "--turn-instance-id", f"after-causal-{provider}",
-                            "--scan-path", str(project), cwd=project)
+                             cwd=project)
     assert rc == 0, next_turn
     assert next_turn["effective_action"] != "unsettled_host_turn_recovery"
     assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID

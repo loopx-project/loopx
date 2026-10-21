@@ -169,7 +169,7 @@ def test_real_cli_frontier_preserves_canonical_counts_after_display_loss(tmp_pat
         state_path=state, provider=provider)
     original_state = state.read_bytes()
     quota_args = ("quota", "should-run", "--goal-id", goal["id"],
-        "--agent-id", "agent-a", "--scan-path", str(tmp_path), "--include-detail", "agent-todos")
+        "--agent-id", "agent-a",  "--include-detail", "agent-todos")
     try:
         code, intact = run_json_cli_result(*quota_args, registry_path=registry, runtime_root=runtime)
         assert code == 0, intact

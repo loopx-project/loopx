@@ -102,7 +102,7 @@ def actor(request):
 
 
 def guard(request, turn, *, todo=True):
-    return cli(request, "quota", "should-run", *actor(request), "--codex-app", "--scan-path", request["project"],
+    return cli(request, "quota", "should-run", *actor(request), "--codex-app",
         "--turn-instance-id", turn, *(("--todo-id", request["todo_id"]) if todo else ()))
 
 
@@ -127,7 +127,7 @@ def refresh(request, turn, packet, *, obligation=None):
         "--delivery-outcome", "outcome_progress", "--delivery-boundary", "semantic_closeout" if obligation else "in_flight_continuation",
         "--agent-vision-json", str(path), "--no-global-sync", "--suppress-external-sinks")
     cli(request, "quota", "spend-slot", *actor(request), *binding, "--turn-instance-id", turn,
-        "--slots", "1", "--source", "heartbeat", "--execute", "--scan-path", request["project"])
+        "--slots", "1", "--source", "heartbeat", "--execute", )
     return result
 
 

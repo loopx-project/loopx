@@ -355,7 +355,6 @@ def test_status_attention_queue_surfaces_hard_lease_end_to_end(
     payload = collect_status(
         registry_path=registry,
         runtime_root_override=None,
-        scan_roots=[repo],
         limit=5,
         goal_id=GOAL_ID,
     )

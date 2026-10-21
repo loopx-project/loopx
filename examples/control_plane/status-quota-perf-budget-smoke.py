@@ -176,8 +176,6 @@ def main() -> int:
         status_payload, status_elapsed = run_cli(
             registry_path,
             "status",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--agent-id",
@@ -201,8 +199,6 @@ def main() -> int:
             AGENT_ID,
             "--available-capability",
             "shell",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
         )
@@ -226,8 +222,6 @@ def main() -> int:
             GOAL_ID,
             "--agent-id",
             AGENT_ID,
-            "--scan-path",
-            str(public_doc),
             check=False,
         )
         assert leak_returncode != 0 or leak_payload.get("status_health_ok") is False, leak_payload
@@ -268,8 +262,6 @@ def main() -> int:
         ) = run_cli_result(
             registry_path,
             "status",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             "--agent-id",
@@ -309,8 +301,6 @@ def main() -> int:
             AGENT_ID,
             "--available-capability",
             "shell",
-            "--scan-path",
-            str(public_doc),
             "--limit",
             "5",
             check=False,

@@ -48,7 +48,7 @@ def _original_operation_turn(
     turn_id = "operation-wake-" + hashlib.sha256(str(proposal["proposal_id"]).encode()).hexdigest()
     arguments = ["turn", "run-once", "--goal-id", parameters["goal_id"],
         "--agent-id", parameters["agent_id"], "--todo-id", executor["todo_id"],
-        "--turn-instance-id", turn_id, "--project", str(workspace), "--scan-root", str(workspace),
+        "--turn-instance-id", turn_id, "--project", str(workspace),
         "--timeout-seconds", str(timeout), *host_args,
         "--confirmed-operation-id", str(proposal["proposal_id"]),
         # An authenticated human confirmation is manual input, not a scheduled
@@ -62,7 +62,7 @@ def _original_operation_turn(
     if ((selected.goal_id, selected.agent_id, selected.todo_id, selected.turn_instance_id)
             != (parameters["goal_id"], parameters["agent_id"], executor["todo_id"], turn_id)
             or Path(selected.project).resolve() != workspace
-            or Path(selected.scan_root).resolve() != workspace or selected.resume_turn_key
+            or selected.resume_turn_key
             or selected.retry_failed_turn or selected.iteration_context == "fresh"
             or selected.timeout_seconds != timeout or selected.dsh_runner is not None
             or selected.host != executor.get("host", "codex-cli")):

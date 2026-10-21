@@ -175,7 +175,7 @@ def test_real_cli_path_delta_result_evolves_question_and_reads_it_back(tmp_path,
         "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID)
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
-    cli("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
+    cli("quota", "should-run", "--codex-app", *binding, )
     cli("explore", "node", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--node-id", "transfer", "--title", "Can the estimate transfer?", "--kind", "question")
     attachment = {k: deepcopy(ATTACHMENT[k]) for k in ("question", "applicability", "input_revision", "status")}

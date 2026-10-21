@@ -61,7 +61,7 @@ def test_in_flight_turn_replay_preserves_open_todo_and_fresh_turn_admission(
     before = todo()
     turn_id = f"inflight-{provider}-{waiting}"
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn_id)
-    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, "--scan-path", str(project))
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, )
     first = cli(*guard, *binding)
     assert first["should_run"] is True
     refresh = cli(

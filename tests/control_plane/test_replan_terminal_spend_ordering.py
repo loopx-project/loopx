@@ -121,8 +121,6 @@ def _should_run(
         AGENT_ID,
         "--turn-instance-id",
         TURN_INSTANCE_ID,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, payload
     return payload
@@ -153,8 +151,6 @@ def _dry_run_spend_preview(
         registry_path,
         runtime,
         *args,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, preview
     return preview
@@ -215,8 +211,6 @@ def test_coverage_backed_no_followup_replan_does_not_strand_its_quota_spend(
         registry_path,
         runtime,
         *spend_args,
-        "--scan-path",
-        str(project),
     )
     assert spend_rc == 0, spend
     assert spend["settlement_result"]["ok"] is True
@@ -235,8 +229,6 @@ def test_coverage_backed_no_followup_replan_does_not_strand_its_quota_spend(
         registry_path,
         runtime,
         *spend_args,
-        "--scan-path",
-        str(project),
     )
     assert replay_rc == 0, replay
     assert replay["idempotent_replay"] is True
@@ -277,8 +269,6 @@ def test_unbound_terminal_spend_stays_rejected(tmp_path: Path) -> None:
         "--source",
         "heartbeat",
         "--execute",
-        "--scan-path",
-        str(project),
     )
     assert spend["ok"] is False
     assert spend["appended"] is False

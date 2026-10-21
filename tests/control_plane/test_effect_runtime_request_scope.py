@@ -286,7 +286,6 @@ def test_collect_status_defines_one_programmatic_request(
     payload = status_module.collect_status(
         registry_path=Path("registry.json"),
         runtime_root_override=None,
-        scan_roots=[],
         limit=1,
     )
 

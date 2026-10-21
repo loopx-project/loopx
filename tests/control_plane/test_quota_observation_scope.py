@@ -50,7 +50,7 @@ def goals(tmp_path, request):
 @pytest.mark.parametrize("mode", ["status", "plan"])
 def test_selected_goal_excludes_unrelated_broken_goal(goals, mode):
     registry, runtime, project = goals
-    code, payload = run_json_cli_result("quota", mode, "--goal-id", "selected", "--scan-root", str(project),
+    code, payload = run_json_cli_result("quota", mode, "--goal-id", "selected",
                                         registry_path=registry, runtime_root=runtime)
     assert code == 0, payload
     assert payload["goal_filter"] == "selected"
@@ -61,7 +61,7 @@ def test_selected_goal_excludes_unrelated_broken_goal(goals, mode):
     assert payload["status_projection_envelope"]["coverage"]["scope"] == "goal"
     assert "Within Selected Goal" in render_quota_markdown(payload)
 
-    _, global_payload = run_json_cli_result("quota", mode, "--scan-root", str(project),
+    _, global_payload = run_json_cli_result("quota", mode,
                                             registry_path=registry, runtime_root=runtime)
     assert "goal_filter" not in global_payload
     assert {row["goal_id"] for group in global_payload["groups"].values() for row in group} == {"selected", "unrelated"}
@@ -69,7 +69,7 @@ def test_selected_goal_excludes_unrelated_broken_goal(goals, mode):
 
 def test_unknown_goal_does_not_become_a_successful_empty_or_global_plan(goals):
     registry, runtime, project = goals
-    code, payload = run_json_cli_result("quota", "status", "--goal-id", "missing", "--scan-root", str(project),
+    code, payload = run_json_cli_result("quota", "status", "--goal-id", "missing",
                                         registry_path=registry, runtime_root=runtime)
     assert code == 1
     assert payload["status"] == "goal_not_found"

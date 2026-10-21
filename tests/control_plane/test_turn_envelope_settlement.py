@@ -96,7 +96,7 @@ def test_generated_json_commands_settle_original_turn_once(tmp_path, profile_arg
     _configure_read_only_todo(project)
     args = ("quota", "should-run", *profile_args, "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
-            "--turn-instance-id", TURN_ID, "--scan-path", str(project))
+            "--turn-instance-id", TURN_ID, )
     rc, full = _run_cli(registry, runtime, *args)
     assert rc == 0, full
     rc, envelope = _run_cli(registry, runtime, *args, "--turn-envelope")

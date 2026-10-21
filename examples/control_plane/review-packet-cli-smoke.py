@@ -758,7 +758,7 @@ def assert_overflow_cli_roundtrip() -> None:
         append_operator_gate_approval_fixture(root, command=command)
         for handoff_only in (False, True):
             flags = ["--handoff-only"] if handoff_only else []
-            args = ["review-packet", "--goal-id", GOAL_ID, "--scan-root", str(root / "project"), *flags]
+            args = ["review-packet", "--goal-id", GOAL_ID,  *flags]
             payload = json.loads(run_cli(root, registry, "--format", "json", *args).stdout)
             complete = payload["project_agent_handoff"]
             assert payload["handoff_interface_budget"]["within_budget"] is False
@@ -809,8 +809,6 @@ def main() -> int:
             GOAL_ID,
             "--review-url",
             "https://example.invalid/review",
-            "--scan-root",
-            str(root / "project"),
         )
         packet = markdown_result.stdout
         assert "【LoopX Review Packet】" in packet, packet
@@ -849,8 +847,6 @@ def main() -> int:
             "review-packet",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(root / "project"),
         )
         payload = json.loads(json_result.stdout)
         assert payload["ok"] is True, payload
@@ -889,8 +885,6 @@ def main() -> int:
             "review-packet",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(root / "project"),
             "--handoff-only",
         )
         controller_handoff_payload = json.loads(controller_handoff_json_result.stdout)
@@ -918,8 +912,6 @@ def main() -> int:
             "review-packet",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(root / "project"),
             "--handoff-only",
             "--format",
             "json",
@@ -955,8 +947,6 @@ def main() -> int:
             "review-packet",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(root / "project"),
         )
         approved_packet = approved_markdown_result.stdout
         assert "类型：Codex" in approved_packet, approved_packet
@@ -985,8 +975,6 @@ def main() -> int:
             "review-packet",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(root / "project"),
             "--handoff-only",
         )
         handoff_only = handoff_only_result.stdout
@@ -1013,8 +1001,6 @@ def main() -> int:
             "review-packet",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(root / "project"),
         )
         approved_payload = json.loads(approved_json_result.stdout)
         assert approved_payload["ok"] is True, approved_payload
@@ -1051,8 +1037,6 @@ def main() -> int:
             "review-packet",
             "--goal-id",
             GOAL_ID,
-            "--scan-root",
-            str(root / "project"),
             "--handoff-only",
         )
         handoff_payload = json.loads(handoff_json_result.stdout)

@@ -67,7 +67,7 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
     guard_args = ["quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn,
         "--available-capability", "network", "--available-capability", "external_evidence_poll",
-        "--scan-path", str(project)]
+        ]
     rc, guard = _run_cli(registry, runtime, *guard_args)
     assert rc == 0, json.dumps(guard, ensure_ascii=False)
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
@@ -79,7 +79,7 @@ def test_emitted_auxiliary_command_honors_an_unrelated_gate(tmp_path, monkeypatc
     assert args[args.index("--target-key") + 1] == "due-monitor-fixture"
     args = tuple("observed-target" if x == "${LOOPX_MONITOR_RESULT_HASH:?}" else x for x in args)
     def emitted():
-        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args, "--scan-path", str(project)],
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args, ],
             cwd=Path(__file__).resolve().parents[2], text=True, capture_output=True)
         return result.returncode, json.loads(result.stdout)
     if gate_change != "none":
@@ -160,10 +160,10 @@ def test_gate_changed_after_preflight_cannot_commit_observation(tmp_path, monkey
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
         "--available-capability", "network", "--available-capability", "external_evidence_poll",
-        "--scan-path", str(project))
+        )
     assert rc == 0 and guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID, guard
     status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[project], limit=20, goal_id=GOAL_ID, include_public_boundary_scan=False)
+        limit=20, goal_id=GOAL_ID)
     original = monitor_poll._provider_writeback
     def interleaved(plan, **kwargs):
         update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=gate["todo_id"],
@@ -209,10 +209,10 @@ def test_old_pending_plan_preserves_identity_but_not_new_write_authority(tmp_pat
     turn = "historical-auxiliary-plan-turn"
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--available-capability", "network",
-        "--available-capability", "external_evidence_poll", "--scan-path", str(project))
+        "--available-capability", "external_evidence_poll", )
     assert rc == 0 and guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID, guard
     status = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[project], limit=20, goal_id=GOAL_ID, include_public_boundary_scan=False)
+        limit=20, goal_id=GOAL_ID)
     original = monitor_poll._provider_writeback
     def interrupted(plan, **kwargs):
         if business_committed:
@@ -255,7 +255,7 @@ def test_no_gate_auxiliary_command_retains_commit_and_replay_parity(tmp_path, mo
     turn = "auxiliary-no-gate-parity"
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--available-capability", "network",
-        "--available-capability", "external_evidence_poll", "--scan-path", str(project))
+        "--available-capability", "external_evidence_poll", )
     assert rc == 0 and guard["requires_user_action"] is False, guard
     projection = guard["interaction_contract"]["cli_channel"]["auxiliary_monitor_poll"]
     assert projection["availability"] == "ready"
@@ -263,7 +263,7 @@ def test_no_gate_auxiliary_command_retains_commit_and_replay_parity(tmp_path, mo
     args = ["no-gate-observation" if part == "${LOOPX_MONITOR_RESULT_HASH:?}" else part for part in args]
     for expected_replay in [False, True]:
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args,
-            "--scan-path", str(project)], text=True, capture_output=True)
+            ], text=True, capture_output=True)
         payload = json.loads(result.stdout)
         assert result.returncode == 0 and payload["ok"] is True, payload
         assert payload.get("replayed", False) is expected_replay

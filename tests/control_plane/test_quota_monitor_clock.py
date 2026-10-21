@@ -121,7 +121,7 @@ def test_public_quota_gap_count_uses_real_full_source_without_writing_it(tmp_pat
     state.unlink()
     before = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--include-detail", "agent-todos", "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+        "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     assert summary["monitor_schedule_gap_count"] == 25
@@ -189,7 +189,7 @@ def test_codex_cli_replan_streak_respects_canonical_monitor_expiry(
         sys.executable, "-c", entrypoint, "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "json",
         "quota", "should-run", "--codex-app", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--turn-instance-id", "expiry-fixture-turn", "--scan-path", str(tmp_path),
+        "--turn-instance-id", "expiry-fixture-turn",
     ], capture_output=True, text=True, encoding="utf-8", check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     guard = json.loads(result.stdout)

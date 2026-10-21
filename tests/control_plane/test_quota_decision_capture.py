@@ -445,8 +445,6 @@ def test_guided_turn_captures_the_minted_identity(tmp_path):
         "--begin-turn",
         "--decision-output-root",
         str(capture_root),
-        "--scan-path",
-        str(project),
     )
 
     assert code == 0, payload

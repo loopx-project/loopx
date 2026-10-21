@@ -212,8 +212,6 @@ def _plan_argv(
         GOAL_ID,
         "--agent-id",
         AGENT_ID,
-        "--scan-root",
-        str(project),
     ]
     if host:
         argv.extend(["--host", host])
@@ -271,8 +269,6 @@ def _run_once_argv(
             json.dumps(_validator_command()),
             "--validation-failure-kind",
             "repair_required",
-            "--scan-root",
-            str(project),
             "--no-global-sync",
             "--execute",
         ]

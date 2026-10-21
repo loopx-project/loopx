@@ -210,8 +210,6 @@ def main() -> int:
             GOAL_ID,
             "--available-capability",
             "material_lifecycle",
-            "--scan-path",
-            str(project / "PUBLIC.md"),
         )
         quota = run_cli(
             registry_path,
@@ -226,8 +224,6 @@ def main() -> int:
             "--available-capability",
             "material_lifecycle",
             "--codex-app",
-            "--scan-path",
-            str(project / "PUBLIC.md"),
         )
         handoff = run_cli(
             registry_path,
@@ -238,8 +234,6 @@ def main() -> int:
             GOAL_ID,
             "--available-capability",
             "material_lifecycle",
-            "--scan-root",
-            str(project),
             "--handoff-only",
         )
 

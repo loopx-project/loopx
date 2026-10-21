@@ -21,7 +21,7 @@ def _missing(root: Path):
         ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
          "--vision-summary", "Validate the scoped change.", "--vision-acceptance", "Focused checks pass.",
          "--no-global-sync", "--suppress-external-sinks"),
-        ("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project)),
+        ("quota", "should-run", "--codex-app", *binding, ),
     ):
         rc, result = _run_cli(registry, runtime, *args, cwd=project)
         assert rc == 0, result
@@ -38,7 +38,7 @@ def test_checkpoint_recovery_is_not_a_fresh_turn_preflight(tmp_path):
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
     rc, admitted = _run_cli(registry, runtime, "quota", "should-run",
-                            "--codex-app", *binding, "--scan-path", str(project), cwd=project)
+                            "--codex-app", *binding,  cwd=project)
     assert rc == 0, admitted
     rc, recovery = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)
     assert rc == 1, recovery

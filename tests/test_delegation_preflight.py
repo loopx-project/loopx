@@ -479,7 +479,7 @@ def test_mcp_workspace_fault_is_a_read_only_observation(service):
 
 
 @pytest.mark.parametrize("health_repair", [False, True])
-def test_actual_workspace_scan_refusal_is_typed_and_effect_free(service, health_repair):
+def test_private_workspace_content_does_not_change_read_only_preflight(service, health_repair):
     root, runner = service
     if health_repair:
         registry = json.loads(runner.registry.read_text())
@@ -488,20 +488,19 @@ def test_actual_workspace_scan_refusal_is_typed_and_effect_free(service, health_
         }}
         runner.registry.write_text(json.dumps(registry))
     workspace = Path(json.loads(runner.config.read_text())["bindings"][0]["workspace"])
-    # A synthetic literal exercises the real scanner; never exempt test files.
-    (workspace / "unsafe-fixture.py").write_text("fixture = " + repr("tok" + "en=" + "abcdefghijklmnop1234"))
+    baseline = runner.inspect("analysis")
+    outgoing = workspace / "unsafe-fixture.py"
+    outgoing.write_text("fixture = " + repr("tok" + "en=" + "abcdefghijklmnop1234"))
     before = runner.registry.read_bytes()
     status, result = cli(runner, "inspect", "--binding-id", "analysis")
     assert status == 0, result
-    assert result["state"] == "turn_blocked"
+    assert result["state"] == baseline["state"] == "runtime_unverified"
     assert result["authority_ready"] and result["acceptance_ready"]
-    assert result["turn_eligible"] is False and result["executor"] is None
-    refusal = result["turn_blocker"]
-    assert refusal["requested_todo_id"] == "todo_analyst-initial"
-    assert refusal["state"] == "deferred"
-    assert refusal["reason_code"] == ("control_repair" if health_repair else "delivery_not_allowed")
-    assert refusal["status_health_ok"] is False and refusal["contract_error_count"] >= 1
+    assert result["turn_eligible"] and result["executor"] == baseline["executor"]
+    assert result["binding"] == baseline["binding"]
     assert not any(result["effects"].values())
+    from loopx.contract import scan_public_boundary
+    assert scan_public_boundary([outgoing])["ok"] is False
     if health_repair:
         async def inspect_mcp():
             params = StdioServerParameters(command=sys.executable, args=[
@@ -517,14 +516,14 @@ def test_actual_workspace_scan_refusal_is_typed_and_effect_free(service, health_
                     assert not inspected.isError
                     return json.loads(inspected.content[0].text)
         mcp_result = asyncio.run(inspect_mcp())
-        assert mcp_result["turn_blocker"] == refusal
-        assert mcp_result["state"] == "turn_blocked"
+        assert mcp_result["binding"] == result["binding"]
+        assert mcp_result["state"] == result["state"]
+        assert mcp_result["turn_eligible"]
         assert not any(mcp_result["effects"].values())
     assert runner.registry.read_bytes() == before
     assert not (root / "host-started").exists()
     assert not list((root / "runtime" / "goals").glob("*/turns/*.json"))
-    # Removing this exact synthetic input restores ordinary inspection, rather
-    # than leaving a persisted repair route or choosing a different Todo.
+    # Neither adding nor removing private content changes execution authority.
     (workspace / "unsafe-fixture.py").unlink()
     status, restored = cli(runner, "inspect", "--binding-id", "analysis")
     assert status == 0 and restored["turn_eligible"], restored

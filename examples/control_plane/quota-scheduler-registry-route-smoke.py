@@ -108,8 +108,6 @@ def main() -> None:
             "--codex-app-current-rrule",
             "FREQ=MINUTELY;INTERVAL=3",
             "--turn-envelope",
-            "--scan-path",
-            str(project),
             cwd=project,
         )
         ack_cli_args = decision["scheduler"]["codex_app"]["ack_cli_args"]
@@ -125,7 +123,7 @@ def main() -> None:
         assert "--identity-signature" in ack_cli_args, decision
         assert ack_cli_args[-1] == "--execute", decision
 
-        ack = run_cli(*ack_cli_args, "--scan-path", str(project), cwd=project)
+        ack = run_cli(*ack_cli_args,  cwd=project)
         state_path = Path(ack["scheduler_state_path"])
         assert state_path.resolve().is_relative_to(global_runtime.resolve()), ack
         assert state_path.exists(), ack
@@ -141,8 +139,6 @@ def main() -> None:
             "--agent-id",
             AGENT_ID,
             "--codex-app",
-            "--scan-path",
-            str(project),
             cwd=project,
         )
         stateful = follow_up["scheduler_hint"]["codex_app"]["stateful_backoff"]

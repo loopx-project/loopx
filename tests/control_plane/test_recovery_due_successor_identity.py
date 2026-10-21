@@ -141,8 +141,6 @@ def test_interrupted_binding_survives_new_due_successor(
         "--goal-id",
         GOAL_ID,
         *old_binding,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0 and admitted["normal_delivery_allowed"], json.dumps(
         admitted, indent=2
@@ -184,8 +182,6 @@ def test_interrupted_binding_survives_new_due_successor(
         AGENT_ID,
         "--turn-instance-id",
         new_turn,
-        "--scan-path",
-        str(project),
     )
     assert (
         rc == 0 and recovering["effective_action"] == "unsettled_host_turn_recovery"
@@ -199,8 +195,6 @@ def test_interrupted_binding_survives_new_due_successor(
         "--goal-id",
         GOAL_ID,
         *old_binding,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, reentry
     assert reentry["heartbeat_receipt"]["settlement_identity"] == identity
@@ -225,8 +219,6 @@ def test_interrupted_binding_survives_new_due_successor(
         old_turn,
         "--todo-id",
         TODO_ID,
-        "--scan-path",
-        str(project),
     )
     assert rc == 1, peer
     assert peer["error_code"] == "quota_action_selection_rejected"
@@ -283,8 +275,6 @@ def test_interrupted_binding_survives_new_due_successor(
         AGENT_ID,
         "--turn-instance-id",
         new_turn,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, fresh
     assert fresh["effective_action"] != "unsettled_host_turn_recovery"
@@ -320,8 +310,6 @@ def test_interrupted_binding_survives_new_due_successor(
         new_turn,
         "--todo-id",
         due_id,
-        "--scan-path",
-        str(project),
     )
     assert rc == 0, selected
     new_identity = selected["heartbeat_receipt"]["settlement_identity"]

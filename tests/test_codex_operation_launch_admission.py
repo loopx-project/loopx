@@ -51,7 +51,7 @@ def test_owner_stop_prevents_operation_native_launch(tmp_path, monkeypatch, boun
         code = main([
             "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-            "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+            "--host", "codex-cli", "--project", str(project),
             "--no-global-sync", "--codex-operation-tools", "--codex-bin", str(native),
             "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh",
             "--codex-sandbox", "read-only", "--iteration-context", "fresh",
@@ -76,7 +76,7 @@ def test_legacy_read_only_registration_can_preview_and_launch(tmp_path, monkeypa
     monkeypatch.setenv("FAKE_CODEX_LOG", str(marker))
     args = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-        "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+        "--host", "codex-cli", "--project", str(project),
         "--codex-bin", str(native), "--codex-sandbox", "read-only", "--no-global-sync",
         "--iteration-context", "fresh", "--validation-command-json", json.dumps([sys.executable, "-c", "pass"])]
     for suffix in ([], ["--execute"]):

@@ -412,7 +412,6 @@ def _public_closed_current_vision_args(
     guard = _run_cli([
         *base, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn_id,
-        "--scan-path", str(project),
     ])
     assert guard["decision"] == "run"
     effect_id = guard["heartbeat_receipt"]["settlement_identity"]["effect_id"]
@@ -471,7 +470,6 @@ def test_public_same_turn_closed_current_vision_records_one_pending_stage(
     spent = _run_cli([
         *base, "quota", "spend-slot", "--goal-id", GOAL_ID,
         "--slots", "1", "--source", "heartbeat", "--execute", *binding,
-        "--scan-path", str(project),
     ])
     assert spent["appended"] is True
     terminal = _run_cli([*completion_args, "--no-follow-up"])
@@ -534,7 +532,6 @@ def test_closed_current_vision_hook_recovers_original_source_after_later_todo(
     spent = _run_cli([
         *base, "quota", "spend-slot", "--goal-id", GOAL_ID,
         "--slots", "1", "--source", "heartbeat", "--execute", *binding,
-        "--scan-path", str(project),
     ])
     assert spent["appended"] is True
     added = _run_cli([

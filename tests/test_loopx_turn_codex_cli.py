@@ -872,7 +872,7 @@ def test_default_turn_cli_blocks_native_launch_after_canonical_goal_stop(
         code = cli_main([
             "--registry", str(registry_path), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-            "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+            "--host", "codex-cli", "--project", str(project),
             "--codex-bin", str(executable), "--codex-sandbox", "read-only", "--no-global-sync",
             "--iteration-context", "fresh", "--turn-instance-id", "cancel-before-native-launch",
             "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]), "--execute",
@@ -1620,7 +1620,7 @@ def test_default_turn_cli_rejects_stopped_source_behind_stale_global_mirror(
         code = cli_main([
             "--registry", str(mirror), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-            "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+            "--host", "codex-cli", "--project", str(project),
             "--codex-bin", str(executable), "--codex-sandbox", "read-only", "--no-global-sync",
             "--iteration-context", "fresh", "--turn-instance-id", "stale-mirror-stop-before-native",
             "--validation-command-json", json.dumps([sys.executable, "-c", "pass"]), "--execute",

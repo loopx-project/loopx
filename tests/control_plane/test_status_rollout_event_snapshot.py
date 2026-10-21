@@ -174,10 +174,8 @@ def test_collect_status_reuses_display_snapshot_but_pr_wait_reads_complete_facts
     first = status_module.collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[tmp_path],
         limit=20,
         goal_id=GOAL_ID,
-        include_public_boundary_scan=False,
     )
 
     assert loads == [(GOAL_ID, 500)]
@@ -200,10 +198,8 @@ def test_collect_status_reuses_display_snapshot_but_pr_wait_reads_complete_facts
     second = status_module.collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[tmp_path],
         limit=20,
         goal_id=GOAL_ID,
-        include_public_boundary_scan=False,
     )
 
     assert loads == [(GOAL_ID, 500), (GOAL_ID, 500)]
@@ -387,10 +383,8 @@ def test_collect_status_scans_effect_runtime_sources_once_per_request(
         status_module.collect_status(
             registry_path=registry_path,
             runtime_root_override=str(runtime_root),
-            scan_roots=[tmp_path],
             limit=20,
             goal_id=GOAL_ID,
-            include_public_boundary_scan=False,
         )
 
     assert scanned_roots == [
@@ -504,10 +498,8 @@ def test_attention_queue_todo_text_stays_authoritative_over_events(
     payload = status_module.collect_status(
         registry_path=registry_path,
         runtime_root_override=str(runtime_root),
-        scan_roots=[tmp_path],
         limit=20,
         goal_id=GOAL_ID,
-        include_public_boundary_scan=False,
     )
 
     row = next(

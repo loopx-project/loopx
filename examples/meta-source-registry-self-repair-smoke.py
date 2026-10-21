@@ -143,7 +143,6 @@ def assert_meta_source_shadow(finding_kind: str) -> None:
         status_payload = collect_status(
             registry_path=registry_path,
             runtime_root_override=str(runtime),
-            scan_roots=[project],
             limit=5,
         )
         findings_text = json.dumps(status_payload["global_registry"], ensure_ascii=False)

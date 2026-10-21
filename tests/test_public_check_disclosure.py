@@ -98,3 +98,30 @@ def test_invalid_utf8_is_unexamined_and_never_clean(tmp_path):
     assert checked["ok"] is False
     assert checked["public_boundary_scan"]["unreadable_files"] == ["request.md: invalid UTF-8"]
     assert not any("scan clean" in text for text in checked["checks"])
+
+
+@pytest.mark.parametrize("command", [
+    ["status"], ["diagnose"], ["review-packet", "--goal-id", "fixture"],
+    ["quota", "should-run", "--goal-id", "fixture"],
+    ["turn", "plan", "--goal-id", "fixture", "--agent-id", "fixture"],
+    ["turn", "managed-step", "--goal-id", "fixture", "--agent-id", "fixture", "--turn-key", "fixture"],
+    ["turn", "run-once", "--goal-id", "fixture", "--agent-id", "fixture", "--project", "."],
+    ["ready-score"], ["agent-directory", "--goal-id", "fixture"],
+    ["global-summary"], ["global-gates"], ["global-todos"], ["global-risks"],
+])
+@pytest.mark.parametrize("option", ["--scan-root", "--scan-path"])
+def test_operational_commands_reject_retired_scan_options(command, option):
+    from loopx.cli import build_parser
+
+    parser = build_parser()
+    parser.parse_args(command)
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args([*command, option, "."])
+    assert error.value.code == 2
+
+
+def test_explicit_check_keeps_outgoing_selection_options():
+    from loopx.cli import build_parser
+
+    selected = build_parser().parse_args(["check", "--scan-root", ".", "--scan-path", "outgoing.md"])
+    assert selected.scan_path == ["outgoing.md"]

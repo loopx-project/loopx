@@ -45,7 +45,7 @@ def test_persisted_local_evidence_is_omitted_from_public_lifecycle(tmp_path, loc
 
     result = collect_status(
         registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[], limit=5, include_public_boundary_scan=False,
+        limit=5,
     )
     assert result["ok"] is True
     lifecycle = result["run_history"]["goals"][0]["artifact_lifecycle"]
@@ -106,7 +106,7 @@ def test_persisted_work_observation_coverage_before_display_trimming(
     before = {path: path.read_bytes() for path in (state, registry, run_path, markdown_path, runs / "index.jsonl")}
     result = collect_status(
         registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[], limit=display_limit, include_public_boundary_scan=False,
+        limit=display_limit,
     )
     assert result["ok"] is True
     goal = result["run_history"]["goals"][0]

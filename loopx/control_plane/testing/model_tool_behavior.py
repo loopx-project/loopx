@@ -533,8 +533,6 @@ def execute_loopx_cli(
     argv = list(tokens[1:])
     for option, value in (argument_overrides or {}).items():
         replace_argument(argv, option, value)
-    if "quota" in argv and "--scan-root" not in argv and "--scan-path" not in argv:
-        argv.extend(["--scan-root", str(project_root)])
     env = os.environ.copy()
     existing_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = (

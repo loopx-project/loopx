@@ -84,7 +84,7 @@ def test_run_once_preview_preserves_every_fixture_path_and_file(tmp_path: Path) 
         exit_code = cli_main([
             "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--host", "generic-cli", "--goal-id", "loopx-turn-fixture",
-            "--agent-id", "codex-fixture", "--project", str(project), "--scan-root", str(project),
+            "--agent-id", "codex-fixture", "--project", str(project),
             "--host-command-json", json.dumps([
                 sys.executable, "-c", "raise AssertionError('preview invoked a Host')",
             ]),

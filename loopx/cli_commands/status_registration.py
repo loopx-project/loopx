@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 
-from ..paths import default_public_scan_root
-
 
 def register_status_commands(
     subparsers: argparse._SubParsersAction,
@@ -35,22 +33,6 @@ def register_status_commands(
         help="Show a first-screen goal status and attention queue.",
     )
     add_subcommand_format(status_parser)
-    status_parser.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help=(
-            "Compatibility scope metadata; operational status defers public scans. "
-            "Use loopx check for outgoing content."
-        ),
-    )
-    status_parser.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help=(
-            "Compatibility scope metadata. Repeatable; does not request a public scan."
-        ),
-    )
     status_parser.add_argument("--limit", type=int, default=5)
     status_parser.add_argument(
         "--goal-id",
@@ -138,22 +120,6 @@ def register_status_commands(
             "envelope as quota should-run."
         ),
     )
-    diagnose_parser.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help=(
-            "Compatibility scope metadata; operational status defers public scans. "
-            "Use loopx check for outgoing content."
-        ),
-    )
-    diagnose_parser.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help=(
-            "Compatibility scope metadata. Repeatable; does not request a public scan."
-        ),
-    )
     diagnose_parser.add_argument("--limit", type=int, default=5)
 
     review_packet_parser = subparsers.add_parser(
@@ -179,22 +145,6 @@ def register_status_commands(
     review_packet_parser.add_argument(
         "--review-url",
         help="Optional dashboard review URL to include in the packet.",
-    )
-    review_packet_parser.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help=(
-            "Compatibility scope metadata; operational status defers public scans. "
-            "Use loopx check for outgoing content."
-        ),
-    )
-    review_packet_parser.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help=(
-            "Compatibility scope metadata. Repeatable; does not request a public scan."
-        ),
     )
     review_packet_parser.add_argument(
         "--handoff-only",

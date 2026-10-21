@@ -216,7 +216,7 @@ def test_actual_chat_status_projects_canonical_host_eligibility_without_extra_re
             reads.append(path)
             return original_read(path, **kwargs)
         monkeypatch.setattr(routes, "_read_source_registry_with_deadline", counted)
-        kwargs = {"registry_path": shared, "runtime_root_override": None, "scan_roots": [project], "limit": 8, "include_public_boundary_scan": False}
+        kwargs = {"registry_path": shared, "runtime_root_override": None, "limit": 8}
         baseline = collect_status(**kwargs)
         baseline_reads = list(reads)
         assert all("zcode_goal_eligible_agent_ids" not in row for row in baseline["run_history"]["goals"])

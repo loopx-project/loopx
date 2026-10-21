@@ -41,7 +41,7 @@ def test_settled_advancement_hold_preserves_independent_monitor(
     capabilities = ("--available-capability", "network",
                     "--available-capability", "external_evidence_poll")
     guard = ("quota", "should-run", "--codex-app", *binding,
-             *capabilities, "--scan-path", str(project))
+             *capabilities, )
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0, first
     _append_newly_due_monitor(project, watch_only=True)
@@ -77,7 +77,7 @@ def test_settled_advancement_hold_preserves_independent_monitor(
     assert rc == 0, successor
     poll_args = tuple("observed-after-hold" if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
                       else token for token in _projected_cli_args(
-                          poll_command, turn_instance_id=turn)) + ("--scan-path", str(project))
+                          poll_command, turn_instance_id=turn))
     for expected_replay in (False, True):
         rc, poll = _run_cli(registry, runtime, *poll_args)
         assert rc == 0, (poll.get("error_code"), poll.get("reason"), poll.get("error"))
@@ -108,8 +108,6 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
         AGENT_ID,
         "--turn-instance-id",
         turn_instance_id,
-        "--scan-path",
-        str(project),
     )
     first_rc, first = _run_cli(registry_path, runtime, *guard_args)
     assert first_rc == 0, first
@@ -146,7 +144,7 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
         if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
         else token
         for token in poll_args
-    ) + ("--scan-path", str(project))
+    )
     poll_rc, poll = _run_cli(registry_path, runtime, *poll_args)
     poll_replay_rc, poll_replay = _run_cli(
         registry_path,
@@ -250,8 +248,6 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
         "--codex-app",
         *binding,
         *capabilities,
-        "--scan-path",
-        str(project),
     )
     rc, first = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, first
@@ -292,7 +288,7 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
         if token == "${LOOPX_MONITOR_RESULT_HASH:?}"
         else token
         for token in _projected_cli_args(auxiliary["command"], turn_instance_id=turn)
-    ) + ("--scan-path", str(project))
+    )
     rc, complete = _run_cli(
         registry_path,
         runtime,

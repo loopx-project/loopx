@@ -121,7 +121,7 @@ def assert_mainstream_cli_turn(provider: str) -> None:
         project, registry_path, state_file = write_project_fixture(Path(tmp))
         import_fixture_authority(registry_path, GOAL_ID, provider=provider)
 
-        status = run_cli(registry_path, "status", "--scan-root", str(project))
+        status = run_cli(registry_path, "status", )
         assert status.get("ok") is True, status
 
         added = run_cli(
@@ -166,8 +166,6 @@ def assert_mainstream_cli_turn(provider: str) -> None:
             "generic_cli",
             "--todo-id", todo_id,
             "--turn-instance-id", TURN_ID,
-            "--scan-path",
-            str(project),
         )
         assert guard.get("should_run") is True, guard
         assert guard.get("state") == "eligible", guard
@@ -252,8 +250,6 @@ def assert_mainstream_cli_turn(provider: str) -> None:
             "--source",
             "heartbeat",
             "--execute",
-            "--scan-path",
-            str(project),
         )
         assert spent.get("ok") is True, spent
         assert spent.get("appended") is True, spent
@@ -271,7 +267,7 @@ def assert_mainstream_cli_turn(provider: str) -> None:
             registry_path, "quota", "spend-slot", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", todo_id,
             "--turn-instance-id", TURN_ID, "--slots", "1", "--source", "heartbeat",
-            "--execute", "--scan-path", str(project),
+            "--execute",
         )
         assert replay["appended"] is False and replay["idempotent_replay"] is True, replay
 

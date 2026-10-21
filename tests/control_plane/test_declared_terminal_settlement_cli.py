@@ -112,7 +112,7 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
                "--turn-instance-id", cli.TURN_ID)
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
-                  "--scan-path", str(project), *binding,
+                   *binding,
                   "--available-capability", "shell", "--available-capability", "filesystem_write")
     code, guard = run(*guard_args)
     assert code == 0, guard.get("error") or guard.get("reason") or guard
@@ -187,7 +187,7 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     assert refreshed["delivery_workspace"]["workspace_kind"] == "independent_git_worktree"
     assert refreshed["delivery_workspace"]["task_repository"] == original["task_repository"]
     spend_args = ("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *binding,
-                  "--slots", "1", "--source", "heartbeat", "--execute", "--scan-path", str(project))
+                  "--slots", "1", "--source", "heartbeat", "--execute", )
     code, spent = run(*spend_args)
     assert code == 0, spent
     assert spent["appended"] is True
@@ -230,7 +230,7 @@ def test_original_lease_and_failed_validator_remain_required_before_accounting(
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
                "--turn-instance-id", cli.TURN_ID)
     code, guard = run("quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
-                      "--scan-path", str(project), *binding)
+                       *binding)
     assert code == 0, guard.get("error") or guard.get("reason")
     command = ("todo", "complete", "--goal-id", cli.GOAL_ID, *binding,
                "--evidence", "Only the original controller check can accept this deliverable.")
@@ -247,7 +247,7 @@ def test_original_lease_and_failed_validator_remain_required_before_accounting(
     assert state["todo"]["status"] == "open"
     assert state["todo"]["completion_validation_sha256"] == original["completion_validation_sha256"]
     code, no_spend = run("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *binding,
-                         "--source", "heartbeat", "--slots", "1", "--execute", "--scan-path", str(project))
+                         "--source", "heartbeat", "--slots", "1", "--execute", )
     assert code == 1, no_spend
     assert cli._spend_run_count(runtime) == 0
     fail.unlink()
@@ -275,7 +275,7 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
                "--turn-instance-id", cli.TURN_ID)
     capabilities = ("--available-capability", "shell", "--available-capability", "filesystem_write")
     call("quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
-         "--scan-path", str(project), *binding, *capabilities)
+          *binding, *capabilities)
     done = call("todo", "complete", "--goal-id", cli.GOAL_ID, *binding, *lease,
                 "--evidence", "Original declared source check passed.")
     before = call("todo", "list", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)["todo"]
@@ -286,10 +286,10 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
          "--vision-acceptance", "Its original check, writeback and accounting are independently verified.",
          "--no-global-sync", "--suppress-external-sinks")
     call("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *binding,
-         "--slots", "1", "--source", "heartbeat", "--execute", "--scan-path", str(project))
+         "--slots", "1", "--source", "heartbeat", "--execute", )
     turn = "turn-original-lifecycle-review"
     guard = ("quota", "should-run", "--runtime-profile", "generic_cli", "--goal-id", cli.GOAL_ID,
-             "--agent-id", cli.AGENT_ID, "--turn-instance-id", turn, "--scan-path", str(project), *capabilities)
+             "--agent-id", cli.AGENT_ID, "--turn-instance-id", turn,  *capabilities)
     admitted = call(*guard)
     identity = admitted["heartbeat_receipt"]["settlement_identity"]
     assert admitted["autonomous_replan_obligation"]["triggers"][0]["todo_id"] == cli.TODO_ID
@@ -305,7 +305,7 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
     replan_binding = ("--agent-id", cli.AGENT_ID, "--replan-obligation-id", identity["replan_obligation_id"],
                       "--turn-instance-id", turn)
     spend = ("quota", "spend-slot", "--goal-id", cli.GOAL_ID, *replan_binding,
-             "--slots", "1", "--source", "heartbeat", "--execute", "--scan-path", str(project))
+             "--slots", "1", "--source", "heartbeat", "--execute", )
     assert call(*spend, expected=1).get("appended") is not True
     # A no-follow-up transition alone must not waive the acceptance checkpoint.
     refresh = ("refresh-state", "--goal-id", cli.GOAL_ID, *replan_binding,

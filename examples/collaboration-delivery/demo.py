@@ -420,8 +420,6 @@ def run(root, phase, model, execute, attempt):
         json.dumps(validator),
         "--validation-failure-kind",
         "repair_required",
-        "--scan-root",
-        str(workspace),
         "--no-global-sync",
         "--timeout-seconds",
         "600",

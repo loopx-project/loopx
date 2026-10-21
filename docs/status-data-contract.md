@@ -161,12 +161,12 @@ dashboard surfaces should prefer it over exposing raw `orchestration_mode` plus
 loopx --format json status > goal-status.json
 ```
 
-By default, `status` scans the LoopX install root for public/private
-contract health. Use narrow scan paths only when you intentionally want the
-status export to check a specific public-safe project surface:
+`status` reads execution and contract health with public-boundary scanning
+deferred. It does not accept scan-selection options. Check outgoing content
+explicitly; a deferred scan does not certify public safety:
 
 ```bash
-loopx --format json status \
+loopx --format json check \
   --scan-path README.md \
   --scan-path docs/ \
   --scan-path examples/

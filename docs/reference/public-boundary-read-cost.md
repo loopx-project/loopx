@@ -93,6 +93,17 @@ CLI 显式检查执行扫描，运行用 CLI、managed host 与 Lark 复用既�
 默认推迟扫描；前端状态路径此前已推迟。没有新增配置、CLI 参数、前端控件或
 Lark 命令。紧凑状态投影保留 deferred 检查文字，不向每次普通响应加入仓库扫描正文。
 
+The operational `status`, `diagnose`, `review-packet`, `quota`, readiness, agent
+directory and global-summary commands, plus Turn `plan`/`managed-step`/`run-once`, do not accept `--scan-root` or
+`--scan-path`. These retired options are rejected rather than silently ignored.
+The status collector and its cache no longer accept or key on scan scope or an
+optional scan switch. Use explicit `check` for outgoing selections.
+
+运行用 `status`、`diagnose`、`review-packet`、`quota`、readiness、Agent 目录、
+全局汇总及 Turn 的 `plan`/`managed-step`/`run-once` 不再接受 `--scan-root` 或 `--scan-path`，
+旧参数会被拒绝，不会静默忽略。状态收集器及缓存不再接收扫描范围或可选扫描开关，
+也不以扫描范围分隔缓存；外发内容选取使用显式 `check`。
+
 Therefore no packaged frontend rebuild or layout change is required. Existing
 status-hot-path regression checks must continue to prove the explicit deferred
 state. Full scan and real CLI tests cover the changed entry path.

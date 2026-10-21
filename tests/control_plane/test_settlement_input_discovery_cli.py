@@ -88,7 +88,7 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
 
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID)
-    rc, guard = run("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
+    rc, guard = run("quota", "should-run", "--codex-app", *binding, )
     assert rc == 0 and guard["interaction_contract"]["agent_channel"]["delivery_allowed"], guard
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     authoring = plan["ordered_steps"][1]["vision_authoring"]
@@ -149,7 +149,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     assert rc == 0, configured
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
-    rc, guard = run("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
+    rc, guard = run("quota", "should-run", "--codex-app", *binding, )
     assert rc == 0, guard
     rc, written = run("refresh-state", *binding, "--classification", "validated_progress",
                       "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
@@ -171,7 +171,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     )
 
     current = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-               "--turn-instance-id", "periodic-without-todo", "--scan-path", str(project))
+               "--turn-instance-id", "periodic-without-todo", )
     rc, guard = run("quota", "should-run", "--codex-app", *current)
     assert rc == 0 and guard["selected_todo"] is None, guard
     identity = guard["heartbeat_receipt"]["settlement_identity"]
@@ -231,7 +231,7 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
                    "--todo-id", TODO_ID, "--turn-instance-id", f"link-example-{stage}")
         rc, guard = run("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
                         "--agent-id", AGENT_ID, "--turn-instance-id", f"link-example-{stage}",
-                        "--scan-path", str(project))
+                        )
         if rc == 0 and guard["interaction_contract"]["cli_channel"].get("selection_required"):
             selection = guard["interaction_contract"]["cli_channel"]["selection_command"]
             command = selection["route_prefix"] + " " + selection["command_args_template"].format(todo_id=TODO_ID)

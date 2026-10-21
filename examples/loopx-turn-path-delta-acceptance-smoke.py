@@ -218,8 +218,6 @@ def _run_turn(
                 json.dumps(_host_command(host, mode)),
                 "--validation-command-json",
                 json.dumps(_validator_command(mode)),
-                "--scan-root",
-                str(project),
                 "--no-global-sync",
                 "--execute",
             ]

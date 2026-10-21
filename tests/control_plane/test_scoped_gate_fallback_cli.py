@@ -38,7 +38,7 @@ def test_quota_fallback_uses_real_source_and_explicit_relations(tmp_path, monkey
     before = state.read_bytes() if state.exists() else None
     authority_before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-                                       "--scan-path", str(tmp_path), registry_path=registry, runtime_root=runtime)
+                                        registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     fallback = packet.get("scoped_user_gate_fallback")
     # The explicit target wins even when the two action labels disagree.

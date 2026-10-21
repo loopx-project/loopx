@@ -21,7 +21,6 @@ def build_global_gates(tmp_path, *, agent_id=None, limit=8):
     return summary_all.build_global_gates(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=agent_id,
         limit=limit,
     )
@@ -79,7 +78,6 @@ def test_blocked_visible_todo_is_not_counted_as_runnable(monkeypatch, tmp_path) 
     payload = summary_all.build_summary_all(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="24h",
         limit=5,
@@ -130,7 +128,6 @@ def test_summary_all_reuses_status_recent_run_projection(
     payload = summary_all.build_summary_all(
         registry_path=tmp_path / "registry.json",
         runtime_root_override=None,
-        scan_roots=[],
         agent_id=None,
         time_range="99999d",
         limit=3,

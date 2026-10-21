@@ -57,7 +57,7 @@ def _guard(project: Path, runtime: Path, registry: Path, *, turn_id: str = cli.T
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
         "--todo-id", cli.TODO_ID, "--turn-instance-id", turn_id,
-        "--scan-path", str(project), cwd=project,
+         cwd=project,
     )
 
 
@@ -233,7 +233,7 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(tmp_path, 
         code, replay = cli._run_cli(
             registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
-            "--turn-instance-id", cli.TURN_ID, "--scan-path", str(project),
+            "--turn-instance-id", cli.TURN_ID,
             *(["--todo-id", cli.TODO_ID] if explicit else []), cwd=project,
         )
         assert code == 0 and replay["effective_action"] == "heartbeat_settled_skip", replay
@@ -255,7 +255,7 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(tmp_path, 
     code, fresh = cli._run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
-        "--turn-instance-id", "turn-after-semantic-progress", "--scan-path", str(project), cwd=project,
+        "--turn-instance-id", "turn-after-semantic-progress",  cwd=project,
     )
     assert code == 0 and fresh["decision"] in ("run", "autonomous_replan_required"), fresh
     assert fresh["heartbeat_receipt"]["turn_instance_id"] == "turn-after-semantic-progress"

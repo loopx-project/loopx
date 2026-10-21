@@ -49,7 +49,7 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
     binding = ("--agent-id", fixture.AGENT_ID, "--todo-id", fixture.TODO_ID,
         "--turn-instance-id", "original-next-action-turn")
     guard_args = ("quota", "should-run", "--goal-id", fixture.GOAL_ID, "--codex-app",
-        "--scan-path", str(project), *binding)
+         *binding)
     code, admitted = run(*guard_args)
     assert code == 0 and admitted["normal_delivery_allowed"], admitted
     identity = admitted["heartbeat_receipt"]["settlement_identity"]
@@ -113,7 +113,7 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
     assert final is not None and final.writeback == writeback.writeback
     code, next_guard = run("quota", "should-run", "--goal-id", fixture.GOAL_ID,
         "--agent-id", fixture.AGENT_ID, "--todo-id", fixture.ALTERNATIVE_TODO_ID,
-        "--turn-instance-id", "fresh-alternative-turn", "--codex-app", "--scan-path", str(project))
+        "--turn-instance-id", "fresh-alternative-turn", "--codex-app", )
     assert code == 0 and next_guard["normal_delivery_allowed"], next_guard
     route = next_guard["agent_lane_next_action"]
     assert route["todo_id"] == fixture.ALTERNATIVE_TODO_ID
@@ -143,7 +143,7 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
     turn = "replan-recommendation-recovery"
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", fixture.GOAL_ID,
         "--agent-id", fixture.AGENT_ID, "--turn-instance-id", turn,
-        "--scan-path", str(project))
+        )
     code, guard = run(*guard_args)
     assert code == 0 and guard["decision"] == "autonomous_replan_required", guard
     identity = guard["heartbeat_receipt"]["settlement_identity"]
@@ -184,7 +184,7 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
     spend = ("quota", "spend-slot", "--goal-id", fixture.GOAL_ID,
         "--agent-id", fixture.AGENT_ID, "--replan-obligation-id", identity["replan_obligation_id"],
         "--turn-instance-id", turn, "--source", "heartbeat", "--slots", "1", "--execute",
-        "--scan-path", str(project))
+        )
     code, spent = run(*spend)
     assert code == 0 and spent["settlement_result"]["ok"], spent
     code, replay = run(*spend)

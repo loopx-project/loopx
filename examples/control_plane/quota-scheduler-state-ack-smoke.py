@@ -39,8 +39,6 @@ def run_should_run(
         "--agent-id",
         SCOPED_AGENT_ID,
         "--codex-app",
-        "--scan-path",
-        str(project),
         registry_path=registry_path,
         runtime_root=runtime_root,
         cwd=REPO_ROOT,

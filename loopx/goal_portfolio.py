@@ -186,10 +186,8 @@ def _read_goal(
             else collect_status(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_override,
-                scan_roots=[],
                 limit=8,
                 goal_id=goal_id,
-                include_public_boundary_scan=False,
             )
         )
         if include_goal_attention:
@@ -402,9 +400,7 @@ def build_goal_portfolio(
             shared_status = collect_status(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_override,
-                scan_roots=[],
                 limit=max(8, len(inspected)),
-                include_public_boundary_scan=False,
                 **({"activation_state_filter": "active"} if not include_stopped else {}),
             )
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):

@@ -207,8 +207,6 @@ def test_public_quota_reads_revocation_from_full_history_without_mutating_displa
         "goal-a",
         "--agent-id",
         "agent-a",
-        "--scan-path",
-        str(tmp_path),
         registry_path=registry,
         runtime_root=runtime,
     )

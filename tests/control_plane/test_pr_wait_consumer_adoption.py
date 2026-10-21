@@ -105,7 +105,7 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
         "'recommended_action':'Continue the original accepted work.'})\n"
     )
     argv = [*prefix, "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-            "--host", "dsh", "--dsh-runner", str(runner), "--project", str(project), "--scan-root", str(project),
+            "--host", "dsh", "--dsh-runner", str(runner), "--project", str(project),
             "--todo-id", todo_id, "--turn-instance-id", "consumer-adoption", "--available-capability", "external_evidence_poll",
             "--validation-command-json", json.dumps([sys.executable, "-c", "from pathlib import Path; "
                 "assert Path('validated-artifact').read_text() == 'terminal independent artifact marker'"]),
@@ -153,7 +153,7 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     revision = list_goal_todos(registry_path=registry, goal_id="loopx-turn-fixture")["authority_read"]["provider_revision"]
     code, managed = _invoke_turn([*prefix, "turn", "managed-step", "--goal-id", "loopx-turn-fixture",
         "--agent-id", "codex-fixture", "--host", "dsh", "--turn-key", result["resume_turn_key"],
-        "--scan-root", str(project), "--available-capability", "external_evidence_poll"])
+         "--available-capability", "external_evidence_poll"])
     assert code == 1 and managed["error"] == "managed step requires a failed Turn journal", managed
     assert list_goal_todos(registry_path=registry, goal_id="loopx-turn-fixture")["authority_read"]["provider_revision"] == revision
     replay_argv = list(argv)

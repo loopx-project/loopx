@@ -403,8 +403,6 @@ def run_should_run_cli(
         "--agent-id",
         agent_id,
         "--codex-app",
-        "--scan-path",
-        str(project),
     ]
     if include_detail:
         args.extend(["--include-detail", "scheduler"])

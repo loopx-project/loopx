@@ -68,7 +68,7 @@ def _native_successor(
         "--registry", str(registry), "--runtime-root", str(runtime),
         "--format", "json", "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--turn-instance-id", turn_id, "--scan-path", str(project),
+        "--turn-instance-id", turn_id,
     ]
     first_guard = _run_cli(guard)
     assert first_guard["decision"] == "autonomous_replan_required"

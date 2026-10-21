@@ -46,7 +46,7 @@ from .goal_channel_operation import (
     run_goal_channel_operation,
 )
 from ..history import load_registry
-from ..paths import registry_project_root, resolve_runtime_root
+from ..paths import resolve_runtime_root
 from ..quota import build_quota_should_run
 from ..status import collect_status
 
@@ -431,11 +431,9 @@ def _quota_packet(
     goal_id: str,
     agent_id: str | None,
 ) -> dict[str, Any]:
-    project_root = registry_project_root(registry_path)
     status = collect_status(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
-        scan_roots=[project_root],
         limit=20,
         goal_id=goal_id,
     )

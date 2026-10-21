@@ -93,8 +93,6 @@ def should_run(project: Path, runtime: Path, registry_path: Path, agent_id: str)
         GOAL_ID,
         "--agent-id",
         agent_id,
-        "--scan-path",
-        str(project),
         "--host-surface", "generic_cli", "--scheduler-owner", "none", "--execution-mode", "interactive",
         registry_path=registry_path,
         runtime=runtime,

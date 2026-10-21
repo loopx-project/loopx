@@ -56,7 +56,7 @@ if started == 0:
     Path("retained-input.json").write_text(json.dumps([2,3]))
     args = ["quota","should-run","--goal-id",env["LOOPX_GOAL_ID"],"--agent-id",env["LOOPX_AGENT_ID"],
             "--runtime-profile","generic_cli","--turn-instance-id",env["FIXTURE_HELD_TURN"],
-            "--scan-path",env["LOOPX_PROJECT"],"--available-capability","shell",
+            "--available-capability","shell",
             "--available-capability","filesystem_write"]
     if env.get("FIXTURE_BOUND_TODO"):
         planning = cli(*args)
@@ -80,7 +80,7 @@ if guard["heartbeat_receipt"].get("settlement_identity") is None:
     todo_id = env["FIXTURE_SELECTION_TODO"]
     args = ["quota","should-run","--goal-id",env["LOOPX_GOAL_ID"],"--agent-id",env["LOOPX_AGENT_ID"],
         "--runtime-profile","generic_cli","--turn-instance-id",env["LOOPX_TURN"],"--todo-id",todo_id,
-        "--scan-path",env["LOOPX_PROJECT"]]
+]
     selected = subprocess.run([*base,*args], capture_output=True, text=True)
     guard = json.loads(selected.stdout)
     if selected.returncode:
@@ -109,7 +109,7 @@ else:
     refresh_args += ["--agent-vision-json",str(vision)]
 updated = cli(*refresh_args)
 spend = rendered(next(command for command in actions if "spend-slot" in command))
-spent, replay = cli(*spend,"--scan-path",env["LOOPX_PROJECT"]), cli(*spend,"--scan-path",env["LOOPX_PROJECT"])
+spent, replay = cli(*spend), cli(*spend)
 Path("checkpoint-settlement.json").write_text(json.dumps({"refresh":updated,"spend":spent,"replay":replay}))
 '''
 

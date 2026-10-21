@@ -190,7 +190,6 @@ def main() -> int:
         payload = status_module.collect_status(
             registry_path=registry_path,
             runtime_root_override=str(runtime),
-            scan_roots=[root / "project"],
             limit=20,
         )
         history = collect_history(

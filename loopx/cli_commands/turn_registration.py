@@ -13,7 +13,6 @@ from ..control_plane.turn_driver.host_binding import (
     resolve_default_turn_host,
 )
 from ..control_plane.turn_driver.execution_profile import REASONING_EFFORTS
-from ..paths import default_public_scan_root
 
 # Explicit host choices stay per-command: planning may name any host the Turn
 # driver routes, while run-once only ships built-in adapters for these three.
@@ -90,17 +89,6 @@ def register_turn_commands(
         action="store_true",
         help="Include session binding and transaction receipt planning detail.",
     )
-    plan.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help="Compatibility scope metadata; Turn execution defers public scans. Use loopx check before publishing.",
-    )
-    plan.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help="Compatibility scope metadata. Repeatable; does not request a public scan.",
-    )
     plan.add_argument("--limit", type=int, default=5)
 
     managed_step = command_sub.add_parser(
@@ -149,17 +137,6 @@ def register_turn_commands(
             "Caller's observed retry ceiling, reconciled against the Turn "
             "journal retry policy."
         ),
-    )
-    managed_step.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help="Compatibility scope metadata; Turn execution defers public scans. Use loopx check before publishing.",
-    )
-    managed_step.add_argument(
-        "--scan-path",
-        action="append",
-        default=[],
-        help="Compatibility scope metadata. Repeatable; does not request a public scan.",
     )
     managed_step.add_argument("--limit", type=int, default=5)
 
@@ -363,12 +340,6 @@ def register_turn_commands(
         action="store_true",
         help="Invoke the host and commit validated writeback/quota effects.",
     )
-    run_once.add_argument(
-        "--scan-root",
-        default=default_public_scan_root(),
-        help="Compatibility scope metadata; Turn execution defers public scans. Use loopx check before publishing.",
-    )
-    run_once.add_argument("--scan-path", action="append", default=[])
     run_once.add_argument("--limit", type=int, default=5)
 
 

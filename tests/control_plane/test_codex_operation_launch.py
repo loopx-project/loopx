@@ -41,7 +41,7 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
     arguments = [
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
-        "--host", "codex-cli", "--project", str(project), "--scan-root", str(project),
+        "--host", "codex-cli", "--project", str(project),
         "--no-global-sync", "--codex-operation-tools", "--codex-bin", str(executable),
         "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh",
         "--codex-sandbox", "read-only", "--timeout-seconds", "30",

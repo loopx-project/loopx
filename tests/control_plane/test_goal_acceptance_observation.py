@@ -219,9 +219,7 @@ def collect_fixture(
     return collect_status(
         registry_path=registry,
         runtime_root_override=str(runtime),
-        scan_roots=[],
         limit=display_limit,
-        include_public_boundary_scan=False,
     )
 
 

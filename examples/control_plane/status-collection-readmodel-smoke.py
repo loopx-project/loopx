@@ -233,7 +233,6 @@ def assert_context_orchestration() -> None:
     payload = collection_read_model.collect_status(
         registry_path=Path("registry.json"),
         runtime_root_override="runtime-override",
-        scan_roots=[Path("project")],
         limit=2,
         goal_id=GOAL_ID,
         available_capabilities=["network", "material_lifecycle"],

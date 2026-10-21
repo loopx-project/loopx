@@ -125,7 +125,7 @@ def test_real_cli_rejects_invalid_linked_capture_before_primary_commit_and_recov
     assert _run_cli(registry, runtime, "todo", "claim", "--claimed-by", AGENT_ID,
                     *binding[:-2], cwd=project)[0] == 0
     assert _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-                    *binding, "--scan-path", str(project), cwd=project)[0] == 0
+                    *binding,  cwd=project)[0] == 0
     log = question(runtime, GOAL_ID)
     if case != "unlinked":
         update_goal_todo(registry_path=registry, goal_id=GOAL_ID, todo_id=TODO_ID,

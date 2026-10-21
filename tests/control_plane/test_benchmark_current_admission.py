@@ -212,11 +212,11 @@ def test_operational_cli_and_launch_defer_scans_but_explicit_check_blocks_privat
         instrumentation.setattr(contract, "iter_scan_files", unexpected_scan)
         instrumentation.setattr(contract, "iter_utf8_file_reads", unexpected_scan)
         assert main([*base, "status", "--goal-id", fixture.GOAL_ID,
-            "--scan-path", str(project)]) == 0
+            ]) == 0
         assert json.loads(capsys.readouterr().out)["contract"]["ok"] is True
         args = [*base, "quota", "should-run", "--goal-id", fixture.GOAL_ID,
             "--agent-id", fixture.AGENT_ID, "--runtime-profile", "generic_cli",
-            "--turn-instance-id", "private-workspace-turn", "--scan-path", str(project)]
+            "--turn-instance-id", "private-workspace-turn", ]
         assert main(args) == 0
         original = json.loads(capsys.readouterr().out)
         events = fixture._heartbeat_receipt_events(runtime, "private-workspace-turn")

@@ -105,7 +105,7 @@ def test_sqlite_cli_private_evidence_refresh_and_original_turn_replay_spend_once
         "--turn-instance-id",
         TURN_ID,
     )
-    run("quota", "should-run", "--codex-app", *binding, "--scan-path", str(project))
+    run("quota", "should-run", "--codex-app", *binding, )
     refresh = (
         "refresh-state",
         *binding,
@@ -132,8 +132,6 @@ def test_sqlite_cli_private_evidence_refresh_and_original_turn_replay_spend_once
         "--source",
         "heartbeat",
         "--execute",
-        "--scan-path",
-        str(project),
     )
     assert run(*spend)["appended"] is True
     assert run(*spend)["idempotent_replay"] is True

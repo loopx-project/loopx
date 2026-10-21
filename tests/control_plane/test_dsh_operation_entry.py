@@ -140,7 +140,7 @@ def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch,
     command = [sys.executable, "-m", "loopx.cli", "--registry", str(runner.registry),
         "--runtime-root", str(runner.root), "--format", "json", "turn", "run-once",
         "--goal-id", runner.goal_id, "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"],
-        "--project", binding["workspace"], "--scan-root", binding["workspace"], "--no-global-sync",
+        "--project", binding["workspace"],  "--no-global-sync",
         "--timeout-seconds", "120", "--execute", *binding["host_args"]]
     try:
         for option, replacement, expected in [
