@@ -683,24 +683,42 @@ post-settlement ingest retain their existing rules. Provider failure remains
 fail-open. The host adapter is Python IO transport over the existing capability
 resolver and TypeScript envelope owner, not a new enablement policy.
 
-The shared DSH/cloud conversion also preserves the runtime recall packet only
-when the signed participation and fresh Goal/Agent binding permit it. Its local
-`reward_memory_instructions` projection reuses the same Codex CLI clauses;
-ingest-only input omits recalled context. Enabled reflections pass unchanged to
-the outer validator, which retains the existing bounds and material-result rule.
-Native Turn settlement runs the existing ingest observer for verified enabled
-ingest on other hosts too; ordinary validation is still insufficient to write
-memory. Unconfigured, disabled and stale inputs add no memory guidance, result
-field or new observer on those hosts. Codex CLI's existing disabled behavior is
-unchanged. File/SQLite CLI and hermetic host/provider tests qualify this IO
-boundary, not live memory service, model adherence or installed activation.
+The capability layer registers post-selection context once for executing native
+Turn and quota/heartbeat guards. Internal `turn_context_contributions` carry
+bounded context fields, instructions and optional text-result schemas; they are
+not provider permissions. Hosts consume the generic `capability_context_fields`,
+`capability_instructions` and `capability_result_fields` projection. The existing
+`reward_memory_recall` readback and 2,400-character reflection limit remain.
+Programmatic callers contributing memory use the registered context path;
+inserting a legacy recall readback alone cannot activate a host contribution.
+An inactive binding leaves ordinary host input, prompt and result schema intact.
 
-中文：共享 DSH/cloud 转换只在签名参与事实及新鲜 Goal/Agent 绑定允许时保留运行时
-recall 包；本地指导投影复用 Codex CLI 原条款，仅 ingest 不携带召回内容。已开启的
-反思原样交给外层 validator，原大小和 material 规则保留。其他宿主已核验开启 ingest
-时也调用既有结算后 observer，普通验证仍不能授权写记忆。关闭、未配置或失效时不
-新增指导、反思字段或 observer，Codex CLI 原关闭行为不变。隔离 File/SQLite CLI
-及宿主／provider fixture 仅证明 IO 边界，不代表真实服务、模型采用或安装已生效。
+TypeScript binds each contribution to the existing governing signature document
+and its source readback. Capture locations and size diagnostics may change;
+actor, authority, binding readback or contribution changes discard that optional
+context. Capabilities cannot overwrite core authority or result fields.
+Ingest-only input omits recalled context. Host adapters preserve enabled optional
+result values for outer bounds/material validation and independent attestation.
+Registered `PostSettlement` callbacks invoke the original ingest/sidecar owners
+after accountable settlement. `post_writeback` remains effect-free. Per-hook
+receipts preserve completed callbacks during partial recovery; provider receipts
+and idempotency remain with their existing owner. Unknown effects remain unknown.
+After terminal settlement, a resume leaves the journal and its original
+`post_settlement` receipt unchanged. When that receipt is uncertain, the owner
+may reconcile the same effect and return `post_settlement_recovery` as current
+readback. The owner retains the durable receipt; this projection grants no new
+work, validation, quota debit or scheduler action.
+
+中文：执行中的 native Turn 与 quota/heartbeat guard 通过注册的选择后上下文路径接入
+记忆；三种宿主消费统一贡献，不再各自判断记忆模式。原 recall 读回和反思大小限制保留，
+只有旧读回而无注册贡献不能开启宿主记忆输入。关闭保持普通输入／指导／schema 原样。
+TS 复用 governing 签名文档和来源绑定，允许捕获定位变化，拒绝 actor／权限／绑定／
+贡献变更及核心字段替换。独立精确证明和可记账结算后，注册的 `PostSettlement` 调用
+原 ingest owner；无副作用的 `post_writeback` 不变。逐 hook 回执与原 provider 去重
+共同恢复，不把不确定效果写成零。终态重放保留原 journal／`post_settlement`，通过原
+owner 对同一效果恢复的当前读回放入 `post_settlement_recovery`；持久回执仍由原 owner
+保管，不触发业务工作、验证、扣额或调度。隔离 File/SQLite／宿主／provider 验证不代表安装态
+App/Lark、模型采用或真实服务资格。
 
 This is a bounded shared-facts step. Heartbeat still has its existing full and
 compact rendering paths; it is not yet the same installed host journey. The

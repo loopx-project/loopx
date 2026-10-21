@@ -32,13 +32,11 @@ from .codex_sessions import (
 from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
 from .executor import (
     HOST_AGENT_VISION_JSON_MAX_CHARS,
-    HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
     HOST_RESULT_EVIDENCE_LIMITS,
     HOST_RESULT_TEXT_LIMITS,
     LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
-    reward_memory_automation_enabled,
-    reward_memory_prompt_instructions,
 )
+from .capability_context import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
 from .host_process_transport import HostOutputLines, run_host_process
@@ -263,11 +261,7 @@ def codex_cli_result_schema(
             "items": {"type": "string", "maxLength": max_item_chars},
             "maxItems": max_items,
         }
-    if reward_memory_automation_enabled(request, operation="automatic_ingest"):
-        properties["reward_memory_reflection_json"] = {
-            "type": "string",
-            "maxLength": HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
-        }
+    properties.update(capability_result_fields(request))
     if _has_subagent_topology(request):
         child_receipts = child_execution_receipts_json_schema()
         child_receipt_properties = child_receipts["items"]["properties"]
@@ -321,7 +315,7 @@ def _prompt(request: Mapping[str, Any]) -> str:
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
-    instructions.extend(reward_memory_prompt_instructions(request))
+    instructions.extend(request.get("capability_instructions") or ())
     boundary = _mapping(_mapping(request.get("turn_envelope")).get("boundary"))
     if boundary.get("checkpointed_boundary_authority"):
         instructions.append(

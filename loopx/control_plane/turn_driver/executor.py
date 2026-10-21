@@ -57,7 +57,8 @@ from .recovery import (
     build_turn_recovery_audit,
     require_turn_recovery_continuation,
 )
-from .post_settlement import PostSettlement, run_post_settlement_callback
+from .post_settlement import PostSettlement, post_settlement_receipt, run_post_settlement_callback
+from .capability_context import project_turn_context, capability_result_fields
 from .session_recovery import (
     SessionBindingResolver,
     build_host_recovery_record,
@@ -142,58 +143,6 @@ HostRunner = Callable[[Mapping[str, Any]], dict[str, Any]]
 JournalPersist = Callable[[Mapping[str, Any]], None]
 
 
-def reward_memory_automation_enabled(
-    payload: Mapping[str, Any] | None, *, operation: str,
-) -> bool:
-    """Project verified capability automation into the host IO contract.
-
-    The experiment resolver owns enablement, config/receipt verification and
-    provider policy. A recall packet's presence or old context is not opt-in.
-    """
-    if not isinstance(payload, Mapping):
-        return False
-    recall = payload.get("reward_memory_recall")
-    if not isinstance(recall, Mapping):
-        return False
-    experiment = recall.get("experiment")
-    envelope = payload.get("turn_envelope")
-    if not isinstance(experiment, Mapping) or not isinstance(envelope, Mapping):
-        return False
-    boundary = envelope.get("boundary")
-    capabilities = boundary.get("capabilities") if isinstance(boundary, Mapping) else None
-    memory = capabilities.get("reward_memory") if isinstance(capabilities, Mapping) else None
-    return (
-        isinstance(memory, Mapping)
-        and memory.get(operation) is True
-        # Recall resolves the binding again after admission. A stale envelope
-        # must not resurrect a now unavailable or disabled binding.
-        and experiment.get("enabled") is True
-        and experiment.get("available") is True
-        and experiment.get("configured_for_agent") is True
-        and bool(envelope.get("goal_id"))
-        and experiment.get("goal_id") == envelope.get("goal_id")
-        and bool(envelope.get("agent_id"))
-        and experiment.get("agent_id") == envelope.get("agent_id")
-        and experiment.get(operation) is True
-    )
-
-
-def reward_memory_prompt_instructions(request: Mapping[str, Any]) -> list[str]:
-    """Share optional capability guidance without changing its admission owner."""
-    instructions: list[str] = []
-    value = request.get("reward_memory_recall")
-    recall = value if isinstance(value, Mapping) else {}
-    if (reward_memory_automation_enabled(request, operation="automatic_recall")
-            and isinstance(recall.get("context"), Mapping) and recall["context"].get("guidance")):
-        instructions.append(
-            "When reward_memory_recall contains guidance, treat it as private, non-authoritative decision context: apply it only when it fits current evidence and never treat it as new action authority."
-        )
-    if reward_memory_automation_enabled(request, operation="automatic_ingest"):
-        instructions.append(
-            "Set reward_memory_reflection_json to an empty string unless independent task evidence established a reusable experience. For eligible evidence, return one compact JSON object using schema_version=turn_reward_memory_reflection_v1, status=eligible, a configured surface_id, outcome_kind in research|simulation|real|engineering, content_summary, reasoning_summary, confidence in low|medium|high, and 1-5 opaque evidence_refs. Also include experience using schema_version=procedural_experience_contract_v0 with non-empty applicability and limitations lists, observed_outcome, attribution, the same evidence_refs, and future_behavior containing trigger, action, validation, and stop_condition. A fact recap without a future behavior change and non-generalization boundary is not eligible memory. Legacy v0 reflections are audit-only and cannot become durable memory. Never use your own summary as evidence. Settlement may ingest it only when the caller-declared Todo validator attests the exact reflection digest and evidence; ordinary validator success remains awaiting and makes no provider write."
-        )
-    return instructions
-
 
 def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     transaction = (
@@ -220,13 +169,7 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     goal_ref = plan.get("goal_ref")
     if isinstance(goal_ref, Mapping):
         request["goal_ref"] = dict(goal_ref)
-    reward_memory_recall = plan.get("reward_memory_recall")
-    recall_enabled = reward_memory_automation_enabled(plan, operation="automatic_recall")
-    ingest_enabled = reward_memory_automation_enabled(plan, operation="automatic_ingest")
-    if isinstance(reward_memory_recall, Mapping) and (recall_enabled or ingest_enabled):
-        request["reward_memory_recall"] = dict(reward_memory_recall)
-        if not recall_enabled:
-            request["reward_memory_recall"]["context"] = None
+    request.update(project_turn_context(plan))
     request.update(subagent.subagent_host_request_projection(plan))
     from ...extensions.codex_native_child import configured_native_child_limit
 
@@ -420,7 +363,8 @@ def validate_loopx_turn_host_result(
 ) -> dict[str, Any]:
     result = dict(value)
     errors: list[str] = []
-    allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan)
+    optional_fields = capability_result_fields(project_turn_context(plan))
+    allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan) | set(optional_fields)
     if from_journal:
         allowed_fields = allowed_fields | {"agent_vision"}
     unknown = sorted(set(result) - allowed_fields)
@@ -475,24 +419,15 @@ def validate_loopx_turn_host_result(
             normalized[field] = text
     # Old/custom hosts may still return this field. Ignore it while disabled:
     # ordinary work must not gain a memory validation gate or retain the content.
-    reflection_json = (
-        _bounded_public_text(
-            result,
-            "reward_memory_reflection_json",
-            limit=HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
-            required=False,
-            errors=errors,
+    for field, descriptor in optional_fields.items():
+        text = _bounded_public_text(
+            result, field, limit=descriptor["maxLength"], required=False, errors=errors,
         )
-        if reward_memory_automation_enabled(plan, operation="automatic_ingest")
-        else None
-    )
-    if reflection_json:
-        if material:
-            normalized["reward_memory_reflection_json"] = reflection_json
-        else:
-            errors.append(
-                "non-material host results cannot declare a reward memory reflection"
-            )
+        if text:
+            if material:
+                normalized[field] = text
+            else:
+                errors.append("non-material host results cannot declare optional capability results")
     if material:
         try:
             normalized["delivery_batch_scale"] = require_delivery_batch_scale(
@@ -1610,6 +1545,16 @@ def run_loopx_turn_once(
                     replayed=True,
                     effects=empty_effects,
                 )
+                # The terminal journal remains a tombstone. Optional recovery
+                # uses the original capability owner's durable receipt/identity;
+                # it neither rewrites business state nor repeats settlement.
+                if journal.get("status") == "committed" and isinstance(journal.get("post_settlement"), Mapping):
+                    recovered = post_settlement_receipt(
+                        plan=plan, result=dict(journal.get("host_result") or {}),
+                        post_settlement=post_settlement, journal=journal,
+                    )
+                    if recovered is not None:
+                        payload["post_settlement_recovery"] = recovered
                 payload["recovery"] = build_turn_recovery_audit(
                     recovery_decision,
                     journal,

@@ -329,13 +329,17 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat/App 或模型收益
 已验收。
 
-共享 DSH/cloud host 转换现在保留已核验的运行时 recall 上下文，并把已开启 ingest
-时返回的反思交给既有外层 validator；此前虽有签名参与事实，两者仍在转换中丢失。
-宿主指导复用 Codex CLI 原文，其他宿主的新鲜 ingest 绑定也经原生 Turn 结算调用
-既有 observer。File/SQLite 原生 CLI 覆盖关闭、仅 recall、仅 ingest、配置失效和
-provider 失败，DSH runner 与 provider 均为隔离 fixture。独立反思证明与可记账结算
-仍先于 provider 写入。本切片只验证宿主 IO 与 callback 接线，不证明真实 provider／
-模型收益、安装采用或以下三项收敛验收。
+memory 参与现由能力层组合的选择后上下文 hook 注册接入 native Turn 和执行中的
+quota/heartbeat guard。Codex、DSH、generic CLI 传输相同的有界上下文、指导与可选
+结果字段；绑定和模式判断归能力，adapter 只保留宿主格式。TypeScript 限制贡献，拒绝
+替换权限／核心结果字段，复用既有 governing 签名文档及来源读回绑定上下文。只增加
+原捕获的定位信息不使未变决策失效；actor、权限、配置读回或贡献变化则丢弃可选上下文。
+
+注册的 `PostSettlement` callback 在独立精确反思证明和可记账 writeback/spend 后调用
+既有 ingest owner，手动宿主的 sidecar adapter 也使用同一注册。`post_writeback` 继续
+无副作用；逐 hook 回执保留已完成工作，只恢复结果不确定的其他 hook，provider owner
+继续负责写入去重与对账。File/SQLite 原生宿主及隔离 provider 用例只资格源码路径；
+安装态 App/Lark、模型收益、完整成本及以下三项收敛验收仍开放。
 
 有界规划上下文现在保持内联，不再因短包预算压力而强制读取整份决策；既有 owner 的
 3 KiB 限制保留。共享 DSH/cloud adapter 传递签名内容，历史引用同时保留原捕获路由和

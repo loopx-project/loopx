@@ -42,6 +42,8 @@ def _plan(*, recall: bool = True, ingest: bool = True) -> dict:
     plan["turn_envelope"]["boundary"] = {"capabilities": {"reward_memory": {
         "automatic_recall": recall, "automatic_ingest": ingest,
     }}}
+    from tests.control_plane.reward_memory_host_fixture import register_plan_memory
+    register_plan_memory(plan)
     return plan
 
 
@@ -74,10 +76,10 @@ def test_admitted_memory_does_not_resurrect_invalidated_runtime_binding(invalida
     experiment = plan["reward_memory_recall"]["experiment"]
     experiment[invalidated] = "another-actor" if invalidated.endswith("_id") else False
     request = build_loopx_turn_host_request(plan)
-    valid_binding = invalidated.startswith("automatic_")
+    valid_binding = False  # Changed registered sources invalidate the entire optional contribution.
     assert ("reward_memory_recall" in request) is valid_binding
-    assert ("reward_memory_reflection_json" in codex_cli_result_schema(request)["properties"]) is (invalidated == "automatic_recall")
-    assert ("When reward_memory_recall contains guidance" in _prompt(request)) is (invalidated == "automatic_ingest")
+    assert ("reward_memory_reflection_json" in codex_cli_result_schema(request)["properties"]) is False
+    assert ("When reward_memory_recall contains guidance" in _prompt(request)) is False
 
 
 @pytest.mark.parametrize(("recall", "ingest"), [(True, False), (False, True), (True, True)])
@@ -97,6 +99,8 @@ def test_recall_and_reflection_are_independently_opted_in(recall: bool, ingest: 
 def test_unavailable_provider_does_not_instruct_use_of_missing_recall_context() -> None:
     plan = _plan()
     plan["reward_memory_recall"].update(status="provider_unavailable", context=None)
+    from tests.control_plane.reward_memory_host_fixture import register_plan_memory
+    register_plan_memory(plan)
     request = build_loopx_turn_host_request(plan)
     assert "When reward_memory_recall contains guidance" not in _prompt(request)
     # Recall failure does not silently disable independently configured outcome ingest.
@@ -132,6 +136,8 @@ def test_shared_host_memory_keeps_binding_context_and_validation(recall, ingest,
     envelope["action"]["primary_action"] = "Advance one public fixture"
     digest = _canonical_hash(turn_envelope_action_signature_document(envelope))
     envelope["action_signature"].update(source_hash=digest, envelope_hash=digest)
+    from tests.control_plane.reward_memory_host_fixture import register_plan_memory
+    register_plan_memory(plan)
     if invalidated:
         plan["reward_memory_recall"]["experiment"][invalidated] = "other" if invalidated.endswith("_id") else False
     request = build_loopx_turn_host_request(plan)
@@ -232,6 +238,8 @@ def run_dsh_turn(*, prompt, **kwargs):
     return json.dumps({'result_kind': 'validated_progress', 'classification': 'fixture_progress',
         'next_action': 'Run the next bounded fixture', 'path_delta_mode': 'unchanged',
         'vision_unchanged_reason': 'The original fixture remains open.',
+        'work_evidence': ['artifact:fixture-host-capture'],
+        'validation_evidence': ['check:fixture-independent-validator'],
         'reward_memory_reflection_json': '{"status":"no_evidence"}'})
 ''', encoding="utf-8")
         host_args = ["--host", "dsh", "--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "dsh-home")]

@@ -15,10 +15,9 @@ from ..quota.turn_envelope import turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
+from .capability_context import host_context_projection, capability_result_fields
 from .executor import (
     HOST_RESULT_EVIDENCE_LIMITS,
-    reward_memory_automation_enabled,
-    reward_memory_prompt_instructions,
 )
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
@@ -138,14 +137,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         # its binding; this adapter neither reads it nor re-enters admission.
         authority["detail_ref"] = _mapping(envelope.get("detail_ref"))
         authority["action_signature"] = signature
-    recall_enabled = reward_memory_automation_enabled(request, operation="automatic_recall")
-    ingest_enabled = reward_memory_automation_enabled(request, operation="automatic_ingest")
-    if recall_enabled or ingest_enabled:
-        memory = _mapping(request.get("reward_memory_recall"))
-        if not recall_enabled:
-            memory["context"] = None
-        authority["reward_memory_recall"] = memory
-        authority["reward_memory_instructions"] = reward_memory_prompt_instructions(request)
+    authority.update(host_context_projection(request))
     return authority
 
 
@@ -421,11 +413,10 @@ def build_result(
             # Preserve the structured executor input verbatim. The executor
             # owns type, size, JSON and semantic validation.
             result[field] = candidate[field]
-    if ("reward_memory_reflection_json" in candidate
-            and reward_memory_automation_enabled(request, operation="automatic_ingest")):
-        # The outer executor validates bounds, material outcome, exact digest
-        # attestation and evidence. This adapter must not silently drop its input.
-        result["reward_memory_reflection_json"] = candidate["reward_memory_reflection_json"]
+    for field in capability_result_fields(request):
+        if field in candidate:
+            # Preserve optional values verbatim for the owning validator.
+            result[field] = candidate[field]
     for field in HOST_RESULT_EVIDENCE_LIMITS:
         if field in candidate:
             # Preserve the bounded evidence value for the executor's typed

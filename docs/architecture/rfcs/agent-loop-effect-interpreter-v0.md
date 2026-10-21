@@ -471,16 +471,24 @@ shape merely because of its size. Optional memory participation now has one
 compact, signed envelope projection; the Codex CLI adapter preserves default-off
 isolation. This does not qualify installed heartbeat/App adoption or model value.
 
-The shared DSH/cloud host conversion now retains verified runtime recall context
-and returns opted-in reflections to the existing outer validator. Previously it
-dropped both despite the signed participation facts. Host guidance reuses the
-Codex CLI wording, and native Turn settlement invokes the existing ingest observer
-for a freshly verified ingest binding on other hosts as well. File/SQLite native
-CLI cases cover off, recall-only, ingest-only, invalidated configuration and
-provider failure; the DSH runner and provider are hermetic. The independent
-reflection attestation and accountable settlement still precede provider writes.
-This qualifies host IO and callback wiring, not live provider/model benefit,
-installed adoption or the three convergence acceptances below.
+Memory participation now uses a registered post-selection context contribution,
+composed in the capability layer for native Turn and executing quota/heartbeat
+guards. Codex, DSH and generic CLI hosts transport the same bounded context,
+instructions and optional result fields. The capability owns binding/mode checks;
+adapters retain only host formatting. TypeScript bounds contributions, prevents
+authority/result-field replacement and binds them to the existing governing
+signature document plus their source readback. Adding the original capture's
+location does not invalidate an unchanged decision; changed actors, authority,
+configuration readback or contributions do invalidate optional context.
+
+Registered `PostSettlement` callbacks call the existing ingest owner after
+independent exact-reflection attestation and accountable writeback/spend. The
+manual-host sidecar adapter uses that registration too. `post_writeback` remains
+effect-free. Per-hook receipts preserve completed work while an uncertain peer
+hook recovers; the provider owner retains write deduplication and reconciliation.
+File/SQLite native host and isolated provider cases qualify this source path.
+Installed App/Lark adoption, model benefit, complete costs and the three
+convergence acceptances below remain open.
 
 Bounded planning context now remains inline instead of forcing a full-decision
 read under envelope budget pressure. Its existing owner retains the 3 KiB bound;

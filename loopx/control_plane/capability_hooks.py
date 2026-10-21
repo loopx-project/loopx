@@ -77,6 +77,24 @@ class PostWritebackSourceRejected(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class TurnContextHookRegistration:
+    """Configured provider IO after governing selection, before host input.
+
+    Registration bounds IO/results; it grants no provider or task authority.
+    """
+
+    hook_id: str
+    capability_id: str
+    readback_slots: tuple[str, ...]
+    producer: Callable[[], Mapping[str, Any]]
+    max_result_bytes: int = 64 * 1024
+
+    def contract(self) -> dict[str, Any]:
+        return {"hook_id": self.hook_id, "capability_id": self.capability_id,
+                "readback_slots": list(self.readback_slots), "max_result_bytes": self.max_result_bytes}
+
+
+@dataclass(frozen=True, slots=True)
 class InteractionProjectionHookRegistration:
     """One read-only capability contribution to an interaction contract."""
 

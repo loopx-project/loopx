@@ -593,6 +593,12 @@ export function createEffectRuntimeHandlers(
       "capability_hook.turn_start.validate_registration",
       lazyHandler(() => import("./capability_hooks.ts"), ({validateTurnStartHookRegistration}) => (params) => validateTurnStartHookRegistration(params.registration)),
     ],
+    ["capability_hook.turn_context.validate_registration", lazyHandler(() => import("./turn_driver/capability_context.ts"),
+      ({validateTurnContextRegistration}) => (params) => validateTurnContextRegistration(params.registration))],
+    ["capability_hook.turn_context.validate", lazyHandler(() => import("./turn_driver/capability_context.ts"),
+      ({validateTurnContextContribution}) => validateTurnContextContribution)],
+    ["capability_hook.turn_context.project", lazyHandler(() => import("./turn_driver/capability_context.ts"),
+      ({projectTurnContextContribution}) => projectTurnContextContribution)],
     [
       "capability_hook.turn_start.validate",
       lazyHandler(() => import("./capability_hooks.ts"), ({validateTurnStartHookInvocation}) => (params) => validateTurnStartHookInvocation({
