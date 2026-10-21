@@ -338,9 +338,10 @@ def current_heartbeat_host_launch_decision(
     args = argparse.Namespace(
         goal_id=goal_id, agent_id=agent_id, turn_instance_id=original_turn,
         todo_id=None, codex_app=False, runtime_profile="generic_cli",
-        # Match heartbeat-prompt's default public scan. The execution workspace
-        # may be a private task with auth fixtures, rather than public LoopX code.
-        scan_path=[], scan_root=default_public_scan_root(), limit=0,
+        # Uncaptured wakes use heartbeat-prompt's public-package default. Keep
+        # the existing workspace recheck for an already-held checkpoint packet.
+        scan_path=[str(project)] if original_quota is not None else [],
+        scan_root=default_public_scan_root(), limit=0,
         available_capabilities=["shell", "filesystem_write"],
     )
     selection = load_requested_quota_action_selection(

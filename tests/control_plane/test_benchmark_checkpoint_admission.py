@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from ipaddress import IPv4Address
 import os
 from pathlib import Path
 import sys
@@ -115,7 +116,7 @@ Path("checkpoint-settlement.json").write_text(json.dumps({"refresh":updated,"spe
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop", "original_event_changed", None])
+@pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop", "original_event_changed", "public_scope_violation", None])
 def test_checkpoint_resume_rechecks_current_source_with_original_guard(tmp_path, monkeypatch, provider, refusal):
     _run_checkpoint(tmp_path, monkeypatch, provider, refusal=refusal, todo_bound=False)
 
@@ -186,6 +187,13 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
             elif refusal == "missing_state":
                 state.rename(state.with_suffix(".saved"))
                 assert _quota(source, runtime, project)["status_health_ok"] is False
+            elif refusal == "public_scope_violation":
+                # The held guard explicitly scanned this workspace. A default
+                # package scan must not replace that check on continuation.
+                (project / "changed_public_fixture.py").write_text(
+                    "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
+                )
+                assert _quota(source, runtime, project)["status_health_ok"] is False
             elif refusal == "stop":
                 with monkeypatch.context() as fault:
                     fault.setattr(activation_service, "sync_project_registry_to_global", lambda **kwargs: {
@@ -237,6 +245,7 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
         assert error is not None and {
             "source_compute_zero":"goal_launch_not_allowed", "missing_state":"goal_launch_not_allowed",
             "stop":"goal_stopped", "original_event_changed":"heartbeat_launch_original_binding_changed",
+            "public_scope_violation":"goal_launch_not_allowed",
         }[refusal] in str(error)
         assert not (project / "checkpoint-business.json").exists()
         assert fixture._heartbeat_receipt_events(runtime, HELD_TURN) == observations["events"]

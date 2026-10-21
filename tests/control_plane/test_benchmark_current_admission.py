@@ -16,7 +16,6 @@ from loopx.cli_commands import turn_decision
 from loopx.control_plane.goals import activation_service
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from loopx.global_registry import sync_project_registry_to_global
-from loopx.paths import default_public_scan_root
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.host_process_fixture import write_python_host_fixture
 from tests.control_plane import test_quota_settlement_cli as fixture
@@ -42,11 +41,6 @@ def _environment(tmp_path, monkeypatch, provider, *, replan=False):
     elif replan:
         fixture._configure_autonomous_replan_fixture(project, runtime, source)
     fixture._initialize_fixture_authority(project, runtime, provider=provider)
-    # A private task can contain synthetic private-network fixtures. It is not
-    # the public package tree selected by the heartbeat CLI's default scan.
-    (project / "task_network_fixture.py").write_text(
-        "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
-    )
     synced = sync_project_registry_to_global(
         registry_path=source, runtime_root_override=str(runtime), goal_id=fixture.GOAL_ID,
     )
@@ -78,7 +72,7 @@ print(json.dumps({"type":"thread.started","thread_id":"benchmark-original-sessio
 def _quota(registry, runtime, project):
     code, result = fixture._run_cli(registry, runtime,
         "quota", "should-run", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
-        "--runtime-profile", "generic_cli", "--scan-root", default_public_scan_root(), cwd=project)
+        "--runtime-profile", "generic_cli", cwd=project)
     assert code == 0 or code == 1 and result.get("status_health_ok") is False, result
     return result
 
@@ -87,6 +81,12 @@ def _quota(registry, runtime, project):
 @pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop", None])
 def test_heartbeat_worker_qualifies_current_source_at_actual_spawn(tmp_path, monkeypatch, provider, refusal):
     env, project, runtime, source, state = _environment(tmp_path, monkeypatch, provider)
+    if refusal is None:
+        # This default-scan caller may work on a private task. Keep that fixture
+        # out of the shared environment used by explicit project-scan callers.
+        (project / "task_network_fixture.py").write_text(
+            "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
+        )
     mirror = Path(env["LOOPX_REGISTRY"])
     mirror_before, state_before = mirror.read_bytes(), state.read_bytes()
     observations = []
@@ -149,6 +149,9 @@ def test_initial_benchmark_planner_can_launch_without_a_prior_heartbeat_receipt(
     env, project, runtime, source, _state = _environment(tmp_path, monkeypatch, provider, replan="empty")
     packet = _quota(source, runtime, project)
     assert packet["should_run"] is True and packet.get("selected_todo") is None
+    (project / "task_network_fixture.py").write_text(
+        "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
+    )
     env.update(LOOPX_TASK_ENTRY="loopx-planned", LOOPX_TASK_STAGE="plan", LOOPX_EXECUTION_MODE=mode,
         LOOPX_PHASE_DEADLINE_EPOCH=str(time.time()+600), LOOPX_PLANNING_RESULT=str(project / "planning.json"))
     if mode == "turn":
