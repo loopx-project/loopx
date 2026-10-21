@@ -34,6 +34,7 @@ for (const kind of ["project", "steward"]) {
     const observed = {thread_id: "native", turn_id: "native-failed", codex_error_info: "other",
       pre_execution_routing_timeout: true, only_pre_execution_items: true, only_original_user_item: false};
     const packet = {request: {request_ref: "f".repeat(24), command: null, status: "accepted", delivery_verified: true,
+      message: "Original synthetic request", origin: "lark",
       binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
       binding: selected, current_session: session, context_recovery: {version: 21, failed_turn: failed,
         observed_at: "2026-01-01T00:10:00Z", steering_observed: false, source_verified: true, native_observation: observed}};
@@ -43,6 +44,17 @@ for (const kind of ["project", "steward"]) {
     assert.equal(plan.not_before, "2026-01-01T00:01:00.000Z");
     const reservation = {version: 21, failed_turn_id: "failed", routing_attempt: 1, client_turn_id: plan.client_turn_id};
     assert.deepEqual(planBoundConversationRequest({...packet, request: {...packet.request, context_recovery: reservation}}), plan);
+    const admitted = {session_id: "original", turn_id: "already-admitted", client_turn_id: plan.client_turn_id,
+      message: packet.request.message, origin: "lark", status: "completed", attachments: []};
+    const crash = {...packet, request: {...packet.request, context_recovery: reservation},
+      current_session: {...session, status: "busy", active_turn_id: "already-admitted"},
+      context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted}};
+    assert.equal(planBoundConversationRequest(crash).admitted_turn_id, "already-admitted");
+    for (const change of [{session_id: "foreign"}, {client_turn_id: "foreign"},
+      {message: "another request"}, {attachments: [{type: "image"}]}]) {
+      assert.equal(planBoundConversationRequest({...crash,
+        context_recovery: {...crash.context_recovery, admitted_turn: {...admitted, ...change}}}).recovery_eligible, false);
+    }
     const next = {...packet, request: {...packet.request, turn_id: "next", context_recovery: reservation},
       context_recovery: {...packet.context_recovery, failed_turn: {...failed, turn_id: "next"}}};
     assert.equal(planBoundConversationRequest(next).routing_attempt, 2);

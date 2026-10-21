@@ -66,11 +66,15 @@ class ChatExternalConversations:
                 return {}
         else:
             selected_binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
+        reservation = row.get("context_recovery") or {}
+        admitted = (store.turn_for_client(session["session_id"], reservation["client_turn_id"])
+            if reservation.get("routing_attempt") and reservation.get("failed_turn_id") == row["turn_id"] else None)
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
             "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
+                "admitted_turn": admitted,
                 "steering_observed": any(event.get("kind") == "turn.steered"
                     for event in store.events_after(session["session_id"], turn["turn_id"], None)),
                 "native_observation": observation, "source_verified": source_verified},
@@ -120,7 +124,7 @@ class ChatExternalConversations:
                 assert session is not None and turn is not None
                 self.controller._check_codex_home(session)
                 context = self.controller.project_contexts.session_context(session)
-                proof = CodexAppServerAdapter.failed_request_observation(
+                proof = None if plan.get("admitted_turn_id") else CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
                     thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                 selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
@@ -144,10 +148,14 @@ class ChatExternalConversations:
                     _atomic_write_json(path, row)
                 # Freeze correlation before the existing queue can dispatch.
                 self._record_steward_ingress(row, selected, session, plan["client_turn_id"])
-                continued, _ = self.controller.enqueue_turn(session_id=row["session_id"],
-                    client_turn_id=plan["client_turn_id"], message=row["message"],
-                    attachments=row.get("attachments"), origin=row.get("origin", "lark"),
-                    work_dir=context["project"], objective=context["objective"])
+                if plan.get("admitted_turn_id"):
+                    continued = self.controller.store.load_turn(row["session_id"], plan["admitted_turn_id"])
+                    assert continued is not None
+                else:
+                    continued, _ = self.controller.enqueue_turn(session_id=row["session_id"],
+                        client_turn_id=plan["client_turn_id"], message=row["message"],
+                        attachments=row.get("attachments"), origin=row.get("origin", "lark"),
+                        work_dir=context["project"], objective=context["objective"])
                 row.update(turn_id=continued["turn_id"], delivery_verified=False)
                 _atomic_write_json(path, row)
             self.controller.resume_session_queue(session_id=row["session_id"],
