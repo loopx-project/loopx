@@ -127,6 +127,15 @@ def _host_process_drain(record: dict[str, Any] | None, *, supervises: str,
         return (HOST_PROCESS_NOT_LAUNCHED if record.get("process_group") is None
                 and "bridge_pid" not in record else HOST_PROCESS_UNATTRIBUTABLE)
     if not hasattr(os, "killpg"):
+        if sys.platform == "win32" and "windows_job" in record:
+            from .windows_host_job import active_job_processes, valid_job_name
+            if not valid_job_name(record["windows_job"]):
+                return HOST_PROCESS_UNATTRIBUTABLE
+            try:
+                active = active_job_processes(record["windows_job"])
+            except OSError:
+                return HOST_PROCESS_UNATTRIBUTABLE
+            return HOST_PROCESS_DRAINING if active else HOST_PROCESS_DRAINED
         # A launched Host on a platform without process groups is never proven
         # drained. This is a platform boundary, not an attribution failure.
         return HOST_PROCESS_UNSUPPORTED_PLATFORM
@@ -177,7 +186,11 @@ def execution_host_drain(record_path: Path, *, launch_possible: bool = False) ->
     host = _host_process_drain(owned_record, supervises=HOST_PROCESS_SUPERVISES_HOST,
                                expected=True)
     drain = next(state for state in _DRAIN_PRECEDENCE if state in {supervisor, host})
-    if not host_process_drain_supported() and (launch_possible or drain != HOST_PROCESS_NOT_LAUNCHED):
+    assigned_windows_job = sys.platform == "win32" and any(
+        "windows_job" in item for item in (owned_record or {}, supervisor_record or {})
+    )
+    if (not assigned_windows_job and not host_process_drain_supported()
+            and (launch_possible or drain != HOST_PROCESS_NOT_LAUNCHED)):
         return HOST_PROCESS_UNSUPPORTED_PLATFORM
     return drain
 

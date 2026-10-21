@@ -1,4 +1,5 @@
 {
+  "loopx/control_plane/goals/checkpoint_commit.ts::<anonymous>::direct_json_read:readFileSync#1": "source_digest_guard",
   "loopx/control_plane/goals/deletion_service.py::<module>._load_locked_payloads::direct_json_read:read_json#1": "global_registry_io",
   "loopx/control_plane/goals/deletion_service.py::<module>._load_locked_payloads::direct_json_read:read_json#2": "global_registry_io",
   "loopx/control_plane/goals/deletion_service.py::<module>._resolve_route::direct_json_read:read_json#1": "global_registry_io",

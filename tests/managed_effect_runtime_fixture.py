@@ -6,11 +6,13 @@ import tempfile
 from uuid import uuid4
 
 from loopx.control_plane import effect_runtime
+from loopx.control_plane.runtime.file_paths import windows_extended_path
 
 
 def capture_disposable_effect_runtimes(root: Path) -> list[tuple[Path, str]]:
     if root.is_symlink():
         return []
+    root = windows_extended_path(root)
     owned_root = root.resolve()
     captured = []
     for locator in root.glob("**/loopx-effect-runtime-*/runtime-*.json"):
@@ -30,6 +32,7 @@ def stop_disposable_effect_runtimes(
 ) -> None:
     if root.is_symlink():
         return
+    root = windows_extended_path(root)
     owned_root = root.resolve()
     records = dict.fromkeys([*(captured or []), *capture_disposable_effect_runtimes(root)])
     if not records:
@@ -61,7 +64,7 @@ def stop_disposable_effect_runtimes(
             # the server's frozen physical publication path, never a path
             # claimed by copied JSON. Unknown/older servers remain untouched.
             published = ping.get("info_path")
-            if not isinstance(published, str) or Path(published) != locator.resolve():
+            if not isinstance(published, str) or windows_extended_path(Path(published).resolve()) != locator.resolve():
                 continue
             result = effect_runtime._stop_effect_runtime(
                 locator, info, timeout=5, wait_for_process_exit=True,

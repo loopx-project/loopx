@@ -388,8 +388,5 @@ def handle_turn_command(
         if args.turn_command == "run-once"
         else _render_loopx_turn_plan_markdown
     )
-    if args.turn_command == "plan" and not args.include_transaction_detail:
-        print_payload(payload, output_format(args), renderer)
-    else:
-        print_payload(payload, output_format(args), renderer)
+    print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") else 1

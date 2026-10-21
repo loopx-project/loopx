@@ -4,15 +4,13 @@ import {mkdtemp, writeFile, chmod, symlink, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {test} from "node:test";
-import {execFile, spawnSync} from "node:child_process";
+import {execFile} from "node:child_process";
+import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {fileURLToPath} from "node:url";
 
 async function windowsFixture(directory: string, path: string): Promise<void> {
   if (process.platform !== "win32") return;
-  const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN ??
-    spawnSync("python", ["-c", "import sys;print(sys.executable)"],
-      {encoding: "utf8", windowsHide: true, timeout: 5000}).stdout?.trim();
-  assert.ok(python, "Windows fixture needs its selected Python interpreter");
+  const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN ?? resolveTestPython();
   process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN = python;
   const helper = fileURLToPath(new URL("../../loopx/control_plane/runtime/private_permissions.py", import.meta.url));
   await command(python, ["-c", "import runpy,sys;from pathlib import Path;m=runpy.run_path(sys.argv[1]);m['protect_private_path'](Path(sys.argv[2]),directory=True);m['protect_private_path'](Path(sys.argv[3]))", helper, directory, path]);

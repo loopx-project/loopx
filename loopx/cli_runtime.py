@@ -97,6 +97,9 @@ class _SelectedArgumentParser(LoopXArgumentParser):
 		raise _SelectedParseRejected(message)
 
 
+PrintPayload = Callable[[dict[str, object], str, Callable[[dict[str, object]], str]], None]
+
+
 def print_payload(
 	payload: dict[str, object],
 	fmt: str,

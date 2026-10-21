@@ -34,3 +34,19 @@ for(const shape of ["closed_before_guard","unsettled","missing_source","duplicat
     assert.throws(()=>run(obligation,items),/lifecycle source does not match/);
   });
 }
+
+test("sealed admission retains a still-pending original lifecycle", () => {
+  const result = run(source, structuredClone(admitted) as typeof current);
+  assert.equal((result.obligation as Record<string, unknown>).resolution_mode, "todo_lifecycle_settlement");
+  assert.equal((result.obligation as Record<string, unknown>).selection_binding, "heartbeat_receipt");
+});
+
+
+test("sealed admission accepts the lifecycle owner's closeout timestamp", () => {
+  const items = structuredClone(current);
+  items[0].updated_at = "2026-09-03T00:00:00Z";
+  assert.equal((run(source, items).obligation as Record<string, unknown>).resolution_mode,
+    "receipt_bound_replan_settlement");
+  items[0].updated_at = "2026-09-01T12:00:00Z";
+  assert.throws(() => run(source, items), /lifecycle source does not match/);
+});

@@ -177,7 +177,7 @@ def test_lark_private_json_long_path_interrupted_replace(
     def interrupted_replace(*args: object) -> None:
         raise OSError("interrupted replacement")
 
-    monkeypatch.setattr(private_json.os, "replace", interrupted_replace)
+    monkeypatch.setattr(file_lock.os, "replace", interrupted_replace)
     with pytest.raises(OSError, match="interrupted replacement"):
         private_json.write_private_json_atomic(target, {"status": "replacement"})
     assert address.read_bytes() == before

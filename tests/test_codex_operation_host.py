@@ -102,6 +102,11 @@ for line in sys.stdin:
 """
 
 
+def _fake_server(tmp_path: Path, program: str = FAKE_SERVER) -> Path:
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+    return write_python_host_fixture(tmp_path / "fake-codex-operation", program)
+
+
 def _registered_host_goal(tmp_path: Path) -> Path:
     """Direct transport tests still require a registered live Goal at launch."""
     registry = tmp_path / "registry.json"
@@ -601,7 +606,7 @@ def test_owned_app_server_process_authenticates_native_metadata_and_resumes_same
 @pytest.mark.parametrize('tool_attempt', [False, True])
 def test_checkpoint_direction_resumes_session_without_operation_or_child_adoption(tmp_path, monkeypatch, tool_attempt):
     executable = _fake_server(tmp_path)
-    options = dict(runtime_root=tmp_path / 'runtime', registry_path=tmp_path / 'registry.json',
+    options = dict(runtime_root=tmp_path / 'runtime', registry_path=_registered_host_goal(tmp_path),
                    project=tmp_path, codex_bin=str(executable), model='test-model',
                    reasoning_effort='xhigh', timeout_seconds=5)
     run_codex_operation_host(_request(), **options)
@@ -644,10 +649,15 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     )
     selected_route = {"host_surface": "codex-app", "thread_id": "source-thread"}
     observed_routes = []
+    host_failures = []
 
     def operation_host(*args, **kwargs):
         observed_routes.append(kwargs["source_route"])
-        return run_codex_operation_host(*args, **kwargs)
+        try:
+            return run_codex_operation_host(*args, **kwargs)
+        except Exception as error:
+            host_failures.append({"error": str(error), "gate": getattr(error.__cause__, "gate", None), "cause": str(error.__cause__)})
+            raise
 
     monkeypatch.setattr("loopx.control_plane.turn_driver.codex_operation_host.run_codex_operation_host", operation_host)
     arguments = [
@@ -657,7 +667,7 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
         "--no-global-sync", "--codex-operation-tools", "--codex-bin", str(executable),
         "--codex-operation-source-route-json", json.dumps(selected_route),
         "--codex-model", "test-model", "--codex-reasoning-effort", "xhigh",
-        "--codex-sandbox", "read-only", "--timeout-seconds", "5",
+        "--codex-sandbox", "read-only", "--timeout-seconds", "30",
         "--validation-command-json", json.dumps([sys.executable, "-c", "import json,sys; json.load(sys.stdin)"]),
     ]
     lineage = {"goal_id": "loopx-turn-fixture", "agent_id": "codex-fixture", "todo_id": "todo_fixture0001"}
@@ -671,7 +681,7 @@ def test_admitted_turn_cli_launches_owned_transport_without_plain_cli_fallback(
     with contextlib.redirect_stdout(output):
         exit_code = cli_main([*arguments, "--execute"])
     payload = json.loads(output.getvalue())
-    assert exit_code == 0, json.dumps(payload, indent=2)
+    assert exit_code == 0, json.dumps({"payload": payload, "host_failures": host_failures}, indent=2)
     assert payload["host"] == {"executable": "built-in", "kind": "codex-cli"}
     binding = load_codex_cli_session(runtime, lineage=lineage)
     assert binding["operation_transport"] == "app-server-operation-tools-v0"

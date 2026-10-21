@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
-import {syncBuiltinESMExports} from "node:module";
 import {mkdtemp, mkdir, rm, readFile, writeFile, readdir} from "node:fs/promises";
 import {syncBuiltinESMExports} from "node:module";
 import {tmpdir} from "node:os";

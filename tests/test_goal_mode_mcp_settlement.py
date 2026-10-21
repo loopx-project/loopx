@@ -171,7 +171,7 @@ def test_typescript_provider_plan_short_circuits_typed_completion_rejection() ->
     assert provider_calls[1][:2] == ["todo", "complete"]
 
 
-def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _write_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[Path, Path]:
     project = tmp_path / "project"
     project.mkdir()
     state_file = project / "ACTIVE_GOAL_STATE.md"
@@ -218,7 +218,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
                             "registered_agents": [AGENT_ID],
                             "storage_target": {
                                 "schema_version": "loopx_new_goal_storage_target_v1",
-                                "provider": "file",
+                                "provider": provider,
                                 "handoff_mode": "soft_claim",
                             },
                         },

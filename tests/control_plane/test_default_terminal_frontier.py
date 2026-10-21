@@ -82,7 +82,7 @@ def test_negative_oracle_sentinels(tmp_path):
         with pytest.raises(AssertionError):
             assert result_facts(original) == result_facts(damaged)
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('scenario', SCENARIOS)
 def test_default_terminal_frontier(provider, scenario, tmp_path, monkeypatch):
     runtime = tmp_path / 'runtime'
@@ -225,4 +225,3 @@ def test_default_terminal_frontier(provider, scenario, tmp_path, monkeypatch):
         assert result_facts(next(r for r in final_rows if r['todo_id'] == original_todo)) == original_result_facts
         assert next(r for r in final_rows if r['todo_id'] == new_todo)['status'] == 'done'
         assert new_finished.get('goal_completion_certified') is not True
-

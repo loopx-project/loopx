@@ -6,9 +6,7 @@ import sys
 import subprocess
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.status import parse_active_state_todos
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.todos import add_goal_todo, update_goal_todo
 from loopx.control_plane.quota.settlement import SettlementIdentity
 from loopx.control_plane.turn_driver.checkpoint_continuation import CurrentAgentCheckpoint
@@ -19,7 +17,7 @@ from tests.test_goal_mode_mcp_settlement import _write_fixture, _control, GOAL_I
 
 def _fixture(provider, tmp_path, monkeypatch, *, validation_command_json=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = _write_fixture(tmp_path)
+    registry, state = _write_fixture(tmp_path, provider=provider)
     doc = json.loads(registry.read_text())
     doc['goals'][0]['adapter'] = {'kind': 'fixture_v0', 'status': 'connected-delivery'}
     registry.write_text(json.dumps(doc), encoding='utf-8')
@@ -30,15 +28,10 @@ def _fixture(provider, tmp_path, monkeypatch, *, validation_command_json=None):
     todo = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role='agent',
         text='Verify one candidate.', task_class='advancement_task', claimed_by=AGENT_ID,
         continuation_policy='same_agent_non_delivery', validation_command_json=validation_command_json)
-    if provider != 'legacy':
-        todos = parse_active_state_todos(state.read_text(encoding='utf-8'))['agent_todos']['items']
-        initialize_canonical_authority(tmp_path / 'runtime', GOAL_ID,
-            build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode='soft_claim'),
-            state_path=state, provider=provider)
     return registry, state, todo['todo_id']
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('terminal', [False, True, 'stored', 'cold_explicit'])
 def test_default_mcp_uses_post_result_basis_and_original_turn(provider, terminal, tmp_path, monkeypatch):
     registry, state, todo = _fixture(provider, tmp_path, monkeypatch)
@@ -66,7 +59,7 @@ def test_default_mcp_uses_post_result_basis_and_original_turn(provider, terminal
     assert second['settlement_identity'] == original
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_default_mcp_rejects_stale_direction_preserves_result(provider, tmp_path, monkeypatch):
     registry, state, todo = _fixture(provider, tmp_path, monkeypatch)
     control = _control(registry)
@@ -88,7 +81,7 @@ def test_default_mcp_rejects_stale_direction_preserves_result(provider, tmp_path
     assert resumed['settlement_identity'] == first['settlement_identity']
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_default_pending_readback_guides_the_original_caller(provider, tmp_path, monkeypatch):
     registry, state, todo = _fixture(provider, tmp_path, monkeypatch)
     control = _control(registry)
@@ -121,7 +114,7 @@ def test_default_pending_readback_guides_the_original_caller(provider, tmp_path,
     assert sum(row.get('classification') == 'quota_slot_spent' for row in rows) == 1
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('terminal', [False, True])
 def test_managed_default_reuses_candidate_and_calls_current_agent_for_direction(provider, terminal, tmp_path, monkeypatch):
     registry, state, todo = _fixture(provider, tmp_path, monkeypatch)
@@ -194,7 +187,7 @@ def run_dsh_turn(**kwargs):
     assert sum(row.get('classification') == 'quota_slot_spent' for row in rows) == 1
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('change', ['none', 'related', 'display', 'cached_binding'])
 def test_direction_retry_keeps_input_response_binding_and_result(provider, change, tmp_path, monkeypatch):
     registry, state, todo = _fixture(provider, tmp_path, monkeypatch)

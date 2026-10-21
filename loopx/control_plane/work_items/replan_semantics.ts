@@ -175,10 +175,10 @@ function admittedLifecycleSource(request: JsonObject, obligation: JsonObject): J
     const timestamp = typeof request.guard_recorded_at === "string"
       ? parseTodoTimestampMicros(request.guard_recorded_at) : null;
     const stable = ["todo_id", "index", "status", "done", "task_class", "archive_state",
-      "claimed_by", "last_actor_agent_id", "completed_at", "updated_at",
+      "claimed_by", "last_actor_agent_id", "completed_at",
       "completion_turn_key", "successor_todo_ids", "superseded_by"];
     const items = triggers.map(trigger => current.find(item => item.todo_id === trigger.todo_id) ?? {});
-    const settled = timestamp !== null && triggers.length > 0 && triggers.length <= 3 &&
+    const valid = timestamp !== null && triggers.length > 0 && triggers.length <= 3 &&
       admitted.length === triggers.length && new Set(admitted.map(item => item.todo_id)).size === admitted.length &&
       triggers.every((trigger, index) => {
         const prior = admitted.find(item => item.todo_id === trigger.todo_id);
@@ -190,10 +190,16 @@ function admittedLifecycleSource(request: JsonObject, obligation: JsonObject): J
           prior.last_actor_agent_id === request.agent_id && completed !== null && completed <= timestamp &&
           prior.no_followup !== true && strings(prior.successor_todo_ids).length === 0 && !prior.superseded_by &&
           stable.every(key => JSON.stringify(prior[key] ?? null) === JSON.stringify(item[key] ?? null)) &&
-          item.no_followup === true && item.completion_continuation === "no_followup" &&
-          item.completion_recovery === "lifecycle_reentry_terminal_closeout";
+          ((item.no_followup !== true && item.updated_at === prior.updated_at &&
+            item.completion_continuation === prior.completion_continuation &&
+            item.completion_recovery === prior.completion_recovery) ||
+           (item.no_followup === true && item.completion_continuation === "no_followup" &&
+            item.completion_recovery === "lifecycle_reentry_terminal_closeout" &&
+            (item.updated_at === prior.updated_at ||
+             (typeof item.updated_at === "string" && parseTodoTimestampMicros(item.updated_at) !== null &&
+              parseTodoTimestampMicros(item.updated_at)! >= timestamp))));
       });
-    source = {items, settled};
+    source = {items: valid ? items : [], settled: valid && items.every(item => item.no_followup === true)};
   }
   return source;
 }

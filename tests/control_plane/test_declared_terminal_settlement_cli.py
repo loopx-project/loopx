@@ -248,7 +248,7 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     assert settled["effective_action"] == "heartbeat_settled_skip"
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_original_lease_and_failed_validator_remain_required_before_accounting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
@@ -294,7 +294,7 @@ def test_original_lease_and_failed_validator_remain_required_before_accounting(
     assert cli._spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_lease_change_during_validator_still_blocks_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:

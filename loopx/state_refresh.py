@@ -1163,7 +1163,6 @@ def refresh_state_run(
             guard_capability=settlement_replan_guard.get("selected_capability_guard"),
             todo_fields=todo_fields,
             receipt_bound_source=(usable_source or {}).get("obligation"),
-            receipt_bound_guard_recorded_at=(settlement_readback.heartbeat_receipt or {}).get("recorded_at") if settlement_readback else None,
             autonomous_replan_recorded=replan_stage["qualify"],
             requested_delta_kinds=normalized_repair_delta_kinds,
             active_state_next_action_update=None,

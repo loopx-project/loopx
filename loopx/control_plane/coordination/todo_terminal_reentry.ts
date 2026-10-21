@@ -92,5 +92,6 @@ export function prepareTerminalReentry(todo: JsonObject, input: CoordinationTodo
   const state = selectTodoCompletionState({schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA, todo,
     requested_no_followup: true, has_successor: false, completion_identity_source: "lifecycle_reentry"});
   return {...todo, no_followup: true, completion_continuation: state.continuation,
-    completion_recovery: state.recovery, completion_turn_key: input.requested_completion_turn_key};
+    completion_recovery: state.recovery, completion_turn_key: input.requested_completion_turn_key,
+    updated_at: input.now.toISOString().replace(/\.\d{3}Z$/u, "Z")};
 }

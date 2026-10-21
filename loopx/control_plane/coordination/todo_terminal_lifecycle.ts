@@ -1789,8 +1789,10 @@ export async function executeCoordinationTodoTerminalLifecycle(
         requested_has_successor:
           input.successor_intents.length > 0 || input.linked_successor_todo_ids.length > 0,
         dry_run: input.dry_run,
-        validation_receipt: implicitMonitorNoChange ? null : terminalUpgradeReceipt !== null
-          ? terminalUpgradeReceipt.validation_receipt : input.validation_receipt,
+        // A same-Turn closeout reuses the verified durable receipt below; it
+        // must not submit that receipt as a newly executed validation effect.
+        validation_receipt: implicitMonitorNoChange || terminalUpgradeReceipt !== null
+          ? null : input.validation_receipt,
         // Link ids are caller intent; role/status are facts owned by this head.
         // Receipt recovery above preserves the originally accepted policy.
         completion_policy_request: input.completion_policy_request === null ? null : {

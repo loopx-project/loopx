@@ -129,7 +129,7 @@ raise SystemExit(main(sys.argv[1:]))
     return state, project, args, injection
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('fault', ['result', 'read', 'decision', 'checkpoint', 'spend', 'terminal', 'stale'])
 def test_default_managed_cold_recovery_resumes_only_unfinished_checkpoint(provider, fault, tmp_path, monkeypatch):
     state, project, args, injection = _managed_recovery_call(provider, fault, tmp_path, monkeypatch)
@@ -178,7 +178,7 @@ def _provider_revision(runtime):
     return snapshot['provider_revision'] if snapshot is not None else None
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('fault', [
     'result', 'read', 'dispatch', 'response', 'bound_response',
     'decision', 'checkpoint', 'spend', 'terminal',
@@ -256,7 +256,7 @@ def _original_checkpoint_receipt(runtime):
     return next(receipt for receipt in receipts if receipt.get('purpose') == 'first_delivery')
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize(('fault', 'change'), [
     ('dispatch', 'none'), ('dispatch', 'related'),
     ('response', 'none'), ('response', 'related'),
@@ -308,7 +308,7 @@ def test_unpersisted_direction_response_rejudges_without_repeating_work(
     assert _work_counts(project) == after_work and _business_rows(runtime) == after_effects
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('fault', ['before_artifacts', 'after_json', 'after_markdown', 'after_index'])
 def test_default_managed_native_append_recovery_never_treats_unknown_as_absent(
         provider, fault, tmp_path, monkeypatch):

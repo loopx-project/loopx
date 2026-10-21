@@ -358,4 +358,3 @@ def test_original_terminal_cold_replay_keeps_lease_fingerprint(
     assert code == 0 and exact["idempotent_replay"] is True, exact
     assert ledger.read_bytes() == original_ledger
     assert marker.read_bytes() == original_validation
-

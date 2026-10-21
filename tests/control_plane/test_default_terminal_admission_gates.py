@@ -57,7 +57,7 @@ def _resume(args):
     return subprocess.run([sys.executable, '-m', 'loopx.cli', *args], capture_output=True, text=True, timeout=90)
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('gate', ['pause', 'stop'])
 def test_pending_result_respects_explicit_gate_and_original_resume(provider, gate, tmp_path, monkeypatch):
     state, project, runtime, registry, journal_path, journal, resume = _original(provider, tmp_path, monkeypatch)
@@ -96,7 +96,7 @@ def test_pending_result_respects_explicit_gate_and_original_resume(provider, gat
     _assert_preserved(after, _snapshot(project, runtime))
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_real_direction_permission_signal_retains_result_and_blocks_retry(provider, tmp_path, monkeypatch):
     _, project, runtime, _, journal_path, journal, resume = _original(provider, tmp_path, monkeypatch)
     host = project/'host.py'

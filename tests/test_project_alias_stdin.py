@@ -26,7 +26,7 @@ def test_git_probe_preserves_protocol_input(missing_origin: bool) -> None:
         f"alias.subprocess.run=lambda argv,**kwargs: "
         f"run([sys.executable,'-I','-c',{fake_git!r}],**kwargs); "
         "result=alias._run_git(Path.cwd(),'rev-parse','--show-toplevel'); "
-        "print(json.dumps({'code':result.returncode,'stdout':result.stdout," 
+        "print(json.dumps({'code':result.returncode,'stdout':result.stdout,"
         "'remaining':sys.stdin.readline()}))"
     )
     result = subprocess.run(

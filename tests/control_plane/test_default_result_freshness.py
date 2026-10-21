@@ -27,7 +27,7 @@ def _default_fixture(provider, tmp_path, monkeypatch):
     return project, runtime, registry, state
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_default_guard_restores_actual_basis_and_result_commit(provider, tmp_path, monkeypatch):
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
@@ -71,7 +71,7 @@ def test_concurrent_default_reads_share_original_turn_and_basis(provider, tmp_pa
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--scan-path", str(project), cwd=project)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: read(), range(2)))
-    assert all(rc == 0 for rc, _ in results), results
+    assert all(rc == 0 for rc, _ in results), json.dumps(results, indent=2)
     assert results[0][1]["delivery_result_context"] == results[1][1]["delivery_result_context"]
 
 
@@ -141,7 +141,7 @@ def test_already_bound_historical_receipt_retains_original_policy(provider, tmp_
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_default_commit_keeps_basis_after_unrelated_todo_revision(provider, tmp_path, monkeypatch):
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
@@ -177,23 +177,17 @@ def test_damaged_work_input_blocks_default_dispatch_and_preserves_admission(prov
     assert rc == 0 and restored["delivery_result_context"] == first["delivery_result_context"], restored
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("recovery_window", ["normal", "receipt_replaced", "input_persisted", "commit_response_lost", "commit_receipt_deleted", "commit_receipt_damaged", "commit_race", "binding_race", "terminal_commit_race", "terminal_host_cold", "terminal_validation_cold", "terminal_host_replaced", "terminal_validation_replaced", "terminal_commit_response_lost", "terminal_receipt_deleted", "terminal_receipt_damaged", "terminal_validation_failed", "terminal_stop"])
 def test_historical_result_only_turn_retains_candidate_and_revalidates(provider, recovery_window, tmp_path, monkeypatch):
     from tests.test_loopx_turn_driver import _write_live_fixture
-    from loopx.status import parse_active_state_todos
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     terminal_race = recovery_window.startswith("terminal_")
-    project, runtime, registry = _write_live_fixture(tmp_path,
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider,
         **({"todo_metadata_extra": "no_followup=true"} if terminal_race else {}))
     goal, agent = "loopx-turn-fixture", "codex-fixture"
     state = project / f".codex/goals/{goal}/ACTIVE_GOAL_STATE.md"
-    todos = parse_active_state_todos(state.read_text(encoding="utf-8"))["agent_todos"]["items"]
-    if provider != "legacy":
-        initialize_canonical_authority(runtime, goal,
-            build_todo_runtime_shadow_projection(goal_id=goal, todos=todos, handoff_mode="soft_claim"),
-            state_path=state, provider=provider)
     host = f'''
 import json, pathlib, sys
 r = json.load(sys.stdin)
@@ -383,26 +377,20 @@ raise SystemExit(main())
     assert rc == 0 and replay["replayed"] is True and replay["effects"]["host_invoked"] is False, replay
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("receipt_loss", [None, "deleted", "damaged", "writeback_deleted", "writeback_damaged"])
 def test_default_mcp_reads_before_work_and_rejects_stale_result(provider, receipt_loss, tmp_path, monkeypatch):
     from tests.test_goal_mode_mcp_settlement import _write_fixture as mcp_fixture, _control, _complete_default_task, GOAL_ID as goal, AGENT_ID as agent
     from loopx.todos import add_goal_todo
-    from loopx.status import parse_active_state_todos
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = mcp_fixture(tmp_path)
+    registry, state = mcp_fixture(tmp_path, provider=provider)
     registration = json.loads(registry.read_text(encoding="utf-8"))
     registration["goals"][0]["adapter"] = {"kind": "fixture_v0", "status": "connected-delivery"}
     registry.write_text(json.dumps(registration), encoding="utf-8")
     added = add_goal_todo(registry_path=registry, goal_id=goal, role="agent", text="Verify a bounded candidate.",
         task_class="advancement_task", claimed_by=agent, continuation_policy="same_agent_non_delivery")
     runtime = tmp_path / "runtime"
-    if provider != "legacy":
-        todos = parse_active_state_todos(state.read_text(encoding="utf-8"))["agent_todos"]["items"]
-        initialize_canonical_authority(runtime, goal,
-            build_todo_runtime_shadow_projection(goal_id=goal, todos=todos, handoff_mode="soft_claim"),
-            state_path=state, provider=provider)
     control = _control(registry)
     first = json.loads(control.should_run())
     assert first.get("delivery_result_context"), json.dumps(first)
@@ -449,3 +437,18 @@ def test_default_mcp_reads_before_work_and_rejects_stale_result(provider, receip
     next_work = json.loads(control.should_run())
     assert next_work.get("delivery_result_context"), next_work
     assert next_work["delivery_result_context"]["settlement_identity"]["turn_instance_id"] != original["settlement_identity"]["turn_instance_id"]
+
+
+@pytest.mark.parametrize("operation", ["add", "complete"])
+def test_legacy_work_read_does_not_restore_retired_mutation_authority(operation, tmp_path, monkeypatch):
+    project, runtime, registry, state = _default_fixture("legacy", tmp_path, monkeypatch)
+    rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
+    assert rc == 0 and "delivery_result_context" in admitted, admitted
+    original = state.read_bytes()
+    args = (("--role", "agent", "--text", "Independent candidate.") if operation == "add"
+            else ("--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--note", "Verified candidate."))
+    rc, rejected = _run_cli(registry, runtime, "todo", operation, "--goal-id", GOAL_ID, *args, cwd=project)
+    assert rc == 1 and rejected["error_code"] == "canonical_authority_required", rejected
+    assert state.read_bytes() == original
+    assert _spend_run_count(runtime) == 0
