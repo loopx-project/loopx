@@ -59,6 +59,8 @@ flowchart LR
    双读对账、cutover receipt 和可逆恢复。
 7. **有界 Explore intake**：必须从明确的 evidence gap 出发，并声明 provider
    预算、候选预算和 stop condition。
+8. **派生状态完整性**：在不改变成员或顺序的前提下修复 ranked summary count，
+   并把归档引起的 rank 移除绑定到新的 authority revision。
 
 ## 核心不变量
 
@@ -73,6 +75,9 @@ flowchart LR
 - Recall 只是线索；影响排序的证据必须经过 exact read。
 - Proposal 与 apply receipt 必须分离。
 - Apply 与 rollback 都需要显式 owner gate 和 revision 校验。
+- 每个派生 authority revision 都必须解析到唯一的 applied ranking-lineage receipt；
+  投影不能按 revision 名称继承旧 plan receipt。
+- 归档一个已排序素材时，只移除目标素材，其余 entry identity 与相对顺序保持不变。
 
 ## 典型场景
 
@@ -82,6 +87,7 @@ flowchart LR
 - 保留完整 ranked backlog，同时输出一份简洁、可读的视图。
 - 把素材从 candidate 提升到 active，或携带稳定来源引用进行归档。
 - 针对一个明确 evidence gap 做有预算的探索，而不是无限收集。
+- 修复过期派生计数，并在不破坏下一次可读投影的情况下归档已排序素材。
 
 普通的一次性阅读、摘要或网页调研不需要启用这项能力，除非项目已经显式激活了
 受管素材库。

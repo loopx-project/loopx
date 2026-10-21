@@ -20,6 +20,11 @@ from .ranking import (
 from .readable_projection import (
     MATERIAL_READABLE_PROJECTION_RECEIPT_SCHEMA_VERSION,
 )
+from .ranked_state import (
+    MATERIAL_LIFECYCLE_RANKING_APPLY_RECEIPT_SCHEMA_VERSION,
+    MATERIAL_RANKED_STATE_REPAIR_APPLY_RECEIPT_SCHEMA_VERSION,
+    MATERIAL_RANKED_STATE_REPAIR_PLAN_SCHEMA_VERSION,
+)
 from .rebuild import (
     MATERIAL_RANKED_ENTRY_REBUILD_APPLY_RECEIPT_SCHEMA_VERSION,
     MATERIAL_RANKED_ENTRY_REBUILD_PLAN_SCHEMA_VERSION,
@@ -55,6 +60,9 @@ def build_material_lifecycle_architecture_packet() -> dict[str, object]:
             MATERIAL_RANKED_ENTRY_REBUILD_PLAN_SCHEMA_VERSION,
             MATERIAL_RANKED_ENTRY_REBUILD_APPLY_RECEIPT_SCHEMA_VERSION,
             MATERIAL_READABLE_PROJECTION_RECEIPT_SCHEMA_VERSION,
+            MATERIAL_RANKED_STATE_REPAIR_PLAN_SCHEMA_VERSION,
+            MATERIAL_RANKED_STATE_REPAIR_APPLY_RECEIPT_SCHEMA_VERSION,
+            MATERIAL_LIFECYCLE_RANKING_APPLY_RECEIPT_SCHEMA_VERSION,
             MATERIAL_EXPLORE_INTENT_SCHEMA_VERSION,
         ],
         "sibling_capabilities": {
@@ -107,6 +115,9 @@ def build_material_lifecycle_architecture_packet() -> dict[str, object]:
             "ranked_entry_children_have_deterministic_stable_references",
             "readable_projection_preserves_exact_ranked_coverage",
             "readable_projection_receipt_excludes_content_and_private_locations",
+            "ranked_summary_repairs_preserve_membership_and_order",
+            "lifecycle_rank_removal_preserves_remaining_entry_identity_and_order",
+            "ranking_lineage_resolves_by_applied_authority_revision",
             "decision_evidence_is_revision_bound_and_public_safe",
             "explore_intent_is_budgeted_analysis_only_and_has_a_stop_condition",
             "invalid_or_unavailable_policy_fails_open_to_no_change",
