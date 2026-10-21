@@ -265,6 +265,7 @@ def dispatch_turn_start_hooks(
     contexts: list[dict[str, Any]] = []
     seen_hook_ids: set[str] = set()
     seen_required_read_commands: set[str] = set()
+    uncertain_local_effects = False
     ordered = sorted(registrations or (), key=lambda item: item.hook_id)
     for registration in ordered:
         if registration.hook_id in seen_hook_ids:
@@ -285,6 +286,7 @@ def dispatch_turn_start_hooks(
             result = dict(registration.producer())
         except Exception:  # noqa: BLE001 - capability failures are isolated.
             failures.append(_hook_failure(registration, error_code="producer_failed"))
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         try:
             normalized = effect_runtime_result(
@@ -296,11 +298,13 @@ def dispatch_turn_start_hooks(
             )
         except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
             failures.append(_hook_failure(registration, error_code="contract_rejected"))
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         if not isinstance(normalized, Mapping):
             failures.append(
                 _hook_failure(registration, error_code="runtime_result_invalid")
             )
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         results.append(dict(normalized))
         if normalized.get("agent_read_required") is True and isinstance(
@@ -335,6 +339,7 @@ def dispatch_turn_start_hooks(
         "results": results,
         "required_reads": required_reads,
         "failures": failures,
+        **({"uncertain_local_effects": True} if uncertain_local_effects else {}),
         **({"contexts": contexts} if contexts else {}),
     }
 

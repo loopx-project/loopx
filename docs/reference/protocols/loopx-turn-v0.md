@@ -416,6 +416,33 @@ One driver tick has exactly these ordered phases:
 The driver may stop after any phase. A stop must return a typed result and must
 not silently continue with a different execution mode.
 
+Executing admission entrypoints compose registered TurnStart observations
+before collecting the decision. The capability owns permission resolution,
+provider IO and bounded readback; the shared dispatcher validates the existing
+registration/result contract and isolates failures. Core Turn rendering consumes
+`readback.summary_lines`, without knowing the capability's domain. The same
+registration is used by executing quota guards and compatibility prequota.
+Read-only builders, plans, managed-step and original-journal recovery do not
+invoke new observations. An observer may establish a fact during a business
+wait or compute pause, but it cannot grant host execution or spend authority.
+
+TurnStart results may carry bounded capability-owned `readback` without an
+Agent message-read obligation. Failed/partial/unavailable results may report
+unknown external reads or local effects as `null`; external writes remain an
+explicit boolean. If invocation precedes a rejected/lost result, the dispatcher
+retains `uncertain_local_effects` for declared local writes and callers refresh
+their decision projection. These extensions do not make post-writeback hooks
+effectful or authorize new provider writes.
+
+执行准入入口在决策收集前组合注册的 TurnStart 观察。能力负责权限、provider IO 与
+有界读回；共享 dispatcher 校验既有契约并隔离失败，核心 renderer 只消费通用
+`readback.summary_lines`。执行 quota guard 与兼容 prequota 复用该注册。只读 builder、
+plan、managed-step 和原 journal 恢复不添加观察。业务等待或额度暂停中的事实观察
+不授予宿主执行或扣费权限。失败／退化／不可用结果可用 `null` 表示外部读取或本地效果
+未知，远端写入仍须显式布尔声明。执行后响应丢失／被拒绝时，dispatcher 为已声明的
+本地写入保留 `uncertain_local_effects`，调用方刷新决策投影；post-writeback hook
+继续无效果，不由此获得 provider 写入权限。
+
 ### One Executor Per Turn Lane
 
 A **Turn lane** is one agent working one goal. Phase 5 launches exactly one

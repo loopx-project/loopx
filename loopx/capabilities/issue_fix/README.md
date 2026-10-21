@@ -445,6 +445,23 @@ event does not grant new write authority. [LoopX PR
 #1883](https://github.com/huangruiteng/loopx/pull/1883) is the implementation
 and regression evidence for this contract.
 
+`pr_wait_hook.py` registers dependency observation through the existing
+TurnStart contract. Executing quota guards, native Turns and compatibility
+prequota share the capability's permission resolution, durable per-dependency
+cadence and Goal-local single flight. Current Goal declarations and remembered
+host capabilities are reused; a Todo requirement never grants networking.
+Provider/configuration failure is observable and does not gate independent
+business work. The automatic wait observer requires the exact returned
+repository URL; redirects do not silently satisfy the original binding.
+
+The shared core consumes generic hook results; PR-specific target selection,
+metadata validation and summaries stay here. Diagnostic rows are bounded after
+complete-source selection and declare omitted rows/ids. Status/list/App/Lark
+context reads and original-journal recovery consume existing facts without
+polling. Installed executor adoption remains separate from source/wheel tests.
+See [continuation readback](../../../docs/reference/todo-continuation-readback.md#pr-dependency-observation--pr-依赖观察)
+for the entrypoint, permission and failure matrix.
+
 ### 8. Terminal closeout and repeatability
 
 At merged/closed state, persist compact lifecycle evidence, close the monitor,

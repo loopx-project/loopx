@@ -14,10 +14,12 @@ does not prove that GitHub is still pending. Delivery-history supervision no
 longer exempts that unobserved wait. Causal blocked closeout continues to require
 a registered `monitor_changed` or `todo_done` target with current readback.
 
-The existing `heartbeat-prequota --goal-id GOAL --agent-id AGENT` observes exact
+The registered `issue-fix` TurnStart hook observes exact
 unfinished PR dependencies from the complete Todo head, including deferred work.
 It polls at most four distinct repository-qualified dependencies per invocation,
-with a durable 30-minute cadence for successful and failed attempts. A missing
+with a durable 30-minute cadence per dependency for successful and failed attempts.
+Executing callers share one Goal-local single flight; a concurrent caller reports
+observation in progress without another provider request. A missing
 repository binding is reported for repair; it never guesses from PR numbers.
 An exact merged observation appends the existing native `pr_merge` fact so the
 original condition becomes satisfied. Resume readback uses the same complete
@@ -31,32 +33,108 @@ and provider failures cannot satisfy it. This observation changes no Todo status
 requirements, claims, leases or Goal acceptance. Deferred ready work still needs
 its normal lifecycle transition.
 
-Generated heartbeat prompts include prequota only when the host declares
-`--available-capability external_evidence_poll`; filesystem/shell declarations
-alone do not opt in. Omitting that declaration keeps external observation off.
-Explicit prequota invocation authorizes compact metadata reads and local
-observation writeback, never merge, review, remote mutation or quota spend.
-Read back with `todo list --goal-id GOAL --todo-id TODO --format json`.
-These same typed dependency facts are the boundary to reuse in TurnEnvelope;
-this heartbeat adoption does not claim that every Turn host already polls them.
+The existing typed capability owner resolves `external_evidence_poll` from the
+current Goal declaration, remembered host observations and invocation facts;
+remembered revocation defeats inherited permission. No per-command flag is
+required when the owner already supplies permission. Shell/filesystem access,
+Todo requirements and explicit prequota invocation do not grant network access.
+Unavailable permission sources return a failure without contacting GitHub.
+Remove all inherited grants or record the capability as unavailable to stop
+future automatic reads; previously verified merge facts remain usable.
+
+Fresh executing `quota should-run` and `turn run-once --execute` compose the
+same registered hook before collecting the governing decision. Compatibility
+`heartbeat-prequota --goal-id GOAL --agent-id AGENT` uses that hook too. Generated
+full/thin heartbeat prompts retain their optional prequota command when the
+host explicitly declares polling; their executing guard also resolves current
+owner permission. Observation can continue while business compute is paused or
+business execution is stopped, if observation remains authorized. The ordinary
+stop, quota, claim, lease and launch checks still govern subsequent work.
+Status, list, page/context reads, prompt generation, plans, dry runs,
+`managed-step` and `--resume-turn-key` recovery perform no fresh observation.
+
+JSON carries capability-owned readback under
+`turn_start_capability_hook_dispatch.results[].readback`, with hook id
+`issue_fix.pr_wait_observation`: remote read count, duration in milliseconds,
+degraded/failure readback, target/cadence diagnostics and observation
+`state_written`. Compatibility prequota retains `checks.pr_dependencies`.
+Markdown consumes the hook's bounded summary without PR-specific core logic.
+Diagnostic lists include at most 16 rows and 16 Todo ids per row, with explicit
+omission counts; selection and satisfaction still use complete canonical state.
+The 64 KiB hook budget remains unchanged. An uncertain provider/log response
+reports `null` reads/effects; rejected post-invocation results also preserve
+uncertain effects and invalidate the quota projection cache. Neither case may
+certify zero effects. Provider failures do not gate unrelated eligible work.
+Observation has no separate model call or business quota debit. It is polling;
+network latency and total host costs remain workload-dependent.
+
+File/SQLite source qualification covers full/thin generated heartbeat commands,
+executing guard/native Turn, cross-entrypoint cadence, concurrent invocation,
+revocation, actual validated protocol-host work and original-journal replay.
+The App/Lark shared context backend reads the same canonical readiness without
+polling. This does not qualify an installed App/heartbeat/Lark executor or
+automatic recovery of an existing owner's live Goal. Those owners must retain
+their actual identity, permission and scheduling readback. Observe, condition
+satisfaction, admission and accepted subsequent work are separate evidence.
+
+Full decisions retain the selected Task's existing `resume_when`, `resume_ready`
+and complete `resume_condition`; TurnEnvelope carries the same fields in
+`action.selected_todo` and signs them with the action. Native Host inputs retain
+that proof, including its repository, event identity and original event time,
+alongside the complete Task requirements. This is observation transport;
+execution still needs the ordinary current admission. The projection does not
+recompute satisfaction or substitute another Task's proof. Tasks without these
+fields keep their prior shape, and saved journal envelopes keep their original
+signed contents. `managed-step` remains a read-only controller and does not poll.
 
 `pr_merged:owner/repo#42` 只标识依赖；缺少合并事件不证明 GitHub 仍在等待。
 历史交付监督不再豁免这种未观察等待，因果阻塞结算仍要求已注册的
 `monitor_changed` 或 `todo_done` 目标及当前回读。
-原生 `heartbeat-prequota --goal-id GOAL --agent-id AGENT` 从完整 Todo 源选择
+注册的 `issue-fix` TurnStart hook 从完整 Todo 源选择
 精确的未完成 PR 依赖（含 deferred），每次最多核验四个不同仓库限定的依赖。
-成功和失败均保留 30 分钟核验节奏，重启后仍有效。仓库缺失需要修复，不能按编号猜测。
+成功和失败均按每项依赖保留 30 分钟核验节奏，重启后仍有效；执行入口共用 Goal 内的
+single-flight，并发调用只读回观察进行中，不重复请求。仓库缺失需要修复，不能按编号猜测。
 真实合并观察写入既有 `pr_merge`，原条件自然满足。回读与观察共用完整保留的 Goal
 日志，在最近事件展示裁剪前由 TS resume owner 保留每项精确依赖的原始合并证明；
 超过 500 条无关事件或 256 项其他依赖不能挤走它。list、status、quota 与归档读取
 仍保留原展示边界，重启不需要重复远端读取或改写合并时间。离开 open 列表、关闭未合并或
 provider 失败不能解除等待。观察不修改 Todo 状态、要求、认领、lease 或 Goal 验收；
 已满足条件的 deferred Todo 仍走正常生命周期转换。
-生成的 heartbeat 仅在声明 `--available-capability external_evidence_poll` 时加入
-prequota；只声明 filesystem/shell 不会启用。省略该声明即关闭外部观察。
-显式调用仅授权紧凑元数据读取和本地观察记账，不授权合并、review、远端写入或额度支出。
-通过 `todo list --goal-id GOAL --todo-id TODO --format json` 回读。
-TurnEnvelope 应复用同一类型化依赖事实；本批未证明所有 Turn host 已接入自动核验。
+既有 typed capability owner 从当前 Goal 声明、已记住的宿主观察和本次参数解析
+`external_evidence_poll`；宿主记录的撤销优先于继承授权。owner 已提供权限时，不必给
+每条命令手工补 flag。filesystem/shell、Todo 要求与显式调用 prequota 都不授予网络
+权限。权限来源不可用时只返回失败，不联系 GitHub。移除所有继承授权或记录能力不可用，
+即可停止后续自动读取；已验证合并事实保留。
+
+执行性的 `quota should-run` 与新的 `turn run-once --execute` 在 governing decision
+前组合相同注册 hook；兼容 `heartbeat-prequota` 也调用它。full/thin heartbeat 在宿主
+显式声明轮询时保留原 prequota 命令，执行 guard 仍从当前 owner 解析权限。业务额度暂停
+或业务停止时，仍获授权的观察可以继续；随后工作仍受 stop、quota、claim、lease 与
+启动准入约束。status、list、页面／上下文读取、prompt 生成、plan、dry run、
+`managed-step` 与原 journal 恢复均不执行新观察。
+
+JSON 在 `turn_start_capability_hook_dispatch.results[].readback` 返回能力自有读回，
+hook id 为 `issue_fix.pr_wait_observation`，包含读取次数、耗时、退化／失败、目标／
+节奏诊断与观察 `state_written`；兼容 prequota 保留 `checks.pr_dependencies`。
+Markdown 消费 hook 的有界摘要，核心 renderer 不持有 PR 业务规则。诊断列表最多
+16 行、每行最多 16 个 Todo id，并声明省略数量；选择和满足判断仍使用完整 canonical
+源，64 KiB hook 预算不变。provider／日志响应丢失时，读取／效果为 `null`；执行后
+被契约拒绝的结果也保留效果不确定性并使 quota 投影缓存失效，不能宣称零效果。
+provider 失败不阻挡无关的合法工作。观察不单独调用模型或扣业务额度；它是轮询，
+网络延迟与完整宿主成本仍依赖实际负载。
+
+File/SQLite 源码验证覆盖 full/thin 生成命令、执行 guard／原生 Turn、跨入口节奏、
+并发、撤销、实际协议宿主的独立校验工作与原 journal 重放。App/Lark 共用上下文后端
+无需轮询即可读取相同 canonical 就绪状态。这不代表已安装 App／heartbeat／Lark
+执行器或既有 owner 的真实 Goal 已恢复；这些 owner 仍需以真实身份读回权限和调度。
+观察、条件满足、执行准入与后续验收工作是分别成立的证据。
+
+完整决策保留所选 Task 既有的 `resume_when`、`resume_ready` 与完整
+`resume_condition`；TurnEnvelope 将相同字段置于 `action.selected_todo`，纳入
+动作签名。原生 Host 输入同时保留该证明的仓库、事件身份、原事件时间与完整任务要求。
+这些是观察事实的传输，执行仍需正常当前准入；投影不重判满足，也不借用另一 Task 的
+证明。缺少这些字段的任务保持原形态，已保存 journal 保留原签名内容。
+`managed-step` 仍是只读控制器，不执行观察轮询。
 
 ## Completion dependency cycles / 完成依赖环
 

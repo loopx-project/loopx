@@ -462,3 +462,19 @@ def test_private_peer_scope_requires_current_server_contract(tmp_path: Path):
     assert result.status == "unavailable"
     assert result.reason_code == "provider_server_version_incompatible"
     assert "server 0.4.17" in str(result.provider_version)
+
+
+def test_openviking_rejects_malformed_utf8_stdout():
+    def runner(command, **kwargs):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    with pytest.raises(UnicodeDecodeError):
+        OpenVikingContextProvider(runner=runner).retrieve(
+            namespace="reward_memory",
+            scope_ref="viking://user/default/resources",
+            query="test",
+            query_summary="test",
+            max_results=5,
+            timeout_seconds=5,
+            observed_at="2026-01-01T00:00:00Z",
+        )

@@ -486,9 +486,38 @@ independent exact-reflection attestation and accountable writeback/spend. The
 manual-host sidecar adapter uses that registration too. `post_writeback` remains
 effect-free. Per-hook receipts preserve completed work while an uncertain peer
 hook recovers; the provider owner retains write deduplication and reconciliation.
+Terminal replay preserves the original journal/receipt and returns recovered
+owner readback as `post_settlement_recovery`, without repeating settlement.
 File/SQLite native host and isolated provider cases qualify this source path.
 Installed App/Lark adoption, model benefit, complete costs and the three
 convergence acceptances below remain open.
+
+PR dependency observation now uses the existing registered TurnStart lifecycle
+shared by executing quota guards, native Turns and compatibility prequota.
+Permission comes from the typed Goal/Agent capability owner, including remembered
+host observations and revocation; callers need no repeated flag when permission
+already exists. Capability-owned diagnostics preserve domain policy outside core
+Turn code. The existing complete-source TypeScript plan, merge-fact owner and
+normal execution admission remain authoritative. Goal-local single flight and
+durable per-dependency cadence prevent duplicate concurrent/due reads.
+File/SQLite qualification covers paused/stopped business, generated full/thin
+heartbeat commands, cross-entrypoint observation, revocation, unknown effects,
+unrelated validated work after provider failure and original-journal replay.
+App/Lark's shared context backend consumes canonical readiness without polling.
+Plans, read-only/status/context paths, missing permission and recovery add no
+observation. Installed executor adoption, legitimate recovery of existing live
+owners, sustained scheduling, model outcomes and the three convergence
+acceptances remain open. Installed memory lifecycle adoption remains a separate
+acceptance; post-writeback hooks retain their effect-free contract.
+
+The same captured decision now retains the selected Task's existing continuation
+condition and readiness through the full selection projection, signed envelope
+and actual protocol-host input. File/SQLite qualification distinguishes two
+repositories' identically numbered PRs, preserves the original event time and
+long requirement tail, validates subsequent work, and rejects proof tampering.
+Read-only managed-step and original-journal replay add no observation or debit.
+This closes that fact-delivery omission; installed adoption and model outcomes
+remain outside this qualification.
 
 Bounded planning context now remains inline instead of forcing a full-decision
 read under envelope budget pressure. Its existing owner retains the 3 KiB bound;

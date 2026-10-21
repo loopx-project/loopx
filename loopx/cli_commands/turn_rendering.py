@@ -13,6 +13,18 @@ from ..presentation.renderers.turn_envelope_markdown import (
 )
 
 
+def _turn_start_observation_lines(payload: Mapping[str, object]) -> list[str]:
+    dispatch = payload.get("turn_start_capability_hook_dispatch")
+    if not isinstance(dispatch, Mapping):
+        return []
+    lines = []
+    for result in dispatch.get("results", []):
+        readback = result.get("readback")
+        if isinstance(readback, Mapping):
+            lines.extend(f"- {result['capability_id']}: {line}" for line in readback.get("summary_lines", []))
+    return lines
+
+
 def build_turn_error_payload(
     planned: dict[str, Any], exc: Exception, *, turn_command: str,
     execution_started: bool = False,
@@ -72,6 +84,7 @@ def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
     capability = payload.get("capability_action") if isinstance(payload.get("capability_action"), dict) else {}
     intent = capability.get("intent") if isinstance(capability.get("intent"), dict) else {}
     envelope = payload.get("turn_envelope")
+    observation = payload.get("turn_start_capability_hook_dispatch")
     return "\n".join(
         [
             "# LoopX Turn Plan",
@@ -79,7 +92,11 @@ def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
             f"- execution_mode: {host.get('execution_mode')}",
             f"- route: {route.get('kind')}",
             f"- would_invoke_host: {route.get('would_invoke_host')}",
-            "- side_effects: none",
+            ("- side_effects: registered capability observation"
+             if isinstance(observation, dict) and (observation.get("uncertain_local_effects") or any(
+                 row.get("local_private_state_mutated") is not False for row in observation.get("results", [])))
+             else "- side_effects: none"),
+            *_turn_start_observation_lines(payload),
             *(["- capability_action: required (not executed)",
                f"- next_command: {capability.get('command') or intent.get('command')}"] if capability else []),
             *turn_envelope_budget_warning_lines(
@@ -164,6 +181,7 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
             f"- host_invoked: {effects.get('host_invoked')}",
             f"- state_written: {effects.get('state_written')}",
             f"- quota_spent: {effects.get('quota_spent')}",
+            *_turn_start_observation_lines(payload),
             *([f"- error: {payload['error']}"] if payload.get("error") else []),
             *([f"- journal_readback: {journal_observation.get('status')}",
                f"- recorded_effects: {journal_observation.get('recorded_effects')}",

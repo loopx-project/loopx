@@ -830,6 +830,33 @@ test("selected work aliases only an exact complete recommendation", () => {
   assert.equal(selected.text, undefined);
 });
 
+test("selected dependency keeps its original readiness and event proof signed", () => {
+  const source = payload();
+  const original = source.selected_todo as Record<string, unknown>;
+  Object.assign(original, {
+    resume_when: "pr_merged:owner/repo#42", resume_ready: true,
+    resume_condition: {schema_version: "todo_resume_condition_v0", kind: "pr_merged",
+      satisfied: true, matched_pr_ref: "owner/repo#42", matched_event_id: "original-merge",
+      matched_event_at: "2026-10-01T00:00:00Z", source: "rollout_event_log"},
+  });
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const selected = (envelope.action as Record<string, unknown>).selected_todo as Record<string, unknown>;
+  for (const field of ["resume_when", "resume_ready", "resume_condition"]) {
+    assert.deepEqual(selected[field], original[field]);
+  }
+  const signed = structuredClone(turnEnvelopeActionSignatureDocument(envelope));
+  selected.resume_ready = false;
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), signed);
+  selected.resume_ready = true;
+  (selected.resume_condition as Record<string, unknown>).matched_event_id = "another-event";
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), signed);
+  const historical = buildTurnEnvelope({payload: payload(), protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const historicalSelected = (historical.action as Record<string, unknown>).selected_todo as Record<string, unknown>;
+  for (const field of ["resume_when", "resume_ready", "resume_condition"]) assert.equal(field in historicalSelected, false);
+});
+
 test("signature document fails closed to the canonical signed dimensions", () => {
   const envelope = buildTurnEnvelope({
     payload: payload(),
