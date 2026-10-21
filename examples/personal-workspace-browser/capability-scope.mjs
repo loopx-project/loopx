@@ -17,8 +17,8 @@ export const capabilityScopeScenario = {
       const tabs = page.locator(".personal-settings-tabs");
       await tabs.getByRole("button", { name: "能力中心", exact: true }).click();
       if (await tabs.getByRole("button", { name: "Goal 能力", exact: true }).count()) throw new Error("Duplicate capability destinations remain");
-      const defaults = page.getByRole("radio", { name: "此设备默认", exact: true });
-      const goalScope = page.getByRole("radio", { name: "单个 Goal", exact: true });
+      const defaults = page.getByRole("radio", { name: "本机设置", exact: true });
+      const goalScope = page.getByRole("radio", { name: "Goal 设置", exact: true });
       if (!await defaults.isChecked()) throw new Error("Global settings must start at device defaults");
       await page.getByRole("navigation", { name: "机器能力目录" }).waitFor();
       await tabs.getByRole("button", { name: "管家", exact: true }).click();
@@ -132,6 +132,8 @@ export const capabilityScopeScenario = {
       await page.getByRole("navigation", { name: "机器能力目录" }).waitFor();
       if (await page.locator(".personal-capability-preview").count()) throw new Error("A Goal preview crossed into device defaults");
       await goalScope.check();
+      if (await target.inputValue() !== "") throw new Error("Returning to Goal scope must not restore an implicit edit target");
+      await target.selectOption("research-monitor");
       await page.getByRole("heading", { level: 2, name: "周期报告", exact: true }).waitFor();
       if (await page.locator(".personal-capability-preview").count()) throw new Error("Returning revived a discarded preview");
       if (!reads.includes("product-release") || !reads.includes("research-monitor")) throw new Error("Target changes did not read their own configuration");

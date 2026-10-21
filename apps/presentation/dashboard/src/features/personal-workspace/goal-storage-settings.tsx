@@ -137,7 +137,7 @@ export function GoalStorageSettings({goalId, onChanged}: {goalId: string; onChan
       {current?.canonical || carrier ? <p>{t("storage.boundary")}</p> : null}
       {current ? <div className="personal-cadence-readback"><small>{t("storage.current")}</small>
         <strong>{current.provider ?? t("storage.oldSource")}</strong>
-        {current.canonical ? <span>{t("storage.counts", {todos: current.todo_count ?? 0, leases: current.unsettled_lease_count ?? 0})}</span> : <>
+        {current.canonical ? <span>{[current.todo_count === undefined ? t("storage.tasksNotRead") : t("storage.taskCount", {count: current.todo_count}), current.unsettled_lease_count === undefined ? t("storage.leasesNotRead") : t("storage.leaseCount", {count: current.unsettled_lease_count})].join(" · ")}</span> : <>
           {cold ? <>
             <span>{t("storage.coldCounts", {active: cold.active_todo_count, archived: cold.archived_todo_count, leases: cold.unsettled_lease_count})}</span>
             {cold.capture_artifacts_present ? <span>{t("storage.coldCapture")}</span> : null}

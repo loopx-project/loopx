@@ -2,6 +2,7 @@ import {GoalAcceptanceContractSection} from "./goal-acceptance-contract";
 import {GoalObjectiveSettings} from "./goal-objective-settings";
 import {goalAcceptanceContractCopy} from "./delivery-review-copy";
 import { useEffect, useRef, useState } from "react";
+import type {SettingsTarget} from "./workspace-settings-route";
 import { ArrowLeft, Bot, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2 } from "lucide-react";
 
 import type { WorkspaceLocale } from "./i18n";
@@ -46,10 +47,12 @@ const tabIcons: Record<SettingsPage, typeof Settings2> = {
 
 export function WorkspaceSettingsPage({
   callbacks,
+  scope = "machine",
+  onNavigate,
   focusGoalConnection = false,
   goals,
   initialGoalId,
-  initialTab = "lark",
+  initialTab = "steward",
   goalNotifications,
   onChanged,
   onClose,
@@ -60,6 +63,8 @@ export function WorkspaceSettingsPage({
   onOpenOriginalConversation,
 }: {
   callbacks: PersonalWorkspaceCallbacks;
+  scope?: "machine" | "goal";
+  onNavigate: (target: SettingsTarget) => void;
   focusGoalConnection?: boolean;
   goals: WorkspaceGoal[];
   initialGoalId?: string | null;
@@ -74,54 +79,32 @@ export function WorkspaceSettingsPage({
   onOpenOriginalConversation?: (target: import("../../data/chat").BoundConversationTarget) => void;
 }) {
   const { locale, setLocale, t } = useWorkspaceI18n();
-  // Preserve existing Goal-settings links while presenting one capability entry.
-  const [tab, setTab] = useState<SettingsPage>(initialTab === "machine" ? "capabilities" : initialTab);
-  const [capabilityScope, setCapabilityScope] = useState<"machine" | "goal">(initialTab === "capabilities" ? "goal" : "machine");
-  const [capabilityGoalId, setCapabilityGoalId] = useState(initialGoalId ?? "");
-  const [ownershipRefresh, setOwnershipRefresh] = useState(0);
-  const tabsRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const navigation = tabsRef.current;
-    if (!navigation) return;
-    const revealSelectedTab = () => {
-      if (navigation.scrollWidth <= navigation.clientWidth) return;
-      const selected = navigation.querySelector('[aria-current="page"]');
-      if (!selected) return;
-      const parent = navigation.getBoundingClientRect();
-      const child = selected.getBoundingClientRect();
-      const delta = child.left < parent.left ? child.left - parent.left
-        : child.right > parent.right ? child.right - parent.right : 0;
-      if (delta) navigation.scrollLeft += delta;
-    };
-    revealSelectedTab();
-    const observer = new ResizeObserver(revealSelectedTab);
-    observer.observe(navigation);
-    return () => observer.disconnect();
-  }, [tab]);
-  const tabGroups: Array<{ label: string; tabs: Array<{ key: SettingsPage; label: string }> }> = [
-    {
-      label: t("settings.agentGroup"),
-      tabs: [
-        { key: "steward", label: t("settings.steward") },
-        { key: "conversation", label: locale === "zh-CN" ? "对话与模型" : "Conversations and models" },
-        // The model provider is one machine decision (which endpoint and key the
-        // operator credential holds); the capability catalog is another (which
-        // machine defaults every Goal inherits). They answer different questions
-        // and are edited on different surfaces, so they are separate categories.
-        { key: "provider", label: t("settings.modelProvider") },
-        { key: "capabilities", label: t("settings.globalCapabilities") },
-        ...(initialGoalId ? [{ key: "cadence" as const, label: t("cadence.title") }, { key: "ownership" as const, label: t("ownership.title") }] : []),
-      ],
-    },
-    {
-      label: t("settings.workspaceGroup"),
-      tabs: [
-        { key: "lark", label: "Lark" },
-        { key: "appearance", label: t("settings.appearance") },
-        { key: "language", label: t("settings.language") },
-      ],
-    },
+  const machineTabs: Array<{ key: SettingsPage; label: string }> = [
+    { key: "steward", label: t("settings.steward") },
+    { key: "conversation", label: locale === "zh-CN" ? "对话与模型" : "Conversations and models" },
+    { key: "provider", label: t("settings.modelProvider") },
+    { key: "capabilities", label: t("settings.globalCapabilities") },
+    { key: "lark", label: "Lark" },
+    { key: "appearance", label: t("settings.appearance") },
+    { key: "language", label: t("settings.language") },
   ];
+  const goalTabs: Array<{ key: SettingsPage; label: string }> = [
+    { key: "capabilities", label: t("settings.globalCapabilities") },
+    { key: "cadence", label: t("cadence.title") },
+    { key: "ownership", label: t("ownership.title") },
+    { key: "lark", label: "Lark" },
+  ];
+  const tabs = scope === "goal" ? goalTabs : machineTabs;
+  const requestedTab = initialTab === "machine" ? "capabilities" : initialTab;
+  const tab = tabs.find(item => item.key === requestedTab)?.key ?? tabs[0].key;
+  const selectedGoal = scope === "goal" ? goals.find(item => item.goalId === initialGoalId) : undefined;
+  const editableGoal = selectedGoal && !selectedGoal.sourceAccess?.readOnly ? selectedGoal : undefined;
+  const [ownershipRefresh, setOwnershipRefresh] = useState(0);
+  const navigate = (nextScope: "machine" | "goal", nextGoalId?: string, nextTab?: SettingsPage) => {
+    onNavigate({kind: "settings", scope: nextScope,
+      ...(nextScope === "goal" ? {goalId: nextGoalId ?? ""} : {}),
+      tab: nextTab ?? (nextScope === "goal" ? "capabilities" : "steward")});
+  };
   const localeOptions: Array<{ label: string; value: WorkspaceLocale }> = [
     {
       label: t("settings.languageEnglish"),
@@ -158,10 +141,18 @@ export function WorkspaceSettingsPage({
     },
   };
   const heading = headings[tab];
-  const selectedGoal = goals.find((item) => item.goalId === initialGoalId);
-  const goalSettingsTarget = (tab === "cadence" || tab === "ownership") && initialGoalId
-    ? selectedGoal?.title || initialGoalId
-    : null;
+  const bodyRef = useRef<HTMLElement>(null);
+  useEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = 0; }, [scope, initialGoalId, tab]);
+  const scopeHint = scope === "machine" ? {
+    steward: "",
+    conversation: t("settings.effect.conversation"),
+    provider: t("settings.effect.provider"),
+    capabilities: t("settings.effect.capabilities"),
+    lark: t("settings.effect.larkMachine"),
+    appearance: t("settings.effect.appearance"),
+    language: t("settings.effect.language"),
+    cadence: "", ownership: "",
+  }[tab] : tab === "lark" ? t("settings.effect.larkGoal") : "";
 
   return (
     <section aria-label={t("settings.title")} className="personal-settings-page" data-pw-theme={theme}>
@@ -173,58 +164,65 @@ export function WorkspaceSettingsPage({
         <div className="personal-settings-title">
           <strong>{t("settings.title")}</strong>
         </div>
-        <nav aria-label={t("settings.categories")} className="personal-settings-tabs" ref={tabsRef}>
-          {tabGroups.map((group) => <div className="personal-settings-tab-group" key={group.label}>
-            <span className="personal-settings-tab-group-label">{group.label}</span>
-            {group.tabs.map((item) => {
+        <fieldset className="personal-settings-scopes">
+          <legend>{t("settings.scope")}</legend>
+          {(["machine", "goal"] as const).map(value => <label key={value}>
+            <input type="radio" name="settings-scope" checked={scope === value}
+              onChange={() => navigate(value, undefined, machineTabs.some(item => item.key === tab) && goalTabs.some(item => item.key === tab) ? tab : undefined)} />
+            {t(`settings.scope.${value}`)}
+          </label>)}
+        </fieldset>
+        <label className="personal-settings-mobile-category">
+          <span>{t("settings.categories")}</span>
+          <select value={tab} onChange={event => navigate(scope, initialGoalId ?? undefined, event.target.value as SettingsPage)}>
+            {tabs.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
+          </select>
+        </label>
+        <nav aria-label={t("settings.categories")} className="personal-settings-tabs">
+          <div className="personal-settings-tab-group">
+            {tabs.map(item => {
               const Icon = tabIcons[item.key];
-              return (
-                <button aria-current={tab === item.key ? "page" : undefined} key={item.key} onClick={() => setTab(item.key)} type="button">
-                  <Icon size={17} />
-                  <span><strong>{item.label}</strong></span>
-                </button>
-              );
+              return <button aria-current={tab === item.key ? "page" : undefined} key={item.key}
+                onClick={() => navigate(scope, initialGoalId ?? undefined, item.key)} type="button">
+                <Icon size={17} /><span><strong>{item.label}</strong></span>
+              </button>;
             })}
-          </div>)}
+          </div>
         </nav>
       </aside>
 
-      <main className="personal-settings-body">
-        <header className={`personal-settings-header${tab === "capabilities" ? " has-capability-target" : ""}`}>
+      <main className="personal-settings-body" ref={bodyRef}>
+        <header className="personal-settings-header">
           <div className="personal-settings-heading">
             <h1>{heading.title}</h1>
-            {goalSettingsTarget ? (
-              <span className="personal-settings-goal-target" title={`${goalSettingsTarget} · ${initialGoalId}`}>
-                <span>Goal</span>
-                <strong>{goalSettingsTarget}</strong>
-              </span>
-            ) : null}
+            {scope === "machine" ? <span className="personal-settings-goal-target">{t("settings.scope.machine")}</span>
+              : <label className="personal-settings-goal-choice personal-settings-goal-target">
+                <span>{t("settings.targetGoal")}</span>
+                <select aria-label={t("settings.targetGoal")} value={initialGoalId ?? ""}
+                  onChange={event => navigate("goal", event.target.value, tab)}>
+                  <option value="">{t("capabilities.chooseGoal")}</option>
+                  {initialGoalId && !selectedGoal ? <option value={initialGoalId} disabled>{t("settings.goalUnavailable")}</option> : null}
+                  {goals.map(goal => <option key={goal.goalId} value={goal.goalId}>
+                    {goal.title}{goal.sourceAccess ? ` · ${goal.sourceAccess.label}` : ""}{goals.filter(item => item.title === goal.title).length > 1 ? ` · ${goal.goalId}` : ""}
+                  </option>)}
+                </select>
+              </label>}
           </div>
-          {tab === "capabilities" ? <div className="personal-capability-target">
-            <fieldset className="personal-capability-scope-options">
-              <legend>{t("settings.capabilityScope")}</legend>
-              {(["machine", "goal"] as const).map((scope) => <label key={scope}>
-                <input type="radio" name="capability-scope" checked={capabilityScope === scope} onChange={() => setCapabilityScope(scope)} />
-                {t(`settings.capabilityScope.${scope}`)}
-              </label>)}
-            </fieldset>
-            {capabilityScope === "goal" ? <label className="personal-capability-goal-choice">
-              <span>{t("settings.targetGoal")}</span>
-              <select aria-label={t("settings.targetGoal")} value={capabilityGoalId} onChange={(event) => setCapabilityGoalId(event.target.value)}>
-                <option value="">{t("capabilities.chooseGoal")}</option>
-                {goals.map((goal) => <option key={goal.goalId} value={goal.goalId}>{goal.title} · {goal.goalId}</option>)}
-              </select>
-            </label> : null}
-            <p>{t(`settings.capabilityScope.${capabilityScope}Description`)}</p>
-          </div> : null}
+          {scopeHint ? <p className="personal-settings-effect">{scopeHint}</p> : null}
         </header>
-        {tab === "lark" ? (
+        {scope === "goal" && initialGoalId && !editableGoal ? <p role="status" className="personal-settings-unavailable">
+          {selectedGoal?.sourceAccess ? t("settings.goalReadOnly", {source: selectedGoal.sourceAccess.label})
+            : initialGoalId ? t("settings.goalUnavailable") : t("capabilities.chooseGoal")}
+        </p> : null}
+        {tab === "lark" && (scope === "machine" || editableGoal) ? (
           <LarkSettingsPage
             onOpenOriginalConversation={onOpenOriginalConversation}
             embedded
             focusGoalConnection={focusGoalConnection}
-            goals={goals}
-            initialGoalId={initialGoalId}
+            key={`${scope}:${initialGoalId ?? ""}`}
+            goalScope={scope === "goal" ? editableGoal?.goalId : undefined}
+            goals={scope === "goal" && editableGoal ? [editableGoal] : goals.filter(goal => !goal.sourceAccess?.readOnly)}
+            initialGoalId={scope === "goal" ? initialGoalId : undefined}
             onChanged={onChanged}
             onClose={onClose}
           />
@@ -239,29 +237,29 @@ export function WorkspaceSettingsPage({
 
         {tab === "steward" ? <MachineConfigurationSettings onChanged={onChanged} section="steward" /> : null}
         {tab === "conversation" ? <MachineConfigurationSettings onChanged={onChanged} section="conversation" /> : null}
-        {tab === "capabilities" && capabilityScope === "machine" ? <MachineConfigurationSettings onChanged={onChanged} section="other" /> : null}
-        {tab === "capabilities" && capabilityScope === "goal" ? (
+        {tab === "capabilities" && scope === "machine" ? <MachineConfigurationSettings onChanged={onChanged} section="other" /> : null}
+        {tab === "capabilities" && editableGoal ? (
           <GoalCapabilitySettings
-            key={capabilityGoalId}
+            key={editableGoal.goalId}
             callbacks={callbacks}
-            goalId={capabilityGoalId}
-            notification={goalNotifications.find((row) => row.goalId === capabilityGoalId)}
+            goalId={editableGoal.goalId}
+            notification={goalNotifications.find((row) => row.goalId === editableGoal.goalId)}
             onChanged={onChanged}
           />
         ) : null}
-        {tab === "ownership" && selectedGoal ? <div key={selectedGoal.goalId}>
-              <GoalOwnershipSettings goalId={selectedGoal.goalId} onChanged={onChanged} refreshKey={ownershipRefresh} />
-              <GoalStorageSettings goalId={selectedGoal.goalId} onChanged={() => {
+        {tab === "ownership" && editableGoal ? <div key={editableGoal.goalId}>
+              <GoalOwnershipSettings goalId={editableGoal.goalId} onChanged={onChanged} refreshKey={ownershipRefresh} />
+              <GoalStorageSettings goalId={editableGoal.goalId} onChanged={() => {
                 setOwnershipRefresh(value => value + 1);
                 onChanged();
               }} />
-              <GoalAmendmentSettings goalId={selectedGoal.goalId} />
-              <GoalObjectiveSettings goalId={selectedGoal.goalId} />
-              <GoalDirectionSettings goalId={selectedGoal.goalId} />
-              <GoalAcceptanceContractSection goalId={selectedGoal.goalId} current canManage management copy={goalAcceptanceContractCopy[locale]} />
+              <GoalAmendmentSettings goalId={editableGoal.goalId} />
+              <GoalObjectiveSettings goalId={editableGoal.goalId} />
+              <GoalDirectionSettings goalId={editableGoal.goalId} />
+              <GoalAcceptanceContractSection goalId={editableGoal.goalId} current canManage management copy={goalAcceptanceContractCopy[locale]} />
         </div> : null}
-        {tab === "capabilities" && (capabilityScope === "machine" || capabilityGoalId) ? <ConfigurationBackupSettings key={`${capabilityScope}:${capabilityGoalId}`} goalId={capabilityScope === "goal" ? capabilityGoalId : null} /> : null}
-        {tab === "cadence" && selectedGoal ? <AutomationCadenceSettings key={selectedGoal.goalId} goal={selectedGoal} /> : null}
+        {tab === "capabilities" && (scope === "machine" || editableGoal) ? <ConfigurationBackupSettings key={`${scope}:${initialGoalId ?? ""}`} goalId={scope === "goal" ? editableGoal!.goalId : null} /> : null}
+        {tab === "cadence" && editableGoal ? <AutomationCadenceSettings key={editableGoal.goalId} goal={editableGoal} /> : null}
 
         {tab === "appearance" ? (
           <section className="personal-detail-card personal-appearance-settings">
