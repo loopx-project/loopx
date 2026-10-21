@@ -62,6 +62,7 @@ def test_real_pip_compiled_and_uncompiled_wheel_have_the_same_identity(tmp_path:
     contents = {
         "loopx/__init__.py": Path(manifest.__file__).with_name("__init__.py").read_text(),
         "loopx/release_manifest.py": Path(manifest.__file__).read_text(),
+        "loopx/doctor_git.py": Path(manifest.__file__).with_name("doctor_git.py").read_text(),
         f"{metadata}/METADATA": f"Metadata-Version: 2.1\nName: loopx\nVersion: {version}\n",
         f"{metadata}/WHEEL": "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
     }

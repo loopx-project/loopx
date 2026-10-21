@@ -18,6 +18,72 @@ const request = {current, expected_revision: 0, operation: "configure", binding:
   available_projects: [project]};
 
 for (const kind of ["project", "steward"]) {
+  test(`${kind} routing recovery is bounded, source-bound and independent of context migrations`, () => {
+    const selected = kind === "steward" ? {...row, context_kind: kind, grant: "portfolio_read", goal_ids: []} : row;
+    const configured = planConversationBinding({...request, binding: selected}).state;
+    const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+    const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+      observation, available_projects: [project], ...source}).context;
+    const session = {session_id: "original", goal_id: kind === "steward" ? "loopx-manager" : null,
+      agent_id: "codex", upstream_mode: "chat", status: "ready",
+      upstream_thread_id: "native", active_turn_id: null, manager_context_version: 21,
+      channel_id: `${kind === "steward" ? "manager.external.native" : "project.external"}.${row.binding_id}.${source.source_ref}`,
+      ...(kind === "steward" ? {steward_context: context} : {project_context: context})};
+    const failed = {session_id: "original", turn_id: "failed", status: "failed", delta_count: 0,
+      response: null, error_code: "host_gate", upstream_turn_id: "native-failed", completed_at: "2026-01-01T00:00:00Z"};
+    const observed = {thread_id: "native", turn_id: "native-failed", codex_error_info: "other",
+      pre_execution_routing_timeout: true, only_pre_execution_items: true, only_original_user_item: false};
+    const packet = {request: {request_ref: "f".repeat(24), command: null, status: "accepted", delivery_verified: true,
+      message: "Original synthetic request", origin: "lark",
+      binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+      binding: selected, current_session: session, context_recovery: {version: 21, failed_turn: failed,
+        observed_at: "2026-01-01T00:10:00Z", steering_observed: false, source_verified: true, native_observation: observed}};
+    const plan = planBoundConversationRequest(packet);
+    assert.equal(plan.recovery_eligible, true);
+    assert.equal(plan.routing_attempt, 1);
+    assert.equal(plan.not_before, "2026-01-01T00:01:00.000Z");
+    const reservation = {version: 21, failed_turn_id: "failed", routing_attempt: 1, client_turn_id: plan.client_turn_id};
+    assert.deepEqual(planBoundConversationRequest({...packet, request: {...packet.request, context_recovery: reservation}}), plan);
+    const admitted = {session_id: "original", turn_id: "already-admitted", client_turn_id: plan.client_turn_id,
+      message: packet.request.message, origin: "lark", status: "completed", attachments: []};
+    const crash = {...packet, request: {...packet.request, context_recovery: reservation},
+      current_session: {...session, status: "busy", active_turn_id: "already-admitted"},
+      context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted}};
+    assert.equal(planBoundConversationRequest(crash).admitted_turn_id, "already-admitted");
+    for (const change of [{session_id: "foreign"}, {client_turn_id: "foreign"},
+      {message: "another request"}, {attachments: [{type: "image"}]}]) {
+      assert.equal(planBoundConversationRequest({...crash,
+        context_recovery: {...crash.context_recovery, admitted_turn: {...admitted, ...change}}}).recovery_eligible, false);
+    }
+    const next = {...packet, request: {...packet.request, turn_id: "next", context_recovery: reservation},
+      context_recovery: {...packet.context_recovery, failed_turn: {...failed, turn_id: "next"}}};
+    assert.equal(planBoundConversationRequest(next).routing_attempt, 2);
+    assert.equal(planBoundConversationRequest(next).not_before, "2026-01-01T00:02:00.000Z");
+    assert.equal(planBoundConversationRequest({...next, request: {...next.request,
+      context_recovery: {...reservation, routing_attempt: 3}}}).recovery_candidate, false);
+    for (const change of [{source_verified: false}, {steering_observed: true},
+      {observed_at: "2026-01-01T00:00:59Z"}, {observed_at: "invalid"},
+      {native_observation: {...observed, only_pre_execution_items: false}},
+      {native_observation: {...observed, thread_id: "foreign"}},
+      {native_observation: {...observed, codex_error_info: "cyberPolicy"}}]) {
+      assert.notEqual(planBoundConversationRequest({...packet,
+        context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+    }
+    for (const change of [{status: "closed"}, {status: "stale"}, {goal_id: "other"}, {active_turn_id: "other"},
+      {session_mode: "attached_host"}, {channel_id: "foreign"}]) {
+      assert.notEqual(planBoundConversationRequest({...packet,
+        current_session: {...session, ...change}}).recovery_eligible, true);
+    }
+    if (kind === "project") {
+      assert.equal(planBoundConversationRequest({...packet,
+        binding: {...selected, audience: "group", group_refs: ["1".repeat(24)]}}).recovery_eligible, false);
+      assert.equal(planBoundConversationRequest({...packet,
+        binding: {...selected, grant: "workspace_write"}}).recovery_eligible, false);
+    }
+  });
+}
+
+for (const kind of ["project", "steward"]) {
   const selected = kind === "steward" ? {...row, context_kind: kind, grant: "portfolio_read", goal_ids: []} : row;
   const configured = planConversationBinding({...request, binding: selected}).state;
   const lookup = {current: configured, binding_id: row.binding_id, observation, available_projects: [project]};

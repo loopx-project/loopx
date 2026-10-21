@@ -12,6 +12,8 @@ import json
 from typing import Any
 
 from ..quota.turn_envelope import turn_envelope_action_signature_document
+from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
+from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
 from .executor import reward_memory_automation_enabled, reward_memory_prompt_instructions
 
@@ -201,6 +203,8 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "- summary: what changed or why stopped (<=400 chars)\n"
         "- recommended_action: the bounded follow-up recommendation (<=1200 chars)\n"
         "- next_action: the concrete next step (<=1200 chars)\n"
+        f"- delivery_batch_scale (material results): {' | '.join(DELIVERY_BATCH_SCALE_CHOICES)}\n"
+        f"- delivery_outcome (material results): {' | '.join(DELIVERY_OUTCOME_CHOICES)}\n"
         "- vision_unchanged_reason: why a material result's goal path is unchanged "
         "(<=240 chars)\n"
         "For material result kinds (validated_progress, repair_required, and "
@@ -259,26 +263,22 @@ def parse_model_json(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _complete_material_fields(result: dict[str, Any], kind: str) -> None:
+def _complete_material_fields(
+    result: dict[str, Any], candidate: Mapping[str, Any], kind: str,
+) -> None:
     """Fill the required delivery fields of a material host candidate."""
-    result["delivery_batch_scale"] = "single_surface"
-    result["delivery_outcome"] = "outcome_progress"
-    # Material results require these bounded text fields; fill them from
-    # adjacent fields if the model returned a sparse block.
-    if not result.get("recommended_action"):
-        result["recommended_action"] = _bounded(
-            result.get("next_action") or result.get("classification") or kind,
-            limit=TEXT_LIMITS["recommended_action"],
-        )
-    if not result.get("next_action"):
-        result["next_action"] = _bounded(
-            result.get("recommended_action"),
-            limit=TEXT_LIMITS["next_action"],
-        )
-    if not result.get("classification"):
-        result["classification"] = _bounded(
-            kind, limit=TEXT_LIMITS["classification"]
-        )
+    # Only omitted metadata gets the legacy defaults. Supplied values, including
+    # null and invalid JSON types, belong to the existing executor validators.
+    result["delivery_batch_scale"] = candidate.get("delivery_batch_scale", "single_surface")
+    result["delivery_outcome"] = candidate.get("delivery_outcome", "outcome_progress")
+    # Preserve sparse legacy candidates; the executor validates both supplied
+    # fields and these aliases against the same result contract.
+    if "recommended_action" not in result:
+        result["recommended_action"] = result.get("next_action") or result.get("classification") or kind
+    if "next_action" not in result:
+        result["next_action"] = result.get("recommended_action")
+    if "classification" not in result:
+        result["classification"] = kind
 
 
 def build_result(
@@ -336,16 +336,19 @@ def build_result(
         "result_kind": kind,
         "completed_phases": list(COMPLETED_PHASES),
     }
-    for field, limit in TEXT_LIMITS.items():
+    for field in TEXT_LIMITS:
         if field == "vision_unchanged_reason":
             continue
         value = candidate.get(field)
-        text = _bounded(value, limit=limit)
-        if text:
+        # The executor must see an over-limit candidate and reject it. Clipping
+        # can remove a trailing constraint and turn invalid input into a valid
+        # but semantically different next action or progress claim.
+        text = value.strip() if isinstance(value, str) else value
+        if text or (value is not None and not isinstance(value, str)):
             result[field] = text
 
     if kind in MATERIAL_KINDS:
-        _complete_material_fields(result, kind)
+        _complete_material_fields(result, candidate, kind)
     for field in ("path_delta_mode", "agent_vision_json"):
         if field in candidate:
             # Preserve the structured executor input verbatim. The executor
@@ -359,10 +362,10 @@ def build_result(
 
     has_path_delta = "path_delta_mode" in candidate or "agent_vision_json" in candidate
     unchanged_reason = candidate.get("vision_unchanged_reason")
-    if unchanged_reason:
-        result["vision_unchanged_reason"] = _bounded(
-            unchanged_reason, limit=TEXT_LIMITS["vision_unchanged_reason"]
-        )
+    if unchanged_reason is not None and not isinstance(unchanged_reason, str):
+        result["vision_unchanged_reason"] = unchanged_reason
+    elif unchanged_reason:
+        result["vision_unchanged_reason"] = unchanged_reason.strip()
     elif not has_path_delta:
         # Keep the legacy material-without-packet behavior for older hosts.
         result["vision_unchanged_reason"] = _bounded(

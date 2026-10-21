@@ -1305,6 +1305,46 @@ spending or provider permissions and does not rewrite original failures as passe
 仅修正已超过的展示回归预算。时钟与生成回执元数据不作逐字节一致声明；每 Todo
 和固定增长、重复度、生产性能诊断及执行配额边界不变，原失败仍按失败记录保留。
 
+The cumulative-outcome guidance added 523 authored characters on the same
+`contract-fixture` / `worker-a` prompt workload, comparing
+`74dd179c44ba06dfa3c621d978c41dcd9a2f46f3` with
+`b9e60c59f3c367a63755d97f4595d9c2eef91947`. It preserves original requirements,
+inline acceptance reuse, direct-user refinement, milestone evidence review,
+batch writeback, unmet-outcome replanning and root stop/budget authority. These
+are distinct consumer decisions, not redundant copies. All four visible-Goal
+hosts and all four heartbeat modes retain the same line counts. For example,
+the Codex Goal body grew from 3,152 to 3,675 characters; the full heartbeat's
+normalized body grew from 12,285 to 12,808, exceeding its old 12,640 allowance.
+That original failure remains a failure.
+
+The matched current workload also covers zero and 320-character authored profile
+scopes with Reward Memory both disabled and enabled. The following values are
+normalized body characters, not JSON size, UTF-8 bytes, model tokens or transport
+limits. Only the exceeded mode budgets change; generated instructions and command
+routes remain byte-identical across this budget repair.
+
+| Mode / memory | No scope / 320-character scope | Previous / qualified ceiling |
+| --- | --- | --- |
+| Full / disabled | 12,388 / 12,688 | 12,000 / 12,800 |
+| Full / enabled | 12,808 / 13,108 | 12,640 / 13,440 |
+| Compact / disabled | 7,231 / 7,531 | 7,200 / 7,600 |
+| Compact / enabled | 7,486 / 7,786 | 7,840 / 8,240 |
+| Brief / disabled | 4,985 / 5,285 | 4,800 / 5,400 |
+| Brief / enabled | 5,240 / 5,540 | 5,440 / 6,040 |
+
+The disabled base budgets leave 112 / 69 / 115 characters above the measured
+full / compact / brief maximum. The fixed, feature-scoped 640-character Reward
+Memory allowance remains unchanged. Thin budgets, envelope limits, normalization,
+and the visible Goal host's existing 4,000-character limit remain unchanged; its
+obsolete 3,300-character test expectation now follows that existing host limit.
+Exact-limit and one-character-over cases still distinguish valid and overflowing
+bodies. No prompt clause, execution permission, quota, experiment threshold or
+model-compliance requirement changes.
+
+累计成果指引在相同输入上增加 523 字符；本次保留完整指令，仅按默认及 320 字符
+profile、memory 关闭和开启的实测结果调整受影响的展示回归预算。原超限失败保留，
+正文与命令逐字节不变；thin、信封、Goal 宿主硬边界及执行/费用权限不变。
+
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;
 it does not grant execution quota, spending, or provider authority.

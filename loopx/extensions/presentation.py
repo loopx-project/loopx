@@ -17,7 +17,10 @@ from urllib.parse import parse_qsl, urlparse
 
 from ..file_lock import exclusive_file_lock
 # Public extension presentation utility; keep path classification single-owned.
-from ..public_safe_text import find_public_safe_local_path as find_public_safe_local_path
+from ..public_safe_text import (
+    COMPACT_TOKEN_PATTERN as _ID_RE,
+    find_public_safe_local_path as find_public_safe_local_path,
+)
 from .runtime import (
     MAX_EXTENSION_RESPONSE_BYTES,
     _resolved_active_extension,
@@ -45,7 +48,6 @@ EXTENSION_PROJECTION_PUBLISH_RECEIPT_SCHEMA_VERSION = (
     "extension_projection_publish_receipt_v0"
 )
 
-_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _ANCHOR_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _MARKUP_RE = re.compile(r"<[^>]*>|javascript:", re.IGNORECASE)
 _LOCAL_PATH_RE = re.compile(

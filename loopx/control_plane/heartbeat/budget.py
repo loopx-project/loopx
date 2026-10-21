@@ -10,11 +10,12 @@ from typing import Any
 # Keep useful admission and authority instructions readable; do not abbreviate
 # them solely to fit a historical character ceiling.
 INTERFACE_BUDGET_CHARS = {
-    "full": 12_000,
-    # Matched scoped prompt: 7,286 -> 7,809 including Reward Memory.
-    # Default outcome intake/review preserves earlier continuation clauses.
-    "compact": 7_200,
-    "brief": 4_800,
+    # Complete outcome intake/review adds 523 authored characters. Matched
+    # no-memory bodies with the supported 320-character profile scope measure
+    # 12,688 / 7,531 / 5,285; preserve the instructions and bound their growth.
+    "full": 12_800,
+    "compact": 7_600,
+    "brief": 5_400,
     # Matched public CLI fixture: 3,306 -> 3,829 normalized body chars.
     # The same supported 320-char scope reaches 4,118, leaving 82 chars
     # above the complete outcome, authority, continuation and settlement rules.

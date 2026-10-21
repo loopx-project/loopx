@@ -31,8 +31,12 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id,
         return {"state_file": str(state_file), "text": text,
             "revision": "sha256:" + sha256(source_bytes).hexdigest()}
     if source == "goal_acceptance":
+        # The typed acceptance owner scopes task-binding observations while
+        # retaining the complete Goal contract and cumulative outcomes. The
+        # selected-Todo read owns its body; do not transport it a second time
+        # through the bounded acceptance RPC before discarding it here.
         return inspect_goal_acceptance(registry_path=registry_path, goal_id=goal_id,
-            runtime_root=str(runtime_root))
+            runtime_root=str(runtime_root), todo_id=todo_id, include_work_details=False)
     if source == "selected_todo":
         if not todo_id:
             raise ValueError("selected Todo identity is unavailable")

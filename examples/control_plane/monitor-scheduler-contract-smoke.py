@@ -196,7 +196,8 @@ def guard_for(
 def assert_scheduler_timestamp_parser_is_shared_and_utc_normalized() -> None:
     assert scheduler_time.parse_timestamp is runtime_time.parse_timestamp
     assert monitor_todo_module.parse_monitor_timestamp is scheduler_time.parse_scheduler_timestamp
-    assert scheduler_hint_module._parse_monitor_timestamp("2026-01-01T08:00:00+08:00").isoformat() == (
+    assert scheduler_hint_module.parse_timestamp is runtime_time.parse_timestamp
+    assert scheduler_hint_module.parse_timestamp("2026-01-01T08:00:00+08:00").isoformat() == (
         "2026-01-01T00:00:00+00:00"
     )
     assert monitor_todo_module.parse_monitor_timestamp(" 2026-01-01T00:00:00Z ").isoformat() == (

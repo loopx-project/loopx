@@ -24,7 +24,10 @@ from ..goals.first_party_host_admission import (
 )
 from ..goals.goal_vision import normalize_goal_vision_packet
 from ..work_items.delivery_batch_scale import require_delivery_batch_scale
-from ..work_items.delivery_outcome import require_delivery_outcome
+from ..work_items.delivery_outcome import (
+    explain_turn_scoped_settlement_gap,
+    require_delivery_outcome,
+)
 from . import subagent_execution_topology as subagent
 from .command_validation import (
     TaskValidator,
@@ -235,7 +238,13 @@ def _bounded_public_text(
     required: bool,
     errors: list[str],
 ) -> str | None:
-    text = str(result.get(field) or "").strip()
+    value = result.get(field)
+    # Missing/null legacy optional text remains absent. Other JSON types must
+    # not acquire instruction meaning through Python string coercion.
+    if value is not None and not isinstance(value, str):
+        errors.append(f"{field} must be a string")
+        return None
+    text = (value or "").strip()
     if required and not text:
         errors.append(f"{field} is required")
         return None
@@ -445,6 +454,16 @@ def validate_loopx_turn_host_result(
             normalized["delivery_outcome"] = require_delivery_outcome(
                 result.get("delivery_outcome")
             ).value
+            if not from_journal:
+                # This Host contract carries no typed blocker observation.
+                # Refuse new candidates before preparing an impossible write.
+                # Saved results retain provider readback/recovery: an effect
+                # may already have committed under an older producer.
+                settlement_gap = explain_turn_scoped_settlement_gap(
+                    normalized["delivery_outcome"], None,
+                )
+                if settlement_gap:
+                    errors.append(settlement_gap)
         except ValueError as exc:
             errors.append(str(exc))
 

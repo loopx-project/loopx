@@ -69,13 +69,17 @@ def test_interface_budget_uses_visible_goal_mode() -> None:
     assert budget["within_budget"] is True
 
 
-@pytest.mark.parametrize("mode,limit", [("thin", 4200), ("visible_goal", 4000)])
+@pytest.mark.parametrize("mode,limit", [
+    ("full", 12800), ("compact", 7600), ("brief", 5400),
+    ("thin", 4200), ("visible_goal", 4000),
+])
 def test_prompt_body_limit_remains_independent_of_json_envelope(mode: str, limit: int) -> None:
     for size in (limit, limit + 1):
         budget = build_interface_budget(
             task_body="x" * size,
             goal_id="fixture-goal",
             active_state="fixture-state",
+            **({mode: True} if mode != "visible_goal" else {}),
             native_goal_host=mode == "visible_goal",
         )
         assert budget["max_chars"] == limit
@@ -302,19 +306,27 @@ def test_brief_diagnostics_keep_only_the_selected_prompt_command() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "base_budget"),
-    [("full", 12000), ("compact", 7200), ("brief", 4800), ("thin", 4200)],
+    [("full", 12800), ("compact", 7600), ("brief", 5400), ("thin", 4200)],
 )
+@pytest.mark.parametrize("scope_chars", [0, 320])
 def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
-    mode: str, base_budget: int
+    mode: str, base_budget: int, scope_chars: int
 ) -> None:
+    profile = {"scope_summary": "x" * scope_chars} if scope_chars else None
     enabled = build_heartbeat_prompt(
         goal_id="reward-memory-budget-fixture",
+        agent_id="worker-a",
+        registered_agents=["worker-a"],
+        agent_profile=profile,
         runtime_profile="codex_app_heartbeat",
         **{mode: True},
         reward_memory_enabled=True,
     )
     disabled = build_heartbeat_prompt(
         goal_id="reward-memory-budget-fixture",
+        agent_id="worker-a",
+        registered_agents=["worker-a"],
+        agent_profile=profile,
         runtime_profile="codex_app_heartbeat",
         **{mode: True},
         reward_memory_enabled=False,
@@ -329,6 +341,8 @@ def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
     assert "--reward-memory-reflection-json" not in disabled["task_body"]
     assert disabled["interface_budget"]["reward_memory_headroom_chars"] == 0
     assert disabled["interface_budget"]["max_chars"] == base_budget
+    assert enabled["interface_budget"]["within_budget"]
+    assert disabled["interface_budget"]["within_budget"]
 
 
 @pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])

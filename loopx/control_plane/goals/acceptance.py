@@ -149,6 +149,7 @@ def inspect_goal_acceptance(
     runtime_root: str | None = None,
     agent_id: str | None = None,
     todo_id: str | None = None,
+    include_work_details: bool = True,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -156,7 +157,8 @@ def inspect_goal_acceptance(
     basis = _result(
         _INSPECT_METHOD,
         {**_routing(registry_path, goal_id, runtime_root, agent_id),
-         **({"todo_id": todo_id} if todo_id is not None else {})},
+         **({"todo_id": todo_id} if todo_id is not None else {}),
+         **({"include_work_details": False} if not include_work_details else {})},
     )
     basis["goal_acceptance_contract"] = observe_goal_acceptance_oracles(
         registry_path=registry_path, goal_id=goal_id,

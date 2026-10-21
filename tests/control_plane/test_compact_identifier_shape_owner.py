@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from loopx import chat_action_normalization, chat_actions, chat_action_store
+from loopx.capabilities.benchmark_toolkit import integrity
 from loopx.capabilities.decision_context import packets, profile, sources
 from loopx.capabilities.material_lifecycle import _validation
 from loopx.capabilities.reward_memory import (
@@ -19,7 +20,12 @@ from loopx.capabilities.reward_memory import (
     registry,
 )
 from loopx.capabilities.semantic_preference import contract
-from loopx.control_plane.goals import botmux_runtime, goal_ref_validation
+from loopx.control_plane.goals import (
+    botmux_runtime,
+    deletion_service,
+    goal_ref_validation,
+)
+from loopx.extensions import presentation
 from loopx.public_safe_text import (
     COMPACT_TOKEN_PATTERN,
     OPAQUE_ID_PATTERN as PUBLIC_OPAQUE_ID,
@@ -34,11 +40,11 @@ COMPACT_SHAPE = "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
 SURFACE_SHAPE = "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)+$"
 OPAQUE_SHAPE = "^[A-Za-z0-9._:-]{1,200}$"
 
-# A file that still compiles this body itself, with the number of constructions
-# allowed there. The goal-deletion service is being restructured in #5854, so this
-# slice declares that site instead of racing it; converting it deletes the entry,
-# and leaving an entry whose site is already converted fails too.
-OPEN_OPAQUE_SITES = {"loopx/control_plane/goals/deletion_service.py": 1}
+# Sites still allowed to state each body locally, per file and count. Both are
+# empty: every converted module imports the owner instead. A new restatement, or
+# an entry whose site has already been converted, fails the census.
+OPEN_OPAQUE_SITES: dict[str, int] = {}
+OPEN_COMPACT_SITES: dict[str, int] = {}
 
 
 SHAPE_CONSUMERS = {
@@ -53,10 +59,12 @@ SHAPE_CONSUMERS = {
         "loopx/capabilities/semantic_preference/contract.py",
     ),
     COMPACT_SHAPE: (
+        "loopx/capabilities/benchmark_toolkit/integrity.py",
         "loopx/capabilities/decision_context/packets.py",
         "loopx/capabilities/decision_context/profile.py",
         "loopx/capabilities/decision_context/sources.py",
         "loopx/capabilities/material_lifecycle/_validation.py",
+        "loopx/extensions/presentation.py",
     ),
     SURFACE_SHAPE: (
         "loopx/capabilities/reward_memory/application.py",
@@ -107,11 +115,24 @@ def test_the_opaque_id_body_is_compiled_only_by_the_owner_and_declared_sites() -
     assert found == {OWNER_MODULE: 1, **OPEN_OPAQUE_SITES}
 
 
+def test_the_compact_token_body_is_compiled_only_by_the_owner_and_declared_sites() -> None:
+    found: dict[str, int] = {}
+    for path in sorted(REPOSITORY_ROOT.glob("loopx/**/*.py")):
+        relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+        count = path.read_text(encoding="utf-8").count(COMPACT_SHAPE)
+        if count:
+            found[relative] = count
+    assert found == {OWNER_MODULE: 1, **OPEN_COMPACT_SITES}
+
+
 def test_each_contract_holds_the_owners_object_and_reports_its_own_field() -> None:
     assert chat_actions._OPAQUE_ID is PUBLIC_OPAQUE_ID
     assert chat_action_store._OPAQUE_ID is PUBLIC_OPAQUE_ID
+    assert deletion_service._OPAQUE_ID is PUBLIC_OPAQUE_ID
     assert goal_ref_validation.GOAL_ID is PUBLIC_OPAQUE_ID
     assert botmux_runtime._SAFE_TOKEN is PUBLIC_OPAQUE_ID
+    assert presentation._ID_RE is COMPACT_TOKEN_PATTERN
+    assert integrity._PUBLIC_EVIDENCE_ID_PATTERN is COMPACT_TOKEN_PATTERN
     for rejected in ("x" * 201, "has space"):
         with pytest.raises(ValueError, match="must be a compact opaque id"):
             chat_action_store._opaque_id(rejected, field="action_id")

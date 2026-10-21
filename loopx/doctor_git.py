@@ -1,7 +1,8 @@
-"""Git source and revision diagnostics for the installation doctor."""
+"""Source-owned Git identity for installation manifests and diagnostics."""
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from enum import Enum
@@ -17,6 +18,34 @@ class GitRevisionRelation(str, Enum):
     UNKNOWN = "unknown"
 
 
+def _source_git_environment() -> dict[str, str]:
+    env = dict(os.environ)
+    # A caller (for example a Git hook) may target an unrelated checkout.
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
+        env.pop(key, None)
+    return env
+
+
+def _is_git_worktree_root(source_root: Path) -> bool:
+    """Reject Git's upward discovery while accepting linked worktree gitfiles."""
+    if not (source_root / ".git").exists():
+        return False
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), "rev-parse", "--show-toplevel"],
+            check=False, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            env=_source_git_environment(),
+        )
+        return (
+            result.returncode == 0
+            and bool(result.stdout.strip())
+            and Path(result.stdout.strip()).resolve() == source_root
+        )
+    except OSError:
+        return False
+
+
 def git_metadata_for_root(root: Path | None) -> dict[str, Any]:
     if root is None:
         return {
@@ -29,7 +58,7 @@ def git_metadata_for_root(root: Path | None) -> dict[str, Any]:
         source_root = root.expanduser().resolve()
     except OSError:
         source_root = root.expanduser()
-    if not source_root.exists():
+    if not _is_git_worktree_root(source_root):
         return {
             "root": str(source_root),
             "git_commit": None,
@@ -46,6 +75,7 @@ def git_metadata_for_root(root: Path | None) -> dict[str, Any]:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=_source_git_environment(),
             )
         except OSError:
             return None
@@ -92,7 +122,7 @@ def git_revision_relation(
         source_root = root.expanduser().resolve()
     except OSError:
         source_root = root.expanduser()
-    if not source_root.exists():
+    if not _is_git_worktree_root(source_root):
         return GitRevisionRelation.UNKNOWN
 
     def _is_ancestor(ancestor: str, descendant: str) -> bool | None:
@@ -112,6 +142,7 @@ def git_revision_relation(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=_source_git_environment(),
             )
         except OSError:
             return None
@@ -157,7 +188,7 @@ def trusted_release_ref_for_root(
         source_root = root.expanduser().resolve()
     except OSError:
         source_root = root.expanduser()
-    if not source_root.exists():
+    if not _is_git_worktree_root(source_root):
         return None
 
     try:
@@ -168,6 +199,7 @@ def trusted_release_ref_for_root(
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=_source_git_environment(),
         )
     except OSError:
         return None
@@ -186,6 +218,7 @@ def trusted_release_ref_for_root(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=_source_git_environment(),
             )
         except OSError:
             continue
@@ -210,6 +243,7 @@ def trusted_release_ref_for_root(
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=_source_git_environment(),
         )
         commit = resolved.stdout.strip() if resolved.returncode == 0 else ""
         if commit:

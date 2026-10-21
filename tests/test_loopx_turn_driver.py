@@ -3579,7 +3579,7 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert "One%20public%20fixture%20advanced" not in state
 
 
-@pytest.mark.parametrize("host_kind", ["codex-cli", "dsh"])
+@pytest.mark.parametrize("host_kind", ["codex-cli", "dsh", "generic-cli"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_turn_run_once_host_wires_validated_reflection_post_settlement(
     tmp_path: Path,
@@ -3694,6 +3694,18 @@ def test_turn_run_once_host_wires_validated_reflection_post_settlement(
             encoding="utf-8",
         )
         host_args += ["--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "dsh-home")]
+    elif host_kind == "generic-cli":
+        runner = tmp_path / "generic_reflection_runner.py"
+        candidate = fake_codex_host({"turn_key": "unused"})
+        runner.write_text(
+            "import json, sys\n"
+            "request = json.load(sys.stdin)\n"
+            f"result = json.loads({json.dumps(candidate)!r})\n"
+            "result['turn_key'] = request['turn_key']\n"
+            "json.dump(result, sys.stdout)\n",
+            encoding="utf-8",
+        )
+        host_args += ["--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         exit_code = cli_main(

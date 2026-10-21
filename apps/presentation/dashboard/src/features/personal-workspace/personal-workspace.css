@@ -130,6 +130,8 @@
 .personal-goal-row:has(.personal-goal-move-actions) { grid-template-columns: minmax(0, 1fr) 52px 28px; }
 .personal-goal-row.has-goal-tree { grid-template-columns: 22px minmax(0, 1fr) auto auto; }
 .personal-goal-row.has-goal-tree:has(.personal-goal-move-actions) { grid-template-columns: 22px minmax(0, 1fr) 52px 28px; }
+.personal-goal-row:has(> .context-help) { grid-template-columns: minmax(0, 1fr) 32px 28px; }
+.personal-goal-row.has-goal-tree:has(> .context-help) { grid-template-columns: 22px minmax(0, 1fr) 32px 28px; }
 .personal-goal-row[data-reorder-goal] > .personal-goal-link { cursor: grab; user-select: none; }
 .personal-goal-row[data-reorder-goal] > .personal-goal-link:active { cursor: grabbing; }
 .personal-goal-row.is-drop-before { box-shadow: 0 -2px var(--color-link, #0070f3); }
@@ -179,7 +181,14 @@
 .personal-goal-activity-chip { --pw-tone: #a1a1a1; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-goal-activity-chip > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-goal-window-badge { flex: none; padding: 1px 5px; border-radius: 99px; background: var(--pw-amber-bg); color: var(--pw-amber); font-size: var(--text-caption); line-height: var(--leading-caption); }
-.personal-goal-window-badge.is-missing { background: var(--pw-red-bg); color: var(--pw-red); }
+.personal-goal-window-badge.is-missing { background: var(--pw-hover); color: var(--pw-muted); }
+.personal-goal-observation-list { margin: 12px 0 0; padding: 0; list-style: none; }
+.personal-goal-observation-list li + li { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--pw-line); }
+.personal-goal-observation-list p { margin-top: 4px; }
+@media (max-width: 640px) {
+  .personal-goal-row:has(> .context-help) { grid-template-columns: minmax(0, 1fr) 44px 28px; }
+  .personal-goal-row.has-goal-tree:has(> .context-help) { grid-template-columns: 22px minmax(0, 1fr) 44px 28px; }
+}
 .personal-goal-activity-dot { position: relative; flex: none; width: 7px; height: 7px; box-sizing: border-box; border-radius: 50%; background: var(--pw-tone); }
 .personal-goal-activity-chip.is-queued .personal-goal-activity-dot, .personal-goal-activity-chip.is-waiting .personal-goal-activity-dot { border: 1.5px solid var(--pw-tone); background: transparent; }
 .personal-goal-activity-chip.is-live { color: var(--pw-text); }

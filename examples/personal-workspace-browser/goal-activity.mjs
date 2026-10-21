@@ -72,7 +72,7 @@ async function leadVisible(row, prefix) {
     const range = document.createRange();
     range.setStart(node, start);
     range.setEnd(node, start + lead.length);
-    const clip = element.getBoundingClientRect();
+    const clip = (node.parentElement.closest(".personal-goal-row-activity-copy") || element).getBoundingClientRect();
     return range.getBoundingClientRect().right <= clip.right + 0.5;
   }, prefix);
 }
@@ -204,6 +204,98 @@ export const goalActivityScenario = {
       throw error;
     }
 
+    // A lane's missing record is coverage, not a verdict that the Goal stopped.
+    // Completed activity, open execution and cadence misses retain their own
+    // clocks and reasons. This uses the packaged status projection unchanged.
+    const gaps = await openWorkspacePage(browser, url, {
+      collectCoverage,
+      beforeGoto: api => {
+        api.hostThreadActivity = {
+          "product-release": {completeness: "complete", threads: [
+            {...thread("turn_open", minutesAgo(1)), agent_id: "worker-active", delivery_window: {state: "fresh"}},
+            {...thread("unknown", null), agent_id: "worker-unknown", reason: "no_turn_marker", delivery_window: {state: "missing", reason: "no_observation"}},
+            {...thread("idle", minutesAgo(90)), agent_id: "worker-older", delivery_window: {state: "stale", age_hours: 1.5}},
+          ]},
+          "research-monitor": {completeness: "complete", threads: ["unsupported_host", "thread_not_found", "store_unavailable", "record_unrecognized"].map((reason, i) => ({
+            ...thread("unknown", null), agent_id: `unreadable-${i}`, reason,
+            delivery_window: {state: "missing", reason: "no_observation"},
+          }))},
+          "multi-agent-projection": {completeness: "complete", threads: [{...thread("idle", minutesAgo(1)), delivery_window: {state: "fresh"}}]},
+        };
+      },
+    });
+    try {
+      const {api, page} = gaps;
+      const running = await goalRow(page, "Product Release");
+      await running.locator("small", {hasText: "执行中"}).waitFor();
+      await page.screenshot({path: resolve(outputDir, "goal-activity-observation-first.png"), animations: "disabled"});
+      assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1);
+      assert.match(await running.locator("small").innerText(), /缺口 2/);
+      assert.doesNotMatch(await running.locator("small").innerText(), /未观察到活动|worker-|预期时间窗/);
+      assert.ok(await leadVisible(running, "执行中"), "The leading execution fact survives the gap badge");
+      const help = running.getByRole("button", {name: "活动观测 · Product Release", exact: true});
+      const selectedBeforeHelp = new URL(page.url()).searchParams.get("goalId");
+      await help.hover();
+      const bubble = page.getByRole("tooltip").filter({hasText: "worker-active"});
+      await bubble.waitFor({state: "visible"});
+      await bubble.hover();
+      assert.match(await bubble.innerText(), /worker-unknown[\s\S]*没有回合开始或结束标记/);
+      assert.match(await bubble.innerText(), /worker-older[\s\S]*最近回合已结束[\s\S]*1.5 小时/);
+      await page.keyboard.press("Escape");
+      await bubble.waitFor({state: "hidden"});
+      await help.focus();
+      await bubble.waitFor({state: "visible"});
+      await page.keyboard.press("Escape");
+      assert.equal(await help.evaluate(element => element === document.activeElement), true);
+      assert.equal(new URL(page.url()).searchParams.get("goalId"), selectedBeforeHelp, "Help never navigates or starts work");
+      const unavailable = await goalRow(page, "Research Monitor");
+      const unknownState = unavailable.locator("small");
+      assert.equal(await unknownState.innerText(), "状态不可读");
+      assert.equal(await unavailable.locator(".personal-goal-window-badge").count(), 0, "An all-unknown status is stated once");
+      assert.equal(await unknownState.evaluate(element => {
+        const probe = document.createElement("span"); probe.style.color = "var(--pw-muted)"; element.append(probe);
+        const neutral = getComputedStyle(element).color === getComputedStyle(probe).color; probe.remove(); return neutral;
+      }), true, "Missing observation has a neutral color");
+      assert.equal(await unavailable.locator(".personal-goal-mark.is-live").count(), 0);
+      await unavailable.getByRole("button", {name: "活动观测 · Research Monitor", exact: true}).click();
+      const unknownHelp = page.getByRole("tooltip").filter({hasText: "unreadable-0"});
+      await unknownHelp.waitFor({state: "visible"});
+      assert.match(await unknownHelp.innerText(), /尚不提供本机活动观测/);
+      assert.match(await unknownHelp.innerText(), /未找到绑定的线程/);
+      assert.match(await unknownHelp.innerText(), /无法读取宿主的本机记录/);
+      assert.match(await unknownHelp.innerText(), /无法识别宿主记录格式/);
+      await page.keyboard.press("Escape");
+      assert.doesNotMatch(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /执行中|观测缺口|状态不可读/,
+        "Another Goal's completed activity stays isolated");
+      await page.screenshot({path: resolve(outputDir, "goal-activity-observation-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.locator(".personal-mobile-menu").click();
+      assert.ok(await leadVisible(running, "执行中"));
+      await help.click();
+      await bubble.waitFor({state: "visible"});
+      const bounds = await bubble.boundingBox();
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390, "The same disclosure fits the narrow sidebar");
+      await page.screenshot({path: resolve(outputDir, "goal-activity-observation-mobile.png"), animations: "disabled"});
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+      await page.setViewportSize({width: 1512, height: 982});
+      await page.reload({waitUntil: "networkidle"});
+      const englishRunning = await goalRow(page, "Product Release");
+      assert.match(await englishRunning.locator("small").innerText(), /^Running[\s\S]*gaps · 2/);
+      await englishRunning.getByRole("button", {name: "Observed activity · Product Release", exact: true}).click();
+      assert.match(await page.getByRole("tooltip").filter({hasText: "worker-unknown"}).innerText(), /Execution remains unknown/);
+      await page.keyboard.press("Escape");
+      api.hostThreadActivity["product-release"] = {completeness: "complete", threads: [thread("idle", minutesAgo(1))]};
+      await page.reload({waitUntil: "networkidle"});
+      const recovered = await goalRow(page, "Product Release");
+      await recovered.locator(".personal-goal-window-badge").waitFor({state: "hidden"});
+      assert.doesNotMatch(await recovered.locator("small").innerText(), /Running|state unavailable|gaps/);
+      assert.equal(await recovered.locator(".personal-goal-window-badge, .personal-goal-mark.is-live").count(), 0,
+        "A refreshed complete ended-turn observation clears the old gap without inventing execution");
+    } finally {
+      coverageEntries.push(...await gaps.close());
+    }
+
     for (const completeness of ["incomplete", undefined, "unrecognized"]) {
       const partial = await openWorkspacePage(browser, url, {
         collectCoverage,
@@ -218,7 +310,7 @@ export const goalActivityScenario = {
       try {
         const { api, page } = partial;
         const queued = await goalRow(page, "Multi Agent Projection");
-        await queued.locator("small", { hasText: "执行情况以宿主为准" }).waitFor({ timeout: 15_000 });
+        await queued.locator("small", { hasText: "状态不可读" }).waitFor({ timeout: 15_000 });
         assert.doesNotMatch(await queued.locator("small").innerText(), /线程空闲|执行中/, "A partial or legacy sample cannot prove every bound thread idle");
         assert.match(await (await goalRow(page, "Product Release")).locator("small").innerText(), /^执行中/, "A positive open-turn observation remains usable with partial coverage");
         assert.doesNotMatch(await (await goalRow(page, "Research Monitor")).locator("small").innerText(), /线程空闲|执行中/, "An unrecognized record never becomes idle or running");

@@ -317,3 +317,22 @@ def test_legacy_observation_upgrades_only_against_its_original_registry_view(tmp
         source_goal_observation_digest=host_worker_goal_observation_digest(mirror_goal, registry_path=tmp_path / "global.json"),
         runtime_root=runtime)
     assert observed["read_status"] == ("stale" if source_changed else "read")
+
+
+@pytest.mark.parametrize("kind", ["quota_exhausted", "provider_capacity"])
+def test_host_hold_or_backoff_does_not_consume_a_new_replan(tmp_path, monkeypatch, kind):
+    from test_external_scheduler_worker import _guarded_host
+
+    args, invocations = _guarded_host(tmp_path, kind=kind)
+    args.once = True
+    payload = _hint_payload(should_run=True)
+    monkeypatch.setattr(worker, "run_quota_should_run", lambda *a, **kw: deepcopy(payload))
+    assert worker.run_worker(args, clock=lambda: 0) == 1
+    assert "replan_attempts" not in json.loads(Path(args.state_file).read_text())
+    payload.clear()
+    payload.update(replan_packet(), runtime_root=str(tmp_path / "runtime"))
+    assert worker.run_worker(args, clock=lambda: 0) == 2
+    assert invocations.read_text() == "1"
+    # No Host dispatch was admitted: the independent semantic replan owner must
+    # not acquire a phantom started attempt while provider work is held.
+    assert "replan_attempts" not in json.loads(Path(args.state_file).read_text())

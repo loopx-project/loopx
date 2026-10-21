@@ -457,6 +457,7 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
     before = read_canonical_todos_if_promoted(
         runtime_root=runtime_root, goal_id=GOAL_ID,
     )
+    goal_source = state_file.read_bytes()
     if display == "missing":
         state_file.unlink()
     else:
@@ -471,8 +472,16 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
         return snapshot
 
     monkeypatch.setattr(fallback_source, "read_fallback_source_snapshot", read_once)
-    assert cli_main(args) == 0
+    code = cli_main(args)
     result = json.loads(capsys.readouterr().out)
+    # Canonical Todos survive display loss; they do not replace the Goal's
+    # intent and stop conditions. A missing Goal source must still deny work.
+    assert code == (1 if display == "missing" else 0), result
+    if display == "missing":
+        assert result["state"] == "blocked_health"
+        assert result["should_run"] is False
+        assert result["normal_delivery_allowed"] is False
+        assert result["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
     assert "fallback_gaps" not in result["goal_frontier_projection"]
     assert snapshots == [len(rows)]
     after = read_canonical_todos_if_promoted(
@@ -480,3 +489,16 @@ def test_real_provider_cli_uses_one_snapshot_including_archived_dependency(
     )
     assert before == after
     assert (state_file.read_bytes() if state_file.exists() else None) == saved_display
+
+    if display == "missing":
+        state_file.write_bytes(goal_source)
+        snapshots.clear()
+        assert cli_main(args) == 0
+        recovered = json.loads(capsys.readouterr().out)
+        assert recovered["status_health_ok"] is True
+        assert "fallback_gaps" not in recovered["goal_frontier_projection"]
+        assert snapshots == [len(rows)]
+        assert read_canonical_todos_if_promoted(
+            runtime_root=runtime_root, goal_id=GOAL_ID,
+        ) == before
+        assert state_file.read_bytes() == goal_source

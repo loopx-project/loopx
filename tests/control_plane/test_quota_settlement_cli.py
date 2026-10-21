@@ -242,7 +242,7 @@ def _initialize_fixture_authority(
     handoff_mode: str = "soft_claim",
     leases: list[dict[str, Any]] | None = None,
 ) -> None:
-    from canonical_authority_fixture import initialize_canonical_authority
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import (
         build_todo_runtime_shadow_projection,
     )

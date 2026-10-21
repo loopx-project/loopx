@@ -171,7 +171,7 @@ def test_shared_host_memory_keeps_binding_context_and_validation(recall, ingest,
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("host_kind", ["codex-cli", "dsh"])
+@pytest.mark.parametrize("host_kind", ["codex-cli", "dsh", "generic-cli"])
 @pytest.mark.parametrize("mode", ["unconfigured", "disabled", "stale", "both_off", "recall_only", "recall_context", "ingest_only", "both_on"])
 def test_real_turn_cli_memory_projection_and_settlement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, host_kind: str, mode: str) -> None:
     from loopx.cli import main
@@ -235,6 +235,20 @@ def run_dsh_turn(*, prompt, **kwargs):
         'reward_memory_reflection_json': '{"status":"no_evidence"}'})
 ''', encoding="utf-8")
         host_args = ["--host", "dsh", "--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "dsh-home")]
+    elif host_kind == "generic-cli":
+        runner = tmp_path / "generic_host.py"
+        runner.write_text('''import json, os, pathlib, sys
+request = json.load(sys.stdin)
+pathlib.Path(os.environ['FIXTURE_HOST_CAPTURE']).write_text(json.dumps({'request': request}))
+json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_key'],
+    'result_kind': 'validated_progress', 'completed_phases': ['host_execute', 'typed_result'],
+    'classification': 'fixture_progress', 'next_action': 'Run the next bounded fixture',
+    'recommended_action': 'Continue the original fixture', 'summary': 'Independent fixture validation passed.',
+    'delivery_batch_scale': 'single_surface', 'delivery_outcome': 'outcome_progress',
+    'vision_unchanged_reason': 'The original fixture remains open.',
+    'reward_memory_reflection_json': '{"status":"no_evidence"}'}, sys.stdout)
+''', encoding="utf-8")
+        host_args = ["--host", host_kind, "--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
     monkeypatch.setenv("FIXTURE_HOST_CAPTURE", str(capture))
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -248,14 +262,18 @@ def run_dsh_turn(*, prompt, **kwargs):
     observed = json.loads(capture.read_text())
     if host_kind == "codex-cli":
         assert ("reward_memory_reflection_json" in observed["schema"]["properties"]) is ingest
-    assert ("Set reward_memory_reflection_json" in observed["prompt"]) is ingest
-    assert ("When reward_memory_recall contains guidance" in observed["prompt"]) is (mode == "recall_context")
+    if host_kind != "generic-cli":
+        assert ("Set reward_memory_reflection_json" in observed["prompt"]) is ingest
+        assert ("When reward_memory_recall contains guidance" in observed["prompt"]) is (mode == "recall_context")
     if mode == "recall_context":
-        memory = observed["request" if host_kind == "codex-cli" else "authority"]["reward_memory_recall"]
+        memory = observed["authority" if host_kind == "dsh" else "request"]["reward_memory_recall"]
         assert memory["status"] == "applied"
         assert "integration branch" in memory["context"]["guidance"][0]["content_summary"]
     if mode in {"unconfigured", "disabled", "stale", "both_off"}:
-        assert "reward_memory" not in observed["prompt"]
+        if host_kind == "generic-cli":
+            assert "reward_memory_recall" not in observed["request"]
+        else:
+            assert "reward_memory" not in observed["prompt"]
     assert result["effects"]["quota_spent"] is True
     assert result.get("post_settlement", {}).get("external_writes_performed", False) is False
     if ingest:
@@ -263,3 +281,41 @@ def run_dsh_turn(*, prompt, **kwargs):
     journals = list((runtime / "goals/loopx-turn-fixture/turns").glob("*.json"))
     assert len(journals) == 1
     assert ("reward_memory_reflection_json" in json.loads(journals[0].read_text())["host_result"]) is ingest
+
+    # Read the real consumers after the native host and settlement. A connected
+    # lifecycle is source wiring, not an activation or live-provider receipt.
+    from loopx.capabilities.reward_memory.configuration import reward_memory_goal_configuration_summary
+    from loopx.capabilities.reward_memory.experiment import resolve_reward_memory_experiment
+    from loopx.presentation.renderers.reward_memory_markdown import append_agent_reward_memory_markdown
+
+    experiment, _ = resolve_reward_memory_experiment(
+        registry_path=registry, goal_id="loopx-turn-fixture", agent_id="codex-fixture")
+    configuration = reward_memory_goal_configuration_summary(json.loads(registry.read_text())["goals"][0])
+    assert configuration["effective_available"] is experiment["available"]
+    assert experiment["automatic_ingest"] is ingest
+    status_output = io.StringIO()
+    with contextlib.redirect_stdout(status_output):
+        status_code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "status", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture", "--scan-root", str(project)])
+    status = json.loads(status_output.getvalue())
+    assert status_code == 0, status
+    item = next(item for item in status["attention_queue"]["items"] if item.get("goal_id") == "loopx-turn-fixture")
+    projection = item.get("project_asset", {}).get("agent_reward_memory") or item.get("agent_reward_memory")
+    if experiment["available"]:
+        assert projection is not None
+    consumers = [experiment, configuration]
+    if projection is not None:
+        assert projection["automatic_ingest"] is ingest
+        consumers.append(projection)
+        lines: list[str] = []
+        append_agent_reward_memory_markdown(lines, {"agent_reward_memory": projection}, {})
+        markdown = "\n".join(lines)
+        for host_id in ["codex_cli_turn", "dsh_turn", "generic_cli_turn"]:
+            assert f"{host_id}:recall=connected,ingest=connected_post_settlement" in markdown
+        assert "lark:recall=status_projection_only,ingest=uncovered" in markdown
+    for consumer in consumers:
+        coverage = {row["host_id"]: row for row in consumer["host_coverage"]}
+        for host_id in ["codex_cli_turn", "dsh_turn", "generic_cli_turn"]:
+            assert coverage[host_id]["automatic_recall"] == "connected"
+            assert coverage[host_id]["automatic_ingest"] == "connected_post_settlement"
+        assert coverage["lark"]["automatic_ingest"] == "uncovered"

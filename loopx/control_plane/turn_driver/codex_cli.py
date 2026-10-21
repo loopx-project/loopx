@@ -582,6 +582,44 @@ def _select_failure_category(categories: list[str]) -> str | None:
     )
 
 
+class CodexFailureObservation:
+    """Reduce native error frames without retaining provider text or tool output."""
+
+    def __init__(self) -> None:
+        self.structured: set[str] = set()
+        self.diagnostics: set[str] = set()
+
+    def observe_event(self, event: Mapping[str, Any]) -> None:
+        structured, diagnostic = _event_failure_categories(event)
+        if structured:
+            self.structured.add(structured)
+        if diagnostic:
+            self.diagnostics.add(diagnostic)
+
+    def observe_stdout(self, line: str) -> bool:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(event, Mapping):
+            return False
+        self.observe_event(event)
+        return True
+
+    def observe_stderr(self, line: str) -> None:
+        if category := _diagnostic_failure_category(line):
+            self.diagnostics.add(category)
+
+    def category(self, *, complete: bool = True) -> str:
+        if not complete:
+            return "unknown"
+        return (_select_failure_category(list(self.structured))
+                or _select_failure_category(list(self.diagnostics)) or "exit_nonzero")
+
+    def failure_kind(self, *, complete: bool = True) -> str:
+        return _FAILURE_KINDS.get(self.category(complete=complete), "unknown")
+
+
 def _codex_command(
     *,
     codex_bin: str,
@@ -775,8 +813,7 @@ def run_codex_cli_host(
             mcp_server=mcp_server,
         )
         observed_session: list[str] = []
-        structured_failure_categories: set[str] = set()
-        diagnostic_failure_categories: set[str] = set()
+        failures = CodexFailureObservation()
 
         def observe_event(line: str) -> None:
             try:
@@ -797,16 +834,10 @@ def run_codex_cli_host(
                         record_child()
                     else:
                         goal_admission.accept_result(record_child)
-                structured, diagnostic = _event_failure_categories(event)
-                if structured:
-                    structured_failure_categories.add(structured)
-                if diagnostic:
-                    diagnostic_failure_categories.add(diagnostic)
+                failures.observe_event(event)
 
         def observe_stderr(line: str) -> None:
-            category = _diagnostic_failure_category(line)
-            if category:
-                diagnostic_failure_categories.add(category)
+            failures.observe_stderr(line)
 
         events = HostOutputLines(observe_event)
         diagnostics = HostOutputLines(observe_stderr)
@@ -835,15 +866,7 @@ def run_codex_cli_host(
                 failure_kind="executor_timeout",
                 recovery_kind=("resume_session" if observed_session else None),
             )
-        category = (
-            "unknown"
-            if output_observation_incomplete
-            else (
-                _select_failure_category(list(structured_failure_categories))
-                or _select_failure_category(list(diagnostic_failure_categories))
-                or "exit_nonzero"
-            )
-        )
+        category = failures.category(complete=not output_observation_incomplete)
         if session_scope == "todo" and returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
             discard_session()
         if observed_session and (

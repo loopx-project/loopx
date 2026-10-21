@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from ...control_plane.effect_runtime import effect_runtime_result
+from ..native_chat.codex_context import shared_chatgpt_transport
 
 
 def _digest(value: Any) -> str:
@@ -73,6 +74,7 @@ def execute(
     retry: bool = False,
     timeout_seconds: int = 900,
     codex: str = "codex",
+    reuse_from: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # Re-derive the request at the I/O boundary; do not trust caller-supplied
     # paths, prompts or schemas hidden in an otherwise valid prepared object.
@@ -83,6 +85,12 @@ def execute(
     if prepared["analysis_key"] != verified["analysis_key"]:
         raise ValueError("Analysis input/config key mismatch")
     prepared = verified
+    if reuse_from is not None:
+        comparison = effect_runtime_result(
+            "benchmark.trajectory.continuation", {**prepared, "previous": reuse_from}
+        )
+        if not comparison["can_reuse"]:
+            raise ValueError("Changed evidence requires full reassessment")
     directory = output_root.resolve() / prepared["analysis_key"]
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = directory / "execution.lock"
@@ -144,12 +152,27 @@ def execute(
         _write(directory / "output-schema.json", prepared["output_schema"])
         (directory / "prompt.txt").write_text(prepared["prompt"], encoding="utf-8")
         config = prepared["config"]
+        # Keep native account routing while ignoring unrelated user tools and
+        # rules. The shared host transport delegates credentials/refresh to
+        # Codex; it supplies no endpoint, bearer token or account configuration.
+        transport = shared_chatgpt_transport({}, {})
+        # The desktop service pins its Chat account independently of an
+        # unrelated terminal's CODEX_HOME. Use that existing host selection;
+        # leave ordinary CLI environments and Codex-owned credentials intact.
+        environment = dict(os.environ)
+        if chat_home := environment.get("LOOPX_CHAT_CODEX_HOME"):
+            environment["CODEX_HOME"] = chat_home
+        provider = transport["model_provider"]
+        transport_args = ["-c", f"model_provider={json.dumps(provider)}"]
+        for key, value in transport["model_providers"][provider].items():
+            transport_args.extend(["-c", f"model_providers.{provider}.{key}={json.dumps(value)}"])
         command = [
             codex,
             "exec",
             "--ephemeral",
             "--ignore-user-config",
             "--ignore-rules",
+            *transport_args,
             "--skip-git-repo-check",
             "--sandbox",
             "read-only",
@@ -189,6 +212,26 @@ def execute(
             "reused": False,
         }
         _write(directory / "receipt.json", receipt)
+        if reuse_from is not None:
+            # Same declared evidence, eligibility, scope and model contract.
+            # Requalify against the new exact manifest; never splice labels or
+            # add old metric totals to new ones. This path launches no child.
+            output = {key: reuse_from["output"][key] for key in
+                      ("assessments", "limitations", "episode_questions")
+                      if key in reuse_from["output"]}
+            result = effect_runtime_result(
+                "benchmark.trajectory.qualify", {**prepared, "output": output}
+            )
+            _write(directory / "model-output.json", output)
+            _write(directory / "assessment.json", result)
+            receipt.update(
+                status="succeeded", ok=True, reused=True,
+                reused_from_analysis_key=reuse_from["analysis_key"],
+                analysis_wall_seconds=time.monotonic() - started,
+                **_result_proof(directory, prepared),
+            )
+            _write(directory / "receipt.json", receipt)
+            return receipt
         with (
             (directory / "prompt.txt").open(encoding="utf-8") as prompt,
             (directory / "events.jsonl").open("w", encoding="utf-8") as events,
@@ -200,6 +243,7 @@ def execute(
                 stdin=prompt,
                 stdout=events,
                 stderr=errors,
+                env=environment,
                 text=True,
                 encoding="utf-8",
             )

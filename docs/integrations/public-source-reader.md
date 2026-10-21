@@ -54,6 +54,16 @@ text coverage. Every call independently performs the existing anonymous fetch
 and address checks. A changed digest returns `public_source_changed` without
 text; restart from zero instead of mixing revisions. Invalid offsets, missing
 continuation digests and out-of-range positions fail without a text result.
+The MCP entry validates original JSON values before the SDK can coerce them:
+offsets and image indices must be integers, excluding booleans, numeric strings
+and floats. A supplied digest must be a lowercase 64-character SHA-256 string
+or JSON `null` for an initial read; the string `"null"` is rejected. Invalid
+parameter types, digest formats and static ranges are rejected before a network
+observation or worker starts. An offset beyond the actual source length or an
+image index absent from that source requires reading the source before rejection.
+Qualification exercises
+the production MCP registration with a real SDK client, including these rejected
+values, valid text continuation, changed-source rejection and image content.
 
 The provider sends no cookies, account headers, proxy settings or caller-defined
 headers. Every destination and redirect must resolve entirely to globally

@@ -37,7 +37,10 @@ def test_goal_prompt_has_one_live_execution_entry(host: str) -> None:
     assert "notification" in body
     assert "no work/spend" in body
     assert "No permission asks in a trusted session" not in body
-    assert len(body) < 3300
+    # The native host already owns a 4,000-character limit. Keep the complete
+    # outcome/continuation clauses within it, rather than a stale second cap.
+    assert len(body) < 4000
+    assert packet["interface_budget"]["within_budget"]
 
 
 def test_codex_wait_rule_is_not_exported_to_other_goal_hosts() -> None:

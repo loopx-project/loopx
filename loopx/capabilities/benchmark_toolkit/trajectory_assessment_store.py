@@ -12,7 +12,7 @@ import json
 from pathlib import Path, PurePosixPath
 
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
-from ...control_plane.effect_runtime import effect_runtime_result
+from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...file_lock import exclusive_file_lock
 from .trajectory_assessment import _digest, _write, execute, read_job, request_cancel
 
@@ -54,6 +54,8 @@ def _pack_id(owner_goal_id: str, record: dict) -> str:
         identity["solver_usage"] = record["solver_usage"]
     if "native_outcomes" in record:
         identity["native_outcomes"] = record["native_outcomes"]
+    if "base_pack_id" in record:
+        identity["base_pack_id"] = record["base_pack_id"]
     return _digest(identity)
 
 
@@ -242,6 +244,7 @@ def register_pack(
     usage_jsonl: str | None = None,
     usage_session_id: str | None = None,
     native_outcomes_json: str | None = None,
+    base_pack_id: str | None = None,
 ) -> dict:
     """Trusted operator only; no HTTP/renderer path-registration endpoint."""
     if not title.strip():
@@ -263,6 +266,14 @@ def register_pack(
         },
     }
     _verify_sources(record)
+    if base_pack_id is not None:
+        _, previous = _resolve(runtime_root, owner_goal_id, base_pack_id)
+        # The typed owner validates Goal/case/run identity before registration.
+        # This merely links frozen versions; registration launches no analysis.
+        effect_runtime_result("benchmark.trajectory.continuation", {
+            **prepared, "previous": _prepared(previous),
+        })
+        record["base_pack_id"] = _opaque(base_pack_id)
     if (usage_jsonl is None) != (usage_session_id is None):
         raise ValueError(
             "Usage capture and expected session identity must be supplied together"
@@ -305,11 +316,15 @@ def discover(*, runtime_root: Path, owner_goal_id: str, output_language: str | N
     owner = _owner(runtime_root, owner_goal_id)
     index = _index(owner)
     packs = []
+    unreadable = []
     for pack_id in index["pack_ids"]:
-        _, record = _resolve(runtime_root, owner_goal_id, pack_id)
-        prepared = _prepared(record)
-        packs.append(_summary(record, _availability(record, prepared),
-            _prepared(record, output_language) if output_language is not None else None))
+        try:
+            _, record = _resolve(runtime_root, owner_goal_id, pack_id)
+            prepared = _prepared(record)
+            packs.append(_summary(record, _availability(record, prepared),
+                _prepared(record, output_language) if output_language is not None else None))
+        except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRejected):
+            unreadable.append(pack_id)
     available = any(p["availability"] == "available" for p in packs)
     return {
         "ok": True,
@@ -317,6 +332,7 @@ def discover(*, runtime_root: Path, owner_goal_id: str, output_language: str | N
         "reason_code": None if available else "no_available_pack",
         "default_pack_id": index["default_pack_id"],
         "packs": packs,
+        **({"unreadable_pack_ids": unreadable} if unreadable else {}),
     }
 
 
@@ -346,6 +362,7 @@ def _public_job(job: dict) -> dict:
         "served_service_tier",
         "reused",
         "cancel_requested",
+        "reused_from_analysis_key",
     )
     result = {k: job[k] for k in fields if k in job}
     if job.get("error"):
@@ -358,6 +375,7 @@ def _public_job(job: dict) -> dict:
 def inspect_pack(
     *, runtime_root: Path, owner_goal_id: str, pack_id: str | None = None,
     output_language: str | None = None,
+    include_continuation: bool = True,
 ) -> dict:
     owner, record = _resolve(runtime_root, owner_goal_id, pack_id)
     prepared = _prepared(record)
@@ -407,7 +425,7 @@ def inspect_pack(
                         ),
                     },
                 )
-    return {
+    view = {
         "ok": True,
         **_summary(record, reason, prepared if output_language is not None else None),
         "objective": record["input"]["objective"],
@@ -416,6 +434,51 @@ def inspect_pack(
         "result": result,
         "applicability": "historical" if reason else "current",
     }
+    if include_continuation and record.get("base_pack_id"):
+        continuation, _ = _continuation(
+            runtime_root, owner_goal_id, record, prepared, result, output_language
+        )
+        if continuation is not None:
+            view["continuation"] = continuation
+        else:
+            view["continuation_unavailable"] = {"base_pack_id": record["base_pack_id"]}
+    return view
+
+
+def _continuation(runtime_root, owner_goal_id, record, prepared, result, language):
+    """Read one explicitly linked base, without recursively loading its history."""
+    base_id = record.get("base_pack_id")
+    if base_id is None:
+        return None, None
+    try:
+        _, previous = _resolve(runtime_root, owner_goal_id, base_id)
+        base = inspect_pack(runtime_root=runtime_root, owner_goal_id=owner_goal_id,
+                            pack_id=base_id, output_language=language, include_continuation=False)
+        old = _prepared(previous, language) if language is not None else _prepared(previous)
+    except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRejected):
+        # A missing/corrupt base cannot disable a valid independently qualified
+        # successor. It also cannot certify reuse or an unchanged judgment.
+        return None, None
+    # Changed bytes can be compared to the frozen original excerpts, but a
+    # removed/unreadable source must not feed reuse or continuation context.
+    readable = True
+    try:
+        for source in previous["input"]["sources"]:
+            with _source_path(Path(previous["source_root"]), source["artifact"]).open("rb") as stream:
+                stream.read(1)
+    except (OSError, ValueError):
+        readable = False
+    usable = readable and base["result"] is not None and base["reason_code"] != "method_changed"
+    prior = {**old, **({"output": base["result"]} if usable else {})}
+    projection = effect_runtime_result("benchmark.trajectory.continuation", {
+        **prepared, "previous": prior, **({"output": result} if result is not None else {}),
+    })
+    return {
+        **projection,
+        "base_pack_id": base_id, "base_title": base["title"],
+        "base_analysis_key": base["analysis_key"], "base_available": usable,
+        "base_episode_count": base["episode_count"],
+    }, prior if projection["can_reuse"] else None
 
 
 def execute_pack(
@@ -436,6 +499,7 @@ def execute_pack(
     reason = _availability(record, base)
     if reason:
         raise PackUnavailable(reason)
+    _, reuse = _continuation(runtime_root, owner_goal_id, record, prepared, None, output_language)
     return _public_job(
         execute(
             prepared,
@@ -443,6 +507,7 @@ def execute_pack(
             retry=retry,
             timeout_seconds=timeout_seconds,
             codex=codex,
+            **({"reuse_from": reuse} if reuse is not None else {}),
         )
     )
 

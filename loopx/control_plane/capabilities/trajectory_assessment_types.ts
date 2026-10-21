@@ -34,6 +34,16 @@ export interface TrajectoryAssessment {
   episode_questions?: Array<{episode_id: string; question: string}>;
 }
 
+/** Changes between two frozen inputs; all substantive changes are reassessed. */
+export interface TrajectoryContinuation {
+  base_analysis_key: string; base_scope: TrajectoryInput['scope']; current_scope: TrajectoryInput['scope'];
+  sources: {added: string[]; revised: string[]; removed: string[]};
+  episodes: {added: string[]; revised: string[]; removed: string[]};
+  can_reuse: boolean; configuration_changed: boolean; objective_changed: boolean;
+  reassessed_episode_ids: string[]; new_pair_count: number; removed_pair_count: number;
+  verdict_changes: Array<{episode_id: string; metric: TrajectoryMetric; before: AssessmentVerdict; after: AssessmentVerdict}>;
+}
+
 /** Provider-observed facts, separate from inferred episode judgments. */
 export interface TrajectorySolverUsage {
   session_id: string; method: 'codex_complete_session_counters_v1';

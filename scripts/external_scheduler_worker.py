@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 from hashlib import sha256
 import json
+import math
 import os
 import shlex
 import signal
@@ -55,6 +56,7 @@ from loopx.control_plane.todos.contract import (  # noqa: E402
 SCHEDULER_DETAIL_KEY = "local_scheduler"
 LOCAL_SCHEDULER_STOP_DIRECTIVE = "stop"
 PROCESS_OUTPUT_LIMIT_BYTES = 1_000_000
+HOST_LOCK_OPERATION = "external_worker_host"
 
 
 @dataclass(frozen=True)
@@ -209,7 +211,7 @@ def run_quota_should_run(
     return payload
 
 
-def _load_state(path: Path | None) -> dict[str, Any]:
+def _load_state(path: Path | None, *, strict: bool = False) -> dict[str, Any]:
     if path is None:
         return {}
     try:
@@ -266,7 +268,7 @@ def resolve_state_path(args: argparse.Namespace) -> Path:
     return _default_state_path(args)
 
 
-def _save_state(path: Path | None, state: dict[str, Any]) -> None:
+def _save_state(path: Path | None, state: dict[str, Any], *, durable: bool = False) -> None:
     if path is None:
         return
     # Dispatch intent must survive a process crash. Reuse the atomic writer's
@@ -460,6 +462,38 @@ def _worker_goal_observation_digests(args: argparse.Namespace) -> dict[str, str 
     return result
 
 
+def _host_pending_path(state_path: Path) -> Path:
+    return state_path.with_name(f"{state_path.name}.host-attempt")
+
+
+def _host_pending(state_path: Path) -> bool | None:
+    """Independent local IO witness: absent/resolved, pending, or unreadable."""
+    path = _host_pending_path(state_path)
+    if path.is_symlink():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    pending = value.get("pending") if isinstance(value, dict) else None
+    return pending if isinstance(pending, bool) else None
+
+
+def _save_host_pending(state_path: Path, pending: bool) -> None:
+    _save_state(_host_pending_path(state_path), {"pending": pending}, durable=True)
+
+
+def _legacy_host_lock(state_path: Path) -> bool:
+    from loopx.file_lock import lock_holder_liveness
+
+    # Capture only compatibility metadata before our mutex replaces it. PID
+    # liveness never grants dispatch; read primary state under the current lock.
+    _, holder = lock_holder_liveness(state_path)
+    return holder.get("operation") == HOST_LOCK_OPERATION
+
+
 def select_interval(
     decision: TickDecision,
     *,
@@ -482,14 +516,99 @@ def _shell_argv(command: str) -> list[str]:
     return ["/bin/sh", "-c", command]
 
 
-def _run_wake(command: str, *, timeout_seconds: float | None) -> CappedProcessResult:
+def _run_wake(command: str, *, timeout_seconds: float | None,
+              environment: dict[str, str] | None = None) -> CappedProcessResult:
     return run_capped_process(
         _shell_argv(command),
         stdin=b"",
         timeout_seconds=None if timeout_seconds is None else max(0.01, timeout_seconds),
         output_limit_bytes=PROCESS_OUTPUT_LIMIT_BYTES,
         termination_grace_seconds=10,
+        env=environment,
     )
+
+
+def _host_scope(args: argparse.Namespace) -> str:
+    """Private transport scope; Todo/reset-token changes cannot reset a failure."""
+    source = [str(Path(args.registry).expanduser().resolve()), args.runtime_root,
+              args.goal_id, args.agent_id, args.wake_cmd, getattr(args, "wake_stop_exit_code", None),
+              *[os.environ.get(k, "") for k in ("CODEX_HOME", "MODEL_NAME",
+                  "LOOPX_CODEX_HOME", "CODEX_BIN", "LOOPX_PROJECT", "CODEX_WIRE_API",
+                  "LOOPX_ITERATION_CONTEXT", "LOOPX_CODEX_SANDBOX", "LOOPX_EXECUTION_MODE",
+                  "REASONING_EFFORT", "OPENAI_BASE_URL", "LOOPX_EXPECTED_COMMIT",
+                  "LOOPX_EXPECTED_RUNNER_COMMIT")]]
+    return sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
+
+
+def _host_attempt(state: dict[str, Any], scope: str) -> dict[str, Any]:
+    """Validate local IO state; retry kinds/limits stay with the Host owner."""
+    from loopx.control_plane.turn_driver.host_failure import normalize_host_failure_record
+    from loopx.control_plane.turn_driver.codex_sessions import _valid_session_id
+
+    if "host_attempt" not in state:
+        return {}
+    prior = state["host_attempt"]
+    if not isinstance(prior, dict) or prior.get("scope") != scope:
+        raise ValueError("Host attempt scope is unresolved")
+    count = prior.get("attempt")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise ValueError("Host attempt count is invalid")
+    if prior.get("status") == "started":
+        return prior
+    if prior.get("status") == "stopped":
+        code = prior.get("stop_exit_code")
+        if isinstance(code, bool) or not isinstance(code, int):
+            raise ValueError("Host stop result is invalid")
+        return prior
+    if prior.get("status") != "failed":
+        raise ValueError("Host attempt status is invalid")
+    failure = normalize_host_failure_record(prior.get("host_failure"))
+    due = prior.get("not_before")
+    if (failure["attempt"] != count or isinstance(due, bool)
+            or not isinstance(due, (int, float)) or not math.isfinite(due) or due < 0):
+        raise ValueError("Host attempt result is invalid")
+    if prior.get("session_id") is not None and _valid_session_id(prior["session_id"]) != prior["session_id"]:
+        raise ValueError("Host attempt session is invalid")
+    return prior
+
+
+def _host_result(result: CappedProcessResult, attempt: dict[str, Any], now: float) -> dict[str, Any] | None:
+    """Consume only the configured Host's content-free failure receipt."""
+    from loopx.control_plane.turn_driver.codex_sessions import _valid_session_id
+    from loopx.control_plane.turn_driver.host_failure import (
+        build_host_failure_record, normalize_host_failure_record,
+    )
+
+    try:
+        receipt = json.loads(result.stdout)
+        if not isinstance(receipt, dict):
+            raise ValueError("not an object")
+    except (ValueError, UnicodeError):
+        receipt = {}
+    session = _mapping(receipt.get("session"))
+    candidate = session.get("session_id")
+    session_id = (_valid_session_id(candidate)
+                  if session.get("binding_scope") == "agent" and isinstance(candidate, str) else None)
+    if session_id != candidate:
+        session_id = None
+    same_session = not attempt.get("session_id") or attempt["session_id"] == session_id
+    if (result.failure_kind is None and result.returncode == 0 and receipt.get("ok") is True
+            and not receipt.get("timed_out") and not receipt.get("error_kind")
+            and "host_failure" not in receipt and session_id and same_session):
+        return None
+    kind = "unknown"
+    if (result.failure_kind is None and result.returncode != 0 and receipt.get("ok") is False
+            and not receipt.get("timed_out") and not receipt.get("error_kind") and same_session):
+        try:
+            failure = normalize_host_failure_record(receipt.get("host_failure"))
+            if failure["attempt"] == 1:
+                kind = failure["kind"]
+        except (ValueError, TypeError):
+            pass
+    failure = build_host_failure_record(kind, attempt=attempt["attempt"])
+    return {**attempt, "status": "failed", "host_failure": failure,
+            "session_id": attempt.get("session_id") or session_id,
+            "not_before": now + failure.get("retry", {}).get("backoff_seconds", 0)}
 
 
 def build_should_run_command(args: argparse.Namespace) -> list[str]:
@@ -538,18 +657,47 @@ def run_worker(
     args: argparse.Namespace,
     *,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.time,
 ) -> int:
-    state_path = resolve_state_path(args)
+    opted_in = bool(getattr(args, "wake_host_failure", False))
+    state_path = resolve_state_path(args).resolve()
+    pending = _host_pending(state_path)
+    # Read the predecessor's marker before our mutex replaces its metadata.
+    # An explicit resolved witness supersedes that older compatibility evidence.
+    # The marker never grants dispatch; inspect actual state under the lock.
+    legacy_lock = (
+        _legacy_host_lock(state_path)
+        if not opted_in and pending is False and not _host_pending_path(state_path).exists()
+        else False
+    )
+    guarded = opted_in or pending is not False or legacy_lock
     try:
         state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        # One configured state route has one live synchronous consumer. A
-        # second service/cron invocation observes the owner and does no work.
+        # All workers retain main's single-consumer mutex. The provider guard
+        # composes with it instead of nesting a second lock on the same path.
         with try_exclusive_file_lock(state_path, agent_id=normalize_todo_claimed_by(args.agent_id),
-                                     operation="external_scheduler_worker") as lock:
-            if lock is None:
+                                     operation=HOST_LOCK_OPERATION if guarded or legacy_lock
+                                     else "external_scheduler_worker") as held:
+            if held is None:
+                if guarded or legacy_lock:
+                    _log("status=host_failure_hold kind=unknown reason=worker_already_running")
+                    return 2
                 _log("status=already_running next=observe_current_worker")
                 return 0
-            return _run_worker_locked(args, state_path=state_path, sleep=sleep)
+            pending = _host_pending(state_path)
+            host_guard = opted_in or pending is not False
+            legacy_unreadable = False
+            if legacy_lock and pending is False and not _host_pending_path(state_path).exists():
+                try:
+                    legacy_unreadable = not state_path.exists()
+                    _load_state(state_path)
+                except (OSError, ValueError):
+                    legacy_unreadable = True
+                host_guard = host_guard or legacy_unreadable
+            if not host_guard:
+                host_guard = "host_attempt" in _load_state(state_path)
+            return _run_worker_locked(args, state_path=state_path, sleep=sleep, clock=clock,
+                                      host_guard=host_guard, unresolved_state=legacy_unreadable)
     except (OSError, ValueError) as exc:
         reason = "worker state I/O failed; preserve original work" if isinstance(exc, OSError) else str(exc)
         _log(f"status=state_error error={shlex.quote(reason)}")
@@ -561,14 +709,46 @@ def _run_worker_locked(
     *,
     state_path: Path,
     sleep: Callable[[float], None],
+    clock: Callable[[], float],
+    host_guard: bool,
+    unresolved_state: bool = False,
 ) -> int:
     should_run_command = build_should_run_command(args)
     once = bool(args.once)
+    scope = _host_scope(args) if host_guard else ""
 
     while True:
-        state = _load_state(state_path)
-        previous_token = str(state.get("reset_token") or "")
-        unchanged_count = int(state.get("unchanged_count") or 0)
+        state_unreadable = False
+        pending = _host_pending(state_path) if host_guard else False
+        try:
+            if unresolved_state:
+                raise ValueError("legacy Host state is unreadable")
+            state = _load_state(state_path, strict=host_guard)
+            previous_token = str(state.get("reset_token") or "")
+            unchanged_count = int(state.get("unchanged_count") or 0)
+            prior = _host_attempt(state, scope) if host_guard else {}
+            # A validated original worker-stop permits readback, never dispatch,
+            # even when the secondary witness is unreadable.
+            if ((pending is None and prior.get("status") != "stopped")
+                    or (pending is True and not prior)):
+                raise ValueError("original Host attempt is unresolved")
+        except (ValueError, TypeError, OverflowError):
+            if not host_guard:
+                raise
+            # Unknown local evidence forbids dispatch, not Core observation.
+            state, previous_token, unchanged_count, prior = {}, "", 0, {}
+            state_unreadable = True
+
+        if host_guard and pending is False and (prior or state_unreadable):
+            # Retain an older valid attempt, or an opted-in unreadable state,
+            # before a later flag-off restart can lose that evidence.
+            try:
+                _save_host_pending(state_path, True)
+            except OSError:
+                state_unreadable = True
+
+        def save(fields: dict[str, Any]) -> None:
+            _save_state(state_path, {**state, **fields}, durable=host_guard)
 
         try:
             payload = run_quota_should_run(
@@ -603,10 +783,18 @@ def _run_worker_locked(
                     f"action={decision.action} class={decision.cadence_class} "
                     f"reason={shlex.quote(decision.reason)}"
                 )
-                _save_state(
-                    state_path,
-                    {**state, "reset_token": decision.reset_token, "unchanged_count": 0},
-                )
+                if not state_unreadable:
+                    save({"reset_token": decision.reset_token, "unchanged_count": 0})
+                return 0
+
+            if state_unreadable:
+                _log("status=host_failure_hold kind=unknown reason=state_unreadable "
+                     "goal_complete=false new_wake=false")
+                return 2
+
+            if prior.get("status") == "stopped":
+                _log(f"status=wake_requested_stop wake_rc={prior['stop_exit_code']} "
+                     "replayed=true goal_complete=false new_wake=false")
                 return 0
 
             if decision.should_run:
@@ -615,13 +803,32 @@ def _run_worker_locked(
                 wake_failure_kind = None
                 wake_failed = False
                 if args.wake_cmd:
+                    environment = None
+                    if host_guard:
+                        from loopx.control_plane.turn_driver.host_failure import host_failure_retry_available
+
+                        if prior and (not getattr(args, "wake_host_failure", False)
+                                      or prior["status"] == "started" or not prior.get("session_id")
+                                      or not host_failure_retry_available(prior["host_failure"])):
+                            kind = _mapping(prior.get("host_failure")).get("kind", "unknown")
+                            _log(f"status=host_failure_hold kind={kind} attempt={prior['attempt']} "
+                                 "next=original_host_recovery goal_complete=false new_wake=false")
+                            return 2
+                        delay = max(0, prior.get("not_before", 0) - clock())
+                        if delay:
+                            _log(f"status=host_failure_backoff seconds={delay:.3f} new_wake=false")
+                            if once:
+                                return 2
+                            sleep(min(delay, 60.0))
+                            retry_after_error = True
+                            break
                     if _read_resolved_replan_attempts(state, payload, args):
                         _save_state(state_path, state)
                     if _pending_replan_attempt(state, payload, args):
-                        scope = _admission_scope(payload, args)
+                        replan_scope = _admission_scope(payload, args)
                         original = next(previous for previous in state["replan_attempts"]
                                         if previous["status"] in {"started", "unknown"}
-                                        and _same_replan_scope(previous, scope))
+                                        and _same_replan_scope(previous, replan_scope))
                         _observe_worker_replan(payload, args, original, "replan_outcome_unknown")
                         _log("status=replan_outcome_unknown next=use_original_host_recovery "
                              "goal_complete=false new_wake=false")
@@ -645,9 +852,19 @@ def _run_worker_locked(
                         _save_state(state_path, {**state, "reset_token": decision.reset_token,
                                                 "unchanged_count": unchanged_count})
                     _observe_worker_replan(payload, args, None, None)
+                    if host_guard:
+                        # Persist intent separately before either the main
+                        # state write or the Host invocation can be interrupted.
+                        _save_host_pending(state_path, True)
+                        state["host_attempt"] = {"scope": scope, "status": "started",
+                            "attempt": prior.get("attempt", 0) + 1,
+                            "session_id": prior.get("session_id")}
+                        save({})
+                        environment = {**os.environ, "LOOPX_HOST_RETRY_SESSION_ID": prior.get("session_id") or ""}
                     wake_result = _run_wake(
                         args.wake_cmd,
                         timeout_seconds=getattr(args, "wake_timeout_seconds", None),
+                        **({"environment": environment} if host_guard else {}),
                     )
                     wake_rc = wake_result.returncode
                     wake_failure_kind = wake_result.failure_kind
@@ -666,12 +883,30 @@ def _run_worker_locked(
                     if (stop_code is not None and wake_failure_kind is None
                             and wake_rc == stop_code):
                         _log(f"status=wake_requested_stop wake_rc={wake_rc}")
-                        _save_state(state_path, {
-                            **state,
+                        if host_guard:
+                            state["host_attempt"].update(status="stopped", stop_exit_code=wake_rc)
+                        save({
                             "reset_token": decision.reset_token, "unchanged_count": 0,
+                            **({"last_wake_rc": wake_rc, "last_wake_status": "wake_requested_stop"}
+                               if host_guard else {}),
                         })
                         return 0
                     wake_failed = wake_failure_kind is not None or wake_rc != 0
+                    if host_guard:
+                        failure = _host_result(wake_result, state["host_attempt"], clock())
+                        if failure is None:
+                            state.pop("host_attempt", None)
+                        else:
+                            state["host_attempt"] = failure
+                            wake_failed = True
+                        state.update(last_wake_rc=wake_rc,
+                                     last_wake_status="wake_failed" if wake_failed else "wake_ok",
+                                     last_wake_failure_kind=wake_failure_kind)
+                        save({})
+                        if failure is None:
+                            # Only confirmed success, after its main-state
+                            # commit, resolves the independent witness.
+                            _save_host_pending(state_path, False)
                     wake_status = "wake_failed" if wake_failed else "wake_ok"
                 _log(
                     f"status=should_run {wake_status} "
@@ -682,23 +917,22 @@ def _run_worker_locked(
                     + (f" wake_rc={wake_rc}" if wake_rc is not None else "")
                 )
                 if wake_failed:
-                    _save_state(
-                        state_path,
-                        {
-                            **state,
+                    save({
                             "reset_token": decision.reset_token,
                             "unchanged_count": unchanged_count,
                             "last_wake_rc": wake_rc,
                             "last_wake_status": "wake_failed",
                             "last_wake_failure_kind": wake_failure_kind,
-                        },
-                    )
+                        })
                     if once:
                         return (
                             int(wake_rc)
                             if wake_failure_kind is None and wake_rc
                             else 2
                         )
+                    if host_guard:
+                        retry_after_error = True
+                        break
                     _log(
                         "status=wake_failed_backoff "
                         f"backoff_seconds={max(5, int(args.error_backoff_seconds))}"
@@ -765,14 +999,10 @@ def _run_worker_locked(
                     decision = final_decision
                     continue
 
-            _save_state(
-                state_path,
-                {
-                    **state,
+            save({
                     "reset_token": decision.reset_token,
                     "unchanged_count": unchanged_count,
-                },
-            )
+                })
             _log(
                 "status=stop_after_unchanged_limit "
                 f"unchanged_limit={decision.unchanged_limit} "
@@ -783,14 +1013,10 @@ def _run_worker_locked(
         if retry_after_error:
             continue
 
-        _save_state(
-            state_path,
-            {
-                **state,
+        save({
                 "reset_token": decision.reset_token,
                 "unchanged_count": unchanged_count,
-            },
-        )
+            })
 
         if once:
             return 0
@@ -829,6 +1055,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--wake-cmd",
         help="Optional shell command to run when should_run is true. "
         "Without it the worker is observe-only.",
+    )
+    parser.add_argument(
+        "--wake-host-failure", action="store_true",
+        help="Opt in to the configured Host JSON receipt (ok, session, host_failure). "
+             "Persist bounded same-session retries; unknown/hard failures require original Host recovery. "
+             "No model/account switching or Goal settlement is performed.",
     )
     parser.add_argument(
         "--wake-stop-exit-code",

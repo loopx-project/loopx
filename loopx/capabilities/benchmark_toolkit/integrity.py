@@ -14,6 +14,7 @@ from typing import Any, TypeGuard, cast
 from urllib.parse import urlsplit
 
 from ...control_plane.content_digest import BARE_SHA256_PATTERN as _SHA256_PATTERN
+from ...public_safe_text import COMPACT_TOKEN_PATTERN as _PUBLIC_EVIDENCE_ID_PATTERN
 
 from .environment_access import (
     _heredoc_delimiters,
@@ -156,7 +157,6 @@ _COMMAND_ARGUMENT_FIELDS = ("args", "argv")
 # metadata, so their narrative arguments cannot themselves access benchmark data.
 # Unknown tools remain fail-closed and continue through the access-request scan.
 _NON_ACCESS_CONTROL_TOOLS = frozenset({"update_plan"})
-_PUBLIC_EVIDENCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _TASK_ENVIRONMENT_NAMESPACE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,30}_$")
 _TASK_ENVIRONMENT_VARIABLE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,79}$")
 _REQUIRED_ADJUDICATION_REVIEW_SURFACES = frozenset(

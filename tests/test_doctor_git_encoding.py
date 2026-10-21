@@ -77,12 +77,15 @@ def test_trusted_release_preserves_unicode_remote_and_ref(git_repo, gbk_host):
 
 
 @pytest.fixture
-def git_output(monkeypatch, gbk_host):
+def git_output(monkeypatch, gbk_host, tmp_path):
     def install(*, returncode=0, fail_at=None):
         calls = []
+        (tmp_path / ".git").mkdir(exist_ok=True)
 
         def run(command, **kwargs):
             args = command[3:]
+            if args == ["rev-parse", "--show-toplevel"]:
+                return SimpleNamespace(returncode=0, stdout=str(tmp_path) + "\n")
             calls.append(args)
             code = (
                 returncode[len(calls) - 1]

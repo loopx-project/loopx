@@ -21,6 +21,17 @@ the frontend does not present an unspecified or other-language result as a new
 analysis in the selected language. Output-language metadata records the request,
 not independent verification of a model's translation or judgments.
 
+The Codex observer reuses native Chat's shared authenticated HTTP transport.
+Credentials and refresh remain with Codex's existing signed-in account; the
+observer neither copies tokens nor imports user tool/rule configuration. Its
+child follows the desktop service's explicit `LOOPX_CHAT_CODEX_HOME` account
+selection rather than an unrelated inherited `CODEX_HOME`. Without that Chat
+selection, ordinary CLI account discovery remains unchanged. This selects an
+existing native account directory; it does not copy credentials or change login.
+The explicit read-only sandbox, disabled shell/exec/web tools and fixed supplied
+evidence remain in force. A failed provider attempt stays in job history and
+requires an explicit retry after the host problem is repaired.
+
 ## What the measurements should answer
 
 Use one **research episode** as the process unit: a bounded question or competing
@@ -77,6 +88,39 @@ is new cost. Analysis-job usage is separate from solver and native-evaluation co
 Never impute missing dollars from an unverified model price.
 
 ## Producer and consumer boundary
+
+### Continuing a frozen analysis
+
+The trusted curator can register a complete successor snapshot using the
+existing `benchmark trajectory-pack-register --base-pack-id <previous-pack>`.
+The base must already belong to the same owner Goal and original Goal/case/run.
+This records an immutable version link; it neither appends to the original
+source nor starts a model. The Agent prepares this link with the input, rather
+than asking the reader to enter internal identifiers.
+
+The existing Goal analysis action becomes **Continue analysis**. Its inline
+version summary identifies added, corrected and removed sources/episodes,
+previous and current coverage, and changed judgments after completion. Previous
+versions remain accessible through the same reader and browser history.
+Reading, registering or refreshing a successor never starts analysis. A failed,
+cancelled or concurrently running successor does not replace a valid base result.
+
+The typed comparison reuses a qualified output only when literal excerpts,
+source identities/paths/line positions, episode questions, eligibility,
+objective, selection/window and analyst configuration are equivalent. Capture
+revision/hash changes outside those excerpts do not themselves prove new
+information. Explicit reuse requalifies every row against the current manifest
+without starting a model; the original usage stays with its original job.
+Missing or unreadable base evidence is not eligible for reuse.
+
+All substantive additions, corrections, deletions or contract changes currently
+trigger **full reassessment of the complete successor input**, including old
+episodes that later evidence may affect. No heuristic certifies an unaffected
+row and no prior model summary substitutes for original evidence. New metrics
+are reduced from the complete new eligible pairs, including unknowns; old and
+overlapping-window counts are never summed. This conservative continuation does
+not claim tail-only execution, lower token cost or scientific uplift. Method or
+configuration changes retain their original applicability boundaries.
 
 Capability owner: existing `benchmark-toolkit`. Shared input validation, fixed
 rubric, applicability identity and count reduction live in TypeScript at

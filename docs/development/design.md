@@ -81,6 +81,11 @@ Owner-facing state follows four rules:
   "executing", "running") requires an observed active worker, session or turn.
   A stored status, a registration or a count is not activity; unknown stays
   visibly unknown.
+  Aggregate mixed Agent lanes without letting one unreadable lane erase
+  another's observed activity. Distinguish a recent ended turn from execution.
+  Show missing coverage neutrally beside the Goal state, with each affected
+  Agent, host and read failure available through the shared contextual help.
+  A cadence miss is an older observation, not proof of a stopped worker.
 - **Group by responsibility.** Collaboration surfaces place work under the
   member, Agent or owner responsible for it, so one glance shows who is doing
   what and who is blocked. Work with no resolvable owner goes into an explicit
@@ -151,9 +156,17 @@ source, method and limitation paragraphs before adding another note.
   actual judgment. Show the shared interpretation once on demand. Expand an
   individual row for its complete question, verbatim rationale and source links;
   do not repeat a long question template, full rationale and button wall for
-  every item. Use declared identities rather than extracting guessed labels
+  every item. Apply the same hierarchy to the deep-analysis reader: opening
+  analysis should show comparable episode rows, not expand every evidence
+  section. Show each rationale and its citations once within that episode.
+  Use declared identities rather than extracting guessed labels
   from prose. Keep unknowns, exclusions and denominators visible at the metric,
   and preserve keyboard and touch access to the full evidence.
+- When analysis has a successor, show one compact version/change summary and
+  the existing previous-version entry. Keep the new result separate from the
+  last valid result while pending or failed. Put detailed input differences and
+  changed judgments in the same optional disclosure; do not introduce another
+  setup page, repeated methodology paragraphs or automatic model execution.
 
 For example, research metrics can show “19 episodes · purposive sample ·
 uncalibrated” once, with a nearby explanation of yes/eligible counts and unknowns.

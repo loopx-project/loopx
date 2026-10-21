@@ -83,11 +83,11 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
             build_todo_runtime_shadow_projection(goal_id="requirements-goal", todos=items, handoff_mode="soft_claim"),
             state_path=state, provider=provider)
 
-    def guard(*extra):
+    def guard(*extra, expected_exit=0):
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
             "--agent-id", "agent-a", "--scan-path", str(tmp_path), *extra,
             registry_path=registry, runtime_root=runtime)
-        assert code == 0, json.dumps(packet, indent=2)
+        assert code == expected_exit, json.dumps(packet, indent=2)
         return packet
 
     packet = guard()
@@ -107,7 +107,8 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
         # Canonical tasks still exist: the full Goal source must fail closed,
         # rather than silently substituting a Todo summary for missing intent.
         state.unlink()
-        failed = guard()
+        failed = guard(expected_exit=1)
+        assert failed["ok"] is False and failed["status_health_ok"] is False
         failed_channel = failed["interaction_contract"]["agent_channel"]
         assert failed_channel["delivery_allowed"] is False
         assert failed_channel["work_context"]["complete"] is False

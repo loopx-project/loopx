@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import socket
 import ssl
 import subprocess
@@ -22,6 +23,12 @@ import threading
 import time
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
+
+# Reuse the generated binding without adding this release to the isolated
+# worker's module search path or requiring a site-installed LoopX package.
+_BARE_SHA256_PATTERN = runpy.run_path(
+    str(Path(__file__).resolve().parents[1] / "control_plane" / "content_digest.py")
+)["BARE_SHA256_PATTERN"]
 
 MAX_BYTES = 4_000_000
 MAX_TEXT = 100_000
@@ -223,7 +230,7 @@ def _text_page_parameters(offset: int, expected_sha256: str | None) -> None:
     if type(offset) is not int or not 0 <= offset <= MAX_BYTES:
         raise ValueError("invalid text offset")
     if ((expected_sha256 is not None and (not isinstance(expected_sha256, str)
-            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None))
+            or _BARE_SHA256_PATTERN.fullmatch(expected_sha256) is None))
             or (offset > 0 and expected_sha256 is None)):
         raise ValueError("text continuation requires the original source digest")
 
@@ -345,6 +352,11 @@ def read_public_url(url: str, offset: int = 0,
         _LOCK.release()
 
 
+def _image_index(index: int) -> None:
+    if type(index) is not int or not 0 <= index < MAX_IMAGES:
+        raise ValueError("invalid image index")
+
+
 def read_public_image(url: str, index: int) -> list:
     """Return actual PNG pixels of a static article image, not its caption.
 
@@ -355,8 +367,7 @@ def read_public_image(url: str, index: int) -> list:
     if not _LOCK.acquire(blocking=False):
         return [TextContent(type="text", text=json.dumps({"ok": False, "error": "source_reader_busy"}))]
     try:
-        if type(index) is not int or not 0 <= index < MAX_IMAGES:
-            raise ValueError("invalid image index")
+        _image_index(index)
         public_url(url)
         result = _observation("image", url, index)
         return [TextContent(type="text", text=json.dumps(result["metadata"])),
@@ -372,7 +383,27 @@ def read_public_image(url: str, index: int) -> list:
 
 def main() -> None:
     from mcp.server.fastmcp import FastMCP
-    server = FastMCP("loopx-public-source-read")
+    from mcp.types import TextContent
+
+    class PublicSourceServer(FastMCP):
+        async def call_tool(self, name, arguments):
+            # FastMCP coerces JSON strings, booleans and integral floats before
+            # calling a tool. Validate the original values, including "null"
+            # digests, before that conversion can erase a rejected input.
+            raw = arguments or {}
+            try:
+                if name == "read_public_url":
+                    _text_page_parameters(raw.get("offset", 0), raw.get("expected_sha256"))
+                elif name == "read_public_image":
+                    _image_index(raw.get("index"))
+            except ValueError:
+                if name == "read_public_url":
+                    return {"ok": False, "error": "public_source_unavailable_or_rejected"}
+                return [TextContent(type="text", text=json.dumps({"ok": False,
+                    "error": "public_image_unavailable_or_rejected"}))]
+            return await super().call_tool(name, arguments)
+
+    server = PublicSourceServer("loopx-public-source-read")
     server.tool()(read_public_url)
     server.tool()(read_public_image)
     server.run()

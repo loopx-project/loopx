@@ -14,7 +14,7 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, MAX_REQUEST_BYTES
 from loopx.control_plane.quota.monitor_poll import resolve_due_monitor_candidate
 from loopx.control_plane.scheduler import monitor_poll_writeback, monitor_todo
-from loopx.control_plane.testing.canary_harness import run_json_cli
+from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
 
 
 def _monitor(**fields):
@@ -33,6 +33,7 @@ def _monitor(**fields):
 def test_real_large_authority_returns_complete_target(tmp_path, monkeypatch, provider, target_repetitions):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, state = _write_fixture(tmp_path, canonical=False)
+    goal_source = state.read_text(encoding="utf-8")
     note = "Measured evidence 演示 " * target_repetitions
     if target_repetitions == 120_000:
         assert len(note.encode()) > MAX_REQUEST_BYTES
@@ -76,7 +77,18 @@ def test_real_large_authority_returns_complete_target(tmp_path, monkeypatch, pro
                  "--turn-instance-id", "monitor-large-history"]
         guard = ["quota", "should-run", *scope,
                  "--available-capability", "network"]
+        before_missing = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        returncode, missing = run_json_cli_result(*guard, registry_path=registry, runtime_root=runtime)
+        assert returncode != 0 and missing["ok"] is False
+        assert missing["state"] == "blocked_health" and missing["should_run"] is False
+        assert not state.exists()
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)["todos"] == before_missing["todos"]
+
+        # Restore Goal intent only; the empty source cannot supply the 321 Todos.
+        # Recovery must reuse the original Turn before the Monitor may execute.
+        state.write_text(goal_source, encoding="utf-8")
         admitted = run_json_cli(*guard, registry_path=registry, runtime_root=runtime)
+        assert admitted["should_run"] is True
         assert admitted["selected_todo"]["todo_id"] == target["todo_id"]
         poll = ["quota", "monitor-poll", *scope, "--todo-id", target["todo_id"],
                 "--target-key", target["target_key"], "--result-hash", "observed-v2",

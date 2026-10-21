@@ -33,6 +33,7 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
     register.add_argument("--input-json", type=Path, required=True)
     register.add_argument("--source-root", type=Path, required=True)
     register.add_argument("--title", required=True)
+    register.add_argument("--base-pack-id", help="Existing frozen pack in this owner Goal and original case/run; links a successor without running analysis.")
     register.add_argument(
         "--usage-jsonl",
         help="Optional complete Codex session capture, relative to source-root; read-only cost facts, not model input.",
@@ -92,6 +93,7 @@ def _handle_benchmark_trajectory_command(
                 usage_jsonl=args.usage_jsonl,
                 usage_session_id=args.usage_session_id,
                 native_outcomes_json=args.native_outcomes_json,
+                base_pack_id=args.base_pack_id,
             )
             if args.benchmark_command == "trajectory-pack-register"
             else discover(**scope)

@@ -7,11 +7,11 @@ import os
 from email.parser import Parser
 from pathlib import Path
 import shutil
-import subprocess
 import tempfile
 from typing import Any, Mapping, Sequence
 
 from . import __version__
+from .doctor_git import git_metadata_for_root
 
 SKILL_INSTALL_READBACK_SCHEMA_VERSION = "loopx_skill_install_readback_v1"
 SKILL_INSTALL_READBACK_FILENAME = ".loopx-skill-install.json"
@@ -287,21 +287,6 @@ def hash_skill_tree(
     }
 
 
-def _git_value(root: Path, *args: str) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), *args],
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
-    except OSError:
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
-
-
 def _source_readback(
     source_root: Path,
     *,
@@ -363,13 +348,13 @@ def _source_readback(
                 "git_dirty": False,
             }
 
-    commit = _git_value(source_root, "rev-parse", "HEAD")
-    status = _git_value(source_root, "status", "--porcelain")
+    metadata = git_metadata_for_root(source_root)
+    commit = metadata["git_commit"]
     return {
         "kind": "local_checkout",
         "revision": commit,
         "revision_kind": "git_commit" if commit else None,
-        "git_dirty": bool(status) if commit is not None else None,
+        "git_dirty": metadata["git_dirty"] if commit is not None else None,
     }
 
 

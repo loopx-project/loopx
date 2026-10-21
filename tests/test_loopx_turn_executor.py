@@ -724,6 +724,23 @@ def test_host_result_requires_bounded_public_material_fields(field: str) -> None
     assert "unsupported host result fields" in " ".join(validation["errors"])
 
 
+@pytest.mark.parametrize("kind", [
+    "validated_progress", "validated_completion", "repair_required", "replan_required",
+])
+@pytest.mark.parametrize("outcome", ["surface_only", "outcome_gap"])
+def test_new_material_host_result_requires_qualifying_settlement(kind: str, outcome: str) -> None:
+    plan = _plan()
+    result = {**_host_result(plan), "result_kind": kind, "delivery_outcome": outcome}
+
+    validation = validate_loopx_turn_host_result(
+        plan, result, completion_lifecycle_configured=True,
+    )
+
+    assert validation["ok"] is False
+    assert outcome in " ".join(validation["errors"])
+    assert validation["result"]["delivery_outcome"] == outcome
+
+
 @pytest.mark.parametrize("packet, expected_error", [
     (None, "cached agent_vision must be a JSON object"),
     ([], "cached agent_vision must be a JSON object"),
@@ -1869,9 +1886,11 @@ def test_run_once_commits_once_and_replays_without_duplicate_effects(
     assert resumed["route"] == stored["plan"]["route"]
 
 
+@pytest.mark.parametrize("saved_outcome", ["outcome_progress", "surface_only", "outcome_gap"])
 def test_provider_can_commit_before_its_journal_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    saved_outcome: str,
 ) -> None:
     plan = _plan()
     calls = {"writeback": 0, "spend": 0, "scheduler": 0}
@@ -1927,6 +1946,33 @@ def test_provider_can_commit_before_its_journal_checkpoint(
     assert prepared["effect_ref"] in provider_records
 
     monkeypatch.setattr(turn_executor, "_write_journal", write_journal)
+    # Model metadata accepted by a historical producer. A new candidate gate
+    # cannot erase this unresolved provider commit or replace its saved result.
+    journal["host_result"]["delivery_outcome"] = saved_outcome
+    write_journal(
+        turn_journal_path(
+            tmp_path / "runtime", goal_id="fixture-goal", turn_key=journal["turn_key"],
+        ),
+        journal,
+    )
+    unresolved = run_loopx_turn_once(
+        plan,
+        host_runner=lambda _request: pytest.fail("host must not run during recovery"),
+        project=tmp_path,
+        runtime_root=tmp_path / "runtime",
+        goal_id="fixture-goal",
+        timeout_seconds=5,
+        execute=True,
+        task_validator=_passing_validator,
+        writeback=writeback,
+        writeback_resolver=lambda _effect_ref: {"kind": "unknown", "reason": "provider unavailable"},
+        spend=spend,
+        scheduler=scheduler,
+    )
+    assert unresolved["result_kind"] == "writeback_failed"
+    assert unresolved["receipt"]["failed_phase"] == "durable_writeback"
+    assert _journal(tmp_path / "runtime")["effect_attempts"]["durable_writeback"] == prepared
+    assert calls == {"writeback": 1, "spend": 0, "scheduler": 0}
     resumed = run_loopx_turn_once(
         plan,
         host_runner=lambda _request: pytest.fail("host must not run during recovery"),
@@ -1941,6 +1987,7 @@ def test_provider_can_commit_before_its_journal_checkpoint(
             "kind": "committed",
             "payload": provider_records[effect_ref],
         },
+        retry_failed=True,
         spend=spend,
         scheduler=scheduler,
     )
@@ -1948,6 +1995,7 @@ def test_provider_can_commit_before_its_journal_checkpoint(
     assert resumed["status"] == "committed"
     assert calls == {"writeback": 1, "spend": 1, "scheduler": 1}
     assert "effect_attempts" not in _journal(tmp_path / "runtime")
+    assert _journal(tmp_path / "runtime")["host_result"]["delivery_outcome"] == saved_outcome
 
 
 def test_recreation_waits_for_admitted_provider_checkpoint(

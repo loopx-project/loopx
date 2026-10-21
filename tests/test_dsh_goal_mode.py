@@ -459,6 +459,37 @@ def test_build_result_shapes_material_results_with_required_fields() -> None:
     assert "agent_vision_json" not in result
 
 
+@pytest.mark.parametrize("kind", ["validated_progress", "repair_required", "replan_required"])
+@pytest.mark.parametrize("field,value,valid", [
+    ("delivery_batch_scale", "test_only", True),
+    ("delivery_batch_scale", "multi_surface", True),
+    ("delivery_batch_scale", "implementation", True),
+    ("delivery_outcome", "surface_only", False),
+    ("delivery_outcome", "outcome_gap", False),
+    ("delivery_outcome", "primary_goal_outcome", True),
+    ("delivery_batch_scale", "single_segment", False),
+    ("delivery_batch_scale", "bounded_segment", False),
+    *[(field, value, False)
+      for field in ("delivery_batch_scale", "delivery_outcome")
+      for value in (None, False, 0, {}, [], "", "unknown")],
+])
+def test_explicit_delivery_metadata_reaches_its_existing_validator(kind, field, value, valid):
+    request = _signed_request()
+    base = {
+        "result_kind": kind, "classification": "artifact_checked",
+        "next_action": "Continue the accepted task.",
+        "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+    }
+    adapted = turn_host_adapter.build_result(request, {**base, field: value})
+    assert type(adapted[field]) is type(value) and adapted[field] == value
+    direct = {**turn_host_adapter.build_result(request, base), field: value}
+    # Legal outcome names alone cannot settle a material Turn. The current
+    # Host result has no typed blocker observation, so outcome_gap is refused.
+    for result in (adapted, direct):
+        verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+        assert verdict["ok"] is valid, verdict["errors"]
+
+
 def _material_replan_candidate() -> tuple[dict[str, object], str]:
     vision = {
         "schema_version": "goal_vision_replan_contract_v0",
@@ -632,20 +663,74 @@ def test_build_result_is_accepted_by_the_real_host_result_validator(
     assert verdict["ok"], verdict["errors"]
 
 
-def test_build_result_bounds_every_free_text_field() -> None:
+@pytest.mark.parametrize("field,limit", [
+    ("classification", 120), ("summary", 400), ("next_action", 1_200),
+    ("recommended_action", 1_200), ("vision_unchanged_reason", 240),
+])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+@pytest.mark.parametrize("extra", [0, 1])
+def test_candidate_text_reaches_executor_limits_without_losing_its_tail(
+    field: str, limit: int, kind: str, extra: int,
+) -> None:
+    # Independent limits from the Turn result contract. A trailing restriction
+    # must reach the validator, including on stop and legacy unchanged paths.
+    tail = "Stop before publication."
+    value = "验" * (limit + extra - len(tail)) + tail
+    candidate = {
+        "result_kind": kind, "classification": "implementation_refined",
+        "summary": "The isolated artifact was checked.",
+        "next_action": "Continue the accepted work.",
+        "recommended_action": "Read the next current decision.",
+        "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+        field: value,
+    }
+    request = _signed_request()
     result = turn_host_adapter.build_result(
-        _signed_request(),
-        {
-            "result_kind": "user_action_required",
-            "classification": "x" * 500,
-            "summary": "y" * 900,
-            "next_action": "z" * 5000,
-        },
+        request, candidate,
     )
-    # Independent limits from the Turn result contract, not the adapter's table.
-    assert len(result["classification"]) <= 120
-    assert len(result["summary"]) <= 400
-    assert len(result["next_action"]) <= 1_200
+    assert result[field] == value
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"] is (extra == 0), verdict["errors"]
+    if extra:
+        assert f"{field} exceeds {limit} characters" in verdict["errors"]
+
+
+@pytest.mark.parametrize("field", [
+    "classification", "summary", "next_action", "recommended_action", "vision_unchanged_reason",
+])
+@pytest.mark.parametrize("value", [True, False, 42, 0, 1.25, {}, [], {"action": "Continue"}, ["Continue"]])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+def test_nontext_candidate_fields_reach_the_executor_without_coercion(field, value, kind):
+    request = _signed_request()
+    valid = {
+        "result_kind": kind, "classification": "artifact_checked", "summary": "Evidence checked.",
+        "next_action": "Continue the accepted task.", "recommended_action": "Read current requirements.",
+        "vision_unchanged_reason": "The accepted Goal is unchanged.",
+    }
+    adapted = turn_host_adapter.build_result(request, {**valid, field: value})
+    assert type(adapted[field]) is type(value) and adapted[field] == value
+    # The generic host route must reject the same raw JSON type even without
+    # the shared DSH/Ark adapter. A transport cannot repair malformed meaning.
+    direct = {**turn_host_adapter.build_result(request, valid), field: value}
+    for result in (adapted, direct):
+        verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+        assert not verdict["ok"]
+        assert f"{field} must be a string" in verdict["errors"]
+
+
+@pytest.mark.parametrize("field", [
+    "classification", "summary", "next_action", "recommended_action", "vision_unchanged_reason",
+])
+@pytest.mark.parametrize("kind", ["validated_progress", "wait"])
+def test_legacy_null_candidate_text_still_uses_the_existing_absent_field_behavior(field, kind):
+    request = _signed_request()
+    result = turn_host_adapter.build_result(request, {
+        "result_kind": kind, "classification": "artifact_checked", "summary": "Evidence checked.",
+        "next_action": "Continue the accepted task.", "recommended_action": "Read current requirements.",
+        "vision_unchanged_reason": "The accepted Goal is unchanged.", field: None,
+    })
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
 
 
 def test_adapter_runs_hermetically_through_the_module_entry() -> None:

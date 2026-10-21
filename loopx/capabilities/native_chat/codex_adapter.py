@@ -15,8 +15,82 @@ import threading
 import time
 from typing import Any, Callable
 
-from ...chat_agent import CodexChatAgentSession, CodexChatTimeoutError
+from ...chat_agent import (
+    CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError,
+    _retry_error_details, _routing_discovery_timeout,
+)
 from ...chat_codex_goal import CodexGoalDriver
+
+
+def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
+    """Observe a historical pre-execution failure without resuming it.
+
+    Unlike a same-worker retry, a migration may inspect an older failure.
+    Every native Turn must be terminal. Routing recovery additionally
+    requires the latest Turn and permits only user input plus native
+    compaction bookkeeping: no answer, tool, correction or unknown item.
+    The Core still owns any new continuation admission.
+    """
+    deadline = time.monotonic() + session.response_timeout_sec
+
+    def terminal() -> dict[str, Any] | None:
+        turns = list(session._control_items("thread/turns/list", {
+            "sortDirection": "desc", "itemsView": "summary",
+        }, deadline))
+        ids = [item.get("id") for item in turns]
+        if (not ids or any(not isinstance(value, str) or not value for value in ids)
+                or len(set(ids)) != len(ids)
+                or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in turns)):
+            return None
+        selected = next((item for item in turns if item["id"] == turn_id), None)
+        if not selected or selected.get("status") != "failed":
+            return None
+        if _routing_discovery_timeout(selected.get("error")):
+            # A later request may supersede this one. Compaction is native
+            # bookkeeping, but only the exact latest routing failure can
+            # use that exception to the historical user-only inventory.
+            if ids[0] != turn_id:
+                return None
+            return {"codex_error_info": "other", "pre_execution_routing_timeout": True}
+        info = _retry_error_details(selected.get("error")).get("retry", {}).get("codex_error_info")
+        # `other` is evidence of a failed native request, not permission to
+        # retry it. The typed admission owner separately decides whether
+        # this proven user-only failure is eligible for one continuation.
+        if info in ("contextWindowExceeded", "serverOverloaded", "internalServerError", "other"):
+            return {"codex_error_info": info}
+        if isinstance(info, dict) and len(info) == 1:
+            detail = next(iter(info.values()))
+            status = detail.get("httpStatusCode") if isinstance(detail, dict) else False
+            if isinstance(detail, dict) and "httpStatusCode" in detail and (
+                status is None or type(status) is int and 500 <= status <= 599
+            ):
+                return {"codex_error_info": info}
+        return None
+
+    try:
+        proof = terminal()
+        if proof is None:
+            return None
+        items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
+        routing = proof.get("pre_execution_routing_timeout") is True
+        allowed = {"userMessage", "contextCompaction"} if routing else {"userMessage"}
+        ids: set[str] = set()
+        users = 0
+        for entry in items:
+            item = entry.get("item")
+            if (entry.get("turnId") != turn_id or not isinstance(item, dict)
+                    or item.get("type") not in allowed or not item.get("id")
+                    or not isinstance(item["id"], str) or item["id"] in ids):
+                return None
+            ids.add(item["id"])
+            users += item["type"] == "userMessage"
+        if users != 1 or (not routing and len(items) != 1) or terminal() != proof:
+            return None
+        return {"thread_id": session.thread_id, "turn_id": turn_id,
+                "only_original_user_item": len(items) == 1,
+                **({"only_pre_execution_items": True} if routing else {}), **proof}
+    except (CodexChatAgentError, OSError, TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -50,7 +124,7 @@ class CodexAppServerAdapter:
             for thread_id in dict.fromkeys(thread_ids):
                 native.thread_id = thread_id
                 native.response_timeout_sec = max(.01, deadline - time.monotonic())
-                proof = native.failed_request_readback(turn_id)
+                proof = failed_request_readback(native, turn_id)
                 if proof is not None:
                     return proof
                 if time.monotonic() >= deadline:

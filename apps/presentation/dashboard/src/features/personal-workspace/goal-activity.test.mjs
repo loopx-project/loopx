@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { goalExecution, goalHostDeliveryWindows, goalWorkKind, presentGoalActivity, taskSessionStatus } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
+import { goalExecution, goalObservationGaps, goalWorkKind, presentGoalActivity, taskSessionStatus } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
 
 // One Goal's session facts, mixed by mode. `updated_at` stands for the time the
 // owner last recorded anything for that session.
@@ -19,19 +19,9 @@ const recent = minutesAgo(2);
 const silent = minutesAgo(30);
 const old = minutesAgo(45);
 
-assert.deepEqual(goalHostDeliveryWindows({ hostThreadActivity: { threads: [
-  { agentId: "codex", hostSurface: "codex-app", state: "idle", lastEventAt: recent, deliveryWindow: { state: "stale", ageHours: 3.5 } },
-  { agentId: "cursor-agent", hostSurface: "cursor", state: "idle", lastEventAt: recent, deliveryWindow: { state: "fresh", ageHours: 0.2 } },
-] } }), [
-  { agentId: "codex", hostSurface: "codex-app", state: "stale", ageHours: 3.5 },
-  { agentId: "cursor-agent", hostSurface: "cursor", state: "fresh", ageHours: 0.2 },
-]);
-assert.deepEqual(goalHostDeliveryWindows({ hostThreadActivity: { threads: [
-  { agentId: "codex", hostSurface: "codex-app", state: "unknown", lastEventAt: null, deliveryWindow: { state: "missing", reason: "no_observation" } },
-] } }), [{ agentId: "codex", hostSurface: "codex-app", state: "missing", ageHours: null }]);
-assert.deepEqual(goalHostDeliveryWindows({ hostThreadActivity: { threads: [
+assert.deepEqual(goalObservationGaps({ hostThreadActivity: {completeness: "complete", threads: [
   { agentId: "codex", hostSurface: "codex-app", state: "idle", lastEventAt: recent, deliveryWindow: { state: "unknown", reason: "no_expectation" } },
-] } }), [], "an unavailable cadence expectation is not a missed window");
+] } }), {missing: 0, stale: 0, unavailable: false, incomplete: false}, "an unavailable cadence expectation is not a missed window");
 
 function executionOf(sessions, observation) {
   const execution = goalExecution(sessions, "goal-a", observation, now);
@@ -103,6 +93,37 @@ assert.equal(freshHost.quiet, false);
 assert.equal(presentGoalActivity({ activationState: "active", execution: freshHost, state: "推进" }).live, true);
 assert.equal(goalExecution(undefined, "goal-a", hostObservation(recent), now).kind, "running");
 assert.equal(goalExecution(null, "goal-a", hostObservation(minutesAgo(8 * 60)), now).kind, "unknown");
+assert.equal(goalExecution([], "goal-a", hostObservation(minutesAgo(8 * 60)), now).kind, "unknown", "An old open marker proves neither current execution nor an ended turn");
+const unreadable = { hostSurface: "codex-app", state: "unknown", reason: "no_turn_marker", lastEventAt: null,
+  deliveryWindow: { state: "missing", reason: "no_observation" } };
+const mixedHosts = { completeness: "complete", threads: [...hostObservation(recent).threads, unreadable] };
+assert.equal(executionOf([], mixedHosts).lastActivityAt, recent, "An unreadable lane cannot replace another lane's clock");
+assert.equal(goalObservationGaps({hostThreadActivity: mixedHosts}).unavailable, false);
+assert.equal(goalObservationGaps({hostThreadActivity: mixedHosts}).missing, 1);
+for (const reason of ["unsupported_host", "thread_not_found", "store_unavailable", "record_unrecognized", "no_turn_marker"]) {
+  const observation = {completeness: "complete", threads: [{...unreadable, reason}]};
+  for (const sessions of [undefined, null, []]) {
+    assert.equal(goalExecution(sessions, "goal-a", observation, now).kind, "unknown", `${reason}: absent host evidence cannot establish idleness`);
+  }
+  assert.equal(goalObservationGaps({hostThreadActivity: observation}).unavailable, true);
+  assert.equal(executionOf([session("managed", "managed_runtime", recent)], observation).lastActivityAt, recent,
+    "Managed execution also survives a missing host observation");
+}
+const endedAndMissing = {completeness: "complete", threads: [
+  {hostSurface: "codex-app", state: "idle", lastEventAt: recent, deliveryWindow: {state: "fresh"}}, unreadable,
+]};
+assert.equal(goalExecution([], "goal-a", endedAndMissing, now).kind, "unknown", "Recent completed activity is not execution or proof of all-host idleness");
+assert.deepEqual(goalObservationGaps({hostThreadActivity: endedAndMissing}), {missing: 1, stale: 0, unavailable: false, incomplete: false});
+assert.equal(goalExecution([], "goal-a", {completeness: "incomplete", threads: []}, now).kind, "unknown");
+assert.equal(goalExecution([], "goal-a", {completeness: "complete", threads: [{hostSurface: "codex-app", state: "archived", lastEventAt: null}]}, now).kind, "idle");
+assert.equal(goalObservationGaps({hostThreadActivity: {completeness: "complete", threads: [
+  {hostSurface: "codex-app", state: "idle", lastEventAt: old, deliveryWindow: {state: "stale"}}, unreadable,
+]}}).stale, 1, "An actual cadence miss stays visible beside missing coverage");
+assert.deepEqual(goalObservationGaps({hostThreadActivity: {completeness: "complete", threads: [
+  {hostSurface: "codex-app", state: "turn_open", lastEventAt: "unreadable", deliveryWindow: {state: "stale"}},
+]}}), {missing: 1, stale: 0, incomplete: false, unavailable: true}, "One unreadable lane is counted once even when its cadence payload is inconsistent");
+assert.equal(presentGoalActivity({activationState: "active", state: "等待条件", execution: {kind: "unknown"}, hostThreadActivity: {completeness: "complete", threads: [unreadable]}}).labelKey,
+  "state.waiting", "A known wait condition survives missing execution coverage");
 for (const completeness of ["incomplete", undefined]) {
   const partialIdle = presentGoalActivity({
     activationState: "active", state: "已安排", boundHostSurfaces: ["codex-app"],

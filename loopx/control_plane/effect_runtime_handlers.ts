@@ -287,6 +287,7 @@ export function createEffectRuntimeHandlers(
     ["benchmark.trajectory.codex-usage", lazyHandler(() => import("./capabilities/trajectory_codex_usage.ts"), ({summarizeTrajectoryCodexUsage}) => summarizeTrajectoryCodexUsage)],
     ["benchmark.trajectory.prepare", lazyHandler(() => import("./capabilities/trajectory_assessment.ts"), ({prepareTrajectoryAssessment}) => prepareTrajectoryAssessment)],
     ["benchmark.trajectory.qualify", lazyHandler(() => import("./capabilities/trajectory_assessment.ts"), ({qualifyTrajectoryAssessment}) => qualifyTrajectoryAssessment)],
+    ["benchmark.trajectory.continuation", lazyHandler(() => import("./capabilities/trajectory_assessment_continuation.ts"), ({compareTrajectoryAssessments}) => compareTrajectoryAssessments)],
     ["agent.preferences", lazyHandler(() => import("./capabilities/agent_preferences.ts"), ({agentPreferences}) => agentPreferences)],
     ["todo.archive.capture_dependencies", lazyHandler(() => Promise.all([import("./todos/archive_capture.ts"), import("./coordination/source_transfer.ts")]), ([{captureArchivedTodoDependencies}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies))],
     ["agent.supervisor.plan_append", lazyHandler(() => import("./agents/supervisor_event_append.ts"), ({planSupervisorEventAppend}) => planSupervisorEventAppend)],

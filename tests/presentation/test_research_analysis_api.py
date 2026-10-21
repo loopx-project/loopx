@@ -138,6 +138,82 @@ def test_frontend_language_scopes_process_retry_cache_and_original_citations(wor
     assert all(path.read_bytes() == data for path, data in w["before"].items())
 
 
+def test_continuation_http_preserves_previous_analysis_through_cancel_retry_and_equivalent_reuse(workspace):
+    w, read = workspace, workspace["request"]
+    w["mode"].write_text("ok")
+    first = read(output_language="zh")["pack"]
+    operation = {**w["operation"], "analysis_key": first["analysis_key"], "output_language": "zh"}
+    assert read(body=operation)["job"]["status"] == "succeeded"
+    previous = read(output_language="zh")["pack"]["result"]
+    source, path = w["sources"], w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    later = b"A late follow-up still has no representative utility test.\n"
+    (source / "later.txt").write_bytes(later)
+    data["sources"].append(dict(id="later", artifact="later.txt", artifact_sha256=hashlib.sha256(later).hexdigest(), first_line=1, text=later.decode().strip()))
+    data["episodes"][0]["source_ids"].append("later")
+    data["scope"]["revision"] = "later-evidence"
+    path.write_text(json.dumps(data))
+    scope = dict(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner")
+    second = register_pack(**scope, input_path=path, source_root=source, title="Later evidence", base_pack_id=first["pack_id"])
+    current = read(output_language="zh")["pack"]
+    assert current["result"] is None and current["job"] is None
+    assert current["continuation"]["sources"]["added"] == ["later"]
+    assert current["continuation"]["reassessed_episode_ids"] == ["episode"]
+    assert not current["continuation"]["can_reuse"]
+    successor = {**operation, "pack_id": second["pack_id"], "analysis_key": current["analysis_key"]}
+    w["mode"].write_text("wait")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        running = pool.submit(read, body=successor)
+        until = time.monotonic() + 8
+        while time.monotonic() < until:
+            view = read(output_language="zh")["pack"]
+            if view["job"] and view["job"]["status"] == "running":
+                break
+            time.sleep(.05)
+        else:
+            pytest.fail("successor never reached its actual process receipt")
+        assert read(body=successor)["job"]["status"] == "busy"
+        assert read(pack_id=first["pack_id"], output_language="zh")["pack"]["result"] == previous
+        assert read(body=successor, suffix="/cancel")["job"]["cancel_requested"]
+        assert running.result(timeout=8)["job"]["status"] == "cancelled"
+    assert read(pack_id=first["pack_id"], output_language="zh")["pack"]["result"] == previous
+    w["mode"].write_text("fail")
+    with pytest.raises(HTTPError):
+        read(body={**successor, "retry": True})
+    w["mode"].write_text("ok")
+    assert read(body={**successor, "retry": True})["job"]["attempt"] == 3
+    completed = read(output_language="zh")["pack"]
+    assert completed["result"]["metrics"][1]["eligible"] == 1
+    assert completed["continuation"]["verdict_changes"] == []
+    calls = w["count"].read_text()
+    assert read(output_language="en")["pack"]["result"] is None
+    assert w["count"].read_text() == calls  # locale and history reads never execute
+    # Capture metadata outside the selected excerpt is not new evidence.
+    evidence = (source / "facts.txt").read_bytes() + b"Additional unselected metadata\n"
+    (source / "facts.txt").write_bytes(evidence)
+    data["sources"][0]["artifact_sha256"] = hashlib.sha256(evidence).hexdigest()
+    data["scope"]["revision"] = "capture-only"
+    path.write_text(json.dumps(data))
+    third = register_pack(**scope, input_path=path, source_root=source, title="Equivalent capture", base_pack_id=second["pack_id"])
+    view = read(output_language="zh")["pack"]
+    assert view["continuation"]["can_reuse"] and view["result"] is None
+    reused = read(body={**successor, "pack_id": third["pack_id"], "analysis_key": view["analysis_key"]})["job"]
+    assert reused["reused_from_analysis_key"] == completed["analysis_key"]
+    assert w["count"].read_text() == calls
+    assert read(output_language="zh")["pack"]["result"]["scope"]["revision"] == "capture-only"
+    assert read(pack_id=second["pack_id"], output_language="zh")["pack"]["result"] == completed["result"]
+    base_path = next((scope["runtime_root"] / "benchmark" / "trajectory-assessments").glob(f"*/packs/{second['pack_id']}.json"))
+    captured = base_path.read_bytes()
+    base_path.unlink()
+    unavailable_base = read(output_language="zh")
+    assert unavailable_base["catalog"]["unreadable_pack_ids"] == [second["pack_id"]]
+    assert unavailable_base["pack"]["continuation_unavailable"] == {"base_pack_id": second["pack_id"]}
+    assert unavailable_base["pack"]["result"]["scope"]["revision"] == "capture-only"
+    assert w["count"].read_text() == calls
+    base_path.write_bytes(captured)
+    assert read(output_language="zh")["pack"]["continuation"]["base_available"]
+
+
 def test_registered_http_cancel_failure_retry_reuse_and_source_return(workspace):
     w = workspace
     read, operation = w["request"], w["operation"]

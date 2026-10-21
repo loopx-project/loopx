@@ -420,6 +420,25 @@ fixture。只读规划与可选 quota capture 默认值不变，原生执行 Tur
 这只关闭 producer 到 detail 的传输缺口。真实模型、打包 App/Lark、后续 authority 检查
 及其余收敛矩阵仍独立验收，本切片不退役任何 Python 投影。
 
+共享 Host 结果适配器现在保留所提供文本，交给既有 Turn 校验器，而不通过截短使
+候选通过。超限后续行动原本可能丢失末尾审批约束却仍获接受。JSON 布尔值、数字和
+容器也保留原类型，交给同一校验器拒绝；false/零不能消失到
+稀疏字段默认值，旧 null/省略的可选文本仍按缺省处理。明确提供的交付规模与结果
+现在也保留原值及 JSON 类型，只有省略元数据时才沿用稀疏默认值。此前声明的
+`surface_only`、不满足条件的 `outcome_gap` 或非法值都会变成 `outcome_progress`，
+绕过既有拒绝并记入 quota 扣费。共享 prompt 使用既有交付词汇。原生 File/SQLite
+测试保留合法规模历史。新材料结果也在任务验证或效果准备前复用既有结算规则：
+`surface_only` 与 `outcome_gap` 返回 typed `validation_failed`，不留下 prepared
+写回。此前词汇合法但不满足结算条件的结果会进入 refresh-state，抛出通用 CLI
+错误，留下反复遭遇同一拒绝的 in-progress prepared 写回。Host 合同不携带 typed
+blocker observation；普通 CLI 的阻塞结算保持原行为。历史缓存结果仍走 provider
+读回／恢复，覆盖 provider 返回 unknown 后读到 committed receipt，不重启 Host 或
+重复写回；此处没有新增结算策略。
+File/SQLite 原生 CLI
+和实际 DSH 子进程验证任务校验、写回、扣费、ACK 前的拒绝、失败结果重放，以及
+修正后的新 Turn 只结算一次。边界长度的合法结果保持原行为。这只证明结果传输
+正确性，不证明模型采用、撤销 Host 已执行工作或关闭原三批收敛验收。
+
 首个普通 CLI 整合将完全相同的
 `heartbeat_recommendation.blocked_priority_fallback` 副本替换为
 `blocked_priority_fallback_ref="$.blocked_priority_fallback"`。根字段的完整事实、
@@ -428,6 +447,11 @@ fixture。只读规划与可选 quota capture 默认值不变，原生执行 Tur
 捕获的动作维度及无扣费重放。原始 source hash 本就区分不同渲染；本批不改变签名
 覆盖，也不让渲染视图替代原始 capture。
 旧字段访问保留在既有 packet owner；CLI 调用其投影函数，不增加待迁移的旧字段消费者。
+
+验收上下文 adapter 现在对已选定工作复用既有精确 Todo 读取，保留完整 Goal 验收依据
+和累计 outcome，避免再次搬运无关任务的关联观察及选定 Todo 正文。真实 File/SQLite
+CLI 与 DSH 协议输入覆盖已配置检查、仅声明 outcome 两种情形；无选定工作的读取
+仍返回原列表。这只验证局部 IO 边界，不能替代真实模型收益、安装采用或整轮成本。
 
 下一步先调查获准真实 Goal 的活跃工作、peer/replan、等待/恢复和可选能力形态，
 将每条保留义务映射到共享 typed owner 与实际消费者，再完成一族调用方迁移，最后

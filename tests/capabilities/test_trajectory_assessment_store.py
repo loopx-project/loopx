@@ -128,6 +128,7 @@ def test_scope_discovery_execute_read_citation_and_changed_source_history(pack):
     )
     with pytest.raises(PackUnavailable, match="citation_not_in_result"):
         read_citation(**operation, source_id="source", first_line=1, last_line=2)
+
     (sources / "result.txt").write_text("changed", encoding="utf-8")
     assert discover(**scope)["packs"][0]["reason_code"] == "source_changed"
     with pytest.raises(PackUnavailable, match="source_changed"):
@@ -143,6 +144,93 @@ def test_scope_discovery_execute_read_citation_and_changed_source_history(pack):
         ]
         == citation["text"]
     )
+
+
+def test_continuation_reuses_identical_excerpts_despite_other_capture_bytes(pack):
+    scope, operation, registered, path, sources, provider = pack
+    assert execute_pack(**operation, codex=provider)["status"] == "succeeded"
+    original = inspect_pack(**scope, pack_id=registered["pack_id"])["result"]
+    old_directory = next((scope["runtime_root"] / "benchmark" / "trajectory-assessments").glob("*/jobs")) / operation["analysis_key"]
+    old_bytes = {p.name: p.read_bytes() for p in old_directory.iterdir() if p.is_file()}
+    evidence = (sources / "result.txt").read_bytes() + b"Unselected capture metadata changed\n"
+    (sources / "result.txt").write_bytes(evidence)
+    data = json.loads(path.read_text())
+    data["scope"]["revision"] = "capture-2"
+    data["sources"][0]["artifact_sha256"] = hashlib.sha256(evidence).hexdigest()
+    path.write_text(json.dumps(data))
+    successor = register_pack(**scope, input_path=path, source_root=sources, title="Updated capture", base_pack_id=registered["pack_id"])
+    assert register_pack(**scope, input_path=path, source_root=sources, title="Updated capture", base_pack_id=registered["pack_id"])["pack_id"] == successor["pack_id"]
+    before = inspect_pack(**scope)
+    assert before["job"] is None and before["result"] is None
+    assert before["continuation"]["can_reuse"] is True
+    assert before["continuation"]["sources"] == dict(added=[], revised=[], removed=[])
+    new_operation = {**scope, "pack_id": successor["pack_id"], "analysis_key": successor["analysis_key"]}
+    completed = execute_pack(**new_operation, codex="must-not-run")
+    assert completed["reused"] and completed["reused_from_analysis_key"] == operation["analysis_key"]
+    reused_output = json.loads((old_directory.parent / successor["analysis_key"] / "model-output.json").read_text())
+    assert set(reused_output) == {"assessments", "limitations"}
+    view = inspect_pack(**scope)
+    assert view["result"]["scope"]["revision"] == "capture-2"
+    assert view["result"]["metrics"] == original["metrics"]
+    assert view["result"]["evidence_manifest"][0]["artifact_sha256"] == data["sources"][0]["artifact_sha256"]
+    assert read_citation(**new_operation, source_id="source", first_line=2, last_line=2)["applicability"] == "current"
+    assert all((old_directory / name).read_bytes() == contents for name, contents in old_bytes.items())
+
+
+def test_new_evidence_reassesses_old_judgments_and_complete_denominator(pack, tmp_path):
+    scope, operation, registered, path, sources, provider = pack
+    execute_pack(**operation, codex=provider)
+    previous = inspect_pack(**scope)["result"]
+    data = json.loads(path.read_text())
+    later = b"The earlier proxy was not representative; no native test occurred.\n"
+    (sources / "later.txt").write_bytes(later)
+    data["sources"].append(dict(id="later", artifact="later.txt", artifact_sha256=hashlib.sha256(later).hexdigest(), first_line=1, text=later.decode().strip()))
+    data["episodes"][0]["source_ids"].append("later")
+    data["episodes"].append(dict(id="follow-up", question="Did follow-up test utility?", source_ids=["later"], eligible_metrics=["benefit_test"]))
+    data["selection"]["population_episodes"] = 2
+    data["scope"].update(revision="corrected", window="original and later evidence")
+    path.write_text(json.dumps(data))
+    successor = register_pack(**scope, input_path=path, source_root=sources, title="Later evidence", base_pack_id=registered["pack_id"])
+    before = inspect_pack(**scope)
+    assert before["continuation"]["can_reuse"] is False
+    assert before["continuation"]["reassessed_episode_ids"] == ["episode", "follow-up"]
+    assert before["continuation"]["new_pair_count"] == 1
+    revised = {"assessments": [dict(episode_id=e, metric="benefit_test", verdict=v, reason="Later evidence corrects the earlier interpretation", citations=[dict(source_id="later", first_line=1, last_line=1)] if v != "unknown" else []) for e, v in [("episode", "no"), ("follow-up", "unknown")]], "limitations": ["Synthetic counterevidence"]}
+    executable = tmp_path / "reassessment"
+    executable.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\nprompt=sys.stdin.read()\nassert 'The earlier proxy' in prompt and '原始测量' in prompt\nPath(sys.argv[sys.argv.index('-o')+1]).write_text({json.dumps(revised)!r})\n")
+    executable.chmod(0o700)
+    new_operation = {**scope, "pack_id": successor["pack_id"], "analysis_key": successor["analysis_key"]}
+    execute_pack(**new_operation, codex=str(executable))
+    view = inspect_pack(**scope)
+    benefit = next(row for row in view["result"]["metrics"] if row["metric"] == "benefit_test")
+    assert (benefit["yes"], benefit["no"], benefit["unknown"], benefit["eligible"]) == (0, 1, 1, 2)
+    assert view["continuation"]["verdict_changes"] == [dict(episode_id="episode", metric="benefit_test", before="yes", after="no")]
+    assert inspect_pack(**scope, pack_id=registered["pack_id"])["result"] == previous
+
+
+def test_continuation_does_not_cross_owner_run_or_revoked_source(pack, tmp_path):
+    scope, operation, registered, path, sources, provider = pack
+    execute_pack(**operation, codex=provider)
+    data = json.loads(path.read_text())
+    data["scope"]["run_id"] = "unrelated"
+    path.write_text(json.dumps(data))
+    with pytest.raises(EffectRuntimeRejected, match="different Goal/case/run"):
+        register_pack(**scope, input_path=path, source_root=sources, title="Wrong run", base_pack_id=registered["pack_id"])
+    with pytest.raises(PackUnavailable, match="pack_not_registered"):
+        register_pack(**{**scope, "owner_goal_id": "other-owner"}, input_path=path, source_root=sources, title="Wrong owner", base_pack_id=registered["pack_id"])
+    data["scope"].update(run_id="run", revision="current")
+    path.write_text(json.dumps(data))
+    copied = tmp_path / "current-sources"
+    copied.mkdir()
+    (copied / "result.txt").write_bytes((sources / "result.txt").read_bytes())
+    successor = register_pack(**scope, input_path=path, source_root=copied, title="Current snapshot", base_pack_id=registered["pack_id"])
+    (sources / "result.txt").unlink()
+    view = inspect_pack(**scope)
+    assert view["availability"] == "available"
+    assert not view["continuation"]["base_available"] and not view["continuation"]["can_reuse"]
+    assert view["continuation"]["reassessed_episode_ids"] == ["episode"]
+    result = execute_pack(**scope, pack_id=successor["pack_id"], analysis_key=successor["analysis_key"], codex=provider)
+    assert result["status"] == "succeeded" and not result["reused"]
 
 
 def test_native_results_register_through_real_cli_and_read_without_analysis(pack, tmp_path):
@@ -164,7 +252,8 @@ def test_native_results_register_through_real_cli_and_read_without_analysis(pack
     result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
         "--runtime-root", str(scope["runtime_root"]), "--format", "json", "benchmark", "trajectory-pack-register",
         "--goal-id", scope["owner_goal_id"], "--input-json", str(input_path), "--source-root", str(sources),
-        "--title", "Native outcome window", "--native-outcomes-json", native_path.name],
+        "--title", "Native outcome window", "--native-outcomes-json", native_path.name,
+        "--base-pack-id", original["pack_id"]],
         capture_output=True, text=True, check=True)
     registered = json.loads(result.stdout)
     assert registered["analysis_key"] == original["analysis_key"]
@@ -172,6 +261,8 @@ def test_native_results_register_through_real_cli_and_read_without_analysis(pack
     assert registered["native_outcomes"]["projection"]["initial"]["value"] == 2
     view = inspect_pack(**scope, pack_id=registered["pack_id"])
     assert view["job"] is None and view["result"] is None
+    assert view["continuation"]["base_pack_id"] == original["pack_id"]
+    assert not view["continuation"]["base_available"]
     assert view["native_outcomes"]["projection"]["retained"]["candidate_ref"] == "candidate-a"
     citation = read_citation(**scope, pack_id=registered["pack_id"], analysis_key=registered["analysis_key"],
         source_id="source", first_line=2, last_line=2)

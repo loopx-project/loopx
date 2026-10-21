@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 import threading
@@ -64,7 +65,8 @@ def prepared(tmp_path):
 
 
 def provider(
-    tmp_path: Path, *, delay=0, code=0, invalid=False, invalid_utf8=False
+    tmp_path: Path, *, delay=0, code=0, invalid=False, invalid_utf8=False,
+    expected_home=None,
 ) -> str:
     script = tmp_path / "codex-fixture"
     output = {
@@ -88,9 +90,20 @@ def provider(
     )
     script.write_text(
         f"""#!{sys.executable}
-import json,sys,time
+import json,os,sys,time
 from pathlib import Path
 assert "\\u539f\\u59cb\\u76ee\\u6807" in sys.stdin.buffer.read().decode("utf-8")
+options = dict(arg.split('=', 1) for index, arg in enumerate(sys.argv) if index > 0 and sys.argv[index-1] == '-c')
+selected = json.loads(options['model_provider'])
+assert json.loads(options['model_providers.' + selected + '.requires_openai_auth']) is True
+assert json.loads(options['model_providers.' + selected + '.supports_websockets']) is False
+assert not any(key.endswith(('.base_url', '.env_key', '.experimental_bearer_token')) for key in options)
+assert '--ignore-user-config' in sys.argv and '--ignore-rules' in sys.argv
+assert sys.argv[sys.argv.index('--sandbox')+1] == 'read-only'
+assert json.loads(options['web_search']) == 'disabled'
+assert 'shell_tool' in sys.argv and 'unified_exec' in sys.argv
+if {expected_home!r} is not None:
+    assert os.environ.get('CODEX_HOME') == {expected_home!r}
 time.sleep({delay})
 if {code}: sys.exit({code})
 Path(sys.argv[sys.argv.index('-o')+1]).write_bytes({payload!r})
@@ -101,6 +114,26 @@ sys.stdout.buffer.write((json.dumps({{'type':'turn.completed','message':'\\u5206
     )
     script.chmod(0o700)
     return str(script)
+
+
+@pytest.mark.parametrize("chat_home", [None, "", "selected-chat-home"])
+def test_actual_child_uses_explicit_chat_account_not_unrelated_terminal(
+    prepared, tmp_path, monkeypatch, chat_home
+):
+    monkeypatch.setenv("CODEX_HOME", "unrelated-terminal-home")
+    if chat_home is None:
+        monkeypatch.delenv("LOOPX_CHAT_CODEX_HOME", raising=False)
+    else:
+        monkeypatch.setenv("LOOPX_CHAT_CODEX_HOME", chat_home)
+    expected = "selected-chat-home" if chat_home else "unrelated-terminal-home"
+    result = execute(
+        prepared, tmp_path / "jobs",
+        codex=provider(tmp_path, expected_home=expected),
+    )
+    assert result["status"] == "succeeded"
+    # Selection belongs to this child, not the server's process or saved input.
+    assert os.environ["CODEX_HOME"] == "unrelated-terminal-home"
+    assert "CODEX_HOME" not in result["config"]
 
 
 def test_actual_child_reuse_and_repair_of_derived_output(prepared, tmp_path):

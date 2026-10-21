@@ -578,10 +578,22 @@ if os.environ.get("LOOPX_SKILL_ENTRY_HOST_SURFACE") and result["status"] in {
 PY
 }
 
+read_source_git_commit() {
+  PYTHONSAFEPATH=1 PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" \
+    "$LOOPX_PYTHON" - "$repo_root" <<'PY_SOURCE'
+from pathlib import Path
+import sys
+
+from loopx.doctor_git import git_metadata_for_root
+
+print(git_metadata_for_root(Path(sys.argv[1]))["git_commit"] or "")
+PY_SOURCE
+}
+
 verify_default_promotion() {
   LOOPX_VERIFY_LINK="$bin_dir/loopx" \
     LOOPX_VERIFY_RELEASE_DIR="$release_dir" \
-    LOOPX_VERIFY_SOURCE_COMMIT="${LOOPX_RESOLVED_SOURCE_GIT_COMMIT:-$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)}" \
+    LOOPX_VERIFY_SOURCE_COMMIT="${LOOPX_RESOLVED_SOURCE_GIT_COMMIT:-$source_git_commit}" \
     "${LOOPX_PYTHON:-python3}" - <<'PY'
 from pathlib import Path
 import json
@@ -695,13 +707,14 @@ resolve_default_promotion() {
       ;;
   esac
 
-  if ! git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  source_git_commit="$(read_source_git_commit)"
+  if [[ -z "$source_git_commit" ]]; then
     promotion_mode="canary_only_unverified_source"
     return 1
   fi
 
   local source_commit approved_commit source_status approved_ref
-  source_commit="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
+  source_commit="$source_git_commit"
   source_status="$(git -C "$repo_root" status --porcelain 2>/dev/null || true)"
   approved_ref="${LOOPX_APPROVED_DEFAULT_REF:-refs/remotes/origin/main}"
   approved_commit="$(git -C "$repo_root" rev-parse "$approved_ref" 2>/dev/null || true)"
@@ -726,6 +739,9 @@ if [[ -z "$shell_profile" ]]; then
 fi
 
 configure_python_runtime
+# Git hooks can pass selectors for their own repository into this installer.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE
+source_git_commit=""
 promote_default=0
 if resolve_default_promotion; then
   promote_default=1
@@ -744,6 +760,11 @@ if [[ "$install_canary" != "0" ]]; then
   check_symlink_destination "$bin_dir/loopx-canary"
 fi
 if [[ "$promote_default" == "1" ]]; then
+  # Use the same source-root identity as the manifest and doctor, after rejecting
+  # unusable entry targets. A nested archive must not borrow its container's Git.
+  if [[ -z "$source_git_commit" ]]; then
+    source_git_commit="$(read_source_git_commit)"
+  fi
   # Preparing shared Chat assets is part of the guarded installation.
   mkdir -p "$releases_dir"
   run_under_install_guard "$@"

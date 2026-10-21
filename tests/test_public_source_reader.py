@@ -1,6 +1,8 @@
 """Public evidence must not acquire account, local-network or file authority."""
+import asyncio
 import io
 import ipaddress
+import json
 import socket
 import ssl
 import threading
@@ -458,6 +460,90 @@ def test_invalid_public_text_page_never_starts_observation(monkeypatch, offset, 
     monkeypatch.setattr(reader, "_observation", forbidden)
     result = reader.read_public_url("https://example.org/source", offset=offset, expected_sha256=digest)
     assert result == {"ok": False, "error": "public_source_unavailable_or_rejected"}
+
+
+@pytest.fixture
+def public_source_mcp(monkeypatch):
+    from mcp.server.fastmcp import FastMCP
+    servers = []
+    monkeypatch.setattr(FastMCP, "run", lambda server: servers.append(server))
+    reader.main()  # Exercise the production registration, not a separate test server.
+    assert len(servers) == 1
+    return servers[0]
+
+
+@pytest.mark.parametrize("tool,arguments,error", [
+    *(("read_public_url", {"offset": offset, "expected_sha256": "a" * 64},
+        "public_source_unavailable_or_rejected")
+       for offset in (False, True, "1", 1.0, None, -1, reader.MAX_BYTES + 1)),
+    *(("read_public_url", {"expected_sha256": digest}, "public_source_unavailable_or_rejected")
+       for digest in ("null", "false", "[]", False, "a" * 63, "A" * 64)),
+    ("read_public_url", {"offset": 1}, "public_source_unavailable_or_rejected"),
+    *(("read_public_image", {"index": index}, "public_image_unavailable_or_rejected")
+       for index in (False, True, "0", 0.0, None, -1, reader.MAX_IMAGES)),
+])
+def test_mcp_rejects_raw_invalid_parameters_before_sdk_coercion(
+        public_source_mcp, monkeypatch, tool, arguments, error):
+    from mcp.shared.memory import create_connected_server_and_client_session
+    calls = []
+    monkeypatch.setattr(reader, "_observation", lambda *a, **k: calls.append((a, k)) or {
+        "ok": True, "metadata": {"ok": True}, "pixels": "cGl4ZWxz"})
+
+    async def request():
+        async with create_connected_server_and_client_session(public_source_mcp) as client:
+            return await client.call_tool(tool, {"url": "https://example.org/source", **arguments})
+    result = asyncio.run(request())
+    assert calls == []  # A sanitized error after IO would not protect this boundary.
+    assert len(result.content) == 1 and result.content[0].type == "text"
+    assert json.loads(result.content[0].text) == {"ok": False, "error": error}
+
+
+def test_mcp_valid_pages_images_and_private_url_rejection(public_source_mcp, monkeypatch):
+    import base64
+    import hashlib
+    from mcp.shared.memory import create_connected_server_and_client_session
+    body = ("公共🙂" * 40_000).encode()
+    png = io.BytesIO()
+    Image.new("RGB", (2, 1), "red").save(png, format="PNG")
+    pixels = png.getvalue()
+    calls = []
+    monkeypatch.setattr(reader, "fetch", lambda *a, **k: (
+        "https://example.org/source", "text/plain", body))
+    def observe(kind, url, index=None, **kwargs):
+        calls.append((kind, index, kwargs))
+        if kind == "text":
+            return reader.article(url, deadline=time.monotonic() + 5, **kwargs)
+        return {"metadata": {"ok": True, "index": index, "sha256": hashlib.sha256(pixels).hexdigest()},
+                "pixels": base64.b64encode(pixels).decode()}
+    monkeypatch.setattr(reader, "_observation", observe)
+
+    async def request():
+        async with create_connected_server_and_client_session(public_source_mcp) as client:
+            tools = {t.name: t.inputSchema for t in (await client.list_tools()).tools}
+            assert set(tools) == {"read_public_url", "read_public_image"}
+            assert tools["read_public_url"]["properties"]["offset"]["type"] == "integer"
+            assert tools["read_public_image"]["properties"]["index"]["type"] == "integer"
+            first = (await client.call_tool("read_public_url", {"url": "https://example.org/source"})).structuredContent
+            explicit_initial = await client.call_tool("read_public_url", {
+                "url": "https://example.org/source", "offset": 0, "expected_sha256": None})
+            assert explicit_initial.structuredContent == first
+            tail = (await client.call_tool("read_public_url", {"url": "https://example.org/source",
+                "offset": first["next_offset"], "expected_sha256": first["sha256"]})).structuredContent
+            assert first["text"] + tail["text"] == body.decode()
+            assert tail["next_offset"] is None and tail["sha256"] == first["sha256"]
+            changed = await client.call_tool("read_public_url", {"url": "https://example.org/source",
+                "offset": 1, "expected_sha256": "b" * 64})
+            assert changed.structuredContent == {"ok": False, "error": "public_source_changed"}
+            image = await client.call_tool("read_public_image", {"url": "https://example.org/source", "index": 0})
+            assert json.loads(image.content[0].text)["index"] == 0
+            assert image.content[1].type == "image" and base64.b64decode(image.content[1].data) == pixels
+            before = len(calls)
+            for tool, extra, error in (("read_public_url", {}, "public_source_unavailable_or_rejected"),
+                    ("read_public_image", {"index": 0}, "public_image_unavailable_or_rejected")):
+                rejected = await client.call_tool(tool, {"url": "https://127.0.0.1/private", **extra})
+                assert json.loads(rejected.content[0].text) == {"ok": False, "error": error}
+            assert len(calls) == before
+    asyncio.run(request())
 
 
 def test_public_text_page_rejects_changed_source_and_out_of_range(monkeypatch):

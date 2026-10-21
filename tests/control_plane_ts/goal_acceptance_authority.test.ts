@@ -900,10 +900,20 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.equal(inspect.source_authority, `${provider}_v0`);
     assert.equal((inspect.tasks as JsonObject[]).length, 1);
     assert.equal((inspect.todo as JsonObject).todo_id, "todo_first");
+    const context = await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal,
+      todo_id: "todo_first", include_work_details: false});
+    const {todo: _todo, completion_requirements: _completion, ...basis} = inspect;
+    assert.deepEqual(context, basis, "context omits work details before the RPC, preserving the entire acceptance basis");
+    assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal,
+      todo_id: "todo_first", include_work_details: "false"})).status, "failed");
     const heldDoc = {...document(), bindings: [{todo_id: "todo_first", criterion_ids: ["prerequisite"]}]};
     assert.equal((await commitLocalGoalAcceptance({...await configureRequest(store, {document: heldDoc}), runtime_root: root})).status, "applied");
     assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_second"})).reason_code,
       "goal_acceptance_unbound", "canonical task diagnosis survives the private effect adapter");
+    const unboundContext = await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal,
+      todo_id: "todo_second", include_work_details: false});
+    assert.equal((unboundContext.tasks as JsonObject[])[0].state, "unbound");
+    assert.equal((unboundContext.goal_acceptance_contract as JsonObject).status, "held");
     await update(store, "todo_first", {text: "Changed owner-bound work"});
     assert.equal((await inspectLocalGoalAcceptance({runtime_root: root, goal_id: goal, todo_id: "todo_first"})).reason_code,
       "goal_acceptance_stale");

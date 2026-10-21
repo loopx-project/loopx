@@ -6,10 +6,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 from typing import Any
 
 from . import __version__
+from .doctor_git import git_metadata_for_root
 
 
 RELEASE_MANIFEST_SCHEMA_VERSION = "loopx_release_manifest_v0"
@@ -71,51 +71,6 @@ def _hash_tree(root: Path) -> dict[str, Any]:
     }
 
 
-def _run_git(source_root: Path, args: list[str]) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(source_root), *args],
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
-    except OSError:
-        return None
-    if result.returncode != 0:
-        return None
-    value = result.stdout.strip()
-    return value or None
-
-
-def _git_metadata(source_root: Path | None) -> dict[str, Any]:
-    if source_root is None:
-        return {
-            "git_commit": None,
-            "git_ref": None,
-            "git_dirty": None,
-        }
-    root = source_root.expanduser().resolve()
-    if not root.exists():
-        return {
-            "git_commit": None,
-            "git_ref": None,
-            "git_dirty": None,
-        }
-    commit = _run_git(root, ["rev-parse", "HEAD"])
-    branch = _run_git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"])
-    tag = _run_git(root, ["describe", "--tags", "--exact-match"])
-    status = _run_git(root, ["status", "--porcelain"])
-    if commit is None and branch is None and tag is None and status is None:
-        dirty: bool | None = None
-    else:
-        dirty = bool(status)
-    return {
-        "git_commit": commit,
-        "git_ref": branch or tag,
-        "git_dirty": dirty,
-    }
-
-
 def _manifest_source_metadata(source_root: Path | None) -> dict[str, Any]:
     if source_root is None:
         return {
@@ -171,7 +126,8 @@ def _manifest_source_metadata(source_root: Path | None) -> dict[str, Any]:
 
 
 def _source_metadata(source_root: Path | None) -> dict[str, Any]:
-    git_metadata = _git_metadata(source_root)
+    git_metadata = git_metadata_for_root(source_root)
+    git_metadata.pop("root")
     if any(git_metadata.get(key) is not None for key in ("git_commit", "git_ref", "git_dirty")):
         return {
             **git_metadata,

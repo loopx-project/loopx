@@ -7,7 +7,7 @@ from .todos.contract import normalize_todo_claimed_by
 
 
 def reward_memory_host_coverage() -> list[dict[str, str]]:
-    """Project actual host lifecycle wiring without inferring parity."""
+    """Project source lifecycle wiring, not Agent enablement or provider qualification."""
 
     return [
         {
@@ -18,12 +18,12 @@ def reward_memory_host_coverage() -> list[dict[str, str]]:
         {
             "host_id": "generic_cli_turn",
             "automatic_recall": "connected",
-            "automatic_ingest": "uncovered",
+            "automatic_ingest": "connected_post_settlement",
         },
         {
             "host_id": "dsh_turn",
-            "automatic_recall": "connected_task_body",
-            "automatic_ingest": "uncovered",
+            "automatic_recall": "connected",
+            "automatic_ingest": "connected_post_settlement",
         },
         {
             "host_id": "codex_app_quota",

@@ -677,6 +677,52 @@ no-declaration result. The executor accepts those empty strings and rejects
 non-empty stop-result declarations. The shared material validation applies to
 generic CLI, Codex CLI, dsh, and optional-cloud host results.
 
+Shared dsh/optional-cloud adapters preserve candidate text through the existing
+Turn result limits. They must not truncate a supplied classification, summary,
+next action, recommendation or unchanged-path reason to make it pass validation:
+a trailing constraint can change the meaning. The executor rejects over-limit
+text before task validation, durable writeback, quota spend or scheduler ACK.
+Generated adapter diagnostics remain bounded. Existing transport/output limits
+still apply, and a failed result does not undo work the Host already performed.
+Candidate text fields retain their JSON types until validation: booleans,
+numbers, arrays and objects are rejected, including false, zero and empty
+containers. They must not become instructions through string coercion or
+missing-field fallbacks. Legacy null/omitted optional text keeps its absence
+semantics; sparse adapter candidates retain their established defaults.
+Explicit `delivery_batch_scale` and `delivery_outcome` also pass through to
+their existing validators; only omitted metadata uses the legacy
+`single_surface` / `outcome_progress` defaults. The adapter must not replace a
+declared result with progress or accept read-only scale aliases for new writes.
+Valid vocabulary does not establish a qualifying settlement. For new material
+Host results, the validator reuses the existing settlement rule before task
+validation or effect preparation. `surface_only` and `outcome_gap` return
+`validation_failed` at `host_result_contract`: this Host contract carries no
+typed blocker observation. The failed journal retains no prepared writeback;
+ordinary replay has no effects, and a corrected candidate needs a new Turn or
+an explicitly admitted failed-result retry. Historical cached results keep
+their provider readback and settlement recovery; a possibly committed effect
+cannot be discarded by this new-candidate check. Ordinary CLI typed-blocker
+settlement remains unchanged. Valid declared scales reach durable history
+unchanged.
+
+共享 dsh/可选云端适配器保留候选结果的完整文本，交给现有 Turn 结果校验器判定上限；
+不得截短分类、摘要、后续行动、建议或路径不变理由以使其通过，否则可能丢失末尾约束。
+超限结果在任务验证、持久写回、quota 扣费和 scheduler ACK 前被拒绝。适配器生成的
+诊断仍有界，原传输和输出上限保留；结果被拒绝不会撤销 Host 已经执行的工作。
+候选文本字段保留原 JSON 类型直到校验；布尔值、数字、数组和对象（含 false、零和
+空容器）会被拒绝，不得经字符串转换或缺字段兜底变成行动。旧 null/省略的可选
+文本继续按缺省处理，稀疏适配器候选保留既有默认值。
+明确提供的 `delivery_batch_scale` 与 `delivery_outcome` 也原样交给既有校验器；
+只有省略元数据时才使用旧 `single_surface` / `outcome_progress` 默认值。适配器
+不得将所声明结果替换为进展，也不得让只读 scale 别名用于新写入。词汇合法不代表
+满足结算条件。新材料 Host 结果在任务校验或效果准备前复用既有结算规则：
+`surface_only` 与 `outcome_gap` 返回 `host_result_contract` 阶段的
+`validation_failed`，因为当前 Host 合同不携带 typed blocker observation。
+失败 journal 不留下 prepared 写回；普通重放无效果，修正候选须通过新 Turn 或明确
+准入的失败结果重试。历史缓存结果继续走 provider 读回和结算恢复，不能由新增候选
+校验丢弃可能已经提交的效果。普通 CLI 的 typed blocker 结算保持原行为。合法声明
+的规模原样进入持久历史。
+
 The existing TypeScript Vision normalizer owns packet interpretation and emits
 the canonical `goal_vision_replan_contract_v0` shape. Its current compatibility
 behavior does not verify the submitted packet's top-level `schema_version`;
