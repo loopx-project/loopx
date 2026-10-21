@@ -360,6 +360,7 @@ def test_owner_history_includes_tools_with_bounded_pages_and_offline_reading(
                     json.dumps(
                         {
                             "type": "response_item",
+                            "timestamp": "2026-01-01T00:00:02Z",
                             "payload": {
                                 "type": "function_call_output",
                                 "output": "tool-result" * 512,

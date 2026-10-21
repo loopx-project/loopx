@@ -172,7 +172,10 @@ test("Todo timestamp codec retains Python ISO compatibility, timezone seconds an
   for (const value of ["1970-02-30", "2021-W53", "1970-01-01T01:00+24:00",
     "1970-01-01T24:00:00", "1970-01-01T24:00:01",
     "9999-12-31T24:00:00", "9999-12-31T24:00:00Z", "9999-12-31T24:00:00.000000",
+    "0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00",
     "1970-01-01T00:0000", "1970-01-01T0000:00", "tomorrow", "2030"]) {
     assert.equal(parseTodoTimestampMicros(value), null, value);
   }
+  assert.equal(parseTodoTimestampMicros("0001-01-01T00:00:00Z"), -62135596800000000n);
+  assert.equal(parseTodoTimestampMicros("9999-12-31T23:59:59.999999Z"), 253402300799999999n);
 });
