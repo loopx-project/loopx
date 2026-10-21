@@ -200,6 +200,11 @@ Todo 关联保留既有可恢复边界与 claim/lease 证明；恢复旧批次�
 合法写回。变化只涉及启用后的证据捕获及显式 Todo 关联编辑；普通工作与
 能力关闭时的 hook 行为保持不变。完整附件与作用域规则见[英文契约](README.md#results-from-ordinary-work-writeback)。
 
+每张 comparison card 保留该结果页中全部已关联结论，复用最多20条的分页上限。
+显式扩大 `--result-limit` 后，第4条及之后显示的结论也可绑定到
+`selected_candidate`；写回仍重放相同分页并核对精确来源摘要。默认三条视图与
+独立的卡片数量上限保持不变。较大的结果页不授予执行权限，也不证明选题质量。
+
 ## 可选 Todo 分支规划
 
 `loopx explore todo-branch-plan` 是面向探索目标的窄 opt-in harness：一次尝试多个看起来都合理的下一个 todo。它使用 CPU 分支预测类比 + DSpark 启发调度器：对 open agent todos 排序，估计分支置信度与预期证据单位，选择置信度调度的验证前缀，选一个 `primary` 分支加安全的 `speculative` 分支，拒绝声明写作用域与已选分支重叠的分支。

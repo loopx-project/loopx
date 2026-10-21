@@ -698,6 +698,13 @@ permission. Node-filtered and planner-detail reads are not supported by this
 citation path. See the [stride contract](../../../docs/reference/protocols/goal-vision-replan-contract-v0.md#structured-stride-control)
 for the existing decision, budget and original-Turn recovery rules.
 
+Each comparison card retains every linked outcome on that result page, up to
+the same 20-result bound. Expanding `--result-limit` therefore also makes the
+fourth and later displayed outcomes available to `selected_candidate`; writeback
+replays the same page and exact source digest. The default three-result view
+and the separate number-of-cards limit remain unchanged. A larger page grants
+no execution permission and does not certify the quality of a selection.
+
 Planning context also keeps a bounded `typed_evidence_audit` on suggested
 branches with explicit Todo/node links, and up to three existing exploring
 frontier nodes. Linked findings are resolved before the recent-history limit,

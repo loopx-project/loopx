@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {projectStrideExploreBasis, strideReviewMismatch} from "../../loopx/control_plane/work_items/stride_policy.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
 
 test("next-turn evidence exposes current question state and relation changes invalidate old pages", () => {
@@ -78,5 +79,55 @@ for (const includeDigests of [false, true]) {
     } else {
       assert.deepEqual(updatedFinding, audit.findings[0]);
     }
+  });
+}
+
+for (const limit of [3, 4, 20]) {
+  test(`every scoped outcome on an explicitly requested page remains selectable: ${limit}`, () => {
+    const findings = Array.from({length: 20}, (_, index) => ({finding_id: `scoped-${index}`,
+      node_id: "question", finding: `Measured input family ${index}`, status: "confirmed",
+      summary: `Applicable to input family ${index} only.`, tags: ["writeback-result"],
+      evidence_refs: [`result:scoped-${index}`],
+      measurements: [{metric: "quality", value: index, unit: "points", higher_is_better: true,
+        comparison_scope: "validation:owned-v1", input_revision: "owned-input-v1",
+        evaluation_ref: "evaluator:owned-v1", candidate_ref: `candidate:scoped-${index}`,
+        evidence_ref: `result:scoped-${index}`}]}));
+    const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
+      graph_enabled: true, harness_gate: {enabled: true}, result_limit: limit,
+      projection: {nodes: [{node_id: "question", status: "exploring"}], findings},
+      plan: {selected_branches: [{todo_id: "todo_method", actionable_open: true,
+        typed_evidence_audit: {requested_node_refs: ["question"]}}]}};
+    const source = projectExploreTurnContext(request);
+    const graph = source.graph as JsonObject, harness = source.harness as JsonObject;
+    const card = harness.comparison_candidates[0];
+    // Quantitative feedback still uses all sources, independently of page size.
+    assert.equal(graph.measurement_feedback[0].measured_count, 20);
+    assert.equal(graph.measurement_feedback[0].best.value, 19);
+    assert.equal(graph.measurement_feedback[0].best.candidate_ref, "candidate:scoped-19");
+    // The result page and candidate card must describe the same read scope.
+    assert.equal(graph.writeback_results.length, limit);
+    assert.deepEqual(card.outcomes.map((row: JsonObject) => row.finding_id),
+      findings.slice(0, limit).map(row => row.finding_id));
+    const last = findings[limit - 1];
+    const selected = {todo_id: "todo_method", node_id: last.node_id, finding_id: last.finding_id,
+      source_sha256: createHash("sha256").update(JSON.stringify(last)).digest("hex")};
+    const basis = projectStrideExploreBasis(source, "research", "worker")!;
+    const decision = {explore_review: {revision: basis.revision, disposition: "used",
+      considered_refs: [last.finding_id], selected_candidate: selected}};
+    assert.equal(strideReviewMismatch(decision, {explore_basis: basis}, undefined, ["retain:todo_method"]), null);
+    assert.match(String(strideReviewMismatch({explore_review: {...decision.explore_review,
+      selected_candidate: {...selected, source_sha256: "f".repeat(64)}}},
+      {explore_basis: basis}, undefined, ["retain:todo_method"])), /exact scoped result/);
+    assert.match(String(strideReviewMismatch(decision, {explore_basis: basis}, undefined, [])), /retained/);
+    // Page replay must expose exactly the same choices at ordinary writeback.
+    const page = {revision: graph.result_page.revision, offset: 0, limit};
+    const replay = projectExploreTurnContext({...request, review_pages: [page]});
+    assert.deepEqual(replay.review_pages[0].comparison_candidates, harness.comparison_candidates);
+    const tooMany = {...source, harness: {...harness, comparison_candidates: [
+      {...card, outcomes: Array.from({length: 21}, () => card.outcomes[0])}]}};
+    assert.throws(() => projectStrideExploreBasis(tooMany, "research", "worker"), /scoped outcomes/);
+    const evidenceOnly = projectExploreTurnContext({...request, harness_gate: {enabled: false}});
+    assert.equal(evidenceOnly.harness, null);
+    assert.equal(Object.hasOwn(evidenceOnly.graph, "comparison_candidates"), false);
   });
 }

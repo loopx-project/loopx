@@ -6,7 +6,7 @@ import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringA
 import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
-import {normalizeExploreResultPages} from "./explore_result_page.ts";
+import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 function rows(value: unknown): JsonObject[] {
@@ -112,7 +112,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const command = (...args: string[]) => [...route, "explore", ...args, "--goal-id", goal];
   const resultLimit = requireInteger(params.result_limit ?? 3, "result_limit");
   const resultOffset = requireInteger(params.result_offset ?? 0, "result_offset");
-  if (resultLimit < 1 || resultLimit > 20 || resultOffset < 0) {
+  if (resultLimit < 1 || resultLimit > EXPLORE_RESULT_PAGE_MAX || resultOffset < 0) {
     throw new EffectRuntimeRequestError("Use result_limit 1..20 and a nonnegative result_offset");
   }
   const resultNode = params.result_node == null ? null : requireNonEmptyString(params.result_node, "result_node");
@@ -134,7 +134,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       const audit = requireJsonObject(branch.typed_evidence_audit, "Explore evidence audit");
       const linked = new Set(requireStringArray(audit.requested_node_refs ?? [], "Explore node refs")
         .filter(ref => nodeById.has(ref)));
-      const outcomes = page.filter(row => linked.has(String(row.node_id))).slice(0, 3);
+      // The explicit page already bounds these results. A second three-row
+      // cap would display findings that the same page cannot bind at writeback.
+      const outcomes = page.filter(row => linked.has(String(row.node_id)));
       return outcomes.length ? [{todo_id: branch.todo_id, outcomes}] : [];
     });
     if (!linkedCandidates.length) return {};
