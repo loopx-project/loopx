@@ -307,6 +307,15 @@ duplicate configuration. Frontend presence does not require automatic execution
 of privileged tools. Internal helpers/providers belong to their owning
 capability's interaction, not an independent screen.
 
+For artifact-producing capabilities, the requested work is the deliverable.
+An existing conversation, artifact preview/download and revision feedback can
+satisfy the frontend journey. HTML, games, mini-worlds and video are creation
+formats; they do not by themselves require a dedicated LoopX editor, simulator
+or settings screen. Add a product surface only for an accepted user workflow.
+Qualify the capability through actual requested works and meaningful revisions;
+rendering or interaction checks alone do not establish creative quality or
+communication effectiveness.
+
 Before PR handoff, validate the packaged journey with its real owning backend
 and a relevant failure/recovery case. Name changed entrypoints and evidence.
 A staged prerequisite may be proposed as partial with its remaining journey and
