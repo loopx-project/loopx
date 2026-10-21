@@ -428,9 +428,10 @@ def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp
 
     monkeypatch.setattr(session, "_write", write)
     proof = failed_request_readback(session, "failed")
-    if fault in {None, "older", "host-other"}:
+    if fault in {None, "older", "host-other", "usage"}:
         assert proof == {"thread_id": "original-thread", "turn_id": "failed",
-            "only_original_user_item": True, "codex_error_info": "other" if fault == "host-other" else "contextWindowExceeded"}
+            "only_original_user_item": True, "codex_error_info": "usageLimitExceeded" if fault == "usage" else
+            "other" if fault == "host-other" else "contextWindowExceeded"}
     else:
         assert proof is None
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}

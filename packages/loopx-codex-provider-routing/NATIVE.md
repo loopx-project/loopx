@@ -48,6 +48,12 @@ runs with its serving LoopX process and rehydrates the saved opt-in on restart.
 Client restart is a separate permission, off by default and absent from older
 policies. Enabling it also permits a subsequent explicit manual switch to quit
 and reopen the GPT instance. Neither permission is enabled by installation.
+**Force quit GPT if normal quit fails** is a further, default-off permission.
+When enabled, normal refusal or timeout automatically force-quits only the
+observed GPT launch, then continues switching and reopening without another
+confirmation. The PID, executable, launch date, selection and quota freshness
+must still match. Other CLI/file owners remain holds. Force quit can interrupt
+work in that instance; it does not authorize replay of submitted jobs.
 An operator-owned service independent of the App can run the same observer:
 
 ```sh
@@ -61,7 +67,7 @@ revisions from `status`:
 
 ```sh
 loopx-codex-accounts configure <<'JSON'
-{"expected_revision":0,"enabled":true,"restart_clients":true,"slots":["a","b"]}
+{"expected_revision":0,"enabled":true,"restart_clients":true,"force_quit_clients":true,"slots":["a","b"]}
 JSON
 loopx-codex-accounts refresh
 ```
@@ -81,6 +87,10 @@ native sign-in or inspection; this never qualifies it for automatic selection.
 
 Usage checks use verified HTTPS without model calls, bound response size and
 refuse redirects. Schema drift/network failure means unknown, never exhausted.
+If the HTTP transport fails and the host already configures a SOCKS route,
+the provider can use its installed curl transport for the same fixed HTTPS
+quota endpoint. Proxy and authorization headers travel on stdin, never argv or
+logs. It does not change proxy settings or retry HTTP authentication denials.
 The active native client owns its login refresh. A distinct inactive account
 can refresh through an isolated official App Server; rotated bytes are saved
 only to that slot under native locks after identity and selection checks. No
@@ -105,6 +115,9 @@ ring with a five-minute cooldown. An external native/manual choice wins and
 starts a cooldown. Busy clients defer; refused/changed clients and remaining
 file owners pause further shutdowns. Other repeated failures stop after three
 attempts until an explicit check/reconnect. Resets require new observations.
+A paused observer still reads native selection metadata: a later native/manual
+choice invalidates the old account observations and failure pause, then starts
+the usual cooldown without another shutdown attempt.
 All-unavailable accounts are checked again at the next reset or within five
 minutes; unknown observations retry within one minute. These are bounded usage
 reads, not model probes. The managed extension's enable/disable controls its
@@ -129,6 +142,17 @@ history stay outside the transaction. Reopening failure is reported after
 committed selection, without switching again.
 The same checks reject expired automatic quota evidence before shutting down or
 writing credentials. A manual/native choice during exit or launch wins.
+
+Private Bot requests that failed with `usageLimitExceeded` can continue through
+their original delivery worker after fresh usable allowance is independently
+observed. Admission requires the exact original user-only native inventory,
+unchanged source and grant, idle canonical queue, bounded backoff and a durable
+per-request attempt identity. A tool, answer, correction, unknown inventory or
+unavailable allowance prevents continuation. The old failure remains immutable;
+the new Turn resumes the same Session, and its idle model client reloads the
+current login. This path requires the optional provider's availability policy
+in the Bot's Python environment; it never replays the failed Turn or delegates
+business work from a repair Agent.
 
 ## Disable, upgrade and rollback
 
@@ -176,3 +200,19 @@ visible even when the account list continues below the viewport.
 ![Packaged desktop account settings](docs/assets/native-accounts-desktop.png)
 
 [Narrow account settings](docs/assets/native-accounts-phone.png)
+
+### Force-quit settings / 自动强关设置
+
+The packaged settings page persists the optional permission and describes the
+interruption effect before selection. These screenshots use synthetic A/B
+accounts through the shipped HTTP service, native policy and private state
+owner; they do not show a live credential transaction. Unknown quota was also
+exercised, followed by a fresh successful check without changing the account.
+
+设置页保存可选强关授权，并在选择前说明中断效果。下图通过实际打包网页、HTTP
+服务、原生策略和私有状态 owner 验收，账号 A/B 为合成数据，不代表真实凭据切换。
+另已验收额度未知及重新检查恢复；未知期间没有换号。
+
+![Desktop force-quit settings / 桌面强关设置](docs/assets/native-accounts-force-desktop.png)
+
+![Narrow settings / 窄屏设置](docs/assets/native-accounts-force-narrow.png)

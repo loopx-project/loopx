@@ -13,14 +13,17 @@ from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 from loopx.extensions.lark.private_progress import presentation_phase
 
 
+@pytest.mark.parametrize("recovery_kind", ["routing", "quota"])
 @pytest.mark.parametrize("profile", ["notes-app", "steward-app"])
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "unknown-effects",
     "reservation-crash", "post-enqueue-crash"])
-def test_original_scanner_recovers_across_another_failure_and_restart(steward, monkeypatch, profile, fault):  # noqa: F811
+def test_original_scanner_recovers_across_another_failure_and_restart(steward, monkeypatch, profile, fault, recovery_kind):  # noqa: F811
     store, runtime, provider, transport, _, capture, _ = steward
     fake = Path(runtime.codex_bin)
-    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "other"')
+    native_error = "usageLimitExceeded" if recovery_kind == "quota" else "other"
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', f'"codexErrorInfo": "{native_error}"')
     source = source.replace('"private-fixture-upstream-detail"',
+        '"Subscription allowance exhausted"' if recovery_kind == "quota" else
         '"Error running remote compact task: workspace routing discovery timed out"')
     source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
     fake.write_text(source)
@@ -46,8 +49,9 @@ def test_original_scanner_recovers_across_another_failure_and_restart(steward, m
     monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
     monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **kw: None
         if fault == "unknown-effects" else {"thread_id": "durable-thread", "turn_id": kw["turn_id"],
-            "codex_error_info": "other", "pre_execution_routing_timeout": True,
-            "only_pre_execution_items": True, "only_original_user_item": False}))
+            "codex_error_info": native_error, "pre_execution_routing_timeout": recovery_kind == "routing",
+            "only_pre_execution_items": recovery_kind == "routing", "only_original_user_item": recovery_kind == "quota",
+            "quota_available": True, "quota_observed_at": int(clock[0].timestamp() * 1000) / 1000}))
     if fault == "changed-source":
         provider.messages[event["message_id"]]["content"] = "Changed requirement"
     elif fault == "revoked":
@@ -76,8 +80,8 @@ def test_original_scanner_recovers_across_another_failure_and_restart(steward, m
         assert not continued.get("context_recovery")
         assert failed_path.read_bytes() == original_bytes
         return
-    assert continued["turn_id"] != original["turn_id"]
-    assert continued["context_recovery"]["routing_attempt"] == 1
+    assert continued["turn_id"] != original["turn_id"], first.core._context_recovery_plan(original, observation=CodexAppServerAdapter.failed_request_observation(turn_id="active"), source_verified=True)
+    assert continued["context_recovery"][f"{recovery_kind}_attempt"] == 1
     assert finish(runtime, continued)["status"] == "failed"
     first.reconcile_request(path)
     assert first.core.read_request(ref)["delivery_verified"]
@@ -91,7 +95,7 @@ def test_original_scanner_recovers_across_another_failure_and_restart(steward, m
     second = restarted_worker()
     second.reconcile()
     recovered = second.core.read_request(ref)
-    assert recovered["context_recovery"]["routing_attempt"] == 2, second.core._context_recovery_plan(recovered)
+    assert recovered["context_recovery"][f"{recovery_kind}_attempt"] == 2, second.core._context_recovery_plan(recovered)
     assert recovered["context_recovery_history"] == [continued["context_recovery"]]
     assert recovered["session_id"] == original["session_id"]
     assert finish(runtime, recovered)["status"] == "completed"

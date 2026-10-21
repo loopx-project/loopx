@@ -110,7 +110,8 @@ class NativeAccounts:
         if self.path.exists():
             return private_read(self.path)
         return {"schema_version": SCHEMA, "revision": 0,
-                "policy": {"enabled": False, "slots": [], "cooldown_seconds": 300, "restart_clients": False},
+                "policy": {"enabled": False, "slots": [], "cooldown_seconds": 300,
+                           "restart_clients": False, "force_quit_clients": False},
                 "observations": [], "last_switch_at": None, "action": "disabled"}
 
     @contextmanager
@@ -162,10 +163,12 @@ class NativeAccounts:
         return self._projection(state, native)
 
     def configure(self, *, expected_revision: int, enabled: bool, slots: list[str], reconnect: bool = False,
-                  restart_clients: bool | None = None) -> dict:
+                  restart_clients: bool | None = None, force_quit_clients: bool | None = None) -> dict:
         if type(enabled) is not bool or not isinstance(slots, list) or len(slots) > 16 or len(slots) != len(set(slots)):
             raise HostError("invalid_policy")
         if restart_clients is not None and type(restart_clients) is not bool:
+            raise HostError("invalid_policy")
+        if force_quit_clients is not None and type(force_quit_clients) is not bool:
             raise HostError("invalid_policy")
         # Stop requests fence new effects at the Watcher first, then persist
         # after an already dispatched atomic switch finishes. Other mutations
@@ -188,7 +191,9 @@ class NativeAccounts:
                 state.update(adapter=adapter, native=native)
             state.update(policy={"enabled": enabled, "slots": slots, "cooldown_seconds": 300,
                                  "restart_clients": restart_clients if restart_clients is not None
-                                 else state["policy"].get("restart_clients", False)},
+                                 else state["policy"].get("restart_clients", False),
+                                 "force_quit_clients": force_quit_clients if force_quit_clients is not None
+                                 else state["policy"].get("force_quit_clients", False)},
                          revision=state["revision"] + 1, retry_at=None, code=None,
                          intent=pending if pending.get("handoff_receipt") else None,
                          action="checking" if enabled else "disabled", failure_count=0)
@@ -207,8 +212,6 @@ class NativeAccounts:
             if not state["policy"]["enabled"] and not refresh and not manual_slot and not state.get("intent"):
                 return self._projection(state)
             if not refresh and not manual_slot and now < (state.get("retry_at") or 0):
-                return self._projection(state)
-            if state.get("failure_count", 0) >= 3 and not refresh and not manual_slot:
                 return self._projection(state)
             if "adapter" not in state:
                 # An explicit check/manual choice can connect existing slots
@@ -262,6 +265,13 @@ class NativeAccounts:
                     return self._projection(state)
                 if native["current_login_matches"] is not True:
                     raise HostError("selection_changed")
+                # A paused effect must still notice the native owner's later
+                # selection. Otherwise a manual change leaves the observer
+                # permanently attached to the account that failed shutdown.
+                # Only status/readback runs while paused; unchanged selection
+                # must not retry usage refresh, client shutdown or switching.
+                if state.get("failure_count", 0) >= 3 and not refresh and not manual_slot:
+                    return self._projection(state)
                 # Inspect the active account even when it is not an authorized
                 # destination. Candidates stay strictly inside the allowlist.
                 slots = list(dict.fromkeys([native["active_slot"], *state["policy"]["slots"]]))
@@ -288,7 +298,9 @@ class NativeAccounts:
                     # Native owner rechecks the same fence inside its transaction.
                     state["intent"] = {"id": operation_id or uuid.uuid4().hex,
                                        "source_revision": native["selection_revision"], "target": decision["target"]}
-                    effects = {"restart_clients": decision["restart_clients"], "not_after": decision["valid_until"]}
+                    effects = {"restart_clients": decision["restart_clients"],
+                               "force_quit_clients": decision["force_quit_clients"],
+                               "not_after": decision["valid_until"]}
                     if decision["restart_clients"]:
                         directory = self.root / "handoffs"
                         if directory.is_symlink():

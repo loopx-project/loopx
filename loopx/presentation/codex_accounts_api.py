@@ -99,7 +99,7 @@ class CodexAccountsRequestMixin:
             if set(body) != {"operation", "parameters"} or not isinstance(body["parameters"], dict):
                 raise ValueError("Invalid account operation")
             operation, parameters = body["operation"], body["parameters"]
-            fields = {"configure": {"expected_revision", "enabled", "slots", "reconnect", "restart_clients"},
+            fields = {"configure": {"expected_revision", "enabled", "slots", "reconnect", "restart_clients", "force_quit_clients"},
                       "switch": {"manual_slot", "expected_selection", "operation_id"},
                       "recover": {"expected_revision", "expected_selection"}, "rollback": {"expected_revision", "expected_selection"},
                       "reopen": {"expected_selection"}, "refresh": set()}
