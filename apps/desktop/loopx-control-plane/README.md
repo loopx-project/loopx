@@ -60,6 +60,11 @@ continue beyond thirty seconds; stalled headers or body reads remain bounded.
 The archive client limits apply only after feed discovery; the feed keeps its
 existing check deadline (45 seconds manually, 30 seconds in the background).
 Signature verification still precedes cache publication or installation.
+The existing recovery and workspace update panels distinguish a download timeout,
+an interrupted network request, an unavailable package and a rejected signature.
+They keep the coarse cause and retry action without exposing transport URLs or
+signature diagnostics. Unclassified failures retain the general download/verification
+message; a failure never certifies that an update was installed.
 Progress and failures use the
 existing update panel; background IO does not hold the service supervisor or
 restart a running workspace.
@@ -69,6 +74,10 @@ restart a running workspace.
 启用，清单仍保留手动四十五秒、后台三十秒的原期限。签名通过后
 才写入准备缓存或安装。现有更新面板显示进度与失败，后台下载不阻塞服务监督或重启
 正在使用的工作区。
+
+启动恢复页与工作区更新面板分别提示下载超时、网络请求失败、安装包不可用和签名
+校验失败，只展示可操作的原因与重试入口，不暴露传输地址或签名内部错误。
+无法分类的失败仍保留通用提示，失败不会被显示为已安装。
 
 Startup automatically uses the newest qualified local runtime it can establish.
 It compares package versions; equal versions with source revisions use ancestry

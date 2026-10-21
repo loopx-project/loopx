@@ -227,6 +227,51 @@ try {
   checkUpToDate = false;
   fastInstallFailure = false;
 
+  nativeState = { phase: "error", details: { code: "update_download_or_signature_failed" } };
+  const beforeGeneralFailure = calls.length;
+  await page.reload();
+  await page.getByRole("button", { name: "更新需重试", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: /更新包下载或签名校验失败，尚未安装/ }).waitFor();
+  assert.equal(calls.length, beforeGeneralFailure, "unclassified native failures remain readable without effects");
+  await page.screenshot({ path: resolve(output, "update-generic-failure.png") });
+
+  // A read of a specific native transfer failure never retries installation.
+  // Only the owner's check action can discover a fresh signed candidate.
+  for (const [locale, retryLabel, applyLabel, code, message] of [
+    ["zh-CN", "更新需重试", "更新并准备重启", "update_download_timeout", /更新包下载超时，尚未安装/],
+    ["zh-CN", "更新需重试", "更新并准备重启", "update_signature_invalid", /更新包未通过签名校验，尚未安装/],
+    ["zh-CN", "更新需重试", "更新并准备重启", "update_download_failed", /更新服务器未能提供安装包，尚未安装/],
+    ["en", "Retry update", "Install update", "update_download_timeout", /update download timed out; nothing was installed/],
+    ["en", "Retry update", "Install update", "update_signature_invalid", /update package failed signature verification; nothing was installed/],
+    ["en", "Retry update", "Install update", "update_network_failed", /update request failed; nothing was installed/],
+  ]) {
+    nativeState = { phase: "error", details: { code } };
+    await page.evaluate((nextLocale) => localStorage.setItem("loopx-pw-locale", nextLocale), locale);
+    const beforeFailureRead = calls.length;
+    await page.reload();
+    await page.getByRole("button", { name: retryLabel, exact: true }).click();
+    await page.getByRole("status").filter({ hasText: message }).waitFor({ timeout: 2000 });
+    assert.equal(calls.length, beforeFailureRead, "reading a failure must not retry or install");
+    assert.equal(await page.getByRole("button", { name: applyLabel, exact: true }).count(), 0);
+    if (code === "update_signature_invalid" && locale === "zh-CN") {
+      await page.screenshot({ path: resolve(output, "update-signature-failure.png") });
+    }
+    const checkLabel = locale === "zh-CN" ? "检查更新" : "Check for updates";
+    await page.getByRole("button", { name: checkLabel, exact: true }).click();
+    await page.getByRole("button", { name: applyLabel, exact: true }).waitFor();
+    assert.deepEqual(calls.slice(beforeFailureRead).map((call) => call.args.action), ["check"]);
+  }
+  await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
+  nativeState = { phase: "error", details: { code: "update_download_timeout" } };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.getByRole("button", { name: "打开 Goal 导航" }).click();
+  await page.getByRole("button", { name: "更新需重试", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: /更新包下载超时，尚未安装/ }).waitFor();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: resolve(output, "update-download-timeout-mobile.png") });
+  await page.setViewportSize({ width: 1280, height: 900 });
+
   // Restore failures retain the native cause instead of suggesting a Repair
   // action that this independently managed runtime cannot perform.
   nativeRuntimeSelection = { explicit: true, bundled_repair_available: false };
@@ -316,7 +361,7 @@ try {
   nativeState = { phase: "idle", details: {} };
   await page.reload();
   await page.getByRole("button", { name: "更新 LoopX", exact: true }).click();
-  await page.getByText(/App 启动时会检查并安装当前通道/).waitFor();
+  await page.getByText(/先打开本地版本，更新在后台准备，下次打开时生效/).waitFor();
   await page.getByText("高级选项", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "修复当前版本", exact: true }).isEnabled(), true, "legacy native status retains its available repair action");
 
@@ -439,7 +484,7 @@ try {
   // its error projection (fresh Mac without Python 3.11+: installer exit 2),
   // not the pre-fix permanent loading shape. The projection is derived by the
   // page from desktop_update_status itself.
-  environmentTelemetry = { os_version: "26.5", arch: "aarch64", runtime_executable_found: false, python3_found: false, python3_version: null };
+  environmentTelemetry = { os_version: "26.5", arch: "aarch64", runtime_executable_found: false, python3_found: false, python3_version: null, node_found: null, node_version: null };
   nativeState = { phase: "error", details: { code: "runtime_install_exit_2" } };
   await page.reload();
   await page.waitForFunction(() => document.querySelector("main").dataset.state === "error");
@@ -466,6 +511,20 @@ try {
   nativeState = { phase: "runtime_required", details: { code: "runtime_setup_required" } };
   await page.waitForFunction(() => document.querySelector("main").dataset.state === "error" && document.querySelector("#status").innerText.includes("请修复当前版本，成功后重启"));
   environmentTelemetry = null;
+  const beforeBootFailures = calls.length;
+  for (const [code, message] of [
+    ["update_download_timeout", /更新包下载超时，尚未安装/],
+    ["update_signature_invalid", /更新包未通过签名校验，尚未安装/],
+  ]) {
+    nativeState = { phase: "error", details: { code } };
+    await page.locator("#update-status").filter({ hasText: message }).waitFor();
+    assert.match(await page.locator("#status").innerText(), message);
+    assert.equal(JSON.parse(await page.locator("#diagnostics").inputValue()).error_code, code);
+    assert.equal(await page.locator("#update").innerText(), "检查更新 / Check for updates");
+    assert.equal(await page.locator("#update").isEnabled(), true);
+    assert.equal(calls.length, beforeBootFailures, "boot failure readback cannot install or retry");
+    if (code === "update_download_timeout") await page.screenshot({ path: resolve(output, "startup-download-timeout.png") });
+  }
   // Production boot surface must expose native installation and service
   // stages even while recovery is collapsed; reload keeps native elapsed time.
   nativeState = { phase: "installing_runtime", details: {} };
