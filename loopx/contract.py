@@ -66,6 +66,9 @@ from .control_plane.todos.contract import (
 class LeakRule:
     pattern: re.Pattern[str]
     required_literals: tuple[str, ...]
+    # A rule match is evidence for review, not necessarily a secret. Keep
+    # severity with the existing classification rule, not the runtime gate.
+    blocking: bool = True
 
     def is_candidate(self, folded_text: str) -> bool:
         return any(literal in folded_text for literal in self.required_literals)
@@ -151,6 +154,7 @@ LEAK_RULES = {
             r"|\b192\.168\.\d+\.\d+\b"
         ),
         required_literals=("10.", "172.", "192.168."),
+        blocking=False,
     ),
 }
 LEAK_PATTERNS = {name: rule.pattern for name, rule in LEAK_RULES.items()}
@@ -999,14 +1003,15 @@ def iter_scan_files(
 def scan_public_boundary(
     scan_roots: list[Path], *, registry: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Scan the requested trees and report what was found, and what was not read.
+    """Check selected outgoing content, preserving findings and unread inputs.
 
-    ``ok`` answers only "no private material was found in the files this scan
-    read", so a caller that must fail closed has to act on ``missing_scan_roots``
-    and ``unreadable_directories`` as well; ``check_contract`` does that for the
-    shipped CLI entry points.
+    ``hits`` retains rule locations; ``blocking_hits`` excludes ambiguous IP
+    advisories. ``ok`` requires no blocker or unread input. It
+    never certifies an unrequested file, generated text or future publication.
     """
     hits: list[str] = []
+    blocking_hits: list[str] = []
+    advisory_hits: list[str] = []
     allowed_hits: list[str] = []
     private_state_git_warnings: list[str] = []
     skipped_private_state_files: list[str] = []
@@ -1018,6 +1023,11 @@ def scan_public_boundary(
     file_roots: dict[Path, Path] = {}
     directory_roots: dict[Path, Path] = {}
     private_files: set[Path] = set()
+
+    def record_hit(hit: str, *, blocking: bool = True) -> None:
+        hits.append(hit)
+        (blocking_hits if blocking else advisory_hits).append(hit)
+
     for scan_root in scan_roots:
         resolved_scan_root = scan_root.resolve()
         if not resolved_scan_root.exists():
@@ -1038,6 +1048,11 @@ def scan_public_boundary(
             classification_root = (
                 _git_worktree_root(resolved_scan_root) or Path(resolved_scan_root.anchor)
             )
+        if _is_local_private_state_path(resolved_scan_root, classification_root):
+            # Explicit outgoing selection cannot turn an ignored private file
+            # or a pruned private directory into a successful empty scan.
+            record_hit(f"{rel_or_abs(resolved_scan_root, classification_root)}: local_private_state")
+            continue
         for file_path in iter_scan_files(
             resolved_scan_root, unreadable_directories=unreadable_directories
         ):
@@ -1069,16 +1084,19 @@ def scan_public_boundary(
                         )
                     continue
                 private_file_git[path] = git
+                record_hit(f"{rel_or_abs(path, root)}: local_private_state")
             yield path
 
     for read in iter_utf8_file_reads(public_files()):
         path = read.path
         root = file_roots.get(path, path)
         git: dict[str, Any] | None = private_file_git.pop(path, None)
-        if isinstance(read.error, UnicodeDecodeError):
-            continue
         if read.error is not None:
-            unreadable_files.append(f"{rel_or_abs(path, root)}: {read.error.strerror or read.error}")
+            detail = (
+                read.error.strerror or type(read.error).__name__
+                if isinstance(read.error, OSError) else "invalid UTF-8"
+            )
+            unreadable_files.append(f"{rel_or_abs(path, root)}: {detail}")
             continue
         text = read.text
         assert text is not None
@@ -1100,7 +1118,7 @@ def scan_public_boundary(
                             and not resolved.startswith(_PUBLIC_NPM_REGISTRY_PREFIX)
                         ):
                             display_package = package_path or "<root>"
-                            hits.append(
+                            record_hit(
                                 f"{rel_or_abs(path, root)}: "
                                 "non_public_package_registry "
                                 f"({display_package})"
@@ -1134,9 +1152,9 @@ def scan_public_boundary(
                     if git is not None and _hit_allowed_by_policy(name, git, policy):
                         allowed_hits.append(hit)
                     else:
-                        hits.append(hit)
+                        record_hit(hit, blocking=rule.blocking)
     return {
-        "ok": not hits,
+        "ok": not (blocking_hits or missing_scan_roots or unreadable_files or unreadable_directories),
         "scan_roots": [str(path) for path in scan_roots],
         "files": len(files),
         "scanned_files": len(files) - len(skipped_private_state_files),
@@ -1153,6 +1171,8 @@ def scan_public_boundary(
         "private_state_git_warnings": private_state_git_warnings,
         "policy": policy,
         "hits": hits,
+        "blocking_hits": blocking_hits,
+        "warnings": advisory_hits + credential_reference_hits,
     }
 
 
@@ -1319,12 +1339,18 @@ def check_contract(
         unreadable_directories = [
             str(item) for item in boundary.get("unreadable_directories") or []
         ]
+        unreadable_files = [str(item) for item in boundary.get("unreadable_files") or []]
+        boundary_warnings = [str(item) for item in boundary.get("warnings") or []]
         public_boundary_scan = {
             "state": "completed",
-            "ok": bool(boundary.get("ok")) and not missing_scan_roots,
+            "ok": bool(boundary.get("ok")) and not (
+                missing_scan_roots or unreadable_directories or unreadable_files
+            ),
             "scanned_files": int(boundary.get("scanned_files") or 0),
             "missing_scan_roots": missing_scan_roots,
             "unreadable_directories": unreadable_directories,
+            "unreadable_files": unreadable_files,
+            "warnings": boundary_warnings,
         }
         for missing_root in missing_scan_roots:
             add_global_error(
@@ -1336,11 +1362,18 @@ def check_contract(
                 "public_boundary_scan_directory_unreadable",
                 f"scan directory could not be listed: {unreadable_directory}",
             )
-        if boundary.get("ok") and not missing_scan_roots and not unreadable_directories:
-            checks.append(f"public boundary scan clean: {boundary.get('scanned_files')} files")
+        for unreadable_file in unreadable_files:
+            add_global_error(
+                "public_boundary_scan_file_unreadable",
+                f"scan file could not be read: {unreadable_file}",
+            )
+        if public_boundary_scan["ok"]:
+            label = "completed with warnings" if boundary_warnings else "clean"
+            checks.append(f"public boundary scan {label}: {boundary.get('scanned_files')} files")
         else:
-            for hit in boundary.get("hits") or []:
+            for hit in boundary.get("blocking_hits", boundary.get("hits")) or []:
                 add_global_error("public_boundary_violation", str(hit))
+        warnings.extend(boundary_warnings)
         if boundary.get("skipped_private_state_files"):
             checks.append(
                 "private state scan skipped: "
@@ -1357,9 +1390,6 @@ def check_contract(
                 "credential references downgraded: "
                 f"{len(boundary.get('credential_reference_hits') or [])} non-literal hits"
             )
-        warnings.extend(
-            f"unreadable file skipped: {item}" for item in boundary.get("unreadable_files") or []
-        )
     else:
         public_boundary_scan = {
             "state": "deferred",

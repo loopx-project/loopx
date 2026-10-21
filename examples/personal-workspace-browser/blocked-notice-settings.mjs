@@ -40,7 +40,7 @@ export const blockedNoticeSettingsScenario = {
     try {
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
-      await page.getByRole("radio", { name: "单个 Goal", exact: true }).check();
+      await page.getByRole("radio", { name: "Goal 设置", exact: true }).check();
       await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("product-release");
       await page.getByRole("navigation", { name: "Goal 能力目录" })
         .getByRole("button", { name: /飞书事件收件箱/ }).click();
@@ -72,10 +72,12 @@ export const blockedNoticeSettingsScenario = {
       }
       await page.reload({ waitUntil: "networkidle" });
       if (!await toggle.isVisible()) {
-        await page.getByRole("button", { name: "打开 Goal 导航", exact: true }).click();
-        await page.getByRole("button", { name: "设置", exact: true }).click();
-        await page.getByRole("button", { name: "能力中心", exact: true }).click();
-        await page.getByRole("radio", { name: "单个 Goal", exact: true }).check();
+        if (!await page.locator(".personal-settings-page").isVisible()) {
+          await page.getByRole("button", { name: "打开 Goal 导航", exact: true }).click();
+          await page.getByRole("button", { name: "设置", exact: true }).click();
+        }
+        await page.locator(".personal-settings-mobile-category select").selectOption("capabilities");
+        await page.getByRole("radio", { name: "Goal 设置", exact: true }).check();
         await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("product-release");
         await page.getByRole("navigation", { name: "Goal 能力目录" })
           .getByRole("button", { name: /飞书事件收件箱/ }).click();

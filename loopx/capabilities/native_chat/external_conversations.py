@@ -68,7 +68,8 @@ class ChatExternalConversations:
             selected_binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
         reservation = row.get("context_recovery") or {}
         admitted = (store.turn_for_client(session["session_id"], reservation["client_turn_id"])
-            if reservation.get("routing_attempt") and reservation.get("failed_turn_id") == row["turn_id"] else None)
+            if (reservation.get("routing_attempt") or reservation.get("quota_attempt"))
+            and reservation.get("failed_turn_id") == row["turn_id"] else None)
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
@@ -122,10 +123,11 @@ class ChatExternalConversations:
                 session = self.controller.store.load_session(row["session_id"])
                 turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
                 assert session is not None and turn is not None
-                self.controller._check_codex_home(session)
+                model_auth_home = self.controller._check_codex_home(session)
                 context = self.controller.project_contexts.session_context(session)
                 proof = None if plan.get("admitted_turn_id") else CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
+                    model_auth_home=model_auth_home,
                     thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                 selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
                 source = source_observation(selected)
@@ -140,10 +142,11 @@ class ChatExternalConversations:
                         "native_observation": proof, "source_observation": source,
                         "client_turn_id": plan["client_turn_id"],
                         "failure_notice_delivery_verified": row["delivery_verified"]}
-                    if plan.get("routing_attempt") is not None:
-                        recovery.update(routing_attempt=plan["routing_attempt"],
-                            presentation_key=f"{MANAGER_CONTEXT_VERSION}.routing.{plan['routing_attempt']}",
-                            not_before=plan["not_before"])
+                    for kind in ("routing", "quota"):
+                        if plan.get(f"{kind}_attempt") is not None:
+                            recovery.update({f"{kind}_attempt": plan[f"{kind}_attempt"],
+                                "presentation_key": f"{MANAGER_CONTEXT_VERSION}.{kind}.{plan[f'{kind}_attempt']}",
+                                "not_before": plan["not_before"]})
                     row["context_recovery"] = recovery
                     _atomic_write_json(path, row)
                 # Freeze correlation before the existing queue can dispatch.
@@ -163,7 +166,7 @@ class ChatExternalConversations:
             return row
 
     def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
-        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-routing-[1-3])?", str(turn.get("client_turn_id") or ""))
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-(?:routing|quota)-[1-3])?", str(turn.get("client_turn_id") or ""))
         if match is None:
             return None
         row = self.read_request(match[1])

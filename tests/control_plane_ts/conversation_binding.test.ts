@@ -17,8 +17,8 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
-for (const kind of ["project", "steward"]) {
-  test(`${kind} routing recovery is bounded, source-bound and independent of context migrations`, () => {
+for (const kind of ["project", "steward"]) for (const retryKind of ["routing", "quota"]) {
+  test(`${kind} ${retryKind} recovery is bounded, source-bound and independent of context migrations`, () => {
     const selected = kind === "steward" ? {...row, context_kind: kind, grant: "portfolio_read", goal_ids: []} : row;
     const configured = planConversationBinding({...request, binding: selected}).state;
     const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
@@ -33,6 +33,13 @@ for (const kind of ["project", "steward"]) {
       response: null, error_code: "host_gate", upstream_turn_id: "native-failed", completed_at: "2026-01-01T00:00:00Z"};
     const observed = {thread_id: "native", turn_id: "native-failed", codex_error_info: "other",
       pre_execution_routing_timeout: true, only_pre_execution_items: true, only_original_user_item: false};
+    const attemptKey = `${retryKind}_attempt`;
+    if (retryKind === "quota") {
+      Object.assign(failed, {error_code: "usage_limit_exceeded"});
+      Object.assign(observed, {codex_error_info: "usageLimitExceeded", only_original_user_item: true,
+        pre_execution_routing_timeout: false, only_pre_execution_items: false, quota_available: true,
+        quota_observed_at: Date.parse("2026-01-01T00:10:00Z") / 1000});
+    }
     const packet = {request: {request_ref: "f".repeat(24), command: null, status: "accepted", delivery_verified: true,
       message: "Original synthetic request", origin: "lark",
       binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
@@ -40,9 +47,9 @@ for (const kind of ["project", "steward"]) {
         observed_at: "2026-01-01T00:10:00Z", steering_observed: false, source_verified: true, native_observation: observed}};
     const plan = planBoundConversationRequest(packet);
     assert.equal(plan.recovery_eligible, true);
-    assert.equal(plan.routing_attempt, 1);
+    assert.equal(plan[attemptKey], 1);
     assert.equal(plan.not_before, "2026-01-01T00:01:00.000Z");
-    const reservation = {version: 21, failed_turn_id: "failed", routing_attempt: 1, client_turn_id: plan.client_turn_id};
+    const reservation = {version: 21, failed_turn_id: "failed", [attemptKey]: 1, client_turn_id: plan.client_turn_id};
     assert.deepEqual(planBoundConversationRequest({...packet, request: {...packet.request, context_recovery: reservation}}), plan);
     const admitted = {session_id: "original", turn_id: "already-admitted", client_turn_id: plan.client_turn_id,
       message: packet.request.message, origin: "lark", status: "completed", attachments: []};
@@ -57,13 +64,19 @@ for (const kind of ["project", "steward"]) {
     }
     const next = {...packet, request: {...packet.request, turn_id: "next", context_recovery: reservation},
       context_recovery: {...packet.context_recovery, failed_turn: {...failed, turn_id: "next"}}};
-    assert.equal(planBoundConversationRequest(next).routing_attempt, 2);
+    assert.equal(planBoundConversationRequest(next)[attemptKey], 2);
     assert.equal(planBoundConversationRequest(next).not_before, "2026-01-01T00:02:00.000Z");
     assert.equal(planBoundConversationRequest({...next, request: {...next.request,
-      context_recovery: {...reservation, routing_attempt: 3}}}).recovery_candidate, false);
+      context_recovery: {...reservation, [attemptKey]: 3}}}).recovery_candidate, false);
     for (const change of [{source_verified: false}, {steering_observed: true},
       {observed_at: "2026-01-01T00:00:59Z"}, {observed_at: "invalid"},
-      {native_observation: {...observed, only_pre_execution_items: false}},
+      {native_observation: {...observed, ...(retryKind === "quota"
+        ? {only_original_user_item: false} : {only_pre_execution_items: false})}},
+      ...(retryKind === "quota" ? [
+        {native_observation: {...observed, quota_available: false}},
+        {native_observation: {...observed, quota_observed_at: 0}},
+        {native_observation: {...observed, quota_observed_at: Date.parse("2026-01-01T00:11:00Z") / 1000}},
+      ] : []),
       {native_observation: {...observed, thread_id: "foreign"}},
       {native_observation: {...observed, codex_error_info: "cyberPolicy"}}]) {
       assert.notEqual(planBoundConversationRequest({...packet,

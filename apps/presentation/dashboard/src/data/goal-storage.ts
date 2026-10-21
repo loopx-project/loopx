@@ -49,29 +49,37 @@ export const storageResultSchema = z.object({
 });
 export type StorageResult = z.infer<typeof storageResultSchema>;
 
-async function read(url: string, init?: RequestInit): Promise<StorageResult> {
-  try { return storageResultSchema.parse(await requestJson<unknown>(url, init)); }
+async function read(url: string, goalId: string, init?: RequestInit): Promise<StorageResult> {
+  const bound = (payload: unknown) => {
+    const result = storageResultSchema.parse(payload);
+    if (result.goal_id !== goalId || (result.current && result.current.goal_id !== goalId)
+      || (result.pending_preview && result.pending_preview.goal_id !== goalId)) {
+      throw new Error("Storage response belongs to another Goal");
+    }
+    return result;
+  };
+  try { return bound(await requestJson<unknown>(url, init)); }
   catch (error) {
-    if (error instanceof ChatApiError && error.payload.http_status === 409) return storageResultSchema.parse(error.payload);
+    if (error instanceof ChatApiError && error.payload.http_status === 409) return bound(error.payload);
     throw error;
   }
 }
 export function fetchGoalStorage(goalId: string) {
-  return read(`/api/chat/goal-storage?${new URLSearchParams({goal_id: goalId})}`);
+  return read(`/api/chat/goal-storage?${new URLSearchParams({goal_id: goalId})}`, goalId);
 }
 export function previewGoalStorage(goalId: string, target: MigrationProvider, mode?: "soft_claim" | "hard_lease") {
-  if (mode) return read("/api/chat/goal-storage/import/preview", {method: "POST",
+  if (mode) return read("/api/chat/goal-storage/import/preview", goalId, {method: "POST",
     body: JSON.stringify({goal_id: goalId, provider: target, handoff_mode: mode})});
-  return read("/api/chat/goal-storage/preview", {method: "POST", body: JSON.stringify({goal_id: goalId, provider: target})});
+  return read("/api/chat/goal-storage/preview", goalId, {method: "POST", body: JSON.stringify({goal_id: goalId, provider: target})});
 }
 export function recoverGoalStorage(carrier: StorageCarrier, apply = false) {
   const saved = storageCarrierSchema.parse(carrier);
-  if ("operation_id" in saved) return read(`/api/chat/goal-storage/import/${apply ? "apply" : "recover"}`, {
+  if ("operation_id" in saved) return read(`/api/chat/goal-storage/import/${apply ? "apply" : "recover"}`, saved.goal_id, {
     method: "POST", body: JSON.stringify({...saved, ...(apply ? {writers_stopped: true} : {})})});
-  return read(`/api/chat/goal-storage/${apply ? "apply" : "recover"}`, {method: "POST", body: JSON.stringify(storageCarrierSchema.parse(carrier))});
+  return read(`/api/chat/goal-storage/${apply ? "apply" : "recover"}`, saved.goal_id, {method: "POST", body: JSON.stringify(storageCarrierSchema.parse(carrier))});
 }
 export function discardGoalStorage(carrier: StorageCarrier) {
-  return read("/api/chat/goal-storage/discard", {
+  return read("/api/chat/goal-storage/discard", carrier.goal_id, {
     method: "POST", body: JSON.stringify(storageCarrierSchema.parse(carrier)),
   });
 }

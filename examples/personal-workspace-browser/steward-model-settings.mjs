@@ -81,8 +81,9 @@ export const stewardModelSettingsScenario = {
       for (let attempt = 0; attempt < 50 && capabilityReads === readsBeforeApply; attempt += 1) await page.waitForTimeout(100);
       if (capabilityReads === readsBeforeApply) throw new Error("Applying settings did not refresh the owning channel projection");
       await page.setViewportSize({ width: 390, height: 844 });
-      await stewardTab.waitFor({ state: "visible" });
-      if (await stewardTab.getAttribute("aria-current") !== "page") {
+      const narrowCategory = page.locator(".personal-settings-mobile-category select");
+      await narrowCategory.waitFor({ state: "visible" });
+      if (await narrowCategory.inputValue() !== "steward") {
         throw new Error("Steward section was lost in the narrow settings navigation");
       }
       await page.screenshot({ path: resolve(outputDir, "steward-model-settings-mobile.png"), fullPage: false, animations: "disabled" });

@@ -845,6 +845,16 @@ class ChatRuntimeController:
             # A context/tool refresh cannot discard a native Goal and its usage.
             # Keep this binding; a new Session explicitly selects new tools.
             and session.get("upstream_mode") != CODEX_GOAL_CHAT_MODE)
+        # A quota continuation may follow an account handoff. Retire only the
+        # idle adapter for this admitted queued request so its replacement reads
+        # the current login while resuming the same native thread and history.
+        quota_recovery = False
+        if (active and active.get("status") == "queued" and active.get("turn_id") == accepted_turn_id
+                and self.project_contexts.conversation_bindings is not None
+                and "-quota-" in str(active.get("client_turn_id") or "")):
+            from .capabilities.native_chat.external_conversations import ChatExternalConversations
+            recovery = ChatExternalConversations(self).recovery_context(session, active)
+            quota_recovery = bool(recovery and recovery.get("quota_attempt"))
         with self.lock:
             current = self.adapters.get(session_id)
             manager_profile_changed = bool(
@@ -862,6 +872,7 @@ class ChatRuntimeController:
                 current is not None
                 and current.healthcheck()
                 and not manager_profile_changed
+                and not quota_recovery
                 and model_allocation is None
             ):
                 reusable = current

@@ -195,6 +195,7 @@ export function LarkSettingsPage({
   onOpenOriginalConversation,
   embedded = false,
   focusGoalConnection = false,
+  goalScope,
   goals,
   initialGoalId,
   onChanged,
@@ -202,6 +203,7 @@ export function LarkSettingsPage({
 }: {
   embedded?: boolean;
   focusGoalConnection?: boolean;
+  goalScope?: string;
   goals: WorkspaceGoal[];
   initialGoalId?: string | null;
   onChanged?: () => void;
@@ -389,25 +391,26 @@ export function LarkSettingsPage({
   const selectedApp = apps.find((app) => app.app_ref === appRef);
   const selectedChat = chats.find((chat) => chat.chat_id === chatId);
   const filteredConnections = useMemo(() => {
+    const scoped = goalScope ? connections.filter(connection => connection.goal_id === goalScope && connection.conversation_kind !== "manager") : connections;
     const keyword = query.trim().toLocaleLowerCase();
-    if (!keyword) return connections;
-    return connections.filter((connection) => [
+    if (!keyword) return scoped;
+    return scoped.filter((connection) => [
       connection.app_label,
       connection.chat_name,
       connection.goal_title,
       connection.topic_name,
     ].some((value) => value.toLocaleLowerCase().includes(keyword)));
-  }, [connections, query]);
+  }, [connections, query, goalScope]);
   const unverifiedRouteCount = useMemo(
-    () => connections.filter((connection) => larkConnectionHealth(connection, t).state === "unverified").length,
-    [connections, t],
+    () => filteredConnections.filter((connection) => larkConnectionHealth(connection, t).state === "unverified").length,
+    [filteredConnections, t],
   );
 
   function openConnect(goal?: WorkspaceGoal) {
     const nextGoal = goal ?? goals.find((item) => item.goalId === initialGoalId) ?? goals[0];
     setEditingGoalId(null);
     setEditingConnection(null);
-    setConversationKind(goal || focusGoalConnection ? "goal" : "manager");
+    setConversationKind(goalScope || goal || focusGoalConnection ? "goal" : "manager");
     setAppRef(apps.some((app) => app.app_ref === appRef) ? appRef : apps.find((app) => app.reply_ready)?.app_ref ?? apps[0]?.app_ref ?? "");
     setChatId("");
     setGoalId(nextGoal?.goalId ?? "");
@@ -425,6 +428,7 @@ export function LarkSettingsPage({
   }
 
   function openConnectionEditor(connection: LarkGoalConnection) {
+    if (goalScope && (connection.goal_id !== goalScope || connection.conversation_kind === "manager")) return;
     setEditingGoalId(connection.goal_id);
     setEditingConnection(connection);
     setConversationKind(connection.conversation_kind ?? "goal");
@@ -488,6 +492,7 @@ export function LarkSettingsPage({
   }
 
   async function connect() {
+    if (goalScope && (goalId !== goalScope || conversationKind !== "goal")) return;
     if (!appRef || !goalId || (!editingConnection && !selectedChat) || (conversationKind === "goal" && targetAgentIds.length === 0) || connecting) return;
     setConnecting(true);
     setConnectError(null);
@@ -528,6 +533,7 @@ export function LarkSettingsPage({
   }
 
   async function disconnect(goal: string, connectionId: string) {
+    if (goalScope && goal !== goalScope) return;
     if (disconnectConnectionId !== connectionId) {
       setDisconnectConnectionId(connectionId);
       return;
@@ -554,11 +560,11 @@ export function LarkSettingsPage({
         </header>
       )}
 
-      <nav className="personal-lark-tabs" aria-label={t("lark.management")}>
+      {!goalScope ? <nav className="personal-lark-tabs" aria-label={t("lark.management")}>
         <button aria-current={tab === "apps" ? "page" : undefined} onClick={() => setTab("apps")} type="button">{t("lark.apps")} <span>{appCount}</span></button>
         <button aria-current={tab === "connections" ? "page" : undefined} onClick={() => setTab("connections")} type="button">{t("lark.connections")} <span>{loading ? "…" : connections.length}</span></button>
-      </nav>
-      {tab === "connections" ? <PrivateConversationPanel apps={apps.filter(app => app.ready && app.app_ref !== "default")} onOpenOriginal={onOpenOriginalConversation} /> : null}
+      </nav> : null}
+      {!goalScope && tab === "connections" ? <PrivateConversationPanel apps={apps.filter(app => app.ready && app.app_ref !== "default")} onOpenOriginal={onOpenOriginalConversation} /> : null}
       {error ? <p className="personal-notification-error">{error}</p> : null}
       {appsError ? <p className="personal-notification-error">{larkErrorMessage(appsError, t("lark.error.configuration"), t)}</p> : null}
       {loading ? <div className="personal-lark-loading"><Loader2 className="is-spinning" size={18} />{t("lark.loading")}</div> : null}
@@ -623,7 +629,7 @@ export function LarkSettingsPage({
         <div className="personal-lark-modal-backdrop" role="presentation">
           <section aria-labelledby="connect-lark-title" aria-modal="true" className="personal-lark-modal" role="dialog">
             <header><div><small>Goal Topic connection</small><h2 id="connect-lark-title">{editingGoalId ? t("lark.editConnection") : t("lark.connectApp")}</h2></div><button aria-label={t("lark.closeConnection")} onClick={() => setModalOpen(false)} type="button"><X size={18} /></button></header>
-            <label><span>{t("lark.conversationKind")}</span><select aria-label={t("lark.conversationKind")} disabled={Boolean(editingConnection)} value={conversationKind} onChange={(event) => setConversationKind(event.target.value as "goal" | "manager")}><option value="manager">{t("lark.managerConversation")}</option><option value="goal">{t("lark.workerConversation")}</option></select></label>
+            <label><span>{t("lark.conversationKind")}</span><select aria-label={t("lark.conversationKind")} disabled={Boolean(editingConnection) || Boolean(goalScope)} value={conversationKind} onChange={(event) => setConversationKind(event.target.value as "goal" | "manager")}><option value="manager">{t("lark.managerConversation")}</option><option value="goal">{t("lark.workerConversation")}</option></select></label>
             {conversationKind === "manager" ? <p>{t("lark.managerConversationDescription")}</p> : null}
             {editingConnection ? <>
               <label><span>{t("lark.appProfile")}</span><div>{editingConnection.app_label}</div></label>

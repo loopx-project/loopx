@@ -78,6 +78,7 @@ def collect_turn_status_payload(
         goal_id=args.goal_id,
         available_capabilities=args.available_capabilities,
         agent_lane_id=args.agent_id,
+        include_public_boundary_scan=False,
     )
 
 
@@ -337,7 +338,9 @@ def current_heartbeat_host_launch_decision(
     args = argparse.Namespace(
         goal_id=goal_id, agent_id=agent_id, turn_instance_id=original_turn,
         todo_id=None, codex_app=False, runtime_profile="generic_cli",
-        scan_path=[str(project)], scan_root=str(project), limit=0,
+        # Re-read execution authority, including held receipt identity. Public
+        # disclosure is independently checked by `loopx check`/premerge.
+        scan_path=[], scan_root=str(project), limit=0,
         available_capabilities=["shell", "filesystem_write"],
     )
     selection = load_requested_quota_action_selection(
