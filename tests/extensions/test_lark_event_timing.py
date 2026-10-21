@@ -45,12 +45,15 @@ def test_timing_does_not_authorize_revoked_stop_delivery(completed_group_stop, m
     assert not provider.writes and not provider.reaction_creates
 
 
-@pytest.mark.parametrize("broken_sink", [False, True])
+@pytest.mark.parametrize("broken_sink", [None, False, True], ids=["disabled", "enabled", "unavailable"])
 def test_native_topic_stop_retains_target_delivery_and_duplicate_safety(
     ordinary, tmp_path, monkeypatch, capsys, broken_sink,  # noqa: F811
 ):
     store, runtime, provider, transport = connect_group(ordinary)
-    monkeypatch.setenv("LOOPX_LARK_EVENT_TIMING", "1")
+    if broken_sink is None:
+        monkeypatch.delenv("LOOPX_LARK_EVENT_TIMING", raising=False)
+    else:
+        monkeypatch.setenv("LOOPX_LARK_EVENT_TIMING", "1")
     if broken_sink:
         def failed_print(*_args, **_kwargs):
             raise BrokenPipeError("synthetic unavailable diagnostic sink")
@@ -92,7 +95,7 @@ def test_native_topic_stop_retains_target_delivery_and_duplicate_safety(
         assert len([text for _, _, text in provider.topic_writes
                     if text == "已请求停止这条消息对应的执行。"]) == 1
         assert runtime.wait_for_turn(session_id=native["session_id"], turn_id=native["turn_id"], timeout_sec=5)["status"] == "interrupted"
-        if not broken_sink:
+        if broken_sink is False:
             event_ref = hashlib.sha256(json.dumps(["notes-app", stop["message_id"]]).encode()).hexdigest()
             rows = [row for row in _timings(capsys.readouterr().out) if row["event_ref"] == event_ref]
             stages = {row["stage"]: row["monotonic_ns"] for row in rows}
