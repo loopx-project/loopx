@@ -7,52 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from ...control_plane.capability_hooks import TurnContextHookRegistration
+from ...control_plane.reward_memory import reward_memory_automation_enabled
 from ...control_plane.turn_driver.post_settlement import (
     PostSettlementHookRegistration,
     registered_post_settlement,
 )
-
-
-def reward_memory_automation_enabled(
-    payload: Mapping[str, Any] | None,
-    *,
-    operation: str,
-) -> bool:
-    """Project verified capability automation into the host IO contract.
-
-    The experiment resolver owns enablement, config/receipt verification and
-    provider policy. A recall packet's presence or old context is not opt-in.
-    """
-    if not isinstance(payload, Mapping):
-        return False
-    recall = payload.get("reward_memory_recall")
-    if not isinstance(recall, Mapping):
-        return False
-    experiment = recall.get("experiment")
-    envelope = payload.get("turn_envelope")
-    if not isinstance(experiment, Mapping) or not isinstance(envelope, Mapping):
-        return False
-    boundary = envelope.get("boundary")
-    capabilities = (
-        boundary.get("capabilities") if isinstance(boundary, Mapping) else None
-    )
-    memory = (
-        capabilities.get("reward_memory") if isinstance(capabilities, Mapping) else None
-    )
-    return (
-        isinstance(memory, Mapping)
-        and memory.get(operation) is True
-        # Recall resolves the binding again after admission. A stale envelope
-        # must not resurrect a now unavailable or disabled binding.
-        and experiment.get("enabled") is True
-        and experiment.get("available") is True
-        and experiment.get("configured_for_agent") is True
-        and bool(envelope.get("goal_id"))
-        and experiment.get("goal_id") == envelope.get("goal_id")
-        and bool(envelope.get("agent_id"))
-        and experiment.get("agent_id") == envelope.get("agent_id")
-        and experiment.get(operation) is True
-    )
 
 
 def reward_memory_prompt_instructions(request: Mapping[str, Any]) -> list[str]:

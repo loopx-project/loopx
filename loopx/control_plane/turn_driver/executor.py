@@ -59,7 +59,7 @@ from .recovery import (
 )
 from .post_settlement import PostSettlement, recover_post_settlement, run_post_settlement_callback
 from ..capability_hooks import capability_result_fields, project_turn_context
-from ...capabilities.reward_memory.turn_hooks import reward_memory_automation_enabled
+from ..reward_memory import reward_memory_automation_enabled
 from .session_recovery import (
     SessionBindingResolver,
     build_host_recovery_record,

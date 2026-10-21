@@ -700,11 +700,16 @@ wire decoding; new Host results still require registered context. Recovery
 preserves the original result, validation digest and plan without repeating the
 Host or task validator. Current ingest policy, independent evidence and the
 original settlement/idempotency owners still decide any provider effect.
+The cached reader and capability composition reuse the same verified automation
+fact projection in `control_plane/reward_memory.py`; provider policy is not
+copied into the executor.
 
 中文：恢复注册前的执行日志时，保留已准入的有界反思、原独立证明及原 plan；缺少
 贡献 annotation 的旧缓存仅沿用该结果字段原有的 2,400 字符解码，不重新启动 Host
 或 validator，也不为新 Host 输入开启旧接线。provider 效果仍由当前 ingest 策略、
 独立证据及原结算／去重 owner 判定。
+缓存 reader 和能力组合复用 `control_plane/reward_memory.py` 的同一参与事实投影，
+executor 不复制 provider 策略。
 
 TypeScript binds each contribution to the existing governing signature document
 and its source readback. Capture locations and size diagnostics may change;
