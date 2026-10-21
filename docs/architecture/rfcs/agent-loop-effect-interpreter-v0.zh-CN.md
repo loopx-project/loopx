@@ -440,6 +440,11 @@ File/SQLite 原生 CLI
 覆盖，也不让渲染视图替代原始 capture。
 旧字段访问保留在既有 packet owner；CLI 调用其投影函数，不增加待迁移的旧字段消费者。
 
+验收上下文 adapter 现在对已选定工作复用既有精确 Todo 读取，保留完整 Goal 验收依据
+和累计 outcome，避免再次搬运无关任务的关联观察及选定 Todo 正文。真实 File/SQLite
+CLI 与 DSH 协议输入覆盖已配置检查、仅声明 outcome 两种情形；无选定工作的读取
+仍返回原列表。这只验证局部 IO 边界，不能替代真实模型收益、安装采用或整轮成本。
+
 下一步先调查获准真实 Goal 的活跃工作、peer/replan、等待/恢复和可选能力形态，
 将每条保留义务映射到共享 typed owner 与实际消费者，再完成一族调用方迁移，最后
 退役其旧投影。用同次捕获决策比较 full/thin heartbeat 与 Turn，将必需详情补读、

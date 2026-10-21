@@ -9,11 +9,29 @@ A local-first control plane and research workbench for agents and teams.<br>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=181717)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-181717)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd)
 
-[Why LoopX](#why-loopx) · [See it in action](#see-loopx-in-action) · [Get started](#try-loopx) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
+[Get started](#quick-start) · [Why LoopX](#why-loopx) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
 </div>
 
 ---
+
+<a id="quick-start"></a>
+
+## Start in two steps
+
+With Python 3.11+ and Node.js 22.22.3+ (24 LTS recommended), install once:
+
+```bash
+python3 -m pip install --upgrade loopx && loopx workflow-skills --install
+```
+
+Restart your Agent host, open your project, then give Codex a concrete task:
+
+```text
+$loopx fix the open PR review feedback and keep the patch reviewable
+```
+
+Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgrades ↓](#try-loopx)
 
 <a id="how-it-works"></a>
 
@@ -156,8 +174,6 @@ from this reproducible workspace. [Scenarios and replay instructions](demo/works
 [Watch the full 32-second walkthrough](docs/assets/personal-workspace/loopx-dashboard-launch.mp4)
 · [Read the workspace guide](docs/guides/personal-workspace-user-guide.md)
 · [Try the five-minute tour](docs/guides/personal-workspace-trial-guide.md)
-
-<a id="quick-start"></a>
 
 ## Try LoopX
 

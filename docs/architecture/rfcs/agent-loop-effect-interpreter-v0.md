@@ -638,6 +638,14 @@ coverage or make a rendered view a substitute for the original capture.
 Legacy-field access stays in the existing packet owner; the CLI invokes its
 projection function without adding another legacy migration consumer.
 
+The acceptance-context adapter now uses the existing exact Todo inspection for
+selected work. It retains the complete Goal acceptance basis and cumulative
+outcomes, while avoiding a second inventory of unrelated task-binding
+observations and a second selected-Todo body. File/SQLite CLI and actual DSH
+protocol input cover configured checks and outcomes without checks; Todo-less
+inspection still returns its original inventory. This qualifies the scoped IO
+boundary, not live model benefit, installed adoption or total Turn cost.
+
 Next, inventory authorized real Goal captures across active work, peer/replan,
 wait/recovery and optional-capability shapes, then map each retained clause to
 its shared typed owner and actual consumer. Migrate one complete caller family

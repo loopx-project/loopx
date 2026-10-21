@@ -34,6 +34,20 @@ def legacy_goal_state_file(project: Path, goal_id: str) -> Path:
     return project / LEGACY_PROJECT_GOALS / goal_id / "ACTIVE_GOAL_STATE.md"
 
 
+# Single owner for the goal-id traversal rule; callers keep their own fields and errors.
+def validate_goal_id_path_segment(goal_id: str) -> str:
+    """Return a goal id that is safe to use as one path segment."""
+
+    value = str(goal_id or "").strip()
+    if not value:
+        raise ValueError("goal id is required")
+    if value in {".", ".."} or "/" in value or "\\" in value:
+        raise ValueError("goal id must be a single path segment")
+    if Path(value).name != value:
+        raise ValueError("goal id must not include path traversal")
+    return value
+
+
 def registered_goal_state_file(
     project: Path, goal_id: str, registry: dict[str, object] | None = None
 ) -> Path:

@@ -1352,8 +1352,8 @@ whose native error is `other`, only when the stable native inventory proves
 there was exactly the original user input and no execution item. It resumes the
 existing thread, without a history migration or error-message text matching.
 This proves absence of execution, not provider health or eventual success. A
-terminal Core failure is returned and retained; it cannot enqueue another
-continuation.
+terminal Core failure on this unclassified-host/context-migration path is
+returned and retained; it cannot enqueue another continuation on that path.
 
 The existing in-flight transport retry also recognizes the exact native
 `other` diagnostic `workspace routing discovery timed out`. This provider hint
@@ -1364,6 +1364,23 @@ holds. It reuses the original Core Turn, input, Session and three-retry/backoff
 budget; it never reopens a terminal historical request or resets a reservation
 after restart. Native error prose is not copied into the retry journal. Existing
 App and Lark retry progress and final readback expose the same request's outcome.
+
+After those in-flight retries end, the original private reply worker can also
+recover a proven routing outage for ordinary project assistants and stewards.
+The exact diagnostic above, or its native remote-compaction wrapper, must be
+independently read back from the latest failed native Turn. Its complete stable
+inventory may contain only one user input and native compaction bookkeeping;
+answers, tools, corrections, unknown items and active native work remain holds.
+Fresh source, App/owner and grant verification still precede each admission.
+Core reserves at most three new, correlated continuations per original request,
+with 60/120/240-second backoff from the preceding persisted failure. Restart
+neither resets this budget nor reopens the failed Turn. A lost acknowledgement
+after queue admission adopts the exact existing client identity, including an
+already completed Turn, instead of enqueueing it again. Recovery attempts retain
+their own presentation keys and earlier reservation/notice history. A delivered
+failure of a continuation remains unfinished work; a completed answer does not
+activate recovery. This does not establish provider availability or eventual
+business completion, and it creates no additional event consumer.
 
 Recovery discovery backoff is only a temporary hint. The existing reply worker
 retains its per-request fairness count while that canonical request still exists;

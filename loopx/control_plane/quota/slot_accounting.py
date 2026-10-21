@@ -22,6 +22,7 @@ from ..work_items.delivery_outcome import (
 )
 from .monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION
 from .scheduler_ack import QUOTA_SCHEDULER_ACK_CLASSIFICATION
+from ...paths import validate_goal_id_path_segment as _validate_goal_id_path_segment
 from ..effect_program import SettlementBindingKind
 from .settlement import (
     SettlementFailureKind,
@@ -295,17 +296,6 @@ def _repair_settlement_workspace_causality(
     if str((repaired or {}).get("requirement") or "") == "unknown":
         return causality
     return repaired or causality
-
-
-def _validate_goal_id_path_segment(goal_id: str) -> str:
-    value = goal_id.strip()
-    if not value:
-        raise ValueError("goal id is required")
-    if value in {".", ".."} or "/" in value or "\\" in value:
-        raise ValueError("goal id must be a single path segment")
-    if Path(value).name != value:
-        raise ValueError("goal id must not include path traversal")
-    return value
 
 
 def _queue_item_for_goal(status_payload: dict[str, Any], *, goal_id: str) -> dict[str, Any]:

@@ -9,11 +9,29 @@
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=181717)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-181717)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd)
 
-[为什么需要 LoopX](#为什么需要-loopx) · [看看实际使用](#看看-loopx-如何工作) · [开始使用](#试用-loopx) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
+[快速上手](#快速开始) · [为什么需要 LoopX](#为什么需要-loopx) · [看看实际使用](#看看-loopx-如何工作) · [证据与案例](#证据) · [参与贡献](#贡献) · [文档](https://loopx-project.github.io/loopx/docs/) · [English](README.md)
 
 </div>
 
 ---
+
+<a id="快速开始"></a>
+
+## 两步开始
+
+准备好 Python 3.11+、Node.js 22.22.3+（推荐 24 LTS），安装一次：
+
+```bash
+python3 -m pip install --upgrade loopx && loopx workflow-skills --install
+```
+
+重启 Agent 宿主，打开项目，再给 Codex 一个具体任务：
+
+```text
+$loopx 处理 PR 上未解决的 review 意见，保持补丁易于评审
+```
+
+Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升级说明 ↓](#试用-loopx)
 
 ## 为什么需要 LoopX
 
@@ -134,8 +152,6 @@ App 为 ad-hoc 签名，尚未 notarize。Windows 预览版目前手动更新，
 [观看 32 秒完整演示](docs/assets/personal-workspace/loopx-dashboard-launch.mp4)
 · [阅读工作区指南](docs/guides/personal-workspace-user-guide.md)
 · [开始五分钟体验](docs/guides/personal-workspace-trial-guide.md)
-
-<a id="快速开始"></a>
 
 ## 试用 LoopX
 

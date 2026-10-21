@@ -1107,10 +1107,12 @@ class LarkPrivateConversations:
         # and the shared Session queue/fence; transport workers never run models.
         row = _read_json(path)
         if row["status"] == "delivered" and row.get("context_recovery"):
-            # Repair presentation through the original worker, without asking
-            # Core to recover/enqueue any execution or creating another reply.
+            # Repair historical presentation first. A delivered failure of a
+            # continuation still needs Core's fresh recovery judgment; only a
+            # completed/ineligible request can stop at presentation repair.
             self._repair_recovery_presentation(path)
-            return 0
+            if not self.core.context_recovery_candidate(row["request_ref"]):
+                return 0
         if row["status"] == "delivered" and row.get("session_id") and row.get("turn_id"):
             # Legacy terminal delivery may be only a verified failure notice.
             # Core decides whether a migration continuation is safe; preserve

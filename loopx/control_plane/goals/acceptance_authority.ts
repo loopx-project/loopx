@@ -508,6 +508,7 @@ export async function inspectGoalAcceptance(
   goalId: string,
   todoId?: string,
   goalRef?: WireExactGoalRef,
+  includeWorkDetails = true,
 ): Promise<JsonObject> {
   const head = await store.loadAuthority();
   if (head.status !== "loaded") return source(store, {...head});
@@ -531,7 +532,7 @@ export async function inspectGoalAcceptance(
   return source(store, {status: "loaded", provider_revision: head.provider_revision,
     revision: state?.revision ?? null, contract_digest: state?.digest ?? null,
     contract: state ? state.document : null, tasks,
-    ...(todoId === undefined ? {} : {todo: todos.get(todoId) ?? null,
+    ...(todoId === undefined || !includeWorkDetails ? {} : {todo: todos.get(todoId) ?? null,
       completion_requirements: acceptanceCompletionRequirements(head.head, goalId, todoId)}),
     goal_acceptance_contract: projectGoalAcceptance(head.head, goalId)});
 }
@@ -545,9 +546,14 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify" | 
     const goalId = requireAuthorityStoreId(request.goal_id, "goal_id");
     const run = async () => {
       store = await openLocalAuthorityStore(root, goalId);
-      if (kind === "inspect") return inspectGoalAcceptance(store, goalId,
-        request.todo_id == null ? undefined : requireAuthorityStoreId(request.todo_id, "todo_id"),
-        request.goal_ref === undefined ? undefined : parseWireExactGoalRef(request.goal_ref, "acceptance request goal_ref"));
+      if (kind === "inspect") {
+        acceptanceRequire(request.include_work_details === undefined || typeof request.include_work_details === "boolean",
+          "include_work_details must be boolean");
+        return inspectGoalAcceptance(store, goalId,
+          request.todo_id == null ? undefined : requireAuthorityStoreId(request.todo_id, "todo_id"),
+          request.goal_ref === undefined ? undefined : parseWireExactGoalRef(request.goal_ref, "acceptance request goal_ref"),
+          request.include_work_details !== false);
+      }
       if (kind === "configure") return configureGoalAcceptance(store, request);
       if (kind === "refine") return refineGoalAcceptanceOutcome(store, request);
       return kind === "verify"
