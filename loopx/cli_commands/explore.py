@@ -85,7 +85,7 @@ def register_explore_commands(
     add_subcommand_format(context)
     context.add_argument("--goal-id", required=True)
     context.add_argument("--agent-id", required=True)
-    context.add_argument("--result-limit", type=int, default=3, help="Evidence details per page (1..20); default 3.")
+    context.add_argument("--result-limit", type=int, default=3, help="Evidence details and measurement groups per page (1..20); default 3.")
     context.add_argument("--result-offset", type=int, default=0, help="Continue using the previous page's result_revision.")
     context.add_argument("--result-node", help="Read evidence for one question node.")
     context.add_argument("--result-revision", help="Evidence revision returned by the previous page; rejects changed evidence.")

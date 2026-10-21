@@ -170,6 +170,10 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   };
   const resultRevision = createHash("sha256").update(JSON.stringify([
     goal, agent, resultNode, resultRows, resultRows.map(currentQuestion),
+    // Manual findings participate in feedback too, even without a writeback
+    // tag. Bind every compared source before paging either derived view.
+    ...(measurementFeedback.length ? [findings.filter(row => row.measurements !== undefined
+      && (resultNode === null || row.node_id === resultNode))] : []),
   ])).digest("hex");
   if (params.result_revision != null && params.result_revision !== resultRevision) {
     throw new EffectRuntimeRequestError("Explore evidence changed; restart at result_offset 0 without result_revision");
@@ -192,7 +196,14 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   });
   const visibleComparisons = comparisonCandidates(visibleResults, resultLimit);
   const remainingResults = Math.max(0, resultRows.length - resultOffset - visibleResults.length);
+  const visibleMeasurements = measurementFeedback.slice(resultOffset, resultOffset + resultLimit);
+  const remainingMeasurements = Math.max(0, measurementFeedback.length - resultOffset - visibleMeasurements.length);
   const resultRead = (...args: string[]) => command("turn-context", "--agent-id", agent, ...args);
+  const nextRead = (remaining: number, count: number) => remaining ? resultRead(
+    "--result-offset", String(resultOffset + count),
+    "--result-limit", String(resultLimit), "--result-revision", resultRevision,
+    ...(resultNode == null ? [] : ["--result-node", resultNode]),
+  ) : null;
   const writeback = exploreResultWritebackAffordance();
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
@@ -216,11 +227,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       result_page: {
         total: resultRows.length, offset: resultOffset, limit: resultLimit,
         remaining: remainingResults, revision: resultRevision,
-        next_command: remainingResults ? resultRead(
-          "--result-offset", String(resultOffset + visibleResults.length),
-          "--result-limit", String(resultLimit), "--result-revision", resultRevision,
-          ...(resultNode == null ? [] : ["--result-node", resultNode]),
-        ) : null,
+        next_command: nextRead(remainingResults, visibleResults.length),
         node_command_template: resultRead("--result-node", "<node-id>", "--result-limit", "10"),
       },
       omitted_nodes: Math.max(0, nodes.length - 3),
@@ -237,9 +244,14 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       result_attachment_template: writeback.attachment_template,
       optional_measurement_example: writeback.optional_measurement_example,
       ...(measurementFeedback.length ? {
-        measurement_feedback: measurementFeedback.slice(0, 3),
-        omitted_measurement_feedback: Math.max(0, measurementFeedback.length - 3),
-        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Read omitted evidence with the existing node result page.",
+        measurement_feedback: visibleMeasurements,
+        omitted_measurement_feedback: remainingMeasurements,
+        measurement_feedback_page: {
+          total: measurementFeedback.length, offset: resultOffset, limit: resultLimit,
+          remaining: remainingMeasurements, revision: resultRevision,
+          next_command: nextRead(remainingMeasurements, visibleMeasurements.length),
+        },
+        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Follow measurement_feedback_page.next_command for omitted groups, or filter by node; existing result limit/offset/revision options apply and changed evidence requires restarting the read.",
       } : {}),
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),
       record_finding_template: command("finding", "--node", "<node-id>", "--title", "<evidence-backed result>", "--status", "<tentative|confirmed|refuted>"),

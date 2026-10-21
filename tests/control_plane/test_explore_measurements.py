@@ -112,6 +112,50 @@ def test_disabled_explore_does_not_offer_score_feedback(tmp_path):
     assert context(args)["graph"] is None
 
 
+def test_cli_pages_every_measurement_group_and_rejects_changed_manual_evidence(tmp_path):
+    args = fixture(tmp_path)
+    for turn, score in [("earlier", 10), ("latest", 5)]:
+        current = {**args, "turn_instance_id": turn}
+        result = payload()
+        result["settlement_identity"]["effect_id"] = f"research:worker:{turn}"
+        result["explore_result"]["measurements"] = [
+            {**measurement(turn, score + index), "metric": f"quality-{index}"}
+            for index in range(8)
+        ]
+        prepare_result_attachment(result["explore_result"], **current)
+        assert deliver_result_attachment(payload=result, **current)["ok"]
+    log = explore_result_log_path(args["runtime_root"], "research")
+    healthy = log.read_bytes()
+    first = context(args)["graph"]
+    scope = {key: args[key] for key in ("registry_path", "runtime_root", "goal_id", "agent_id")}
+    expanded = explore_turn_context(**scope, result_node="prefix-bound", result_limit=20)["graph"]
+    assert len(expanded["measurement_feedback"]) == 8, "expanded reads must expose all comparable groups"
+    seen = list(first["measurement_feedback"])
+    command = first["measurement_feedback_page"]["next_command"]
+    while command:
+        read = subprocess.run([sys.executable, "-m", "loopx.cli", *command[1:]], capture_output=True, text=True)
+        assert read.returncode == 0, read.stdout + read.stderr
+        graph = json.loads(read.stdout)["graph"]
+        seen.extend(graph["measurement_feedback"])
+        command = graph["measurement_feedback_page"]["next_command"]
+    assert len(seen) == len({item["metric"] for item in seen}) == 8
+    assert all(item["best"]["value"] - item["latest"]["measurement"]["value"] == 5
+               and item["improvement"] == -5 for item in seen)
+    assert log.read_bytes() == healthy, "paging cannot mutate the source"
+    # Manual findings are not writeback-result rows, but must still invalidate
+    # a feedback continuation. Otherwise a new source could be skipped silently.
+    document = tmp_path / "manual-measurements.json"
+    document.write_text(json.dumps([{**measurement("manual", 99), "metric": "quality-7"}]))
+    captured = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", "--registry",
+        str(args["registry_path"]), "--runtime-root", str(args["runtime_root"]), "explore", "finding",
+        "--goal-id", "research", "--agent-id", "worker", "--node", "prefix-bound", "--title", "Manual result",
+        "--finding-id", "manual-result", "--evidence-ref", "validation:counterexample-1",
+        "--measurements-json", str(document)], capture_output=True, text=True)
+    assert captured.returncode == 0, captured.stdout + captured.stderr
+    with pytest.raises(EffectRuntimeRejected, match="evidence changed"):
+        explore_turn_context(**scope, result_offset=3, result_revision=first["result_page"]["revision"])
+
+
 @pytest.mark.parametrize("clock", ["tied", "backfilled"])
 def test_recorded_measurement_order_is_independent_of_source_clock(tmp_path, clock):
     args = fixture(tmp_path)

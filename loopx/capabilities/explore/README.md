@@ -41,7 +41,12 @@ before applying the context's display limit. Latest follows source-log append
 order, including tied or backfilled timestamps; its ordinal is derived, not
 another persisted fact. Corrected findings replace earlier
 versions in comparisons; original versions remain in history. Counts are records,
-not independent trials. The next-turn guidance uses this feedback to investigate
+not independent trials. Feedback pages reuse `--result-limit` (1..20, default 3),
+`--result-offset`, `--result-revision` and the optional `--result-node` filter.
+Follow `measurement_feedback_page.next_command` for additional groups, including
+multiple metrics or conditions on one node. The shared revision binds all compared
+sources, including manual findings; a changed source requires restarting the read.
+The next-turn guidance uses this feedback to investigate
 regressions or revisit better candidates before repeating work. Best does not
 identify the current retained candidate, establish causality, satisfy acceptance
 or authorize execution. Actual adoption and outcome benefit require subsequent

@@ -127,3 +127,33 @@ test("history and next-turn feedback use append order across tied and backfilled
     {...finding("first", 8), recorded_order: 0}, {...finding("next", 9), recorded_order: 0},
   ]), /unambiguous/);
 });
+
+test("measurement feedback pages retain every group and bind manual findings to the continuation", () => {
+  const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
+    graph_enabled: true, harness_gate: {enabled: false}, projection: {findings: [{
+      ...finding("multi", 8), measurements: Array.from({length: 8}, (_, index) => ({...metric, metric: `quality-${index}`})),
+    }]}, plan: {}};
+  const first = projectExploreTurnContext(request).graph as any;
+  assert.equal((projectExploreTurnContext({...request, result_node: "question-a", result_limit: 20}).graph as any).measurement_feedback.length, 8);
+  const all = [...first.measurement_feedback];
+  let page = first.measurement_feedback_page;
+  while (page.next_command) {
+    const next = projectExploreTurnContext({...request, result_offset: page.offset + page.limit,
+      result_revision: page.revision}).graph as any;
+    all.push(...next.measurement_feedback);
+    page = next.measurement_feedback_page;
+  }
+  assert.equal(all.length, 8);
+  assert.equal(new Set(all.map(row => row.metric)).size, 8);
+  assert.throws(() => projectExploreTurnContext({...request, projection: {findings: [
+    finding("manual", 99), ...request.projection.findings,
+  ]}, result_offset: 3, result_revision: first.result_page.revision}), /changed/);
+  const sources = [finding("latest", 8), finding("best", 10), {...finding("older", 1), summary: "Original applicability"}];
+  const snapshot = projectExploreTurnContext({...request, projection: {findings: sources}}).graph as any;
+  const corrected = {...request, projection: {findings: sources.map(row => row.finding_id === "older"
+    ? {...row, summary: "Corrected applicability"} : row)}};
+  assert.deepEqual((projectExploreTurnContext(corrected).graph as any).measurement_feedback, snapshot.measurement_feedback,
+    "unchanged aggregates are not proof that their source evidence is unchanged");
+  assert.throws(() => projectExploreTurnContext({...corrected, result_offset: 3,
+    result_revision: snapshot.result_page.revision}), /changed/);
+});
