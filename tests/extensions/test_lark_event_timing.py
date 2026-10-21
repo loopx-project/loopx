@@ -95,6 +95,8 @@ def test_native_topic_stop_retains_target_delivery_and_duplicate_safety(
         assert len([text for _, _, text in provider.topic_writes
                     if text == "已请求停止这条消息对应的执行。"]) == 1
         assert runtime.wait_for_turn(session_id=native["session_id"], turn_id=native["turn_id"], timeout_sec=5)["status"] == "interrupted"
+        if broken_sink is None:
+            assert not _timings(capsys.readouterr().out)
         if broken_sink is False:
             event_ref = hashlib.sha256(json.dumps(["notes-app", stop["message_id"]]).encode()).hexdigest()
             rows = [row for row in _timings(capsys.readouterr().out) if row["event_ref"] == event_ref]
