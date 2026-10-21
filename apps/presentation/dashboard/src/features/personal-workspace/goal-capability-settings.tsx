@@ -17,7 +17,8 @@ import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
 import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus, CapabilityConfigurationHelp } from "./capability-workbench";
 import { GoalAutoNotifyToggle } from "./notification-settings-panel";
-import {ContentProductionWorkbench} from "./content-production-workbench";
+import { ContentReferenceWorkbench } from "./content-reference-workbench";
+import {ContentMediaWorkbench} from "./content-media-workbench";
 import { DecisionContextWorkbench } from "./decision-context-workbench";
 import { rewardMemoryBindingStatus, rewardMemoryScopeDraft, rewardMemoryWriteValue } from "./reward-memory-settings";
 import {isMemoryCapability, memorySettingsTitle, MemorySettingsHeader} from "./memory-settings";
@@ -341,7 +342,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
           id={memorySelected && selected.capability_id !== "decision_context" ? `memory-panel-${selected.capability_id}` : undefined}
           aria-labelledby={memorySelected && selected.capability_id !== "decision_context" ? `memory-purpose-${selected.capability_id}` : undefined}
           role={memorySelected && selected.capability_id !== "decision_context" ? "tabpanel" : undefined}>
-        {localizedSelected.capability_id === "content_ops" ? <ContentProductionWorkbench key={goalId} goalId={goalId} /> : <CapabilityEditorStatus available={editorAvailable} t={t}
+        {localizedSelected.capability_id === "content_ops" ? <><ContentMediaWorkbench key={goalId} goalId={goalId} /><details><summary>{locale === "zh-CN" ? "来源风格素材" : "Source style references"}</summary><ContentReferenceWorkbench key={goalId} /></details></> : <CapabilityEditorStatus available={editorAvailable} t={t}
           description={readOnlyReason} />}
 
         {selected.capability_id === "progress_review" && selected.observation ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>

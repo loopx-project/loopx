@@ -682,8 +682,6 @@ export function createEffectRuntimeHandlers(
     ["content_reference.search", lazyHandler(() => import("./capabilities/content_reference.ts"), ({searchContentReferences}) => searchContentReferences)],
     ["content_reference.capture", lazyHandler(() => import("./capabilities/content_reference.ts"), ({captureContentReference}) => captureContentReference)],
     ["content_reference.draft", lazyHandler(() => import("./capabilities/content_reference.ts"), ({planReferenceDraft}) => planReferenceDraft)],
-    ["content_experience.plan", lazyHandler(() => import("./capabilities/content_experience.ts"), ({validateExperiencePlan}) => validateExperiencePlan)],
-    ["content_experience.run", lazyHandler(() => import("./capabilities/content_experience.ts"), ({runExperience}) => runExperience)],
     ["content_media.plan", lazyHandler(() => import("./capabilities/content_media.ts"), ({validateMediaPlan}) => validateMediaPlan)],
     ["content_media.transition", lazyHandler(() => import("./capabilities/content_media.ts"), ({transitionMediaRender}) => transitionMediaRender)],
     ["content_media.result", lazyHandler(() => import("./capabilities/content_media.ts"), ({validateMediaResult}) => validateMediaResult)],

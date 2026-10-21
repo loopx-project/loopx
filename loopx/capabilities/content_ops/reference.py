@@ -62,5 +62,5 @@ def reference_configuration_descriptor() -> dict[str, Any]:
     """Discover a native operation in the existing workbench, without a switch."""
     return {"feature_id": "content_ops", "display_name": "Content production",
             "availability": "local_artifact_preview",
-            "effect": "Prepare attributed outlines, finite interactive learning models and source-bound local videos. Video rendering requires the optional local extension; source catalog writes and publishing remain separate.",
+            "effect": "Prepare attributed outlines and source-bound local videos. Video rendering requires the optional local extension; source catalog writes and publishing remain separate.",
             "documentation": {"path": "loopx/capabilities/content_ops/README.md"}}

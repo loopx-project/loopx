@@ -14,7 +14,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
     codex_chat: {displayName: "Codex Goal conversation defaults", description: "Choose the native Codex profile, model, speed tier and reasoning effort for new Goal conversations. Existing conversations keep their original history. This does not start or reconfigure an active Agent Loop, worker or steward."},
     decision_context: {displayName: "Find evidence", description: "Find advisory evidence with a temporary private profile. OpenViking and BM25 are retrieval implementations; this page does not save a binding or enable automatic memory."},
-    content_ops: {displayName: "Content production", description: "Prepare source-backed outlines, interactive learning models and local videos. Review before sharing; video rendering uses an optional local extension."},
+    content_ops: {displayName: "Content production", description: "Prepare source-backed outlines and local videos. Review the result before sharing; rendering uses an optional local extension."},
     goal_storage: { displayName: "New Goal authority", description: "New Goals default to canonical SQLite with hard leases. Choose storage and execution policy for future Goals. Existing Goals require a separate backed-up migration." },
     manager_runtime: {
       displayName: "Runtime",
@@ -83,7 +83,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   "zh-CN": {
     codex_chat: {displayName: "Codex Goal 对话默认值", description: "分别选择 Codex 配置来源、模型、速度档和推理强度，作用于本机的新 Goal 对话。已有对话保留原历史；不会启动或重配正在运行的 Agent Loop、工作 Agent 或管家。"},
     decision_context: {displayName: "资料召回", description: "通过临时私有配置查找参考证据。OpenViking、BM25 是检索实现；本页不保存绑定，也不启用自动记忆。"},
-    content_ops: {displayName: "内容制作", description: "准备有来源的提纲、交互学习模型与本机视频，检查作品后再分享；视频制作使用可选本机扩展。"},
+    content_ops: {displayName: "内容制作", description: "准备有来源的提纲与本机视频，检查作品后再分享；视频制作使用可选本机扩展。"},
     goal_storage: { displayName: "新 Goal 的权威存储", description: "新 Goal 默认使用 canonical SQLite 与 hard lease；可选择之后新 Goal 的存储与执行策略。已有 Goal 仍需单独备份、迁移。" },
     manager_runtime: {
       displayName: "运行环境",

@@ -29,17 +29,6 @@ or role-incomplete page sets. See
 
 ## Implemented Surface
 
-`loopx content-ops experience` retains a source-bound finite learning model.
-The packaged **Content production → Interactive learning** workbench presents
-three separate tasks: compare conditions under one policy, make decisions within
-a budget, and compare/replay strategies in a finite Mini-World. All three use
-the same TypeScript transition owner. Reset, model/trace export and explicit
-silent Canvas recording remain local; recording needs browser WebM support.
-No optional renderer, model account or new configuration is required. Examples
-cover evidence return and service diagnosis. See the
-[learning-model contract and walkthrough](../../../docs/reference/protocols/content-ops-experience-v0.md).
-Finite-model success is not evidence of an audience learning effect.
-
 `loopx content-ops media` prepares source-bound private compositions and renders
 them through the optional local `loopx-media` extension. The packaged
 **Settings → Capabilities → a Goal → Content production** workbench renders,

@@ -28,7 +28,6 @@ from .layout import (
 )
 from .reference import content_reference_operation, inspect_reference_materials, write_reference_artifact
 from .media_cli import handle_media_command, register_media_commands
-from .experience_cli import handle_experience_command, register_experience_commands
 from .surface import (
     build_content_ops_chatview_report_packet,
     build_content_ops_exploration_plan_packet,
@@ -143,7 +142,6 @@ def register_content_ops_commands(
         required=True,
     )
     register_media_commands(content_ops_sub, add_subcommand_format)
-    register_experience_commands(content_ops_sub, add_subcommand_format)
     reference_parser = content_ops_sub.add_parser(
         "reference", help="Search, capture or prepare an attributed outline from a caller-owned private catalog.",
     )
@@ -557,10 +555,6 @@ def register_content_ops_commands(
     )
 
 
-def _render_json_packet(value: dict[str, object]) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
-
-
 def handle_content_ops_command(
     args: argparse.Namespace,
     *,
@@ -573,10 +567,7 @@ def handle_content_ops_command(
             payload, renderer = issue_fix_result
         elif args.content_ops_command == "media":
             payload = handle_media_command(args)
-            renderer = _render_json_packet
-        elif args.content_ops_command == "experience":
-            payload = handle_experience_command(args)
-            renderer = _render_json_packet
+            renderer = lambda value: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
         elif args.content_ops_command == "reference":
             if args.operation == "inventory":
                 if not args.goal_id or not args.store_id or not args.observed_at or args.library_json == "-":
@@ -592,7 +583,7 @@ def handle_content_ops_command(
                 payload = content_reference_operation(args.operation, request)
             if args.output_json:
                 write_reference_artifact(Path(args.output_json).expanduser(), payload)
-            renderer = _render_json_packet
+            renderer = lambda value: json.dumps(value, ensure_ascii=False, indent=2) + "\n"
         elif args.content_ops_command == "preview":
             payload = build_content_ops_preview_packet(generated_at=args.generated_at)
             renderer = render_content_ops_preview_markdown

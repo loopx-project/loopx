@@ -77,7 +77,6 @@ scanning a chronological list.
 - [`auto_research_role_state_machine_v0`](auto-research-role-state-machine-v0.md): Auto-research role state machine v0
 - [`decentralized_auto_research_state_v0`](decentralized-auto-research-state-v0.md): Decentralized auto-research state v0
 - [`content_ops_surface_v0`](content-ops-surface-v0.md): Content operations surface v0
-- [`content_ops_experience_v0`](content-ops-experience-v0.md): Finite interactive learning models, decisions and strategy replay
 - [`cs_notes_explore_capability_map_v0`](cs-notes-explore-capability-map-v0.md): CS notes Explore capability map v0
 - [`issue_fix_acceptance_loop_v0`](issue-fix-acceptance-loop-v0.md): Issue-fix acceptance loop v0
 - [`value_connector_plan_v0`](value-connector-plan-v0.md): Value connector plan v0

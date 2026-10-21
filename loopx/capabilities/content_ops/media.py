@@ -36,8 +36,7 @@ def _owner(operation: str, request: dict) -> dict:
 
 
 def _safe_path(root: Path, relative: str) -> Path:
-    if root.is_symlink():
-        raise ValueError("Composition directory must not be a symlink")
+    if root.is_symlink(): raise ValueError("Composition directory must not be a symlink")
     parts = Path(relative).parts
     if not parts or Path(relative).is_absolute() or any(p in {"..", "."} for p in parts):
         raise ValueError("File is outside the selected composition scope")
@@ -124,12 +123,10 @@ class MediaWorkspace:
                         raise ValueError("Source bytes changed; check the source digest before preparing")
                 path = _safe_path(inputs, asset["sha256"])
                 if path.exists():
-                    if _sha(path) != asset["sha256"]:
-                        raise ValueError("Source snapshot is damaged")
+                    if _sha(path) != asset["sha256"]: raise ValueError("Source snapshot is damaged")
                 else:
                     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                    with os.fdopen(fd, "wb") as output:
-                        output.write(content)
+                    with os.fdopen(fd, "wb") as output: output.write(content)
                 snapshots[asset["id"]] = str(path)
             item = previous["item"] if previous else build_content_ops_item(
                 item_id=composition_id, item_kind="post", channel="local-media", content_digest=validated["plan_digest"],
@@ -151,15 +148,13 @@ class MediaWorkspace:
         status = record["status"]
         if status == "rendering":
             age = (datetime.now(timezone.utc) - datetime.fromisoformat(record["updated_at"])).total_seconds()
-            if age > 150:
-                status = "interrupted"
+            if age > 150: status = "interrupted"
         result = record.get("result")
         if result:
             for name, entry in result["files"].items():
                 path = _safe_path(self._bundle(composition_id), f"{record['attempt']}/{name}")
                 if not path.is_file() or _sha(path) != entry["sha256"]:
-                    status = "damaged"
-                    break
+                    status = "damaged"; break
         return {"ok": True, "composition_id": composition_id, "revision": record["revision"], "status": status,
                 "title": record["plan"]["title"], "duration_seconds": record["duration_seconds"],
                 "plan_digest": record["plan_digest"], "shots": [{k: shot[k] for k in ("title", "seconds", "kind", "boundary", "source_ref", "framing") if k in shot} for shot in record["plan"]["shots"]],
@@ -169,8 +164,7 @@ class MediaWorkspace:
 
     def list(self) -> dict:
         paths = sorted(self.root.glob("media_*/record.json"), key=lambda path: path.stat().st_mtime, reverse=True) if self.root.exists() else []
-        if len(paths) > 100:
-            paths = paths[:100]
+        if len(paths) > 100: paths = paths[:100]
         return {"ok": True, "compositions": [self.inspect(path.parent.name) for path in paths],
                 "provider": self.binding().public_readiness(), "visibility": "local_private"}
 
@@ -213,13 +207,11 @@ class MediaWorkspace:
         bundle = self._bundle(composition_id)
         with exclusive_file_lock(bundle / "render", operation="content-media-render", timeout_seconds=1):
             record = self._record(composition_id)
-            if record["attempt"] != attempt or record["status"] != "rendering":
-                return
+            if record["attempt"] != attempt or record["status"] != "rendering": return
             cancel = _safe_path(bundle, f"{attempt}.cancel")
             try:
                 binding = self.binding()
-                if binding.binding is None:
-                    raise ValueError("Provider unavailable")
+                if binding.binding is None: raise ValueError("Provider unavailable")
                 checked = _owner("plan", {"plan": record["plan"]})
                 result = execute_extension_runtime_binding(binding.binding, request={"protocol": PROTOCOL,
                     "plan": record["plan"], "layout_style": checked["layout_style"],
@@ -271,13 +263,10 @@ class MediaWorkspace:
         return {"ok": True, "status": "cancellation_requested", "composition_id": composition_id}
 
     def file(self, composition_id: str, name: str) -> Path:
-        if name not in RESULT_FILES:
-            raise ValueError("Unsupported result file")
+        if name not in RESULT_FILES: raise ValueError("Unsupported result file")
         record = self._record(composition_id)
         if record["status"] != "ready" or self.inspect(composition_id)["status"] != "ready":
             raise ValueError("A verified result is not available")
-        if name == "manifest.json":
-            raise ValueError("Use the path-free result projection")
-        if name not in record["result"]["files"]:
-            raise ValueError("Result file is not available")
+        if name == "manifest.json": raise ValueError("Use the path-free result projection")
+        if name not in record["result"]["files"]: raise ValueError("Result file is not available")
         return _safe_path(self._bundle(composition_id), f"{record['attempt']}/{name}")

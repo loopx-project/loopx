@@ -23,16 +23,6 @@ CONTENT_OPS_CATALOG_ENTRY: dict[str, Any] = {
     "entry_command": "loopx content-ops aggregate-packets --format json",
     "commands": [
         {
-            "command": "loopx content-ops experience prepare --goal-id <goal> --plan-json <model.json> --format json",
-            "purpose": "Retain a source-bound finite learning model for condition exploration, decision practice and strategy replay in Content production.",
-            "write_boundary": "private local artifact; no author code execution, external source read, model call or publication",
-        },
-        {
-            "command": "loopx content-ops experience run --goal-id <goal> --experience-id <id> --expected-revision <revision> --run-json <conditions-and-decisions.json> --format json",
-            "purpose": "Evaluate the declared conditions, actions and budget through the same typed owner used by the App; return a revision-bound trace.",
-            "write_boundary": "deterministic local simulation only; no actual Goal operation or learning-effect claim",
-        },
-        {
             "command": "loopx content-ops reference search --library-json <private-catalog.json> --query <topic> --structure <structure> --format json",
             "purpose": "Retrieve source credit, version, reuse boundary, styles and dated counters from an existing caller-owned catalog.",
             "write_boundary": "local-private metadata projection; no source access or store writes",
@@ -115,11 +105,6 @@ CONTENT_OPS_CATALOG_ENTRY: dict[str, Any] = {
     ],
     "implemented_protocols": [
         {
-            "schema_version": "content_ops_experience_v0",
-            "module": "loopx.control_plane.capabilities.content_experience",
-            "doc": "docs/reference/protocols/content-ops-experience-v0.md",
-        },
-        {
             "schema_version": "content_ops_reference_v0",
             "module": "loopx.control_plane.capabilities.content_reference",
             "doc": "docs/reference/protocols/content-ops-reference-v0.md",
@@ -195,7 +180,6 @@ CONTENT_OPS_CATALOG_ENTRY: dict[str, Any] = {
         "python3 examples/content-ops-layout-library-smoke.py",
     ],
     "docs": [
-        "docs/reference/protocols/content-ops-experience-v0.md",
         "docs/reference/protocols/content-ops-reference-v0.md",
         "loopx/capabilities/content_ops/README.md",
         "docs/reference/protocols/content-ops-surface-v0.md",
