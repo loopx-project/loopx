@@ -46,25 +46,54 @@ def _protected_path_replacements(
     return sorted(replacements, key=lambda item: len(item[0]), reverse=True)
 
 
+def _root_character_atoms(
+    char: str, *, is_windows: bool
+) -> tuple[tuple[tuple[str, bool], ...], str]:
+    if char in "/\\":
+        options = (("/", False), ("\\", False), ("%2F", True), ("%5C", True))
+        pattern = r"(?:[/\\]|%2[fF]|%5[cC])"
+        return options, pattern
+
+    if is_windows and char.isascii() and char.isalpha():
+        lower_char = char.lower()
+        upper_char = char.upper()
+        lower_enc = f"%{ord(lower_char):02X}"
+        upper_enc = f"%{ord(upper_char):02X}"
+        options = (
+            (lower_char, True),
+            (lower_enc, True),
+            (upper_enc, True),
+        )
+        pattern = f"(?:(?i:{re.escape(char)})|(?i:{lower_enc}|{upper_enc}))"
+        return options, pattern
+
+    encoded = "".join(
+        f"%{byte:02X}"
+        for byte in char.encode("utf-8", errors="surrogateescape")
+    )
+    options = ((char, False), (encoded, True))
+    pattern = f"(?:{re.escape(char)}|(?i:{encoded}))"
+    return options, pattern
+
+
 def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
     if not replacements:
         return LOCAL_PATH_SURFACE_PATTERN
     separator = r"(?:[/\\]|%2[fF]|%5[cC])"
 
-    def component_pattern(component: str) -> str:
+    def component_pattern(component: str, *, is_windows: bool) -> str:
         if not component:
             return ""
-        encoded_chars = []
-        for char in component:
-            encoded = "".join(
-                f"%{byte:02X}"
-                for byte in char.encode("utf-8", errors="surrogateescape")
-            )
-            encoded_chars.append(f"(?:{re.escape(char)}|(?i:{encoded}))")
-        return "".join(encoded_chars)
+        return "".join(
+            _root_character_atoms(char, is_windows=is_windows)[1]
+            for char in component
+        )
 
     roots = "|".join(
-        separator.join(component_pattern(part) for part in re.split(r"[/\\]", raw))
+        separator.join(
+            component_pattern(part, is_windows=bool(re.match(r"^[A-Za-z]:[/\\]", raw)))
+            for part in re.split(r"[/\\]", raw)
+        )
         for raw, _ in replacements
     )
     return re.compile(
@@ -76,8 +105,8 @@ def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
         + r"|[\s`'\"<>.,;:!?)}\]])"
         + r"(?:"
         + separator
-        + r"[^\s`'\"<>]*)?"
-        + r"|(?<![:/A-Za-z0-9_.\\])/(?:[^\s`'\"<>]+)"
+        + r"[^\s`'\"<>()\[\]{}，。！？]*)?"
+        + r"|(?<![:/A-Za-z0-9_.\\])/(?:[^\s`'\"<>()\[\]{}，。！？]+)"
         + "|(?i:"
         + LOCAL_PATH_SURFACE_PATTERN.pattern
         + ")"
@@ -185,18 +214,19 @@ def redact_local_paths(
     redacted = str(text or "")
     replacements = _protected_path_replacements(protected_paths)
 
-    def path_parts(value: str) -> tuple[str, ...]:
+    def _normalize_path_parts(value: str, *, fold_case: bool = False) -> tuple[str, ...]:
         decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
-        if re.match(r"^[A-Za-z]:/", decoded):
+        if fold_case and re.match(r"^[A-Za-z]:/", decoded):
             decoded = decoded.casefold()
         parts: list[str] = []
-        absolute = decoded.startswith("/") or bool(re.match(r"^[a-z]:/", decoded))
+        drive_pattern = r"^[a-z]:$" if fold_case else r"^[A-Za-z]:$"
+        absolute = decoded.startswith("/") or bool(re.match(r"^[A-Za-z]:/", decoded))
         for part in decoded.split("/"):
             if part in {"", "."}:
                 continue
             if part == "..":
                 if parts and parts[-1] != ".." and not (
-                    len(parts) == 1 and re.match(r"^[a-z]:$", parts[0])
+                    len(parts) == 1 and re.match(drive_pattern, parts[0])
                 ):
                     parts.pop()
                 elif not absolute:
@@ -205,23 +235,8 @@ def redact_local_paths(
             parts.append(part)
         return tuple(parts)
 
-    def display_path_parts(value: str) -> tuple[str, ...]:
-        decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
-        parts: list[str] = []
-        absolute = decoded.startswith("/") or bool(re.match(r"^[A-Za-z]:/", decoded))
-        for part in decoded.split("/"):
-            if part in {"", "."}:
-                continue
-            if part == "..":
-                if parts and parts[-1] != ".." and not (
-                    len(parts) == 1 and re.match(r"^[A-Za-z]:$", parts[0])
-                ):
-                    parts.pop()
-                elif not absolute:
-                    parts.append(part)
-                continue
-            parts.append(part)
-        return tuple(parts)
+    path_parts = lambda value: _normalize_path_parts(value, fold_case=True)
+    display_path_parts = lambda value: _normalize_path_parts(value, fold_case=False)
 
     def has_parent_segment(value: str) -> bool:
         decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
@@ -382,16 +397,11 @@ class VisibleResponseStreamFilter:
 
     @staticmethod
     def _protected_root_atoms(root: str) -> tuple[tuple[tuple[str, bool], ...], ...]:
+        is_windows = bool(re.match(r"^[A-Za-z]:[/\\]", root))
         atoms = []
         for character in root:
-            if character in "/\\":
-                atoms.append((("/", False), ("\\", False), ("%2F", True), ("%5C", True)))
-                continue
-            encoded = "".join(
-                f"%{byte:02X}"
-                for byte in character.encode("utf-8", errors="surrogateescape")
-            )
-            atoms.append(((character, False), (encoded, True)))
+            options, _ = _root_character_atoms(character, is_windows=is_windows)
+            atoms.append(options)
         # A following path separator is enough to put the complete root in
         # path context. Include the whole separator token so partial `%2f` / `%5c`
         # spellings stay buffered while they arrive across stream chunks.

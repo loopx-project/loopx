@@ -444,3 +444,38 @@ def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (r"q%3A%5Cproject%5Cruntime%5Csecret.txt", "[local-path]"),
+        (r"Q%3A%5CPROJECT%5CRUNTIME%5Csecret.txt", "[local-path]"),
+        (r"q%3A%5Cproject%5Cnotes%5Creport.md", "./notes/report.md"),
+        (r"Q%3A%5CPROJECT%5Cnotes%5Creport.md", "./notes/report.md"),
+    ],
+)
+def test_windows_encoded_case_aliases_honor_private_roots_and_safe_files(path, expected):
+    roots = [r"Q:\project", r"Q:\project\runtime"]
+    assert redact_local_paths(path, protected_paths=roots, project_relative=True) == expected
+    text = f"File {path}.\n"
+    expected_text = f"File {expected}.\n"
+    assert parse_agent_response(text, protected_paths=roots)["message"] == expected_text.strip()
+    for split in range(len(text) + 1):
+        stream = VisibleResponseStreamFilter(protected_paths=roots)
+        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected_text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"q%3A%5Cproject%5Cruntime%5Csecret.txt",
+        r"Q%3A%5CPROJECT%5CRUNTIME%5Csecret.txt",
+    ],
+)
+def test_windows_encoded_case_aliases_stream_character_by_character(path):
+    roots = [r"Q:\project", r"Q:\project\runtime"]
+    stream = VisibleResponseStreamFilter(protected_paths=roots)
+    streamed = "".join(stream.feed(character) for character in path)
+    assert streamed == ""
+    assert stream.feed("\n") + stream.finish() == "[local-path]\n"
