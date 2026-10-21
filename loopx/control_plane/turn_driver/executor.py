@@ -59,6 +59,7 @@ from .recovery import (
 )
 from .post_settlement import PostSettlement, recover_post_settlement, run_post_settlement_callback
 from ..capability_hooks import capability_result_fields, project_turn_context
+from ...capabilities.reward_memory.turn_hooks import reward_memory_automation_enabled
 from .session_recovery import (
     SessionBindingResolver,
     build_host_recovery_record,
@@ -364,6 +365,17 @@ def validate_loopx_turn_host_result(
     result = dict(value)
     errors: list[str] = []
     optional_fields = capability_result_fields(project_turn_context(plan))
+    if (
+        from_journal
+        and "turn_context_contributions" not in plan
+        and reward_memory_automation_enabled(plan, operation="automatic_ingest")
+    ):
+        # Pre-registration journals already admitted this bounded wire field.
+        # Preserve the cached result that independent validation attested;
+        # never reconstruct context, activate a Host, or change ingest policy.
+        optional_fields["reward_memory_reflection_json"] = {
+            "type": "string", "maxLength": HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
+        }
     allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan) | set(optional_fields)
     if from_journal:
         allowed_fields = allowed_fields | {"agent_vision"}

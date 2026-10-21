@@ -346,6 +346,10 @@ quota/heartbeat guard。Codex、DSH、generic CLI 传输相同的有界上下文
 通过 `post_settlement_recovery` 返回，不重新结算。File/SQLite 原生宿主及隔离 provider 用例只资格源码路径；
 安装态 App/Lark、模型收益、完整成本及以下三项收敛验收仍开放。
 
+注册前 journal 的恢复保留已准入的有界反思及独立验证 digest，不改写原 plan、不重启
+Host／validator，也不为新工作激活旧输入。provider 效果仍由当前 ingest 策略及原结算
+owner 决定，缓存内容本身不授予写入权限。
+
 PR 依赖观察现复用既有注册 TurnStart 生命周期，由执行性 quota guard、原生 Turn
 与兼容 prequota 共用。权限来自 typed Goal／Agent capability owner，包括已记住的
 宿主观察与撤销；已有授权时不必逐命令补 flag。能力自有诊断使 PR 业务规则留在 core

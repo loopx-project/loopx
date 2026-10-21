@@ -497,6 +497,12 @@ File/SQLite native host and isolated provider cases qualify this source path.
 Installed App/Lark adoption, model benefit, complete costs and the three
 convergence acceptances below remain open.
 
+Pre-registration journal recovery retains the already admitted bounded
+reflection and independent validation digest without changing the saved plan,
+reinvoking the Host/validator or activating legacy input for new work. Provider
+effects still use the current ingest policy and original settlement owner;
+cached content alone does not authorize a write.
+
 PR dependency observation now uses the existing registered TurnStart lifecycle
 shared by executing quota guards, native Turns and compatibility prequota.
 Permission comes from the typed Goal/Agent capability owner, including remembered

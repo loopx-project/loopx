@@ -108,7 +108,8 @@ def test_unavailable_provider_does_not_instruct_use_of_missing_recall_context() 
 
 
 @pytest.mark.parametrize("ingest", [False, True])
-def test_old_host_reflection_is_ignored_when_ingest_is_off(ingest: bool) -> None:
+@pytest.mark.parametrize("from_journal", [False, True])
+def test_old_host_reflection_is_ignored_when_ingest_is_off(ingest: bool, from_journal: bool) -> None:
     plan = _plan(recall=False, ingest=ingest)
     result = {
         "schema_version": "loopx_turn_result_v0",
@@ -123,9 +124,153 @@ def test_old_host_reflection_is_ignored_when_ingest_is_off(ingest: bool) -> None
         "vision_unchanged_reason": "The original fixture remains open.",
         "reward_memory_reflection_json": '{"status":"no_evidence"}',
     }
-    validated = validate_loopx_turn_host_result(plan, result)
+    validated = validate_loopx_turn_host_result(plan, result, from_journal=from_journal)
     assert validated["ok"], validated
     assert ("reward_memory_reflection_json" in validated["result"]) is ingest
+
+
+def test_pre_registration_journal_preserves_validated_reflection_on_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.turn_driver import executor
+    from loopx.control_plane.turn_driver.journal_store import (
+        load_loopx_turn_plan_from_journal, turn_journal_path,
+    )
+    from tests.capabilities.test_reward_memory_outcome_lifecycle import _reflection
+
+    plan = _plan(recall=False)
+    reflection = _reflection()
+    attestation = {
+        "schema_version": "reward_memory_reflection_validation_v0",
+        "status": "validated",
+        "reflection_digest": executor.reward_memory_reflection_digest(reflection),
+        "evidence_refs": json.loads(reflection)["evidence_refs"],
+    }
+    result = {
+        "schema_version": "loopx_turn_result_v0",
+        "turn_key": plan["transaction"]["turn_key"],
+        "result_kind": "validated_progress",
+        "completed_phases": ["host_execute", "typed_result"],
+        "classification": "fixture_progress", "recommended_action": "Continue",
+        "next_action": "Continue", "delivery_batch_scale": "single_surface",
+        "delivery_outcome": "outcome_progress",
+        "vision_unchanged_reason": "The original objective remains open.",
+        "reward_memory_reflection_json": reflection,
+    }
+    counts = dict(host=0, validation=0, writeback=0, spend=0, post=0)
+
+    def host(_request):
+        counts["host"] += 1
+        return result
+
+    def validate(_plan, candidate):
+        counts["validation"] += 1
+        assert candidate["reward_memory_reflection_json"] == reflection
+        return {"status": "passed", "validator_kind": "fixture-independent-validator",
+                "summary": "Exact reflection and evidence verified.",
+                "reward_memory_reflection_validation": attestation}
+
+    def writeback(candidate):
+        counts["writeback"] += 1
+        assert candidate["reward_memory_reflection_json"] == reflection
+        return {"ok": True, "appended": True}
+
+    def spend():
+        counts["spend"] += 1
+        return {"ok": True, "appended": True, "slots": 1}
+
+    def post(_plan, candidate, evidence):
+        counts["post"] += 1
+        assert candidate["reward_memory_reflection_json"] == reflection
+        assert evidence["task_validation"]["reward_memory_reflection_validation"] == attestation
+        return {"ok": True, "status": "fixture_observed", "external_writes_performed": False}
+
+    class InterruptedAfterValidation(BaseException):
+        pass
+
+    persist = executor._write_journal
+
+    def interrupt(path, journal, **kwargs):
+        # Persist the producer's pre-registration shape from its first write;
+        # never rewrite the native journal owner's immutable saved plan.
+        legacy = copy.deepcopy(journal)
+        legacy["plan"].pop("turn_context_contributions", None)
+        persist(path, legacy, **kwargs)
+        if journal.get("completed_phases") == ["host_execute", "typed_result", "validation"]:
+            raise InterruptedAfterValidation
+
+    options = dict(host_runner=host, task_validator=validate, writeback=writeback,
+                   spend=spend, scheduler=lambda _: {"completed": True},
+                   post_settlement=post, project=tmp_path, runtime_root=tmp_path / "runtime",
+                   goal_id="fixture-goal", timeout_seconds=10, execute=True)
+    with monkeypatch.context() as patch:
+        patch.setattr(executor, "_write_journal", interrupt)
+        with pytest.raises(InterruptedAfterValidation):
+            executor.run_loopx_turn_once(plan, **options)
+
+    path = turn_journal_path(options["runtime_root"], goal_id="fixture-goal",
+                             turn_key=result["turn_key"])
+    journal = json.loads(path.read_text())
+    # The pre-registration producer persisted this same result/attestation and
+    # verified participation, but no generic contribution annotation. This is a
+    # synthetic compatibility input, not a new activation or provider receipt.
+    assert "turn_context_contributions" not in journal["plan"]
+    original_plan = copy.deepcopy(journal["plan"])
+    saved_plan = load_loopx_turn_plan_from_journal(
+        options["runtime_root"], goal_id="fixture-goal", turn_key=result["turn_key"],
+    )
+    recovered = executor.run_loopx_turn_once(saved_plan, **options)
+    assert recovered["status"] == "committed", recovered
+    final = json.loads(path.read_text())
+    assert final["host_result"]["reward_memory_reflection_json"] == reflection
+    assert final["task_validation"]["reward_memory_reflection_validation"] == attestation
+    assert final["plan"] == original_plan
+    before_replay = path.read_bytes()
+    replay = executor.run_loopx_turn_once(saved_plan, **options)
+    assert replay["replayed"] is True
+    assert path.read_bytes() == before_replay
+    assert counts == dict(host=1, validation=1, writeback=1, spend=1, post=1)
+
+
+@pytest.mark.parametrize(("reflection", "kind", "valid"), [
+    (None, "validated_progress", True),
+    ("x" * 2400, "validated_progress", True),
+    ("x" * 2401, "validated_progress", False),
+    ({"wrong": "type"}, "validated_progress", False),
+    ("bounded reflection", "wait", False),
+])
+def test_legacy_cached_reflection_is_bounded_and_cannot_activate_a_host(reflection, kind, valid):
+    plan = _plan(recall=False)
+    plan.pop("turn_context_contributions")
+    before = copy.deepcopy(plan)
+    request = build_loopx_turn_host_request(plan)
+    assert "reward_memory_recall" not in request
+    assert "reward_memory_reflection_json" not in codex_cli_result_schema(request)["properties"]
+    assert "Set reward_memory_reflection_json" not in _prompt(request)
+    assert "When reward_memory_recall contains guidance" not in _prompt(request)
+    result = {
+        "schema_version": "loopx_turn_result_v0", "turn_key": plan["transaction"]["turn_key"],
+        "result_kind": kind, "completed_phases": ["host_execute", "typed_result"],
+        "classification": "fixture_progress", "recommended_action": "Continue",
+        "next_action": "Continue", "delivery_batch_scale": "single_surface",
+        "delivery_outcome": "outcome_progress",
+        "vision_unchanged_reason": "The original objective remains open.",
+        "reward_memory_reflection_json": reflection,
+    }
+    fresh = validate_loopx_turn_host_result(plan, result)
+    assert fresh["ok"], fresh
+    assert "reward_memory_reflection_json" not in fresh["result"]
+    cached = validate_loopx_turn_host_result(plan, result, from_journal=True)
+    assert cached["ok"] is valid, cached
+    if valid:
+        assert cached["result"].get("reward_memory_reflection_json") == reflection
+    # An invalidated registered contribution must not fall back to legacy input.
+    plan["turn_context_contributions"] = []
+    current = validate_loopx_turn_host_result(plan, result, from_journal=True)
+    assert current["ok"], current
+    assert "reward_memory_reflection_json" not in current["result"]
+    plan.pop("turn_context_contributions")
+    assert plan == before
 
 
 @pytest.mark.parametrize(("recall", "ingest"), [(False, False), (True, False), (False, True), (True, True)])

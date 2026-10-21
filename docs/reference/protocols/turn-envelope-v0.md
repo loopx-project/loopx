@@ -693,6 +693,19 @@ Programmatic callers contributing memory use the registered context path;
 inserting a legacy recall readback alone cannot activate a host contribution.
 An inactive binding leaves ordinary host input, prompt and result schema intact.
 
+Recovery also reads pre-registration journals that already contain a bounded
+reflection and its independent validation receipt. Without a contribution
+annotation, only this cached result field retains its existing 2,400-character
+wire decoding; new Host results still require registered context. Recovery
+preserves the original result, validation digest and plan without repeating the
+Host or task validator. Current ingest policy, independent evidence and the
+original settlement/idempotency owners still decide any provider effect.
+
+中文：恢复注册前的执行日志时，保留已准入的有界反思、原独立证明及原 plan；缺少
+贡献 annotation 的旧缓存仅沿用该结果字段原有的 2,400 字符解码，不重新启动 Host
+或 validator，也不为新 Host 输入开启旧接线。provider 效果仍由当前 ingest 策略、
+独立证据及原结算／去重 owner 判定。
+
 TypeScript binds each contribution to the existing governing signature document
 and its source readback. Capture locations and size diagnostics may change;
 actor, authority, binding readback or contribution changes discard that optional
