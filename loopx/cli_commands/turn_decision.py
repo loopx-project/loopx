@@ -38,6 +38,7 @@ from ..control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_turn,
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
+from ..paths import default_public_scan_root
 from ..control_plane.effect_runtime import effect_runtime_result
 from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .turn_selection import turn_controller_advisory_primary
@@ -337,7 +338,9 @@ def current_heartbeat_host_launch_decision(
     args = argparse.Namespace(
         goal_id=goal_id, agent_id=agent_id, turn_instance_id=original_turn,
         todo_id=None, codex_app=False, runtime_profile="generic_cli",
-        scan_path=[str(project)], scan_root=str(project), limit=0,
+        # Match heartbeat-prompt's default public scan. The execution workspace
+        # may be a private task with auth fixtures, rather than public LoopX code.
+        scan_path=[], scan_root=default_public_scan_root(), limit=0,
         available_capabilities=["shell", "filesystem_write"],
     )
     selection = load_requested_quota_action_selection(

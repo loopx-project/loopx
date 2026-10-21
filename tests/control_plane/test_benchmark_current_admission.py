@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from ipaddress import IPv4Address
 from pathlib import Path
 import sys
 import time
@@ -11,9 +12,11 @@ import pytest
 from benchmark.runtime import worker
 from benchmark.tests.test_shared_codex_runtime import worker_env
 from loopx.configure_goal import configure_goal
+from loopx.cli_commands import turn_decision
 from loopx.control_plane.goals import activation_service
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from loopx.global_registry import sync_project_registry_to_global
+from loopx.paths import default_public_scan_root
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.host_process_fixture import write_python_host_fixture
 from tests.control_plane import test_quota_settlement_cli as fixture
@@ -39,6 +42,11 @@ def _environment(tmp_path, monkeypatch, provider, *, replan=False):
     elif replan:
         fixture._configure_autonomous_replan_fixture(project, runtime, source)
     fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    # A private task can contain synthetic private-network fixtures. It is not
+    # the public package tree selected by the heartbeat CLI's default scan.
+    (project / "task_network_fixture.py").write_text(
+        "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
+    )
     synced = sync_project_registry_to_global(
         registry_path=source, runtime_root_override=str(runtime), goal_id=fixture.GOAL_ID,
     )
@@ -70,7 +78,7 @@ print(json.dumps({"type":"thread.started","thread_id":"benchmark-original-sessio
 def _quota(registry, runtime, project):
     code, result = fixture._run_cli(registry, runtime,
         "quota", "should-run", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
-        "--runtime-profile", "generic_cli", cwd=project)
+        "--runtime-profile", "generic_cli", "--scan-root", default_public_scan_root(), cwd=project)
     assert code == 0 or code == 1 and result.get("status_health_ok") is False, result
     return result
 
@@ -112,6 +120,7 @@ def test_heartbeat_worker_qualifies_current_source_at_actual_spawn(tmp_path, mon
     monkeypatch.setattr(worker, "native_command", after_session_selection)
     bindings_before = _bindings(runtime)
     rejected = None
+    result = None
     try:
         result = worker.run_once(env)
     except FirstPartyHostRuntimeRejected as error:
@@ -166,3 +175,24 @@ print(json.dumps({"type":"thread.started","thread_id":"initial-planning-session"
     assert len(planned["todo_ids"]) == 1 and result["planning"]["todo_ids"] == planned["todo_ids"]
     assert not fixture._heartbeat_receipt_events(runtime, result["turn_id"])
     assert fixture._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_heartbeat_host_launch_retains_public_scan_refusal(tmp_path, monkeypatch, provider):
+    env, project, runtime, source, _state = _environment(tmp_path, monkeypatch, provider)
+    public = tmp_path / "selected-public"
+    public.mkdir()
+    (public / "unsafe_fixture.py").write_text(
+        "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
+    )
+    code, original = fixture._run_cli(source, runtime,
+        "quota", "should-run", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
+        "--scan-path", str(public), cwd=project)
+    assert code == 1 and original["status_health_ok"] is False and original["should_run"] is False
+    monkeypatch.setattr(turn_decision, "default_public_scan_root", lambda: str(public))
+    current = turn_decision.current_heartbeat_host_launch_decision(
+        registry_path=Path(env["LOOPX_REGISTRY"]), runtime_root=runtime, project=project,
+        goal_id=fixture.GOAL_ID, agent_id=fixture.AGENT_ID, turn_instance_id="public-scan-refusal",
+    )["current"]
+    assert current["status_health_ok"] is False and current["should_run"] is False
+    assert not (project / "native-starts").exists() and not (project / "model-starts").exists()
