@@ -426,6 +426,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   const pending: JsonObject[] = [], sources: JsonObject[] = [], failures: JsonObject[] = [];
   let selectedTodoRef = false;
   let selectedTodoAuthority: string | null = null;
+  let selectedTodoTextVerified = false;
   for (const value of request.required_reads) {
     const read = requireJsonObject(value, "required read");
     const matches = results.filter(result => result.command === read.command);
@@ -472,6 +473,12 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       // full read instead of guessing which prose is current Goal authority.
       pending.push(read);
     } else {
+      if (read.source === "selected_todo" && typeof selectedTodoRecord?.text === "string") {
+        // Bind completion to the admitted full source, before body deduplication
+        // or display compaction. Provider-wide revisions also change for notes
+        // and unrelated work; those do not replace this task's requirements.
+        selectedTodoTextVerified = true;
+      }
       if (read.source === "selected_todo" && typeof selected.text === "string"
           && selectedTodoRecord?.text === selected.text
           && selectedTodoRecord?.todo_id === selected.todo_id) {
@@ -518,6 +525,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   const includeUserTodos = users && !users.error_code
     && (!Array.isArray(users.todos) || users.todos.length > 0 || users.authority_read != null);
   return {required_reads: pending, work_context: {complete: failures.length === 0,
+    ...(selectedTodoTextVerified ? {selected_todo_text_verified: true} : {}),
     ...(selectedTodoRef ? {selected_todo_ref: "selected_todo"} : {}),
     ...(selectedTodoAuthority ? {selected_todo_authority: selectedTodoAuthority} : {}),
     ...(sources.length ? {sources} : {}),

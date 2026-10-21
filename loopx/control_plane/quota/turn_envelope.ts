@@ -237,6 +237,8 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
   ]) {
     if (source[field] !== null && source[field] !== undefined) compact[field] = source[field];
   }
+  const context = object(object(object(payload.interaction_contract).agent_channel).work_context);
+  if (context.selected_todo_text_verified === true) compact.text_source_verified = true;
   // Work declarations can end in acceptance/stop conditions. Keep their exact
   // text; a display prefix or case-folded recommendation cannot stand in for it.
   const rendered = scalarString(source.text, "selected_todo.text");
@@ -743,7 +745,10 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   );
   const context = object(interaction.agent_context);
   if (Object.keys(context).length > 0) projection.agent_context = structuredClone(context);
-  const workContext = object(object(interaction.agent_channel).work_context);
+  // Source verification belongs to the selected task above. Preserve one carrier while
+  // retaining the existing context elision and historical packet signatures.
+  const {selected_todo_text_verified: _taskTextVerified, ...workContext} =
+    object(object(interaction.agent_channel).work_context);
   const selectedTodoContextIsAlreadyInAction = workContext.complete === true
     && workContext.selected_todo_ref === "selected_todo"
     && Object.keys(workContext).every(field =>

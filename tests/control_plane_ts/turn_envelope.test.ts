@@ -14,6 +14,32 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { TURN_ENVELOPE_SECTION_TARGETS } from "../../loopx/control_plane/quota/turn_envelope_budget.ts";
 import { projectPeerOrchestration } from "../../loopx/control_plane/quota/peer_orchestration.ts";
 
+test("task text commitment has one selected-Todo carrier without changing legacy context elision", () => {
+  for (const retainDetail of [false, true]) {
+    const source = payload();
+    const channel = (source.interaction_contract as JsonObject).agent_channel as JsonObject;
+    channel.work_context = {complete: true, selected_todo_ref: "selected_todo",
+      instruction: "Read full task requirements.", selected_todo_text_verified: true,
+      ...(retainDetail ? {sources: [{source: "selected_todo", content: {todo: {note: "Retain evidence."}}}]} : {})};
+    const envelope = buildTurnEnvelope({payload: source,
+      protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+    const selected = (envelope.action as JsonObject).selected_todo as JsonObject;
+    assert.equal(selected.text_source_verified, true);
+    assert.equal(envelope.work_context === undefined, !retainDetail);
+    assert.equal((envelope.work_context as JsonObject | undefined)?.selected_todo_text_verified, undefined);
+    assert.equal(JSON.stringify(envelope).split('"text_source_verified"').length - 1, 1);
+    assert.equal((envelope.action_signature as JsonObject).matches, true);
+    const legacy = structuredClone(source);
+    delete (((legacy.interaction_contract as JsonObject).agent_channel as JsonObject).work_context as JsonObject).selected_todo_text_verified;
+    const oldEnvelope = buildTurnEnvelope({payload: legacy,
+      protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+    assert.equal(((oldEnvelope.action as JsonObject).selected_todo as JsonObject).text_source_verified, undefined);
+    assert.equal((oldEnvelope.action_signature as JsonObject).matches, true);
+    assert.notEqual((oldEnvelope.action_signature as JsonObject).source_hash,
+      (envelope.action_signature as JsonObject).source_hash);
+  }
+});
+
 function payload(): Record<string, unknown> {
   return {
     ok: true,

@@ -54,7 +54,7 @@ from .turn_decision import collect_turn_status_payload, current_turn_host_launch
 from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
-from .turn_todo_writeback import write_turn_validated_completion
+from .turn_todo_writeback import captured_todo_text_sha256, write_turn_validated_completion
 
 EXACT_SETTLEMENT_READBACK_NOT_FOUND = (
     "exact settlement readback unexpectedly returned not-found"
@@ -122,6 +122,9 @@ def execute_turn_run_once(
             else {}
         )
         selected_todo = selected_turn_todo(envelope)
+        expected_todo_text_sha256 = captured_todo_text_sha256(
+            envelope, todo_id=str(selected_todo.get("todo_id") or "")
+        )
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -350,6 +353,7 @@ def execute_turn_run_once(
                 goal_id=args.goal_id,
                 todo_id=todo_id,
                 completion_turn_key=settlement_identity.turn_instance_id,
+                expected_todo_text_sha256=expected_todo_text_sha256,
                 evidence=(
                     "LoopX Turn validated completion: "
                     + str(result.get("summary") or result["classification"])
@@ -359,6 +363,8 @@ def execute_turn_run_once(
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
             )
+            if completion.get("ok") is not True:
+                return completion
             # Project the continuation the Todo lifecycle durably recorded,
             # never a host-normalized continuation. Contradictory or
             # dangling durable state fails closed before any further

@@ -431,6 +431,14 @@ File/SQLite 原生 CLI
 修正后的新 Turn 只结算一次。边界长度的合法结果保持原行为。这只证明结果传输
 正确性，不证明模型采用、撤销 Host 已执行工作或关闭原三批收敛验收。
 
+Turn 完成写入现将已准入 Todo 全文的精确摘要交给既有原子终态 owner。正文要求
+变化拒绝完成，单独备注或其他 Todo 变化仍有效；provider CAS 阻止并发替换，历史
+receipt 恢复先于当前来源检查。已保存 Turn 缺少全文来源证明时拒绝新完成写入，
+已接受的旧 receipt 则保留原指纹并优先恢复。真实 File/SQLite CLI 和共享 File/SQLite/PostgreSQL
+conformance 覆盖拒绝与恢复。最终 no-followup 保留既有结算顺序：终态拒绝保留此前
+已经提交的 writeback/spend receipt。本批只证明任务正文的完成安全性，不证明整个
+结算的来源原子性、安装态宿主采用、真实模型或其余收敛验收完成。
+
 首个普通 CLI 整合将完全相同的
 `heartbeat_recommendation.blocked_priority_fallback` 副本替换为
 `blocked_priority_fallback_ref="$.blocked_priority_fallback"`。根字段的完整事实、

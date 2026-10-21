@@ -1,6 +1,7 @@
 /** One mixed production-scale graph; independent expectations for review,
  * validation, lease retirement and receipt recovery on every real provider. */
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import test from "node:test";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
@@ -27,6 +28,111 @@ const validation = {schema_version: "issue_fix_validation_command_v0", command_l
 
 export function registerTerminalSourceConformance(provider: string, factory: AuthorityStoreConformanceFactory): void {
   for (const schema of ["legacy", "native"] as const) {
+    test(`${provider}: Turn completion binds exact task text through CAS and historical recovery (${schema})`, async t => {
+      const {store, contender} = await factory(t);
+      const goal = "turn-text-source";
+      const body = "Retain all rows. ".repeat(50) + "最后保留 checksum v1.";
+      const digest = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+      const target: JsonObject = {todo_id: "todo_turn_source", role: "agent", status: "open", done: false,
+        archive_state: "active", text: body, task_class: "advancement_task", claimed_by: "agent-a"};
+      const other = {...target, todo_id: "todo_other", text: "Inspect an independent artifact."};
+      await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+        next_projection: authorityProjectionFixture(goal, [target, other], [], schema, {handoff_mode: "soft_claim"}),
+        events: [], receipts: []});
+      const request: CoordinationTodoTerminalLifecycleInput = {
+        goal_id: goal, todo_id: String(target.todo_id), expected_role: "agent", command: "complete",
+        actor_agent_id: "agent-a", registered_agents: ["agent-a"], lifecycle_grants: [],
+        authority_reason: null, decision_outcome: null,
+        operation_identity: {kind: "explicit", operation_id: "complete-turn-source"},
+        expected_todo_text_sha256: digest(body),
+        lease_idempotency_key: null, lease_expected_version: null, allow_user_gate_auto_acquire: false,
+        requested_no_followup: false, requested_completion_turn_key: "turn-source",
+        requested_completion_identity_source: "turn_settlement", linked_successor_todo_ids: [],
+        successor_intents: [], note: "Verified artifact", evidence: "Independent artifact check passed",
+        reason: null, clear_claim: false, validation_declaration: null, validation_receipt: null,
+        completion_policy_request: null, dry_run: false, now: new Date("2026-09-05T23:00:00Z"),
+      };
+      let head = await loaded(store);
+      const missing = await execute(store, {...request, expected_todo_text_sha256: null});
+      assert.equal(missing.reason_code, "todo_text_source_unavailable");
+      assert.deepEqual(await loaded(store), head);
+      assert.equal((await store.readReceipt(request.operation_identity.operation_id)).status, "missing");
+      // Old accepted requests had no commitment. Explicit missing proof must
+      // retain their fingerprint for receipt recovery, but cannot write anew.
+      const legacy = {...request, todo_id: String(other.todo_id), expected_todo_text_sha256: undefined,
+        operation_identity: {kind: "explicit" as const, operation_id: "legacy-accepted"}};
+      assert.equal((await execute(store, legacy)).status, "applied");
+      head = await loaded(store);
+      assert.equal((await execute(contender, {...legacy, expected_todo_text_sha256: null},
+        async () => {throw new Error("Legacy receipt must recover before missing-source rejection");})).status, "replayed");
+      assert.deepEqual(await loaded(store), head);
+      const storedTarget = (head.head.todos as JsonObject[]).find(todo => todo.todo_id === target.todo_id)!;
+      const storedOther = (head.head.todos as JsonObject[]).find(todo => todo.todo_id === other.todo_id)!;
+      const invalid = await execute(store, {...request, expected_todo_text_sha256: "invalid"});
+      assert.equal(invalid.reason_code, "invalid_coordination_todo_terminal_lifecycle");
+      assert.deepEqual(await loaded(store), head);
+      // Notes and other work advance the global revision without replacing the
+      // requirement this result proves. Preserve both concurrent changes.
+      await contender.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+        operation_id: "unrelated-writes", expected_provider_revision: head.provider_revision,
+        projection: head.head, mutations: [
+          {kind: "todo_upsert", todo: {...storedTarget, note: "Concurrent observation"}},
+          {kind: "todo_upsert", todo: {...storedOther, text: "Different independent requirement"}},
+        ]}));
+      const committed = await execute(store, request);
+      assert.equal(committed.status, "applied", JSON.stringify(committed));
+      assert.equal((await execute(store, {...request, expected_todo_text_sha256: null})).reason_code,
+        "coordination_operation_identity_mismatch");
+      head = await loaded(store);
+      const accepted = (head.head.todos as JsonObject[]).find(todo => todo.todo_id === target.todo_id)!;
+      assert.equal(accepted.status, "done");
+      const nextText = body.replace("checksum v1", "checksum v2");
+      await contender.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+        operation_id: "new-requirement", expected_provider_revision: head.provider_revision,
+        projection: head.head, mutations: [{kind: "todo_upsert", todo: {
+          ...accepted, status: "open", done: false, text: nextText,
+        }}]}));
+      head = await loaded(store);
+      const originalReceipt = await store.readReceipt(request.operation_identity.operation_id);
+      const replay = await execute(contender, request,
+        async () => {throw new Error("Receipt recovery must precede current-source checks");});
+      assert.equal(replay.status, "replayed", JSON.stringify(replay));
+      assert.deepEqual(await loaded(store), head);
+      assert.deepEqual(await store.readReceipt(request.operation_identity.operation_id), originalReceipt);
+      assert.equal((await execute(store, {...request, expected_todo_text_sha256: digest(nextText)})).reason_code,
+        "coordination_operation_identity_mismatch");
+      const stale = {...request, operation_identity: {kind: "explicit" as const, operation_id: "stale-completion"}};
+      assert.equal((await execute(store, stale)).reason_code, "todo_text_changed");
+      assert.deepEqual(await loaded(store), head);
+      assert.equal((await store.readReceipt("stale-completion")).status, "missing");
+      // The source changes after the body check but before the provider write.
+      // That write must lose CAS rather than completing the replacement task.
+      let raced = false;
+      const racingStore = new Proxy(store, {get(owner, key) {
+        if (key === "commitAuthority") return async (...args: Parameters<AuthorityStore["commitAuthority"]>) => {
+          assert.equal(raced, false);
+          raced = true;
+          const current = await loaded(contender);
+          const todo = (current.head.todos as JsonObject[]).find(row => row.todo_id === target.todo_id)!;
+          const changed = await contender.commitAuthority(prepareCoordinationProjectionCommit({goal_id: goal,
+            operation_id: "during-completion-cas", expected_provider_revision: current.provider_revision,
+            projection: current.head, mutations: [{kind: "todo_upsert", todo: {...todo, text: nextText + " Keep all footnotes."}}]}));
+          assert.equal(changed.status, "applied");
+          return owner.commitAuthority(...args);
+        };
+        const member = Reflect.get(owner, key);
+        return typeof member === "function" ? member.bind(owner) : member;
+      }});
+      const racingRequest = {...stale, expected_todo_text_sha256: digest(nextText),
+        operation_identity: {kind: "explicit" as const, operation_id: "racing-completion"}};
+      const conflict = await execute(racingStore, racingRequest);
+      assert.equal(raced, true);
+      assert.equal(conflict.status, "conflict", JSON.stringify(conflict));
+      assert.equal((await store.readReceipt("racing-completion")).status, "missing");
+      assert.equal((await execute(store, racingRequest)).reason_code, "todo_text_changed");
+      const afterRace = await loaded(store);
+      assert.equal((afterRace.head.todos as JsonObject[]).find(todo => todo.todo_id === target.todo_id)!.status, "open");
+    });
     for (const command of ["complete", "supersede"] as const) {
       test(`${provider}: ${command} replaces its own title without admitting duplicate work (${schema})`, async t => {
         const {store, contender} = await factory(t);

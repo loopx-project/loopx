@@ -626,6 +626,18 @@ fresh Turn settling once. Boundary-length valid results retain their behavior.
 This is result-transport correctness; it does not qualify model adoption, undo
 Host work already performed, or close the three convergence streams.
 
+Turn completion now carries an exact text commitment from the admitted full
+Todo source to the existing atomic terminal owner. Changed requirements refuse
+completion; note-only and unrelated Todo changes remain valid. Provider CAS
+fences concurrent replacement, and historical receipt recovery precedes fresh
+source checks. Saved Turns without full-source proof refuse new completion;
+already accepted legacy receipts retain their fingerprints and recover first.
+File/SQLite CLI and shared File/SQLite/PostgreSQL conformance
+cover refusal and recovery. Final no-followup retains its existing settlement
+order: a terminal refusal preserves any earlier writeback/spend receipts.
+This qualifies task-body completion safety, not settlement-wide source atomicity,
+installed host adoption, live models or the remaining convergence acceptance.
+
 The first ordinary-CLI consolidation replaces an exactly identical
 `heartbeat_recommendation.blocked_priority_fallback` mirror with
 `blocked_priority_fallback_ref="$.blocked_priority_fallback"`. The complete root

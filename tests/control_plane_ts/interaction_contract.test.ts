@@ -284,6 +284,7 @@ test("selected Todo references its admitted body only after an exact detail read
   const context = projected.work_context as JsonObject;
   assert.equal(context.complete, true);
   assert.equal(context.selected_todo_ref, "selected_todo");
+  assert.equal(context.selected_todo_text_verified, true);
   const sources = context.sources as JsonObject[];
   assert.equal(sources.length, 1);
   assert.equal(sources[0].source, "selected_todo");
@@ -313,6 +314,7 @@ test("bounded selected text validates its full source snapshot and preserves exa
   const context = projected.work_context as JsonObject;
   assert.equal(context.complete, true);
   assert.equal(context.selected_todo_ref, undefined);
+  assert.equal(context.selected_todo_text_verified, true);
   const source = (context.sources as JsonObject[])[0];
   const sourceContent = source.content as JsonObject;
   assert.equal((sourceContent.todo as JsonObject).text, body);
@@ -322,6 +324,7 @@ test("bounded selected text validates its full source snapshot and preserves exa
     source_results: [{command: read.command, content: {matched: true,
       todo: {...task, text: body + " Updated after selection."}}}]});
   assert.equal((changed.work_context as JsonObject).complete, false);
+  assert.equal((changed.work_context as JsonObject).selected_todo_text_verified, undefined);
   assert.deepEqual(changed.required_reads, [read]);
 });
 
