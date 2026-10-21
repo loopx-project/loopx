@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 from sforge.harness.agent.codex import CodexAgent
+from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
@@ -149,7 +150,10 @@ class SForgeWorker(CodexAgent):
                 raise ValueError("planning_horizon_goal must be a boolean")
             if not profile.startswith("heartbeat-"):
                 raise ValueError("planning_horizon_goal requires a heartbeat profile")
-        self.planning_horizon_goal = planning_horizon_goal
+        self.planning_horizon_goal = (
+            DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and profile.startswith("heartbeat-")
+            else planning_horizon_goal
+        )
         self.stride_strategy = stride_strategy
         self.checkpoint_request_path = None
         self.checkpoint_request = checkpoint_request

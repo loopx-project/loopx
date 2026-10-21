@@ -147,12 +147,15 @@ def goal_context_facts(status: Mapping[str, Any] | None, goal_id: str, acceptanc
                 metadata, _ = split_state_frontmatter(state)
                 objective = active_state_section_text(state, "Objective") or metadata.get("objective")
                 facts["active_state_objective"] = goal_text(objective)
-    if acceptance and configured_checks(acceptance) is not None:
+    if acceptance and (configured_checks(acceptance) is not None or acceptance.get("outcome_requirements") or acceptance.get("goal_objective")):
         # This is the acceptance owner's public projection, including its scope.
         # It must never be mistaken for the whole Goal's original objective.
-        facts["acceptance_contract"] = {key: acceptance[key] for key in (
-            "objective", "non_goals", "criteria", "scope", "revision", "digest", "status",
-        ) if key in acceptance}
+        # Default outcome review exists without executable checks. Carry its
+        # current evidence and linked open work into periodic/stall decisions,
+        # not only the uncovered-work trigger. Configured checks also need their
+        # result/binding/lifetime evidence, not just a summary status. Reuse the
+        # same complete readback as ordinary work; no new read or verdict.
+        facts["acceptance_contract"] = dict(acceptance)
     return facts
 
 

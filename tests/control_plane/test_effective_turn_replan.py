@@ -33,16 +33,19 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
 )
 
 
-@pytest.mark.parametrize("threshold_override,device_count,threshold", [
-    (None, None, 6), (2, 3, 2), (None, 3, 3), (5, 6, 5), (None, 5, 5), (6, None, 6), (None, 6, 6),
+@pytest.mark.parametrize("threshold_override,device_count,threshold,declare_outcome", [
+    (None, None, 6, False), (None, None, 6, True), (2, 3, 2, False), (None, 3, 3, False),
+    (5, 6, 5, False), (None, 5, 5, False), (6, None, 6, False), (None, 6, 6, False),
 ])
 def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     tmp_path: Path, threshold_override: int | None, device_count: int | None,
-    threshold: int,
+    threshold: int, declare_outcome: bool,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     fixture = json.loads(registry.read_text())
     fixture["goals"][0]["quota"]["allowed_slots"] = threshold + 2
+    if declare_outcome:
+        fixture["goals"][0]["status"] = "active"
     registry.write_text(json.dumps(fixture))
     if device_count is not None:
         machine_registry = build_builtin_machine_configuration_registry()
@@ -78,6 +81,21 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     context = effective_turn_cadence_context(
         resolve_todo_replan_cadence_goal(goal, runtime), runtime,
     )
+    original_outcomes = None
+    if declare_outcome:
+        _initialize_fixture_authority(project, runtime)
+        rc, basis = _run_cli(registry, runtime, "goal-acceptance", "inspect", "--goal-id", GOAL_ID)
+        assert rc == 0, basis
+        outcome_path = tmp_path / "ongoing-outcome.json"
+        outcome_path.write_text(json.dumps({"outcome_id": "ongoing-delivery", "owner_agent_id": AGENT_ID,
+            "objective": "Deliver the complete requested result", "todo_ids": [TODO_ID],
+            "requirements": [{"id": "complete", "description": "Meet the complete acceptance scope"}],
+            "source": {"ref": "request:complete-delivery", "summary": "Preserve the requested result across Turns"}}))
+        rc, declared = _run_cli(registry, runtime, "goal-acceptance", "refine", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--document", str(outcome_path), "--operation-id", "declare-ongoing-outcome",
+            "--expected-provider-revision", basis["provider_revision"], "--execute")
+        assert rc == 0, declared
+        original_outcomes = declared["goal_acceptance_contract"]["outcome_requirements"]
 
     def periodic():
         path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
@@ -189,6 +207,12 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
     obligation = next_guard.get("autonomous_replan_obligation")
     assert obligation is not None, next_guard
     assert "periodic_review_due" in json.dumps(obligation)
+    if original_outcomes:
+        assert obligation["replan_context"]["core_goal"]["acceptance_contract"]["outcome_requirements"] == original_outcomes
+        assert original_outcomes["acceptance_gaps"] == [], "periodic review must include requirements covered by open work"
+    else:
+        assert obligation["replan_context"]["core_goal"]["acceptance_contract"] is None
+    assert any("even with open Todos" in line for line in next_guard["replan_action_packet"]["planning_guidance"])
     runs = [
         json.loads(line)
         for line in (runtime / "goals" / GOAL_ID / "runs" / "index.jsonl")
@@ -249,6 +273,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
             "--turn-instance-id", "effective-turn-next", "--scan-path", str(project),
         )
         assert rc == 0, envelope
+        assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
         assert envelope["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
         assert envelope["writeback"]["settlement_plan"] == plan
     vision_path = tmp_path / "periodic-vision.json"

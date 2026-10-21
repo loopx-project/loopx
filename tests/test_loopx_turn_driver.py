@@ -2358,6 +2358,10 @@ def test_turn_run_once_cli_dsh_preserves_material_path_delta(
         "summary": "The prior stage closed and an active successor was authored.",
         "recommended_action": "Continue the validated successor stage.",
         "next_action": "Validate the next bounded fixture check.",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_progress",
+        "work_evidence": ["artifact:validated-artifact"],
+        "validation_evidence": ["check:material-replan-validation"],
         "path_delta_mode": "material_replan",
         "agent_vision_json": "[]" if malformed_packet else json.dumps(vision),
     }

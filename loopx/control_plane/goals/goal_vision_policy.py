@@ -17,6 +17,10 @@ GOAL_VISION_ADVANCEMENT_POLICY_CHOICES = tuple(
 DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD = 6
 MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD = 6
 
+# Original Goal context is part of ordinary work selection. An explicit false
+# remains available for rollback and controlled comparisons.
+DEFAULT_PLANNING_HORIZON_GOAL = True
+
 # Explicit completed-Todo cadence remains bounded by the retained evidence
 # window. This is a legacy-unit limit, not the product default.
 COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD = 5

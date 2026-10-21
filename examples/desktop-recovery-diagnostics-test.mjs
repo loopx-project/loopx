@@ -42,6 +42,23 @@ test('installer failure is actionable and clipboard denial leaves selectable tex
   await elements.get('#copy-diagnostics').onclick();
   assert.equal(elements.get('#diagnostics').selected, true);
 });
+test('download and verification failures retain distinct bounded recovery causes', () => {
+  for (const [code, meaning] of [
+    ['update_download_timeout', /下载超时/],
+    ['update_network_failed', /网络请求失败/],
+    ['update_download_failed', /服务器未能提供安装包/],
+    ['update_signature_invalid', /未通过签名校验/],
+  ]) {
+    const {context, elements} = page();
+    context.packet = {app_version:'1.2.4', state:{phase:'error',details:{code,url:'PRIVATE',signature:'PRIVATE'}}};
+    runInNewContext('render(packet.state); renderDiagnostics(packet)', context);
+    assert.match(elements.get('#update-status').textContent, meaning);
+    assert.match(elements.get('#update-status').textContent, /尚未安装/);
+    const value = JSON.parse(elements.get('#diagnostics').value);
+    assert.equal(value.error_code, code);
+    assert.ok(!JSON.stringify(value).includes('PRIVATE'));
+  }
+});
 test('legacy pairing state reaches diagnostics without private detail', () => {
   const {context, elements} = page();
   context.packet = {

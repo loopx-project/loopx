@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ...control_plane.goals.goal_vision_policy import (
     DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+    DEFAULT_PLANNING_HORIZON_GOAL,
     normalize_completed_todo_replan_threshold,
     normalize_effective_turn_replan_threshold,
 )
@@ -102,6 +103,7 @@ def default_replan_cadence_configuration() -> dict[str, Any]:
     return {
         "count_unit": ReplanCadenceUnit.EFFECTIVE_TURNS.value,
         "count": DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
+        "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
     }
 
 

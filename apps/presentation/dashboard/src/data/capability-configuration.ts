@@ -77,6 +77,7 @@ export function replanCadenceEditorDefaults(effective: unknown, fallback: unknow
   const live = configurationObject(replanCadenceEditorValue(effective));
   if (Object.hasOwn(live, "count_unit")) defaults.count_unit = live.count_unit;
   if (Object.hasOwn(live, "count")) defaults.count = live.count;
+  if (Object.hasOwn(live, "planning_horizon_goal")) defaults.planning_horizon_goal = live.planning_horizon_goal;
   // Strategy omission keeps the existing default-off meaning.
   return defaults;
 }
@@ -100,12 +101,14 @@ export function hasReplanCadenceOverride(value: unknown): boolean {
 export function goalReplanCadenceWriteValue(
   draft: Record<string, unknown>,
   cadenceOverride: boolean,
+  horizonOverride = Object.hasOwn(draft, "planning_horizon_goal"),
 ): Record<string, unknown> {
   const value = { ...draft };
   if (!cadenceOverride) {
     delete value.count_unit;
     delete value.count;
   }
+  if (!horizonOverride) delete value.planning_horizon_goal;
   return value;
 }
 

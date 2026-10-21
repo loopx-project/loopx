@@ -609,6 +609,16 @@ class ChatActionNormalizationMixin:
                 ]
             return result
         if action_kind == "goal.update":
+            if "reason" in parameters or "source_ref" in parameters or "prepared_by" in parameters:
+                values = self._allowed_parameters(parameters, allowed={"goal_id", "objective", "reason", "source_ref", "prepared_by"})
+                goal_id = _opaque(values.get("goal_id"), field="goal_id")
+                goal = self._goal(goal_id)
+                actor = values.get("prepared_by")
+                if actor is not None and actor not in registered_agent_ids_for_goal(goal):
+                    raise ValueError("the preparing Agent must be registered for this Goal")
+                return {"goal_id": goal_id, "objective": _text(values.get("objective"), field="objective", limit=4096),
+                    "reason": _text(values.get("reason"), field="reason", limit=1024),
+                    "source_ref": _text(values.get("source_ref"), field="source_ref", limit=256), "prepared_by": actor}
             values = self._allowed_parameters(
                 parameters,
                 allowed={"goal_id", "title", "objective", "status", "write_scope"},

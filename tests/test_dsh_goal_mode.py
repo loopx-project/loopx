@@ -35,6 +35,7 @@ def _signed_request(
     agent_id: str = "a",
     todo_id: str | None = None,
     boundary: dict | None = None,
+    execution_profile: dict | None = None,
 ) -> dict:
     request = {
         "schema_version": dsh_goal_mode.LOOPX_TURN_HOST_REQUEST_SCHEMA,
@@ -79,6 +80,10 @@ def _signed_request(
         request["turn_envelope"]["action"]["selected_todo"] = {"todo_id": todo_id}
     if boundary is not None:
         request["turn_envelope"]["boundary"].update(boundary)
+    if execution_profile is not None:
+        request["turn_envelope"]["contract_capsule"] = {
+            "execution_profile": execution_profile
+        }
     signature = turn_envelope_action_signature_document(
         request["turn_envelope"]
     )
@@ -488,6 +493,123 @@ def test_explicit_delivery_metadata_reaches_its_existing_validator(kind, field, 
     for result in (adapted, direct):
         verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
         assert verdict["ok"] is valid, verdict["errors"]
+def test_material_result_preserves_profile_classification_and_evidence() -> None:
+    request = _signed_request(
+        execution_profile={
+            "minimum_scale": "multi_surface_or_implementation",
+            "must_include": ["coherent_artifact", "targeted_validation"],
+        }
+    )
+    result = turn_host_adapter.build_result(
+        request,
+        {
+            "result_kind": "validated_progress",
+            "classification": "implementation completed",
+            "summary": "The bounded implementation and validation completed.",
+            "next_action": "Review the validated implementation.",
+            "delivery_batch_scale": "implementation",
+            "delivery_outcome": "primary_goal_outcome",
+            "vision_unchanged_reason": "The accepted outcome remains unchanged.",
+            "work_evidence": ["artifact:implementation-change"],
+            "validation_evidence": ["check:targeted-tests"],
+        },
+    )
+
+    assert result["delivery_batch_scale"] == "implementation"
+    assert result["delivery_outcome"] == "primary_goal_outcome"
+    assert result["work_evidence"] == ["artifact:implementation-change"]
+    assert result["validation_evidence"] == ["check:targeted-tests"]
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
+    assert verdict["result"]["delivery_batch_scale"] == "implementation"
+    assert verdict["result"]["delivery_outcome"] == "primary_goal_outcome"
+    assert verdict["result"]["work_evidence"] == result["work_evidence"]
+    assert verdict["result"]["validation_evidence"] == result["validation_evidence"]
+
+
+def test_execution_readback_projects_host_evidence() -> None:
+    from loopx.control_plane.turn_driver.execution_readback import execution_payload
+
+    request = _signed_request()
+    payload = execution_payload(
+        _turn_plan(request),
+        {
+            "status": "committed",
+            "host_result": {
+                "work_evidence": ["artifact:change"],
+                "validation_evidence": ["check:targeted-tests"],
+            },
+        },
+        execute=True,
+        replayed=False,
+        effects={},
+    )
+
+    assert payload["host_evidence"] == {
+        "work_evidence": ["artifact:change"],
+        "validation_evidence": ["check:targeted-tests"],
+    }
+
+
+def test_shared_host_fails_closed_without_profile_evidence() -> None:
+    request = _signed_request(
+        execution_profile={"minimum_scale": "multi_surface_or_implementation"}
+    )
+    result = turn_host_adapter.build_result(
+        request,
+        {
+            "result_kind": "validated_progress",
+            "classification": "implementation completed",
+            "next_action": "Review the implementation.",
+            "delivery_batch_scale": "implementation",
+            "delivery_outcome": "primary_goal_outcome",
+        },
+    )
+
+    assert result["result_kind"] == "wait"
+    assert result["classification"] == "missing_host_execution_evidence"
+    assert "work_evidence and validation_evidence" in result["next_action"]
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert verdict["ok"], verdict["errors"]
+
+
+@pytest.mark.parametrize(
+    ("change", "expected_error"),
+    [
+        ({"work_evidence": "artifact:change"}, "work_evidence must be an array"),
+        ({"validation_evidence": [""]}, "validation_evidence must contain"),
+        ({"work_evidence": ["x" * 241]}, "work_evidence items"),
+        (
+            {"validation_evidence": [f"check:{index}" for index in range(9)]},
+            "validation_evidence must contain at most 8 items",
+        ),
+        (
+            {"work_evidence": ["/Users/example/private.txt"]},
+            "work_evidence[0]",
+        ),
+    ],
+)
+def test_profile_material_result_rejects_unbounded_or_unsafe_evidence(
+    change: dict[str, object], expected_error: str,
+) -> None:
+    request = _signed_request(
+        execution_profile={"minimum_scale": "multi_surface_or_implementation"}
+    )
+    candidate: dict[str, object] = {
+        "result_kind": "validated_progress",
+        "classification": "implementation completed",
+        "next_action": "Review the implementation.",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "primary_goal_outcome",
+        "work_evidence": ["artifact:change"],
+        "validation_evidence": ["check:targeted-tests"],
+    }
+    candidate.update(change)
+    result = turn_host_adapter.build_result(request, candidate)
+
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), result)
+    assert not verdict["ok"]
+    assert expected_error in " ".join(verdict["errors"])
 
 
 def _material_replan_candidate() -> tuple[dict[str, object], str]:
@@ -593,6 +715,24 @@ def test_stop_candidates_cannot_smuggle_material_path_fields(kind: str) -> None:
 
 
 @pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
+def test_stop_candidates_cannot_declare_work_or_validation_evidence(kind: str) -> None:
+    result = turn_host_adapter.build_result(
+        _signed_request(),
+        {
+            "result_kind": kind,
+            "classification": "bounded stop",
+            "next_action": "Await the next authorized iteration.",
+            "work_evidence": ["artifact:unexpected"],
+            "validation_evidence": ["check:unexpected"],
+        },
+    )
+
+    verdict = validate_loopx_turn_host_result(_turn_plan(_signed_request()), result)
+    assert not verdict["ok"]
+    assert "work/validation evidence" in " ".join(verdict["errors"])
+
+
+@pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
 def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind: str) -> None:
     request = _signed_request()
     schema = codex_cli_result_schema(request)
@@ -601,6 +741,8 @@ def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind:
     assert "path_delta_mode" in required and "agent_vision_json" in required
     assert properties["path_delta_mode"]["type"] == "string"
     assert properties["agent_vision_json"]["type"] == "string"
+    assert "work_evidence" not in required
+    assert "validation_evidence" not in required
     value = {field: "" for field in required}
     value.update(
         {
@@ -615,6 +757,35 @@ def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind:
 
     verdict = validate_loopx_turn_host_result(_turn_plan(request), value)
     assert verdict["ok"], verdict["errors"]
+
+
+def test_codex_schema_requires_profile_evidence_only_for_material_results() -> None:
+    request = _signed_request(
+        execution_profile={"minimum_scale": "multi_surface_or_implementation"}
+    )
+    schema = codex_cli_result_schema(request)
+
+    assert "work_evidence" not in schema["required"]
+    assert "validation_evidence" not in schema["required"]
+    assert schema["allOf"] == [
+        {
+            "if": {
+                "properties": {
+                    "result_kind": {
+                        "enum": [
+                            "validated_progress",
+                            "repair_required",
+                            "replan_required",
+                        ]
+                    }
+                },
+                "required": ["result_kind"],
+            },
+            "then": {
+                "required": ["work_evidence", "validation_evidence"],
+            },
+        }
+    ]
 
 
 def _turn_plan(request: dict) -> dict:

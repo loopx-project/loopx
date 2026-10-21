@@ -77,7 +77,7 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
     from argparse import BooleanOptionalAction
     configure_goal_parser.add_argument(
         "--execution-planning-horizon-goal", action=BooleanOptionalAction, default=None,
-        help="Include the full same-source Goal in preselection planning horizons. Default off; no selection or execution authority change.",
+        help="Include the original Goal in preselection planning horizons (default on). Explicitly disable for rollback or comparison; no selection or execution authority change.",
     )
     configure_goal_parser.add_argument(
         "--clear-execution-planning-horizon-goal", action="store_true",

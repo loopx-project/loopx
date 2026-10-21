@@ -635,7 +635,7 @@ def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_pa
         # launching a model or mutating any active project.
         build_parser().parse_args(args)
         calls.append(args)
-        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value}}}
+        return {"todo_id": "todo_fixture", "after": {"execution_profile": {field: value, "planning_horizon_goal": True}}}
 
     monkeypatch.setattr(agent, "_write_task_document", write_task)
     monkeypatch.setattr(agent, "_registry_exists", registry_exists)
@@ -652,7 +652,8 @@ def test_seeded_phase_bootstrap_records_default_turns_or_explicit_cadence(tmp_pa
     configured = [args for args in calls if option in args]
     assert configured and all(args[args.index(option) + 1] == str(value)
                               for args in configured)
-    assert agent._replan_receipt() == {field: value}
+    assert agent._replan_receipt() == {field: value, "planning_horizon_goal": True}
+    assert all("--execution-planning-horizon-goal" in args for args in configured)
 
 
 def test_requested_stride_requires_configuration_readback_before_execution(tmp_path, monkeypatch):
@@ -670,7 +671,7 @@ def test_requested_stride_requires_configuration_readback_before_execution(tmp_p
 
     async def wrong_strategy(*args, **kwargs):
         return {"after": {"execution_profile": {
-            "replan_after_effective_turns": 6, "stride_strategy": "off",
+            "replan_after_effective_turns": 6, "stride_strategy": "off", "planning_horizon_goal": True,
         }}}
 
     monkeypatch.setattr(agent, "_registry_exists", prepared)
@@ -1058,7 +1059,7 @@ raise SystemExit(1)
             extra_env={"FAKE_DIE": "1"})
 
 
-@pytest.mark.parametrize("requested,actual", [(True, False), (False, True), (None, True)])
+@pytest.mark.parametrize("requested,actual", [(True, False), (False, True), (None, False), (None, None), (None, 1)])
 def test_horizon_setting_must_match_restored_goal_before_work(tmp_path, monkeypatch, requested, actual):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex

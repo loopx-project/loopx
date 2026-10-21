@@ -382,7 +382,8 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
     expected_cadence = ({"replan_after_effective_turns": turns or 6}
                         if profile.startswith("heartbeat-") else
                         {"replan_after_completed_todos": 3})
-    assert worker.runtime._replan_receipt() == expected_cadence
+    assert worker.runtime._replan_receipt() == {**expected_cadence,
+        **({"planning_horizon_goal": True} if profile.startswith("heartbeat-") else {})}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     if profile.startswith("heartbeat-"):
         assert all(receipt.get(k) == v for k, v in expected_cadence.items())
@@ -594,7 +595,8 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
                           profile="heartbeat-explore", cwd="/task", task_entry=entry, planning_horizon_goal=horizon)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.runtime.execution.task_entry == entry
-    assert worker.runtime.planning_horizon_goal is horizon
+    expected_horizon = True if horizon is None else horizon
+    assert worker.runtime.planning_horizon_goal is expected_horizon
     assert worker.runtime.execution.turn_envelope is False
     worker.prepared = True  # Bootstrap is separately covered through real CLI fixtures.
     first = worker.format_run_cmd("/task.md")
@@ -605,8 +607,7 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("timeout --signal")
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
     assert profile["task_entry"] == entry
-    assert profile.get("planning_horizon_goal") is horizon
-    assert ("planning_horizon_goal" in profile) is (horizon is not None)
+    assert profile["planning_horizon_goal"] is expected_horizon
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
 @pytest.mark.parametrize('enabled', [False, True])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
@@ -823,7 +824,7 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
         assert kwargs["eval_interval"] == interval
         agent = kwargs["agent"]
         horizon = (True if "--planning-horizon-goal" in cadence_args else
-                   False if "--no-planning-horizon-goal" in cadence_args else None)
+                   False if "--no-planning-horizon-goal" in cadence_args else True)
         assert agent.planning_horizon_goal is horizon
         assert "total trial budget" not in agent.workspace_instructions
         assert agent.task_objective == "fixture task"
@@ -846,9 +847,8 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
     assert receipt["eval_interval"] == interval
     assert receipt[field] == count
     horizon = (True if "--planning-horizon-goal" in cadence_args else
-               False if "--no-planning-horizon-goal" in cadence_args else None)
-    assert receipt.get("planning_horizon_goal") is horizon
-    assert ("planning_horizon_goal" in receipt) is (horizon is not None)
+               False if "--no-planning-horizon-goal" in cadence_args else True)
+    assert receipt["planning_horizon_goal"] is horizon
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in receipt
@@ -937,7 +937,7 @@ def test_sforge_explicit_todo_cadence_reaches_worker_and_receipt(tmp_path, monke
                           profile=profile, cwd="/task", replan_after_todos=3)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.replan_after_turns is None
-    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3}
+    assert worker.runtime._replan_receipt() == {"replan_after_completed_todos": 3, "planning_horizon_goal": True}
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["replan_after_completed_todos"] == 3
     assert "replan_after_effective_turns" not in receipt

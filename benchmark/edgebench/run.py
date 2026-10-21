@@ -123,7 +123,7 @@ def main(argv=None):
     cadence.add_argument("--replan-after-todos", type=int, choices=range(1, 6),
                          help="Explicit completed-Todo cadence ablation for heartbeat profiles")
     parser.add_argument("--planning-horizon-goal", action=argparse.BooleanOptionalAction, default=None,
-                        help="Opt-in full Goal in preselection horizon; --no-planning-horizon-goal explicitly disables it")
+                        help="Heartbeat workers include the original Goal before selection by default; --no-planning-horizon-goal opts out")
     parser.add_argument("--stride-strategy", choices=stride_strategy_options(),
                         help="Explicit heartbeat Goal-review strategy; omitted keeps the ordinary off treatment")
     parser.add_argument("--checkpoint-controller-file", type=Path,
@@ -372,8 +372,8 @@ def main(argv=None):
            if agent.replan_after_turns is not None else {}),
         **({"replan_after_completed_todos": agent.replan_after_todos}
            if agent.replan_after_todos is not None else {}),
-        **({"planning_horizon_goal": args.planning_horizon_goal}
-           if args.planning_horizon_goal is not None else {}),
+        **({"planning_horizon_goal": agent.planning_horizon_goal}
+           if agent.planning_horizon_goal is not None else {}),
         **({"stride_strategy": args.stride_strategy}
            if args.stride_strategy is not None else {}),
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}

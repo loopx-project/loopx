@@ -1175,6 +1175,13 @@ They require demonstrated need and a separately reviewed automated policy and
 verifier contract. Permission expansion or escape from root intent cannot be
 auto-committed unless Goal creation explicitly delegated that exact class.
 
+The proposed [current operating objective](goal-outcome-refinement-v0.md#current-operating-objective)
+slice addresses stale source declarations through explicit owner apply and
+independent peer adoption. It does not enable automated root-intent, acceptance
+or permission amendments. The existing immutable work-template intent and
+its revision keep their meaning; the operating-objective history has its own
+versioned contract, and old `intent_basis` receipts are not upgraded in place.
+
 ## 11. Validation matrix
 
 At minimum, tests must prove:

@@ -76,6 +76,10 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
             (home / "sessions").mkdir(parents=True)
             (home / "ipc").mkdir(mode=0o700)
             rollout = home / "sessions" / "bound.jsonl"
+            rollout.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": THREAD}})
+                + "\n"
+            )
             append_message(rollout, "user", "Original request")
             append_message(rollout, "assistant", "Original result")
             with rollout.open("a") as stream:

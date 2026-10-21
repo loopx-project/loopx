@@ -22,7 +22,10 @@ const updateErrors: Record<string, [string, string]> = {
   update_feed_invalid: ["更新源格式异常。请稍后重新检查。", "The update feed is invalid. Check again later."],
   update_platform_unavailable: ["此通道尚无适用于本机的更新包。", "This channel has no update package for this platform."],
   update_check_timeout: ["检查更新超时。请稍后重试。", "The update check timed out. Try again later."],
-  update_network_failed: ["无法连接更新服务器。请检查网络后重试。", "Cannot reach the update server. Check your connection and retry."],
+  update_network_failed: ["更新网络请求失败，尚未安装。请检查连接后重试。", "The update request failed; nothing was installed. Check your connection and retry."],
+  update_download_timeout: ["更新包下载超时，尚未安装。请检查网络后重试。", "The update download timed out; nothing was installed. Check your connection and retry."],
+  update_download_failed: ["更新服务器未能提供安装包，尚未安装。请重新检查更新。", "The update server did not provide the package; nothing was installed. Check for updates again."],
+  update_signature_invalid: ["更新包未通过签名校验，尚未安装。请重新检查更新。", "The update package failed signature verification; nothing was installed. Check for updates again."],
   update_download_or_signature_failed: ["更新包下载或签名校验失败，尚未安装。请重新检查更新。", "Download or signature verification failed; the update was not installed. Check for updates again."],
 };
 function failedUpdate(error: unknown, fallback = "update_failed"): UpdateState {

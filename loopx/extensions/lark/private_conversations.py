@@ -351,13 +351,39 @@ class LarkPrivateConversations:
         verified = self._source_verified(record, sender_identity=identity)
         return identity.get("bot_display_name"), verified
 
+    @staticmethod
+    def _group_control_hint(event: Mapping[str, Any]) -> str | None:
+        # Rendered event mentions only schedule readonly source IO. The raw
+        # provider text and current App identity still authorize the command.
+        text = event.get("content")
+        if not isinstance(text, str):
+            return None
+        text = text.strip()
+        if text in CHAT_CONTROL_COMMANDS:
+            return text
+        mentions = event.get("mentions")
+        if not isinstance(mentions, list):
+            return None
+        candidates = set()
+        for mention in mentions:
+            if not isinstance(mention, Mapping):
+                continue
+            name = mention.get("name")
+            for prefix in (mention.get("key"), "@" + name if isinstance(name, str) else None):
+                if (isinstance(prefix, str) and prefix and text.startswith(prefix)
+                        and text[len(prefix):len(prefix) + 1].isspace()):
+                    command = text[len(prefix):].strip()
+                    if command in CHAT_CONTROL_COMMANDS:
+                        candidates.add(command)
+        return next(iter(candidates)) if len(candidates) == 1 else None
+
     def _admitted_control_root(self, record: dict[str, Any], binding: dict[str, Any]) -> str | None:
         """Schedule readonly IO only for a topic already admitted by this Core."""
         event = record["event"]
         root = event.get("root_id")
         if (binding.get("enabled") is not True or binding.get("audience") != "group"
                 or event.get("message_type") != "text" or not isinstance(event.get("content"), str)
-                or event["content"] not in CHAT_CONTROL_COMMANDS
+                or self._group_control_hint(event) is None
                 or not isinstance(root, str) or not root or root == event["message_id"]):
             return None
         try:
@@ -379,6 +405,9 @@ class LarkPrivateConversations:
 
     def _admit_group_control(self, path: Path, record: dict[str, Any], binding: dict[str, Any],
                             root: str, *, defer_background_stop: bool) -> dict[str, Any] | None:
+        command_input = self._group_control_hint(record["event"])
+        if command_input is None:
+            return None
         checked = False
         source_verified = False
         # Read only the source and its locally admitted root. Fresh Core
@@ -400,7 +429,7 @@ class LarkPrivateConversations:
                                            source_pair=envelopes)
             if message is None:
                 raise ValueError("canonical control source verification failed")
-            if message.get("_command_input") != record["event"]["content"]:
+            if message.get("_command_input") != command_input:
                 raise _ControlReadFallback
             source_verified = True
             _atomic_write_json(path, record)
@@ -408,7 +437,7 @@ class LarkPrivateConversations:
         try:
             admitted = self.core.admit(binding_id=binding["binding_id"], source=record["source"],
                 request_ref=record["request_ref"], message=record["event"]["content"],
-                command=CHAT_CONTROL_COMMANDS[record["event"]["content"]],
+                command=CHAT_CONTROL_COMMANDS[command_input],
                 defer_background_stop=defer_background_stop, source_preflight=preflight)
         except _ControlReadFallback:
             return None

@@ -80,6 +80,12 @@ export const replanCadenceScenario = {
       await waitForInputValue(count, "6");
       if (await strategy.inputValue() !== "off") throw new Error("Stride must default off");
       if (await unit.inputValue() !== "effective_turns") throw new Error("Product default is not settled work Turns");
+      const horizonGoal = page.getByLabel(/^在规划视野中显示 Goal/);
+      const advanced = page.getByText("高级设置", {exact: true});
+      assert.equal(await horizonGoal.isVisible(), false, "ordinary configuration does not require a Goal-context opt-in");
+      await advanced.click();
+      assert.equal(await horizonGoal.isChecked(), true);
+      await advanced.click();
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-product-default.png"), animations: "disabled" });
       const preview = await request(base + "/preview", legacy);
       await request(base + "/apply", { ...legacy, expected_plan_revision: preview.plan_revision });
@@ -148,27 +154,30 @@ export const replanCadenceScenario = {
         await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("multi-agent-projection");
         await page.getByRole("navigation", { name: "Goal 能力目录" }).getByRole("button", { name: /Goal 复盘与步幅/ }).click();
       }
-      // The same real configuration owner supports the independent horizon
-      // switch without pinning cadence or changing stride. Unchecked remains off.
-      const horizonGoal = page.getByLabel(/^在规划视野中显示 Goal/);
-      assert.equal(await horizonGoal.isChecked(), false);
-      await horizonGoal.check();
-      await page.getByRole("button", { name: "预览变更", exact: true }).click();
-      await applyGoalPreview();
-      await reopenGoalCadence();
+      // Default context is visible to the Agent without an owner setup step.
+      // Advanced opt-out persists without pinning cadence or changing stride.
+      assert.equal(await horizonGoal.isVisible(), false);
+      await advanced.click();
       assert.equal(await horizonGoal.isChecked(), true);
-      let horizonReadback = await readGoalCadence();
-      assert.equal(horizonReadback.current.planning_horizon_goal, true);
-      assert.equal(horizonReadback.current.stride_strategy, "evidence_conditioned_v1");
-      assert.equal(horizonReadback.current.count, undefined);
-      await page.screenshot({ path: resolve(outputDir, "planning-horizon-goal-enabled.png"), animations: "disabled" });
       await horizonGoal.uncheck();
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await applyGoalPreview();
       await reopenGoalCadence();
+      await advanced.click();
       assert.equal(await horizonGoal.isChecked(), false);
-      horizonReadback = await readGoalCadence();
+      let horizonReadback = await readGoalCadence();
       assert.equal(horizonReadback.current.planning_horizon_goal, false);
+      assert.equal(horizonReadback.current.stride_strategy, "evidence_conditioned_v1");
+      assert.equal(horizonReadback.current.count, undefined);
+      await page.screenshot({ path: resolve(outputDir, "planning-horizon-goal-disabled.png"), animations: "disabled" });
+      await horizonGoal.check();
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await applyGoalPreview();
+      await reopenGoalCadence();
+      await advanced.click();
+      assert.equal(await horizonGoal.isChecked(), true);
+      horizonReadback = await readGoalCadence();
+      assert.equal(horizonReadback.current.planning_horizon_goal, true);
       // Restore the sparse pre-existing scenario before its cadence transitions.
       await page.getByRole("button", { name: "编辑 JSON", exact: true }).click();
       await page.locator("#goal-configuration-json").fill(JSON.stringify({stride_strategy: "evidence_conditioned_v1"}));
@@ -251,9 +260,12 @@ export const replanCadenceScenario = {
       await unit.focus();
       await page.keyboard.press("Tab");
       await page.keyboard.press("Tab");
-      assert.equal(await horizonGoal.evaluate((element) => element === document.activeElement), true, "Horizon switch is keyboard reachable");
-      await page.keyboard.press("Tab");
       if (!(await strategy.evaluate((element) => element === document.activeElement))) throw new Error("Strategy is not keyboard reachable");
+      await page.keyboard.press("Tab");
+      assert.equal(await advanced.evaluate((element) => element === document.activeElement), true, "Advanced settings is keyboard reachable");
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Tab");
+      assert.equal(await horizonGoal.evaluate((element) => element === document.activeElement), true, "Advanced horizon opt-out is keyboard reachable");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-goal-mobile.png"), animations: "disabled" });
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error("Cadence editor overflowed");
       await page.setViewportSize({ width: 1512, height: 982 });

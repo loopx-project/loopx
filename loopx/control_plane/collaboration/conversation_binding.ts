@@ -496,7 +496,7 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded"].includes(String(failed.error_code))
       || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
-  if (recovery.admitted_turn != null && previous?.failed_turn_id === failed.turn_id
+  if (recovery.admitted_turn != null && previous !== null && previous.failed_turn_id === failed.turn_id
       && Number.isSafeInteger(previous.routing_attempt) && Number(previous.routing_attempt) >= 1
       && Number(previous.routing_attempt) <= 3 && previous.version === version) {
     // A crash after queue admission must adopt that exact canonical Turn,
@@ -560,7 +560,7 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
   failed: JsonObject, previous: JsonObject | null, version: number): JsonObject | null {
   if (!["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
   // An unfinished older reservation must finish under its original identity.
-  if (previous?.failed_turn_id === failed.turn_id && previous.routing_attempt === undefined) return null;
+  if (previous !== null && previous.failed_turn_id === failed.turn_id && previous.routing_attempt === undefined) return null;
   const observed = recovery.native_observation == null ? null
     : requireJsonObject(recovery.native_observation, "native failure readback");
   if (observed && observed.pre_execution_routing_timeout !== true) return null;

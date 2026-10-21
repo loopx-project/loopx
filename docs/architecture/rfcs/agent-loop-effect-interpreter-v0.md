@@ -545,6 +545,36 @@ and reject signature equivalence after a step/order/judge mutation. The existing
 This closes that transport omission, not the three convergence acceptances or
 permission to retire their active Python/host adapters.
 
+Following the capsule through the actual shared Host input exposed a second
+loss: DSH/cloud retained only its unavailable-context field, so a valid signed
+audit never reached the provider. That adapter now forwards the existing audit
+and original capture route/hash. Real File/SQLite normal/replan captures through
+a protocol-only DSH subprocess cover ordered obligations, the continuing judge,
+insufficient-proof conditions, signature refusal and unchanged source/state.
+The same audit also found work qualification missing: the capsule filtered out
+outcome-floor/degradation rules, and that Host omitted the whole existing
+execution profile. The typed projection now retains it intact and the Host
+forwards it. A new material result carrying that profile returns typed,
+public-safe `work_evidence` and `validation_evidence` arrays and preserves its
+actual delivery scale/outcome; the outer executor validates and retains both.
+Native source oracles and signed mutations cover these rules. Inputs without
+either contract retain their prior prompt, and older journal replay remains
+readable. The outer executor keeps all state/quota/scheduler effects. This
+qualifies clause delivery at that caller, not model adherence, installed
+adoption or complete-cost improvement. Count the cost of restored requirements;
+the earlier incomplete input is not an accepted efficiency baseline.
+
+The complete execution profile adds 138–142 JSON characters/UTF-8 bytes and no
+lines to ordinary Turn plans on the unchanged 96-row public CLI fixture. The
+original base/head differential fails its 64/70-character and 128-byte growth
+allowances; this remains a recorded failure. Qualify the restored outcome-floor
+and degradation fields with a 160-character/byte one-time allowance only when
+the old four-field profile becomes complete, with unchanged signature coverage
+and no other JSON-shape change. Already complete, partial or unrelated changes
+receive no allowance. Keep absolute budgets, line limits, fixture populations,
+complete source/Host clause checks and the production 8 KiB diagnostic. This
+explains the required presentation cost, not model tokens or efficiency gains.
+
 中文：本批修复验收步骤、继续说明和当前判断在 capsule 中丢失的问题；签名一致曾只
 比较已经裁剪过的投影。File/SQLite 同次捕获验证完整条款和篡改后的签名差异；
 8 KiB 警告线保留。安装态 host、模型效果及整体统一仍按原三个 Todo 验收。

@@ -19,6 +19,7 @@ from .chat_monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
 from .chat_todo_actions import ChatTodoActionMixin
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
+from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal
 from .control_plane.goals.configure_goal_service import (
     bind_goal_agent_with_global_sync,
@@ -228,6 +229,7 @@ def _monitor_text(parameters: Mapping[str, Any]) -> str | None:
 
 
 class ChatActionService(
+    GoalObjectiveActionMixin,
     GoalAcceptanceActionMixin,
     ChatActionNormalizationMixin,
     ChatGoalLifecycleActionMixin,
@@ -1261,7 +1263,13 @@ class ChatActionService(
             normalized["workspace_ref"] = workspace_binding["workspace_ref"]
         else:
             eligibility = None
-        if action_kind == "goal.acceptance.check":
+        if action_kind == "goal.update" and "reason" in normalized:
+            if context.get("kind") != "goal" or context.get("goal_id") != normalized["goal_id"]:
+                raise ValueError("objective proposal context must match its Goal")
+            fingerprint, _ = self._objective_preview(normalized)
+            evidence = ["The typed Goal owner validated this current-objective revision. Root commitments, permissions and existing acceptance remain unchanged; peers must adopt the new revision before new execution."]
+            permission = "durable_write"
+        elif action_kind == "goal.acceptance.check":
             if context.get("kind") != "goal" or context.get("goal_id") != normalized["goal_id"]:
                 raise ValueError("check plan context must match its target Goal")
             fingerprint, preview = self._acceptance_preview(normalized)
@@ -1555,6 +1563,8 @@ class ChatActionService(
                 },
             )
         if action_kind == "goal.update":
+            if "reason" in parameters:
+                return self._apply_objective_revision(proposal_id)
             raise ProtectedActionGate(
                 action_kind,
                 gate={

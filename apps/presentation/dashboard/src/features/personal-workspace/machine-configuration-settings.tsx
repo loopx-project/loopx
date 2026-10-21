@@ -443,6 +443,7 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
           {editorMode === "guided" ? (
             <section className="personal-capability-field-summary">
               <CapabilityConfigurationFields copy={localizedCapabilityFieldCopy(locale, selected.capability_id)} disabled={Boolean(busy)} editor={selected.configuration_editor}
+                advancedKeys={selected.capability_id === "todo_replan_cadence" ? ["planning_horizon_goal"] : []}
                 omitKeys={selected.capability_id === "steward_executor" && draft.selection_policy !== "flexible" ? ["eligible_endpoints"] : []}
                 onChange={changeDraft} value={draft}
                 enabledAction={<button className="personal-capability-edit-json" onClick={() => changeMode("json")} type="button"><Code2 aria-hidden size={14} />{t("machine.editJson")}</button>} />

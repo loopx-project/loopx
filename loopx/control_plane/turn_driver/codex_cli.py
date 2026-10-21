@@ -33,6 +33,7 @@ from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
 from .executor import (
     HOST_AGENT_VISION_JSON_MAX_CHARS,
     HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
+    HOST_RESULT_EVIDENCE_LIMITS,
     HOST_RESULT_TEXT_LIMITS,
     LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
     reward_memory_automation_enabled,
@@ -254,6 +255,14 @@ def codex_cli_result_schema(
         },
         "summary": {"type": "string", "maxLength": text_limits["summary"]},
     }
+    for evidence_field, (max_items, max_item_chars, _max_total_chars) in (
+        HOST_RESULT_EVIDENCE_LIMITS.items()
+    ):
+        properties[evidence_field] = {
+            "type": "array",
+            "items": {"type": "string", "maxLength": max_item_chars},
+            "maxItems": max_items,
+        }
     if reward_memory_automation_enabled(request, operation="automatic_ingest"):
         properties["reward_memory_reflection_json"] = {
             "type": "string",
@@ -267,12 +276,34 @@ def codex_cli_result_schema(
             "enum": ["codex-cli"],
         }
         properties["child_execution_receipts"] = child_receipts
-    return {
+    envelope = _mapping(request.get("turn_envelope")) if request else {}
+    capsule = _mapping(envelope.get("contract_capsule"))
+    profile = capsule.get("execution_profile")
+    evidence_required = isinstance(profile, Mapping) and bool(profile)
+    schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
-        "required": list(properties),
+        "required": [
+            field for field in properties
+            if field not in HOST_RESULT_EVIDENCE_LIMITS
+        ],
         "additionalProperties": False,
     }
+    if evidence_required:
+        schema["allOf"] = [
+            {
+                "if": {
+                    "properties": {
+                        "result_kind": {"enum": list(CODEX_CLI_RESULT_KINDS[:3])}
+                    },
+                    "required": ["result_kind"],
+                },
+                "then": {
+                    "required": list(HOST_RESULT_EVIDENCE_LIMITS),
+                },
+            }
+        ]
+    return schema
 
 
 def _prompt(request: Mapping[str, Any]) -> str:
@@ -284,6 +315,7 @@ def _prompt(request: Mapping[str, Any]) -> str:
         "Use the TurnEnvelope as the source of truth. Read work_context and remaining required_reads before primary_action; do not repeat fulfilled reads; perform work only when its contract allows it. The selected Todo summary is not its full requirements, and completing that work does not prove Goal completion.",
         "Do not write LoopX state, spend quota, or apply scheduler changes; the adapter owns those effects.",
         "Return only the schema-constrained result. For validated_progress, repair_required, or replan_required, fill every material field with public-safe evidence.",
+        "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. Omit both arrays for stop results.",
         "For those material results, set path_delta_mode=material_replan only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
         "For routine continuation, retry, successor creation, or no-change replanning, set path_delta_mode=unchanged, leave agent_vision_json empty, and provide vision_unchanged_reason.",
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",

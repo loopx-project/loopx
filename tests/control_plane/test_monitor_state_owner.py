@@ -121,6 +121,14 @@ def test_monitor_timestamp_codec_is_stable_across_supported_python_versions(valu
     assert result["metadata"]["expires_at"] == value
 
 
+@pytest.mark.parametrize("value", [
+    "9999-12-31T23:59:59-14:00",
+    "0001-01-01T00:00:00+14:00",
+])
+def test_timestamp_outside_utc_datetime_range_returns_none(value):
+    assert parse_timestamp(value) is None
+
+
 def test_monitor_timestamp_codec_rejects_version_specific_end_of_day():
     value = "2030-01-01T24:00:00"
     assert parse_timestamp(value) is None

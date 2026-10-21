@@ -194,7 +194,7 @@ def test_real_cli_uses_read_only_host_store_and_pins_one_request_after_archived_
     home = tmp_path / "codex-home"
     home.mkdir()
     rollout = home / "current.jsonl"
-    rollout.write_text(json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": "current"}}) + "\n" + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
                                   "payload": {"type": "task_complete"}}) + "\n")
     db = home / "state_5.sqlite"
     with sqlite3.connect(db) as conn:

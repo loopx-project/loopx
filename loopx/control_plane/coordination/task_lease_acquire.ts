@@ -10,6 +10,7 @@ import {canonicalTaskLease} from "./task_lease_state.ts";
 import {decideTaskLeaseAcquire, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {acquisitionFacts, currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
+import {goalObjectiveWorkGuard} from "../goals/goal_objective.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {normalizeGoalId, normalizeTodoId, normalizeOwner, normalizeIdempotencyKey,
   normalizeWriteScopes, normalizeTtl, leaseEpoch, leaseVersion, leaseIsActive,
@@ -89,6 +90,8 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
         ...(facts.todo ? {todo_status: facts.todo.status, claimed_by: facts.todo.claimed_by, excluded_agents: [...facts.todo.excluded_agents]} : {}),
         ...(decision.conflict_indexes.length ? {conflicts: decision.conflict_indexes.map(i => facts.other_leases[i])} : {})});
     }
+    const objective = decision.outcome === "apply" ? goalObjectiveWorkGuard(head.head, input.owner) : null;
+    if (objective !== null) return failed(String(objective.reason_code), String(objective.reason), {goal_objective_guard: objective});
     const acceptance = acceptanceWorkGuard(head.head, input.goal_id, input.todo_id);
     if (acceptance !== null && !acceptance.allowed) {
       return failed(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,

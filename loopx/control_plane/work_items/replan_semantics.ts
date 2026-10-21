@@ -48,7 +48,9 @@ const REPLAN_PLANNING_GUIDANCE = [
     "and hard constraints from provisional agent-created candidate rules; revisit the latter " +
     "when they obstruct the goal. Do not relax frozen acceptance, authority, budget or stops, " +
     "or rewrite criteria after failure.",
-  "Compare expected goal/information gain with full marginal cost. " +
+  "Review unmet requirements even with open Todos. Strongest first delivery is the objective; " +
+    "diagnostic validation and available feedback can strengthen it. Flat metrics alone prove neither progress nor exhaustion. " +
+    "Compare expected goal/information gain with full marginal cost. " +
     "Before widening repeated validation, check that the changed intervention reaches the " +
     "executed path and current artifact. Prefer a probe that distinguishes remaining explanations; " +
     "scope negative results to tested conditions and local proxies to their coverage. " +
@@ -351,6 +353,9 @@ function acknowledgeVisionEvidence(request: JsonObject): JsonObject {
   const formalObligation = typeof delta.obligation_id === "string" && /^replan-[a-f0-9]{16}$/.test(delta.obligation_id);
   const gaps = request.acceptance_gaps.map(value => {
     const gap = object(value);
+    // A Vision ACK cannot impersonate this Agent's exact canonical adoption.
+    // The owning objective operation removes the gap after work reconciliation.
+    if (gap.kind === "goal_objective_review_required") return false;
     if (gap.kind === "goal_outcome_uncovered") {
       return gap.source === "goal_acceptance_contract" && typeof gap.agent_id === "string" &&
         !!gap.agent_id && ack.agent_id === gap.agent_id &&

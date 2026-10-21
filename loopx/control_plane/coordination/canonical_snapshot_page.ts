@@ -107,7 +107,7 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
     "canonical_snapshot_changed", "store incarnation changed while loading the snapshot");
   const todoStart = after?.todo_offset ?? 0, leaseStart = after?.lease_offset ?? 0;
   const metadata = {todo_read_model: readModel,
-    ...(!!configuredGoalChecks(acceptance) || acceptance.outcome_requirements ? {goal_acceptance_contract: acceptance} : {}),
+    ...(!!configuredGoalChecks(acceptance) || acceptance.outcome_requirements || acceptance.goal_objective ? {goal_acceptance_contract: acceptance} : {}),
     ...(oracleObservationBasis === null ? {} : {goal_acceptance_oracle_observation_basis: oracleObservationBasis}),
     ...(leases === null ? {} : {handoff_mode: head.head.handoff_mode ?? "legacy"}),
     ...(readback === null ? {} : {projection_readback: confirmProjectionReadback(readback, head.provider_revision)})};

@@ -154,6 +154,19 @@ but the shape depends on how clear the goal already is:
   concise todos to make the approach explicit, without arbitrary item-count
   caps or management-only filler.
 
+The shared `budget_policy` now explicitly asks for the minimum plan needed to
+begin useful work: reuse covered Todos, identify the next executable step and its
+decisive validation, and defer uncertain later work to replan. Diagnostic validation,
+including permitted feedback, can be that first step before dependent implementation
+to strengthen the first deliverable. The quality objective and diagnostic means
+coexist: a diagnostic result does not replace the requested deliverable. Do not
+require exhaustive upfront decomposition. This changes default
+planning guidance for both `/loopx` and `todo plan`, in ordinary and fine-grained
+mode; it adds no fixed step/time limit or permission to skip planning/readback,
+task acceptance, quota admission or genuine blockers. The existing fine-grained
+one-checkpoint rule and broad-goal lane suggestions still apply. Lightweight
+planning does not mean early task completion or weaker delivery requirements.
+
 The shared planner now includes `first_delivery_guidance`, also rendered in the
 guided `/loopx` start prompt and the existing `todo plan` packet. This changes
 default Agent guidance in both ordinary and fine-grained planning: preserve a

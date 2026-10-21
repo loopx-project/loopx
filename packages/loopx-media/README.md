@@ -39,11 +39,42 @@ RTL shaping and arbitrary font discovery are not qualified. macOS speech is
 optional; other platforms require supplied audio or explicit silence.
 No cloud voice, generative image/video or game engine is bundled here.
 
-Excerpt and Blender layouts display the title and source boundary; nonempty
+The default excerpt and Blender layouts display the title and source boundary; nonempty
 `body` text is explicitly refused. Preserve a needed qualifier in those visible
 fields, a separate title scene or timed captions before preparing a new revision.
 The renderer also refuses a stale/direct request with unsupported body text;
 it cannot return ready while silently dropping that text.
+
+## Picture framing
+
+For a source-led composition, an Agent can set `framing: "full_frame"` on an
+image/video excerpt or Blender shot. Version 0.3.0 fits the complete picture
+without cropping and keeps its source boundary in a separate strip below it.
+The studio header, drawn shot title and progress bar are omitted; the title
+remains in the timeline/source readback. Include needed titles in the artwork,
+a title shot or timed captions. Each shot can choose independently. Omitted
+framing or `"editorial"` keeps the original canonical plan and layout.
+
+Use the explicit package upgrade/reinstall and extension upgrade/doctor route
+below for an existing provider. The core refuses full-frame readiness when an
+older renderer omits its framing readback. Retry the unchanged plan after the
+upgrade. The workbench displays the choice and retains its existing render,
+cancel, retry and verified-download journey. To roll back the composition,
+prepare a new revision without framing and render it. No global setting,
+source classification or publication authority changes. See the
+[bilingual contract](../../docs/reference/protocols/content-ops-media-v0.md#per-shot-picture-framing).
+
+中文：0.3.0 在原 content-ops 镜头中加入可选“大画面”构图。素材保持完整比例，
+来源说明另置底栏；需要观众看到的标题由素材、标题镜头或字幕承载。Agent 准备
+分镜，工作台沿原入口制作和查看。已有安装应显式升级可选包及 manifest 并运行
+doctor；移除字段、保存新修订并重制即可恢复原构图。默认计划和发布边界不变。
+
+Public synthetic packaged-workbench captures (macOS, source qualification;
+not an installed-App or comprehension claim):
+
+| Editorial | Full frame | Narrow, scrolled to movie |
+| --- | --- | --- |
+| ![Editorial](examples/framing/editorial-desktop.png) | ![Full frame](examples/framing/full-frame-desktop.png) | ![Narrow](examples/framing/full-frame-narrow.png) |
 
 ## Optional Blender scenes
 

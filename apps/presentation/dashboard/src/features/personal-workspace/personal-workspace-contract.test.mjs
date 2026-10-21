@@ -375,7 +375,7 @@ assert.match(page, /t\("home\.blockingSummary", \{ count: managerBlockingCount \
 assert.match(dashboard, /function personalGoalState[\s\S]*hasOpenUserTodo[\s\S]*if \(\["user_or_controller", "controller"\][\s\S]*if \(personalGoalNeedsRepair/, "User gates outrank agent-owned health repair in Goal state projection");
 assert.match(dashboard, /if \(goal\.registry_member === false\)[\s\S]*return \[\]/, "Unregistered historical Goals are excluded from the interactive workspace");
 assert.match(status, /runGoalSchema[\s\S]*display_name:\s*z\.string\(\)/, "Run history preserves the registered Goal display name");
-assert.match(dashboard, /title:\s*personalGoalTitle\(goal\.id,\s*goal\.display_name\)/, "Personal workspace prefers the registered Goal display name");
+assert.match(dashboard, /title:\s*personalGoalTitle\(goal\.id,\s*goal\.source_access\?\.label \?\? goal\.display_name\)/, "Personal workspace prefers the configured source label and falls back to the registered Goal display name");
 assert.match(dashboard, /function personalGoalHasPendingOperatorGate/, "Pending operator gates have a durable state projection helper");
 assert.match(dashboard, /personalGoalHasPendingOperatorGate\(row\)/, "Pending operator gates project into the needs-you state");
 assert.match(dashboard, /explicitUserWait/, "Explicit user-approval language repairs incomplete gate projections");

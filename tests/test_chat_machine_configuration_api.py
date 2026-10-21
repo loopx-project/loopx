@@ -362,6 +362,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "count_unit": "effective_turns",
         "count": 6,
         "stride_strategy": "off",
+        "planning_horizon_goal": True,
     }
     assert namespace_catalog["change_quality_qualification"][
         "configuration_template"
