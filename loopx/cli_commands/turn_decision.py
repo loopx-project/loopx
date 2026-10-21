@@ -38,7 +38,6 @@ from ..control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_turn,
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
-from ..paths import default_public_scan_root
 from ..control_plane.effect_runtime import effect_runtime_result
 from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .turn_selection import turn_controller_advisory_primary
@@ -79,6 +78,7 @@ def collect_turn_status_payload(
         goal_id=args.goal_id,
         available_capabilities=args.available_capabilities,
         agent_lane_id=args.agent_id,
+        include_public_boundary_scan=False,
     )
 
 
@@ -338,10 +338,9 @@ def current_heartbeat_host_launch_decision(
     args = argparse.Namespace(
         goal_id=goal_id, agent_id=agent_id, turn_instance_id=original_turn,
         todo_id=None, codex_app=False, runtime_profile="generic_cli",
-        # Uncaptured wakes use heartbeat-prompt's public-package default. Keep
-        # the existing workspace recheck for an already-held checkpoint packet.
-        scan_path=[str(project)] if original_quota is not None else [],
-        scan_root=default_public_scan_root(), limit=0,
+        # Re-read execution authority, including held receipt identity. Public
+        # disclosure is independently checked by `loopx check`/premerge.
+        scan_path=[], scan_root=str(project), limit=0,
         available_capabilities=["shell", "filesystem_write"],
     )
     selection = load_requested_quota_action_selection(

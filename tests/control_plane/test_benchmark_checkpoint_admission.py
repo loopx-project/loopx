@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from ipaddress import IPv4Address
 import os
 from pathlib import Path
 import sys
@@ -19,7 +18,7 @@ from loopx.control_plane.goals import activation_service
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from tests.control_plane import test_quota_settlement_cli as fixture
 from tests.control_plane.host_process_fixture import write_python_host_fixture
-from tests.control_plane.test_benchmark_current_admission import _environment, _quota
+from tests.control_plane.test_benchmark_current_admission import _environment, _private_workspace, _quota
 from tests.control_plane.test_codex_operation_launch import _bindings
 
 
@@ -116,7 +115,7 @@ Path("checkpoint-settlement.json").write_text(json.dumps({"refresh":updated,"spe
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop", "original_event_changed", "public_scope_violation", None])
+@pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop", "original_event_changed", None])
 def test_checkpoint_resume_rechecks_current_source_with_original_guard(tmp_path, monkeypatch, provider, refusal):
     _run_checkpoint(tmp_path, monkeypatch, provider, refusal=refusal, todo_bound=False)
 
@@ -127,11 +126,17 @@ def test_checkpoint_todo_bound_closeout_keeps_original_host(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_checkpoint_resume_keeps_private_workspace_and_original_receipt(tmp_path, monkeypatch, provider):
+    _run_checkpoint(tmp_path, monkeypatch, provider,
+        refusal=None, todo_bound=False, workspace_change=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_checkpoint_unbound_guard_selects_existing_work_in_original_turn(tmp_path, monkeypatch, provider):
     _run_checkpoint(tmp_path, monkeypatch, provider, refusal=None, todo_bound=False, unbound=True)
 
 
-def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unbound=False):
+def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unbound=False, workspace_change=False):
     unbound = unbound or refusal == "original_event_changed"
     env, project, runtime, source, state = _environment(
         tmp_path, monkeypatch, provider, replan="todo" if todo_bound or unbound else True)
@@ -179,6 +184,9 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
             if todo_bound:
                 assert held["quota"]["heartbeat_receipt"]["settlement_identity"]["todo_id"] == fixture.SELECTED_REPLAN_TODO_ID
             env["FIXTURE_HELD_QUOTA"] = str(held["path"])
+            if workspace_change:
+                _private_workspace(project)
+                assert _quota(source, runtime, project)["status_health_ok"] is True
             if refusal == "source_compute_zero":
                 changed = configure_goal(registry_path=source, goal_id=fixture.GOAL_ID, quota_compute=0, execute=True)
                 assert changed["written"], changed
@@ -186,13 +194,6 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
                 assert _quota(Path(env["LOOPX_REGISTRY"]), runtime, project)["should_run"] is True
             elif refusal == "missing_state":
                 state.rename(state.with_suffix(".saved"))
-                assert _quota(source, runtime, project)["status_health_ok"] is False
-            elif refusal == "public_scope_violation":
-                # The held guard explicitly scanned this workspace. A default
-                # package scan must not replace that check on continuation.
-                (project / "changed_public_fixture.py").write_text(
-                    "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
-                )
                 assert _quota(source, runtime, project)["status_health_ok"] is False
             elif refusal == "stop":
                 with monkeypatch.context() as fault:

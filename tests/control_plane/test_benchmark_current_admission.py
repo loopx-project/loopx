@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from ipaddress import IPv4Address
 from pathlib import Path
 import sys
 import time
@@ -15,14 +14,27 @@ from loopx.configure_goal import configure_goal
 from loopx.cli_commands import turn_decision
 from loopx.control_plane.goals import activation_service
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
+from loopx import contract, status as status_owner
+from loopx.cli import main
 from loopx.global_registry import sync_project_registry_to_global
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.host_process_fixture import write_python_host_fixture
 from tests.control_plane import test_quota_settlement_cli as fixture
 from tests.control_plane.test_codex_operation_launch import _bindings
+from tests.test_contract_credential_pattern_precision import PRIVATE_LARK_TENANT_HOST
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _private_workspace(project):
+    path = project / "task_network_fixture.py"
+    path.write_text(
+        'endpoint = "http://192.168.10.10"\n'
+        'auth = "Authorization: Bearer ${SERVICE_TOKEN}"\n'
+        f'link = "https://{PRIVATE_LARK_TENANT_HOST}/wiki/example"\n'
+    )
+    return path
 
 
 def _environment(tmp_path, monkeypatch, provider, *, replan=False):
@@ -82,11 +94,7 @@ def _quota(registry, runtime, project):
 def test_heartbeat_worker_qualifies_current_source_at_actual_spawn(tmp_path, monkeypatch, provider, refusal):
     env, project, runtime, source, state = _environment(tmp_path, monkeypatch, provider)
     if refusal is None:
-        # This default-scan caller may work on a private task. Keep that fixture
-        # out of the shared environment used by explicit project-scan callers.
-        (project / "task_network_fixture.py").write_text(
-            "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
-        )
+        _private_workspace(project)
     mirror = Path(env["LOOPX_REGISTRY"])
     mirror_before, state_before = mirror.read_bytes(), state.read_bytes()
     observations = []
@@ -149,9 +157,7 @@ def test_initial_benchmark_planner_can_launch_without_a_prior_heartbeat_receipt(
     env, project, runtime, source, _state = _environment(tmp_path, monkeypatch, provider, replan="empty")
     packet = _quota(source, runtime, project)
     assert packet["should_run"] is True and packet.get("selected_todo") is None
-    (project / "task_network_fixture.py").write_text(
-        "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
-    )
+    _private_workspace(project)
     env.update(LOOPX_TASK_ENTRY="loopx-planned", LOOPX_TASK_STAGE="plan", LOOPX_EXECUTION_MODE=mode,
         LOOPX_PHASE_DEADLINE_EPOCH=str(time.time()+600), LOOPX_PLANNING_RESULT=str(project / "planning.json"))
     if mode == "turn":
@@ -181,21 +187,52 @@ print(json.dumps({"type":"thread.started","thread_id":"initial-planning-session"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_heartbeat_host_launch_retains_public_scan_refusal(tmp_path, monkeypatch, provider):
-    env, project, runtime, source, _state = _environment(tmp_path, monkeypatch, provider)
-    public = tmp_path / "selected-public"
-    public.mkdir()
-    (public / "unsafe_fixture.py").write_text(
-        "endpoint = " + repr("http://" + str(IPv4Address(0x0A000001))) + "\n"
-    )
-    code, original = fixture._run_cli(source, runtime,
-        "quota", "should-run", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
-        "--scan-path", str(public), cwd=project)
-    assert code == 1 and original["status_health_ok"] is False and original["should_run"] is False
-    monkeypatch.setattr(turn_decision, "default_public_scan_root", lambda: str(public))
-    current = turn_decision.current_heartbeat_host_launch_decision(
-        registry_path=Path(env["LOOPX_REGISTRY"]), runtime_root=runtime, project=project,
-        goal_id=fixture.GOAL_ID, agent_id=fixture.AGENT_ID, turn_instance_id="public-scan-refusal",
-    )["current"]
-    assert current["status_health_ok"] is False and current["should_run"] is False
+def test_operational_cli_and_launch_defer_scans_but_explicit_check_blocks_private_content(
+    tmp_path, monkeypatch, provider, capsys,
+):
+    _env, project, runtime, source, state = _environment(tmp_path, monkeypatch, provider)
+    outgoing = _private_workspace(project)
+    before = (source.read_bytes(), state.read_bytes())
+    monkeypatch.chdir(project)
+    base = ["--format", "json", "--registry", str(source), "--runtime-root", str(runtime)]
+    observed = []
+    real_check = status_owner.check_contract
+
+    def check_execution(*args, **kwargs):
+        result = real_check(*args, **kwargs)
+        observed.append(result["public_boundary_scan"])
+        return result
+
+    def unexpected_scan(*args, **kwargs):
+        pytest.fail("ordinary execution traversed or read public-scan inputs")
+
+    with monkeypatch.context() as instrumentation:
+        instrumentation.setattr(status_owner, "check_contract", check_execution)
+        instrumentation.setattr(contract, "scan_public_boundary", unexpected_scan)
+        instrumentation.setattr(contract, "iter_scan_files", unexpected_scan)
+        instrumentation.setattr(contract, "iter_utf8_file_reads", unexpected_scan)
+        assert main([*base, "status", "--goal-id", fixture.GOAL_ID,
+            "--scan-path", str(project)]) == 0
+        assert json.loads(capsys.readouterr().out)["contract"]["ok"] is True
+        args = [*base, "quota", "should-run", "--goal-id", fixture.GOAL_ID,
+            "--agent-id", fixture.AGENT_ID, "--runtime-profile", "generic_cli",
+            "--turn-instance-id", "private-workspace-turn", "--scan-path", str(project)]
+        assert main(args) == 0
+        original = json.loads(capsys.readouterr().out)
+        events = fixture._heartbeat_receipt_events(runtime, "private-workspace-turn")
+        for held in (None, original):
+            current = turn_decision.current_heartbeat_host_launch_decision(
+                registry_path=source, runtime_root=runtime, project=project,
+                goal_id=fixture.GOAL_ID, agent_id=fixture.AGENT_ID,
+                turn_instance_id="private-workspace-turn", original_quota=held,
+            )["current"]
+            assert current["status_health_ok"] and current["should_run"]
+        assert observed and all(row["state"] == "deferred" for row in observed)
+        assert fixture._heartbeat_receipt_events(runtime, "private-workspace-turn") == events
+    assert main([*base, "check", "--scan-path", str(outgoing)]) == 1
+    checked = json.loads(capsys.readouterr().out)
+    assert not checked["ok"] and checked["public_boundary_scan"]["state"] == "completed"
+    assert any("private_doc_url" in str(error) for error in checked["errors"])
+    assert (source.read_bytes(), state.read_bytes()) == before
     assert not (project / "native-starts").exists() and not (project / "model-starts").exists()
+    assert fixture._spend_run_count(runtime) == 0

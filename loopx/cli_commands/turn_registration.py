@@ -93,13 +93,13 @@ def register_turn_commands(
     plan.add_argument(
         "--scan-root",
         default=default_public_scan_root(),
-        help="Public files to scan for obvious private material.",
+        help="Compatibility scope metadata; Turn execution defers public scans. Use loopx check before publishing.",
     )
     plan.add_argument(
         "--scan-path",
         action="append",
         default=[],
-        help="Specific public file or directory to scan. Repeatable.",
+        help="Compatibility scope metadata. Repeatable; does not request a public scan.",
     )
     plan.add_argument("--limit", type=int, default=5)
 
@@ -153,13 +153,13 @@ def register_turn_commands(
     managed_step.add_argument(
         "--scan-root",
         default=default_public_scan_root(),
-        help="Public files to scan for obvious private material.",
+        help="Compatibility scope metadata; Turn execution defers public scans. Use loopx check before publishing.",
     )
     managed_step.add_argument(
         "--scan-path",
         action="append",
         default=[],
-        help="Specific public file or directory to scan. Repeatable.",
+        help="Compatibility scope metadata. Repeatable; does not request a public scan.",
     )
     managed_step.add_argument("--limit", type=int, default=5)
 
@@ -366,7 +366,7 @@ def register_turn_commands(
     run_once.add_argument(
         "--scan-root",
         default=default_public_scan_root(),
-        help="Public files to scan for obvious private material.",
+        help="Compatibility scope metadata; Turn execution defers public scans. Use loopx check before publishing.",
     )
     run_once.add_argument("--scan-path", action="append", default=[])
     run_once.add_argument("--limit", type=int, default=5)
