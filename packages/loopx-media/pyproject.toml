@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx-media"
-version = "0.2.0"
+version = "0.3.0"
 description = "Optional local composition renderer for LoopX content-ops"
 requires-python = ">=3.11"
 dependencies = ["Pillow>=11,<13", "imageio-ffmpeg>=0.6,<0.7", "fonttools>=4,<5"]

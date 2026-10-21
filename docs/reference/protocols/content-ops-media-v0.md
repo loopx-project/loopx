@@ -169,3 +169,44 @@ missing bpy does not disable ordinary 2D work. A failed 3D attempt retains its
 prepared input and supports retry after dependency repair. No fallback replaces
 3D with a code projection. Mechanical readiness still does not establish
 creative quality, audience understanding or publication approval.
+
+## Per-shot picture framing
+
+An `excerpt` or `blender` shot can opt into `framing: "full_frame"` with
+`loopx-media` 0.3.0. The source fits the available width/height without cropping
+or changing its aspect ratio; a small image may be enlarged. Its complete
+`boundary` is wrapped in a separate measured strip below the picture. Neither
+that strip nor the optional player captions are baked over source pixels.
+The shot title remains timeline/source metadata; put a title that the viewer
+must see in the source artwork, a title shot or timed captions. The fixed studio
+header, drawn shot title and progress bar are omitted for this shot. The
+selected layout's background/text tokens still apply. This is a rendering
+choice, not an audience-understanding or creative-quality judgment.
+
+Omitted framing and explicit `"editorial"` normalize to the original plan
+structure and retain the existing digest/layout. Other values and framing on
+non-spatial shot kinds are refused. Nonempty spatial `body` remains refused.
+Full-frame framing changes the source-bound digest and needs a new revision;
+it cannot inherit earlier content approval. The result additionally requires
+`qa.full_frame_shots` to match the admitted ordered shot IDs. An older provider
+that ignores the field cannot produce a ready result; explicitly upgrade the
+optional package/manifest and retry after doctor. Default framing remains
+compatible with the older provider. No core setting or global installation is
+changed by preparing a full-frame plan.
+
+The Agent prepares this choice in the same brief; the packaged workbench shows
+“Full frame” beside its timeline/source entry and renders, cancels, retries and
+reads back the same composition. Users do not enter source paths or JSON again.
+Disabling the existing extension blocks new renders and keeps verified movies
+readable. To return to editorial framing, prepare a revision without the field
+and render it; an older LoopX core will refuse a plan containing the new field.
+
+中文：`excerpt` 与 `blender` 镜头可选 `framing: "full_frame"`。素材按原比例
+完整放入较大的画面区，必要时放大；来源说明在独立底栏完整换行，工作室页眉、
+片内标题和进度条不再绘制。标题仍在分镜与来源信息中，需要观众看到的标题由素材、
+标题镜头或字幕承载。省略该字段或显式选择 `editorial` 保留原计划摘要与构图。
+此选项需要显式升级 `loopx-media` 0.3.0、注册新 manifest 并运行 doctor；旧渲染器
+若忽略新字段，结果会被拒绝就绪。修改构图需新修订，仍会撤销旧内容批准。
+工作台沿现有入口显示“大画面”并制作、取消、重试和查看；停用扩展阻止新制作但
+保留已校验影片。回到旧构图时，移除字段后保存新修订再制作；旧版核心不会接受
+含新字段的计划。该选项不改变来源可见性、发布权限或全局配置。
