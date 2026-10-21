@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..control_plane.turn_driver.capability_context import dispatch_turn_context_hooks
+from ..control_plane.capability_hooks import dispatch_turn_context_hooks
 from ..control_plane.turn_driver.post_settlement import (
     PostSettlement,
     registered_post_settlement,

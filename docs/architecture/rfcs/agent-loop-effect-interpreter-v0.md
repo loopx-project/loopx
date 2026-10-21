@@ -481,6 +481,11 @@ signature document plus their source readback. Adding the original capture's
 location does not invalidate an unchanged decision; changed actors, authority,
 configuration readback or contributions do invalidate optional context.
 
+The generic Python contribution IO lives with the existing registrations and
+dispatchers in `loopx.control_plane.capability_hooks`; there is no parallel Python
+Turn-context module. It calls the TypeScript decoder for validation and source
+binding. Host adapters consume that same hook-owned projection.
+
 Registered `PostSettlement` callbacks call the existing ingest owner after
 independent exact-reflection attestation and accountable writeback/spend. The
 manual-host sidecar adapter uses that registration too. `post_writeback` remains

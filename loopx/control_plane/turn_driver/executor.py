@@ -58,7 +58,7 @@ from .recovery import (
     require_turn_recovery_continuation,
 )
 from .post_settlement import PostSettlement, recover_post_settlement, run_post_settlement_callback
-from .capability_context import project_turn_context, capability_result_fields
+from ..capability_hooks import capability_result_fields, project_turn_context
 from .session_recovery import (
     SessionBindingResolver,
     build_host_recovery_record,

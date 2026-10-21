@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from loopx.control_plane.capability_hooks import TurnContextHookRegistration
-from loopx.control_plane.turn_driver.capability_context import (
+from loopx.control_plane.capability_hooks import (
+    TurnContextHookRegistration,
     dispatch_turn_context_hooks,
     project_turn_context,
 )

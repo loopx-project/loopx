@@ -335,6 +335,10 @@ quota/heartbeat guard。Codex、DSH、generic CLI 传输相同的有界上下文
 替换权限／核心结果字段，复用既有 governing 签名文档及来源读回绑定上下文。只增加
 原捕获的定位信息不使未变决策失效；actor、权限、配置读回或贡献变化则丢弃可选上下文。
 
+通用 Python 贡献 IO 与既有注册和 dispatcher 共同归属
+`loopx.control_plane.capability_hooks`，不再保留平行的 Python Turn-context 模块。
+校验与来源绑定继续调用 TypeScript decoder，宿主 adapter 消费同一份 hook 投影。
+
 注册的 `PostSettlement` callback 在独立精确反思证明和可记账 writeback/spend 后调用
 既有 ingest owner，手动宿主的 sidecar adapter 也使用同一注册。`post_writeback` 继续
 无副作用；逐 hook 回执保留已完成工作，只恢复结果不确定的其他 hook，provider owner

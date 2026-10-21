@@ -36,7 +36,7 @@ from .executor import (
     HOST_RESULT_TEXT_LIMITS,
     LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
 )
-from .capability_context import capability_result_fields
+from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
 from .host_process_transport import HostOutputLines, run_host_process

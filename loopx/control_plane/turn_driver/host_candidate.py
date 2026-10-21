@@ -15,7 +15,7 @@ from ..quota.turn_envelope import turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
-from .capability_context import host_context_projection, capability_result_fields
+from ..capability_hooks import capability_result_fields, host_context_projection
 from .executor import (
     HOST_RESULT_EVIDENCE_LIMITS,
 )

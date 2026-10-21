@@ -22,8 +22,10 @@ def enable_plan_memory(plan: dict) -> None:
 
 def register_plan_memory(plan: dict) -> None:
     """Exercise the actual registered context dispatcher over an explicit fixture."""
-    from loopx.control_plane.capability_hooks import TurnContextHookRegistration
-    from loopx.control_plane.turn_driver.capability_context import dispatch_turn_context_hooks
+    from loopx.control_plane.capability_hooks import (
+        TurnContextHookRegistration,
+        dispatch_turn_context_hooks,
+    )
     from loopx.capabilities.reward_memory.turn_hooks import memory_context_result
 
     recall = plan.pop("reward_memory_recall")
