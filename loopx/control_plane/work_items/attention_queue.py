@@ -157,6 +157,28 @@ def _active_state_goal_context(
     return fields, context.active_state_todo_attention_item(goal, fields, current_run)
 
 
+def _unavailable_todo_source_item(
+    goal: dict[str, Any],
+    error: RetiredTodoEventSourceError | LocalCoordinationAuthorityUnavailable,
+    context: AttentionQueueContext,
+) -> dict[str, Any]:
+    item = context.attention_item(
+        goal_id=str(goal.get("id") or ""),
+        status=(error.code if isinstance(error, LocalCoordinationAuthorityUnavailable)
+                else error.reason_code),
+        waiting_on="user_or_controller",
+        severity="high",
+        recommended_action=str(error),
+        source="active_state",
+    )
+    item["todo_source"] = "unavailable"
+    if isinstance(error, LocalCoordinationAuthorityUnavailable):
+        item["error_code"] = error.code
+        item["authority_read"] = error.payload
+    item["activation_state"] = str(goal.get("activation_state") or "active")
+    return item
+
+
 def build_attention_queue(
     *,
     contract: dict[str, Any],
@@ -211,21 +233,7 @@ def build_attention_queue(
                     raise
                 # Refuse this source without hiding independent Goals or turning
                 # stale Todo/run projections into executable fallback work.
-                item = context.attention_item(
-                    goal_id=str(goal.get("id") or ""),
-                    status=(error.code if isinstance(error, LocalCoordinationAuthorityUnavailable)
-                            else error.reason_code),
-                    waiting_on="user_or_controller",
-                    severity="high",
-                    recommended_action=str(error),
-                    source="active_state",
-                )
-                item["todo_source"] = "unavailable"
-                if isinstance(error, LocalCoordinationAuthorityUnavailable):
-                    item["error_code"] = error.code
-                    item["authority_read"] = error.payload
-                item["activation_state"] = str(goal.get("activation_state") or "active")
-                history_items.append(item)
+                history_items.append(_unavailable_todo_source_item(goal, error, context))
                 continue
         if active_state_item and active_state_item.get("waiting_on") in {"controller", "user_or_controller"}:
             item = active_state_item

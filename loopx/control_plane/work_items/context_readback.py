@@ -18,8 +18,7 @@ from ..todos.list_readback import list_goal_todos
 from ..todos.summary_item import todo_text_content_revision
 
 
-def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id,
-                    state_file=None, expected_state_revision=None):
+def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id):
     source = read.get("source")
     if source == "goal_state":
         _goal, _project, state_file = resolve_goal_state(
@@ -111,24 +110,16 @@ def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
     if isinstance(selected, dict) and isinstance(selected_text_snapshot, str):
         selected["_context_text_sha256"] = selected_text_snapshot
     results = [dict(item) for item in (hook_dispatch or {}).get("contexts", [])]
-    state_file = None
-    state_revision = None
     for read in reads:
         if read.get("source") not in {"goal_state", "goal_acceptance", "selected_todo"}:
             continue
         result = {"command": read["command"]}
         try:
             result["content"] = _source_content(read, registry_path=registry_path,
-                runtime_root=runtime_root, goal_id=goal_id, todo_id=plan.get("todo_id"),
-                state_file=state_file, expected_state_revision=state_revision)
+                runtime_root=runtime_root, goal_id=goal_id, todo_id=plan.get("todo_id"))
         except (OSError, ValueError, RuntimeError):
             result["error_code"] = "context_source_unavailable"
         results.append(result)
-        if read.get("source") == "goal_state" and isinstance(result.get("content"), dict):
-            resolved_path = result["content"].get("state_file")
-            if isinstance(resolved_path, str):
-                state_file = Path(resolved_path)
-                state_revision = result["content"].get("revision")
     users = None
     if agent_id and plan.get("read_user_todos"):
         try:

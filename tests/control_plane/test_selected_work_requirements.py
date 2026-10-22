@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
 from loopx.control_plane.work_items.context_readback import _source_content
@@ -25,7 +26,7 @@ from loopx.control_plane.turn_driver.host_candidate import extract_turn_authorit
 REPO = Path(__file__).resolve().parents[2]
 
 
-def test_legacy_selected_todo_requires_same_goal_state_revision(tmp_path: Path) -> None:
+def test_selected_todo_refuses_unmigrated_source(tmp_path: Path) -> None:
     state = tmp_path / "state.md"
     state.write_text(
         "---\nstatus: active\n---\n# Goal\n## Agent Todo\n"
@@ -33,16 +34,17 @@ def test_legacy_selected_todo_requires_same_goal_state_revision(tmp_path: Path) 
         "  <!-- loopx:todo todo_id=todo_current status=open task_class=advancement_task -->\n"
     )
 
-    with pytest.raises(ValueError, match="changed after the Goal state read"):
+    original = state.read_bytes()
+    with pytest.raises(CanonicalAuthorityRequired) as refused:
         _source_content(
             {"source": "selected_todo"},
             registry_path=tmp_path / "registry.json",
             runtime_root=tmp_path / "runtime",
             goal_id="goal-current",
             todo_id="todo_current",
-            state_file=state,
-            expected_state_revision="sha256:stale",
         )
+    assert refused.value.code == "canonical_authority_required"
+    assert state.read_bytes() == original
 
 
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
@@ -90,6 +92,14 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
         assert code == expected_exit, json.dumps(packet, indent=2)
         return packet
 
+    if provider == "legacy":
+        refused = guard(expected_exit=1)
+        assert refused["error_code"] == "canonical_authority_required"
+        assert refused["decision_read_from_provider"] is False
+        assert refused["should_run"] is False
+        assert state.read_text() == state_text
+        return
+
     packet = guard()
     channel = packet["interaction_contract"]["agent_channel"]
     users = channel["work_context"]["user_todos"]["todos"]
@@ -103,18 +113,17 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
     envelope = guard("--turn-envelope")
     assert envelope["work_context"]["user_todos"] == channel["work_context"]["user_todos"]
     assert state.read_text() == state_text
-    if provider != "legacy":
-        # Canonical tasks still exist: the full Goal source must fail closed,
-        # rather than silently substituting a Todo summary for missing intent.
-        state.unlink()
-        failed = guard(expected_exit=1)
-        assert failed["ok"] is False and failed["status_health_ok"] is False
-        failed_channel = failed["interaction_contract"]["agent_channel"]
-        assert failed_channel["delivery_allowed"] is False
-        assert failed_channel["work_context"]["complete"] is False
-        assert any(read["source"] == "goal_state" for read in failed_channel["required_reads"])
-        state.write_text(state_text)
-        assert guard()["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    # Canonical tasks still exist: the full Goal source must fail closed,
+    # rather than silently substituting a Todo summary for missing intent.
+    state.unlink()
+    failed = guard(expected_exit=1)
+    assert failed["ok"] is False and failed["status_health_ok"] is False
+    failed_channel = failed["interaction_contract"]["agent_channel"]
+    assert failed_channel["delivery_allowed"] is False
+    assert failed_channel["work_context"]["complete"] is False
+    assert any(read["source"] == "goal_state" for read in failed_channel["required_reads"])
+    state.write_text(state_text)
+    assert guard()["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

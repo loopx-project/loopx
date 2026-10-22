@@ -127,6 +127,12 @@ from .control_plane.work_items.autonomous_candidates import (
 from .control_plane.goals.active_state_metadata import (
     parse_state_frontmatter,
 )
+# Explicit source parsing remains available to migration and fixture callers;
+# ordinary status obtains Task authority through the canonical read model.
+from .control_plane.todos.active_state_todo_parser import (
+    active_state_incomplete_warning as active_state_incomplete_warning,
+    parse_active_state_todos as parse_active_state_todos,
+)
 from .control_plane.todos.active_state_todos import (
     active_state_todo_fields as _active_state_todo_fields_read_model,
 )
