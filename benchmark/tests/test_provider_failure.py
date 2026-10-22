@@ -37,6 +37,7 @@ def test_structured_terminal_429_is_reduced_without_message_or_path(tmp_path, in
 @pytest.mark.parametrize("event", [
     _event({"codexErrorInfo": {"futureProviderError": {"httpStatusCode": 429}}}),
     _event({"codexErrorInfo": {"responseTooManyFailedAttempts": {"httpStatusCode": "429"}}}),
+    {"type": "event_msg", "payload": {"type": []}},
     {"type": "event_msg", "payload": {"type": "task_complete",
         "error": {"message": "HTTP 429 rate limit"}}},
     {"type": "response_item", "payload": {"text": "HTTP 429 rate limit"}},

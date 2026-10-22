@@ -306,3 +306,26 @@ def test_docker_collection_preserves_real_worker_outcome(tmp_path, goal, turn, e
         if not cleaned:
             backend.cleanup_container(handle)
         backend.client.close()
+
+
+@pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
+                    reason="Requires explicit isolated Docker qualification")
+def test_docker_cleanup_survives_provider_observation_failure(tmp_path, monkeypatch):
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None, oauth_proxy=True)
+    handle = backend.create_container("python:3.12-slim", "diagnostic-cleanup-" + uuid.uuid4().hex[:10],
+                                      cpu_limit=1, mem_limit="256m")
+    backend.start_container(handle)
+    monkeypatch.setattr("benchmark.runtime.sforge_backend.observe_terminal_provider_failure",
+                        lambda *args: (_ for _ in ()).throw(TypeError("unknown event shape")))
+    try:
+        backend.cleanup_container(handle)
+        assert not backend.container_exists(handle.name)
+        observations = json.loads((tmp_path / "collected" / "artifact-collection.json").read_text())
+        assert {"artifact": "provider-failure-observation", "collected": False,
+                "error_kind": "TypeError"} in observations
+    finally:
+        if backend.container_exists(handle.name):
+            DockerBackend.cleanup_container(backend, handle, None)
+        backend.client.close()

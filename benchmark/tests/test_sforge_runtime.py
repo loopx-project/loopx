@@ -437,6 +437,34 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     assert "PRIVATE-SENTINEL" not in json.dumps(backend.provider_failure_receipt)
 
 
+def test_provider_observation_failure_cannot_skip_native_cleanup(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    backend.checkpoint = None
+    backend.log_dir = tmp_path / "artifacts"
+    backend.feedback = None
+    backend.provider_failure_receipt = None
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w"):
+        pass
+    monkeypatch.setattr(backend, "copy_from_container", lambda *args: payload.getvalue())
+    monkeypatch.setattr("benchmark.runtime.sforge_backend.observe_terminal_provider_failure",
+                        lambda *args: (_ for _ in ()).throw(TypeError("unknown event shape")))
+    cleaned = []
+    monkeypatch.setattr(DockerBackend, "cleanup_container",
+                        lambda self, handle, logger: cleaned.append(handle))
+
+    backend.cleanup_container("fixture-container")
+
+    assert cleaned == ["fixture-container"]
+    assert backend.provider_failure_receipt is None
+    observations = json.loads((backend.log_dir / "artifact-collection.json").read_text())
+    assert {"artifact": "provider-failure-observation", "collected": False,
+            "error_kind": "TypeError"} in observations
+
+
 @pytest.mark.parametrize("fail", [False, True])
 def test_setup_proxy_is_cleared_before_worker_execution(tmp_path, monkeypatch, fail):
     pytest.importorskip("sforge")

@@ -59,7 +59,10 @@ def _terminal_provider_failure(
     if event.get("type") != "event_msg":
         return False, None
     payload = event.get("payload")
-    if not isinstance(payload, Mapping) or payload.get("type") not in _TERMINAL_EVENT_TYPES:
+    if not isinstance(payload, Mapping):
+        return False, None
+    payload_type = payload.get("type")
+    if not isinstance(payload_type, str) or payload_type not in _TERMINAL_EVENT_TYPES:
         return False, None
     error = payload.get("error")
     if not isinstance(error, Mapping):
