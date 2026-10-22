@@ -293,7 +293,7 @@ def test_shared_host_memory_keeps_binding_context_and_validation(recall, ingest,
     assert ("When reward_memory_recall contains guidance" in prompt) is (active and recall)
     assert ("Set reward_memory_reflection_json" in prompt) is (active and ingest)
     if active and recall:
-        assert authority["reward_memory_recall"]["context"] == plan["reward_memory_recall"]["context"]
+        assert authority["reward_memory_recall"]["context"] == plan["turn_context_contributions"][0]["context_fields"]["reward_memory_recall"]["context"]
     elif "reward_memory_recall" in authority:
         assert authority["reward_memory_recall"]["context"] is None
     if not active or not (recall or ingest):
@@ -323,7 +323,7 @@ def test_shared_host_memory_keeps_binding_context_and_validation(recall, ingest,
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("host_kind", ["codex-cli", "dsh", "generic-cli"])
-@pytest.mark.parametrize("mode", ["unconfigured", "disabled", "stale", "both_off", "recall_only", "recall_context", "ingest_only", "both_on"])
+@pytest.mark.parametrize("mode", ["unconfigured", "disabled", "stale", "both_off", "recall_only", "recall_context", "oversized_recall", "ingest_only", "both_on"])
 def test_real_turn_cli_memory_projection_and_settlement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, host_kind: str, mode: str) -> None:
     from loopx.cli import main
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -332,26 +332,42 @@ def test_real_turn_cli_memory_projection_and_settlement(tmp_path: Path, monkeypa
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
-    ingest = mode in {"ingest_only", "both_on"}
+    ingest = mode in {"ingest_only", "both_on", "oversized_recall"}
     if mode != "unconfigured":
-        config = enable_live_memory(registry, recall=mode in {"recall_only", "recall_context", "both_on"}, ingest=ingest)
+        config = enable_live_memory(registry, recall=mode in {"recall_only", "recall_context", "oversized_recall", "both_on"}, ingest=ingest)
         if mode == "disabled":
             data = json.loads(registry.read_text())
             data["goals"][0]["control_plane"]["reward_memory"]["enabled"] = False
             registry.write_text(json.dumps(data))
         elif mode == "stale":
             config.write_text(config.read_text() + "\n")
-    if mode == "recall_context":
+    if mode in {"recall_context", "oversized_recall"}:
         from loopx.capabilities.agent_turn_recall.runtime import run_configured_agent_turn_recall_fail_open
         from loopx.capabilities.reward_memory.experiment import resolve_reward_memory_experiment
         from tests.capabilities.test_agent_turn_recall import RecallProvider, active_record
-        _, binding = resolve_reward_memory_experiment(
+        experiment_status, binding = resolve_reward_memory_experiment(
             registry_path=registry, goal_id="loopx-turn-fixture", agent_id="codex-fixture")
-        provider_fixture = RecallProvider(active_record(binding, expires_at="2099-01-01T00:00:00+00:00"))
-        # Only provider IO is hermetic; native config, binding, recall receipt,
-        # admission, host, validator and canonical settlement still execute.
-        monkeypatch.setattr("loopx.capabilities.agent_turn_recall.run_configured_agent_turn_recall_fail_open",
-            lambda **kwargs: run_configured_agent_turn_recall_fail_open(**kwargs, provider=provider_fixture))
+        if mode == "recall_context":
+            provider_fixture = RecallProvider(active_record(binding, expires_at="2099-01-01T00:00:00+00:00"))
+            # Only provider IO is hermetic; native config, binding, recall receipt,
+            # admission, host, validator and canonical settlement still execute.
+            monkeypatch.setattr("loopx.capabilities.agent_turn_recall.run_configured_agent_turn_recall_fail_open",
+                lambda **kwargs: run_configured_agent_turn_recall_fail_open(**kwargs, provider=provider_fixture))
+        else:
+            monkeypatch.setattr(
+                "loopx.capabilities.agent_turn_recall.run_configured_agent_turn_recall_fail_open",
+                lambda **kwargs: {
+                    "schema_version": "agent_turn_recall_v0",
+                    "status": "applied",
+                    "goal_id": "loopx-turn-fixture",
+                    "agent_id": "codex-fixture",
+                    "experiment": experiment_status,
+                    "context": {"guidance": [
+                        {"content_summary": "x" * 20_000} for _ in range(4)
+                    ]},
+                    "grants_new_action_authority": False,
+                },
+            )
     capture = tmp_path / "host-capture.json"
     host = tmp_path / "fixture-codex"
     host.write_text(f"#!{sys.executable}\n" + '''import json, os, pathlib, sys
@@ -418,10 +434,13 @@ json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_k
     if host_kind != "generic-cli":
         assert ("Set reward_memory_reflection_json" in observed["prompt"]) is ingest
         assert ("When reward_memory_recall contains guidance" in observed["prompt"]) is (mode == "recall_context")
-    if mode == "recall_context":
+    if mode in {"recall_context", "oversized_recall"}:
         memory = observed["authority" if host_kind == "dsh" else "request"]["reward_memory_recall"]
         assert memory["status"] == "applied"
-        assert "integration branch" in memory["context"]["guidance"][0]["content_summary"]
+        if mode == "recall_context":
+            assert "integration branch" in memory["context"]["guidance"][0]["content_summary"]
+        else:
+            assert memory["context"] is None
     if mode in {"unconfigured", "disabled", "stale", "both_off"}:
         if host_kind == "generic-cli":
             assert "reward_memory_recall" not in observed["request"]

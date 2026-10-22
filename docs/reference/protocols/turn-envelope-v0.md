@@ -692,6 +692,12 @@ not provider permissions. Hosts consume the generic `capability_context_fields`,
 Programmatic callers contributing memory use the registered context path;
 inserting a legacy recall readback alone cannot activate a host contribution.
 An inactive binding leaves ordinary host input, prompt and result schema intact.
+The registered contribution carries the full optional recall only once, in
+host context; its readback retains bounded participation facts without a
+second context copy. If the complete recall would exceed the existing 64 KiB
+contribution budget, that recall context is omitted for the Turn while the
+verified binding, reflection schema and post-settlement ingest remain enabled.
+The hard budget is not raised and omission never grants action authority.
 
 Recovery also reads pre-registration journals that already contain a bounded
 reflection and its independent validation receipt. Without a contribution
@@ -708,6 +714,10 @@ copied into the executor.
 贡献 annotation 的旧缓存仅沿用该结果字段原有的 2,400 字符解码，不重新启动 Host
 或 validator，也不为新 Host 输入开启旧接线。provider 效果仍由当前 ingest 策略、
 独立证据及原结算／去重 owner 判定。
+注册贡献只在 host context 中携带一份可选 recall，readback 只保留有界参与事实，
+不再重复正文。若完整 recall 会超过既有 64 KiB contribution 预算，则该 Turn
+省略召回正文，但仍保留已核验绑定、反思 schema 与结算后 ingest；不提高硬预算，
+省略正文也不授予任何 action authority。
 缓存 reader 和能力组合复用 `control_plane/reward_memory.py` 的同一参与事实投影，
 executor 不复制 provider 策略。
 

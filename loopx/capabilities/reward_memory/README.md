@@ -134,6 +134,12 @@ accountable settlement; `post_writeback` observers remain effect-free. Source
 wiring for Codex/DSH/generic CLI and full/thin heartbeat readback is distinct
 from installed App/Lark adoption or model benefit.
 
+The memory contribution carries recall context once and keeps its verified
+participation readback separate. If optional recall text exceeds the existing
+64 KiB contribution budget, that Turn omits recall guidance but preserves the
+enabled reflection schema and post-settlement ingest. The budget remains
+unchanged; degraded recall never grants authority or implies a provider write.
+
 Config v1 declares one `project_provider_binding`, its exact per-corpus scope
 references, the project corpus set, module-owned surfaces, and an automation
 policy. A surface explicitly lists its compatible `corpus_ids`, selects one

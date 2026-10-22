@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from loopx.capabilities.reward_memory.turn_hooks import (
+    MEMORY_CONTEXT_MAX_RESULT_BYTES,
+    memory_context_result,
+)
 from loopx.control_plane.capability_hooks import (
     TurnContextHookRegistration,
     dispatch_turn_context_hooks,
@@ -47,6 +53,58 @@ def test_invalid_or_duplicate_context_registration_never_reinvokes_provider() ->
 @pytest.mark.parametrize("serialized", [True, 3, "invalid", {"fixture": "invalid"}])
 def test_invalid_recovered_context_is_omitted_without_gating_work(serialized) -> None:
     assert project_turn_context({"turn_context_contributions": serialized}) == {}
+
+
+@pytest.mark.parametrize("guidance_chars", [40_000, 70_000])
+def test_optional_recall_size_never_disables_enabled_ingest(
+    guidance_chars: int,
+) -> None:
+    payload = {
+        "turn_envelope": {
+            "goal_id": "fixture-goal",
+            "agent_id": "fixture-agent",
+            "boundary": {
+                "capabilities": {
+                    "reward_memory": {
+                        "automatic_recall": True,
+                        "automatic_ingest": True,
+                    }
+                }
+            },
+        }
+    }
+    recall = {
+        "schema_version": "agent_turn_recall_v0",
+        "status": "applied",
+        "experiment": {
+            "goal_id": "fixture-goal",
+            "agent_id": "fixture-agent",
+            "enabled": True,
+            "available": True,
+            "configured_for_agent": True,
+            "automatic_recall": True,
+            "automatic_ingest": True,
+        },
+        "context": {"guidance": [{"content_summary": "x" * guidance_chars}]},
+        "grants_new_action_authority": False,
+    }
+
+    result = memory_context_result(payload, recall)
+
+    assert result["readback"]["reward_memory_recall"]["context"] is None
+    assert (
+        result["result_fields"]["reward_memory_reflection_json"]["maxLength"]
+        == 2400
+    )
+    assert any(
+        "Set reward_memory_reflection_json" in item
+        for item in result["instructions"]
+    )
+    delivered = result["context_fields"]["reward_memory_recall"]
+    assert (delivered["context"] is not None) is (guidance_chars == 40_000)
+    assert len(
+        json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ) <= MEMORY_CONTEXT_MAX_RESULT_BYTES
 
 
 def test_post_settlement_retry_keeps_completed_peer_hook_and_original_evidence() -> (

@@ -29,7 +29,21 @@ def register_plan_memory(plan: dict) -> None:
     from loopx.capabilities.reward_memory.turn_hooks import memory_context_result
 
     recall = plan.pop("reward_memory_recall")
-    plan.pop("turn_context_contributions", None)
+    previous = plan.pop("turn_context_contributions", None)
+    previous_context = None
+    if isinstance(previous, list):
+        for contribution in previous:
+            fields = contribution.get("context_fields") if isinstance(contribution, dict) else None
+            delivered = fields.get("reward_memory_recall") if isinstance(fields, dict) else None
+            if isinstance(delivered, dict) and delivered.get("context") is not None:
+                previous_context = delivered["context"]
+                break
+    if (
+        previous_context is not None
+        and recall.get("status") == "applied"
+        and recall.get("context") is None
+    ):
+        recall = {**recall, "context": previous_context}
     result = memory_context_result(plan, recall)
     dispatch_turn_context_hooks(plan, (TurnContextHookRegistration(
         "reward-memory.turn-context", "reward-memory", ("reward_memory_recall",), lambda: result,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from ...control_plane.turn_driver.post_settlement import (
     PostSettlementHookRegistration,
     registered_post_settlement,
 )
+
+MEMORY_CONTEXT_MAX_RESULT_BYTES = 64 * 1024
 
 
 def reward_memory_prompt_instructions(request: Mapping[str, Any]) -> list[str]:
@@ -44,21 +47,52 @@ def memory_context_result(
     ingest_enabled = reward_memory_automation_enabled(
         admitted, operation="automatic_ingest"
     )
-    context: dict[str, Any] = {}
-    if recall_enabled or ingest_enabled:
-        context["reward_memory_recall"] = dict(recall)
-        if not recall_enabled:
-            context["reward_memory_recall"]["context"] = None
-    return {
-        "readback": {"reward_memory_recall": dict(recall)},
-        "context_fields": context,
-        "instructions": reward_memory_prompt_instructions(admitted),
-        "result_fields": {
-            "reward_memory_reflection_json": {"type": "string", "maxLength": 2400}
+    participation = dict(recall)
+    participation["context"] = None
+
+    def result(*, include_recall_context: bool) -> dict[str, Any]:
+        delivered = dict(participation)
+        delivered["context"] = (
+            dict(recall["context"])
+            if include_recall_context
+            and recall_enabled
+            and isinstance(recall.get("context"), Mapping)
+            else None
+        )
+        context_fields: dict[str, Any] = {}
+        if recall_enabled or ingest_enabled:
+            context_fields["reward_memory_recall"] = delivered
+        instruction_request = {
+            **payload,
+            "reward_memory_recall": delivered,
         }
-        if ingest_enabled
-        else {},
-    }
+        return {
+            # Readback carries bounded participation only. The complete optional
+            # recall is transported once through context_fields.
+            "readback": {"reward_memory_recall": participation},
+            "context_fields": context_fields,
+            "instructions": reward_memory_prompt_instructions(instruction_request),
+            "result_fields": {
+                "reward_memory_reflection_json": {
+                    "type": "string",
+                    "maxLength": 2400,
+                }
+            }
+            if ingest_enabled
+            else {},
+        }
+
+    full = result(include_recall_context=True)
+    encoded = json.dumps(
+        full,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return (
+        result(include_recall_context=False)
+        if len(encoded) > MEMORY_CONTEXT_MAX_RESULT_BYTES
+        else full
+    )
 
 
 def memory_context_registration(
@@ -88,6 +122,7 @@ def memory_context_registration(
         "reward-memory",
         ("reward_memory_recall",),
         produce,
+        max_result_bytes=MEMORY_CONTEXT_MAX_RESULT_BYTES,
     )
 
 

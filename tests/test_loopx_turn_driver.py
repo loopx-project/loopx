@@ -931,7 +931,13 @@ def test_turn_host_request_carries_reward_memory_decision_context() -> None:
     register_plan_memory(plan)
     request = build_loopx_turn_host_request(plan)
 
-    assert request["reward_memory_recall"] == plan["reward_memory_recall"]
+    expected_recall = {
+        **plan["reward_memory_recall"],
+        "context": plan["turn_context_contributions"][0]["context_fields"][
+            "reward_memory_recall"
+        ]["context"],
+    }
+    assert request["reward_memory_recall"] == expected_recall
     assert request["reward_memory_recall"]["context"]["guidance"][0][
         "content_summary"
     ]
