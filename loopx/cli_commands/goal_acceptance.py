@@ -6,6 +6,7 @@ from ..control_plane.goals.acceptance_readback import configured_checks
 
 import argparse
 import json
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +25,34 @@ def register_goal_acceptance_command(subparsers: Any, add_format: Any) -> None:
     parser = subparsers.add_parser(
         "goal-acceptance",
         help="Read Goal intent, prepare revisions, adopt current intent, refine outcomes or run configured checks.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''Objective CLI workflow (no App required):
+  1. inspect --agent-id AGENT
+  2. prepare-objective --agent-id AGENT --document objective.json --operation-id ID --execute
+     objective.json: {"objective":"Current direction", "reason":"Evidence of changed user direction", "source_ref":"message:owner"}
+     Saves/reuses a proposal; does not change the Goal or block existing work.
+  3. inspect-proposal --proposal-id PROPOSAL
+  4. apply-proposal --proposal-id PROPOSAL --execute
+     Local owner operation: use existing explicit authorization, or surface once
+     for owner review and continue independently authorized work. Do not ask
+     again for an already authorized unchanged proposal. Omit --execute to preview.
+     Retry the same proposal ID after a lost response; no new operation ID.
+  5. inspect --agent-id AGENT
+     Review your own work, then adopt-objective --agent-id AGENT --document adoption.json
+       --operation-id ID --expected-provider-revision REV --execute
+     adoption.json: {"revision":1, "digest":"<goal_objective.digest>", "work_digest":"<objective_work_digest>", "review_summary":"How my current work fits"}
+     Use exact values from inspect; each peer adopts only for itself.
+     Own work review/adoption needs no human reply or unanimous peer vote.
+All steps require --goal-id GOAL. Proposal preparation alone requires neither
+owner input nor adoption; only an applied objective revision needs adoption.
+Authority, budgets, stops and existing gated actions remain binding.''',
     )
     add_format(parser)
-    parser.add_argument("action", type=lambda value: "clear-checks" if value == "disable" else value, choices=("inspect", "prepare", "configure", "verify", "clear-checks", "refine", "prepare-objective", "revise-objective", "adopt-objective"))
+    parser.add_argument("action", type=lambda value: "clear-checks" if value == "disable" else value, choices=("inspect", "prepare", "configure", "verify", "clear-checks", "refine", "prepare-objective", "inspect-proposal", "apply-proposal", "revise-objective", "adopt-objective"))
     parser.add_argument("--goal-id", required=True)
+    parser.add_argument(
+        "--proposal-id", help="Existing objective proposal ID for inspect-proposal/apply-proposal; reuses the original reviewed request and recovery identity.",
+    )
     parser.add_argument(
         "--agent-id",
         help="Registered caller; Agents may prepare objective revisions, adopt only for themselves, refine outcomes or inspect/verify checks. Shared objective revision requires the owner.",
@@ -60,6 +85,17 @@ def render_goal_acceptance(payload: dict[str, Any]) -> str:
         return "\n".join(lines)
     if payload.get("provider_revision"):
         lines.append(f"- provider revision: {payload['provider_revision']}")
+    proposal = payload.get("proposal")
+    if proposal and proposal["action_kind"] == "goal.update":
+        parameters = proposal["normalized_parameters"]
+        lines.extend([f"- proposal: {proposal['proposal_id']} ({proposal['status']})",
+            f"- proposed objective: {parameters['objective']}",
+            f"- reason: {parameters['reason']}", f"- source: {parameters['source_ref']}"])
+        lines.extend(f"- CLI: {command}" for command in payload.get("next_cli_actions", []))
+        lines.append("- A pending proposal does not change intent or block independently authorized work. Owner apply needs existing explicit authorization; do not repeat an answered request.")
+        if payload.get("current"):
+            lines.append(render_goal_acceptance(payload["current"]))
+        return "\n".join(lines)
     contract = payload.get("goal_acceptance_contract") or {}
     objective = contract.get("goal_objective")
     if objective:
@@ -119,7 +155,17 @@ def handle_goal_acceptance_command(
             "runtime_root": runtime_root_arg,
             "agent_id": args.agent_id,
         }
-        if args.action in {"revise-objective", "adopt-objective"}:
+        if args.proposal_id and args.action not in {"inspect-proposal", "apply-proposal"}:
+            raise ValueError("--proposal-id requires inspect-proposal or apply-proposal")
+        if args.action in {"inspect-proposal", "apply-proposal"}:
+            from ..control_plane.goals.goal_objective_actions import objective_revision_proposal
+            if not args.proposal_id or args.document or args.operation_id or args.expected_provider_revision:
+                raise ValueError("inspect-proposal/apply-proposal requires only --proposal-id, not a new document, operation or revision")
+            if args.action == "inspect-proposal" and args.execute:
+                raise ValueError("inspect-proposal is read-only")
+            payload = objective_revision_proposal(**common, proposal_id=args.proposal_id,
+                execute=args.action == "apply-proposal" and args.execute)
+        elif args.action in {"revise-objective", "adopt-objective"}:
             if args.document is None or not args.operation_id or not args.expected_provider_revision:
                 raise ValueError("objective updates require --document, --operation-id and --expected-provider-revision from inspect")
             document = json.loads(args.document.read_text(encoding="utf-8"))
@@ -184,9 +230,19 @@ def handle_goal_acceptance_command(
                 payload = public_goal_acceptance(inspect_goal_acceptance(**common))
             else:
                 payload = verify_goal_acceptance(**common, execute=args.execute)
+        if (payload.get("proposal") or {}).get("action_kind") == "goal.update":
+            prefix = ["loopx", "--registry", str(registry_path), "--format", "json"]
+            if runtime_root_arg:
+                prefix.extend(["--runtime-root", runtime_root_arg])
+            proposal_args = ["--goal-id", args.goal_id, "--proposal-id", payload["proposal"]["proposal_id"]]
+            payload["next_cli_actions"] = [shlex.join(prefix + ["goal-acceptance", "inspect-proposal"] + proposal_args)]
+            if payload["proposal"]["status"] in {"preview_ready", "deferred", "applying"}:
+                payload["next_cli_actions"].append(shlex.join(prefix + ["goal-acceptance", "apply-proposal"] + proposal_args + ["--execute"]))
+            payload["next_action"] = "Surface this proposal once and continue independently authorized work under the current Goal. Apply only under existing explicit local-owner authorization; do not ask again for an already authorized unchanged proposal. After apply, each Agent reviews and adopts for itself."
         code = (
             1
-            if payload.get("checks_passed") is False
+            if payload.get("ok") is False
+            or payload.get("checks_passed") is False
             or payload.get("acceptance_ready") is False
             else 0
         )

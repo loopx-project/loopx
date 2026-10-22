@@ -113,17 +113,29 @@ or peer instructions. Attribution never expands authority. Record in-scope
 refinement under existing authorization, link concrete work, read back, and
 revisit unmet requirements before switching focus or claiming completion.
 
-If direct user direction makes the recorded Goal objective obsolete, use
+If recorded direct user direction makes the Goal objective obsolete, use
 `goal-acceptance prepare-objective` with the proposed objective, reason and
-opaque source reference; surface the existing Goal update proposal for owner
-apply. Do not silently edit Markdown or treat a peer/document as authorization.
+opaque source reference. Autonomous replanning may discover this mismatch from
+existing user context; it need not request new intent merely because the Agent
+initiated the review. Surface the existing proposal once as reviewable output,
+not a mandatory question or precondition for continuing authorized work.
+Preparing or reusing a pending proposal changes neither the current objective
+nor execution authority. Continue under the current valid Goal; pause only an
+action that actually depends on missing intent or authority. Use existing
+explicit authorization for the unchanged proposal without asking again. These
+rules also apply in unattended harness and benchmark runs; never create an
+owner gate merely to surface a proposal. Do not silently edit Markdown or treat
+a peer/document as authorization.
 Ordinary progress, Todo/route changes, diagnostic feedback, wording polish or
 age alone need no revision. Reuse an existing pending proposal without polling.
 The current canonical objective then takes precedence over the old source text.
-Before new execution, each Agent reviews its own Todo/Vision route and records
+Only after owner apply, before new execution, each Agent reviews its own Todo/Vision route and records
 `goal-acceptance adopt-objective` with its exact revision/digest and inspected
 `objective_work_digest`. One peer cannot acknowledge for another; no unanimous
-vote or extra write is needed after that revision is adopted. See the
+vote, human response or extra write is needed after that revision is adopted.
+Use CLI `inspect-proposal` / `apply-proposal --proposal-id` and the document
+formats in `goal-acceptance --help`; App access or source-code inspection is
+not required. Owner apply retains its authority boundary. See the
 [operating-objective procedure](references/outcome-refinement.md#current-operating-objective).
 
 ## Current State, Continued Work And Settlement

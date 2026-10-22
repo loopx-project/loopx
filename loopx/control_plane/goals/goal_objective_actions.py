@@ -7,22 +7,57 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from ...chat_action_store import ChatActionStore, ActionConflictError, normalize_idempotency_key
 from ...file_lock import exclusive_file_lock
 from .acceptance import inspect_goal_acceptance, update_goal_objective, public_goal_acceptance, goal_acceptance_route, GoalAcceptanceRoute
 
+if TYPE_CHECKING:
+    from ...chat_actions import ChatActionService
 
-def prepare_objective_revision(*, registry_path: Path, runtime_root: str | None,
-    goal_id: str, agent_id: str | None, document: dict[str, Any], operation_id: str,
-    execute: bool) -> dict[str, Any]:
+
+def _objective_service(registry_path: Path, runtime_root: str | None) -> ChatActionService:
     from ...chat_actions import ChatActionService
     from ...paths import effective_runtime_root
 
     root = effective_runtime_root(registry_path, runtime_root)
-    service = ChatActionService(store=ChatActionStore(root / "chat" / "actions"), registry_path=registry_path)
+    return ChatActionService(store=ChatActionStore(root / "chat" / "actions"), registry_path=registry_path)
+
+
+def objective_revision_proposal(*, registry_path: Path, runtime_root: str | None,
+    goal_id: str, agent_id: str | None, proposal_id: str, execute: bool = False) -> dict[str, Any]:
+    """CLI transport for the same reviewed request, owner apply and recovery as Chat."""
+    service = _objective_service(registry_path, runtime_root)
+    current = inspect_goal_acceptance(**service._objective_route(goal_id), agent_id=agent_id)
+    proposal = service.load(proposal_id)
+    if proposal is None:
+        raise ValueError("Objective proposal was not found")
+    parameters = proposal["normalized_parameters"]
+    if (proposal["action_kind"] != "goal.update"
+        or proposal["context"].get("goal_id") != goal_id
+        or parameters.get("goal_id") != goal_id
+        or not {"objective", "reason", "source_ref"}.issubset(parameters)):
+        raise ValueError("Proposal is not a current-objective revision for this Goal")
+    if not execute:
+        return {"ok": True, "executed": False, "proposal": proposal,
+            "current": public_goal_acceptance(current)}
+    if agent_id is not None:
+        raise ValueError("Shared objective revision requires the local Goal owner; an Agent may prepare or inspect the proposal, not apply it")
+    result = service.apply(proposal_id)
+    # Replays may return only a historical receipt. Always read today's basis;
+    # never reinstall that historical objective or imply another peer adopted it.
+    current = inspect_goal_acceptance(**service._objective_route(goal_id))
+    applied = result["proposal"]["status"] == "applied"
+    return {**result, "ok": applied, "executed": applied,
+        "current": public_goal_acceptance(current)}
+
+
+def prepare_objective_revision(*, registry_path: Path, runtime_root: str | None,
+    goal_id: str, agent_id: str | None, document: dict[str, Any], operation_id: str,
+    execute: bool) -> dict[str, Any]:
+    service = _objective_service(registry_path, runtime_root)
     if not isinstance(document, dict) or set(document) != {"objective", "reason", "source_ref"}:
         raise ValueError("objective proposal needs objective, reason and an opaque source_ref")
     parameters = service._normalize("goal.update", {"goal_id": goal_id, **document, "prepared_by": agent_id})

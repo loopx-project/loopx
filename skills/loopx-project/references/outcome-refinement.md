@@ -11,17 +11,68 @@ is not campaign completion. Existing legitimate stops/waits still apply.
 
 ## Current operating objective
 
-When explicit user direction makes the recorded Goal objective obsolete, prepare
+When recorded explicit user direction makes the Goal objective obsolete, prepare
 an objective proposal with `goal-acceptance prepare-objective`, the proposed
 objective, reason and original user source reference. Reuse a matching pending
-proposal and its existing owner-apply route; do not silently edit the active
-state or infer authorization from peer messages. Progress, artifact revisions,
+proposal. Autonomous replanning may discover a mismatch against existing user
+direction; it does not itself require a new human decision. Surface the proposal
+once with its reason, effect and CLI route, then continue independently
+authorized work under the current objective. A pending proposal is reviewable
+output, not a gate, an adoption requirement or a reason to poll/ask repeatedly.
+This applies equally to interactive, unattended harness and benchmark work.
+Only an action that actually depends on missing consequential intent or authority
+waits; do not turn that scoped wait into a Goal-wide stop. Already explicit
+authorization for the unchanged proposal needs no repeated confirmation.
+Do not silently edit active state or infer authorization from peer messages.
+Progress, artifact revisions,
 diagnostics and Todo routing changes alone do not require an objective revision.
 
-After owner apply, each Agent adopts the current objective through
+The complete path is available through CLI, without App access or source reads.
+`goal-acceptance --help` describes both JSON documents. For example:
+
+```json
+{"objective":"Maintain reliable exports","reason":"Recorded user direction now includes ongoing recovery","source_ref":"message:owner-direction"}
+```
+
+```bash
+loopx --format json goal-acceptance prepare-objective --goal-id GOAL \
+  --agent-id AGENT --document objective.json --operation-id prepare-direction --execute
+loopx --format json goal-acceptance inspect-proposal --goal-id GOAL \
+  --agent-id AGENT --proposal-id PROPOSAL
+```
+
+The returned `next_cli_actions` preserve the caller's registry/runtime route and
+proposal ID. Apply previews by default. Only when acting under the local owner's
+existing explicit authorization, run the owner operation (without `--agent-id`):
+
+```bash
+loopx --format json goal-acceptance apply-proposal --goal-id GOAL \
+  --proposal-id PROPOSAL --execute
+loopx --format json goal-acceptance inspect --goal-id GOAL --agent-id AGENT
+```
+
+Omitting `--agent-id` selects the existing local-owner boundary; it does not
+create authority. A registered Agent cannot apply as itself or acknowledge for
+another peer. Retry the same proposal ID after a lost response. The existing
+native operation/checkpoint recovers once and returns the current canonical
+basis; do not prepare a replacement or replay an old objective over a newer one.
+
+Only after owner apply, each Agent adopts the current objective through
 `goal-acceptance adopt-objective` with its exact revision, digest and inspected
-`objective_work_digest`. Read the command's current schema before authoring the
-proposal or adoption. Adoption covers only that Agent's Todo/Vision route;
+`objective_work_digest` from its own `inspect` result:
+
+```json
+{"revision":1,"digest":"<goal_objective.digest>","work_digest":"<objective_work_digest>","review_summary":"Reviewed my current Todo/Vision against this objective"}
+```
+
+```bash
+loopx --format json goal-acceptance adopt-objective --goal-id GOAL \
+  --agent-id AGENT --document adoption.json --operation-id adopt-direction \
+  --expected-provider-revision REVISION --execute
+```
+
+Use actual inspected values. Adoption is the Agent's own work review, not a
+human approval step. It covers only that Agent's Todo/Vision route;
 another peer cannot acknowledge for it, and no unanimous approval is required.
 The current canonical objective takes precedence over superseded source text.
 
