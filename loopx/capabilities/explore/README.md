@@ -74,6 +74,13 @@ identify the current retained candidate, establish causality, satisfy acceptance
 or authorize execution. Actual adoption and outcome benefit require subsequent
 work and evidence; automatic branch rankings remain unchanged.
 
+Manually captured measured findings also appear in the existing result pages
+and, when linked to eligible work, its exact-source comparison cards. They need
+no `writeback-result` origin tag. Read the page before optionally binding a
+`selected_candidate`; normal source-revision, Todo-link and followthrough checks
+still apply. Unmeasured manual notes retain their existing summary/audit path.
+Reading or selecting a measured result does not certify adoption or execution.
+
 ## At a Glance
 
 Explore Harness is a supported, default-off optional capability for

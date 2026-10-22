@@ -82,11 +82,11 @@ for (const includeDigests of [false, true]) {
   });
 }
 
-for (const limit of [3, 4, 20]) {
-  test(`every scoped outcome on an explicitly requested page remains selectable: ${limit}`, () => {
+for (const tagged of [false, true]) for (const limit of [3, 4, 20]) {
+  test(`every scoped measured outcome remains selectable: tagged=${tagged}, limit=${limit}`, () => {
     const findings = Array.from({length: 20}, (_, index) => ({finding_id: `scoped-${index}`,
       node_id: "question", finding: `Measured input family ${index}`, status: "confirmed",
-      summary: `Applicable to input family ${index} only.`, tags: ["writeback-result"],
+      summary: `Applicable to input family ${index} only.`, tags: tagged ? ["writeback-result"] : [],
       evidence_refs: [`result:scoped-${index}`],
       measurements: [{metric: "quality", value: index, unit: "points", higher_is_better: true,
         comparison_scope: "validation:owned-v1", input_revision: "owned-input-v1",
@@ -99,6 +99,7 @@ for (const limit of [3, 4, 20]) {
         typed_evidence_audit: {requested_node_refs: ["question"]}}]}};
     const source = projectExploreTurnContext(request);
     const graph = source.graph as JsonObject, harness = source.harness as JsonObject;
+    assert.ok(harness.comparison_candidates?.length, "measured findings must reach the existing decision cards without an origin tag");
     const card = harness.comparison_candidates[0];
     // Quantitative feedback still uses all sources, independently of page size.
     assert.equal(graph.measurement_feedback[0].measured_count, 20);
