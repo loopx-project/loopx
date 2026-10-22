@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-20
+- Last revised：2026-10-21
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -32,7 +32,23 @@ Python builder 和 App 兼容组合逻辑已退役。Python 保留既有 executi
 follow-up wire 契约、真实 runtime transport、已安装调用者，以及匹配的完整
 SQLite CLI 性能。仅减少请求次数不能证明性能收益。
 
+### 全局读取 CLI 调用者接入
+
+既有五个全局读取命令现在使用按命令 parser 和共享 dispatcher。
+`summary_all_registration.py` 统一持有仅解析参数的注册实现，旧注册 import 保留
+同一函数的 alias。完整 parser 的兼容调用者复用相同 handler 分发，旧完整 CLI
+分支已删除。Help 和诊断保留既有 interface；实际读取保留 registry/runtime 解析、
+guard、格式和 typed owner。这不新增领域规则、桥接操作或数据缓存。增量资格验证
+单独计入待合入的 quota 请求作用域接入，避免重复计算其收益。
+
 ### 产品对话与通用异步 inbox
+
+**有界 Goal portfolio 读取。** `goal_portfolio.py` 现在在完整 portfolio 读取期间
+复用既有 executable-revision 请求作用域。CLI、Chat context 和 manager inspection
+调用者在 status 与逐 Agent quota 读取之间共用该作用域。嵌套作用域加入当前请求；
+下一次 portfolio 读取重新解析当前代码。Registry、provider 与 run-history 仍实时
+读取，保留既有范围、上限和变化检查。这是有界调用者接入，不新增桥接、数据缓存、
+语义 owner 或 provider 路由。
 
 **接收方 Inbox 读取事务（2026-10-19）。**
 `loopx/control_plane/collaboration/inbox_read.ts` 现在通过既有 typed owner 组合本地源扫描、分页、
@@ -48,6 +64,14 @@ finalize 重新取得 Goal lifetime guard，并在共享 request fence 内重读
 正常 runtime IPC、已安装 HTTP 调用者一致性、
 完整默认 SQLite CLI 性能仍是独立资格门。本次源码切换不证明 R1–R3 或完整异步协作
 生命周期已通过验收。
+
+**Inbox CLI 调用者接入。** 正常 `manager-inbox` 命令族现在使用既有按命令
+parser、共享 dispatcher 和 executable-revision 请求作用域。完整兼容 CLI
+复用同一个 dispatcher，旧 Inbox 重复分支已退役。两条路径保留既有 parser、
+handler、registry／runtime 解析和 native-controller guard。一次命令只解析一次
+可执行代码身份；源记录仍在原锁协议下实时读取，下一次命令重新解析当前代码。
+既有 TypeScript 语义 owner、桥接操作、回执格式和 Python provider IO 均不变。
+这是 Stage 3 调用者接入，不是新的叶子迁移、结果存储，也不证明 R1–R3 已完成。
 
 R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 [App/inbox 融合设计](app-conversation-and-async-inbox-v0.md#ts-and-generic-async-inbox-migrate-with-the-user-path)
@@ -1253,6 +1277,13 @@ TypeScript 类型在运行时会被擦除。因此 network/RPC payload、解析�
 而不必在每层重复临时字段检查。Framing、authentication、size limit 等 transport
 检查与 schema validation、semantic invariant 分层负责。未经检查的
 `JSON.parse(...) as T` 不能建立控制面 authority。
+
+Canonical Todo 集合读取在同一个已加载 provider head 内共享 `GoalAcceptanceRead`。
+合同、oracle basis 和工作 guard 复用已验证的 authority、Todo 索引和任务判断。
+guard 保持惰性投影，保留来源 identity 与连续页检查的原拒绝顺序。公开独立 helper
+每次重新读取，返回的容器相互隔离。每个新 provider head 或连续页读取都建立新
+scope。不新增 Python bridge、RPC、持久化缓存或写权限；原生读取测量不证明
+完整 CLI 延迟、安装采用或 PostgreSQL 运行资格。
 
 `as unknown as T` 只允许作为具名迁移缝：cutover PR 必须明确其调用点、上游
 validator、负向边界覆盖和移除 owner。只要 public、持久化、RPC 或 extension

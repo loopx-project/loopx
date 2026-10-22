@@ -8,6 +8,7 @@ import {
   evaluateTurnEnvelope,
   quotaActionSignatureDocument,
   turnEnvelopeActionSignatureDocument,
+  turnEnvelopeReplanSettlementIdentity,
 } from "../../loopx/control_plane/quota/turn_envelope.ts";
 import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
@@ -63,6 +64,36 @@ function payload(): Record<string, unknown> {
     goal_boundary: { rule: "stay_in_scope_or_stop", write_scope: ["loopx/**"] },
   };
 }
+
+test("a Todo-less planning identity must match the original signed quota binding", () => {
+  const identity = {
+    schema_version: "quota_settlement_identity_v1", goal_id: "goal-turn-envelope", agent_id: "agent-ts",
+    turn_instance_id: "planning-turn", binding_kind: "autonomous_replan", binding_id: "replan-original",
+    replan_obligation_id: "replan-original",
+    effect_id: "goal-turn-envelope:agent-ts:autonomous_replan:replan-original:planning-turn",
+  };
+  const source = payload();
+  source.selected_todo = null;
+  source.effective_action = "autonomous_replan_required";
+  source.replan_action_packet = {schema_version: "replan_action_packet_v0", obligation_id: "replan-original"};
+  const cli = (source.interaction_contract as JsonObject).cli_channel as JsonObject;
+  cli.settlement_plan = {schema_version: "quota_settlement_plan_v1", identity, ordered_steps: []};
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  assert.deepEqual(turnEnvelopeReplanSettlementIdentity(envelope, "planning-turn"), identity);
+  assert.throws(() => turnEnvelopeReplanSettlementIdentity(envelope, "different-turn"), /quota admission/);
+  for (const field of ["goal_id", "agent_id", "replan_obligation_id", "effect_id"]) {
+    const changed = structuredClone(source);
+    const changedCli = (changed.interaction_contract as JsonObject).cli_channel as JsonObject;
+    ((changedCli.settlement_plan as JsonObject).identity as JsonObject)[field] = "different";
+    // Native rebuilding signs the changed bytes too; semantic binding must
+    // still fail rather than treating integrity as execution authority.
+    const changedEnvelope = buildTurnEnvelope({payload: changed, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+    assert.throws(() => turnEnvelopeReplanSettlementIdentity(changedEnvelope, "planning-turn"));
+  }
+  assert.equal(turnEnvelopeReplanSettlementIdentity(buildTurnEnvelope({
+    payload: payload(), protocol_action_fields: protocolActionFields, scheduler_execution_args: "",
+  })), null);
+});
 
 const protocolActionFields = {
   actor: "agent",

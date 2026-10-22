@@ -4,7 +4,7 @@
 - Supersedes / closes: none
 - Proposed by: LoopX maintainers
 - Date: 2026-08-15
-- Last revised: 2026-10-20
+- Last revised: 2026-10-21
 - Scope: an incremental, replacement-first migration of the LoopX control-plane
   core from Python to TypeScript without maintaining two semantic
   implementations
@@ -34,7 +34,26 @@ and follow-up wire contracts, real runtime transport, installed callers and
 matched complete SQLite CLI performance must qualify independently before
 delivery. Fewer requests alone do not establish a performance gain.
 
+### Global read CLI caller adoption
+
+The existing five global read commands now use the selected parser and shared
+dispatcher. `summary_all_registration.py` owns their parser-only registration;
+the old registration import remains an alias. Full-parser compatibility callers
+use the same handler dispatch, and the old full-CLI branch is removed. Help and
+diagnostics retain the existing interface; accepted reads retain registry/runtime
+resolution, guards, formatting and typed owners. This adds no domain rule, bridge
+operation or data cache. Incremental qualification accounts for pending quota
+request-scope adoption separately rather than counting its gain again.
+
 ### Product conversations and asynchronous inbox
+
+**Bounded Goal portfolio reads.** `goal_portfolio.py` now joins the existing
+executable-revision request scope around the complete portfolio read. CLI,
+Chat context and manager inspection callers reuse that scope across status and
+per-Agent quota reads. Nested scopes join it; the next portfolio read resolves
+the current executable again. Registry, provider and run-history reads remain
+live, with their existing scope, limits and change detection. This is bounded
+caller adoption: no new bridge, data cache, semantic owner or provider routing.
 
 **Receiver Inbox read transaction (2026-10-19).**
 `loopx/control_plane/collaboration/inbox_read.ts` now composes local source scans, pagination,
@@ -54,6 +73,17 @@ private snapshot transport. Normal runtime IPC, installed
 HTTP caller parity and complete default-SQLite CLI performance remain separate
 qualification gates. This source cutover does not certify R1–R3 or the complete
 asynchronous collaboration lifecycle.
+
+**Inbox CLI caller adoption.** The normal `manager-inbox` command family now
+uses the existing selected-command parser, shared dispatcher and executable-
+revision request scope. The full compatibility CLI reuses that same dispatcher;
+its duplicate Inbox branch is retired. Both paths retain the existing parser,
+handler, registry/runtime resolution and native-controller guard. A command
+resolves executable identity once while source records stay live reads under
+their existing locks; the next command resolves the current code again.
+Existing TypeScript semantic owners, bridge operations, receipt formats and
+Python provider IO are unchanged. This is Stage 3 caller adoption, not another
+leaf migration, a new result store or completion of R1–R3.
 
 R1–R3 also consume the typed kernel through the App, not only CLI settlement.
 The [App/inbox integration plan](app-conversation-and-async-inbox-v0.md#ts-and-generic-async-inbox-migrate-with-the-user-path)
@@ -1771,6 +1801,15 @@ Keep malformed-JSON rejection, schema-error order, canonical bytes and
 input/output independence unchanged.
 This is a bounded shared-codec cost repair, not a provider-format migration or
 qualification of sustained operation, CI capacity or release admission.
+
+Canonical Todo collection reads also share one `GoalAcceptanceRead` within the
+loaded provider head. Contract, oracle basis and work guards reuse the validated
+authority, Todo index and task decisions. Guard projection stays lazy so source
+identity and continuation checks retain their original precedence. Public
+standalone helpers start fresh, and returned containers remain independent.
+Every new provider head or continuation read creates a new scope. This adds no
+Python bridge, RPC, persisted cache or write authority; native-read measurements
+do not qualify full CLI latency, installed adoption or PostgreSQL operation.
 
 `as unknown as T` is permitted only as a named migration seam: its exact call
 site, upstream validator, negative boundary coverage, and removal owner must be

@@ -127,6 +127,7 @@ def build_loopx_turn_transaction_plan(
     scheduler_owner: str = "none",
     turn_instance_id: str | None = None,
     goal_ref: Mapping[str, str] | None = None,
+    settlement_identity: SettlementIdentity | None = None,
 ) -> dict[str, Any]:
     normalized_instance_id = normalize_turn_instance_id(turn_instance_id)
     identity = {
@@ -141,7 +142,7 @@ def build_loopx_turn_transaction_plan(
     if goal_ref is not None:
         identity["goal_ref"] = dict(goal_ref)
     turn_key = _canonical_hash(identity)
-    settlement_identity = SettlementIdentity(
+    settlement_identity = settlement_identity or SettlementIdentity(
         goal_id=str(lineage.get("goal_id") or ""),
         agent_id=str(lineage.get("agent_id") or ""),
         todo_id=str(lineage.get("todo_id") or ""),
@@ -239,7 +240,14 @@ def _settlement_identity(
         "todo_id": str(identity.get("todo_id") or ""),
         "effect_id": str(identity.get("effect_id") or ""),
     }
-    if not all(normalized.values()):
+    if identity.get("replan_obligation_id") is not None:
+        try:
+            parsed = SettlementIdentity.from_runtime_payload(identity)
+        except RuntimeError:
+            errors.append("transaction plan is missing its typed settlement identity")
+        else:
+            normalized["replan_obligation_id"] = str(parsed.replan_obligation_id)
+    elif not all(normalized.values()):
         errors.append("transaction plan is missing its typed settlement identity")
     return normalized
 
@@ -345,6 +353,8 @@ def validate_loopx_turn_receipt(
             "goal_id": settlement_identity["goal_id"],
             "agent_id": settlement_identity["agent_id"],
             "todo_id": settlement_identity["todo_id"],
+            **({"replan_obligation_id": settlement_identity["replan_obligation_id"]}
+               if settlement_identity.get("replan_obligation_id") else {}),
         },
         "settlement_effect_id": settlement_identity["effect_id"] or None,
         "result_kind": kind.value if kind is not None else None,

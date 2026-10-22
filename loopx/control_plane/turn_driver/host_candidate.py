@@ -230,6 +230,10 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         f"- delivery_outcome (material results): {' | '.join(DELIVERY_OUTCOME_CHOICES)}\n"
         "- vision_unchanged_reason: why a material result's goal path is unchanged "
         "(<=240 chars)\n"
+        "- progress_observation_json (material results, optional): JSON-encoded "
+        "typed_progress_observation_v0 with result_class, observed surface_id/"
+        "hypothesis_id/probe_kind or blocker/coverage fields and opaque evidence_ids; "
+        "use independently checked evidence to satisfy the original replan packet.\n"
         "For material result kinds (validated_progress, repair_required, and "
         "replan_required), describe the path outcome. For a material goal-path "
         "change, set path_delta_mode to material_replan, "
@@ -404,7 +408,7 @@ def build_result(
             result[field] = text
     if kind in MATERIAL_KINDS:
         _complete_material_fields(result, candidate, kind)
-    for field in ("path_delta_mode", "agent_vision_json"):
+    for field in ("path_delta_mode", "agent_vision_json", "progress_observation_json"):
         if field in candidate:
             # Preserve the structured executor input verbatim. The executor
             # owns type, size, JSON and semantic validation.

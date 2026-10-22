@@ -32,6 +32,7 @@ from .codex_sessions import (
 from .driver import SUPPORTED_ITERATION_CONTEXT_POLICIES
 from .executor import (
     HOST_AGENT_VISION_JSON_MAX_CHARS,
+    HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS,
     HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS,
     HOST_RESULT_EVIDENCE_LIMITS,
     HOST_RESULT_TEXT_LIMITS,
@@ -252,6 +253,10 @@ def codex_cli_result_schema(
             "type": "string",
             "maxLength": HOST_AGENT_VISION_JSON_MAX_CHARS,
         },
+        "progress_observation_json": {
+            "type": "string",
+            "maxLength": HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS,
+        },
         "summary": {"type": "string", "maxLength": text_limits["summary"]},
     }
     for evidence_field, (max_items, max_item_chars, _max_total_chars) in (
@@ -317,6 +322,7 @@ def _prompt(request: Mapping[str, Any]) -> str:
         "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. Omit both arrays for stop results.",
         "For those material results, set path_delta_mode=material_replan only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
         "For routine continuation, retry, successor creation, or no-change replanning, set path_delta_mode=unchanged, leave agent_vision_json empty, and provide vision_unchanged_reason.",
+        "When replan_action_packet requires a semantic delta, return progress_observation_json as a JSON-encoded typed_progress_observation_v0 with result_class, the observed surface_id/hypothesis_id/probe_kind or blocker/coverage fields, and opaque evidence_ids. Report only independently checked evidence; a plan summary or a vision change alone cannot substitute for the required observation. Otherwise leave this field empty.",
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]

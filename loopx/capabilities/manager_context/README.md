@@ -1,6 +1,10 @@
 # Manager context delivery
 
 Built-in capability for original intent delivery and receiver-owned replanning.
+The `manager-inbox` CLI uses the shared selected-command dispatcher and one
+executable-revision scope per command. It retains the existing handler and
+live source reads; it does not load the full compatibility CLI or cache request
+records between commands.
 The owner's local manager channel uses registered workers automatically.
 An external conversation requires a trusted operator's sender-bound policy in
 `<runtime-root>/.local/manager-context/policy.json`:
