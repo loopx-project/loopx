@@ -286,18 +286,12 @@ def _resolve_start_goal_input(
             "--slash-command-arguments cannot be combined with --fine-grained; "
             "the raw argument string already owns leading switches"
         )
-    if new_peer:
-        raise ValueError(
-            "--slash-command-arguments cannot be combined with --new-peer; "
-            "the raw argument string already owns leading switches"
-        )
-
     normalized = str(raw_arguments).strip()
     if not normalized:
         raise ValueError("--slash-command-arguments must contain goal text")
     route = None
     parsed_fine_grained = False
-    parsed_new_peer = False
+    parsed_new_peer = new_peer
     last_switch = None
     remainder = normalized
     while True:

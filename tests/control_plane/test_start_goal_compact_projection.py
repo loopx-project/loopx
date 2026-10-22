@@ -205,6 +205,8 @@ def _invoke_ark_start_goal_cli(
 def _invoke_start_goal_with_slash_arguments(
     project: Path,
     raw_arguments: str,
+    *,
+    extra_arguments: tuple[str, ...] = (),
 ) -> tuple[int, dict[str, Any]]:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -220,6 +222,7 @@ def _invoke_start_goal_with_slash_arguments(
                 GOAL_ID,
                 "--host-surface",
                 "codex-app",
+                *extra_arguments,
                 f"--slash-command-arguments={raw_arguments}",
             ]
         )
@@ -1778,6 +1781,43 @@ def test_cli_parses_new_peer_from_complete_slash_arguments(
     gate = payload["guided_transaction"]["identity_selection_gate"]
     assert gate["default_action"] == "register_fresh_agent"
     assert gate["fresh_agent_registration"]["recommended"] is True
+
+
+def test_cli_accepts_generated_independent_new_peer_with_raw_arguments(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_before = (project / ".loopx" / "registry.json").read_bytes()
+
+    exit_code, payload = _invoke_start_goal_with_slash_arguments(
+        project,
+        GOAL_TEXT,
+        extra_arguments=("--new-peer",),
+    )
+
+    assert exit_code == 0
+    assert payload["goal_text"] == GOAL_TEXT
+    assert payload["new_peer"] is True
+    gate = payload["guided_transaction"]["identity_selection_gate"]
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
+    assert (project / ".loopx" / "registry.json").read_bytes() == registry_before
+
+
+def test_cli_rejects_duplicate_independent_and_raw_new_peer(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+
+    exit_code, payload = _invoke_start_goal_with_slash_arguments(
+        project,
+        f"--new-peer {GOAL_TEXT}",
+        extra_arguments=("--new-peer",),
+    )
+
+    assert exit_code == 2
+    assert payload["ok"] is False
+    assert "duplicate leading --new-peer switch" in payload["error"]
 
 
 @pytest.mark.parametrize(
