@@ -77,6 +77,8 @@ flowchart LR
 - Apply 与 rollback 都需要显式 owner gate 和 revision 校验。
 - 每个派生 authority revision 都必须解析到唯一的 applied ranking-lineage receipt；
   投影不能按 revision 名称继承旧 plan receipt。
+- 派生 ranking receipt 必须与来源 packet 使用相同的规范化 Goal 或 project owner；
+  不满或清空的 Top-N 必须报告真实 entry 数量。
 - 归档一个已排序素材时，只移除目标素材，其余 entry identity 与相对顺序保持不变。
 
 ## 典型场景

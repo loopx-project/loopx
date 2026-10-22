@@ -91,16 +91,19 @@ owner gate、验证引用、前后 revision；发生修改时还必须有 rollba
 排序成员关系是 authority；summary count 和可读视图属于派生状态。
 `material_ranked_state_repair_plan_v0` 从完整 ranked set 重新计算可以推导的
 entry、material、Top-N 与 backlog 数量，只记录确定性的 order reference 和缺失或
-过期的计数字段，不改变成员、entry identity 或顺序。应用修复时必须推进 authority
-revision，并用 `material_ranked_state_repair_apply_receipt_v0` 记录 CAS 读回与回滚
-证据。
+过期的计数字段，不改变成员、entry identity 或顺序。配置窗口保存在
+`top_window_size`；`top_window_entry_count` 取该配置与真实 entry 数量的较小值，
+因此合法归档可以让窗口不满或清空。应用修复时必须推进 authority revision，并用
+`material_ranked_state_repair_apply_receipt_v0` 记录 CAS 读回与回滚证据；其规范化
+Goal 或 project/profile/workspace owner 必须与 repair plan 一致。
 
 归档一个已排序素材会同时改变 lifecycle 与 ranking membership。
 `material_lifecycle_ranking_apply_receipt_v0` 把 lifecycle receipt 绑定到新的 authority
 revision，并验证目标素材恰好移除一次，其余 entry identity、成员关系和相对顺序均未
 改变。投影 adapter 应按 receipt 已应用的 `after_revision` 解析 lineage，不能假定后续
 lifecycle revision 仍等于早期 rebuild 或 Git reconciliation 产生的 revision。上述
-contract 只携带数量与 digest，不携带标题、正文、URL 或私有位置。
+ranking receipt 还必须与 lifecycle receipt 使用相同的规范化 owner；packet digest
+一致不代表归属可移植。contract 只携带数量与 digest，不携带标题、正文、URL 或私有位置。
 
 ## 迁移边界
 

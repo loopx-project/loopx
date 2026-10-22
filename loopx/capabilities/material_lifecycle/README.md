@@ -86,6 +86,8 @@ flowchart LR
 - Apply and rollback require explicit owner gates and revision checks.
 - Every derived authority revision resolves to one applied ranking-lineage
   receipt; projection does not inherit an older plan receipt by revision name.
+- Derived ranking receipts bind the same normalized Goal or project owner as
+  their source packet, and an underfilled or empty Top-N reports its real count.
 - Archiving a ranked material removes only that material and preserves every
   remaining entry identity and relative order.
 

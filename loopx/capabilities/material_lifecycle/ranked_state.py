@@ -46,6 +46,30 @@ def _required_bool(value: Any, *, field: str) -> bool:
     return value
 
 
+def _material_owner_from_packet(
+    packet: Mapping[str, Any],
+    *,
+    field: str,
+) -> dict[str, Any]:
+    try:
+        return material_owner_fields(
+            goal_id=packet.get("goal_id"),
+            project_scope=packet.get("project_scope"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must identify exactly one material owner") from exc
+
+
+def _require_matching_material_owner(
+    *,
+    source_owner: Mapping[str, Any],
+    target_owner: Mapping[str, Any],
+    source_field: str,
+) -> None:
+    if source_owner != target_owner:
+        raise ValueError(f"{source_field} material owner does not match apply receipt")
+
+
 def _verified_packet_ref(
     packet: Mapping[str, Any],
     *,
@@ -68,15 +92,11 @@ def _normalize_ranked_entries(
 ) -> list[dict[str, Any]]:
     if isinstance(entries, (str, bytes)) or not isinstance(entries, Sequence):
         raise TypeError("entries must be a sequence of objects")
-    if not entries:
-        raise ValueError("entries must contain at least one entry")
-    window_size = positive_int(top_window_size, field="top_window_size")
+    positive_int(top_window_size, field="top_window_size")
     entry_limit = positive_int(
         max_materials_per_entry,
         field="max_materials_per_entry",
     )
-    if window_size > len(entries):
-        raise ValueError("top_window_size cannot exceed entry count")
 
     normalized: list[dict[str, Any]] = []
     entry_refs: set[str] = set()
@@ -134,6 +154,7 @@ def inspect_material_ranked_state(
     )
     window_size = positive_int(top_window_size, field="top_window_size")
     material_count = sum(len(item["material_refs"]) for item in normalized)
+    top_window_entry_count = min(window_size, len(normalized))
     order_ref = packet_ref(
         "material-ranked-order",
         {"entries": normalized},
@@ -143,8 +164,8 @@ def inspect_material_ranked_state(
             "rebuilt_entry_count": len(normalized),
             "material_ref_count": material_count,
             "top_window_size": window_size,
-            "top_window_entry_count": window_size,
-            "ranked_backlog_entry_count": len(normalized) - window_size,
+            "top_window_entry_count": top_window_entry_count,
+            "ranked_backlog_entry_count": len(normalized) - top_window_entry_count,
         },
         "order_ref": order_ref,
         "verification": {
@@ -236,6 +257,16 @@ def build_material_ranked_state_repair_apply_receipt(
         raise ValueError("plan has an unsupported schema_version")
     if not plan.get("repair_required"):
         raise ValueError("plan does not require a repair")
+    target_owner = material_owner_fields(
+        goal_id=goal_id,
+        project_scope=project_scope,
+    )
+    plan_owner = _material_owner_from_packet(plan, field="plan")
+    _require_matching_material_owner(
+        source_owner=plan_owner,
+        target_owner=target_owner,
+        source_field="plan",
+    )
     before = compact_token(before_revision, field="before_revision")
     after = compact_token(after_revision, field="after_revision")
     if before == after:
@@ -331,6 +362,19 @@ def build_material_lifecycle_ranking_apply_receipt(
         lifecycle_receipt,
         field="lifecycle_receipt.receipt_ref",
         prefix="material-lifecycle",
+    )
+    target_owner = material_owner_fields(
+        goal_id=goal_id,
+        project_scope=project_scope,
+    )
+    lifecycle_owner = _material_owner_from_packet(
+        lifecycle_receipt,
+        field="lifecycle_receipt",
+    )
+    _require_matching_material_owner(
+        source_owner=lifecycle_owner,
+        target_owner=target_owner,
+        source_field="lifecycle_receipt",
     )
     before_state = _normalize_ranked_entries(
         before_entries,

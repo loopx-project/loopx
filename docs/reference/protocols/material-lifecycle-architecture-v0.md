@@ -107,10 +107,13 @@ Ranking membership is authoritative; summary counts and readable views are
 derived state. `material_ranked_state_repair_plan_v0` recomputes only the
 derivable entry, material, Top-N, and backlog counts from the complete ranked
 set. It records a deterministic order reference and the missing or stale count
-fields without changing membership, entry identity, or order. An applied repair
-advances the authority revision and emits
-`material_ranked_state_repair_apply_receipt_v0` with CAS readback and rollback
-evidence.
+fields without changing membership, entry identity, or order. The configured
+window remains `top_window_size`; `top_window_entry_count` is the smaller of
+that configuration and the actual entry count, so a legal archive may underfill
+or empty the ranked set. An applied repair advances the authority revision and
+emits `material_ranked_state_repair_apply_receipt_v0` with CAS readback and
+rollback evidence. Its normalized Goal or project/profile/workspace owner must
+match the repair plan.
 
 Archiving a ranked material changes both lifecycle and ranking membership.
 `material_lifecycle_ranking_apply_receipt_v0` binds the lifecycle receipt to
@@ -119,6 +122,8 @@ exactly once while every remaining entry identity, membership, and relative
 order stayed intact. Projection adapters resolve lineage by the receipt's
 applied `after_revision`; they must not assume that a later lifecycle revision
 still equals the revision produced by an older rebuild or Git reconciliation.
+The ranking receipt must have the same normalized owner as the lifecycle
+receipt; matching packet digests do not make ownership portable.
 The contracts carry counts and digests, not titles, source bodies, URLs, or
 private locations.
 
