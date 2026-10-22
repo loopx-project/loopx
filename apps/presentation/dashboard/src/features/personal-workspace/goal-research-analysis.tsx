@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {ArrowUpRight, ChevronDown, LoaderCircle, RefreshCw, Sparkles, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryEpisode, TrajectoryOutputLanguage, TrajectoryContinuation} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
-import {ResearchProgress, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
+import {ResearchProgress, episodeQuestion, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
@@ -306,12 +306,12 @@ export function ResearchAnalysisPanel({analysis: a}: {analysis: Controller}) {
       {result ? <>
         <div className="analysis-finding"><span>{zh ? "Agent 判断 · 未校准" : "Agent interpretation · uncalibrated"}{p.applicability === "historical" ? (zh ? " · 历史结果" : " · Historical result") : ""}</span><h4>{headline}</h4></div>
         {p.episodes?.map(episode => <details className="analysis-episode" key={`${p.pack_id}:${p.analysis_key}:${episode.id}`}>
-          <summary><span className="analysis-episode-name">{episode.id}</span><span className="analysis-episode-verdicts">{(["benefit_test", "evidence_adoption"] as const).map(metric => {
+          <summary><span className="analysis-episode-name">{episodeQuestion(result, episode.id, episode)}</span><span className="analysis-episode-verdicts">{(["benefit_test", "evidence_adoption"] as const).map(metric => {
             const row = result.assessments.find(item => item.episode_id === episode.id && item.metric === metric);
             return row ? <span key={metric}>{metricCopy[metric][zh ? 0 : 1]} · {verdictLabel(metric, row.verdict, zh)}</span> : null;
           })}</span><ChevronDown size={14} aria-hidden/></summary>
-          <div className="analysis-episode-body"><h4>{result.episode_questions?.find(q => q.episode_id === episode.id)?.question ?? episode.question}</h4>
-          {result.episode_questions ? <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><p>{episode.question}</p></details> : null}
+          <div className="analysis-episode-body">
+          <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><code>{episode.id}</code><p>{episode.question}</p></details>
           <div className="analysis-episode-context">{(["benefit_test", "evidence_adoption"] as const).map(metric => {
             const row = result.assessments.find(item => item.episode_id === episode.id && item.metric === metric);
             return row ? <div key={metric}><strong>{metric === "benefit_test" ? (zh ? "原目标收益的检验与缺口" : "Original-objective utility test and its gaps") : (zh ? "证据如何影响后续行动" : "How evidence informed subsequent action")}</strong><p>{row.reason}</p>{citationButtons(row.citations)}</div> : null;

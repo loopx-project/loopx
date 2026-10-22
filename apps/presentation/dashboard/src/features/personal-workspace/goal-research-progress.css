@@ -47,12 +47,12 @@
 .research-assessment { border-block-end: 1px solid var(--pw-line); }
 .research-assessment > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto 14px; align-items: center; gap: 16px; padding-block: 14px; list-style: none; font-size: var(--text-body); line-height: var(--leading-body); }
 .research-assessment > summary::-webkit-details-marker { display: none; }
-.research-assessment-name { font-weight: 500; }
+.research-assessment-name { min-width: 0; font-weight: 500; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.research-assessment[open] > summary .research-assessment-name { display: block; }
 .research-assessment-verdict { color: var(--pw-muted); }
 .research-assessment[open] > summary > svg { transform: rotate(180deg); }
 .research-assessment-body { max-width: 80ch; padding-block: 0 16px; }
 .research-progress .research-assessment-body p { margin-block: 0 12px; font-size: var(--text-body); color: var(--pw-text); }
-.research-progress .research-assessment-body .research-assessment-question { color: var(--pw-muted); }
 .research-assessment > summary:focus-visible, .research-effect-citations button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .research-progress-basis { border-block-start: 1px solid var(--pw-line); margin-block-start: 12px; }
 .research-progress-basis > summary { font-size: var(--text-body); }
