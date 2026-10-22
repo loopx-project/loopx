@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 import loopx.codex_app_thread_activity as observer
-from loopx.codex_rollout_json import SMALL_RECORD_BYTES, MetadataLine
+from loopx.hosts.codex_rollout_json import SMALL_RECORD_BYTES, MetadataLine
 from loopx.control_plane.agents.host_thread_activity import (
     HostDeliveryExpectation,
     HostDeliveryWindowState,
