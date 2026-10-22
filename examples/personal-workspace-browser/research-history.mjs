@@ -263,13 +263,21 @@ export const researchHistoryScenario = {
       const day = history.locator(".research-unlinked-days button").first();
       await day.click();
       const realDetail=history.locator('.research-history-detail');
+      const questionName='Do the tested cost-gated one-session executions improve the frozen forecast strategy?';
+      await realDetail.getByRole('button',{name:new RegExp(questionName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'))}).waitFor();
+      assert.equal(await realDetail.locator('.research-recorded-finding').count(),0,'A date group is a question index, not a stack of complete documents');
+      await realDetail.getByRole('button',{name:new RegExp(questionName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'))}).click();
       await realDetail.getByRole('heading',{name:'Do the tested cost-gated one-session executions improve the frozen forecast strategy?',exact:true}).waitFor();
       assert.match(await realDetail.textContent(),/daily trials1\.53-2\.99\/199-719%/);
+      await realDetail.locator('.research-node-provenance > summary').click();
       assert.match(await realDetail.textContent(),/evidence:opportunity-cost-gates/);
+      await realDetail.getByRole('button',{name:'返回问题列表',exact:true}).click();
+      assert.equal(await realDetail.locator('.research-question-index button:focus').count(),1,'Closing a question restores its exact index control');
       const realDay=new URL(page.url()).searchParams.get('research_group');
       await page.reload({waitUntil:'networkidle'});
       await realDetail.waitFor();
       assert.equal(new URL(page.url()).searchParams.get('research_group'),realDay);
+      assert(await realDetail.evaluate(e=>e===document.activeElement),'Reload restores the selected reader after its actual content mounts');
       await page.screenshot({path:resolve(outputDir,'research-history-portfolio-detail.png'),animations:'disabled'});
       await realDetail.press('Escape');
       await page.goBack();
@@ -412,7 +420,9 @@ from pathlib import Path
 from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_finding_event
 goal='hit-target-fixture'
 events=[build_explore_node_event(goal_id=goal,node_id=f'hit-{index}',title=f'Synthetic hit target {index}',
-    summary='Pointer regression only',parent_id='hit-0' if index else None,
+    summary=('完整原始说明 retained without truncation. '*20) if index==7 else 'Pointer regression only',
+    status='blocked' if index==5 else 'open',blocked_reason='Synthetic source unavailable' if index==5 else None,
+    parent_id='hit-0' if index else None,
     recorded_at='2026-01-01T00:00:00Z' if index<9 else '2026-01-01T18:00:00Z') for index in range(10)]
 events.append(build_explore_finding_event(goal_id=goal,finding_id='negative',node_id='hit-6',
     title='Synthetic negative',summary='Negative pointer regression',status='refuted',recorded_at='2026-01-01T00:00:00Z',
@@ -422,6 +432,9 @@ events.append(build_explore_finding_event(goal_id=goal,finding_id='negative',nod
         'change_reason':'The control isolated a different first intervention.',
         'elapsed_seconds':0.2,'limit_seconds':30,'search_iterations':None,'exit_code':0,
         'stop_reason':'process_exit:0','evidence_refs':['probe:synthetic']}))
+events.append(build_explore_finding_event(goal_id=goal,finding_id='unresolved',node_id='hit-6',
+    title='Synthetic unresolved follow-up',summary='A later question remains unknown; the negative result is retained.',
+    status='tentative',recorded_at='2026-01-01T18:00:00Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Synthetic pointer regression','events':events}))
 `,fixture],{cwd:repoRoot});
       collisionOwner=await startHistoryOwner(fixture);
@@ -429,7 +442,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await realOwner.close();
       await page.setViewportSize({width:1280,height:900});
       await page.goto(new URL(`?goalId=${goal}&view=research&statusUrl=%2Fstatus.json`,url).href,{waitUntil:'networkidle'});
-      await history.getByRole('status').filter({hasText:'11 / 11'}).waitFor();
+      await history.getByRole('status').filter({hasText:'12 / 12'}).waitFor();
       assert(await history.locator('.research-density .is-gap').count() > 0, 'The sparse capture includes recording gaps');
       const gapLegend = history.getByText('无记录', {exact: true});
       assert(await gapLegend.isVisible(), 'Recording-gap color must be explained without opening optional help');
@@ -472,23 +485,41 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
         const target = history.locator('.research-route-track [data-research-nodes~="hit-6"]');
         await target.scrollIntoViewIfNeeded();
         await page.screenshot({path: resolve(outputDir, `research-history-targets-${viewport.width}.png`), animations:'disabled'});
-        // Actual pointer targeting: the old overlapping 44px buttons opened
-        // a neighbour instead of the requested node. A group must expose every
-        // original member immediately, without a second selection or Graph.
+        // Actual pointer targeting preserves every declared member in a compact
+        // index. A chosen question opens its complete evidence, never a neighbour.
         const ids = (await target.getAttribute('data-research-nodes')).split(' ');
         const box = await target.boundingBox();
         await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         const detail = history.locator('.research-history-detail');
         await detail.waitFor();
+        assert.deepEqual(selectedNodes(),ids);
+        assert(ids.includes('hit-6'));
+        for (const id of ids) assert.equal(await detail.locator(`[data-research-node="${id}"]`).count(),1,'Every grouped member remains reachable');
+        assert.equal(await detail.locator('.research-recorded-finding').count(),0,'Opening a large group does not expand all original evidence');
+        assert.match(await detail.innerText(),/Synthetic source unavailable/,'A blocked exception remains visible in the compact index');
+        const widthBefore = await history.locator('.research-history-canvas').evaluate(e=>e.getBoundingClientRect().width);
+        await detail.locator('[data-research-node="hit-7"] button').click();
+        assert.equal(await detail.locator('.research-reader-content > p').filter({hasText:'完整原始说明'}).innerText(),'完整原始说明 retained without truncation. '.repeat(20).trim(),'A question with no finding still leads with its complete recorded description');
+        const reading = await detail.evaluate(e=>({font:parseFloat(getComputedStyle(e).fontSize),maxHeight:getComputedStyle(e).maxHeight}));
+        assert(reading.font >= 16, 'Original prose is reading text, not a small metadata label');
+        assert.equal(reading.maxHeight,'none','Complete evidence uses the page scroll, not a second fixed-height text trap');
+        await detail.getByRole('button',{name:'返回问题列表',exact:true}).click();
+        assert(await detail.locator('[data-research-node="hit-7"] button').evaluate(e=>e===document.activeElement));
+        await page.screenshot({path:resolve(outputDir, `research-question-index-${viewport.width}.png`), animations:'disabled'});
+        await detail.locator('[data-research-node="hit-6"] button').click();
+        assert.equal(await history.locator('.research-history-canvas').evaluate(e=>e.getBoundingClientRect().width),widthBefore,'Reading never squeezes the whole-history graph');
+        assert.equal(await detail.locator('details.research-recorded-finding[open]').count(),0);
+        await detail.locator('details.research-recorded-finding').filter({hasText:'Synthetic negative'}).locator('summary').first().click();
         await detail.getByText('实际执行与资源观测', {exact:true}).click();
         assert(await detail.getByText('scheduler → mask-selection', {exact:true}).isVisible());
         assert(await detail.getByText('未测量', {exact:true}).isVisible(), 'Unknown iterations must not become zero');
         assert(await detail.getByText('0.2 / 30', {exact:true}).isVisible());
         await page.screenshot({path:resolve(outputDir, `research-execution-${viewport.width}.png`), animations:'disabled'});
-        assert.deepEqual(selectedNodes(),ids);
-        assert(ids.includes('hit-6'));
+        assert.deepEqual(selectedNodes(),['hit-6']);
         await detail.getByRole('heading',{name:'Synthetic hit target 6',exact:true}).waitFor();
-        for (const id of ids) assert.equal(await detail.locator(`[data-research-node="${id}"]`).count(),1,'Every grouped member is immediately readable');
+        await detail.press('Escape');
+        assert.deepEqual(selectedNodes(),ids,'Escape returns to the original group');
+        assert(await detail.locator('[data-research-node="hit-6"] button').evaluate(e=>e===document.activeElement));
         await page.reload({waitUntil:'networkidle'});
         await detail.waitFor();
         assert.deepEqual(selectedNodes(),ids,'Grouped selection survives reload');
@@ -524,13 +555,14 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.reload({waitUntil: "networkidle"});
       await history.locator(".research-history-detail").waitFor();
       assert.equal(new URL(page.url()).searchParams.get("research_node"), selected);
-      assert.match(await history.textContent(), /11 \/ 11/);
+      assert(await history.locator('.research-history-detail').evaluate(e=>e===document.activeElement),'Saved evidence focus is restored after reload');
+      assert.match(await history.textContent(), /12 \/ 12/);
       await page.screenshot({path: resolve(outputDir, "research-history-recorded-desktop.png"), animations: "disabled"});
       await history.screenshot({path: resolve(outputDir, "research-history-recorded-detail.png"), animations: "disabled"});
       unavailable = true;
       await history.getByRole("button", {name: "刷新记录", exact: true}).click();
       await history.getByRole("alert").waitFor();
-      assert.match(await history.textContent(), /11 \/ 11/, "A failed refresh cannot erase a verified complete capture");
+      assert.match(await history.textContent(), /12 \/ 12/, "A failed refresh cannot erase a verified complete capture");
       assert.equal(new URL(page.url()).searchParams.get("research_node"), selected);
       unavailable = false;
       await history.getByRole("button", {name: "刷新记录", exact: true}).click();
