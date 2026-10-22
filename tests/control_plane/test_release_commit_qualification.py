@@ -62,6 +62,7 @@ def _summary(qualification_id: str, *, commit: str = COMMIT) -> dict[str, object
             "install_passed": True,
             "upgrade_passed": True,
             "host_passed": True,
+            "packaged_frontend_passed": True,
         },
         "public_boundary": {"scanned_path_count": 8, "violation_count": 0},
         "doubao_actual_default": {
@@ -155,6 +156,33 @@ def test_source_identity_drift_and_dirty_checkout_fail_closed() -> None:
     dirty_candidate = _manifest(source=_source(dirty=True))
     receipt = build_exact_release_commit_qualification(dirty_candidate)
     assert "candidate:git_dirty" in receipt["source_mismatches"]
+
+
+def test_installation_success_cannot_qualify_a_failed_packaged_frontend() -> None:
+    manifest = _manifest()
+    manifest["qualifications"]["install_upgrade_host"]["summary"][
+        "packaged_frontend_passed"
+    ] = False
+    receipt = build_exact_release_commit_qualification(manifest, observed_source=_source())
+
+    assert receipt["ready_for_release"] is False
+    assert "install_upgrade_host_failed" in receipt["qualification_failures"]
+
+    del manifest["qualifications"]["install_upgrade_host"]["summary"][
+        "packaged_frontend_passed"
+    ]
+    with pytest.raises(ValueError, match="packaged_frontend_passed"):
+        build_exact_release_commit_qualification(manifest, observed_source=_source())
+
+
+def test_older_installation_summary_does_not_qualify_the_packaged_frontend() -> None:
+    manifest = _manifest()
+    check = manifest["qualifications"]["install_upgrade_host"]
+    check["result_schema_version"] = "release_install_upgrade_host_summary_v0"
+    del check["summary"]["packaged_frontend_passed"]
+
+    with pytest.raises(ValueError, match="release_install_upgrade_host_summary_v1"):
+        build_exact_release_commit_qualification(manifest, observed_source=_source())
 
 
 def test_failed_skipped_and_semantically_invalid_checks_do_not_qualify() -> None:

@@ -150,6 +150,13 @@ expected public tag is `vX.Y.Z` for that version.
 
 Before moving `stable`, maintainers should:
 
+- run the complete packaged Personal Workspace journey against the exact
+  candidate before publishing a release, including every catalog scenario and
+  the companion flows in `npm run smoke:personal-workspace-packaged`;
+  installation, upgrade and Host checks alone do not qualify the page. The
+  `install_upgrade_host` result uses `release_install_upgrade_host_summary_v1`
+  and requires `packaged_frontend_passed=true` as well as the three existing
+  checks. Missing, failed or skipped page validation holds release readiness;
 - bump `loopx.__version__` and `pyproject.toml` together when user-visible
   release behavior changes;
 - before freezing the candidate, align the existing canonical help catalog,
@@ -922,6 +929,14 @@ path, and canary route rather than as a user-facing release baseline.
   Read the [2.0 migration guide](releases/v2.0.0.md) before continuing existing
   work. Asset availability is separate from native Windows execution or a new
   full-tree qualification of later source changes.
+
+- `v2.1.0` preview at commit `a65c71f789459c12b68d6feeec233fbb99f65c91`:
+  the [original release](https://github.com/loopx-project/loopx/releases/tag/v2.1.0)
+  remains a prerelease. Python publication stopped at the packaged-page checks;
+  its desktop artifacts and earlier source-only checks do not establish complete
+  package readiness. During that hold, the stable source and signed desktop
+  feed were retained or restored to the qualified `v2.0.0` baseline. The immutable
+  preview and failed evidence remain part of the release history.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
