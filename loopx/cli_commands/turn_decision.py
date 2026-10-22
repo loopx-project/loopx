@@ -18,6 +18,7 @@ current decision into the envelope the loop controller consumes.
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,11 @@ from ..capabilities.periodic_report.pending_intent import (
 )
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.quota.turn_envelope import build_turn_envelope
-from ..control_plane.quota.settlement import SettlementIdentity
+from ..control_plane.quota.settlement import SettlementIdentity, build_turn_scoped_cli_settlement_plan
+from ..control_plane.quota.heartbeat_receipt import (
+    find_heartbeat_receipt,
+    heartbeat_receipt_settlement_replan_obligation_id,
+)
 from ..control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from ..control_plane.turn_driver.driver import build_loopx_turn_plan, selected_turn_todo
 from ..control_plane.scheduler.execution_context import (
@@ -39,11 +44,40 @@ from ..control_plane.scheduler.execution_context import (
 )
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.work_items.autonomous_replan_obligation import replan_obligation_id_from_packet
 from .lark_inbox import build_lark_operator_inbox_urgency_projector
 from .turn_selection import turn_controller_advisory_primary
 
 #: The route source every Turn owner attributes its decision to.
 TURN_DECISION_ROUTE_SOURCE = "loopx_turn_plan"
+
+
+def _attach_original_replan_settlement(
+    decision: dict[str, Any], *, registry_path: Path, runtime_root: Path,
+    goal_id: str, agent_id: str,
+    turn_instance_id: str | None, goal_ref: Mapping[str, object] | None,
+) -> dict[str, Any]:
+    """Give an outer executor the existing quota-owned scoped plan.
+
+    Outer-controller profiles omit in-agent settlement commands because the
+    controller executes effects. Their genuine planning binding still belongs
+    to the same shared settlement owner, not to a made-up Todo or Host session.
+    """
+    obligation = replan_obligation_id_from_packet(decision.get("replan_action_packet"))
+    if (not turn_instance_id or not obligation or decision.get("selected_todo")
+            or decision.get("should_run") is not True):
+        return decision
+    cli = (decision.get("interaction_contract") or {}).get("cli_channel")
+    if not isinstance(cli, dict) or cli.get("settlement_plan"):
+        return decision
+    cli["settlement_plan"] = build_turn_scoped_cli_settlement_plan(
+        goal_id=goal_id, agent_id=agent_id,
+        replan_obligation_id=obligation, turn_instance_id=turn_instance_id,
+        command_prefix=shlex.join(["loopx", "--registry", str(registry_path),
+                                  "--runtime-root", str(runtime_root)]),
+        scoped_cli_args="", lifecycle_actor_args="", goal_ref=goal_ref,
+    ).as_dict()
+    return decision
 
 
 class TurnTodoSelectionError(ValueError):
@@ -106,11 +140,16 @@ def _build_turn_decision(
         Path(project).expanduser().resolve()
         if getattr(args, "turn_command", None) == "run-once" and project is not None else None
     )
+    turn_instance_id = getattr(args, "turn_instance_id", None)
+    receipt = (find_heartbeat_receipt(runtime_root, goal_id=args.goal_id,
+        agent_id=args.agent_id, turn_instance_id=turn_instance_id, goal_ref=goal_ref)
+        if turn_instance_id else None)
+    bound_replan = heartbeat_receipt_settlement_replan_obligation_id(receipt) if receipt else None
 
     def build_turn_decision(
         *, requested_action_todo_id: str | None = None
     ) -> dict[str, Any]:
-        return build_live_quota_should_run_decision(
+        decision = build_live_quota_should_run_decision(
             status_payload,
             goal_id=args.goal_id,
             agent_id=args.agent_id,
@@ -126,6 +165,10 @@ def _build_turn_decision(
                 project_live_explore_composition_frontier
             ),
             requested_action_todo_id=requested_action_todo_id,
+            # Preserve ordinary Todo decision/context behavior. Only an
+            # already bound empty-frontier replan needs this scoped reentry.
+            receipt_bound_replan_obligation_id=bound_replan,
+            turn_instance_id=turn_instance_id if bound_replan else None,
             turn_start_hook_dispatch=dict(turn_start_hook_dispatch or {}),
             workspace_path=workspace_path,
             goal_ref=goal_ref,
@@ -137,6 +180,11 @@ def _build_turn_decision(
                     agent_id=args.agent_id,
                 ),
             ),
+        )
+        return _attach_original_replan_settlement(
+            decision, registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=args.goal_id, agent_id=args.agent_id,
+            turn_instance_id=turn_instance_id, goal_ref=goal_ref,
         )
 
     return build_turn_decision
@@ -284,6 +332,9 @@ def current_turn_host_launch_decision(
             goal_id=identity.goal_id, agent_id=identity.agent_id,
         ),),
     )
+    _attach_original_replan_settlement(current, registry_path=registry_path,
+        runtime_root=runtime_root, goal_id=identity.goal_id, agent_id=identity.agent_id,
+        turn_instance_id=identity.turn_instance_id, goal_ref=goal_ref)
     launch = {"current": current, "planned_effective_action": planned_effective_action}
     # The shared typed launch owner retains refusal precedence (including
     # Stop/witness failures) and compares the original effective action.
@@ -295,14 +346,17 @@ def current_turn_host_launch_decision(
     )
     # Reuse the existing side-effect-free Host route projection, including
     # delivery, user-gate and protocol checks. No plan/session is persisted.
-    route = build_loopx_turn_plan(
+    plan = build_loopx_turn_plan(
         current_envelope, host=args.host, execution_mode=args.execution_mode,
         scheduler_owner=args.scheduler_owner, turn_instance_id=identity.turn_instance_id,
         goal_ref=goal_ref,
-    )["route"]
+    )
+    route = plan["route"]
     if route.get("would_invoke_host") is not True:
         raise FirstPartyHostRuntimeRejected("goal_launch_not_allowed")
     if selected_turn_todo(current_envelope).get("todo_id") != identity.todo_id:
+        raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
+    if identity.replan_obligation_id and plan["transaction"]["settlement_plan"]["identity"] != identity.as_dict():
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
     return launch
 

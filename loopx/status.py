@@ -131,6 +131,7 @@ from .control_plane.todos.active_state_todos import (
     active_state_todo_fields as _active_state_todo_fields_read_model,
 )
 from .control_plane.todos.active_state_todo_parser import (
+    active_state_incomplete_warning,
     parse_active_state_todos,
 )
 from .control_plane.work_items.attention_item import (
@@ -731,6 +732,7 @@ def active_state_todo_fields(
         rollout_event_log_path=rollout_event_log_path,
         max_todo_index_rollout_events_per_goal=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
         parse_active_state_todos=parse_active_state_todos,
+        active_state_incomplete_warning=active_state_incomplete_warning,
         parse_issue_meta_surface=parse_issue_meta_surface,
         backlog_hygiene_warning=backlog_hygiene_warning,
         completed_todo_archive_warning=completed_todo_archive_warning,

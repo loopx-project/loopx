@@ -9,9 +9,7 @@ from typing import Any
 from ..capabilities.explore.composition_frontier import (
     project_live_explore_composition_frontier,
 )
-from ..capabilities.reward_memory import (
-    run_configured_turn_outcome_ingest_fail_open,
-)
+from ..capabilities.turn_context import configured_post_settlement
 from ..cli_rollout import append_cli_rollout_event
 from ..control_plane.agents.workspace_guard import capture_delivery_workspace
 from ..control_plane.goals.first_party_host_admission import (
@@ -28,6 +26,7 @@ from ..control_plane.quota.settlement import (
     SettlementStepKind,
     read_heartbeat_settlement,
 )
+from ..control_plane.quota.spend_sources import quota_spend_source_for_execution_context
 from ..control_plane.work_items.autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
 )
@@ -54,7 +53,7 @@ from .turn_decision import collect_turn_status_payload, current_turn_host_launch
 from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
-from .turn_todo_writeback import write_turn_validated_completion
+from .turn_todo_writeback import captured_todo_text_sha256, write_turn_validated_completion
 
 EXACT_SETTLEMENT_READBACK_NOT_FOUND = (
     "exact settlement readback unexpectedly returned not-found"
@@ -122,6 +121,9 @@ def execute_turn_run_once(
             else {}
         )
         selected_todo = selected_turn_todo(envelope)
+        expected_todo_text_sha256 = captured_todo_text_sha256(
+            envelope, todo_id=str(selected_todo.get("todo_id") or "")
+        )
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -149,6 +151,8 @@ def execute_turn_run_once(
                 or transaction.get("turn_key")
                 or ""
             ),
+            replan_obligation_id=(raw_identity.get("replan_obligation_id")
+                                  if isinstance(raw_identity, Mapping) else None),
         )
         persisted_effect_id = str(raw_identity.get("effect_id") or "")
         if (
@@ -205,12 +209,14 @@ def execute_turn_run_once(
                 details={
                     **dict(details),
                     "settlement_effect_id": settlement_identity.effect_id,
+                    **({"replan_obligation_id": settlement_identity.replan_obligation_id}
+                       if settlement_identity.replan_obligation_id else {}),
                 },
                 idempotency_fields=[
                     "goal_id",
                     "event_kind",
                     "agent_id",
-                    "todo_id",
+                    *(("todo_id",) if settlement_identity.todo_id else ()),
                     "run_id",
                     *(("goal_ref",) if goal_ref is not None else ()),
                     *(("status",) if event_kind == "todo_complete" else ()),
@@ -256,12 +262,13 @@ def execute_turn_run_once(
             result_kind = str(result.get("result_kind") or "")
             if result_kind in {"repair_required", "replan_required"}:
                 todo_id = str(selected_todo.get("todo_id") or "")
-                if not todo_id:
+                if not todo_id and not settlement_identity.replan_obligation_id:
                     raise ValueError(
                         f"{result_kind} requires one selected todo for typed writeback"
                     )
             # Diagnostics already live in the journal's typed host_result.
             # Do not overwrite task context before refresh can reject a result.
+            progress_observation = result.get("progress_observation")
             refresh = refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
@@ -278,10 +285,15 @@ def execute_turn_run_once(
                 delivery_outcome=str(result["delivery_outcome"]),
                 delivery_workspace_path=delivery_workspace_path,
                 todo_id=settlement_identity.todo_id,
+                replan_obligation_id=settlement_identity.replan_obligation_id,
                 turn_instance_id=settlement_identity.turn_instance_id,
                 agent_id=args.agent_id,
                 progress_scope="goal",
                 autonomous_replan_recorded=result_kind == "replan_required",
+                progress_observation=(
+                    dict(progress_observation)
+                    if isinstance(progress_observation, dict) else None
+                ),
                 agent_vision_packet=(
                     dict(result["agent_vision"])
                     if isinstance(result.get("agent_vision"), dict)
@@ -350,6 +362,7 @@ def execute_turn_run_once(
                 goal_id=args.goal_id,
                 todo_id=todo_id,
                 completion_turn_key=settlement_identity.turn_instance_id,
+                expected_todo_text_sha256=expected_todo_text_sha256,
                 evidence=(
                     "LoopX Turn validated completion: "
                     + str(result.get("summary") or result["classification"])
@@ -359,6 +372,8 @@ def execute_turn_run_once(
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
             )
+            if completion.get("ok") is not True:
+                return completion
             # Project the continuation the Todo lifecycle durably recorded,
             # never a host-normalized continuation. Contradictory or
             # dangling durable state fails closed before any further
@@ -465,9 +480,14 @@ def execute_turn_run_once(
                 goal_id=args.goal_id,
                 slots=1,
                 execute=True,
-                source="adapter",
+                source=(quota_spend_source_for_execution_context(
+                    payload.get("scheduler_execution_context"),
+                ) if settlement_identity.replan_obligation_id else "adapter"),
                 agent_id=args.agent_id,
                 workspace_path=delivery_workspace_path,
+                replan_obligation_id=settlement_identity.replan_obligation_id,
+                turn_instance_id=(settlement_identity.turn_instance_id
+                                  if settlement_identity.replan_obligation_id else None),
                 available_capabilities=args.available_capabilities,
                 scheduler_execution_context=(
                     payload.get("scheduler_execution_context")
@@ -854,22 +874,6 @@ def execute_turn_run_once(
                     args, workspace=project, environ=operator_environ,
                 )
 
-        def post_settlement_reward_memory(
-            plan: Mapping[str, Any],
-            result: Mapping[str, Any],
-            settlement_evidence: Mapping[str, Any],
-        ) -> Mapping[str, Any]:
-            transaction = plan.get("transaction")
-            transaction = transaction if isinstance(transaction, Mapping) else {}
-            return run_configured_turn_outcome_ingest_fail_open(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                turn_key=str(transaction.get("turn_key") or ""),
-                host_result=result,
-                settlement_evidence=settlement_evidence,
-            )
-
         def on_managed_start_admitted() -> None:
             replan_packet = stable_envelope.get("replan_action_packet")
             capability_guard = (
@@ -921,11 +925,9 @@ def execute_turn_run_once(
                 terminal_closeout_resolver if args.execute else None
             ),
             scheduler=scheduler if args.execute else None,
-            post_settlement=(
-                post_settlement_reward_memory
-                if args.execute and args.host == "codex-cli"
-                else None
-            ),
+            post_settlement=(configured_post_settlement(
+                payload, registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
+            ) if args.execute else None),
             admit_start=managed_cadence.admit if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,

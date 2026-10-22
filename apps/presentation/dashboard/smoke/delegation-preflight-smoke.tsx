@@ -97,3 +97,20 @@ for (const valid of [true, false]) {
   }
 }
 console.log("managed operation transport remains configuration-only in delegation preflight");
+
+for (const [state, en, zhText] of [
+  ["live", "Execution lane is busy", "执行通道正在处理工作"],
+  ["foreign_host", "Execution lane state is unknown", "执行通道状态无法确认"],
+  ["unreadable", "Execution lane state is unknown", "执行通道状态无法确认"],
+] as const) {
+  const check: DelegationPreflight = {...unavailable, state: "turn_blocked", turn_eligible: false,
+    authority_ready: true, authority_reason: null, authority_state: "promoted", authority_next_action: "none",
+    turn_lane: {scope: "native_turn_lane", state}};
+  for (const zh of [false, true]) {
+    const html = renderToStaticMarkup(<DelegationPreflightStatus check={check} zh={zh}/>);
+    if (!html.includes(zh ? zhText : en) || !html.toLowerCase().includes(zh ? "重新检查" : "recheck"))
+      throw new Error("missing lane diagnosis or recovery");
+    if (/本机启动条件已满足|Local launch prerequisites met|Task admission blocked|当前任务未获准执行/.test(html))
+      throw new Error("lane observation was misclassified as task admission");
+  }
+}

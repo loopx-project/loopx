@@ -34,7 +34,7 @@ def _host_session_schema(host: str) -> str:
     raise ValueError("unsupported managed session host")
 
 
-def _lineage(request: Mapping[str, Any]) -> dict[str, str]:
+def _lineage(request: Mapping[str, Any], *, session_scope: str | None = None) -> dict[str, str]:
     envelope = request.get("turn_envelope") or {}
     todo = selected_turn_todo(envelope)
     lineage = {
@@ -42,7 +42,11 @@ def _lineage(request: Mapping[str, Any]) -> dict[str, str]:
         "agent_id": str(envelope.get("agent_id") or "").strip(),
         "todo_id": str(todo.get("todo_id") or "").strip(),
     }
-    if not all(lineage.values()):
+    if session_scope is None:
+        session = request.get("session") or {}
+        policy = session.get("context_policy") or {}
+        session_scope = str(policy.get("binding_scope") or "todo")
+    if not all(lineage[field] for field in session_identity_fields(session_scope)):
         raise ValueError("Codex CLI host request has incomplete turn lineage")
     lineage["goal_id"] = validate_goal_id_path_segment(lineage["goal_id"])
     return lineage
@@ -163,7 +167,7 @@ def codex_cli_session_binding(
     session_scope: str = "todo",
     host: str = "codex-cli",
 ) -> dict[str, str] | None:
-    lineage = _lineage({"turn_envelope": dict(turn_envelope)})
+    lineage = _lineage({"turn_envelope": dict(turn_envelope)}, session_scope=session_scope)
     session = select_codex_cli_session(
         runtime_root,
         lineage=lineage,

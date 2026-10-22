@@ -327,7 +327,7 @@ def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
 
 
 @pytest.mark.parametrize("producer", [None, "local_probe"])
-def test_planner_keeps_host_clock_out_of_model_input_and_preserves_task_identity(planning_env, producer):
+def test_planner_delivers_product_contract_and_only_opted_in_tool_context(planning_env, producer):
     from benchmark.runtime.planning import task_plan_packet
     from benchmark.runtime.research_probe import execution_observation_guidance
     from benchmark.runtime.worker import loopx_command
@@ -348,6 +348,8 @@ def test_planner_keeps_host_clock_out_of_model_input_and_preserves_task_identity
     assert "Research-loop execution evidence:" not in body
     packet = json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1])
     assert packet == before
+    prefix = body.split("Host-supplied planning checkpoint:\n", 1)[0]
+    assert prefix.replace(execution_observation_guidance(), "").strip() == "$loopx"
     assert receipt["planning"]["input_digest"] == before["input_digest"]
     assert env["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
     assert not list(Path(env["LOOPX_PROJECT"]).iterdir())
@@ -363,11 +365,7 @@ def test_planning_input_is_clock_independent_but_preserves_task_time_constraints
         assert render_planning_prompt(packet, env) == body
         assert env == {"LOOPX_PHASE_DEADLINE_EPOCH": deadline}
     assert json.loads(body.split("Host-supplied planning checkpoint:\n", 1)[1]) == packet
-    assert body.startswith("$loopx\n\nBenchmark research planning guidance:\n")
-    assert "declared interface, units, scale" in body
-    assert "preserve that reference while testing a replacement" in body
-    assert "negative experiment can complete its own Todo" in body
-    assert "neither creates a new acceptance document or permission requirement" in body
+    assert body.split("Host-supplied planning checkpoint:\n", 1)[0].strip() == "$loopx"
     assert "Host deadline" not in body and "remaining" not in body
     assert packet == {"input_digest": "unchanged", "text": "Task constraint: inference under 30 seconds."}
 

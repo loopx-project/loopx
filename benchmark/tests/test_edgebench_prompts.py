@@ -14,14 +14,14 @@ from benchmark.edgebench.prompts import (
 )
 
 
-def test_blind_retains_optimization_contract_without_judge_or_background_signal():
+def test_blind_retains_optimization_and_capture_contract_without_judge_or_feedback_signal():
     pytest.importorskip("sforge")
     from sforge.harness.evolve_scripts import generate_evolve_prompt
 
     query = "Read task_instruction.md; satisfy its acceptance criteria.\n### Scoring\nTask-owned text."
     paths = ["solver.py", "results.json"]
     native = generate_evolve_prompt(query, paths, internet=False, submission_cooldown=120)
-    blind = blind_task_prompt(query, paths)
+    blind = blind_task_prompt(query, paths, eval_interval=600)
     # Independently specified obligations, shared with the native task wrapper.
     for obligation in [
         "**Implement incrementally**", "**Iterate**",
@@ -34,20 +34,23 @@ def test_blind_retains_optimization_contract_without_judge_or_background_signal(
     assert blind.endswith("---\n\n" + query + "\n")
     assert "local validation" in blind and "available local evidence" in blind
     wrapper = blind.removesuffix(query + "\n")
-    for hidden_surface in ["sforge-submit", "judge server", "auto-eval", "background",
-                           "300", "120", "Submission Limits", "(0 total)"]:
+    assert "configured interval: 600 seconds" in wrapper
+    assert "You cannot submit evaluations or access official evaluation feedback" in wrapper
+    for hidden_surface in ["sforge-submit", "judge server", "auto-eval",
+                           "Submission Limits", "(0 total)"]:
         assert hidden_surface not in wrapper
 
 
 @pytest.mark.parametrize("render", [blind_task_prompt, best_only_task_prompt])
+@pytest.mark.parametrize("interval", [0, 600])
 @pytest.mark.parametrize("policy,direction", [
     ("score_first", "maximize"), ("score_first", "minimize"),
     ("valid_then_score", "maximize"), ("pass_rate_first", "maximize"),
 ])
-def test_restricted_wrapper_leaves_grading_and_final_selection_to_task(render, policy, direction):
+def test_restricted_wrapper_preserves_task_and_describes_host_sampling(render, interval, policy, direction):
     query = (f"Task final selection: {policy}; score direction: {direction}.\n"
              "All original acceptance criteria must be met.")
-    prompt = render(query, ["solver.py"])
+    prompt = render(query, ["solver.py"], eval_interval=interval)
     assert prompt.endswith("---\n\n" + query + "\n")
     wrapper = prompt.removesuffix(query + "\n")
     assert "task's grading and final-selection rules determine your result" in wrapper
@@ -55,6 +58,10 @@ def test_restricted_wrapper_leaves_grading_and_final_selection_to_task(render, p
     assert "current best solution, judged from available local evidence" in wrapper
     assert "local tests and validation" in wrapper
     assert "Only the AI API is reachable" in wrapper
+    assert ("configured interval: 600 seconds" in wrapper) is (interval > 0)
+    assert ("independently of manual submissions" in wrapper) is (interval > 0)
+    assert ("Periodic automatic evaluation is disabled" in wrapper) is (interval == 0)
+    assert "sforge-submit" not in wrapper
 
 
 @pytest.mark.parametrize("profile", [
@@ -84,7 +91,7 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
         objective = "Complete the supplied task."
     else:
         render = best_only_task_prompt if feedback == "best-only" else blind_task_prompt
-        prompt = render("Complete the supplied task.", ["solver.py"])
+        prompt = render("Complete the supplied task.", ["solver.py"], eval_interval=600)
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
                          profile=profile, cwd=str(workspace), feedback_prompt=prompt,
                          feedback=feedback, workspace_instructions=instructions,
@@ -145,13 +152,28 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
     assert len(uploads) == 1  # Resume does not replace a live task context.
 
 
-def test_native_research_guidance_preserves_original_task_without_budget_injection():
-    query = "Original task: maximize A subject to B. Keep native acceptance and ranking."
+@pytest.mark.parametrize("query", [
+    "Original task: maximize A subject to B. Keep native acceptance and ranking.",
+    "Use an early diagnostic submission before implementing the remaining targets.",
+    "Run the task's required local validation before submitting.\n### Strategy\nTask-owned text.",
+    "Stop once the specified acceptance checks pass; no further optimization is requested. "
+    "Respect explicit stop instructions, budget exhaustion, and genuine blockers.",
+])
+def test_native_context_preserves_objective_and_stops_without_imposing_work_order(query):
     options = dict(submission_cooldown=3600, eval_interval=0, internet=False,
                    selection="score_first", score_direction="maximize")
     policy = native_task_instructions(["solution.py"], **options)
     assert native_task_prompt(query, ["solution.py"], **options) == policy + "---\n\n" + query + "\n"
-    assert native_research_guidance() in policy
+    assert "adds no local-test pass requirement or prior-improvement requirement" in policy
+    assert "The task defines candidate validity and acceptance" in policy
+    assert policy.count(native_research_guidance()) == 1
+    assert "milestones; they do not by themselves establish completion" in policy
+    assert "continue seeking useful improvements" in policy
+    assert "while budget remains and further in-scope progress is feasible" in policy
+    assert "Respect explicit stop instructions, budget exhaustion, and genuine blockers" not in policy
+    assert "### Work Between Submissions" not in policy
+    assert "Implement incrementally" not in policy
+    assert "best validated candidate" not in policy
     assert "total trial budget" not in policy
     assert "remaining time" not in policy
 
@@ -233,7 +255,7 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
             state = project / state
         from loopx.control_plane.goals.active_state_metadata import split_state_frontmatter
         assert split_state_frontmatter(state.read_text())[0]["objective"] == query
-        assert native_research_guidance() not in state.read_text()
+        assert policy not in state.read_text()
         assert remote.read_text() == prompt
         assert policy in (project / "AGENTS.md").read_text()
         packet = task_plan_packet(env | worker.runtime._worker_env(cwd=str(project)),
@@ -257,7 +279,7 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
         assert core["objective"] == " ".join(query.split())
         assert core["objective_source"] == "active_state" and core["acceptance_contract"] is None
         assert worker.format_run_cmd(str(remote), internet=False, resume=True) == command
-        assert (project / "AGENTS.md").read_text().count(native_research_guidance()) == 1
+        assert (project / "AGENTS.md").read_text().count(policy) == 1
     finally:
         subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import "
             "effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],
@@ -284,7 +306,7 @@ def test_native_formatting_does_not_rewrite_prompt(tmp_path, monkeypatch):
 
 def test_best_only_wrapper_preserves_task_and_limits_signal_meaning():
     query = "External evaluation and evaluation feedback are unavailable. TASK TEXT"
-    text = best_only_task_prompt(query, ["solver.py"])
+    text = best_only_task_prompt(query, ["solver.py"], eval_interval=600)
     assert text.endswith("---\n\n" + query + "\n")
     for clause in ["first valid result", "baseline", "Ties, regressions", "not necessarily",
                    "automatically adds", "acceptance criteria", "source_archive", "do not need to poll"]:
@@ -292,7 +314,8 @@ def test_best_only_wrapper_preserves_task_and_limits_signal_meaning():
     assert "sforge-submit" not in text
 
 
-@pytest.mark.parametrize("internet,interval", [(False, 0), (True, 600)])
+@pytest.mark.parametrize("internet", [False, True])
+@pytest.mark.parametrize("interval", [0, 600])
 @pytest.mark.parametrize("selection,direction", [
     ("score_first", "maximize"), ("pass_rate_first", "minimize"),
 ])
@@ -306,14 +329,23 @@ def test_native_candidate_prompt_describes_actual_feedback_and_preserves_objecti
     wrapper = text.removesuffix(query + "\n")
     for clause in ["**3600 seconds**", "first accepted submission", "not from result arrival",
                    "ties and regressions", "make a new submission", "without creating a new evaluation",
-                   "current promising candidate", "separate checkpoint", "every local proxy metric",
-                   "original objective", "hard constraints", "not necessarily your current files",
-                   "Do not idle", "not zero scores", f"`{selection}`", f"`{direction}`"]:
+                   "`candidate.py`", "`output.json`", "submission/round identity",
+                   "Native submissions and terminal capture read on-disk files",
+                   "unsaved changes are not included", "recoverable copy of the best-supported candidate",
+                   "Match a result to its source version",
+                   "The task defines candidate validity and acceptance", "not necessarily your current files",
+                   "not zero scores", f"`{selection}`", f"`{direction}`"]:
         assert clause in wrapper
     assert "current best solution" not in wrapper
     assert ("NO internet access" in wrapper) is (not internet)
-    assert ("every 600 seconds" in wrapper) is (interval > 0)
-    assert ("Periodic automatic evaluation is disabled" in wrapper) is (interval == 0)
+    for clause in ["The host periodically samples", "configured interval", "independently of manual submissions",
+                   "does not wait for editing or local validation to finish", "Keep a runnable candidate",
+                   "write completed changes to disk promptly", "partially updated files can be sampled",
+                   "These automatic results are hidden from you", "Periodic automatic evaluation is disabled"]:
+        assert clause not in wrapper
+    assert text == native_task_prompt(query, ["candidate.py", "output.json"],
+        submission_cooldown=3600, eval_interval=600 if interval == 0 else 0, internet=internet,
+        selection=selection, score_direction=direction)
     assert "not a score-only filter" in wrapper
 
 

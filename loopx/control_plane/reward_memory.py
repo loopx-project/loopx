@@ -6,8 +6,50 @@ from typing import Any
 from .todos.contract import normalize_todo_claimed_by
 
 
+def reward_memory_automation_enabled(
+    payload: Mapping[str, Any] | None,
+    *,
+    operation: str,
+) -> bool:
+    """Project verified capability automation into the host IO contract.
+
+    The experiment resolver owns enablement, config/receipt verification and
+    provider policy. A recall packet's presence or old context is not opt-in.
+    """
+    if not isinstance(payload, Mapping):
+        return False
+    recall = payload.get("reward_memory_recall")
+    if not isinstance(recall, Mapping):
+        return False
+    experiment = recall.get("experiment")
+    envelope = payload.get("turn_envelope")
+    if not isinstance(experiment, Mapping) or not isinstance(envelope, Mapping):
+        return False
+    boundary = envelope.get("boundary")
+    capabilities = (
+        boundary.get("capabilities") if isinstance(boundary, Mapping) else None
+    )
+    memory = (
+        capabilities.get("reward_memory") if isinstance(capabilities, Mapping) else None
+    )
+    return (
+        isinstance(memory, Mapping)
+        and memory.get(operation) is True
+        # Recall resolves the binding again after admission. A stale envelope
+        # must not resurrect a now unavailable or disabled binding.
+        and experiment.get("enabled") is True
+        and experiment.get("available") is True
+        and experiment.get("configured_for_agent") is True
+        and bool(envelope.get("goal_id"))
+        and experiment.get("goal_id") == envelope.get("goal_id")
+        and bool(envelope.get("agent_id"))
+        and experiment.get("agent_id") == envelope.get("agent_id")
+        and experiment.get(operation) is True
+    )
+
+
 def reward_memory_host_coverage() -> list[dict[str, str]]:
-    """Project actual host lifecycle wiring without inferring parity."""
+    """Project source lifecycle wiring, not Agent enablement or provider qualification."""
 
     return [
         {
@@ -18,12 +60,12 @@ def reward_memory_host_coverage() -> list[dict[str, str]]:
         {
             "host_id": "generic_cli_turn",
             "automatic_recall": "connected",
-            "automatic_ingest": "uncovered",
+            "automatic_ingest": "connected_post_settlement",
         },
         {
             "host_id": "dsh_turn",
-            "automatic_recall": "connected_task_body",
-            "automatic_ingest": "uncovered",
+            "automatic_recall": "connected",
+            "automatic_ingest": "connected_post_settlement",
         },
         {
             "host_id": "codex_app_quota",
@@ -128,6 +170,7 @@ def reward_memory_goal_policy(
 
 
 __all__ = [
+    "reward_memory_automation_enabled",
     "reward_memory_goal_policy",
     "reward_memory_host_coverage",
 ]

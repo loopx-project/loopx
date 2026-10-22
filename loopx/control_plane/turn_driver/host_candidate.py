@@ -15,7 +15,10 @@ from ..quota.turn_envelope import turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
-from .executor import HOST_RESULT_EVIDENCE_LIMITS
+from ..capability_hooks import capability_result_fields, host_context_projection
+from .executor import (
+    HOST_RESULT_EVIDENCE_LIMITS,
+)
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
 LOOPX_TURN_RESULT_SCHEMA = "loopx_turn_result_v0"
@@ -134,6 +137,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         # its binding; this adapter neither reads it nor re-enters admission.
         authority["detail_ref"] = _mapping(envelope.get("detail_ref"))
         authority["action_signature"] = signature
+    authority.update(host_context_projection(request))
     return authority
 
 
@@ -230,6 +234,10 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         f"- delivery_outcome (material results): {' | '.join(DELIVERY_OUTCOME_CHOICES)}\n"
         "- vision_unchanged_reason: why a material result's goal path is unchanged "
         "(<=240 chars)\n"
+        "- progress_observation_json (material results, optional): JSON-encoded "
+        "typed_progress_observation_v0 with result_class, observed surface_id/"
+        "hypothesis_id/probe_kind or blocker/coverage fields and opaque evidence_ids; "
+        "use independently checked evidence to satisfy the original replan packet.\n"
         "For material result kinds (validated_progress, repair_required, and "
         "replan_required), describe the path outcome. For a material goal-path "
         "change, set path_delta_mode to material_replan, "
@@ -404,10 +412,14 @@ def build_result(
             result[field] = text
     if kind in MATERIAL_KINDS:
         _complete_material_fields(result, candidate, kind)
-    for field in ("path_delta_mode", "agent_vision_json"):
+    for field in ("path_delta_mode", "agent_vision_json", "progress_observation_json"):
         if field in candidate:
             # Preserve the structured executor input verbatim. The executor
             # owns type, size, JSON and semantic validation.
+            result[field] = candidate[field]
+    for field in capability_result_fields(request):
+        if field in candidate:
+            # Preserve optional values verbatim for the owning validator.
             result[field] = candidate[field]
     for field in HOST_RESULT_EVIDENCE_LIMITS:
         if field in candidate:

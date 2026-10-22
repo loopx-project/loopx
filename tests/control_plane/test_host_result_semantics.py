@@ -22,7 +22,12 @@ from tests.control_plane.test_turn_host_decision_capture import _fixture_module
     ({"delivery_outcome": False}, "delivery_outcome must be one of"),
     ({"delivery_outcome": "surface_only"}, "cannot settle a Turn"),
     ({"delivery_outcome": "outcome_gap"}, "blocked"),
-], ids=["overlimit", "object", "false", "legacy-scale", "invalid-outcome", "surface-only", "untyped-gap"])
+    ({"progress_observation_json": False}, "progress_observation_json must be a JSON string"),
+    ({"progress_observation_json": "x" * 4097}, "progress_observation_json exceeds"),
+    ({"progress_observation_json": "{"}, "invalid progress observation"),
+    ({"progress_observation_json": '{"result_class":"advanced"}'}, "requires at least one stable"),
+], ids=["overlimit", "object", "false", "legacy-scale", "invalid-outcome", "surface-only", "untyped-gap",
+        "observation-type", "observation-size", "observation-json", "observation-unattributed"])
 def test_native_turn_rejects_invalid_candidate_before_writeback(
     tmp_path, monkeypatch, provider, candidate_fields, error,
 ):
@@ -42,6 +47,8 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
         "recommended_action": "Continue the accepted task.",
         "next_action": "Continue the accepted task.",
         "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+        "work_evidence": ["artifact:received.txt"],
+        "validation_evidence": ["check:independent-command"],
         **candidate_fields,
     }
     (workspace / "candidate.json").write_text(json.dumps(candidate))
@@ -91,6 +98,7 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
         "next_action": "Stop before publication; approval is still required.",
         "delivery_batch_scale": "implementation", "delivery_outcome": "outcome_progress",
     })
+    candidate.pop("progress_observation_json", None)
     (workspace / "candidate.json").write_text(json.dumps(candidate))
     code, repeated = f._run_cli([*base, "--resume-turn-key", resume_key, "--execute"])
     assert code == 1 and not repeated["ok"], repeated

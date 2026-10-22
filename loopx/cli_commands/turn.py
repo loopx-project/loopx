@@ -173,7 +173,6 @@ def handle_turn_command(
             # Only an executing wake may sync inboxes or reserve a calendar window.
             turn_start_hook_dispatch = {}
             if args.turn_command == "run-once" and args.execute:
-                from ..capabilities.agent_turn_recall import run_configured_agent_turn_recall_fail_open
                 from ..capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
                 from .lark_inbox import dispatch_goal_lark_turn_start_hooks
 
@@ -205,7 +204,7 @@ def handle_turn_command(
             from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
             turn_start_hook_dispatch = extend_explore(turn_start_hook_dispatch,
                 registry_path=registry_path, runtime_root=runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id)
+                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None))
             # `run-once` and `managed-step` must resolve the same governing decision
             # from the same live status, scheduler context and capability hooks, so
             # this Turn takes all of them -- and its later settle-against inputs --
@@ -277,15 +276,11 @@ def handle_turn_command(
                     or transaction.get("turn_key")
                     or ""
                 )
-                payload["reward_memory_recall"] = (
-                    run_configured_agent_turn_recall_fail_open(
-                        registry_path=registry_path,
-                        goal_id=args.goal_id,
-                        agent_id=args.agent_id,
-                        quota_decision=decision,
-                        turn_instance_id=turn_instance_id,
-                        execute=True,
-                    )
+                from ..capabilities.turn_context import attach_turn_context
+
+                attach_turn_context(
+                    payload, registry_path=registry_path, goal_id=args.goal_id,
+                    agent_id=args.agent_id, decision=decision, turn_instance_id=turn_instance_id,
                 )
             capability_action = payload.get("capability_action")
             if isinstance(capability_action, dict):

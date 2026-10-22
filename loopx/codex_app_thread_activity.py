@@ -19,7 +19,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .codex_rollout_cursor import Reader, RolloutCursor
+from .hosts.codex_rollout_cursor import Reader, RolloutCursor
 from .control_plane.agents.host_thread_activity import (
     HostDeliveryExpectation,
     HostDeliveryScope,

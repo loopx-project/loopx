@@ -238,7 +238,8 @@ def main(argv=None):
         if args.feedback == "best-only":
             validate_best_only(task, args.eval_interval)
         render_prompt = best_only_task_prompt if args.feedback == "best-only" else blind_task_prompt
-        feedback_prompt = render_prompt(task.work.agent_query, task.submit_paths)
+        feedback_prompt = render_prompt(task.work.agent_query, task.submit_paths,
+                                       eval_interval=args.eval_interval)
     elif not task.game_mode:
         native_policy = dict(submission_cooldown=args.submission_cooldown,
             eval_interval=args.eval_interval, internet=task.internet,

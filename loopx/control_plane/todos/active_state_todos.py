@@ -68,6 +68,7 @@ def active_state_todo_fields(
     rollout_event_log_path: Callable[[Path, str], Path],
     max_todo_index_rollout_events_per_goal: int,
     parse_active_state_todos: Callable[..., dict[str, Any]],
+    active_state_incomplete_warning: Callable[[str], dict[str, Any] | None],
     parse_issue_meta_surface: Callable[[str], dict[str, Any] | None],
     backlog_hygiene_warning: Callable[..., dict[str, Any] | None],
     completed_todo_archive_warning: Callable[[dict[str, Any] | None], dict[str, Any] | None],
@@ -150,6 +151,9 @@ def active_state_todo_fields(
             preferred_todo_ids=preferred_todo_ids,
             rollout_events=events,
         )
+        state_incomplete = active_state_incomplete_warning(state_text)
+        if state_incomplete:
+            fields["state_incomplete"] = state_incomplete
     # An explicit canonical objective revision owns current intent. A scoped
     # check objective still cannot substitute for Goal intent. Keep this status
     # field as display content; admission uses the native revision and guard.

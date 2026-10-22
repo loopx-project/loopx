@@ -48,6 +48,61 @@ class RequestControlMixin:
     def _read_json(self, *, max_bytes: int = 256 * 1024) -> dict[str, Any]:
         raise NotImplementedError
 
+    def _request_inventory_scope(self, session_id):
+        from ..capabilities.manager_context import evidence_goal_scope
+
+        controller = self.server.runtime_controller
+        session = self.server.chat_store.load_session(session_id)
+        if not session:
+            raise ValueError("original conversation is unavailable")
+        scope = conversation_scope(session)
+        if scope["kind"] not in {"owner_portfolio", "owner_goal"} and not scope.get("bound_steward"):
+            raise ValueError("request inventory requires an authorized steward conversation")
+        if session.get("steward_context") is not None:
+            controller.project_contexts.session_context(session)
+        selected = getattr(self.server, "selected_goal_id", None)
+        if selected and scope.get("goal_ids") != [selected]:
+            raise ValueError("request inventory is outside this Goal workspace")
+        if scope["private_conversation"]:
+            goals, core = scope["goal_ids"], None
+        else:
+            if controller.manager_scope_resolver is None:
+                raise ValueError("current steward read scope is unavailable")
+            goals = controller.manager_scope_resolver(session)
+            if not isinstance(goals, list):
+                raise ValueError("current steward read scope is unavailable")
+            core = evidence_goal_scope(controller.coordination_runtime_root, session["channel_id"],
+                registry_path=self.server.registry_path) or []
+        return session, goals, core
+
+    def _request_inventory_read(self) -> None:
+        from ..control_plane.collaboration.conversation_inventory import read_conversation_requests
+
+        try:
+            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            if (set(query) - {"session_id", "view", "offset"} or "session_id" not in query
+                    or any(len(values) != 1 for values in query.values())):
+                raise ValueError("select one original conversation")
+            view = query.get("view", ["unfinished"])[0]
+            if view not in {"unfinished", "history"}:
+                raise ValueError("invalid request inventory view")
+            session, goals, core = self._request_inventory_scope(query["session_id"][0])
+            controller = self.server.runtime_controller
+            def validate_source(source):
+                observed, permitted, _ = self._request_inventory_scope(source["session_id"])
+                if observed["channel_id"] != session["channel_id"] or permitted != goals:
+                    raise ValueError("original conversation authorization changed")
+            result = read_conversation_requests(controller.coordination_runtime_root, self.server.registry_path,
+                self.server.chat_store, session, goal_ids=goals, core_goal_ids=core,
+                validate_source_session=validate_source, history=view == "history", offset=int(query.get("offset", ["0"])[0]))
+            current, current_goals, current_core = self._request_inventory_scope(session["session_id"])
+            if (current["channel_id"], current.get("steward_context"), current_goals, current_core) != (
+                    session["channel_id"], session.get("steward_context"), goals, core):
+                raise ValueError("conversation authorization changed during read")
+            self._send_json(_operator_payload(result))
+        except (OSError, ValueError, TypeError, KeyError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+            self._send_error(redact_local_paths(str(exc)), status=400, error_code="request_inventory_unavailable")
+
     def _request_control_source(self, body: dict[str, Any]) -> dict[str, Any]:
         if any(not isinstance(body.get(key), str) or not body[key] for key in _ROUTING):
             raise ValueError("original conversation and exact request identities are required")

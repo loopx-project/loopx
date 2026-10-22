@@ -125,6 +125,8 @@ def route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any]
             call.get("completion_identity_source") if complete else None
         ),
         review_basis=call.get("terminal_review_basis"),
+        expected_todo_text_sha256=call.get("expected_todo_text_sha256"),
+        require_captured_todo_text=call.get("require_captured_todo_text") is True,
         completion_delivery_workspace=(
             call.get("completion_delivery_workspace") if complete else None
         ),
@@ -275,6 +277,8 @@ def terminal_canonical_todo_if_promoted(
     self_merged: bool,
     dry_run: bool,
     review_basis: Mapping[str, Any] | None = None,
+    expected_todo_text_sha256: str | None = None,
+    require_captured_todo_text: bool = False,
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any] | None:
@@ -356,6 +360,8 @@ def terminal_canonical_todo_if_promoted(
         request = {
             "schema_version": _TERMINAL_REQUEST_SCHEMA,
             **({"review_basis": dict(review_basis)} if review_basis is not None else {}),
+            **({"expected_todo_text_sha256": expected_todo_text_sha256}
+               if expected_todo_text_sha256 is not None or require_captured_todo_text else {}),
             "validation_source_provider_revision": None,
             "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
             "goal_id": goal_id,

@@ -3,6 +3,7 @@
  * Local display grouping must not turn parentage or time into supporting evidence.
  */
 import {normalizeExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
+import {normalizeExploreMeasurements, projectExploreMeasurementFeedback, type ExploreMeasurement} from "../capabilities/explore_measurements.ts";
 import type {JsonObject} from "../runtime_decode.ts";
 export type ExploreHistoryEvent = {
   schema_version: string; event_id: string; goal_id: string; event_kind: string;
@@ -11,6 +12,7 @@ export type ExploreHistoryEvent = {
   node_id: string; from_node: string; to_node: string; edge_type: string;
   agent_id: string; run_id: string; evidence_refs: string[]; supersedes: string; confidence: number | null;
   execution_observation?: JsonObject;
+  measurements?: ExploreMeasurement[];
 };
 export type ExploreHistoryPage = {goal_id: string; items: ExploreHistoryEvent[]; total: number; next_cursor: string | null};
 export type ExploreHistoryNode = {id: string; latest: ExploreHistoryEvent; updates: ExploreHistoryEvent[]; findings: ExploreHistoryEvent[]; revisions: ExploreHistoryEvent[]};
@@ -64,6 +66,7 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
       ...(raw.execution_observation === undefined ? {} : {
         execution_observation: normalizeExploreExecutionObservation({observation: raw.execution_observation}),
       }),
+      ...(raw.measurements === undefined ? {} : {measurements: normalizeExploreMeasurements(raw.measurements)}),
     } as ExploreHistoryEvent;
   });
   return {goal_id: goalId, items, total: page.total as number, next_cursor: page.next_cursor as string | null};
@@ -98,8 +101,13 @@ export function projectExploreHistory(events: readonly ExploreHistoryEvent[], go
   }
   const times = [...unique.values()].map(event => Date.parse(event.recorded_at)).filter(Number.isFinite);
   const links = [...edges.values()];
+  const recordedOrder = new Map([...unique.keys()].map((id, index) => [id, index]));
+  const measurementFeedback = projectExploreMeasurementFeedback([...findings.values()].map(event => ({
+    ...event, finding_id: event.result_id, recorded_order: recordedOrder.get(event.event_id),
+  })));
   return {
     events: [...unique.values()], nodes: [...nodes.values()], edges: links, findings: [...findings.values()],
+    ...(measurementFeedback.length ? {measurementFeedback} : {}),
     startAt: times.length ? new Date(Math.min(...times)).toISOString() : null,
     endAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
     unknownTimeCount: unique.size - times.length,

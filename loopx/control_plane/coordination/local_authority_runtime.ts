@@ -1322,6 +1322,10 @@ export async function terminalLifecycleLocalCoordinationTodo(
       const researchEvidence = new ResearchTerminalEvidenceHost(root, goalId, requireJsonObject(input.registry_source, "registry source"));
       try {
       return {...await executeCoordinationTodoTerminalLifecycle(store, {
+        ...(input.expected_todo_text_sha256 === undefined ? {} : {
+          expected_todo_text_sha256: input.expected_todo_text_sha256 === null ? null
+            : requireAuthorityStoreId(input.expected_todo_text_sha256, "expected Todo text digest"),
+        }),
         validation_source_provider_revision: input.validation_source_provider_revision == null
           ? null : requireAuthorityStoreId(input.validation_source_provider_revision, "validation source provider revision"),
         validation_declaration_sha256: input.validation_declaration_sha256 == null

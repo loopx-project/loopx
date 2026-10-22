@@ -11,6 +11,7 @@ import type { ConversationHistoryStatus } from "../../data/use-conversation-hist
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { CollaborationCard } from "./collaboration-card";
+import {ConversationRequests} from "./conversation-requests";
 import {
   compileActionReviewPlan,
   isStaleActionFailure,
@@ -108,6 +109,8 @@ import { deriveRuntimeReadiness, runtimeRequirement, runtimeSetupGuideUrl, type 
 import { buildSeenMarker, compareSeenMarker, readSeenMarker, seenMarkerStorage, seenMarkerStorageKey, writeSeenMarker, type SeenMarkerInput, type SinceYouLookedDelta } from "./since-you-looked";
 import { deriveGoalSuggestions, type GoalSuggestion } from "./goal-suggestions";
 import { projectGoalAcceptanceCriteria } from "../../data/goal-acceptance-observation";
+import { WorkspaceCommandPalette } from "./workspace-command-palette";
+import { workspaceCommandEntries } from "./workspace-command-entries";
 import { WorkspaceShell } from "./workspace-shell";
 import type { StatusSourceControl } from "./status-source-switcher";
 import "./personal-workspace.css";
@@ -986,6 +989,10 @@ export function PersonalWorkspacePage({
     if (todoId !== (routedTodoId ?? null)) callbacks.onSelectTodo?.(todoId);
   }
   const restoredTodoRoute = useRef("");
+  const paletteContext = `${selectionScope}:${sourceGoal?.sourceAccess?.namespace ?? ""}`;
+  const paletteUnavailable = statusSourceControl?.connectionState === "error";
+  const [paletteScope, setPaletteScope] = useState<string | null>(null);
+  useEffect(() => setPaletteScope(null), [paletteContext]);
   const [railScope, setRailScope] = useState<string | null>(null);
   const [taskInspectorExpanded, setTaskInspectorExpanded] = useState(false);
   const [activeSessionRun, setActiveSessionRun] = useState<WorkspaceRun | null>(null);
@@ -2665,6 +2672,17 @@ export function PersonalWorkspacePage({
     <>
     <div hidden={settingsOpen}>
     <WorkspaceShell
+      overlay={<WorkspaceCommandPalette key={paletteContext} open={paletteScope === paletteContext}
+        enabled={!settingsOpen && !mobileSidebarOpen} readOnly={readOnly} unavailable={paletteUnavailable}
+        onOpen={() => setPaletteScope(paletteContext)} onClose={() => setPaletteScope(null)}
+        entries={workspaceCommandEntries({ goals: workspaceGoals, goalId: selectedGoalId, readOnly,
+          userTodos: model.userTodos, sourceId: seenStatusSource,
+          unavailable: paletteUnavailable, items: items.filter(item => item.kind !== "proposal"
+            || (!actionReadback.isError && actionReadback.data?.some(current => current.proposal_id === item.proposal.previewId))) })}
+        onSelect={entry => {
+          if (entry.destination.kind === "goal") selectGoal(entry.destination.goalId);
+          else setSelection(entry.destination.selection);
+        }} />}
       notice={serviceNotice}
       drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
@@ -2697,6 +2715,10 @@ export function PersonalWorkspacePage({
         <div className="personal-channel">
           <div>
           <ChannelHeader
+            requestInventory={!readOnly && !rootUnavailable && !runtimeSourceUnavailable && !selectedGoalId && !selectedWorkspaceRef
+              && (!originalConversation || originalConversation.source?.context_kind === "steward") ? <ConversationRequests
+                key={originalConversation?.session?.session_id ?? "owner"} sessionId={conversationSessionId} ownerFallback={!originalConversation}
+                refreshKey={`${managerMessages.length}:${managerMessages.at(-1)?.id ?? ""}:${Boolean(managerMessages.at(-1)?.pending)}`}/> : undefined}
             originalConversationTitle={originalConversation ? `${originalConversation.source?.app_ref ?? "Lark"} · ${originalTitle}` : undefined}
             agents={agents}
             scopeUnavailable={rootUnavailable}
@@ -3056,6 +3078,7 @@ export function PersonalWorkspacePage({
           onRetryGoalArchive={callbacks.onRetryGoalArchive || callbacks.onRefresh
             ? () => void (callbacks.onRetryGoalArchive ?? callbacks.onRefresh)?.()
             : undefined}
+          onOpenCommands={() => {setMobileSidebarOpen(false); setPaletteScope(paletteContext);}}
           onOpenSettings={readOnly ? undefined : () => openSettings({ kind: "settings" })}
           onSelectGoal={selectGoal}
           selectedGoalId={selectedGoalId}

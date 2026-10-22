@@ -612,8 +612,9 @@ def test_inspect_journal_cli_branches_before_live_or_write_paths(
         "scheduler_execution_context_for_turn",
     ):
         monkeypatch.setattr(turn_decision, name, unexpected_call)
-    for name in ("complete_goal_todo", "update_goal_todo"):
-        monkeypatch.setattr(turn_todo_writeback, name, unexpected_call)
+    # Patch the actual Turn write adapter; the retired update_goal_todo alias
+    # no longer exists here and cannot act as an inspection safety oracle.
+    monkeypatch.setattr(turn_todo_writeback, "complete_goal_todo", unexpected_call)
     monkeypatch.setattr(executor, "execute_turn_driver_settlement", unexpected_call)
     monkeypatch.setattr(executor, "_write_journal", unexpected_call)
 

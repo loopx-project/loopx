@@ -683,6 +683,71 @@ post-settlement ingest retain their existing rules. Provider failure remains
 fail-open. The host adapter is Python IO transport over the existing capability
 resolver and TypeScript envelope owner, not a new enablement policy.
 
+The capability layer registers post-selection context once for executing native
+Turn and quota/heartbeat guards. Internal `turn_context_contributions` carry
+bounded context fields, instructions and optional text-result schemas; they are
+not provider permissions. Hosts consume the generic `capability_context_fields`,
+`capability_instructions` and `capability_result_fields` projection. The existing
+`reward_memory_recall` readback and 2,400-character reflection limit remain.
+Programmatic callers contributing memory use the registered context path;
+inserting a legacy recall readback alone cannot activate a host contribution.
+An inactive binding leaves ordinary host input, prompt and result schema intact.
+The registered contribution carries the full optional recall only once, in
+host context; its readback retains bounded participation facts without a
+second context copy. If the complete recall would exceed the existing 64 KiB
+contribution budget, that recall context is omitted for the Turn while the
+verified binding, reflection schema and post-settlement ingest remain enabled.
+The hard budget is not raised and omission never grants action authority.
+
+Recovery also reads pre-registration journals that already contain a bounded
+reflection and its independent validation receipt. Without a contribution
+annotation, only this cached result field retains its existing 2,400-character
+wire decoding; new Host results still require registered context. Recovery
+preserves the original result, validation digest and plan without repeating the
+Host or task validator. Current ingest policy, independent evidence and the
+original settlement/idempotency owners still decide any provider effect.
+The cached reader and capability composition reuse the same verified automation
+fact projection in `control_plane/reward_memory.py`; provider policy is not
+copied into the executor.
+
+中文：恢复注册前的执行日志时，保留已准入的有界反思、原独立证明及原 plan；缺少
+贡献 annotation 的旧缓存仅沿用该结果字段原有的 2,400 字符解码，不重新启动 Host
+或 validator，也不为新 Host 输入开启旧接线。provider 效果仍由当前 ingest 策略、
+独立证据及原结算／去重 owner 判定。
+注册贡献只在 host context 中携带一份可选 recall，readback 只保留有界参与事实，
+不再重复正文。若完整 recall 会超过既有 64 KiB contribution 预算，则该 Turn
+省略召回正文，但仍保留已核验绑定、反思 schema 与结算后 ingest；不提高硬预算，
+省略正文也不授予任何 action authority。
+缓存 reader 和能力组合复用 `control_plane/reward_memory.py` 的同一参与事实投影，
+executor 不复制 provider 策略。
+
+TypeScript binds each contribution to the existing governing signature document
+and its source readback. Capture locations and size diagnostics may change;
+actor, authority, binding readback or contribution changes discard that optional
+context. Capabilities cannot overwrite core authority or result fields.
+Ingest-only input omits recalled context. Host adapters preserve enabled optional
+result values for outer bounds/material validation and independent attestation.
+Registered `PostSettlement` callbacks invoke the original ingest/sidecar owners
+after accountable settlement. `post_writeback` remains effect-free. Per-hook
+receipts preserve completed callbacks during partial recovery; provider receipts
+and idempotency remain with their existing owner. Unknown effects remain unknown.
+After terminal settlement, a resume leaves the journal and its original
+`post_settlement` receipt unchanged. When that receipt is uncertain, the owner
+may reconcile the same effect and return `post_settlement_recovery` as current
+readback. The owner retains the durable receipt; this projection grants no new
+work, validation, quota debit or scheduler action.
+
+中文：执行中的 native Turn 与 quota/heartbeat guard 通过注册的选择后上下文路径接入
+记忆；三种宿主消费统一贡献，不再各自判断记忆模式。原 recall 读回和反思大小限制保留，
+只有旧读回而无注册贡献不能开启宿主记忆输入。关闭保持普通输入／指导／schema 原样。
+TS 复用 governing 签名文档和来源绑定，允许捕获定位变化，拒绝 actor／权限／绑定／
+贡献变更及核心字段替换。独立精确证明和可记账结算后，注册的 `PostSettlement` 调用
+原 ingest owner；无副作用的 `post_writeback` 不变。逐 hook 回执与原 provider 去重
+共同恢复，不把不确定效果写成零。终态重放保留原 journal／`post_settlement`，通过原
+owner 对同一效果恢复的当前读回放入 `post_settlement_recovery`；持久回执仍由原 owner
+保管，不触发业务工作、验证、扣额或调度。隔离 File/SQLite／宿主／provider 验证不代表安装态
+App/Lark、模型采用或真实服务资格。
+
 This is a bounded shared-facts step. Heartbeat still has its existing full and
 compact rendering paths; it is not yet the same installed host journey. The
 remaining convergence work is tracked in the existing

@@ -90,6 +90,11 @@ Owner-facing state follows four rules:
   member, Agent or owner responsible for it, so one glance shows who is doing
   what and who is blocked. Work with no resolvable owner goes into an explicit
   "other" group; it is never dropped.
+  Keep the steward's request inventory discoverable in its existing header,
+  with one count and an in-place reader grouped by recipient. Counts describe
+  requests still needing follow-up, not distinct tasks or accepted outcomes.
+  Show an unavailable or partial count honestly; put full current briefs,
+  linked work, provenance and original conversations behind row expansion.
 - **Owner language first.** Primary copy uses the owner's words. Protocol ids,
   gate kinds, preview mechanics and executor profiles belong in a collapsed
   diagnostics disclosure.

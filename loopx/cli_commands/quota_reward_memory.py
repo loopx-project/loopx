@@ -6,13 +6,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..capabilities.agent_turn_recall import (
-    run_configured_agent_turn_recall_fail_open,
-)
+from ..capabilities.turn_context import attach_turn_context
 from ..capabilities.reward_memory.codex_app_outcome import (
     stage_codex_app_turn_outcome_candidate_fail_open,
-    run_staged_codex_app_turn_outcome_ingest_fail_open,
 )
+from ..capabilities.reward_memory.turn_hooks import run_staged_memory_settlement
 from ..control_plane.quota.settlement import read_heartbeat_settlement
 
 
@@ -103,7 +101,7 @@ def attach_reward_memory_ingest_after_spend(
             or readback.writeback.failure is not None or readback.spend.failure is not None):
         return
     result = (
-        run_staged_codex_app_turn_outcome_ingest_fail_open(
+        run_staged_memory_settlement(
             registry_path=registry_path,
             goal_id=identity.goal_id,
             agent_id=identity.agent_id,
@@ -139,11 +137,11 @@ def attach_reward_memory_recall_after_should_run(
         or heartbeat_receipt.get("status") not in {"committed", "replayed"}
     ):
         return
-    payload["reward_memory_recall"] = run_configured_agent_turn_recall_fail_open(
+    attach_turn_context(
+        payload,
         registry_path=registry_path,
         goal_id=goal_id,
         agent_id=agent_id,
-        quota_decision=payload,
+        decision=payload,
         turn_instance_id=heartbeat_turn_id,
-        execute=True,
     )

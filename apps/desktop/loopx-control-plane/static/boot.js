@@ -181,7 +181,8 @@ function safeEnvironment(result) {
 }
 function renderDiagnostics(result) {
   observedEnvironment = safeEnvironment(result);
-  const failure = result.last_failure ?? result.state;
+  const startupFailure = ["error", "runtime_required", "runtime_pairing_required", "service_error"].includes(result.startup_state?.phase) ? result.startup_state : null;
+  const failure = startupFailure ?? result.last_failure ?? result.state;
   const text = JSON.stringify({
     schema_version: "desktop_recovery_diagnostics_v2",
     failure_phase: ["error", "runtime_required", "runtime_pairing_required", "service_error"].includes(failure?.phase) ? failure.phase : null,
@@ -252,8 +253,9 @@ async function refresh() {
     forgetSelection.hidden = result.runtime_selection?.explicit === true || (result.runtime_selection?.remembered !== true && !["runtime_selection_invalid", "runtime_selection_unavailable"].includes(result.state?.details?.code));
     renderDiagnostics(result);
     render(result.state);
-    renderStartup(result);
-    escalateFromSnapshot(result.state);
+    const startup = Object.hasOwn(result, "startup_state") ? result.startup_state : result.state;
+    renderStartup({...result, state:startup});
+    escalateFromSnapshot(startup);
   } catch {
     if (generation === statusGeneration && !actionInFlight) {
       renderDiagnostics({state:{phase:"error",details:{code:"desktop_status_unavailable"}}});

@@ -21,12 +21,16 @@ test("an already assessed or Todo-linked request remains until actual answer ret
 });
 
 test("sent work remains visible before return and until the requester consumes it", () => {
-  assert.equal(project({direction: "outgoing"})[0].step, "await_peer_result");
-  assert.equal(project({direction: "outgoing", receipt: settled, results: [conclusion]})[0].step, "consume_peer_result");
+  const peer = {direction: "outgoing", request: {...request, source_kind: "peer"}};
+  assert.equal(project(peer)[0].step, "await_peer_result");
+  assert.equal(project({...peer, receipt: settled, results: [conclusion]})[0].step, "consume_peer_result");
   assert.equal(project({request: {...request, source_kind: "peer"}, receipt: settled,
     results: [{...conclusion, status: "delivered"} ]})[0].step, "await_peer_consumption");
-  assert.deepEqual(project({direction: "outgoing", receipt: settled,
+  assert.deepEqual(project({...peer, receipt: settled,
     results: [{...conclusion, status: "delivered", consumed: true}]}), []);
+  assert.equal(project({direction: "outgoing", receipt: settled, results: [conclusion]})[0].step, "await_return_delivery");
+  assert.deepEqual(project({direction: "outgoing", receipt: settled,
+    results: [{...conclusion, status: "delivered"}]}), []);
 });
 
 test("current revisions, cancellation and unavailable receipts retain independent meanings", () => {

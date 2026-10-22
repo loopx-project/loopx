@@ -4,12 +4,15 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import {
   interpretQuotaShouldRunPacket,
+  settlementIdentityFromPlan,
+  settlementIdentityPayload,
   type JsonObject,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
+import { selectedWorkTodoId } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -237,6 +240,8 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
   ]) {
     if (source[field] !== null && source[field] !== undefined) compact[field] = source[field];
   }
+  const context = object(object(object(payload.interaction_contract).agent_channel).work_context);
+  if (context.selected_todo_text_verified === true) compact.text_source_verified = true;
   // Work declarations can end in acceptance/stop conditions. Keep their exact
   // text; a display prefix or case-folded recommendation cannot stand in for it.
   const rendered = scalarString(source.text, "selected_todo.text");
@@ -749,7 +754,10 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
   );
   const context = object(interaction.agent_context);
   if (Object.keys(context).length > 0) projection.agent_context = structuredClone(context);
-  const workContext = object(object(interaction.agent_channel).work_context);
+  // Source verification belongs to the selected task above. Preserve one carrier while
+  // retaining the existing context elision and historical packet signatures.
+  const {selected_todo_text_verified: _taskTextVerified, ...workContext} =
+    object(object(interaction.agent_channel).work_context);
   const selectedTodoContextIsAlreadyInAction = workContext.complete === true
     && workContext.selected_todo_ref === "selected_todo"
     && Object.keys(workContext).every(field =>
@@ -1026,6 +1034,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const operation = request.operation;
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
+  if (operation === "replan_settlement_identity") return {identity: turnEnvelopeReplanSettlementIdentity(
+    requireJsonObject(request.envelope, "turn_envelope"), request.turn_instance_id,
+  )};
   if (operation === "envelope_signature") {
     return turnEnvelopeActionSignatureDocument(request.envelope);
   }
@@ -1039,4 +1050,30 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     );
   }
   throw new EffectRuntimeRequestError("turn envelope operation is unsupported");
+}
+
+/** A scoped planning identity comes from the signed quota plan, never a Host
+ * session or a missing Todo. Journal validation reuses this exact binding rule.
+ */
+export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+  const plan = object(object(envelope.writeback).settlement_plan);
+  const raw = object(plan.identity);
+  if (raw.replan_obligation_id == null && raw.binding_kind !== "autonomous_replan") return null;
+  const parsed = settlementIdentityFromPlan({settlement_plan: plan});
+  if (parsed.failure !== null) throw new EffectRuntimeRequestError(parsed.failure.reason);
+  const identity = parsed.value;
+  const signature = object(envelope.action_signature);
+  if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION
+      || envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+      || selectedWorkTodoId({selected_todo: object(envelope.action).selected_todo,
+        task_orchestration_contract: envelope.task_orchestration_contract}) !== null
+      || identity.binding_kind !== "autonomous_replan"
+      || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
+      || turnInstanceId != null && identity.turn_instance_id !== turnInstanceId
+      || identity.replan_obligation_id !== object(envelope.replan_action_packet).obligation_id
+      || signature.matches !== true || signature.source_hash !== signature.envelope_hash
+      || signature.envelope_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(envelope))) {
+    throw new EffectRuntimeRequestError("Turn replan settlement identity does not match its signed quota admission");
+  }
+  return settlementIdentityPayload(identity);
 }

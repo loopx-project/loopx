@@ -195,6 +195,7 @@ def test_disabled_hook_keeps_packet_and_does_not_read_evidence(tmp_path, monkeyp
     monkeypatch.setattr(
         "loopx.capabilities.explore.turn_context.load_explore_result_events_strict", unexpected
     )
+    monkeypatch.setattr("loopx.capabilities.explore.turn_context.list_goal_todos", unexpected)
     assert (
         extend_turn_start_dispatch(
             original,
@@ -202,6 +203,7 @@ def test_disabled_hook_keeps_packet_and_does_not_read_evidence(tmp_path, monkeyp
             runtime_root=tmp_path / "runtime",
             goal_id="research",
             agent_id="worker",
+            todo_id="todo_missing",
         )
         is original
     )
@@ -211,6 +213,7 @@ def test_disabled_hook_keeps_packet_and_does_not_read_evidence(tmp_path, monkeyp
             runtime_root=tmp_path / "runtime",
             goal_id="research",
             agent_id="worker",
+            todo_id="todo_missing",
         )["graph"]
         is None
     )

@@ -172,6 +172,73 @@ test("shared reads retain all Goal sources before exact current work and existin
   assert.deepEqual(projectInteractionRequiredReads(facts).required_reads, reads);
 });
 
+test("one Goal acceptance read retains every applicable objective and acceptance obligation", () => {
+  const objectiveClauses = [
+    "revision/digest",
+    "own objective_work_digest",
+    "adoption",
+    "Preserve root acceptance, permissions and stops",
+  ];
+  const outcomeClauses = [
+    "cumulative requirements",
+    "switching work",
+    "Agent review",
+    "Scoped acceptance never replaces Goal intent",
+    "fresh guard",
+  ];
+  const checkClauses = [
+    "non-goals",
+    "criteria",
+    "scope/revision",
+    "Scoped acceptance does not replace Goal intent",
+    "fresh guard",
+  ];
+  const cases = [
+    {goal_objective_present: false, goal_outcomes_present: true, checks: false, clauses: outcomeClauses},
+    {goal_objective_present: false, goal_outcomes_present: false, checks: true, clauses: checkClauses},
+    {goal_objective_present: true, goal_outcomes_present: true, checks: false,
+      clauses: [...objectiveClauses, ...outcomeClauses]},
+    {goal_objective_present: true, goal_outcomes_present: false, checks: true,
+      clauses: [...objectiveClauses, ...checkClauses]},
+  ];
+  for (const current of cases) {
+    const facts: JsonObject = {...readFacts(), goal_state_file: null, selected_todo: null,
+      goal_objective_present: current.goal_objective_present,
+      goal_outcomes_present: current.goal_outcomes_present,
+      goal_acceptance_checks_present: current.checks};
+    const projected = projectInteractionRequiredReads(facts);
+    const reads = projected.required_reads as JsonObject[];
+    const acceptanceReads = reads.filter(read => read.source === "goal_acceptance");
+    assert.equal(acceptanceReads.length, 1, JSON.stringify(current));
+    const reason = String(acceptanceReads[0]!.reason);
+    for (const clause of current.clauses) assert.ok(reason.includes(clause), `${clause}: ${reason}`);
+
+    const replay = projectInteractionRequiredReads({...facts, required_reads: reads});
+    assert.deepEqual(replay.required_reads, reads, "repeated projection must not duplicate guidance");
+
+    const inline = projectInteractionWorkContext({
+      required_reads: acceptanceReads,
+      source_results: [{command: acceptanceReads[0]!.command, content: {
+        goal_acceptance_contract: {goal_objective: {revision: 1}, criteria: [{id: "check"}]},
+      }}],
+    });
+    assert.deepEqual(inline.required_reads, []);
+    const source = ((inline.work_context as JsonObject).sources as JsonObject[])[0]!;
+    assert.equal(source.reason, reason);
+  }
+
+  const facts: JsonObject = {...readFacts(), goal_state_file: null, selected_todo: null,
+    goal_objective_present: true, goal_outcomes_present: false, goal_acceptance_checks_present: true};
+  const inspect = `${String(facts.command_prefix)} --format json goal-acceptance inspect --goal-id goal-requirements`;
+  const existing = {command: inspect, source: "goal_acceptance", reason: "Retain this existing acceptance obligation."};
+  const merged = (projectInteractionRequiredReads({...facts, required_reads: [existing]}).required_reads as JsonObject[]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]!.command, inspect);
+  assert.ok(String(merged[0]!.reason).startsWith(existing.reason));
+  assert.ok(String(merged[0]!.reason).includes(checkClauses[0]));
+  assert.ok(String(merged[0]!.reason).includes(objectiveClauses[0]));
+});
+
 test("shared requirement reads use final admission and add no work on non-delivery lanes", () => {
   for (const patch of [{should_run: false}, {delivery_allowed: false}, {selection_required: true},
     {settlement_only: true, has_replan: true}, {goal_id: null}, {effective_action: "governed_capability_intent"}]) {
@@ -284,6 +351,7 @@ test("selected Todo references its admitted body only after an exact detail read
   const context = projected.work_context as JsonObject;
   assert.equal(context.complete, true);
   assert.equal(context.selected_todo_ref, "selected_todo");
+  assert.equal(context.selected_todo_text_verified, true);
   const sources = context.sources as JsonObject[];
   assert.equal(sources.length, 1);
   assert.equal(sources[0].source, "selected_todo");
@@ -313,6 +381,7 @@ test("bounded selected text validates its full source snapshot and preserves exa
   const context = projected.work_context as JsonObject;
   assert.equal(context.complete, true);
   assert.equal(context.selected_todo_ref, undefined);
+  assert.equal(context.selected_todo_text_verified, true);
   const source = (context.sources as JsonObject[])[0];
   const sourceContent = source.content as JsonObject;
   assert.equal((sourceContent.todo as JsonObject).text, body);
@@ -322,6 +391,7 @@ test("bounded selected text validates its full source snapshot and preserves exa
     source_results: [{command: read.command, content: {matched: true,
       todo: {...task, text: body + " Updated after selection."}}}]});
   assert.equal((changed.work_context as JsonObject).complete, false);
+  assert.equal((changed.work_context as JsonObject).selected_todo_text_verified, undefined);
   assert.deepEqual(changed.required_reads, [read]);
 });
 

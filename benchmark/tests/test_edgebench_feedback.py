@@ -340,7 +340,7 @@ def test_best_only_accepts_native_rankings_without_changing_task_policy(policy):
 @pytest.mark.parametrize("profile", ["official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore"])
 @pytest.mark.parametrize("mode", [None, "blind", "native", "best-only"])
 @pytest.mark.parametrize("override", [False, True])
-def test_cli_native_default_and_explicit_controls_reach_registration(tmp_path, monkeypatch, profile, mode, override):
+def test_cli_native_context_default_and_explicit_controls_reach_registration(tmp_path, monkeypatch, profile, mode, override):
     pytest.importorskip("harbor")
     from benchmark.edgebench import run
     monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
@@ -375,10 +375,19 @@ def test_cli_native_default_and_explicit_controls_reach_registration(tmp_path, m
         assert kwargs["submission_cooldown"] == cooldown
         if selected == "native":
             assert f"**{cooldown} seconds**" in prompt
-            assert "current promising candidate" in prompt
+            assert "The task defines candidate validity and acceptance" in prompt
+            assert "adds no local-test pass requirement or prior-improvement requirement" in prompt
+            assert "continue seeking useful improvements" in prompt
+            assert "Keep a runnable candidate" not in prompt
+            assert "independently of manual submissions" not in prompt
+            assert "Periodic automatic evaluation is disabled" not in prompt
+            assert "### Work Between Submissions" not in prompt
             assert prompt.startswith(kwargs["agent"].workspace_instructions)
         else:
             assert kwargs["agent"].workspace_instructions is None
+            assert f"configured interval: {interval} seconds" in prompt
+            assert "independently of manual submissions" in prompt
+            assert "The host periodically samples" in prompt
         assert kwargs["disable_auto_eval"] == (selected == "best-only")
         raise RuntimeError("synthetic launch boundary")
     monkeypatch.setattr(run, "run_agent", handoff)

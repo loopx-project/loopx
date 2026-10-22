@@ -6,7 +6,8 @@ import json
 
 def work_context_lines(context: dict[str, Any]) -> list[str]:
     """Complete source content once; arbitrary source text stays JSON-escaped."""
-    if set(context) <= {"complete", "selected_todo_ref", "selected_todo_authority", "instruction"}:
+    # The machine-only source witness does not add another instruction body.
+    if set(context) <= {"complete", "selected_todo_ref", "selected_todo_authority", "instruction", "selected_todo_text_verified"}:
         lines = [
             "- work_context: "
             f"complete={context.get('complete')} "

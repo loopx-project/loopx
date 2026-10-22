@@ -449,6 +449,8 @@ def complete_goal_todo(
     completion_turn_key: str | None = None,
     completion_identity_source: str | None = None,
     terminal_review_basis: Mapping[str, Any] | None = None,
+    expected_todo_text_sha256: str | None = None,
+    require_captured_todo_text: bool = False,
     completion_delivery_workspace: Mapping[str, Any] | None = None,
     completion_validation_workspace_path: Path | None = None,
     task_lease_idempotency_key: str | None = None,

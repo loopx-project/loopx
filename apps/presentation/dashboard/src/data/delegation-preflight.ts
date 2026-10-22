@@ -3,6 +3,7 @@ export type DelegationPreflight = {
   workspace_state?: "missing" | "not_directory" | "unavailable";
   workspace_next_action?: "review_operator_workspace_binding";
   turn_eligible: boolean;
+  turn_lane?: {scope: "native_turn_lane"; state: string};
   acceptance_ready: boolean;
   acceptance_reason_code?: "independent_delegation_validation_required" | "completion_validation_declaration_unavailable" | "completion_validation_declaration_mismatch" | "validation_files_unavailable" | "acceptance_binding_unavailable" | null;
   acceptance_next_action?: "review_original_todo_validation" | "restore_original_validation_files" | "review_original_task_acceptance" | "none";

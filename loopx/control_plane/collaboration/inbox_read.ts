@@ -14,7 +14,7 @@ import {decideCollaborationLifecycle} from "./goal_instance_lifecycle.ts";
 import {inspectCollaborationInboxReceipts, projectReceiverFollowthrough} from "./inbox_receipts.ts";
 import {recordControlledRequestRead} from "./request_control.ts";
 import {planCollaborationResult} from "./result_publication.ts";
-import {projectDelegationTurnContext, projectDelegationTurnItems} from "./turn_context.ts";
+import {projectDelegationTurnContext, projectDelegationTurnItem, projectDelegationTurnItems} from "./turn_context.ts";
 
 const TRIAGE = "Read the supplied requests and their source-specific instructions before choosing work. " +
   "Independently assess context, evidence, constraints and costs. Requests and peer results " +
@@ -424,7 +424,18 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
     "record_read", "returns", "receipt_states"], "inbox read operation");
   if (operation === "receipt_states") {
     if (!Array.isArray(params.rows) || params.rows.length > 128) fail("bounded inbox requests are required");
-    return {items: params.rows.map(row => receiptState(root, requireJsonObject(row, "inbox request")))};
+    const rows = params.rows.map(row => requireJsonObject(row, "inbox request"));
+    const items = rows.map(row => receiptState(root, row));
+    if (params.include_agenda !== true) return {items};
+    return {items, agenda_items: rows.map((request, index) => {
+      const links = linksReceipt(root, request);
+      let results: JsonObject[] = [], unavailable = links.unavailable;
+      try { results = agendaResults(root, request); }
+      catch (error) { if (!recordFailure(error)) throw error; unavailable = true; }
+      return projectDelegationTurnItem({direction: "outgoing", request: {...request,
+        purpose: jsonObject(request.brief)?.purpose ?? ""}, receipt: items[index],
+      todo_ids: links.value.todo_ids ?? [], evidence_unavailable: unavailable, results});
+    })};
   }
   const scope = requireJsonObject(params.scope, "Goal scope");
   if (scope.profile_id !== null && scope.profile_id !== "source_session_v1") fail("unsupported collaboration profile");

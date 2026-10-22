@@ -124,6 +124,22 @@ falls back to a shared corpus; provider degradation stays visible while base
 Goal work continues. Each host must report its actual coverage rather than
 generalizing from a direct CLI or helper test.
 
+The native context and settlement registrations live in `turn_hooks.py` and are
+composed outside the kernel in `loopx.capabilities.turn_context`. The existing
+experiment, recall, independent-reflection validation, outcome-ingest and sidecar
+owners retain their permissions and recovery rules. Context contributions are
+private advisory input; the generic host transport cannot replace governing
+fields. The real `PostSettlement` dispatcher runs effect adapters after
+accountable settlement; `post_writeback` observers remain effect-free. Source
+wiring for Codex/DSH/generic CLI and full/thin heartbeat readback is distinct
+from installed App/Lark adoption or model benefit.
+
+The memory contribution carries recall context once and keeps its verified
+participation readback separate. If optional recall text exceeds the existing
+64 KiB contribution budget, that Turn omits recall guidance but preserves the
+enabled reflection schema and post-settlement ingest. The budget remains
+unchanged; degraded recall never grants authority or implies a provider write.
+
 Config v1 declares one `project_provider_binding`, its exact per-corpus scope
 references, the project corpus set, module-owned surfaces, and an automation
 policy. A surface explicitly lists its compatible `corpus_ids`, selects one

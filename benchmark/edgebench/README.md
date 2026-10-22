@@ -215,25 +215,52 @@ The shared native task policy also describes accepted-result recovery. Check the
 pinned provider's generated `sforge-submit --help`: clients that support
 `--result ID` can use `sforge-submit --result ID --details` to read or poll an
 already accepted submission without a new evaluation or cooldown reset. If the
-acceptance reply was lost, inspect `sforge-submit --list` and reconcile its ID
-with the retained checkpoint before retrieving it. Plain `--details` still
+acceptance reply was lost, inspect `sforge-submit --list` and reconcile the
+submission identity before retrieving it. Plain `--details` still
 creates a new submission. Older clients may lack result lookup; unavailable
 commands, missing sessions and missing results remain unresolved feedback,
 and never justify blind resubmission. This does not add restart persistence.
 
-New non-game native trials include brief guidance to keep researching the original
-task objective, treating implementation, passing checks and submission as milestones.
-This guidance reaches the startup prompt and workspace `AGENTS.md`. New LoopX
-Goals now retain the task's original `agent_query` as their objective, so planning
-and replan readback preserve its stated priorities rather than a generic reminder.
-If the query points to task files, those files remain required source material;
-this does not extract or invent a structured acceptance contract. Existing Goals
-and restored checkpoints retain their captured objective without migration.
-Trial budgets and deadlines
-stay with the existing runner, without extra agent-facing budget instructions.
-This changes guidance for new native attempts across all five workers, preserving
-grading, cooldown, selection, blind/best-only controls, game prompts and frozen runs.
-Instruction readback does not establish model adoption or outcome gains.
+New non-game native trials describe the task, submission tools, feedback and
+evaluation rules in the startup prompt and workspace `AGENTS.md`. The wrapper no
+longer prescribes incremental implementation or a best-validated-candidate
+workflow. A brief objective/completion reminder retains continued optimization:
+implementation, passing checks and submission alone do not complete the objective.
+Useful in-scope improvements remain the goal. The wrapper does not repeat a
+generic stop/budget/blocker reminder; the original task and runner still own
+those boundaries. The wrapper adds no local-test pass or
+prior-improvement prerequisite for submission; task-owned requirements still
+apply. New LoopX Goals retain the original `agent_query` as their objective,
+including references to task files. Existing Goals and restored checkpoints keep
+their captured objective.
+
+Native submission prompts omit the host's periodic sampling explanation, both
+when the interval is positive and when it is zero. The interval still reaches
+the runner unchanged; it no longer changes the native prompt. Host capture and
+selection behavior are unchanged. The prompt retains on-disk manual/terminal
+submission, recoverable candidate and result/source identity guidance without
+adding a local-test pass or prior-improvement requirement.
+
+Blind and best-only prompts still describe automatic capture using the resolved
+runner interval: positive intervals name the independent on-disk sampling and
+runnable-candidate requirement; zero reports periodic evaluation as disabled.
+The shared observation describes capture, not feedback access. Blind exposes no
+official feedback; best-only retains its strictly improving snapshot channel.
+
+Shared `loopx-planned` entry also drops the adapter's research-strategy prefix.
+The product planning packet, including Core first-delivery guidance, is unchanged
+and remains a separate experimental variable. Optional execution observations,
+stride settings and checkpoint storage guidance retain their explicit selection.
+Budgets and deadlines stay with the existing runner. Opted-in native Goal
+continuation retains the original task and evaluation rules without requiring a
+prior improvement claim before submission.
+
+This is a prompt-policy behavior change for new native attempts across all five
+workers. Grading, cooldown, selection, blind/best-only task wrappers, game prompts
+and frozen runs are unchanged. Pin the new runner revision for new trials;
+cross-version comparisons also change prompt policy and cannot isolate feedback
+alone. Instruction readback establishes neither earlier feedback nor score gains;
+those require matched studies.
 
 | Mode | Agent-visible evaluator feedback | Evaluation access |
 | --- | --- | --- |

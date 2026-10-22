@@ -129,9 +129,10 @@ or repair the existing extension and retry. No failure creates publication
 authority, fills missing footage, infers a creative pass or changes a Goal.
 
 Mechanical rendering, creative quality, audience understanding and operations
-impact have separate evidence. Future generated media and interactive
-learning providers should reuse the nearest content owner and comparison
-method; they are not silently activated by this protocol.
+impact have separate evidence. Generated image/video assets and footage from
+authored HTML, game or mini-world works can reuse this source-bound composition
+path. Choose their authoring tools for the requested work; a new form does not
+require another core workbench or activate an unconfigured provider.
 
 ## Blender shot and project readback
 
@@ -210,3 +211,60 @@ and render it; an older LoopX core will refuse a plan containing the new field.
 工作台沿现有入口显示“大画面”并制作、取消、重试和查看；停用扩展阻止新制作但
 保留已校验影片。回到旧构图时，移除字段后保存新修订再制作；旧版核心不会接受
 含新字段的计划。该选项不改变来源可见性、发布权限或全局配置。
+
+## Authoring and comparison practice
+
+The existing brief, revision and verified-file operations support this practical
+author workflow. These are creative decisions; `ready` retains the mechanical
+contract above.
+
+Start with the audience, message and factual source revision. Give each scene
+a communication job, then choose the form that serves it: readable 2D for exact
+guidance, actual interface states for product evidence, or authored spatial and
+interactive scenes when their relationships or actions help. A film need not
+contain every available technique. Keep edited, synthetic and illustrative
+material identified; an association, screenshot or source label does not prove
+an outcome. Preserve missing links and other qualifiers when reframing a source.
+
+Inspect the result at its intended viewing size. A source that fits its frame
+can still have unreadable text. For supplied artwork, resolve transparency on
+the intended background and inspect any crop before encoding. Titles that must
+be seen belong in supported visible content. Player captions, exported subtitle
+files and words drawn into source pixels are different deliverables. Check the
+actual speech and caption windows too: a system speech rate parameter does not
+establish the resulting phrase duration, naturalness or comprehension.
+
+Revise the work in response to an observed problem, keeping the earlier version
+and the reason for the change. Controlled excerpts answer a narrow question
+only when the compared script, sources, timing and other relevant conditions
+are recorded. Fully developed films may deliberately change those conditions
+to serve the same brief. Review each complete film for message, picture, sound,
+pacing, readability, possible misreadings and task fit; do not align different
+scripts at the same timestamp or infer a universal medium ranking. Record
+author judgment separately from independent audience observations. No audience
+evidence means no audience conclusion.
+
+Keep research, setup, paid calls, failed attempts, rework, rendering and review
+in the cost account. A timed render is one stage; missing costs stay unknown.
+Retain an editable project and its sources beside the verified outputs. A
+portable handoff benefits from an actual download, extraction and revised
+export, including playback seeking when comparison depends on it. Reusing a
+technique in the next requested work tests that specific reuse; it does not
+by itself establish audience benefit or lower total cost. Publication remains
+with the existing content-item lifecycle.
+
+中文：以下为创作建议，`ready` 仍代表上述机械合同。先明确读者、表达目的和事实版本，
+再给镜头分配叙事作用，按作用选二维、
+实际界面、空间或交互场景，不必把所有形式塞进一部片。重构图时保留缺口与限定，
+不把截图、关联或来源标签当结果证明。在实际观看尺寸检查文字、透明背景、裁切、
+可见标题及声音/字幕时序；播放器字幕、导出的字幕文件和素材内文字分别核对。
+系统语速参数不等于实际句长、自然度或理解效果。
+
+按观察到的问题实质改稿，保留旧版与修改原因。同条件片段用于回答具体问题，
+充分发展的整片允许按同一 brief 重写，但要记录脚本、来源、时序等混杂，不能
+将异稿按同秒伪装对照。分别审阅表达、画面、声音、节奏、可读性、误读与任务适用性，
+区分作者判断和独立观众证据；没有观众证据就保留未知。成本包含调研、搭建、
+付费调用和失败、返工、渲染、审核，不把局部计时当总成本。保留可修改工程及来源，
+可通过实际下载、解压、改稿导出和所需的播放寻址核对交付。下一作品的真实复用只证明
+该次复用，
+不自动证明理解收益或提效；原生就绪和发布权限的含义保持。

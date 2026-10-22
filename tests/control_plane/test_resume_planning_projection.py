@@ -15,6 +15,29 @@ from loopx.control_plane.todos.resume_planning import project_todo_resume_planni
 from loopx.control_plane.todos.quota_summary import select_quota_todo_summary
 
 
+def _quota_goal(tmp_path, monkeypatch, todos, provider):
+    """Todo cutover retains the separately declared Goal definition source."""
+    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
+    prose = "---\nstatus: active\n---\n# Goal\n## Objective\nBuild a checked change.\n\n"
+    state.write_text(prose + "## Agent Todo\n" + todos, encoding="utf-8")
+    write_fixture_registry(
+        project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="goal-a", domain="resume-planning", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None,
+    )
+    if provider is not None:
+        if provider == "sqlite":
+            isolate_sqlite_runtime(tmp_path, monkeypatch)
+        goal = json.loads(registry.read_text())["goals"][0]
+        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
+        projection = build_todo_runtime_shadow_projection(
+            goal_id="goal-a", todos=fields["agent_todos"]["items"], handoff_mode="soft_claim",
+        )
+        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
+        state.write_text(prose, encoding="utf-8")
+    return runtime, registry, state
+
+
 def waiting(todo_id: str, **fields: object) -> dict:
     return {
         "todo_id": todo_id, "index": 1, "text": "[P1] Wait for dependency",
@@ -100,28 +123,21 @@ def test_invalid_deferred_condition_cannot_reuse_a_stale_ready_flag() -> None:
     assert row["resume_ready"] is True  # Diagnosis is a projection, not an edit.
 
 
-@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("provider", [None, "file", "sqlite"])
 @pytest.mark.parametrize("kind", ["todo_done", "monitor_changed"])
-def test_public_quota_distinguishes_monitor_repair_from_generation_wait(tmp_path: Path, promoted: bool, kind: str) -> None:
-    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
-    state.write_text(
-        "---\nstatus: active\n---\n# Goal\n## Objective\nBuild a checked change.\n\n## Agent Todo\n"
+def test_public_quota_distinguishes_monitor_repair_from_generation_wait(
+    tmp_path: Path, monkeypatch, provider: str | None, kind: str,
+) -> None:
+    runtime, registry, state = _quota_goal(
+        tmp_path, monkeypatch,
         "- [ ] [P1] Continue after observation.\n"
         f"  <!-- loopx:todo todo_id=todo_waiting role=agent task_class=advancement_task status=open claimed_by=agent-a resume_when={kind}:todo_monitor resume_monitor_generation=3 -->\n"
         "- [ ] [P2] Observe dependency.\n"
         "  <!-- loopx:todo todo_id=todo_monitor role=agent task_class=continuous_monitor status=open claimed_by=agent-a material_change_generation=3 cadence=1d next_due_at=2099-01-01T00:00:00Z -->\n",
-        encoding="utf-8",
+        provider,
     )
-    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
-        goal_id="goal-a", domain="resume-planning", adapter_kind="generic_project_goal_v0",
-        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)
-    if promoted:
-        goal = json.loads(registry.read_text())["goals"][0]
-        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
-        projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=fields["agent_todos"]["items"], handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state)
-        state.unlink()
-    before = state.read_bytes() if state.exists() else None
+    before = state.read_bytes()
+    assert (b"## Agent Todo" in before) == (provider is None)
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
         "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
@@ -136,7 +152,7 @@ def test_public_quota_distinguishes_monitor_repair_from_generation_wait(tmp_path
         assert not summary.get("monitor_blocked_resume_count")
         assert condition["baseline_generation"] == 3
         assert condition["material_change_generation"] == 3
-    assert (state.read_bytes() if state.exists() else None) == before
+    assert state.read_bytes() == before
 
 
 def test_ready_deferred_lanes_keep_full_counts_before_truncation() -> None:
@@ -237,32 +253,19 @@ def test_unavailable_typed_owner_does_not_fall_back_to_python_selection(monkeypa
         project_todo_resume_planning(source)
 
 
-@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("provider", [None, "file", "sqlite"])
 def test_public_quota_capacity_wait_uses_provider_after_cutover_without_display_write(
-    tmp_path: Path, promoted: bool,
+    tmp_path: Path, monkeypatch, provider: str | None,
 ) -> None:
-    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
-    state.write_text(
-        "---\nstatus: active\n---\n# Goal\n## Objective\nBuild a checked change.\n\n"
-        "## Agent Todo\n- [ ] [P1] Continue when compiler capacity returns.\n"
+    runtime, registry, state = _quota_goal(
+        tmp_path, monkeypatch,
+        "- [ ] [P1] Continue when compiler capacity returns.\n"
         "  <!-- loopx:todo todo_id=todo_capacity role=agent task_class=advancement_task "
         "status=deferred claimed_by=agent-a resume_when=capacity_available:compiler -->\n",
-        encoding="utf-8",
+        provider,
     )
-    write_fixture_registry(
-        project=tmp_path, runtime_root=runtime, registry_path=registry,
-        goal_id="goal-a", domain="resume-planning", adapter_kind="generic_project_goal_v0",
-        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None,
-    )
-    if promoted:
-        goal = json.loads(registry.read_text())["goals"][0]
-        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
-        projection = build_todo_runtime_shadow_projection(
-            goal_id="goal-a", todos=fields["agent_todos"]["items"], handoff_mode="soft_claim",
-        )
-        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state)
-        state.unlink()
-    before = state.read_bytes() if state.exists() else None
+    before = state.read_bytes()
+    assert (b"## Agent Todo" in before) == (provider is None)
     for capabilities, count in [((), 0), (("--available-capability", "compiler"), 1)]:
         code, packet = run_json_cli_result(
             "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
@@ -272,4 +275,39 @@ def test_public_quota_capacity_wait_uses_provider_after_cutover_without_display_
         assert packet["agent_todo_summary"]["current_agent_deferred_resume_count"] == count
         if count:
             assert packet["effective_action"] == "successor_replan_required"
-        assert (state.read_bytes() if state.exists() else None) == before
+        assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_canonical_todos_do_not_replace_a_missing_declared_goal_source(tmp_path, monkeypatch, provider):
+    runtime, registry, state = _quota_goal(
+        tmp_path, monkeypatch,
+        "- [ ] [P1] Advance the checked work.\n"
+        "  <!-- loopx:todo todo_id=todo_work role=agent task_class=advancement_task status=open claimed_by=agent-a -->\n",
+        provider,
+    )
+    prose = state.read_bytes()
+    assert b"## Agent Todo" not in prose
+    state.unlink()
+
+    code, packet = run_json_cli_result(
+        "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
+        registry_path=registry, runtime_root=runtime,
+    )
+
+    assert code == 1
+    assert packet["status"] == "state_file_missing"
+    assert packet["should_run"] is False
+    assert packet["normal_delivery_allowed"] is False
+    assert packet["agent_todo_summary"]["open_count"] == 1
+    assert not state.exists()
+
+    state.write_bytes(prose)
+    code, packet = run_json_cli_result(
+        "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
+        registry_path=registry, runtime_root=runtime,
+    )
+    assert code == 0, packet
+    assert packet["status_health_ok"] is True
+    assert packet["agent_todo_summary"]["open_count"] == 1
+    assert state.read_bytes() == prose

@@ -471,6 +471,38 @@ shape merely because of its size. Optional memory participation now has one
 compact, signed envelope projection; the Codex CLI adapter preserves default-off
 isolation. This does not qualify installed heartbeat/App adoption or model value.
 
+Memory participation now uses a registered post-selection context contribution,
+composed in the capability layer for native Turn and executing quota/heartbeat
+guards. Codex, DSH and generic CLI hosts transport the same bounded context,
+instructions and optional result fields. The capability owns binding/mode checks;
+adapters retain only host formatting. TypeScript bounds contributions, prevents
+authority/result-field replacement and binds them to the existing governing
+signature document plus their source readback. Adding the original capture's
+location does not invalidate an unchanged decision; changed actors, authority,
+configuration readback or contributions do invalidate optional context.
+
+The generic Python contribution IO lives with the existing registrations and
+dispatchers in `loopx.control_plane.capability_hooks`; there is no parallel Python
+Turn-context module. It calls the TypeScript decoder for validation and source
+binding. Host adapters consume that same hook-owned projection.
+
+Registered `PostSettlement` callbacks call the existing ingest owner after
+independent exact-reflection attestation and accountable writeback/spend. The
+manual-host sidecar adapter uses that registration too. `post_writeback` remains
+effect-free. Per-hook receipts preserve completed work while an uncertain peer
+hook recovers; the provider owner retains write deduplication and reconciliation.
+Terminal replay preserves the original journal/receipt and returns recovered
+owner readback as `post_settlement_recovery`, without repeating settlement.
+File/SQLite native host and isolated provider cases qualify this source path.
+Installed App/Lark adoption, model benefit, complete costs and the three
+convergence acceptances below remain open.
+
+Pre-registration journal recovery retains the already admitted bounded
+reflection and independent validation digest without changing the saved plan,
+reinvoking the Host/validator or activating legacy input for new work. Provider
+effects still use the current ingest policy and original settlement owner;
+cached content alone does not authorize a write.
+
 PR dependency observation now uses the existing registered TurnStart lifecycle
 shared by executing quota guards, native Turns and compatibility prequota.
 Permission comes from the typed Goal/Agent capability owner, including remembered
@@ -486,8 +518,8 @@ App/Lark's shared context backend consumes canonical readiness without polling.
 Plans, read-only/status/context paths, missing permission and recovery add no
 observation. Installed executor adoption, legitimate recovery of existing live
 owners, sustained scheduling, model outcomes and the three convergence
-acceptances remain open. Generic memory lifecycle integration is a separate
-remaining boundary; post-writeback hooks retain their effect-free contract.
+acceptances remain open. Installed memory lifecycle adoption remains a separate
+acceptance; post-writeback hooks retain their effect-free contract.
 
 The same captured decision now retains the selected Task's existing continuation
 condition and readiness through the full selection projection, signed envelope
@@ -682,6 +714,18 @@ before task validation/writeback/spend/ACK, failed-result replay, and a correcte
 fresh Turn settling once. Boundary-length valid results retain their behavior.
 This is result-transport correctness; it does not qualify model adoption, undo
 Host work already performed, or close the three convergence streams.
+
+Turn completion now carries an exact text commitment from the admitted full
+Todo source to the existing atomic terminal owner. Changed requirements refuse
+completion; note-only and unrelated Todo changes remain valid. Provider CAS
+fences concurrent replacement, and historical receipt recovery precedes fresh
+source checks. Saved Turns without full-source proof refuse new completion;
+already accepted legacy receipts retain their fingerprints and recover first.
+File/SQLite CLI and shared File/SQLite/PostgreSQL conformance
+cover refusal and recovery. Final no-followup retains its existing settlement
+order: a terminal refusal preserves any earlier writeback/spend receipts.
+This qualifies task-body completion safety, not settlement-wide source atomicity,
+installed host adoption, live models or the remaining convergence acceptance.
 
 The first ordinary-CLI consolidation replaces an exactly identical
 `heartbeat_recommendation.blocked_priority_fallback` mirror with

@@ -147,3 +147,85 @@ def test_current_source_replay_and_different_successor_do_not_certify_selected_w
     refused = review(next_packet, next_turn, expected=1)
     assert "declared work" in refused["error"] and not refused.get("appended"), refused
     assert index.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    monkeypatch.setenv("PYTHONPATH", str(fixture.REPO_ROOT))
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    monkeypatch.chdir(project)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+
+    def cli(*args, expected=0):
+        code, result = fixture._run_cli(registry, runtime, *args, cwd=project)
+        assert code == expected, result
+        return result
+
+    identity = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
+    cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--explore-mode", "planning",
+        "--execution-replan-after-turns", "1", "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    training = project / "training.json"
+    training.write_text(json.dumps([{"x": 2, "y": 3, "observed": 6}]))
+    request = {"project": str(project), "registry": str(registry), "runtime": str(runtime),
+        "goal_id": fixture.GOAL_ID, "agent_id": fixture.AGENT_ID, "todo_id": fixture.TODO_ID,
+        "objective": "Use the exact scoped measurement that informs the next experiment.",
+        "training": str(training), "budget": 25, "seed": 17}
+    actor.probe(request, "retained")
+    for index in range(4):
+        measurements = project / f"measurement-{index}.json"
+        measurements.write_text(json.dumps([{"metric": "quality", "value": index,
+            "unit": "points", "higher_is_better": True,
+            "comparison_scope": "validation:owned-v1", "input_revision": "owned-input-v1",
+            "evaluation_ref": "evaluator:owned-v1", "candidate_ref": f"candidate:scope-{index}",
+            "evidence_ref": f"measured:scope-{index}"}]))
+        cli("explore", "finding", *identity, "--finding-id", f"wide-result-{index}",
+            "--node", "comparison-retained", "--title", f"Observed input scope {index}",
+            "--summary", f"Only the recorded input scope {index}; other inputs remain unknown.",
+            "--status", "confirmed", "--tag", "writeback-result", "--evidence-ref", f"measured:scope-{index}",
+            "--measurements-json", str(measurements))
+    turn = "wide-page-review"
+    cli("quota", "should-run", *identity, "--codex-app", "--turn-instance-id", turn)
+    guard = cli("quota", "should-run", *identity, "--codex-app",
+        "--turn-instance-id", turn, "--todo-id", fixture.TODO_ID)
+    control = guard["replan_action_packet"]["stride_control"]
+    page = cli("explore", "turn-context", *identity, "--todo-id", fixture.TODO_ID, "--result-limit", "20")
+    [card] = [row for row in page["harness"]["comparison_candidates"] if row["todo_id"] == fixture.TODO_ID]
+    assert len(page["graph"]["writeback_results"]) == len(card["outcomes"]) == 5
+    # Choose a quantified outcome omitted by the default three-row view.
+    visible = {row["finding_id"]: row for row in page["graph"]["writeback_results"]}
+    default_refs = {row["finding_id"] for row in control["explore_basis"]["comparison_candidates"][0]["outcomes"]}
+    selected = {"todo_id": fixture.TODO_ID, **next(row for row in reversed(card["outcomes"])
+        if row["finding_id"] not in default_refs and visible[row["finding_id"]].get("measurements"))}
+    measurement = visible[selected["finding_id"]]["measurements"][0]
+    assert measurement["evidence_ref"] == visible[selected["finding_id"]]["evidence_refs"][0]
+    [feedback] = page["graph"]["measurement_feedback"]
+    assert feedback["measured_count"] == 4
+    assert feedback["best"]["candidate_ref"] == "candidate:scope-3"
+    decision = deepcopy(control["minimal_example"])
+    decision["explore_review"] = {"revision": control["explore_basis"]["revision"],
+        "disposition": "used", "considered_refs": [selected["finding_id"]],
+        "selected_candidate": selected, "reason": "This exact measured scope informs the next experiment.",
+        "result_pages": [{k: page["graph"]["result_page"][k] for k in ("revision", "offset", "limit", "todo_id")}]}
+    packet = actor.vision(request, selected["finding_id"], outcome="replan")
+    packet.update(stride_decision=decision, todo_delta=["retain:" + fixture.TODO_ID])
+    path = project / "wide-review.json"
+    command = ("refresh-state", *identity, "--todo-id", fixture.TODO_ID, "--turn-instance-id", turn,
+        "--classification", "scoped_page_review", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(path),
+        "--no-global-sync", "--suppress-external-sinks")
+    bad = deepcopy(packet)
+    bad["stride_decision"]["explore_review"]["selected_candidate"]["source_sha256"] = "f" * 64
+    path.write_text(json.dumps(bad))
+    index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
+    before = index.read_bytes()
+    refused = cli(*command, expected=1)
+    assert "exact scoped result" in refused["error"] and index.read_bytes() == before
+    path.write_text(json.dumps(packet))
+    accepted = cli(*command)
+    persisted = json.loads(Path(accepted["json_path"]).read_text())
+    assert persisted["agent_vision"]["stride_decision"]["explore_review"]["selected_candidate"] == selected
+    assert accepted["autonomous_replan_ack"]["semantic_delta"]["accepted"]
+    readback = cli("explore", "turn-context", *identity, "--result-limit", "20")
+    assert readback["graph"]["measurement_feedback"] == [feedback]

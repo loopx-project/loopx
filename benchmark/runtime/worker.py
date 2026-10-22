@@ -291,9 +291,9 @@ def native_goal_rounds(run_round, *, budget_seconds, continue_after_complete, cl
         suffix = (
             f"\n\nContinuation {rounds}: the time budget is not exhausted "
             f"({int(remaining) if remaining is not None else 'unbounded'} seconds remain). "
-            "The previous Goal declared completion; continue researching and improving the "
-            "best validated candidate with the remaining budget: pick the next useful "
-            "experiment, validate it, and submit only if it improves on the accepted best."
+            "The previous Goal declared completion. Continue the original task under "
+            "its existing requirements and evaluation rules. Submission eligibility "
+            "is determined by those rules, not by a prior improvement claim."
         )
 
 

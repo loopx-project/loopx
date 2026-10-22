@@ -65,6 +65,19 @@ def quota_action_signature_document(payload: Mapping[str, Any]) -> dict[str, Any
     )
 
 
+def turn_envelope_replan_settlement_identity(
+    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+) -> dict[str, Any] | None:
+    result = _turn_envelope_result("replan_settlement_identity", envelope=dict(envelope),
+                                   turn_instance_id=turn_instance_id)
+    identity = result.get("identity")
+    if identity is None:
+        return None
+    if not isinstance(identity, Mapping):
+        raise RuntimeError("TypeScript Turn settlement identity must be an object")
+    return dict(identity)
+
+
 def build_turn_envelope(
     payload: Mapping[str, Any],
     *,

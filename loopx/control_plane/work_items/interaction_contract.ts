@@ -384,7 +384,16 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   const prefix = requireNonEmptyString(request.command_prefix, "command_prefix");
   const goalArg = shellQuote(goalId);
   const add = (command: string, source: string, reason: string) => {
-    if (!reads.some(read => read.command === command)) reads.push({command, source, reason, ordering: "before_work"});
+    const existing = reads.find(read => read.command === command);
+    if (!existing) {
+      reads.push({command, source, reason, ordering: "before_work"});
+      return;
+    }
+    // One command is one read, but it may carry multiple independently
+    // applicable obligations. Merge guidance without duplicating replay.
+    const current = typeof existing.reason === "string" ? existing.reason : "";
+    if (!current) existing.reason = reason;
+    else if (!current.includes(reason)) existing.reason = `${current} ${reason}`;
   };
   const stateFile = readArgument(request.goal_state_file, "goal_state_file");
   if (stateFile) add(`cat -- ${shellQuote(stateFile)}`, "goal_state",
@@ -428,6 +437,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   const pending: JsonObject[] = [], sources: JsonObject[] = [], failures: JsonObject[] = [];
   let selectedTodoRef = false;
   let selectedTodoAuthority: string | null = null;
+  let selectedTodoTextVerified = false;
   for (const value of request.required_reads) {
     const read = requireJsonObject(value, "required read");
     const matches = results.filter(result => result.command === read.command);
@@ -474,6 +484,12 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       // full read instead of guessing which prose is current Goal authority.
       pending.push(read);
     } else {
+      if (read.source === "selected_todo" && typeof selectedTodoRecord?.text === "string") {
+        // Bind completion to the admitted full source, before body deduplication
+        // or display compaction. Provider-wide revisions also change for notes
+        // and unrelated work; those do not replace this task's requirements.
+        selectedTodoTextVerified = true;
+      }
       if (read.source === "selected_todo" && typeof selected.text === "string"
           && selectedTodoRecord?.text === selected.text
           && selectedTodoRecord?.todo_id === selected.todo_id) {
@@ -520,6 +536,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   const includeUserTodos = users && !users.error_code
     && (!Array.isArray(users.todos) || users.todos.length > 0 || users.authority_read != null);
   return {required_reads: pending, work_context: {complete: failures.length === 0,
+    ...(selectedTodoTextVerified ? {selected_todo_text_verified: true} : {}),
     ...(selectedTodoRef ? {selected_todo_ref: "selected_todo"} : {}),
     ...(selectedTodoAuthority ? {selected_todo_authority: selectedTodoAuthority} : {}),
     ...(sources.length ? {sources} : {}),

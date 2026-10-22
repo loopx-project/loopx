@@ -927,9 +927,17 @@ def test_turn_host_request_carries_reward_memory_decision_context() -> None:
         "grants_new_action_authority": False,
     })
 
+    from tests.control_plane.reward_memory_host_fixture import register_plan_memory
+    register_plan_memory(plan)
     request = build_loopx_turn_host_request(plan)
 
-    assert request["reward_memory_recall"] == plan["reward_memory_recall"]
+    expected_recall = {
+        **plan["reward_memory_recall"],
+        "context": plan["turn_context_contributions"][0]["context_fields"][
+            "reward_memory_recall"
+        ]["context"],
+    }
+    assert request["reward_memory_recall"] == expected_recall
     assert request["reward_memory_recall"]["context"]["guidance"][0][
         "content_summary"
     ]
@@ -3254,6 +3262,7 @@ def test_turn_run_once_commits_independently_validated_progress(
             "task_validation": execution["validation"],
             "writeback": {"ok": True, "appended": True},
             "quota_spend": {"ok": True, "appended": True, "slots": 1},
+            "previous_post_settlement": {},
         }
     ]
     assert loopx_turn_execution_committed(execution) is True
@@ -3547,13 +3556,21 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert "One%20public%20fixture%20advanced" not in state
 
 
-def test_turn_run_once_codex_cli_wires_validated_reflection_post_settlement(
+@pytest.mark.parametrize("memory_path", ["callback", "owned", "owned_lost_reply", "ordinary_validator"])
+@pytest.mark.parametrize("host_kind", ["codex-cli", "dsh", "generic-cli"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_turn_run_once_host_wires_validated_reflection_post_settlement(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    host_kind: str,
+    provider: str,
+    memory_path: str,
 ) -> None:
-    project, runtime, registry = _write_live_fixture(tmp_path)
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
     from tests.control_plane.reward_memory_host_fixture import enable_live_memory
-    enable_live_memory(registry)
+    enable_live_memory(registry, validated_ingest=memory_path != "callback")
     reflection = json.dumps(
         {
             "schema_version": "turn_reward_memory_reflection_v1",
@@ -3618,13 +3635,25 @@ def test_turn_run_once_codex_cli_wires_validated_reflection_post_settlement(
             "delivery_outcome": "outcome_progress",
             "vision_unchanged_reason": "The fixture objective remains open.",
             "summary": "One Codex CLI fixture step passed validation.",
+            "work_evidence": ["artifact:fixture-host-result"],
+            "validation_evidence": ["check:fixture-independent-validator"],
             "reward_memory_reflection_json": reflection,
         }
 
+    from loopx.capabilities import reward_memory
+    from tests.capabilities.test_reward_memory_ingestion import FakeProvider
+    actual_ingest = reward_memory.run_configured_turn_outcome_ingest_fail_open
+    memory_provider = FakeProvider()
     observed: list[dict[str, Any]] = []
 
     def fake_ingest(**kwargs: object) -> dict[str, object]:
         observed.append(dict(kwargs))
+        if memory_path != "callback":
+            receipt = actual_ingest(**kwargs, provider=memory_provider)
+            if memory_path == "owned_lost_reply" and len(observed) == 1:
+                # The memory owner committed, but its caller lost the response.
+                raise OSError("provider owner response lost before Turn receipt")
+            return receipt
         return {
             "ok": True,
             "schema_version": "turn_reward_memory_ingest_v0",
@@ -3640,41 +3669,77 @@ def test_turn_run_once_codex_cli_wires_validated_reflection_post_settlement(
     )
     monkeypatch.setattr(
         (
-            "loopx.cli_commands.turn_run_once."
+            "loopx.capabilities.reward_memory."
             "run_configured_turn_outcome_ingest_fail_open"
         ),
         fake_ingest,
     )
+    host_args = ["--host", host_kind]
+    if host_kind == "dsh":
+        runner = tmp_path / "reflection_runner.py"
+        candidate = fake_codex_host({"turn_key": "unused"})
+        runner.write_text(
+            "import json\n"
+            "def run_dsh_turn(**kwargs):\n"
+            f"    return {json.dumps(candidate)!r}\n",
+            encoding="utf-8",
+        )
+        host_args += ["--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "dsh-home")]
+    elif host_kind == "generic-cli":
+        runner = tmp_path / "generic_reflection_runner.py"
+        candidate = fake_codex_host({"turn_key": "unused"})
+        runner.write_text(
+            "import json, sys\n"
+            "request = json.load(sys.stdin)\n"
+            f"result = json.loads({json.dumps(candidate)!r})\n"
+            "result['turn_key'] = request['turn_key']\n"
+            "json.dump(result, sys.stdout)\n",
+            encoding="utf-8",
+        )
+        host_args += ["--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
+    args = [
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(runtime),
+        "--format",
+        "json",
+        "turn",
+        "run-once",
+        "--goal-id",
+        "loopx-turn-fixture",
+        "--agent-id",
+        "codex-fixture",
+        *host_args,
+        "--project",
+        str(project),
+        "--validation-command-json",
+        json.dumps([sys.executable, "-c", "pass"] if memory_path == "ordinary_validator" else [sys.executable, str(validator)]),
+        "--no-global-sync",
+        "--execute",
+    ]
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        exit_code = cli_main(
-            [
-                "--registry",
-                str(registry),
-                "--runtime-root",
-                str(runtime),
-                "--format",
-                "json",
-                "turn",
-                "run-once",
-                "--goal-id",
-                "loopx-turn-fixture",
-                "--agent-id",
-                "codex-fixture",
-                "--host",
-                "codex-cli",
-                "--project",
-                str(project),
-                "--validation-command-json",
-                json.dumps([sys.executable, str(validator)]),
-                "--no-global-sync",
-                "--execute",
-            ]
-        )
+        exit_code = cli_main(args)
 
     payload = json.loads(output.getvalue())
     assert exit_code == 0, payload
-    assert payload["post_settlement"] == {
+    receipt = payload["post_settlement"]["results"]["reward-memory.outcome-ingest"]
+    if memory_path == "owned_lost_reply":
+        assert receipt["status"] == "runtime_unavailable", receipt
+        assert receipt["external_writes_performed"] is None
+        assert memory_provider.sync_calls == memory_provider.retrieve_calls == 1
+    elif memory_path == "owned":
+        assert receipt["status"] == "activated", receipt
+        assert receipt["exact_readback_verified"] is True
+        assert memory_provider.sync_calls == 1
+        assert memory_provider.retrieve_calls == 1
+    elif memory_path == "ordinary_validator":
+        assert receipt["status"] == "evidence_validation_required", receipt
+        assert receipt["external_writes_performed"] is False
+        assert memory_provider.sync_calls == memory_provider.retrieve_calls == 0
+    else:
+        assert receipt == {
         "ok": True,
         "schema_version": "turn_reward_memory_ingest_v0",
         "status": "activated",
@@ -3685,11 +3750,39 @@ def test_turn_run_once_codex_cli_wires_validated_reflection_post_settlement(
     assert len(observed) == 1
     assert observed[0]["host_result"]["reward_memory_reflection_json"] == reflection
     evidence = observed[0]["settlement_evidence"]
-    assert evidence["task_validation"]["reward_memory_reflection_validation"][
-        "status"
-    ] == "validated"
+    if memory_path != "ordinary_validator":
+        assert evidence["task_validation"]["reward_memory_reflection_validation"]["status"] == "validated"
+    else:
+        assert "reward_memory_reflection_validation" not in evidence["task_validation"]
     assert evidence["writeback"]["appended"] is True
     assert evidence["quota_spend"]["appended"] is True
+
+    # The terminal Turn remains immutable. Each resume can read the capability
+    # owner's durable receipt, without repeating provider IO or settlement.
+    journal_path = runtime / "goals" / "loopx-turn-fixture" / "turns" / (
+        payload["resume_turn_key"].removeprefix("sha256:") + ".json"
+    )
+    terminal_journal = journal_path.read_bytes()
+    for _ in range(2):
+        replay_output = io.StringIO()
+        with contextlib.redirect_stdout(replay_output):
+            replay_code = cli_main([*args, "--resume-turn-key", payload["resume_turn_key"]])
+        replay = json.loads(replay_output.getvalue())
+        assert replay_code == 0, replay
+        assert replay["replayed"] is True
+        assert not any(replay["effects"].values())
+        assert journal_path.read_bytes() == terminal_journal
+        assert replay["post_settlement"] == payload["post_settlement"]
+        if memory_path == "owned_lost_reply":
+            recovered = replay["post_settlement_recovery"]["results"]["reward-memory.outcome-ingest"]
+            assert recovered["status"] == "activated", recovered
+            assert recovered["deduplicated"] is True
+            assert recovered["sidecar_receipt_reused"] is True
+            assert recovered["external_writes_performed"] is False
+        else:
+            assert "post_settlement_recovery" not in replay
+        assert memory_provider.sync_calls == memory_provider.retrieve_calls == (0 if memory_path in {"callback", "ordinary_validator"} else 1)
+    assert len(observed) == (3 if memory_path == "owned_lost_reply" else 1)
 
 
 def test_turn_run_once_cli_resumes_session_from_recoverable_failed_turn(

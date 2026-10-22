@@ -830,7 +830,8 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
         assert agent.task_objective == "fixture task"
         assert agent.task_objective in agent.feedback_prompt
         assert agent.task_objective not in agent.workspace_instructions
-        assert "Continue researching" in agent.workspace_instructions
+        assert "The task defines candidate validity and acceptance" in agent.workspace_instructions
+        assert "continue seeking useful improvements" in agent.workspace_instructions
         assert agent.feedback_prompt.startswith(agent.workspace_instructions)
         raise RuntimeError("synthetic launch failure")
     monkeypatch.setattr(run, "run_agent", stop_before_solver)

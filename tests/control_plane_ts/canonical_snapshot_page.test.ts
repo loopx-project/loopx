@@ -11,6 +11,10 @@ import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/
 import {readCanonicalSnapshotFromStore, readCanonicalSnapshotPage, readCanonicalSnapshot,
   CANONICAL_SNAPSHOT_PAGE_BYTES, CANONICAL_SNAPSHOT_LOCAL_BYTES} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
+import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+import {goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument} from "../../loopx/control_plane/goals/acceptance_contract.ts";
+import {reviseGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
 import {collectSnapshot, registerCanonicalSnapshotConformance, seedSnapshot, snapshotRequest, snapshotFixture} from "./canonical_snapshot_conformance.ts";
 
 async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
@@ -31,6 +35,45 @@ for (const kind of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" 
     assert.equal(result.pages.length, 1);
     assert.equal(result.todos.length, source.expected_initial_todo_count);
     assert.equal(result.leases.length, source.expected_current_lease_count);
+  });
+  test(`${kind}: acceptance read reuse ends at the loaded provider head`, async t => {
+    const {store} = await fixture(t, kind);
+    const todo = {todo_id: "todo_work", role: "agent", status: "open", done: false,
+      text: "Deliver the reviewed requirement", task_class: "advancement_task", archive_state: "active"};
+    const document = normalizeGoalAcceptanceDocument({objective: "Verify the reviewed requirement", non_goals: [],
+      criteria: [{id: "criterion-a", description: "The check passes", validation_argv: ["true"]}],
+      bindings: [{todo_id: todo.todo_id, criterion_ids: ["criterion-a"]}]});
+    const acceptance = {schema_version: "loopx_goal_acceptance_v0", enabled: true, revision: 1,
+      digest: canonicalAuthoritySha256(document), document, verification: null,
+      bindings: [{todo_id: todo.todo_id, todo_semantic_digest: goalAcceptanceTodoDigest(todo),
+        revision: 1, criterion_ids: ["criterion-a"], confirmed_by: "owner"}]};
+    await seedSnapshot(store, authorityProjectionFixture("goal-a", [todo], [], "native", {goal_acceptance: acceptance}));
+    const before = await readCanonicalSnapshotFromStore(snapshotRequest(), store);
+    assert.equal(((before.goal_acceptance_work_guards as JsonObject).todo_work as JsonObject).allowed, true);
+    const current = await store.loadAuthority();
+    assert.equal(current.status, "loaded");
+    if (current.status !== "loaded") throw new Error("synthetic provider head missing");
+    const changed = authorityProjectionFixture("goal-a", [{...todo, text: "A different requirement"}], [], "native", {goal_acceptance: acceptance});
+    const commit = await store.commitAuthority({operation_id: "change-requirement",
+      expected_provider_revision: current.provider_revision, next_projection: changed, events: [], receipts: []});
+    assert.equal(commit.status, "applied");
+    const after = await readCanonicalSnapshotFromStore(snapshotRequest(), store);
+    const guard = (after.goal_acceptance_work_guards as JsonObject).todo_work as JsonObject;
+    assert.equal(guard.allowed, false);
+    assert.equal(guard.reason_code, "goal_acceptance_stale");
+    assert.notDeepEqual(after.snapshot, before.snapshot);
+  });
+  test(`${kind}: objective-only snapshots retain the current Goal direction`, async t => {
+    const {store} = await fixture(t, kind);
+    const head = authorityProjectionFixture("goal-a", [], [], "native");
+    const direction = {objective: "Maintain the service and its recovery path", reason: "Bootstrap is complete", source_ref: "message:owner"};
+    head.goal_objective = reviseGoalObjective(head, null, "Bootstrap the service", ["agent-a"], direction);
+    await seedSnapshot(store, head);
+    const result = await readCanonicalSnapshotFromStore(snapshotRequest(), store);
+    const contract = (result.metadata as JsonObject).goal_acceptance_contract as JsonObject;
+    assert.equal((contract.goal_objective as JsonObject).objective, direction.objective);
+    assert.equal(contract.criteria, undefined, "the Goal direction does not enable optional acceptance checks");
+    assert.equal(result.goal_acceptance_work_guards, undefined);
   });
   test(`${kind}: UTF-8 byte pages retain records beyond the old 2 MiB RPC ceiling`, async t => {
     const {store} = await fixture(t, kind);

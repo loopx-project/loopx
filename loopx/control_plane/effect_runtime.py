@@ -786,7 +786,8 @@ def _request_with_info(
                 raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from exc
         try:
             response = json.loads(b"".join(chunks).split(b"\n", 1)[0])
-        except (json.JSONDecodeError, IndexError):
+        except (ValueError, RecursionError):
+            # Decoder limits can fail after commit; they cannot authorize a retry.
             raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from None
         if isinstance(response, dict) and "result_ref" in response:
             response = _read_local_snapshot_response(
@@ -832,7 +833,7 @@ def _read_local_snapshot_response(
         if not isinstance(result, dict):
             raise ValueError("invalid local snapshot response")
         return result
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise EffectRuntimeResponseAmbiguous(method, timeout=timeout) from exc
 
 

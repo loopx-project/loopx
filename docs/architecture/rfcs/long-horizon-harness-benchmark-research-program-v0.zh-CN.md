@@ -946,6 +946,17 @@ heartbeat、Turn 和 Goal 执行，并保留原生验证。合成 Harbor conform
 阻塞状态，并披露独立的规划会话；合成任务通过不能证明与交互式 `$loopx` 启动
 等价，也不能证明规划效果提升。
 
+当前 adapter 提示边界将默认 native EdgeBench wrapper 收敛到任务、工具和评测
+context，并移除共享 benchmark 规划策略前缀。保留简短的目标与完成条件提示：
+持续进行有价值的优化；实现、测试通过和提交本身不代表目标完成。不再重复通用的
+停止、预算耗尽或 blocker 提醒；任务自身要求和 Core 首次交付契约保持不变；可选 native Goal
+续跑不再额外要求提交前先证明改进。Native 提交提示在周期采样间隔为正或为零时
+都不包含周期采样说明；原间隔配置、host 采样与选择行为不变。保留手动/终态提交、
+结果与源码身份绑定和可恢复性提示。
+Blind 与 best-only 提示按已解析的 runner 间隔保留自动采样说明，不扩大各模式声明的反馈范围。
+这是新 run 的行为变化，须独立于反馈模式固定版本。提示交付和读回只验证工程边界；能否更早
+获得有用反馈、能否改善结果，仍是尚未验证的 E3 研究问题。
+
 ### 11.3 必需的 delivery slice
 
 每个 benchmark engineering PR 或 contributor task 都应声明一个有界 slice，包含：

@@ -619,3 +619,34 @@ LoopX 控制台严格遵循 **Human-in-the-Loop（人类介入）安全模型**�
 1. **先预览，后确认**：任何会写入 Goal 状态、修改配置或执行外部变更的指令，都会先在界面弹出 **Typed Action 预览卡片**，明确展示影响范围与待填参数；
 2. **用户点击确认后才下发**：杜绝 Agent 自行执行未授权的高危操作；
 3. **操作回执（Receipt）**：每次操作执行完毕均会生成不可篡改的带时间戳回执，随时可溯源。
+
+
+### 键盘快速导航 / Keyboard quick navigation
+
+按 **⌘K / Ctrl-K**，或点击侧栏底部的「快速导航」，按名称或 ID 搜索目标，
+以及当前目标的已加载任务、成果与已有操作预览。使用 ↑ / ↓ 选择，Enter 打开，
+Esc 关闭并返回原焦点。中文输入法的确认键不会触发导航。
+
+Press **⌘K / Ctrl-K**, or choose **Quick navigation** at the bottom of the
+sidebar. Search Goals and the current Goal's loaded tasks, results and existing
+reviewable previews by name or ID. Use ↑ / ↓ to select, Enter to open, and Esc
+to close and restore focus. IME confirmation does not navigate.
+
+导航使用当前来源的投影，不创建预览、不发送 Agent 指令，也不执行操作。
+已有预览仍需在原详情中确认。只读来源只提供浏览；加载中或不可用的目标会明确标注。
+搜索不是完整历史索引；未加载的历史任务和其他结果仍通过现有任务、文件入口查看。
+
+Navigation uses the current source projection. It creates no preview, sends no
+Agent instruction and executes no action. Existing previews still require their
+normal confirmation. Read-only sources offer browsing only; loading or unavailable
+Goals are labelled. This is not a full history index: use the existing Tasks and
+Files views for history and additional results that are not currently loaded.
+
+浏览目标概览、任务或文件时不再提前准备聊天会话；打开 Chat 或主动发送消息后，
+仍由原有会话 owner 准备会话。
+
+Browsing Goal Overview, Tasks or Files no longer prepares a chat session in the
+background. Opening Chat or explicitly sending a message still prepares it
+through the existing session owner.
+
+![快速导航：中文窄屏](../assets/personal-workspace/command-palette-narrow.png)

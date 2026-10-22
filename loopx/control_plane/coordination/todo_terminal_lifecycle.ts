@@ -96,6 +96,9 @@ type TodoRole = typeof TODO_ROLES[number];
 type CompletionIdentitySource = typeof COMPLETION_IDENTITY_SOURCES[number];
 
 interface CoordinationTodoTerminalLifecycleBaseInput {
+  /** Captured task digest. Null refuses fresh completion without source proof;
+   * omission preserves unscoped callers. Historical receipts recover first. */
+  readonly expected_todo_text_sha256?: string | null;
   readonly review_basis?: {readonly provider_revision: string; readonly registry_sha256: string};
   /** Presence selects source-bound validation; null means no effect issued yet. */
   readonly validation_source_provider_revision?: string | null;
@@ -368,6 +371,10 @@ function validateSuccessorSemantics(
 function normalizeTerminalInput(
   raw: CoordinationTodoTerminalLifecycleInput,
 ): CoordinationTodoTerminalLifecycleInput {
+  if (raw.expected_todo_text_sha256 != null &&
+      (typeof raw.expected_todo_text_sha256 !== "string" || !BARE_SHA256_PATTERN.test(raw.expected_todo_text_sha256))) {
+    throw new AuthorityStoreProtocolError("expected Todo text commitment must be a SHA-256 digest");
+  }
   if (raw.review_basis !== undefined) {
     const basis = canonicalAuthorityObject(raw.review_basis, "terminal review basis");
     if (Object.keys(basis).some(key => !["provider_revision", "registry_sha256"].includes(key)) ||
@@ -500,6 +507,11 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     // command binds both its approved snapshot and its complete prose intent.
     ...(input.review_basis === undefined ? {} : {review_basis: input.review_basis,
       note: input.note, evidence: input.evidence, reason: input.reason}),
+    // Null means the native Turn lacks source proof. Preserve the historical
+    // fingerprint so an accepted old receipt can still recover before refusal.
+    ...(input.expected_todo_text_sha256 == null ? {} : {
+      expected_todo_text_sha256: input.expected_todo_text_sha256,
+    }),
     ...(input.user_update === undefined ? {} : {user_update: {
       patch: input.user_update.patch, clear_fields: input.user_update.clear_fields,
       planning_intent: input.user_update.planning_intent ?? {},
@@ -1295,6 +1307,20 @@ export async function executeCoordinationTodoTerminalLifecycle(
       {},
       "decision_rejection",
     );
+  }
+  // Exact operation receipts above recover historical effects before this
+  // fresh-source check. The provider CAS below also prevents a source change
+  // between this comparison and the terminal write.
+  if (input.expected_todo_text_sha256 === null) {
+    return terminalFailure("todo_text_source_unavailable",
+      "Turn completion lacks its admitted full task source; reread the task and run a fresh Turn",
+      {todo_id: input.todo_id}, "decision_rejection");
+  }
+  if (input.expected_todo_text_sha256 !== undefined &&
+      (typeof todo.text !== "string" || createHash("sha256").update(todo.text, "utf8").digest("hex") !== input.expected_todo_text_sha256)) {
+    return terminalFailure("todo_text_changed",
+      "Todo requirements changed after Turn admission; reread the task and run a fresh Turn",
+      {todo_id: input.todo_id}, "decision_rejection");
   }
   if (todo.archive_state !== "active") {
     return terminalFailure(

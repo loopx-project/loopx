@@ -674,6 +674,7 @@ class Delegations:
             "authority": {"ready": True, "reason": None},
             "preview": preview, "acceptance": acceptance["plan"],
             "validation_files_current": acceptance["files_current"],
+            "lane": {"state": turn_lane_liveness(self._lane_target(binding))["state"]},
         })
 
     def start(self, binding_id: str, operation_id: str, brief: dict,
@@ -727,18 +728,22 @@ class Delegations:
                 self._spawn(operation_id)
         return self.read(operation_id)
 
-    def _spawn(self, operation_id: str) -> None:
-        # No inherited stdio pipes: closing the conversation cannot cancel or
-        # hang this bounded execution. The worker owns a kernel single-flight lock.
+    def _spawn(self, operation_id: str, *, prepared_source_request_id: str | None = None) -> None:
+        # Detached stdio survives requester exit; the worker owns its single-flight lock.
         operation_id = require_operation_id(operation_id)
+        precondition = [] if prepared_source_request_id is None else ["--prepared-source-request-id", prepared_source_request_id]
         subprocess.Popen([*_python_module_command("loopx.collaboration_mcp"),
             "--delegation-action", "worker", "--runtime-root", str(self.root),
             "--registry", str(self.registry), "--goal-id", self.goal_id,
             "--agent-id", self.agent_id, "--execution-config", str(self.config), "--operation-id=" + operation_id,
+            *precondition,
         ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True, close_fds=True, env=_pinned_release_environment())
 
-    def resume(self, operation_id: str) -> dict:
+    def resume(self, operation_id: str, *, prepared_source_request_id: str | None = None) -> dict:
+        """Host-only prepared source CAS is checked under both worker locks.
+        Uncertain Host recovery stays explicit; operator/MCP same-Turn behavior is retained.
+        """
         path = self.path(operation_id)
         if self._read_stop(path) is not None:
             raise ValueError(DELEGATION_STOPPED_MESSAGE)
@@ -748,14 +753,18 @@ class Delegations:
             ):
                 row = _read(path)
                 binding = self._bound(row)
+                if prepared_source_request_id is not None and row["identity"].get("source_request_id") != prepared_source_request_id:
+                    raise ValueError("delegation original source request changed")
                 if row["status"] == "stopped":
                     raise ValueError(DELEGATION_STOPPED_MESSAGE)
-                if row["status"] == "rejected":
+                prepared_replay = prepared_source_request_id is not None
+                if row["status"] == "rejected" and not prepared_replay:
                     try:
                         delegation_validation.recover_validated_settlement(self, path, row, binding)
                     except DelegationFenced:
                         raise ValueError(DELEGATION_STOPPED_MESSAGE) from None
-                should_spawn = row["status"] not in DELEGATION_TERMINAL_STATUSES
+                should_spawn = (row["status"] == "prepared" if prepared_replay
+                                else row["status"] not in DELEGATION_TERMINAL_STATUSES)
                 if should_spawn:
                     self.binding(
                         row["identity"]["binding"]["id"], require_active=True
@@ -765,7 +774,11 @@ class Delegations:
             # sufficient; spawning another process cannot advance settlement.
             return self.read(operation_id)
         if should_spawn:
-            self._spawn(operation_id)
+            if prepared_source_request_id is None:
+                self._spawn(operation_id)
+            else:
+                # Carry prepared CAS across startup; a delayed child only observes advanced work.
+                self._spawn(operation_id, prepared_source_request_id=prepared_source_request_id)
         return self.read(operation_id)
 
     def wait(self, operation_id: str) -> dict:
@@ -1343,13 +1356,17 @@ class Delegations:
     def _accepted(self, binding: dict) -> dict:
         return delegation_results.accepted_result(self, binding)
 
-    def execute(self, operation_id: str) -> None:
+    def execute(self, operation_id: str, *, prepared_source_request_id: str | None = None) -> None:
         path = self.path(operation_id)
-        # Status readers briefly acquire this same kernel lock. Wait for that
-        # observation to finish before deciding another worker owns the operation.
-        # The existing bounded mutation policy still excludes concurrent workers.
+        # Wait through brief status probes under the bounded mutation policy;
+        # the same kernel lock still excludes concurrent workers.
         with exclusive_file_lock(path):
             row = _read(path)
+            if prepared_source_request_id is not None:
+                if row["identity"].get("source_request_id") != prepared_source_request_id:
+                    raise ValueError("delegation original source request changed")
+                if row["status"] != "prepared":
+                    return
             if row["status"] in DELEGATION_TERMINAL_STATUSES:
                 return
             binding = self._bound(row)
@@ -1936,7 +1953,10 @@ def main():
     parser.add_argument("--delegation-action", choices=["worker", "validate"],
                         help="Run a host-owned delegation action instead of serving MCP")
     parser.add_argument("--operation-id", help="Original delegation operation identity")
+    parser.add_argument("--prepared-source-request-id", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.prepared_source_request_id is not None and args.delegation_action != "worker":
+        parser.error("prepared source precondition requires a delegation worker")
     if args.delegation_action or args.operation_id:
         if not (args.delegation_action and args.operation_id and args.execution_config):
             parser.error("delegation actions require --execution-config and --operation-id")
@@ -1955,7 +1975,7 @@ def main():
             service._stop_signal = install_worker_stop_signal(
                 service._stop_path(service.path(args.operation_id)))
             try:
-                service.execute(args.operation_id)
+                service.execute(args.operation_id, prepared_source_request_id=args.prepared_source_request_id)
             except LockAcquireTimeoutError:
                 pass  # Another worker still owns the operation after the bounded wait.
             except DelegationStopRequested:

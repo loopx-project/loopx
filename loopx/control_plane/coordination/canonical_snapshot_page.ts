@@ -4,7 +4,6 @@ import {configuredGoalChecks} from "../goals/acceptance_contract.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {MAX_LOCAL_SNAPSHOT_BYTES} from "../effect_runtime_snapshot.ts";
-import {projectGoalAcceptanceWorkGuards} from "../goals/acceptance_contract.ts";
 import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/projection_delivery.ts";
 import {authorityStoreSourceAuthority, type AuthorityStore} from "./authority_store.ts";
 import {canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
@@ -95,7 +94,7 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
     after.snapshot.provider_revision === head.provider_revision && after.snapshot.cursor === head.cursor &&
     after.snapshot.query_sha256 === query,
   "canonical_snapshot_changed", "canonical snapshot changed; restart the complete read, never append a newer page");
-  const {projection, todoReadModel: readModel, leaseIndex: leases, acceptance, oracleObservationBasis} =
+  const {projection, todoReadModel: readModel, leaseIndex: leases, acceptance, oracleObservationBasis, projectWorkGuards} =
     canonicalTodoCollection(head.head, goal, input.include_leases);
   const snapshot: Snapshot = {goal_id: goal, store_identity: identity.store_identity,
     provider_revision: head.provider_revision, cursor: head.cursor, query_sha256: query,
@@ -128,7 +127,7 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
   let completeGuards: JsonObject | null = null;
   if (after === null && completeBytes > 0) {
     completeGuards = configuredGoalChecks(acceptance)
-      ? projectGoalAcceptanceWorkGuards(head.head, goal, projection.todo_ids) : {};
+      ? projectWorkGuards(projection.todo_ids) : {};
     const complete = result(projection.todo_ids, leases?.lease_todo_ids ?? [], completeGuards);
     if (bytes(complete) <= Math.min(completeBytes, CANONICAL_SNAPSHOT_LOCAL_BYTES)) return complete;
   }
@@ -137,7 +136,7 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
   const todoIds = projection.todo_ids.slice(todoStart, todoStart + CANONICAL_SNAPSHOT_PAGE_ITEMS);
   const leaseIds = leases?.lease_todo_ids.slice(leaseStart, leaseStart + CANONICAL_SNAPSHOT_PAGE_ITEMS - todoIds.length) ?? [];
   const guards = completeGuards ?? (configuredGoalChecks(acceptance)
-    ? projectGoalAcceptanceWorkGuards(head.head, goal, todoIds) : {});
+    ? projectWorkGuards(todoIds) : {});
   const page = (size: number) => result(todoIds.slice(0, size),
     leaseIds.slice(0, Math.max(0, size - todoIds.length)), guards);
   const available = todoIds.length + leaseIds.length;
