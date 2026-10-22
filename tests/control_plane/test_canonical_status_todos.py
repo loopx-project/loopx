@@ -160,8 +160,7 @@ def test_global_status_keeps_unmigrated_goal_visible_without_hiding_canonical_wo
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"schema_version": 1, "goals": [goal, unmigrated],
                                    "common_runtime_root": str(runtime)}))
-    payload = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-                             scan_roots=[], limit=5, include_public_boundary_scan=False)
+    payload = collect_status(registry_path=registry, runtime_root_override=str(runtime), limit=5)
     items = {item["goal_id"]: item for item in payload["attention_queue"]["items"]}
     assert items[goal["id"]]["agent_todos"]["items"][0]["todo_id"] == "todo_canonical"
     refused = items["legacy-goal"]
