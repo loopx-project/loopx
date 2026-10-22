@@ -595,6 +595,18 @@ From top to bottom, one reading column with an optional right rail:
 4. **Owner rail.** What needs the owner sits beside the hero as a hairline
    list: glyph, the decision in owner language, relative age, an arrow that
    opens it in place. A quiet Goal shows no empty rail.
+   Do not repeat the same work in a permanently visible task rail. Overview
+   shows up to three compact tasks per responsible owner; the group summary
+   retains its task count and significant state, including blocked work.
+   Expand the remaining tasks in place or open All work for search, filters,
+   completed history and activity. Direct task links reveal their selected row.
+   Read-only acceptance observations begin as one disclosure with gap/guard
+   counts and an explicit partial or unknown state; full reasons, requirements
+   and evidence remain inside. Zero listed gaps never means Goal acceptance.
+   不要在常驻任务侧栏重复展示主栏的工作。概览每位负责人默认最多展示三条紧凑任务，
+   组摘要保留任务数和受阻等重要状态；其余任务就地展开，搜索、筛选、已完成历史与活动
+   从“全部工作”打开。任务直链自动展开选中行。只读验收观察默认折叠，摘要显示缺口、
+   限制数量及“部分观测”或“未知”；完整原因、要求与证据保留在正文，零缺口不等于验收通过。
 5. **Folded composer.** Reading views fold the composer to one line that
    expands on request; conversation views keep it open.
 
