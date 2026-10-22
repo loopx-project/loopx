@@ -396,6 +396,15 @@ def _error_tail(exc: BaseException) -> dict[str, str]:
     return {"error_kind": type(exc).__name__, "error": " ".join(str(exc).split())[:500]}
 
 
+def _phase_timeout(timeout: float | None, deadline: float | None) -> tuple[float | None, bool]:
+    """Keep the phase clock absolute across preparation and launch admission."""
+    if deadline is not None:
+        remaining = max(0, deadline - time.time())
+        if timeout is None or remaining <= timeout:
+            return remaining, True
+    return timeout, False
+
+
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
@@ -439,6 +448,7 @@ def run_once(env: dict[str, str]) -> dict:
         "timed_out": False,
     }
     session_wake = None
+    phase_work_deadline = None
     checkpoint_context = ExitStack()
     pending_path = (
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
@@ -451,6 +461,8 @@ def run_once(env: dict[str, str]) -> dict:
             if remaining <= PHASE_WORK_RESERVE_SECONDS:
                 receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
                 return receipt
+            if execution.mode == "heartbeat":
+                phase_work_deadline = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - PHASE_WORK_RESERVE_SECONDS
             execution = replace(
                 execution, timeout_seconds=(remaining - PHASE_WORK_RESERVE_SECONDS if execution.timeout_seconds is None
                                              else min(execution.timeout_seconds, remaining - PHASE_WORK_RESERVE_SECONDS))
@@ -516,6 +528,9 @@ def run_once(env: dict[str, str]) -> dict:
             from benchmark.runtime.checkpoint import capture_before_replan
 
             body = capture_before_replan(env, receipt, body)
+        if phase_work_deadline is not None and time.time() >= phase_work_deadline:
+            receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
+            return receipt
         with (wake / "stderr.log").open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr)
@@ -547,8 +562,10 @@ def run_once(env: dict[str, str]) -> dict:
                         timeout = (None if execution.timeout_seconds is None
                                    else execution.timeout_seconds + allowance)
                     if checkpoint_wake.listener is not None:
+                        timeout, phase_limited = _phase_timeout(timeout, phase_work_deadline)
                         receipt["return_code"] = checkpoint_wake.run(
-                            execution, body, wake, session_wake, stdout, stderr, timeout)
+                            execution, body, wake, session_wake, stdout, stderr, timeout,
+                            phase_limited=phase_limited)
                         receipt["ok"] = receipt["return_code"] == 0
                     else:
                         with child_process(command, env=env, stdout=stdout, stderr=stderr,
@@ -556,7 +573,15 @@ def run_once(env: dict[str, str]) -> dict:
                                 check_current_launch=heartbeat_launch_check(env, session_wake)) as process:
                             if session_wake is not None:
                                 receipt["host_invoked"] = True
-                            process.communicate(input=body, timeout=timeout)
+                            timeout, phase_limited = _phase_timeout(timeout, phase_work_deadline)
+                            try:
+                                process.communicate(input=body, timeout=timeout)
+                            except subprocess.TimeoutExpired:
+                                # This specific wait selected the phase cap. A
+                                # renderer/provider/independent timeout is not it.
+                                if phase_limited:
+                                    receipt["budget_exhausted"] = True
+                                raise
                             receipt["return_code"] = process.returncode
                             receipt["ok"] = process.returncode == 0
                 if stage == "plan" and receipt["ok"]:
@@ -608,7 +633,8 @@ def run_once(env: dict[str, str]) -> dict:
                 shutil.copytree(
                     home / "sessions", log_root.parent / "sessions", dirs_exist_ok=True
                 )
-            if execution.mode == "heartbeat" and stage == "execute" and not receipt["ok"]:
+            if (execution.mode == "heartbeat" and stage == "execute"
+                    and not receipt["ok"] and not receipt.get("budget_exhausted")):
                 receipt["host_failure"] = heartbeat_host_failure(wake, receipt)
             (wake / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt

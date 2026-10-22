@@ -183,7 +183,7 @@ class CheckpointWake:
                 "deadline_epoch_ms": window * 1000,
             }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
 
-    def run(self, execution, body, wake, session_wake, stdout, stderr, timeout):
+    def run(self, execution, body, wake, session_wake, stdout, stderr, timeout, *, phase_limited=False):
         from .worker import child_process, heartbeat_launch_check, native_command
         from .sessions import BenchmarkSessionWake
 
@@ -192,6 +192,8 @@ class CheckpointWake:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                if phase_limited:
+                    self.receipt["budget_exhausted"] = True
                 raise subprocess.TimeoutExpired("checkpoint source wake", timeout)
             command = native_command(launch_env, execution, "execute", wake, session_wake)
             continuation = None
@@ -205,6 +207,8 @@ class CheckpointWake:
                 while process.poll() is None:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        if phase_limited:
+                            self.receipt["budget_exhausted"] = True
                         raise subprocess.TimeoutExpired(command, timeout)
                     if not select.select([self.listener], [], [], min(.1, remaining))[0]:
                         continue
