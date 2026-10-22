@@ -37,6 +37,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 from loopx.capabilities.explore.todo_branch_plan import (  # noqa: E402
     MAX_BRANCH_WIDTH,
@@ -387,6 +388,8 @@ def check_cli_gate_states() -> None:
             + "\n",
             encoding="utf-8",
         )
+        for entry in goal_entries:
+            import_fixture_authority(registry, entry["id"])
 
         def run_cli(*extra_args: str, fmt: str = "json", check: bool = True):
             result = subprocess.run(
