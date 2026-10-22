@@ -79,6 +79,10 @@ export type ChatCapabilities = {
     streaming: boolean;
     resume: boolean;
     interrupt: boolean;
+    execution_profile?: string | null;
+    unavailable_reason?: string | null;
+    executable?: string | null;
+    environment_variable?: string | null;
   }>;
 };
 

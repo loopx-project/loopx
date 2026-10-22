@@ -29,6 +29,7 @@ import {prReviewAgentOrderScenario} from "./personal-workspace-browser/pr-review
 import {conversationImageRequestScenario} from "./personal-workspace-browser/conversation-image-request.mjs";
 import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/external-evidence-readback.mjs";
 import {exploreCompositionOwnerScenario} from "./personal-workspace-browser/explore-composition-owner.mjs";
+import {dshHostReadinessScenario} from "./personal-workspace-browser/dsh-host-readiness.mjs";
 // Isolated browser acceptance scenarios for the personal Agent workspace.
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -145,6 +146,7 @@ scenarioCatalog.push(goalSuggestionsLiveScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 scenarioCatalog.push(completedHistoryIsolationScenario);
 scenarioCatalog.push(agentModelSelectionScenario);
+scenarioCatalog.push(dshHostReadinessScenario);
 const scenarios = requestedScenario
   ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
   : selectScenarioShard(scenarioCatalog, process.env.LOOPX_PERSONAL_WORKSPACE_SHARD);
