@@ -53,6 +53,8 @@ export function DshHostReadiness({
           available: adapter.available,
           unavailable_reason: adapter.unavailable_reason,
           execution_profile: adapter.execution_profile,
+          execution_profile_details: adapter.execution_profile_details,
+          unavailable_remediation: adapter.unavailable_remediation,
         })),
       });
     } catch {
@@ -113,9 +115,13 @@ export function DshHostReadiness({
         return {
           tone: "warning",
           title: zh ? "执行配置需要修正" : "Execution profile needs correction",
-          detail: zh
-            ? "当前配置未通过检查。在下方管家设置中修正后重新检查。"
-            : "The current profile failed validation. Correct it in Steward settings below, then recheck.",
+          detail: managed.repair.kind === "environment_variable"
+            ? (zh
+              ? `后台 Turn 的 ${managed.repair.variable} 未通过检查。请在启动 LoopX 服务的环境中修正或清除该变量，然后重启并重新检查；下方管家设置只影响会话默认值。`
+              : `The background Turn rejected ${managed.repair.variable}. Correct or clear it in the LoopX service environment, then restart and recheck. Steward settings only change session defaults.`)
+            : (zh
+              ? `后台 Turn 的 ${managed.repair.setting} 配置来自服务启动参数。请在启动服务的位置修正后重启并重新检查；管家设置不能修改它。`
+              : `The background Turn's ${managed.repair.setting} comes from service startup configuration. Correct it where the service starts, then restart and recheck; Steward settings cannot change it.`),
         };
       case "not_observed":
         return {

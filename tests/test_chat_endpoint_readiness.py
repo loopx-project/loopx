@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import loopx.chat_endpoint_catalog as chat_endpoint_catalog
+from loopx.control_plane.turn_driver import host_binding
 from loopx.chat_endpoint_catalog import builtin_chat_endpoints
 
 
@@ -39,3 +41,27 @@ def test_present_requirements_report_available_without_a_reason(monkeypatch, tmp
     assert rows["openai-api"]["available"] is True
     assert rows["openai-api"]["environment_variable"] == "OPENAI_API_KEY"
     assert "unavailable_reason" not in rows["openai-api"]
+
+
+def test_managed_profile_refusal_exposes_its_real_configuration_source(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "fixture-secret")
+    monkeypatch.setenv("LOOPX_TURN_REASONING_EFFORT", "fixture")
+    monkeypatch.setattr(
+        host_binding,
+        "dsh_runtime_importable",
+        lambda *args, **kwargs: True,
+    )
+
+    row = chat_endpoint_catalog.managed_host_capability(tmp_path)
+
+    assert row["unavailable_remediation"] == [
+        "correct_execution_profile",
+        "select_individual_host",
+    ]
+    assert row["execution_profile_details"]["reasoning_effort_env_var"] == (
+        "LOOPX_TURN_REASONING_EFFORT"
+    )
+    assert row["credential_env"] == "DEEPSEEK_API_KEY"
+    assert "fixture-secret" not in str(row)

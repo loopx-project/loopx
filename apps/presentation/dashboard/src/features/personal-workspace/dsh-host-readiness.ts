@@ -7,12 +7,22 @@ export type DshManagedAdapter = {
   available: boolean;
   unavailable_reason?: string | null;
   execution_profile?: string | null;
+  execution_profile_details?: {
+    reasoning_effort_env_var?: string | null;
+  } | null;
+  unavailable_remediation?: string[] | null;
 };
 
 export type DshManagedReadiness =
   | {kind: "ready"; profile: string | null; reason: null}
-  | {kind: "needs_runtime" | "needs_credential" | "needs_configuration" | "unknown";
+  | {kind: "needs_runtime" | "needs_credential" | "unknown";
       profile: string | null; reason: string | null}
+  | {kind: "needs_configuration";
+      profile: string | null;
+      reason: string | null;
+      repair:
+        | {kind: "environment_variable"; variable: string}
+        | {kind: "service_startup"; setting: string};}
   | {kind: "not_observed"; profile: null; reason: null};
 
 export type DshInteractiveReadiness = {
@@ -39,7 +49,31 @@ export function deriveDshManagedReadiness(
     || reason === "invalid_output_token_limit"
     || reason === "unsupported_execution_host"
     || reason === "unsupported_operation_sandbox") {
-    return {kind: "needs_configuration", profile, reason};
+    if (reason === "invalid_reasoning_effort") {
+      return {
+        kind: "needs_configuration",
+        profile,
+        reason,
+        repair: {
+          kind: "environment_variable",
+          variable: adapter.execution_profile_details?.reasoning_effort_env_var?.trim()
+            || "LOOPX_TURN_REASONING_EFFORT",
+        },
+      };
+    }
+    return {
+      kind: "needs_configuration",
+      profile,
+      reason,
+      repair: {
+        kind: "service_startup",
+        setting: reason === "invalid_output_token_limit"
+          ? "max-token"
+          : reason === "unsupported_operation_sandbox"
+          ? "operation sandbox"
+          : "execution host",
+      },
+    };
   }
   return {kind: "unknown", profile, reason};
 }

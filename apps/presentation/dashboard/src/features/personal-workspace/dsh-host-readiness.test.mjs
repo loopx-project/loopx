@@ -41,6 +41,42 @@ test("an unknown refusal is never presented as a known repair", () => {
   });
 });
 
+test("configuration refusals name the source that can actually repair them", () => {
+  assert.deepEqual(deriveDshManagedReadiness([{
+    ...missingRuntime,
+    unavailable_reason: "invalid_reasoning_effort",
+    execution_profile_details: {
+      provider: "deepseek-official",
+      provider_source: "product_default",
+      provider_env_var: "",
+      model: "deepseek-flash",
+      model_source: "product_default",
+      model_env_var: "",
+      reasoning_effort: "bad",
+      reasoning_effort_source: "env_override",
+      reasoning_effort_env_var: "LOOPX_TURN_REASONING_EFFORT",
+      reasoning_effort_supported: false,
+    },
+  }]), {
+    kind: "needs_configuration",
+    profile: "deepseek-flash@high",
+    reason: "invalid_reasoning_effort",
+    repair: {
+      kind: "environment_variable",
+      variable: "LOOPX_TURN_REASONING_EFFORT",
+    },
+  });
+  assert.deepEqual(deriveDshManagedReadiness([{
+    ...missingRuntime,
+    unavailable_reason: "invalid_output_token_limit",
+  }]), {
+    kind: "needs_configuration",
+    profile: "deepseek-flash@high",
+    reason: "invalid_output_token_limit",
+    repair: {kind: "service_startup", setting: "max-token"},
+  });
+});
+
 test("interactive DSH binding counts Goals and never implies liveness", () => {
   assert.deepEqual(deriveDshInteractiveReadiness([
     {goalId: "goal-a", boundHostSurfaces: ["codex-app", "deepseek-harness-native"]},

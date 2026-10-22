@@ -23,6 +23,7 @@ from .control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     managed_executor_binding,
 )
+from .control_plane.turn_driver.execution_profile import managed_execution_profile
 from .kiro_cli_goal_mode import (
     KIRO_CLI_CHAT_ADAPTER_KIND,
     KIRO_CLI_CHAT_AGENT_ID,
@@ -39,14 +40,16 @@ def managed_host_capability(runtime_root: Path | None = None) -> dict[str, Any]:
     transport really does not offer them.
     """
 
+    operator_environ = operator_provider_environ(runtime_root)
     binding = managed_executor_binding(
         MANAGED_TURN_HOST,
         # A credential stored from a product surface authenticates this host,
         # so the availability verdict has to be resolved against the machine
         # store and not only against the service environment.
-        environ=operator_provider_environ(runtime_root),
+        environ=operator_environ,
     )
-    profile = binding.get("execution_profile") or {}
+    profile = binding.get("execution_profile") or None
+    profile_details = managed_execution_profile(operator_environ)
     return {
         "agent_id": MANAGED_TURN_HOST,
         "display_name": "DeepSeek Harness (managed)",
@@ -62,6 +65,13 @@ def managed_host_capability(runtime_root: Path | None = None) -> dict[str, Any]:
         # frontend's execution chip honest about the boundary.
         "sandbox_mode": STEWARD_SEGMENT_ENV["DSH_PERMISSION_MODE"],
         "execution_profile": profile,
+        # The UI needs the resolved field sources to point at the real repair
+        # owner. In particular, a bad Turn reasoning effort is an environment
+        # problem for the managed executor, not a Steward session default.
+        "execution_profile_details": profile_details,
+        "credential_env": binding.get("credential_env"),
+        "endpoint_env": binding.get("endpoint_env"),
+        "unavailable_remediation": binding.get("unavailable_remediation", []),
         "output_token_budget": binding.get("output_token_budget"),
         "source": "builtin",
     }

@@ -29,6 +29,18 @@ export const dshHostReadinessScenario = {
       resume: true,
       interrupt: false,
       execution_profile: "deepseek-flash@high",
+      execution_profile_details: {
+        provider: "deepseek-official",
+        provider_source: "product_default",
+        provider_env_var: "",
+        model: "deepseek-flash",
+        model_source: "product_default",
+        model_env_var: "",
+        reasoning_effort: "bad",
+        reasoning_effort_source: "env_override",
+        reasoning_effort_env_var: "LOOPX_TURN_REASONING_EFFORT",
+        reasoning_effort_supported: false,
+      },
       unavailable_reason: unavailableReason,
     });
     const session = await openWorkspacePage(browser, url, {
@@ -66,11 +78,28 @@ export const dshHostReadinessScenario = {
       assert.equal(await page.getByTestId("dsh-native-binding").getByText("已绑定 1 个 Goal", {exact: true}).count(), 1);
       await page.screenshot({path: resolve(outputDir, "dsh-host-readiness-unavailable.png"), animations: "disabled"});
 
+      api.runtimeAgentsOverride = [adapter(false, "invalid_reasoning_effort")];
+      await readiness.getByRole("button", {name: "重新检查 DSH 状态"}).click();
+      await managed.getByText("执行配置需要修正", {exact: true}).waitFor();
+      const configurationText = await managed.innerText();
+      assert.match(configurationText, /LOOPX_TURN_REASONING_EFFORT/);
+      assert.match(configurationText, /启动 LoopX 服务的环境/);
+      assert.doesNotMatch(configurationText, /在下方管家设置中修正/);
+      await page.screenshot({path: resolve(outputDir, "dsh-host-readiness-configuration.png"), animations: "disabled"});
+
       api.runtimeAgentsOverride = [adapter(true, null)];
       await readiness.getByRole("button", {name: "重新检查 DSH 状态"}).click();
       await managed.getByText("已就绪", {exact: true}).waitFor();
       assert.equal(await managed.getByRole("link", {name: "检查安装"}).count(), 0);
       await page.screenshot({path: resolve(outputDir, "dsh-host-readiness-ready.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.locator(".personal-settings-mobile-category select").selectOption("steward");
+      await readiness.waitFor({state: "visible"});
+      if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) {
+        throw new Error("Default DSH readiness overflows the narrow settings viewport");
+      }
+      await page.screenshot({path: resolve(outputDir, "dsh-host-readiness-mobile-default.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1440, height: 900});
 
       api.runtimeAgentsOverride = [adapter(false, "operator_credential_unconfigured")];
       await readiness.getByRole("button", {name: "重新检查 DSH 状态"}).click();
