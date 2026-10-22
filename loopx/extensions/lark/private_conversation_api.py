@@ -94,8 +94,15 @@ class PrivateConversationRequestMixin:
             group_apps = [str(config.get("bot_app_id") or _app_identity_for_private_guard(
                 other_profile, self._lark_runner(), self._require_lark_cli()))
                 for other_profile, config in existing.items()]
-            if profile in existing or any(identity_ref(app) == observed["provider_ref"] for app in group_apps):
-                raise ValueError("this App already owns a group listener; disconnect it first")
+            shared_group = existing.get(profile)
+            if shared_group is not None:
+                if body.get("audience", "owner") != "owner" or identity_ref(
+                    str(shared_group.get("bot_app_id") or _app_identity_for_private_guard(
+                        profile, self._lark_runner(), self._require_lark_cli()))
+                ) != observed["provider_ref"]:
+                    raise ValueError("shared listener requires the same verified App and a private owner audience")
+            elif any(identity_ref(app) == observed["provider_ref"] for app in group_apps):
+                raise ValueError("this App already has a group listener; select its existing profile to add private Chat")
             endpoint = str(body["executor_endpoint_id"])
             if not any(row["agent_id"] == endpoint and row["available"] for row in self.server.runtime_controller.capabilities()):
                 raise ValueError("the selected executor is unavailable")

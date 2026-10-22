@@ -692,10 +692,13 @@ class LarkChatRequestMixin:
                             cached_auth[key] = original_runner(args, cwd, timeout)
                         return cached_auth[key]
                 for profile in selected_profiles if configured else []:
-                    if any(row["transport_ref"] == profile for row in configured):
+                    shared_private = next((row for row in configured if row["transport_ref"] == profile), None)
+                    if shared_private is not None and shared_private.get("audience", "owner") != "owner":
                         raise ValueError("this App owns a private listener; disconnect it first")
                     identity = _app_identity_for_private_guard(profile, provider_runner, cli_bin)
-                    if identity and any(row["provider_ref"] == identity_ref(identity) for row in configured):
+                    if shared_private is not None and (not identity or shared_private["provider_ref"] != identity_ref(identity)):
+                        raise ValueError("the shared App identity changed; verify its original profile")
+                    if identity and any(row["provider_ref"] == identity_ref(identity) and row["transport_ref"] != profile for row in configured):
                         raise ValueError("this App alias owns a private listener; disconnect it first")
             executor_endpoint_id = (
                 manager_executor_endpoint_default(

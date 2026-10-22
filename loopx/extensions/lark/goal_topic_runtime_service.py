@@ -361,7 +361,7 @@ class LarkGoalTopicRuntimeService:
                             proposal_deliverer=deliver_proposals,
                             review_callback_handler=(
                                 handle_review_callback
-                                if self.action_service is not None and profile not in dict(self.snapshot_provider().get("private_profiles") or {})
+                                if self.action_service is not None and profile in runtime._active_group_profile_configs(self.snapshot_provider())
                                 else None
                             ),
                             health_sink=lambda update: self._update_health(

@@ -68,6 +68,30 @@ def remote(tmp_path):
     return inspection, calls, records, channel, config
 
 
+def test_native_private_and_group_sources_reuse_exact_ssh_grants(tmp_path):
+    config = tmp_path / "ssh_config"
+    config.write_text("Host research-host\n  HostName example.invalid\n")
+    # Native owner and group audiences have the same binding/audience address
+    # shape; a grant to one audience must not leak to another on that binding.
+    private = "manager.external.native." + "a" * 24 + "." + "b" * 24
+    group = "manager.external.native." + "a" * 24 + "." + "c" * 24
+    configure(tmp_path, channel=private, host="research-host", goal_ids=["private-goal"],
+              execute=True, config_path=config)
+    configure(tmp_path, channel=group, host="research-host", goal_ids=["group-goal"],
+              execute=True, config_path=config)
+    assert grants(tmp_path, private) == {"research-host": ["private-goal"]}
+    assert grants(tmp_path, group) == {"research-host": ["group-goal"]}
+    configure(tmp_path, channel=private, host="research-host", goal_ids=[],
+              execute=True, config_path=config)
+    assert grants(tmp_path, private) == {}
+    assert grants(tmp_path, group) == {"research-host": ["group-goal"]}
+    for invalid in (private.rsplit(".", 1)[0], private + ".extra", "manager.external.*"):
+        with pytest.raises(ValueError, match="exact external manager channel"):
+            configure(tmp_path, channel=invalid, host="research-host", goal_ids=["other"],
+                      execute=True, config_path=config)
+    assert grants(tmp_path, group) == {"research-host": ["group-goal"]}
+
+
 def test_remote_source_is_discovered_and_read_without_local_host_metadata(remote):
     tool, calls, records, _, _ = remote
     sources = tool.read(TOOL_NAME, {"view": "sources"})
