@@ -33,6 +33,13 @@ admission、安装或手机旅程已通过；grant 撤销后历史仍可读，
 Lark 页面选择一个非默认 App、当前可用工作区和宿主 executor，读回监听状态、待回复
 数量及恢复缺口；重新绑定不会把旧 Session 移到其它工作区。
 
+既有群聊监听器也可通过同一个已核验 App profile 接入本人私聊。在设置 → Lark
+中选择原 profile 和本人私聊；同 App 的别名不能另起竞争监听器。单个 consumer
+将明确的群聊事件交给既有群聊准入，将私聊交给 Core 本人准入；拒绝后不转投
+另一受众。群聊授权和审阅回调保持独立，解绑一路保留另一路。HTTP/Core fixture
+覆盖配置、本人未登录、App 不匹配和路由移除，不代表远程 Agent 投递或安装态
+provider 往返已通过。
+
 共享 typed Core 核验 App、本人、受众和当前工作区 grant，拥有稳定 Session、原生
 Turn FIFO 和确切 stop/new/status 目标。传输层保存独立的受理与最终投递意图，通过
 provider 读回确认回复；发生没有 receipt 的不确定写入时不盲目重发。两 App 复用

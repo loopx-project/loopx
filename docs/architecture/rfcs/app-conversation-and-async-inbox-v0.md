@@ -44,6 +44,16 @@ conversation authority. One machine/App lease covers both profile aliases and
 existing group listeners. Replies recheck the original source under that App;
 they do not require group-member scopes for private messages.
 
+An existing group listener can also admit owner-private Chat through the same
+verified App profile. Settings → Lark → owner private Chat reuses that profile;
+aliases of the same App cannot start a competing listener. One consumer dispatches
+explicit group events to the existing group admission and private events to
+Core owner admission. Rejection never falls through to the other audience.
+Group grants and review callbacks remain separate, and disconnecting either
+route preserves the other. HTTP/Core fixtures cover setup, missing owner login,
+App mismatch and route removal; this does not qualify remote Agent delivery or
+an installed provider roundtrip.
+
 Text admission persists the canonical Core Turn without waiting for its terminal
 answer. The existing bounded Session queue keeps follow-ups in FIFO order; another
 App can continue independently. Explicit `/status`, `/stop` and `/new` use the
