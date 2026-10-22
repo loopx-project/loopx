@@ -13,19 +13,27 @@ status/attention item. No new capability activation or provider selection is
 required. Existing Goal Channel HTML renders these rows and warnings; this read
 never sends a message or changes channel bindings.
 
-Before canonical promotion, the source remains the supplied status Todo view
-plus local lease files. Python adapts file records; one TS request evaluates
-expiry, lease generation and claim conflicts for the whole batch. The legacy
-Todo view can be incomplete and does not acquire canonical completeness by using
-the shared rule. An explicitly supplied empty `active_leases=[]` does not cause
-soft claims to be inferred; local hard-lease observation remains independent.
+Ordinary Todo, status, quota and ownership reads require a completed canonical
+Goal cutover. An unmigrated Goal returns `canonical_authority_required` with
+backup/migration recovery guidance; it does not read Markdown Todos or local
+lease files as a fallback, create an empty authority, or migrate on observation.
+Global status keeps that Goal visibly unavailable while independent migrated
+Goals remain readable. A corrupt cutover fence is a separate explicit failure.
 
-After promotion, the selected provider supplies the complete Todo/lease snapshot
+The selected provider supplies the complete Todo/lease snapshot
 in one read. Stale or absent Markdown, legacy lease files and caller-supplied
 claim/lease display overrides cannot replace canonical ownership facts. An empty
 canonical result stays empty. Claims of completed/archived Todos do not re-enter
 the active claim display. Canonical claim/lease conflict comparison happens
 before output limits or text redaction.
+
+Explicit source inspection, backup, cold import and state conversion retain
+their legacy readers. Use Goal settings → Task ownership → Goal data storage
+to inspect, back up, preview, confirm and recover a migration. Conversion must
+preserve complete Task identities, bodies, archives, relationships, receipts
+and leases before ordinary reads become available. File, SQLite and PostgreSQL
+remain supported canonical providers; historical canonical record formats are
+unaffected by retiring the unmigrated operational path.
 
 `coordination_observation` records the provider source/revision, observation time,
 record counts, total observations, display limit and truncation. These fields
@@ -68,13 +76,19 @@ Goal Channel 的 `active_leases` 展示认领与时间上有效的 lease 记录�
 实际修改仍受相应操作的资格、mode 和 lease 门禁约束。上面的 status 命令可读取
 现有 Goal Channel／attention 投影，不新增 activation，也不发送消息。
 
-晋升前沿用传入的状态 Todo 视图与本地 lease 文件，由同一 TS 批量规则计算时间、
-代数和认领冲突；旧 Todo 视图仍可能不完整。明确传入空列表不再补出 soft claim，
-本地 hard lease 仍独立观察。
+普通 Todo、status、quota 和所有权读取要求 Goal 已完成 canonical 切换。未迁移时
+明确返回 `canonical_authority_required` 与备份／迁移指引，不回退 Markdown Todo
+或本地 lease，不创建空权威，也不在观察时自动迁移。全局状态保留该 Goal 的不可用
+说明，其他已迁移 Goal 仍可读取；损坏的切换 fence 单独报错。
 
-晋升后从选定 provider 的完整同一 revision 读取所有权事实。陈旧／缺失 Markdown、
+从选定 provider 的完整同一 revision 读取所有权事实。陈旧／缺失 Markdown、
 旧 lease 文件或调用方的展示覆盖值不再成为事实来源；canonical 空值保持为空，
 完成／归档 Todo 的认领不进入活动认领展示。先判断完整数据中的冲突，再脱敏与截断。
+
+显式源检查、备份、冷导入与 state 转换保留旧数据读取能力。通过 Goal 设置 → 任务
+归属 → Goal 数据存储完成检查、备份、预览、确认与恢复。转换须保留完整 Task 身份、
+正文、归档、关系、回执与 lease，再启用普通读取。File、SQLite、PostgreSQL 仍是
+受支持的 canonical provider，历史 canonical 记录格式也继续可读。
 
 `coordination_observation` 披露来源、版本、观察时间、总数和截断情况，只描述
 所有权这一组数据，不声称整张 Goal Channel 的所有面板来自同一 revision。
