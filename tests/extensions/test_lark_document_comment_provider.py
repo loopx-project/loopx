@@ -477,7 +477,9 @@ def test_lark_document_comment_timestamp_accepts_microsecond_epoch():
 
 
 def test_lark_document_comment_timestamp_rejects_non_ascii_digits():
-    with pytest.raises(LarkDocumentCommentProviderError, match="comment_timestamp_invalid"):
+    with pytest.raises(
+        LarkDocumentCommentProviderError, match="comment_timestamp_invalid"
+    ):
         _epoch_rfc3339("1700000000²")
 
 
