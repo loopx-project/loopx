@@ -111,12 +111,12 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const pack = currentSnapshot?.pack ?? null;
   useEffect(() => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);}, [goalId, readSourceUrl, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
   useEffect(() => {
-    if ((!citation && !citationBusy && !citationError) || !location.open || !active) return;
+    if ((!citation && !citationBusy && !citationError) || !active) return;
     // A response can arrive before React mounts the source panel. Move only
     // after that commit, without competing with analysis-opening navigation.
     sourcePanel.current?.focus({preventScroll: true});
     sourcePanel.current?.scrollIntoView({block: "nearest"});
-  }, [citation, citationBusy, citationError, location.open, active]);
+  }, [citation, citationBusy, citationError, active]);
 
   // A pending request is observed here. A persisted running receipt alone is
   // not proof that the model is currently executing; old receipts stop polling.
@@ -142,9 +142,9 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     window.history[push ? "pushState" : "replaceState"](window.history.state, "", url);
     applyLocation({open, packId});
   };
-  const show = (focusAnalysis = true) => {
+  const show = () => {
     navigate(true, pack?.pack_id ?? location.packId, !location.open);
-    if (focusAnalysis) requestAnimationFrame(() => {panel.current?.focus({preventScroll: true}); panel.current?.scrollIntoView({block: "start"});});
+    requestAnimationFrame(() => {panel.current?.focus({preventScroll: true}); panel.current?.scrollIntoView({block: "start"});});
   };
   const execute = async (retry = false) => {
     if (readSourceUrl && snapshot?.execution_enabled !== true) return;
@@ -172,7 +172,6 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     const p = pack;
     if (!p) return;
     if (origin) sourceTrigger.current = origin;
-    show(false);
     const current = ++citeGeneration.current; setCitation(null); setCitationBusy(true); setCitationError("");
     const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key, output_language: outputLanguage, source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)});
     try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/citation?${query}`)); if (current === citeGeneration.current) setCitation(value);}
@@ -272,6 +271,19 @@ export function ResearchProgressSummary({analysis: a}: {analysis: Controller}) {
   return <ResearchProgress pack={a.pack} packs={packs} selectedId={a.location.packId ?? a.snapshot?.catalog.default_pack_id ?? ""} zh={a.zh} onSelect={a.select} onCitation={a.readCitation}/>;
 }
 
+export function ResearchCitationPanel({analysis: a}: {analysis: Controller}) {
+  if (!a.citation && !a.citationBusy && !a.citationError) return null;
+  const zh = a.zh;
+  // One source reader for metric, native-result and analysis citations. Reading
+  // an original never changes whether the separate analysis is expanded.
+  return <section className="research-analysis analysis-source" ref={a.sourcePanel} tabIndex={-1} aria-label={zh ? "引用原文" : "Cited original"} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); a.closeCitation();}}}>
+    <header><h4>{zh ? "引用原文" : "Cited original"}</h4><button type="button" onClick={a.closeCitation} aria-label={zh ? "关闭原文" : "Close source"}><X size={14} aria-hidden/></button></header>
+    {a.citationBusy ? <p role="status">{zh ? "正在读取引用原文…" : "Reading cited source…"}</p> : null}
+    {a.citationError ? <p className="analysis-error" role="alert">{a.citationError}</p> : null}
+    {a.citation ? <><p>{a.citation.artifact} · {zh ? "行" : "lines"} {a.citation.first_line}–{a.citation.last_line}</p><pre>{a.citation.text}</pre></> : null}
+  </section>;
+}
+
 export function ResearchAnalysisPanel({analysis: a}: {analysis: Controller}) {
   if (!a.location.open) return null;
   const zh = a.zh, p = a.pack, result = p?.result;
@@ -322,13 +334,6 @@ export function ResearchAnalysisPanel({analysis: a}: {analysis: Controller}) {
         })}</div></div></details>)}
         <details className="analysis-method"><summary>{zh ? "来源、方法、覆盖与分析成本" : "Sources, method, coverage and analysis cost"}</summary><p>{p.objective}</p><dl><dt>{zh ? "来源范围" : "Source scope"}</dt><dd>{p.scope.case_id} · {p.scope.run_id}<br/>{p.scope.window}</dd><dt>{zh ? "方法" : "Method"}</dt><dd>{result.method_version} · {zh ? "模型判断未校准" : "Uncalibrated model judgment"}</dd><dt>{zh ? "模型设置" : "Requested model"}</dt><dd>{p.config.model} / {p.config.effort} / {p.config.service_tier} · {zh ? "实际服务档位" : "Served tier"}: {p.job?.served_service_tier ?? (zh ? "未知" : "unknown")}</dd><dt>{zh ? "分析用量" : "Analysis usage"}</dt><dd>{p.job?.reused_from_analysis_key ? (zh ? "复用上一版判读，无新增模型调用；原用量保留在上一版。" : "Reused previous judgments without a new model call; original usage stays with the previous version.") : <>{p.job?.analysis_wall_seconds == null ? "—" : `${p.job.analysis_wall_seconds.toFixed(1)}s`} · {zh ? "输入" : "input"} {p.job?.usage?.input_tokens?.toLocaleString() ?? "—"} / {zh ? "输出" : "output"} {p.job?.usage?.output_tokens?.toLocaleString() ?? "—"} tokens · {zh ? "金额未采集，推理 token 已包含于输出" : "Dollar cost unmeasured; reasoning tokens are included in output"}</>}</dd><dt>{zh ? "覆盖" : "Coverage"}</dt><dd>{p.episode_count} {zh ? "个固定片段" : "fixed episodes"} · {p.source_count} {zh ? "份来源" : "sources"} · {zh ? "总体片段数" : "Population"}: {p.selection.population_episodes ?? (zh ? "未知" : "unknown")}</dd><dt>{zh ? "取样规则" : "Selection"}</dt><dd>{p.selection.rule}</dd><dt>{zh ? "版本" : "Revision"}</dt><dd>{p.scope.revision}</dd></dl><ul>{result.limitations.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{zh ? "引用行存在不等于解释正确；本页不提供独立科学校准结论。" : "A valid citation range does not establish entailment or independent scientific calibration."}</p></details>
       </> : null}
-      {/* Bound native evidence is readable before any model assessment exists. */}
-      {a.citation || a.citationBusy || a.citationError ? <section className="analysis-source" ref={a.sourcePanel} tabIndex={-1} aria-label={zh ? "引用原文" : "Cited original"} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); a.closeCitation();}}}>
-        <header><h4>{zh ? "引用原文" : "Cited original"}</h4><button type="button" onClick={a.closeCitation} aria-label={zh ? "关闭原文" : "Close source"}><X size={14} aria-hidden/></button></header>
-        {a.citationBusy ? <p role="status">{zh ? "正在读取引用原文…" : "Reading cited source…"}</p> : null}
-        {a.citationError ? <p className="analysis-error" role="alert">{a.citationError}</p> : null}
-        {a.citation ? <><p>{a.citation.artifact} · {zh ? "行" : "lines"} {a.citation.first_line}–{a.citation.last_line}</p><pre>{a.citation.text}</pre></> : null}
-      </section> : null}
     </> : null}
   </div>;
 }
