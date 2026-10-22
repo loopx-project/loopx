@@ -2114,6 +2114,109 @@ def test_compact_blocked_wait_keeps_authority_rejections(invalid: str) -> None:
                                    observed_at="2026-01-01T00:00:00Z")
 
 
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("writeback_kind", ["in_flight", "semantic", "replan"])
+@pytest.mark.parametrize("host", ["codex_app", "generic_cli"])
+def test_same_todo_writeback_reentry_only_settles_original_turn(
+    tmp_path: Path, provider: str, writeback_kind: str, host: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sealed writeback cannot admit more work just because its Todo stays open."""
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    todo_id = TODO_ID
+    if writeback_kind == "replan":
+        _configure_selected_todo_replan_fixture(project, registry)
+        _initialize_git_checkout(project)
+        todo_id = SELECTED_REPLAN_TODO_ID
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn_id = "turn-same-todo-writeback"
+    host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
+    guard_args = (
+        "quota", "should-run", *host_args, "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn_id,
+        "--todo-id", todo_id,
+    )
+    rc, initial = _run_cli(registry, runtime, *guard_args[:-2])
+    assert rc == 0, initial
+    rc, guard = _run_cli(registry, runtime, *guard_args)
+    if rc != 0:
+        assert guard["action_selection_qualification"]["state"] == "deferred", guard
+        [command] = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        rc, guard = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0, guard
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
+    if writeback_kind == "replan":
+        assert guard["decision"] == "autonomous_replan_required", guard
+    else:
+        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    identity = ("--agent-id", AGENT_ID, "--todo-id", todo_id, "--turn-instance-id", turn_id)
+    vision = project / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
+        "todo_delta": [f"retain:{todo_id}"],
+        "path_delta": {
+            "outcome": "replan" if writeback_kind == "replan" else "continue",
+            "prior_assumption": "Fixture work needs a verified next route.",
+            "observed_reality": "A fixture check supports continuing the existing work.",
+            "retained": ["Original requirements and the existing Todo."],
+            "evidence_refs": ["evidence:fixture-check"],
+        },
+    }), encoding="utf-8")
+    refresh_args = (
+        "refresh-state", "--goal-id", GOAL_ID, *identity,
+        "--classification", "verified_fixture_work", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(project),
+        "--delivery-boundary", "in_flight_continuation" if writeback_kind == "in_flight" else "semantic_closeout",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    if writeback_kind != "in_flight":
+        refresh_args += ("--agent-vision-json", str(vision))
+    if writeback_kind == "replan":
+        refresh_args += ("--autonomous-replan-recorded", "--repair-delta-kind", "goal_vision_patch")
+    rc, refreshed = _run_cli(registry, runtime, *refresh_args)
+    assert rc == 0 and refreshed["appended"] is True, refreshed
+    assert refreshed["vision_checkpoint"]["satisfied"] is True
+    if writeback_kind == "replan":
+        assert refreshed["autonomous_replan_ack"]["recorded"] is True
+    writeback_bytes = Path(refreshed["json_path"]).read_bytes()
+
+    rc, recovery = _run_cli(registry, runtime, *guard_args)
+    assert rc == 0, recovery
+    assert recovery["normal_delivery_allowed"] is False
+    assert recovery["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert recovery["unsettled_host_turn_recovery"]["scope"] == "current_turn"
+    assert recovery["unsettled_host_turn_recovery"]["binding_id"] == todo_id
+    assert recovery["unsettled_host_turn_recovery"]["repair"] == "quota_spend"
+    assert recovery["settlement_progress"]["state"] == "spend_required"
+    cli = recovery["interaction_contract"]["cli_channel"]
+    assert cli["spend_allowed_now"] is True
+    [spend_command] = cli["next_cli_actions"]
+    assert "spend-slot" in spend_command and turn_id in spend_command
+    assert _spend_run_count(runtime) == 0
+    assert Path(refreshed["json_path"]).read_bytes() == writeback_bytes
+    spend_args = _projected_cli_args(spend_command, turn_instance_id=turn_id)
+    rc, spent = _run_cli(registry, runtime, *spend_args, cwd=project)
+    assert rc == 0 and spent.get("settlement_progress", {}).get("state") == "settled", {
+        key: spent.get(key) for key in ("error", "reason", "settlement_result", "before")
+    }
+    rc, spent_again = _run_cli(registry, runtime, *spend_args, cwd=project)
+    assert rc == 0 and spent_again["appended"] is False, spent_again
+    assert _spend_run_count(runtime) == 1
+    rc, settled = _run_cli(registry, runtime, *guard_args)
+    assert rc == 0 and settled["should_run"] is False, settled
+    assert settled["normal_delivery_allowed"] is False
+    rc, todos = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", todo_id)
+    assert rc == 0 and todos["todo"]["status"] == "open", todos
+    assert Path(refreshed["json_path"]).read_bytes() == writeback_bytes
+
+
 def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     tmp_path: Path,
 ) -> None:
