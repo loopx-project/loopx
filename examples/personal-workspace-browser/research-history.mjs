@@ -792,7 +792,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await analysis.locator('.analysis-episode > summary').count(), 2, 'The reader starts with one comparable row per episode');
       const firstEpisode = analysis.locator('.analysis-episode').first();
       assert.equal(await analysis.locator('.analysis-episode[open]').count(), 0);
-      assert.match(await firstEpisode.locator(':scope > summary').innerText(), /episode.*收益检验.*尚未检验收益.*证据采用.*有依据/s);
+      assert.match(await firstEpisode.locator(':scope > summary').innerText(), /Does a useful diagnosis prove original-objective utility\?.*收益检验.*尚未检验收益.*证据采用.*有依据/s);
       assert.equal(await analysis.locator('.analysis-citations button:visible').count(), 0);
       await firstEpisode.locator(':scope > summary').focus();
       await firstEpisode.locator(':scope > summary').press('Enter');
@@ -934,9 +934,10 @@ print(json.dumps([
       assert.match(await comparison.innerText(), /1 \/ 4.*未知 3/s);
       const rows = metricDetail.locator('.research-assessment');
       assert.equal(await rows.count(), 4);
-      assert.deepEqual(await rows.locator(':scope > summary').allTextContents(), [
-        'variant-alpha证据不足', 'variant-beta证据不足', 'variant-gamma证据不足', 'edge-aware有依据',
-      ], 'Comparable identities and judgments precede repeated questions, reasons and citations');
+      assert.deepEqual(await rows.locator('.research-assessment-name').allTextContents(),
+        ['variant-alpha', 'variant-beta', 'variant-gamma', 'edge-aware'].map(id => `${id} 的实验是否检验原始目标，并被后续候选选择实际采用？负结果、控制差异与未知分别保留。`),
+        'Without a localized interpretation, the original question remains readable instead of a protocol id');
+      assert.deepEqual(await rows.locator('.research-assessment-verdict').allTextContents(), ['证据不足', '证据不足', '证据不足', '有依据']);
       assert.equal(await rows.locator('.research-assessment-body:visible').count(), 0);
       assert.equal(await metricDetail.locator('.research-effect-citations button:visible').count(), 0);
       const interpretation = metricDetail.getByRole('button', {name: '目标关联 · 判读口径', exact: true});
@@ -961,25 +962,35 @@ print(json.dumps([
       await page.setViewportSize({width: 390, height: 844});
       await comparison.scrollIntoViewIfNeeded();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
-      await page.screenshot({path: resolve(outputDir, 'research-assessment-comparison-mobile.png'), animations: 'disabled'});
+      const collapsedQuestion = rows.first().locator('.research-assessment-name');
+      assert(await collapsedQuestion.evaluate(element => element.clientHeight <= 2 * parseFloat(getComputedStyle(element).lineHeight) + 1
+        && element.scrollHeight > element.clientHeight), 'Long questions occupy at most two lines in the narrow comparison index');
       const narrowPositions = await metricPositions();
       await effects.locator('[data-metric="information_gain"]').click();
       assert.deepEqual(await metricPositions(), narrowPositions, 'Narrow metric navigation preserves the comparison band');
       assert.equal(await metricDetail.count(), 1, 'One metric evidence region replaces the previous selection');
       assert.equal(await comparison.getAttribute('aria-expanded'), 'false');
       await comparison.click();
+      await metricDetail.evaluate(element => element.scrollIntoView({block: 'start'}));
+      await page.screenshot({path: resolve(outputDir, 'research-assessment-comparison-mobile.png'), animations: 'disabled'});
       await rows.last().locator(':scope > summary').click();
       await rows.last().getByText(/Synthetic evidence connects/).waitFor();
+      assert(await rows.last().locator('.research-assessment-name').evaluate(element => element.clientHeight >= element.scrollHeight),
+        'Expanding the row restores the complete question without a second copy');
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.screenshot({path: resolve(outputDir, 'research-assessment-expanded-mobile.png'), animations: 'disabled'});
       await metricDetail.getByRole('button', {name: '收起指标详情', exact: true}).click();
       assert.equal(await comparison.evaluate(element => element === document.activeElement), true);
       localizedFixture = true;
       await page.reload({waitUntil: 'networkidle'});
+      await progress.locator('[data-metric="goal_alignment"]').click();
+      assert.equal(await metricDetail.locator('.research-assessment-name').first().innerText(), 'variant-alpha 是否检验原始目标？',
+        'The metric reader uses the same localized question as deep analysis');
+      await metricDetail.press('Escape');
       await history.getByRole('button', {name: '查看分析', exact: true}).click();
       const chineseAnalysis = history.getByRole('region', {name: '轨迹深度分析', exact: true});
       const episodeRows = chineseAnalysis.locator('.analysis-episode');
-      await episodeRows.first().locator(':scope > summary').filter({hasText: 'variant-alpha'}).waitFor();
+      await episodeRows.first().locator('.analysis-episode-name').filter({hasText: 'variant-alpha 是否检验原始目标？'}).waitFor();
       assert.equal(await episodeRows.count(), 4);
       assert.equal(await chineseAnalysis.locator('.analysis-episode[open]').count(), 0);
       assert.equal(await chineseAnalysis.locator('.analysis-episode-body:visible').count(), 0,
@@ -987,7 +998,9 @@ print(json.dumps([
       assert.equal(await chineseAnalysis.locator('.analysis-citations button:visible').count(), 0);
       const episodeSummary = episodeRows.first().locator(':scope > summary');
       await episodeSummary.focus(); await episodeSummary.press('Enter');
-      await episodeRows.first().locator('h4').filter({hasText: 'variant-alpha 是否检验原始目标？'}).waitFor();
+      assert.equal(await episodeRows.first().locator('.analysis-episode-name').innerText(), 'variant-alpha 是否检验原始目标？');
+      assert.equal(await episodeRows.first().getByText('variant-alpha 是否检验原始目标？', {exact: true}).count(), 1,
+        'The localized question is the row title and is not repeated in its expanded body');
       assert.match(await episodeRows.first().innerText(), /来源只记录了实验结果/);
       const episodeCitation = episodeRows.first().getByRole('button', {name: /source.*行 1–2/}).first();
       await episodeCitation.click(); await citedOriginal.waitFor(); await citedOriginal.press('Escape');
@@ -1015,10 +1028,10 @@ print(json.dumps([
       await page.evaluate(key => localStorage.setItem(key, 'en'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});
       const englishAnalysis = page.getByRole('region', {name: 'Trajectory analysis', exact: true});
-      await englishAnalysis.locator('.analysis-episode > summary').first().filter({hasText: 'variant-alpha'}).waitFor();
+      await englishAnalysis.locator('.analysis-episode-name').first().filter({hasText: 'Did variant-alpha test the original objective?'}).waitFor();
       assert.equal(await englishAnalysis.locator('.analysis-episode[open]').count(), 0, 'Language changes reset optional episode details');
       await englishAnalysis.locator('.analysis-episode > summary').first().click();
-      await englishAnalysis.locator('.analysis-episode h4').first().filter({hasText: 'Did variant-alpha test the original objective?'}).waitFor();
+      assert.equal(await englishAnalysis.locator('.analysis-episode-name').first().innerText(), 'Did variant-alpha test the original objective?');
       assert.doesNotMatch(await englishAnalysis.innerText(), /来源只记录了实验结果/);
       await page.evaluate(key => localStorage.setItem(key, 'zh-CN'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});
