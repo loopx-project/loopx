@@ -436,6 +436,14 @@ def write_cli_fixture(root: Path, *, scoped_agents: bool = False) -> tuple[Path,
         + "\n",
         encoding="utf-8",
     )
+    # Production reads require canonical authority; the run-ledger operator
+    # gate remains independent of a manually authored user Todo.
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    for record in registry_goals:
+        initialize_canonical_authority(runtime, record["id"],
+            build_todo_runtime_shadow_projection(goal_id=record["id"], todos=[], handoff_mode="soft_claim"),
+            state_path=project / record["state_file"], provider="sqlite")
     return registry_path, runtime, project
 
 

@@ -3101,7 +3101,8 @@ export function PersonalWorkspacePage({
             : undefined}
           onOpenCommands={() => {setMobileSidebarOpen(false); setPaletteScope(paletteContext);}}
           onOpenSettings={readOnly ? undefined : () => openSettings({ kind: "settings" })}
-          onSelectGoal={selectGoal}
+          onSelectGoal={(goalId) => selectGoal(goalId,
+            goalId && selectedGoalId && selectedGoalTab === "research" ? "research" : "overview")}
           selectedGoalId={selectedGoalId}
           statusSourceControl={statusSourceControl}
         />

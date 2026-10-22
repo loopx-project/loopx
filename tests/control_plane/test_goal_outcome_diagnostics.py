@@ -105,3 +105,59 @@ def test_unqualified_effect_reason_is_not_promoted_to_public_detail(monkeypatch)
     assert str(failure.value) == "goal_acceptance_effect_failed"
     assert private_reason not in str(failure.value)
     assert not getattr(failure.value, "payload", {}).get("error_detail")
+
+
+@pytest.mark.parametrize("entrypoint", ["refine", "refresh"])
+def test_review_capacity_diagnosis_and_lossless_review_recovery(acceptance_goal, entrypoint):
+    import re
+
+    project, _, cli, run = acceptance_goal
+    declaration = refinement("message:original")
+    declaration["requirements"] = [
+        {"id": f"r{i}", "description": "保留证据😀" * 60} for i in range(32)
+    ]
+    _, args = arguments(project, cli, "refine", declaration, "declare")
+    code, declared = run(*args)
+    assert code == 0, declared
+    before = cli("inspect")[1]
+    markdown = (project / "state.md").read_bytes()
+    review = [{"id": f"r{i}", "conclusion": "uncertain", "note": "n" * 512,
+        "evidence_refs": ["e" * 500] * 8} for i in range(32)]
+    path, args = arguments(project, cli, entrypoint, {"outcome_id": "export", "review": review}, "review")
+    code, rejected = run(*args)
+    assert code == 1 and rejected["error"] == "goal_acceptance_invalid_request", rejected
+    detail = rejected["error_detail"]
+    counts = re.search(r"candidate (\d+) UTF-8 bytes, retained (\d+), limit (\d+)", detail)
+    assert counts, rejected
+    candidate, retained, limit = map(int, counts.groups())
+    assert retained == 0 and limit < candidate and limit == 131072
+    assert "outcome review capacity exceeded" in detail
+    assert "declaration and review budgets are independent" in detail
+    assert "all outcomes in the Goal, not the source count" in detail
+    assert "report the capacity blocker" in detail
+    assert declaration["source"]["summary"] not in json.dumps(rejected)
+    assert "保留证据" not in json.dumps(rejected, ensure_ascii=False)
+    assert cli("inspect")[1] == before
+    assert (project / "state.md").read_bytes() == markdown
+    if entrypoint == "refresh":
+        assert rejected["appended"] is False
+
+    # Only new review wording/references change. Every original requirement and
+    # source survives; missing evidence remains uncertain, not a fabricated pass.
+    compact = [{**item, "note": "Further validation needed", "evidence_refs": ["artifact:full-report"]} for item in review]
+    document = json.loads(path.read_text())
+    (document if entrypoint == "refine" else document["refinement"])["review"] = compact
+    path.write_text(json.dumps(document))
+    code, recovered = run(*args)
+    assert code == 0, recovered
+    result = recovered if entrypoint == "refine" else recovered["goal_outcome_update"]
+    assert result["status"] == "applied"
+    current = cli("inspect")[1]
+    outcome = current["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["sources"] == [declaration["source"]]
+    assert [{"id": r["id"], "description": r["description"]} for r in outcome["requirements"]] == declaration["requirements"]
+    assert all(r["agent_review"]["conclusion"] == "uncertain" for r in outcome["requirements"])
+    code, replay = run(*args)
+    assert code == 0, replay
+    assert (replay if entrypoint == "refine" else replay["goal_outcome_update"])["status"] == "replayed"
+    assert cli("inspect")[1] == current

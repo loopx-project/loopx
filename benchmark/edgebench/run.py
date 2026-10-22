@@ -71,28 +71,37 @@ def _observe_run(call):
 
 
 def _result_status(*, interrupted, started, runtime_seconds, exit_code, timed_out=False,
-                   execution_started=True):
+                   execution_started=True, native_goal_outcome=None):
     if interrupted:
         return "cancelled"
     if not started:
         return "launch_failed"
+    if native_goal_outcome == "cancelled":
+        return "cancelled"
+    if native_goal_outcome in {"failed", "usage_limited", "unknown"}:
+        return "runner_failed"
     if not execution_started or runtime_seconds <= 0 or (not timed_out and exit_code != 0):
         return "runner_failed"
     return "terminal"
 
 
-def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort, feedback="native"):
-    """Match the native CLI's visualizer handoff after a completed run only."""
-    if status != "terminal":
+def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort,
+                               feedback="native", native_goal_outcome=None):
+    """Retain partial native scores without publishing a completion marker."""
+    if status != "terminal" and not (native_goal_outcome and result.runtime_seconds > 0):
         return
     final = dict(agent=agent, task=task, run_id=run_id, model=model, effort=effort,
                  **result.to_dict())
+    if native_goal_outcome is not None:
+        final.update(runtime_status=status, native_goal_outcome=native_goal_outcome)
     if feedback == "best-only":
         final["evaluation_coverage"] = "online_only"
         final["offline_scoring_complete"] = False
-    pending = trial / "final_result.json.tmp"
+    # SForge consumers treat final_result.json itself as a completed run.
+    destination = trial / ("final_result.json" if status == "terminal" else "partial_result.json")
+    pending = destination.with_suffix(".json.tmp")
     pending.write_text(json.dumps(final, indent=2, ensure_ascii=False))
-    pending.replace(trial / "final_result.json")
+    pending.replace(destination)
 
 
 def _task_default(task_id: str, key: str, explicit: int | None, fallback: int) -> int:
@@ -413,19 +422,26 @@ def main(argv=None):
     # Native cancellation and swallowed Docker failures return runtime=0.
     # Observe the signal independently; never infer cancellation from output prose.
     execution = backend.execution_receipt or {}
+    native = backend.native_goal_receipt or {}
+    if args.worker == "native-goal" and not native.get("native_goal_outcome"):
+        native["native_goal_outcome"] = "unknown"
     status = _result_status(interrupted=was_interrupted,
                             started=(trial / "started_at").is_file(),
                             runtime_seconds=result.runtime_seconds,
                             execution_started=execution.get("execution_started", False),
                             exit_code=execution.get("exit_code"),
+                            native_goal_outcome=native.get("native_goal_outcome"),
                             timed_out=result.timed_out or execution.get("timed_out", False))
     receipt.update(status=status, controller_elapsed_seconds=elapsed,
                    timed_out=result.timed_out, runtime_seconds=result.runtime_seconds,
                    best_score=result.best_score, total_rounds=result.total_rounds)
     receipt["execution"] = execution
+    if native:
+        receipt.update(native)
     _write_native_final_result(trial, result, status=status, agent=agent.name,
                                task=task.task_id, run_id=args.run_id,
-                               model=args.model, effort=args.effort, feedback=args.feedback)
+                               model=args.model, effort=args.effort, feedback=args.feedback,
+                               native_goal_outcome=native.get("native_goal_outcome"))
     receipt_path.write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt))
     return 0 if status == "terminal" else 130 if status == "cancelled" else 1

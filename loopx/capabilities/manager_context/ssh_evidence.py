@@ -169,6 +169,7 @@ def read_remote(
     ):
         return {"ok": False, "error": "source_outside_available_scope"}
     goal = args.get("goal_id")
+    route_read = args.get("view") == "agent_route"
     if goal and not owner and goal not in before[host]:
         return {"ok": False, "error": "goal_outside_available_scope"}
 
@@ -181,6 +182,9 @@ def read_remote(
             or host not in configured_ssh_host_aliases(config_path)
         ):
             return {"ok": False, "error": "authorization_changed"}
+        # A historical portfolio cannot establish a current host route.
+        if route_read:
+            return _unavailable_read(args, code, reason)
         return _unavailable_read_with_cached_portfolio(
             root,
             channel,
@@ -210,6 +214,11 @@ def read_remote(
         argv += ["--todo-id", args["todo_id"]]
     if args.get("include_stopped"):
         argv += ["--include-stopped"]
+    if route_read:
+        argv = ["resolve-peer-route", "--goal-id", goal, "--agent-id", args["agent_id"]]
+        for field, flag in (("thread_link", "--thread-link"), ("host_surface", "--host-surface")):
+            if args.get(field):
+                argv += [flag, args[field]]
     command = (
         'exec "$HOME/.local/bin/loopx" --registry @host-global --format json '
         + shlex.join(argv)
@@ -248,7 +257,7 @@ def read_remote(
             )
             return unavailable(code, reason)
         packet = json.loads(result.stdout)
-        if (
+        if not route_read and (
             not isinstance(packet, dict)
             or packet.get("schema_version") != "manager_evidence_page_v1"
             or not isinstance(packet.get("rows"), list)
@@ -264,6 +273,13 @@ def read_remote(
             or host not in configured_ssh_host_aliases(config_path)
         ):
             return {"ok": False, "error": "authorization_changed"}
+        if route_read:
+            # Wire validation only. The source host's existing typed route
+            # owner selects the task; this adapter cannot infer a new route or
+            # promote a locator to delivery/execution authority.
+            if not _valid_peer_route_packet(packet, args):
+                return unavailable(*_remote_read_failure(returncode=0, stderr="", protocol=True))
+            return {**packet, "source_id": args["source_id"], "source_host": host}
         if not owner and any(
             r.get("goal_id") not in before[host] for r in packet["rows"]
         ):
@@ -281,6 +297,36 @@ def read_remote(
             protocol=isinstance(exc, ValueError),
         )
         return unavailable(code, reason)
+
+
+def _valid_peer_route_packet(packet: Any, args: Mapping[str, Any]) -> bool:
+    from ...control_plane.collaboration.peer_host_route import (
+        MAX_PUBLISHED_CANDIDATES, PEER_HOST_ROUTE_SCHEMA_VERSION,
+    )
+    if (not isinstance(packet, dict)
+            or packet.get("schema_version") != PEER_HOST_ROUTE_SCHEMA_VERSION
+            or packet.get("ok") is not True
+            or any(packet.get(key) != args[key] for key in ("goal_id", "agent_id"))
+            or packet.get("authority") != "locator_only"
+            or packet.get("host_delivery") != "not_attempted"
+            or not isinstance(packet.get("candidates"), list)
+            or len(packet["candidates"]) > MAX_PUBLISHED_CANDIDATES):
+        return False
+    selected = packet.get("selected_route")
+    if packet.get("status") == "resolved":
+        if (not isinstance(selected, dict) or set(selected) != {"host_surface", "thread_id"}
+                or not all(isinstance(v, str) and v for v in selected.values())
+                or (args.get("host_surface") and selected["host_surface"] != args["host_surface"])):
+            return False
+        if args.get("thread_link"):
+            from ...thread_agent_binding import codex_thread_deep_link_locator
+            if selected["thread_id"] != codex_thread_deep_link_locator(args["thread_link"])["thread_id"]:
+                return False
+    elif packet.get("status") not in {"unavailable", "ambiguous", "not_authorized"} or selected is not None:
+        return False
+    from ...control_plane.runtime.public_safety import validate_public_safe_value
+    validate_public_safe_value(packet, path="remote_peer_route")
+    return True
 
 
 def _cache_dir(root) -> Path:

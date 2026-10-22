@@ -256,9 +256,9 @@ def test_invalid_route_read_is_repairable_and_effect_free(tmp_path, arguments):
     assert not records
 
 
-def test_remote_route_read_does_not_silently_inspect_local_host(tmp_path):
+def test_unconfigured_remote_route_cannot_fall_back_to_local_host(tmp_path):
     _, reader, records = setup(tmp_path)
     result = reader.read(TOOL_NAME, {"view": "agent_route", "source_id": "ssh:remote",
         "goal_id": "research", "agent_id": "worker-34"})
-    assert result["error"] == "remote_agent_route_not_supported"
-    assert not records
+    assert result["error"] == "source_outside_available_scope"
+    assert records == [result]

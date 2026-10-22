@@ -289,6 +289,25 @@ class GoalSourceReader:
                     self._invalidate()
                 raise
 
+    def findings(self, goal_id, cursor="", *, projector):
+        """Read saved evidence; this transport has no complete task-list view."""
+        with self._lock:
+            if goal_id is None:
+                raise SourceScopeError("Choose a Goal before reading findings")
+            if not isinstance(cursor, str) or len(cursor) > 512:
+                raise ValueError("history_cursor_expired")
+            self.status(goal_id)
+            try:
+                page = self._pages.page(
+                    scope=(self.source.namespace, goal_id, "findings"), cursor=cursor,
+                    load=lambda: projector(self.source.read_events(goal_id),
+                                           None, goal_id=goal_id))
+                return {**page, "source": self.source.describe(), "goal_id": goal_id}
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                if str(exc) != "history_cursor_expired":
+                    self._invalidate()
+                raise
+
 
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *_args, **_kwargs):

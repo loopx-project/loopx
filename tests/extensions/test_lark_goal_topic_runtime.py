@@ -14,8 +14,6 @@ from typing import Any
 import pytest
 
 from loopx.extensions.lark.manager_reply_parts import (
-    MANAGER_REPLY_MAX_PARTS,
-    MANAGER_REPLY_OVERFLOW_NOTE,
     PART_DELIVERY_COMPLETE_KEY,
 )
 from loopx.extensions.lark.event_collector import _jq_projection
@@ -197,9 +195,18 @@ def _reply_runner(state: dict[str, Any]):
                     ]
                 }
                 if "--dry-run" in args
-                else {"data": {"message_id": "om_reply_fixture"}}
+                else {"data": {"message_id": "om_reply_fixture" if not state.get("messages") else f"om_reply_{len(state['messages'])}"}}
             )
+            if "--dry-run" not in args:
+                mid = payload["data"]["message_id"]
+                state.setdefault("messages", {})[mid] = {
+                    "message_id": mid, "msg_type": state["reply_type"],
+                    "body": {"content": state["reply_content"]},
+                }
         elif "+messages-mget" in args:
+            mid = args[args.index("--message-ids") + 1]
+            if state.get("messages"):
+                return {"returncode": 0, "stdout": json.dumps({"data": {"items": [state["messages"][mid]]}})}
             payload = {
                 "data": {
                     "items": [
@@ -2767,7 +2774,6 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
         runtime_root=tmp_path / "runtime", answer=answer, reply_runner=reply,
     )
     result = runtime.process_lark_goal_topic_event(**kwargs)
-    sendable = len(body.encode("utf-8")) < 150_000
     if body == r"private\nformat":
         # Escaped newlines are repaired before the first send, so the answer is
         # delivered as markdown (a real bullet list) and is not reported as a
@@ -2786,26 +2792,21 @@ def test_manager_report_delivery_recovers_safe_format_and_keeps_pending_body(
     assert [
         incident["code"] for incident in result.get("rich_text_repairs") or []
     ] == expected_repairs
-    if sendable:
-        assert state["reply_text"] == expected
-        assert result["ok"] is reply_ok
-        assert result.get("format_degraded") is False
-    else:
-        # Longer than one deliverable message: the persisted answer is sent as a
-        # bounded, ordered sequence of parts that ends with the overflow note,
-        # instead of being left undelivered as `reply_format_invalid`.
-        assert result["ok"] is reply_ok
-        assert result.get("format_degraded") is True
-        if reply_ok:
-            assert result["delivery_part_count"] == MANAGER_REPLY_MAX_PARTS
-            assert result["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
-            assert state["reply_text"].startswith("(8/8) ")
-            assert MANAGER_REPLY_OVERFLOW_NOTE in state["reply_text"]
+    assert result["ok"] is reply_ok
+    assert result.get("format_degraded") is False
+    if reply_ok:
+        messages = list(state["messages"].values())
+        bodies = [json.loads(m["body"]["content"])["zh_cn"]["content"][0][0]["text"] for m in messages]
+        assert all(m["msg_type"] == "post" for m in messages)
+        if len(messages) == 1:
+            assert bodies == [expected]
         else:
-            assert result["status"] == "reply_delivery_pending"
-            assert result["reason"] == "reply_part_delivery_incomplete"
-            assert result["delivery_parts_sent"] == 0
-            assert result["source_acknowledged"] is False
+            assert "".join(part.split("\n\n", 1)[1] for part in bodies) == expected
+            assert result["delivery_part_count"] == len(messages)
+            assert result["delivery_parts_sent"] == len(messages)
+    else:
+        assert result["status"] == "reply_delivery_pending"
+        assert result["source_acknowledged"] is False
     pending = inspect_lark_event_inbox(project=kwargs["runtime_root"],
                                       config_path=Path(result["inbox_config_ref"]))
     if reply_ok:
@@ -2934,7 +2935,7 @@ def test_manager_delivery_reuses_saved_answer_after_transport_restart(
     assert second["ok"] is True
     assert second["status"] == "replied_and_acknowledged"
     assert second["saved_response_reused"] is True
-    assert second["format_degraded"] is True
+    assert second["format_degraded"] is False
     receipt = json.loads(delivery_files[0].read_text())
     assert receipt["status"] == "acknowledged"
     assert "delivery_text" not in receipt
@@ -3127,15 +3128,17 @@ def test_a_fully_sent_part_sequence_settles_after_an_interrupted_receipt_write(
     )
     saved = json.loads(state_path.read_text())
     assert saved["status"] == "pending"
-    assert saved["delivery_part_count"] == MANAGER_REPLY_MAX_PARTS
-    assert saved["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
-    assert saved[PART_DELIVERY_COMPLETE_KEY] is True
-    assert MANAGER_REPLY_OVERFLOW_NOTE in state["reply_text"]
-    delivered_once = [
-        call for call in state["calls"]
-        if "+messages-reply" in call and "--dry-run" not in call
-    ]
-    assert len(delivered_once) == MANAGER_REPLY_MAX_PARTS
+    journals = list((tmp_path / "runtime").glob("**/manager-delivery/parts/*.json"))
+    assert len(journals) == 1
+    parts_state = json.loads(journals[0].read_text())
+    part_count = len(parts_state["delivery_parts"])
+    assert part_count > 1
+    assert parts_state["delivery_parts_sent"] == part_count
+    assert parts_state[PART_DELIVERY_COMPLETE_KEY] is True
+    delivered_once = [call for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call]
+    assert len(delivered_once) == part_count
+    assert all("--content" in call and "--text" not in call for call in delivered_once)
 
     monkeypatch.setattr(runtime, "_write_manager_delivery", real_write)
     second = runtime.process_lark_goal_topic_event(**kwargs)
@@ -3153,7 +3156,7 @@ def test_a_fully_sent_part_sequence_settles_after_an_interrupted_receipt_write(
     settled = json.loads(state_path.read_text())
     assert settled["status"] == "acknowledged"
     assert settled["reply_verified"] is True
-    assert settled["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
+    assert settled["delivery_parts_sent"] == part_count
     pending = inspect_lark_event_inbox(project=kwargs["runtime_root"],
                                       config_path=config_path)
     assert pending["items"] == []
@@ -3244,12 +3247,13 @@ def test_a_part_whose_readback_failed_is_reconciled_instead_of_sent_twice(
     )
     saved = json.loads(state_path.read_text())
     assert saved["delivery_parts_sent"] == 0
-    assert saved[PART_ATTEMPT_KEY]["index"] == 0
-    sent_once = [
-        call[call.index("--text") + 1]
-        for call in state["calls"]
-        if "+messages-reply" in call and "--dry-run" not in call
-    ]
+    journals = list((tmp_path / "runtime").glob("**/manager-delivery/parts/*.json"))
+    assert len(journals) == 1
+    parts_state = json.loads(journals[0].read_text())
+    part_count = len(parts_state["delivery_parts"])
+    assert parts_state[PART_ATTEMPT_KEY]["index"] == 0
+    sent_once = [call[call.index("--content") + 1] for call in state["calls"]
+        if "+messages-reply" in call and "--dry-run" not in call]
     assert len(sent_once) == 1
 
     kwargs["reply_runner"] = working_runner
@@ -3259,15 +3263,15 @@ def test_a_part_whose_readback_failed_is_reconciled_instead_of_sent_twice(
     assert second["status"] == "replied_and_acknowledged"
     assert len(answered) == 1
     sent_total = [
-        call[call.index("--text") + 1]
+        call[call.index("--content") + 1]
         for call in state["calls"]
         if "+messages-reply" in call and "--dry-run" not in call
     ]
     assert sent_total.count(sent_once[0]) == 1
-    assert len(sent_total) == MANAGER_REPLY_MAX_PARTS
+    assert len(sent_total) == part_count
     settled = json.loads(state_path.read_text())
     assert settled["status"] == "acknowledged"
-    assert settled["delivery_parts_sent"] == MANAGER_REPLY_MAX_PARTS
+    assert settled["delivery_parts_sent"] == part_count
     assert PART_ATTEMPT_KEY not in settled
 
 
@@ -3277,7 +3281,7 @@ def test_a_long_manager_answer_is_delivered_as_one_message(
     """A 3000-character steward answer is one message, not a bounded sequence.
 
     The self-imposed 1200-character cap is not a provider limit: the transport
-    already accepts up to the 150 KB provider bound, and every reader-visible
+    already accepts the rich-post provider byte bound, and every reader-visible
     split costs an extra message plus a part-sequence record. This pins the
     single-message outcome so a later change cannot silently reintroduce the
     split for an ordinary long answer.
@@ -3395,12 +3399,12 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
     working_runner = _reply_runner(state)
 
     def part_index(text: str) -> int | None:
-        match = re.match(r"\((\d+)/(\d+)\) ", text)
+        match = re.match(r"（(\d+)/(\d+)）", text)
         return int(match.group(1)) if match else None
 
     def stalling_runner(args: list[str]) -> dict[str, Any]:
-        if "+messages-reply" in args and "--dry-run" not in args:
-            text = args[args.index("--text") + 1]
+        if "+messages-reply" in args and "--dry-run" in args:
+            text = json.loads(args[args.index("--content") + 1])["zh_cn"]["content"][0][0]["text"]
             index = part_index(text)
             if index is not None and index >= 3:
                 return {"returncode": 1}
@@ -3429,7 +3433,7 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
 
     def delivered_texts() -> list[str]:
         return [
-            call[call.index("--text") + 1]
+            json.loads(call[call.index("--content") + 1])["zh_cn"]["content"][0][0]["text"]
             for call in state["calls"]
             if "+messages-reply" in call and "--dry-run" not in call
         ]
@@ -3451,7 +3455,7 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
     assert third["delivery_notice_sent"] is True
     notices = [text for text in delivered_texts() if text.startswith("本条答复")]
     assert len(notices) == 1
-    assert "2/8" in notices[0]
+    assert f"2/{third['delivery_part_count']}" in notices[0]
 
     fourth = runtime.process_lark_goal_topic_event(**kwargs)
 
@@ -3466,7 +3470,8 @@ def test_a_stalled_part_sequence_tells_the_reader_what_was_delivered(
             message_id="om_incoming",
         ).read_text()
     )
-    assert saved[PART_STALL_NOTICE_KEY] is True
+    parts_path = next((tmp_path / "runtime").glob("**/manager-delivery/parts/*.json"))
+    assert json.loads(parts_path.read_text())[PART_STALL_NOTICE_KEY] is True
     assert saved["status"] == "pending"
 
 

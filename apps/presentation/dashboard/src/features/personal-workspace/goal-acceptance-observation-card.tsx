@@ -1,7 +1,7 @@
 import type { WorkspaceGoal } from "./personal-workspace-model";
 import { useWorkspaceI18n } from "./i18n";
 
-export function GoalAcceptanceObservationCard({ goal }: { goal: WorkspaceGoal }) {
+export function GoalAcceptanceObservationCard({ goal, overview = false }: { goal: WorkspaceGoal; overview?: boolean }) {
   const { t, locale } = useWorkspaceI18n();
   const checkLabels = locale === "zh-CN" ? {
     checkpoint_satisfied: "检查点满足", checkpoint_fresh: "检查点有效",
@@ -22,8 +22,8 @@ export function GoalAcceptanceObservationCard({ goal }: { goal: WorkspaceGoal })
   const label = (key: string) => labels[key as keyof typeof labels] ?? t("acceptance.unknown");
   const projection = goal.acceptanceObservation;
   const unavailable = goal.loadState || !projection || projection.goal_id !== goal.goalId || projection.coverage === "unavailable";
-  return <section className="personal-detail-card personal-goal-acceptance" aria-label={t("acceptance.title")}>
-    <div className="personal-detail-card-title"><h3>{t("acceptance.title")}</h3><em>{t("common.readOnly")}</em></div>
+  const content = <section className="personal-detail-card personal-goal-acceptance" aria-label={t("acceptance.title")}>
+    {!overview ? <div className="personal-detail-card-title"><h3>{t("acceptance.title")}</h3><em>{t("common.readOnly")}</em></div> : null}
     <p role="status">{t(unavailable ? "acceptance.unavailable" : "acceptance.partial")}</p>
     {!unavailable && projection ? <>
       <h4>{t("acceptance.gaps")}</h4>
@@ -55,4 +55,11 @@ export function GoalAcceptanceObservationCard({ goal }: { goal: WorkspaceGoal })
       {projection.truncated ? <p>{t("acceptance.truncated")}</p> : null}
     </> : null}
   </section>;
+  if (!overview) return content;
+  const zh = locale === "zh-CN";
+  return <details className="goal-overview-evidence goal-observation-details" key={goal.goalId}>
+    <summary><span>{t("acceptance.title")}</span><small>{unavailable ? t("acceptance.unavailable")
+      : `${projection!.acceptance_gaps.length} ${zh ? "项缺口" : "gaps"} · ${projection!.guards.length} ${zh ? "项限制" : "guards"} · ${zh ? "仅部分观测" : "Partial observations"}`}</small></summary>
+    {content}
+  </details>;
 }

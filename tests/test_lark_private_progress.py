@@ -668,3 +668,43 @@ def test_ambiguous_progress_edit_counts_against_budget_before_provider_write(ord
         assert len(provider.edits) == 1
     finally:
         runtime.close()
+
+
+@pytest.mark.parametrize("rollover", ["terminal", "progress"])
+def test_split_draft_retires_only_after_readback_and_keeps_the_full_next_reply(ordinary, rollover):  # noqa: F811
+    store, runtime, provider, transport = streaming(ordinary)
+    try:
+        event = provider.event("notes-app", "split-draft", "wait for interrupt")
+        transport.admit("notes-app", event)
+        row = transport.core.pending()[0]
+        active(store, row)
+        path = transport.root / f"{row['request_ref']}.json"
+        record = _read_json(path)
+        def inbox():
+            return transport._inbox(record)
+        draft = "## Draft\n\n" + "完整草稿字段。" * 4000
+        assert transport._deliver(path, record, "progress", draft, inbox=inbox)
+        count = len(provider.writes)
+        assert count > 1
+        assert record["deliveries"]["progress"]["attempt"]["message_ref"].startswith("lark-parts:")
+        provider.verify_replies = False
+        if rollover == "terminal":
+            assert not transport._deliver(path, record, "terminal", draft + "Final.", inbox=inbox)
+        else:
+            assert not transport._continue_progress(path, record, inbox=inbox)
+        assert len(provider.writes) == count
+        provider.verify_replies = True
+        if rollover == "progress":
+            assert transport._continue_progress(path, record, inbox=inbox)
+            assert record["deliveries"]["progress.0"]["verified"]
+        else:
+            assert transport._deliver(path, record, "terminal", draft + "Final.", inbox=inbox)
+            assert record["stream"]["closed"] and record["deliveries"]["terminal"]["verified"]
+            sent = len(provider.writes)
+            assert transport._deliver(path, record, "terminal", draft + "Final.", inbox=inbox)
+            assert len(provider.writes) == sent
+            final_parts = [text.split("\n\n", 1)[1] for _, text in provider.writes[count:]]
+            assert "".join(final_parts) == draft + "Final."
+        assert all(message["msg_type"] == "post" for ref, message in provider.messages.items() if ref.startswith("om_out_"))
+    finally:
+        runtime.close()

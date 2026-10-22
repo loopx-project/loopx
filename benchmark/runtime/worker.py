@@ -266,8 +266,8 @@ def native_goal_rounds(run_round, *, budget_seconds, continue_after_complete, cl
     """Drive one native Goal and, when opted in, continuation Goals until the budget ends.
 
     ``run_round(objective_suffix, timeout_sec)`` runs one Goal to a terminal status and
-    returns that status. Returns ``(rounds, outcome)`` where outcome is ``complete``,
-    ``budget_exhausted`` (a Goal was still active at the budget edge) or ``stopped``.
+    returns its typed outcome. Only ``complete`` may start an explicitly opted-in
+    continuation. Failure, blocking, cancellation and unknown outcomes stop.
     """
     from loopx.capabilities.benchmark_toolkit.native_codex_goal import NativeGoalDeadlineExceeded
 
@@ -284,7 +284,7 @@ def native_goal_rounds(run_round, *, budget_seconds, continue_after_complete, cl
             return rounds + 1, "budget_exhausted"
         rounds += 1
         if status != "complete" or not continue_after_complete:
-            return rounds, ("complete" if status == "complete" else "stopped")
+            return rounds, status
         remaining = None if deadline is None else deadline - clock()
         if remaining is not None and remaining <= reserve_seconds:
             return rounds, "complete"
@@ -304,6 +304,7 @@ def run_native_goal(
         NativeGoalConfig,
         StdioNativeGoalTransport,
         compact_native_goal_receipt,
+        native_goal_outcome,
         refresh_native_goal_status,
         run_native_goal_until_terminal,
     )
@@ -339,7 +340,9 @@ def run_native_goal(
                 transport, NativeGoalConfig(objective=body + suffix, **base),
                 timeout_sec=timeout_sec, on_turn_started=observed.append,
             )
-            return turn.post_goal_status or refresh_native_goal_status(transport, turn)
+            if not turn.post_goal_status:
+                refresh_native_goal_status(transport, turn)
+            return native_goal_outcome(turn)
 
         try:
             rounds, outcome = native_goal_rounds(
@@ -352,10 +355,10 @@ def run_native_goal(
                 # Reaching the budget with an active Goal is normal exhaustion for
                 # a native-Goal worker, not a runner failure.
                 receipt["budget_exhausted"] = True
-            receipt["ok"] = True
+            receipt["ok"] = outcome in {"complete", "blocked", "paused", "budget_exhausted"}
         finally:
             if observed:
-                receipt["native_goal"] = compact_native_goal_receipt(observed[0])
+                receipt["native_goal"] = compact_native_goal_receipt(observed[-1])
 
 
 def native_command(env, execution, stage, wake, session_wake):
@@ -656,6 +659,8 @@ def main() -> int:
         resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
     receipt = run_once(dict(os.environ))
     print(json.dumps(receipt))
+    if receipt.get("native_goal_outcome") == "cancelled":
+        return 130
     if receipt.get("budget_exhausted") and receipt["mode"] in {"heartbeat", "turn"}:
         from benchmark.runtime.scheduler import BUDGET_EXHAUSTED_EXIT_CODE
 

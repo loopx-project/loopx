@@ -85,3 +85,54 @@ def test_bound_quota_context_and_cli_pages_follow_current_task_without_selecting
     stale = cli(*next_args[next_args.index("explore"):], expected=1)
     assert "changed" in stale["error"] and log.read_bytes() == source
     cli("explore", "turn-context", *identity, "--todo-id", "todo_missing", expected=1)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_shared_planner_question_does_not_bury_new_current_task_evidence(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    monkeypatch.chdir(project)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+
+    def cli(*args):
+        code, packet = fixture._run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0, json.dumps(packet)
+        return packet
+
+    identity = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
+    cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--explore-mode", "planning", "--execute")
+    cli("todo", "update", *identity, "--todo-id", fixture.TODO_ID, "--priority", "P2",
+        "--explore-result-node-ref", "current", "--explore-result-node-ref", "shared")
+    for i in range(4):
+        other = cli("todo", "add", "--goal-id", fixture.GOAL_ID, "--role", "agent", "--priority", "P1",
+            "--claimed-by", fixture.AGENT_ID, "--text", f"Validate separate method {i}.",
+            "--task-class", "advancement_task", "--action-kind", "validate", "--target-key", f"other-{i}")
+        cli("todo", "update", *identity, "--todo-id", other["todo_id"], "--explore-result-node-ref", "shared")
+    log = explore_result_log_path(runtime, fixture.GOAL_ID)
+    for node in ["current", "shared"]:
+        append_explore_result_event(log, build_explore_node_event(
+            goal_id=fixture.GOAL_ID, agent_id=fixture.AGENT_ID, node_id=node,
+            title=node, node_kind="question", status="exploring"))
+    for i, node in enumerate(["shared", "shared", "current"]):
+        evidence = f"result:observation-{i}"
+        append_explore_result_event(log, build_explore_finding_event(
+            goal_id=fixture.GOAL_ID, agent_id=fixture.AGENT_ID, node_id=node,
+            finding_id=f"observation-{i}", title=f"Observation {i}", status="confirmed",
+            summary="Applicable to the named input only.", evidence_refs=[evidence],
+            tags=["writeback-result"], recorded_at=f"2026-01-0{i + 1}T00:00:00Z",
+            measurements=[dict(metric="quality", value=i, unit="points", higher_is_better=True,
+                comparison_scope=f"validation:{node}", input_revision="inputs-v1",
+                evaluation_ref="evaluator:v1", candidate_ref=f"candidate:{i}", evidence_ref=evidence)]))
+    original_log = log.read_bytes()
+    unscoped = cli("explore", "turn-context", *identity, "--result-limit", "1")
+    assert unscoped["graph"]["writeback_results"][0]["node_id"] == "shared"
+    scoped = cli("explore", "turn-context", *identity, "--todo-id", fixture.TODO_ID, "--result-limit", "1")
+    assert scoped["graph"]["writeback_results"][0]["finding_id"] == "observation-2"
+    assert scoped["graph"]["measurement_feedback"][0]["node_id"] == "current"
+    assert scoped["harness"]["selected_branches"] == unscoped["harness"]["selected_branches"]
+    next_args = scoped["graph"]["result_page"]["next_command"]
+    after = cli(*next_args[next_args.index("explore"):])
+    assert after["graph"]["writeback_results"][0]["finding_id"] == "observation-1"
+    assert after["graph"]["measurement_feedback"][0]["node_id"] == "shared"
+    assert log.read_bytes() == original_log

@@ -1065,12 +1065,23 @@ class ChatLoopXMode:
                 emit("collaboration.execution", summary)
             return {"ok": True, **result}
 
+        from .control_plane.goals.acceptance import GoalAcceptanceRejected
+
         def tool(name, arguments):
             try:
                 # Dispatch admission and pause share the same fence. Already
                 # launched children remain independently governed.
                 with self._lock(session_id):
                     return dispatch(name, arguments)
+            except GoalAcceptanceRejected as exc:
+                return {
+                    "ok": False,
+                    "error": exc.code,
+                    **exc.payload,
+                    "next_action": "Read current outcomes and correct the rejected document without dropping retained requirements or provenance. "
+                    "Use a new operation id for changed intent: the conversation keeps the original request immutable. "
+                    "For an uncertain write, recover the original unchanged request first.",
+                }
             except (ValueError, KeyError, OSError):
                 return {
                     "ok": False,

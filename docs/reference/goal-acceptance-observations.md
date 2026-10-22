@@ -101,19 +101,60 @@ Goal 完成；要求／工作变化使依据过期，产物修改后须重新核
 Native `goal-acceptance` and outcome-update `refresh-state` rejections retain
 their stable error code. A known outcome validation rule also supplies optional
 `error_detail`, such as `source ref must be an opaque identifier`, in JSON and
-Markdown. This detail contains fixed rule text, never the rejected value or
-provider/IO context. Validation rejection writes nothing: after confirming that
-result, correct the document and retry its operation with the still-current
+Markdown. This detail contains fixed rule text and validator-measured byte
+counts, never the rejected value or provider/IO context. Validation rejection
+writes nothing: after confirming that result, correct the document and retry
+its operation with the still-current
 provider revision. An uncertain write still follows the original receipt and
 recovery rules. Successful operations and unmarked failures keep their existing
 behavior.
 
 中文：原生 `goal-acceptance` 和成果更新 `refresh-state` 拒绝保留稳定错误码。
 已知成果校验规则还会在 JSON 与 Markdown 中提供可选 `error_detail`，例如
-`source ref must be an opaque identifier`。详情只包含固定规则，不回显被拒值或
+`source ref must be an opaque identifier`。详情只包含固定规则及校验器实测字节数，不回显被拒值或
 provider/IO 上下文。校验拒绝不写入状态；确认这一结果后，修正文档并沿用原操作和
 仍有效的 provider revision 重试。写入结果不确定时继续遵循原有回执与恢复规则。
 成功操作和未标记错误保持既有行为。
+
+Supporting outcomes share two independent 131072-byte compact UTF-8 JSON
+budgets across the Goal: declarations excluding current reviews, and current
+reviews measured as the remaining bytes of the same normalized snapshot. A
+rejection identifies the failing budget and reports its candidate, retained and
+limit bytes. Retained means that budget before this patch in the current Goal
+lifetime. A fresh lifetime has zero retained bytes; no current reviews means
+zero retained review bytes. These are storage observations, not model tokens, packet size or measured execution cost. The
+64-source limit per outcome remains independent. Omitting `source` on an
+ordinary review avoids adding provenance but cannot bypass either byte budget.
+
+For review overflow, shorten only the proposed review notes and evidence
+references while preserving each conclusion and its provenance; keep full
+evidence in its owning material. For declaration overflow, shortening reviews
+cannot help. Preserve original requirements and origins and report the capacity
+blocker if no lossless update fits. Never prune history, raise a limit or create
+a replacement outcome to make the same work fit. Retain the failed response;
+no automatic compaction or retry occurs.
+
+中文：整个 Goal 的累计成果共享两个独立的 131072 字节紧凑 UTF-8 JSON 预算：
+不含当前复核的声明，以及同一规范化快照中当前复核增加的字节。拒绝时指出超限的
+预算，并给出该预算的拟写入、保留状态和上限字节数；保留状态指本次修改前、当前
+Goal 生命周期中的对应字节，新生命周期或尚无复核时相应值为零。这是存储体积，
+不能代替模型 token、packet 大小或实测执行成本；每项成果 64 个来源的限制仍独立。
+普通复核省略 `source` 可以避免追加来源，但不能绕过任一种字节预算。
+
+复核超限时，仅精简拟写入复核的重复说明和证据引用，保留每项结论及溯源，完整
+证据留在原材料中。声明超限时，缩短复核没有作用。保留原要求与来源，无法无损
+写入时报告容量阻塞。不得清理历史、提高上限或新建替代成果规避限制；保留失败
+响应。系统不自动压缩或重试。
+
+The existing native conversation tool also retains this owner-qualified detail.
+Its request envelope is immutable: after a confirmed rejection, a corrected
+document needs a new operation id and current readback. An unchanged retry of an
+uncertain write still recovers the original operation. Generic provider/IO errors
+continue to use the existing sanitized rejection.
+
+中文：既有原生对话工具也保留这种 owner 校验诊断。对话请求封套不可改写；确认
+拒绝后，修正文档须使用新操作 ID 和当前读回。结果不确定时仍以原样请求恢复原操作。
+普通 provider/IO 错误保持原有脱敏拒绝。
 
 <a id="owner-authorized-contract-v0"></a>
 

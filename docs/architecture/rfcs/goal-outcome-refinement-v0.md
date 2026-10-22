@@ -246,6 +246,36 @@ envelope. Explicit sources remain additive and immutable; overflow fails with
 guidance rather than dropping provenance or raising the limit. A new declaration
 cannot use the review path to evade provenance, ownership or check authority.
 
+Declarations and current evidence reviews have independent 128 KiB UTF-8 JSON
+budgets in the same canonical snapshot. The declaration budget includes Goal
+identity, original objectives, requirements, work links and every source; it
+excludes only the optional `review` fields. The review budget counts their exact
+additional serialized bytes. This explicitly raises the combined outcome-state
+ceiling from 128 to 256 KiB; it is a resource tradeoff, not a historical budget
+pass. Per-field/count limits, operation history and provider transport limits
+remain unchanged. Neither envelope can borrow from the other.
+
+The previous shared cap admitted a 131,000-byte declaration but prevented its
+next complete evidence review. Keeping that cap would require rejecting valid
+progress or moving retained records into a new reference/hydration protocol.
+The bounded extra envelope keeps existing synchronous consumers, one atomic
+snapshot, receipts and recovery intact. No compression, external authority,
+provenance pruning or migration is introduced. Oversized reviews fail before
+commit, retain the prior snapshot and direct detailed evidence to its owning
+material. Existing stored states remain readable by older versions, but an
+older writer may reject further refinement above its combined cap; rollback
+must not delete declarations or historical receipts to make them fit.
+
+The synthetic 20-outcome/100-requirement case grows from 131,000 to 131,753
+stored bytes after review; its full outcome projection is 154,503 bytes. On the
+same already-admissible 19,454-byte input, base and candidate produce identical
+state/projection. An alternating 100-sample owner-refinement plus projection
+measurement gives base/candidate p50 1.025/1.034 ms and p95 1.387/1.417 ms. This
+is a local pure-owner cost observation, not a CLI/provider SLO or long-horizon
+benefit. Real File/SQLite CLI and native conversation tests cover the crowded
+case; File/SQLite/PostgreSQL authority tests cover restart, replay, stale bases
+and atomic overflow rejection. No installed-state expansion is claimed here.
+
 The existing admitted-work context carries the complete outcome declaration;
 when inline content is present, no duplicate acceptance inspection is required.
 Changes can accompany ordinary `refresh-state --goal-outcome-update-json`, or one

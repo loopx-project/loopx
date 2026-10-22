@@ -57,7 +57,7 @@ APP_SCHEDULER_CONTEXT = scheduler_execution_context_for_runtime_profile(
 )
 
 
-def assert_plan_shape(plan: dict, markdown: str | None = None) -> None:
+def assert_plan_shape(plan: dict, markdown: str | None = None, *, expected_user_todos: int = 1) -> None:
     eligible_ids = [item["goal_id"] for item in plan["groups"]["eligible"]]
     operator_gate_ids = [item["goal_id"] for item in plan["groups"]["operator_gate"]]
     throttled_ids = [item["goal_id"] for item in plan["groups"]["throttled"]]
@@ -73,7 +73,7 @@ def assert_plan_shape(plan: dict, markdown: str | None = None) -> None:
     assert gated["quota"]["blocked_action_scope"] == "gated_delivery", gated
     assert "operator_question" in gated, gated
     if "user_todos" in gated:
-        assert gated["user_todos"]["open_count"] == 1, gated
+        assert gated["user_todos"]["open_count"] == expected_user_todos, gated
     assert "throttled-half" not in eligible_ids, eligible_ids
     if markdown is not None:
         assert "next_automatic_turn=full-speed" in markdown, markdown
@@ -1425,7 +1425,7 @@ def main() -> int:
     assert_slot_preview(build_quota_slot_preview(status_payload, goal_id="near-limit-half", slots=1))
     with tempfile.TemporaryDirectory(prefix="loopx-quota-plan-smoke-") as tmp:
         cli_plan, cli_markdown = run_cli_quota_plan(Path(tmp))
-    assert_plan_shape(cli_plan, cli_markdown)
+    assert_plan_shape(cli_plan, cli_markdown, expected_user_todos=0)
     with tempfile.TemporaryDirectory(prefix="loopx-quota-should-run-smoke-") as tmp:
         assert_throttled_cli_should_run(run_cli_throttled_should_run(Path(tmp)))
     with tempfile.TemporaryDirectory(prefix="loopx-quota-slot-smoke-") as tmp:

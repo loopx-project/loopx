@@ -694,6 +694,13 @@ or quota, and neither mode is enabled by supplying a task id.
 The dashboard's saved-evidence reader also pages through history; the CLI
 options above control the agent context, not dashboard page size.
 
+Within the current task's linked questions, results retain source recency after
+the reserved counterexamples; measurement groups retain their own append-order
+recency. A question shared with a different planned task gets no extra priority.
+Planner ordering applies only outside the current task's links. When diagnosing
+buried evidence, compare the ordinary task page with the node-filtered read:
+successful lookup alone does not show that the next agent saw or used it.
+
 When the stride strategy is enabled, findings read from a global result page
 can be cited in `explore_review.considered_refs` by also copying that page's
 `revision`, `offset` and `limit` into `explore_review.result_pages` (up to three

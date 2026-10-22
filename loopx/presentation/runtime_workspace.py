@@ -166,9 +166,17 @@ class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandl
                     "status_url": self.server.status_url, "read_only_sources": self.server.catalog,
                     "control_plane_write_enabled": False, "reward_write_enabled": False}
                 self._json(status)
-            elif parsed.path == "/api/chat/explore-results" and query.get("view") == ["history"]:
+            elif parsed.path == "/api/chat/explore-results":
+                from .explore_results_api import _finding_rows
+
                 cursor = query.get("cursor", [""])[0]
-                self._json(self.server.reader.history(goal_id, cursor))
+                view = query.get("view", ["findings"])
+                if view == ["history"]:
+                    self._json(self.server.reader.history(goal_id, cursor))
+                elif view == ["findings"]:
+                    self._json(self.server.reader.findings(goal_id, cursor, projector=_finding_rows))
+                else:
+                    self._json({"ok": False, "error": "Unknown Explore view."}, 400)
             elif parsed.path in {RESEARCH_ANALYSIS_PATH, RESEARCH_ANALYSIS_PATH + "/citation"}:
                 if self.server.analysis_execution_enabled:
                     self._research_analysis_read()

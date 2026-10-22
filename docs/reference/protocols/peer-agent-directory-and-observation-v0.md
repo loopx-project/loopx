@@ -183,8 +183,13 @@ This changes the previous default refusal for *all* multiple bindings: archived
 history no longer requires the owner to supply a link. It applies to the local
 CLI and `manager-inbox request --require-host-route`, including trusted steward
 and peer callers. Readable records are still neither fresh runtime liveness nor
-model/capacity qualification. Restricted Chat and remote hosts do not acquire a
-new observer or execution path. Registration, the scoped candidate set and the
+model/capacity qualification. Manager `agent_route` reads now also use an
+authorized SSH evidence source and execute the same resolver on that source
+host; they no longer reject every remote source. Existing source/Goal grants
+are rechecked after the read, and cached portfolio evidence cannot qualify a
+route. Restricted Chat gains no host tools or execution permission. SSH-origin
+Codex bindings use the source host's local store when available; a missing or
+unrecognized store remains unknown. Registration, the scoped candidate set and the
 selected identity are rechecked after host reads; a changed set remains
 unresolved, while a mere reorder does not change the route. Request replay
 keeps its original exact route.

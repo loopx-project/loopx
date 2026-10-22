@@ -24,6 +24,7 @@ class RecordingDockerBackend(DockerBackend):
         self.execution_command = None
         self.execution_start_marker = None
         self.execution_receipt = None
+        self.native_goal_receipt = None
         self.auth_ips = [] if oauth_proxy else resolve_hostname("auth.openai.com", logger)
         if not oauth_proxy and not self.auth_ips:
             raise RuntimeError("Cannot resolve Codex OAuth endpoint")
@@ -124,6 +125,23 @@ class RecordingDockerBackend(DockerBackend):
                     observations.append({"artifact": name, "collected": False,
                                          "error_kind": type(error).__name__})
             (self.log_dir / "artifact-collection.json").write_text(json.dumps(observations))
+            # A native-Goal worker owns exactly one wake (including opt-in
+            # continuation Goals). Read its retained receipt after collection;
+            # don't infer completion from a shell exit or solver output prose.
+            wakes = self.log_dir / "runtime" / "agent" / "wakes"
+            native = []
+            for path in wakes.glob("*/receipt.json"):
+                try:
+                    receipt = json.loads(path.read_text())
+                    if isinstance(receipt, dict) and receipt.get("mode") in {"native-goal", "loopx-goal"}:
+                        native.append(receipt)
+                except (OSError, ValueError):
+                    continue  # Collection gaps retain the transport failure.
+            if len(native) == 1:
+                self.native_goal_receipt = {key: native[0][key] for key in
+                    ("native_goal_outcome", "native_goal_rounds", "native_goal") if key in native[0]}
+            elif native:
+                self.native_goal_receipt = {"native_goal_outcome": "unknown"}
         super().cleanup_container(handle, logger)
         if self.feedback is not None:
             # Native cleanup logs some failures instead of raising. Verify the

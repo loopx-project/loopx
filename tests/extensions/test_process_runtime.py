@@ -160,18 +160,20 @@ def test_windows_force_cleanup_reserves_bounded_original_receiver_reap(monkeypat
 
 
 def test_windows_exited_leader_does_not_certify_descendant_cleanup(monkeypatch):
+    monkeypatch.setattr(process_runtime.time, "monotonic", lambda: 0.0)
     process = Mock(spec=subprocess.Popen)
     process.poll.return_value = 0
     taskkill = Mock()
     monkeypatch.setattr(subprocess, "Popen", taskkill)
     with pytest.raises(RuntimeError, match="unconfirmed after leader exit"):
-        process_runtime._force_terminate_windows_process_tree(process, time.monotonic() + .1)
+        process_runtime._force_terminate_windows_process_tree(process, .1)
     taskkill.assert_not_called()
     process.kill.assert_not_called()
     assert 0 <= process.wait.call_args.kwargs["timeout"] <= .1
 
 
 def test_windows_force_cleanup_cannot_accept_an_unreaped_receiver(monkeypatch):
+    monkeypatch.setattr(process_runtime.time, "monotonic", lambda: 0.0)
     process = Mock(spec=subprocess.Popen)
     helper = Mock(spec=subprocess.Popen)
     helper.wait.return_value, helper.poll.return_value = 0, 0
@@ -179,7 +181,7 @@ def test_windows_force_cleanup_cannot_accept_an_unreaped_receiver(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", Mock(return_value=helper))
     process.wait.side_effect = subprocess.TimeoutExpired("native", .1)
     with pytest.raises(subprocess.TimeoutExpired):
-        process_runtime._force_terminate_windows_process_tree(process, time.monotonic() + .1)
+        process_runtime._force_terminate_windows_process_tree(process, .1)
     process.wait.assert_called_once()
     assert 0 <= process.wait.call_args.kwargs["timeout"] <= .1
 

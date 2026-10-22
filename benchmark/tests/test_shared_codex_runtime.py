@@ -213,7 +213,7 @@ def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
     assert native_goal_rounds(never_ends, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "budget_exhausted")
     # A non-complete terminal status stops without continuation.
     clock[0] = 0
-    assert native_goal_rounds(lambda s, t: "cancelled", budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "stopped")
+    assert native_goal_rounds(lambda s, t: "cancelled", budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0]) == (1, "cancelled")
 
 
 def test_fresh_wakes_share_environment_without_resuming_or_duplicate_session_copies(
