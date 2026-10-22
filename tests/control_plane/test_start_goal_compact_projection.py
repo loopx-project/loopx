@@ -1432,7 +1432,7 @@ def test_dsh_native_start_goal_binds_the_exact_same_session_lane(
     )
 
 
-def test_start_goal_with_unbound_thread_requires_existing_lane_selection(
+def test_start_goal_with_unbound_thread_defaults_to_fresh_agent_registration(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
@@ -1454,16 +1454,16 @@ def test_start_goal_with_unbound_thread_requires_existing_lane_selection(
 
     gate = payload["guided_transaction"]["identity_selection_gate"]
     assert payload["guided_transaction"]["blocked_by"] == "agent_identity_selection"
-    assert gate["state"] == "thread_binding_selection_required"
-    assert gate["default_action"] == "select_agent_identity"
-    assert gate["fresh_agent_registration"] is None
+    assert gate["state"] == "fresh_agent_registration_required"
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
     assert all(
         choice["requires_explicit_takeover_intent"] is True
         for choice in gate["choices"]
     )
 
 
-def test_start_goal_unbound_thread_requires_lane_selection_even_for_single_registered_agent(
+def test_start_goal_unbound_thread_defaults_to_fresh_for_single_registered_agent(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
@@ -1482,10 +1482,31 @@ def test_start_goal_unbound_thread_requires_lane_selection_even_for_single_regis
     assert payload["agent_id"] is None
     assert payload["guided_transaction"]["blocked_by"] == "agent_identity_selection"
     gate = payload["guided_transaction"]["identity_selection_gate"]
-    assert gate["state"] == "thread_binding_selection_required"
-    assert gate["default_action"] == "select_agent_identity"
-    assert gate["fresh_agent_registration"] is None
+    assert gate["state"] == "fresh_agent_registration_required"
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
     assert gate["choices"][0]["agent_id"] == AGENT_ID
+
+
+def test_start_goal_unbound_thread_preserves_explicit_existing_agent(
+    tmp_path: Path,
+) -> None:
+    project = _write_connected_project(tmp_path)
+
+    payload = build_start_goal_guided_packet(
+        project=project,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        thread_id="thread-explicit-existing",
+        cli_bin="loopx",
+        host_surface="codex-app",
+        goal_text=GOAL_TEXT,
+        available_capabilities=["network"],
+    )
+
+    assert payload["agent_id"] == AGENT_ID
+    assert payload["command_pack"]["host_loop_activation"]["activation_allowed"] is True
+    assert payload["guided_transaction"].get("identity_selection_gate") is None
 
 
 def test_start_goal_without_thread_id_requires_explicit_lane_selection(tmp_path: Path) -> None:
@@ -1510,7 +1531,7 @@ def test_start_goal_without_thread_id_requires_explicit_lane_selection(tmp_path:
     assert gate["choices"][0]["requires_explicit_takeover_intent"] is True
 
 
-def test_cli_codex_app_unbound_ambient_thread_requires_lane_selection(
+def test_cli_codex_app_unbound_ambient_thread_defaults_to_fresh_agent(
     tmp_path: Path, monkeypatch
 ) -> None:
     project = _write_connected_project(tmp_path)
@@ -1540,9 +1561,9 @@ def test_cli_codex_app_unbound_ambient_thread_requires_lane_selection(
     assert payload["thread_id"] == "thread-new-session"
     assert payload["agent_id"] is None
     gate = payload["guided_transaction"]["identity_selection_gate"]
-    assert gate["state"] == "thread_binding_selection_required"
-    assert gate["default_action"] == "select_agent_identity"
-    assert gate["fresh_agent_registration"] is None
+    assert gate["state"] == "fresh_agent_registration_required"
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
     assert gate["choices"][0]["agent_id"] == AGENT_ID
 
 
@@ -1629,7 +1650,7 @@ def test_cli_codex_app_fails_closed_when_codex_thread_runs_over_ssh(
     assert "--codex-app" not in thin_prompt_command
 
 
-def test_cli_codex_app_ssh_unbound_ambient_thread_requires_lane_selection(
+def test_cli_codex_app_ssh_unbound_ambient_thread_defaults_to_fresh_agent(
     tmp_path: Path, monkeypatch
 ) -> None:
     project = _write_connected_project(tmp_path)
@@ -1659,9 +1680,9 @@ def test_cli_codex_app_ssh_unbound_ambient_thread_requires_lane_selection(
     assert payload["thread_id"] == "thread-ssh-new"
     assert payload["agent_id"] is None
     gate = payload["guided_transaction"]["identity_selection_gate"]
-    assert gate["state"] == "thread_binding_selection_required"
-    assert gate["default_action"] == "select_agent_identity"
-    assert gate["fresh_agent_registration"] is None
+    assert gate["state"] == "fresh_agent_registration_required"
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
     assert gate["choices"][0]["agent_id"] == AGENT_ID
 
 

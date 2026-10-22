@@ -113,10 +113,12 @@ def _loopx_start_goal_arguments_instruction(
         "arguments, and never infer a route from issue/PR wording or URLs. "
         "Use `--new-peer` only when the user explicitly asks for a fresh, new, "
         "second, or additional Agent identity rather than continuing or taking "
-        "over an existing lane; pass it as a separate argument before "
-        "`--slash-command-arguments`, or preserve it when supplied as a leading "
-        "visible switch. Do not infer a fresh identity from ordinary task "
-        "wording, registry order, or the availability of another lane."
+        "over an existing lane. A stable unbound host thread already defaults to "
+        "fresh registration; on a host without a stable thread id, pass "
+        "`--new-peer` as a separate argument before `--slash-command-arguments`, "
+        "or preserve it when supplied as a leading visible switch. Do not infer "
+        "a fresh identity from ordinary task wording, registry order, or the "
+        "availability of another lane."
     )
     if host_surface is None:
         instruction += (
