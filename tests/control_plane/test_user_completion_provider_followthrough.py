@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from test_todo_decision_scope_lifecycle import (
     AGENT_ID, GOAL_ID, PUBLISH_SCOPE, _add_target_and_gate, _write_fixture,
 )
@@ -25,12 +25,11 @@ REPO = Path(__file__).resolve().parents[2]
 def _initialize_authority(
     runtime: Path,
     state: Path,
-    registry: Path,
     provider: str,
     *,
     handoff_mode: str,
 ) -> None:
-    rows = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+    rows = read_fixture_todos(state)
     projection = build_todo_runtime_shadow_projection(
         goal_id=GOAL_ID,
         handoff_mode=handoff_mode,
@@ -64,7 +63,6 @@ def test_public_completion_commits_linked_decision(
     _initialize_authority(
         tmp_path / "runtime",
         state,
-        registry,
         provider,
         handoff_mode="soft_claim",
     )
@@ -112,7 +110,6 @@ def test_public_action_closure_and_cli_cancel(tmp_path: Path, monkeypatch, provi
     _initialize_authority(
         tmp_path / "runtime",
         state,
-        registry,
         provider,
         handoff_mode="hard_lease",
     )
@@ -163,7 +160,6 @@ def test_public_gate_closure_without_decision_preserves_existing_contract(
     _initialize_authority(
         tmp_path / "runtime",
         state,
-        registry,
         provider,
         handoff_mode="hard_lease",
     )

@@ -77,13 +77,10 @@ def _fixture(
 def _use_provider(state, registry, provider, monkeypatch, *, handoff_mode="soft_claim"):
     if handoff_mode == "hard_lease":
         state.write_text("---\nhandoff_mode: hard_lease\n---\n" + state.read_text())
-    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
     isolate_sqlite_runtime(registry.parent, monkeypatch)
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-    initialize_canonical_authority(registry.parent, GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, leases=[], handoff_mode=handoff_mode),
-        state_path=state, provider=provider)
+    initialize_canonical_source_fixture(registry.parent, GOAL_ID,
+        state_path=state, provider=provider, handoff_mode=handoff_mode)
     state.unlink()
 
 

@@ -5,7 +5,6 @@ import json
 import pytest
 
 from loopx.capabilities.explore.result_log import explore_result_log_path
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.work_items.task_lease import acquire_task_lease
 from loopx.todos import list_goal_todos
 from tests.control_plane.test_explore_result_writeback import ATTACHMENT
@@ -19,7 +18,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 def test_first_capture_allocates_identity_and_recovers_without_rewriting_scope(
     tmp_path, provider, conflict,
 ):
-    from canonical_authority_fixture import initialize_canonical_authority
+    from canonical_authority_fixture import initialize_canonical_source_fixture
 
     project, runtime, registry = _write_fixture(tmp_path)
     config = json.loads(registry.read_text())
@@ -27,10 +26,8 @@ def test_first_capture_allocates_identity_and_recovers_without_rewriting_scope(
     registry.write_text(json.dumps(config))
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID)
-    rows = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-    initialize_canonical_authority(runtime, GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=rows, handoff_mode="hard_lease"),
-        state_path=project / config["goals"][0]["state_file"], provider=provider)
+    initialize_canonical_source_fixture(runtime, GOAL_ID,
+        state_path=project / config["goals"][0]["state_file"], provider=provider, handoff_mode="hard_lease")
     acquire_task_lease(registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID,
                       todo_id=TODO_ID, owner=AGENT_ID, idempotency_key="capture-identity")
     assert _run_cli(registry, runtime, "todo", "claim", "--claimed-by", AGENT_ID,

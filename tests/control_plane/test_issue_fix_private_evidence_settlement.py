@@ -3,12 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.capabilities.issue_fix.feasibility import build_issue_fix_feasibility_packet
-from loopx.control_plane.coordination.runtime_shadow import (
-    build_todo_runtime_shadow_projection,
-)
 from loopx.domain_packs.issue_fix import (
     default_issue_fix_feasibility_ledger_path,
     upsert_issue_fix_feasibility_ledger_jsonl,
@@ -57,15 +54,8 @@ def test_sqlite_cli_private_evidence_refresh_and_original_turn_replay_spend_once
         assert code == 0, json.dumps(result, indent=2)
         return result
 
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-    initialize_canonical_authority(
-        runtime,
-        GOAL_ID,
-        build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease"
-        ),
-        state_path=state,
-        provider="sqlite",
+    initialize_canonical_source_fixture(
+        runtime, GOAL_ID, state_path=state, handoff_mode="hard_lease", provider="sqlite",
     )
     run(
         "task-lease",

@@ -25,12 +25,8 @@ ACTOR_AGENT = "codex-author"
 
 
 def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_todo_runtime_shadow_projection,
-    )
-    from loopx.todos import list_goal_todos
     from tests.control_plane.canonical_authority_fixture import (
-        initialize_canonical_authority,
+        initialize_canonical_source_fixture,
     )
 
     project = tmp_path / "repo"
@@ -68,16 +64,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-    initialize_canonical_authority(
-        runtime,
-        GOAL_ID,
-        build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
-        ),
-        state_path=state,
-        provider="file",
-    )
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state)
     return registry, state
 
 

@@ -9,12 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, DUE_MONITOR_TODO_ID, GOAL_ID, TODO_ID,
     _append_newly_due_monitor, _run_cli, _spend_run_count, _write_fixture,
 )
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.todos import add_goal_todo, list_goal_todos, update_goal_todo
 
 
@@ -22,16 +21,9 @@ def _scoped_fixture(tmp_path, monkeypatch, provider, route="source", *, with_gat
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, source = _write_fixture(tmp_path)
     _append_newly_due_monitor(project, priority="P1", watch_only=True)
-    todos = list_goal_todos(registry_path=source, goal_id=GOAL_ID)["todos"]
-    projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID,
-        todos=todos,
-        handoff_mode="soft_claim",
-    )
-    initialize_canonical_authority(
+    initialize_canonical_source_fixture(
         runtime,
         GOAL_ID,
-        projection,
         state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
         provider=provider,
     )

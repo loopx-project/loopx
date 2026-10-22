@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
+from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.work_items.team_plan_adapter import apply_team_plan
 from loopx.todos import add_goal_todo, list_goal_todos
@@ -26,12 +27,16 @@ def test_original_1x_team_receipt_survives_canonical_later_writes(tmp_path, monk
             agent_id=None, proposal=history["plan"], expected_state_fingerprint=history["basis"], **overrides)
 
     original = state.read_bytes()
-    assert replay()["action"] == "reused"
+    with pytest.raises(CanonicalAuthorityRequired):
+        replay()
     assert state.read_bytes() == original
-    rows = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    rows = read_fixture_todos(state)
     initialize_canonical_authority(runtime, "goal-a",
         build_todo_runtime_shadow_projection(goal_id="goal-a", todos=rows, handoff_mode="soft_claim"),
         state_path=state, provider=provider)
+    original = state.read_bytes()
+    assert replay()["action"] == "reused"
+    assert state.read_bytes() == original
     add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent", text="Later accepted work", agent_id="alpha")
     before, display = list_goal_todos(registry_path=registry, goal_id="goal-a"), state.read_bytes()
     recovered = replay()
