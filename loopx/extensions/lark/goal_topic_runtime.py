@@ -125,7 +125,7 @@ _EVENT_DIAGNOSTIC_PREFIX = "[event] "
 _EVENT_EXIT_REASON = re.compile(r"\(reason: (limit|timeout|signal)\)$")
 
 
-def _active_group_profile_configs(snapshot: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+def _active_group_profile_configs(snapshot: Mapping[str, object]) -> dict[str, dict[str, str]]:
     target_payload = snapshot.get("target_payload")
     target_payload = target_payload if isinstance(target_payload, Mapping) else {}
     binding_payloads = snapshot.get("binding_payloads")
@@ -158,23 +158,30 @@ def _active_group_profile_configs(snapshot: Mapping[str, Any]) -> dict[str, dict
     return profiles
 
 
-def _active_profile_configs(snapshot: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+def _active_profile_configs(snapshot: Mapping[str, object]) -> dict[str, dict[str, str]]:
     from .conversation_identity import identity_ref
 
     profiles = _active_group_profile_configs(snapshot)
-    for profile, config in dict(snapshot.get("private_profiles") or {}).items():
+    private = snapshot.get("private_profiles")
+    for profile, config in (private.items() if isinstance(private, Mapping) else []):
         if profile in profiles:
-            app_id = profiles[profile].get("bot_app_id")
+            stored_app_id = profiles[profile].get("bot_app_id")
+            app_id = stored_app_id or config.get("bot_app_id")
             if (config.get("audience", "owner") != "owner" or not app_id
                     or identity_ref(app_id) != config.get("provider_ref")):
                 raise ValueError("shared listener requires the same verified App and separate audiences")
             profiles[profile] = {**profiles[profile], **dict(config)}
+            if not stored_app_id:
+                # Keep the pre-upgrade group lease until its original owner
+                # exits. Verified private discovery supplies identity, not a
+                # reason to start a second consumer under a new App key.
+                profiles[profile]["consumer_ref"] = hashlib.sha256(profile.encode("utf-8")).hexdigest()[:32]
         else:
             profiles[profile] = dict(config)
     return profiles
 
 
-def _native_profile_event(snapshot: Mapping[str, Any], profile: str, event: Mapping[str, Any]) -> bool:
+def _native_profile_event(snapshot: Mapping[str, Any], profile: str, event: Mapping[str, object]) -> bool:
     """Select a transport lane only; its original owner still admits the input.
 
     An owner-private binding may share one consumer with legacy group routes.

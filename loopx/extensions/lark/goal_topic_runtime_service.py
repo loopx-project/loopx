@@ -333,11 +333,10 @@ class LarkGoalTopicRuntimeService:
                     # servers can use different runtime roots or ports. The
                     # consumer lease must therefore be machine/App scoped.
                     app_id = str(profile_config.get("bot_app_id") or "")
-                    # Both paths lease the same App-scoped digest, so aliases
-                    # or a second server cannot start another consumer.
-                    digest = (hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]
-                              if app_id else str(profile_config.get("consumer_ref")
-                              or hashlib.sha256(profile.encode("utf-8")).hexdigest()[:32]))
+                    # A composed legacy route explicitly retains its original
+                    # profile lease. Otherwise both paths use the App digest.
+                    digest = str(profile_config.get("consumer_ref") or (
+                        hashlib.sha256((app_id or profile).encode("utf-8")).hexdigest()[:32]))
                     lease = Path.home() / ".loopx" / "lark-consumers" / digest
                     with try_exclusive_file_lock(
                         lease, operation="lark_event_consumer"

@@ -18,7 +18,8 @@ from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntim
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX cross-process flock contract")
-def test_legacy_consumer_stays_standby_until_original_profile_owner_exits(tmp_path, monkeypatch):
+@pytest.mark.parametrize("shared_private", [False, True])
+def test_legacy_consumer_stays_standby_until_original_profile_owner_exits(tmp_path, monkeypatch, shared_private):
     from loopx.extensions.lark import goal_topic_runtime as runtime
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     profile = "legacy-group"
@@ -37,6 +38,10 @@ def test_legacy_consumer_stays_standby_until_original_profile_owner_exits(tmp_pa
         "binding_payloads": {"goal": {"bindings": {"goal": {"goal_id": "goal", "enabled": True,
             "provider": "lark", "target_ref": "group", "topic": {"root_message_id": "om_public_fixture"}}}}},
         "private_profiles": {}, "goal_contexts": {}}
+    if shared_private:
+        snapshot["private_profiles"][profile] = {"cli_bin": "fake-lark", "audience": "owner",
+            "provider_ref": identity_ref("cli_public_fixture"), "bot_app_id": "cli_public_fixture",
+            "consumer_ref": hashlib.sha256(b"cli_public_fixture").hexdigest()[:32]}
     started = threading.Event()
     monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile",
         lambda **_: started.set() or {"ok": True, "status": "stopped"})
@@ -168,7 +173,9 @@ def test_shared_consumer_dispatch_preserves_audience_and_survives_one_route_remo
                 profile: {**private["private_profiles"][profile], **invalid}}})
 
 
-def test_private_http_setup_shares_existing_group_profile_without_changing_its_grants(ordinary, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("stored_app,retarget", [(None, False), ("cli_notes_app", False),
+    ("cli_other_fixture", False), (None, True)])
+def test_private_http_setup_shares_existing_group_profile_without_changing_its_grants(ordinary, monkeypatch, stored_app, retarget):  # noqa: F811
     from test_lark_private_conversations import connect
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
     from loopx.extensions.lark.goal_topic_runtime import _active_profile_configs
@@ -179,6 +186,11 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
             "cli_bin": "lark-cli", "bot_app_id": "cli_notes_app"}}}},
         "binding_payloads": {"goal": {"bindings": {"goal": {"goal_id": "goal", "enabled": True,
             "provider": "lark", "target_ref": "group", "topic": {"root_message_id": "om_root"}}}}}}
+    identity = legacy["target_payload"]["targets"]["group"]["identity"]
+    if stored_app is None:
+        identity.pop("bot_app_id")
+    else:
+        identity["bot_app_id"] = stored_app
     frozen = json.dumps(legacy, sort_keys=True)
     monkeypatch.setattr("loopx.chat_lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: legacy)
     monkeypatch.setattr(ChatRequestHandler, "_lark_runner", lambda _: provider)
@@ -189,7 +201,11 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
     server.lark_cli_resolution = LarkCliResolution(command="lark-cli", available=True,
         source="explicit", version="fixture", error_code=None)
     server.lark_private_conversations = transport
-    server.lark_goal_topic_runtime = SimpleNamespace(refresh=lambda: None, health_snapshot=lambda: {}, close=lambda: None)
+    def snapshot():
+        return {**legacy, "private_profiles": transport.profiles()}
+    service = LarkGoalTopicRuntimeService(snapshot_provider=snapshot, runtime_root=store.root.parent,
+        runtime_controller=runtime, profile_poller=lambda _profile, stop: stop.wait())
+    server.lark_goal_topic_runtime = service
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     def post(body):
@@ -201,6 +217,12 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
             return response.status, json.loads(response.read())
         finally:
             connection.close()
+    if retarget:
+        capabilities = runtime.capabilities
+        def retargeted_capabilities():
+            provider.profile_apps["notes-app"] = "cli_replacement"
+            return capabilities()
+        monkeypatch.setattr(runtime, "capabilities", retargeted_capabilities)
     body = {"app_ref": "notes-app", "project_ref": runtime.project_contexts.available()[0]["project_ref"],
             "executor_endpoint_id": "codex", "context_kind": "steward"}
     try:
@@ -210,10 +232,22 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
         assert transport.bindings.read() == before
         provider.owner_ready = True
         status, result = post(body)
+        if stored_app == "cli_other_fixture" or retarget:
+            assert status == 400, result
+            assert transport.bindings.read() == before
+            return
         assert status == 200, result
         saved = next(row for row in result["connections"] if row["app_ref"] == "notes-app")
         assert saved["audience"] == "owner" and saved["context_kind"] == "steward"
-        assert "notes-app" in _active_profile_configs({**legacy, "private_profiles": transport.profiles()})
+        assert "notes-app" in _active_profile_configs(snapshot())
+        service.close()
+        # Reload the committed Core binding and compose the production listener
+        # again. A successful settings response must survive cold discovery.
+        service = LarkGoalTopicRuntimeService(snapshot_provider=snapshot, runtime_root=store.root.parent,
+            runtime_controller=runtime, profile_poller=lambda _profile, stop: stop.wait())
+        server.lark_goal_topic_runtime = service
+        service.refresh()
+        assert set(service.health_snapshot()) == {"notes-app", "steward-app"}
         assert post({**body, "audience": "group", "group_ids": ["oc_community"]})[0] == 400
         assert json.dumps(legacy, sort_keys=True) == frozen
         assert not provider.writes and not store.list_sessions()
@@ -221,4 +255,5 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
         server.shutdown()
         server.server_close()
         thread.join(2)
+        service.close()
         runtime.close()

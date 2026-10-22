@@ -53,6 +53,12 @@ Group grants and review callbacks remain separate, and disconnecting either
 route preserves the other. HTTP/Core fixtures cover setup, missing owner login,
 App mismatch and route removal; this does not qualify remote Agent delivery or
 an installed provider roundtrip.
+Legacy group entries without a stored App id use the freshly verified private
+profile identity while retaining the original profile-scoped consumer lease.
+Setup checks the effective shared configuration before publishing the Core
+binding; an App identity change before publication is rejected without changing
+that binding. Real HTTP/Core/runtime-refresh fixtures cover this path and cold
+listener discovery, with no provider messages or model work.
 
 Text admission persists the canonical Core Turn without waiting for its terminal
 answer. The existing bounded Session queue keeps follow-ups in FIFO order; another

@@ -39,6 +39,10 @@ Lark 页面选择一个非默认 App、当前可用工作区和宿主 executor�
 另一受众。群聊授权和审阅回调保持独立，解绑一路保留另一路。HTTP/Core fixture
 覆盖配置、本人未登录、App 不匹配和路由移除，不代表远程 Agent 投递或安装态
 provider 往返已通过。
+未保存 App id 的旧群聊配置使用刚核验的私聊 profile 身份，同时保留原 profile
+级 consumer lease。配置在发布 Core 绑定前校验实际共享组合；发布前 App 身份变化
+则拒绝，绑定保持不变。真实 HTTP/Core/runtime-refresh fixture 覆盖此路径及冷启动
+监听发现，不发送 provider 消息或执行模型。
 
 共享 typed Core 核验 App、本人、受众和当前工作区 grant，拥有稳定 Session、原生
 Turn FIFO 和确切 stop/new/status 目标。传输层保存独立的受理与最终投递意图，通过
