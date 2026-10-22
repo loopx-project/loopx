@@ -8,19 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from .history import load_registry
-from .paths import resolve_runtime_root
+from .paths import (
+    resolve_runtime_root,
+    validate_goal_id_path_segment as validate_goal_id_path_segment,
+)
 from .registry import registry_goals
-
-
-def validate_goal_id_path_segment(goal_id: str) -> str:
-    value = goal_id.strip()
-    if not value:
-        raise ValueError("goal id is required")
-    if value in {".", ".."} or "/" in value or "\\" in value:
-        raise ValueError("goal id must be a single path segment")
-    if Path(value).name != value:
-        raise ValueError("goal id must not include path traversal")
-    return value
 
 
 def unique_archive_path(archive_root: Path, goal_id: str, timestamp: str) -> Path:

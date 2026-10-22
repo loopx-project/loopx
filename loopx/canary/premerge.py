@@ -17,6 +17,14 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 
 PREMERGE_TIERS = {"quick", "standard", "deep"}
 
+# These paths need the existing exact-head visual/publication review. This is
+# local premerge coverage classification, not a public-boundary allowlist:
+# every matching file keeps the overall merge gate held, including image-only
+# changes. SVG remains text-scanned. Unknown binary formats still fail closed.
+_VISUAL_REVIEW_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".avif",
+})
+
 CONTROL_PLANE_TOKENS = (
     "loopx/control_plane/",
     "loopx/quota.py",
@@ -153,6 +161,15 @@ def _empty_smoke_suite_run(
     )
 
 
+def _visual_review_paths(changed_files: list[str], repo_root: Path) -> list[str]:
+    return [
+        path for path in _dedupe(changed_files)
+        if Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
+        and (repo_root / path).is_file()
+        and not (repo_root / path).is_symlink()
+    ]
+
+
 def _public_boundary_changed_files_run(
     *,
     changed_files: list[str],
@@ -160,10 +177,12 @@ def _public_boundary_changed_files_run(
     timeout_seconds: float,
     repo_root: Path = REPO_ROOT,
 ) -> dict[str, Any]:
+    visual_paths = _visual_review_paths(changed_files, repo_root)
+    visual_files = {(repo_root / path).resolve() for path in visual_paths}
     existing_paths = [
         (repo_root / path).resolve()
         for path in _dedupe(changed_files)
-        if (repo_root / path).exists()
+        if (repo_root / path).exists() and (repo_root / path).resolve() not in visual_files
     ]
     display_paths: list[str] = []
     for path in existing_paths:
@@ -178,7 +197,10 @@ def _public_boundary_changed_files_run(
         "source": "premerge_public_boundary",
         "tier": "default",
         "command": " ".join(display_argv),
-        "reason": "scans changed public-boundary files for private material",
+        "reason": (
+            "scans changed text for private material; binary images require visual review"
+            if visual_paths else "scans changed public-boundary files for private material"
+        ),
         "normalized": {
             "ok": True,
             "display_argv": display_argv,
@@ -191,10 +213,13 @@ def _public_boundary_changed_files_run(
         if not existing_paths:
             check.update(
                 {
-                    "status": "skipped_no_existing_files",
+                    "status": "skipped_no_text_files" if visual_paths else "skipped_no_existing_files",
                     "ok": True,
                     "duration_seconds": 0.0,
-                    "stdout_tail": "no existing changed public-boundary files to scan",
+                    "stdout_tail": (
+                        "no changed text files; binary images require visual review"
+                        if visual_paths else "no existing changed public-boundary files to scan"
+                    ),
                 }
             )
         else:
@@ -205,21 +230,26 @@ def _public_boundary_changed_files_run(
             unreadable_directories = [
                 str(item) for item in boundary.get("unreadable_directories") or []
             ]
+            unreadable_files = [str(item) for item in boundary.get("unreadable_files") or []]
+            missing_roots = [str(item) for item in boundary.get("missing_scan_roots") or []]
+            warnings = [str(item) for item in boundary.get("warnings") or []]
+            complete_ok = bool(boundary.get("ok")) and not (
+                unreadable_directories or unreadable_files or missing_roots
+            )
+            label = "completed with warnings" if warnings else "clean"
             check.update(
                 {
-                    "status": (
-                        "passed"
-                        if boundary.get("ok") and not unreadable_directories
-                        else "failed"
-                    ),
-                    "ok": bool(boundary.get("ok")) and not unreadable_directories,
+                    "status": "passed" if complete_ok else "failed",
+                    "ok": complete_ok,
                     "duration_seconds": round(time.monotonic() - started, 3),
                     "stdout_tail": (
-                        f"public boundary scan clean: {boundary.get('scanned_files')} files"
-                        if boundary.get("ok") and not unreadable_directories
+                        f"public boundary scan {label}: {boundary.get('scanned_files')} files"
+                        if complete_ok
                         else ""
                     ),
-                    "stderr_tail": "\n".join(hits + unreadable_directories)[-800:],
+                    "stderr_tail": "\n".join(dict.fromkeys(
+                        hits + warnings + unreadable_files + unreadable_directories + missing_roots
+                    ))[-800:],
                     "boundary": {
                         "scanned_files": boundary.get("scanned_files"),
                         "skipped_private_state_files": boundary.get("skipped_private_state_files"),
@@ -235,6 +265,11 @@ def _public_boundary_changed_files_run(
         timeout_seconds=timeout_seconds,
         selected_checks=[check],
         note=(
+            "Premerge public-boundary validation scans the changed public text files "
+            "directly. The full fresh-directory contract smoke remains available "
+            "through the canary catalog/profile suites. Binary images require the "
+            "existing exact-head visual review; text success does not qualify them."
+            if visual_paths else
             "Premerge public-boundary validation scans the changed public files "
             "directly. The full fresh-directory contract smoke remains available "
             "through the canary catalog/profile suites."
@@ -246,6 +281,8 @@ def _public_boundary_changed_files_run(
         "changed_files": list(changed_files),
         "scan_paths": display_paths,
     }
+    if visual_paths:
+        payload["selection_inputs"]["visual_review_paths"] = visual_paths
     return payload
 
 
@@ -311,8 +348,22 @@ def classify_premerge_surfaces(
         mark("extension_runtime", "extension-runtime")
     if any(_path_matches(path, DOC_CONTENT_TOKENS) for path in files):
         mark("docs_project_content", "docs-project-content-ops")
-    if any(_path_matches(path, PUBLIC_BOUNDARY_TOKENS) for path in files):
+    if any(
+        _path_matches(path, PUBLIC_BOUNDARY_TOKENS)
+        or Path(path).suffix.lower() in _VISUAL_REVIEW_SUFFIXES
+        for path in files
+    ):
         mark("public_boundary")
+    for path in _visual_review_paths(files, repo_root):
+        manual_holds.append({
+            "kind": "visual_evidence",
+            "path": path,
+            "reason": (
+                f"{path}: binary image is outside text-scan coverage; inspect pixels, "
+                "metadata and source for private material in the existing exact-head "
+                "PR review. This hold is not a passing privacy check or merge authority."
+            ),
+        })
     if any(_path_matches(path, BENCHMARK_SENSITIVE_TOKENS) for path in files):
         mark("benchmark_sensitive")
         manual_holds.append(

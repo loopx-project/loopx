@@ -67,6 +67,7 @@ def handle_turn_command(
             output_format=output_format, print_payload=print_payload,
         )
     payload: dict[str, Any] = {}
+    turn_start_hook_dispatch: dict[str, Any] = {}
     try:
         if getattr(args, "todo_id", None) is not None and (
             getattr(args, "resume_turn_key", None)
@@ -172,7 +173,6 @@ def handle_turn_command(
             # Only an executing wake may sync inboxes or reserve a calendar window.
             turn_start_hook_dispatch = {}
             if args.turn_command == "run-once" and args.execute:
-                from ..capabilities.agent_turn_recall import run_configured_agent_turn_recall_fail_open
                 from ..capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
                 from .lark_inbox import dispatch_goal_lark_turn_start_hooks
 
@@ -185,11 +185,11 @@ def handle_turn_command(
                 turn_start_hook_dispatch = extend_cadence_turn_start_dispatch(
                     turn_start_hook_dispatch, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=args.goal_id, agent_id=args.agent_id)
-                from ..control_plane.agents.capability_memory import (
-                    extend_turn_start_dispatch as extend_capability_memory_dispatch,
+                from ..capabilities.turn_start import (
+                    extend_turn_start_dispatch as extend_registered_capabilities,
                 )
 
-                turn_start_hook_dispatch = extend_capability_memory_dispatch(
+                turn_start_hook_dispatch = extend_registered_capabilities(
                     turn_start_hook_dispatch,
                     registry_path=registry_path,
                     runtime_root=runtime_root,
@@ -197,13 +197,14 @@ def handle_turn_command(
                     agent_id=args.agent_id,
                     available=args.available_capabilities,
                 )
+
             from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
             turn_start_hook_dispatch = extend_preferences(turn_start_hook_dispatch, runtime_root=runtime_root,
                 registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id)
             from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
             turn_start_hook_dispatch = extend_explore(turn_start_hook_dispatch,
                 registry_path=registry_path, runtime_root=runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id)
+                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None))
             # `run-once` and `managed-step` must resolve the same governing decision
             # from the same live status, scheduler context and capability hooks, so
             # this Turn takes all of them -- and its later settle-against inputs --
@@ -275,15 +276,11 @@ def handle_turn_command(
                     or transaction.get("turn_key")
                     or ""
                 )
-                payload["reward_memory_recall"] = (
-                    run_configured_agent_turn_recall_fail_open(
-                        registry_path=registry_path,
-                        goal_id=args.goal_id,
-                        agent_id=args.agent_id,
-                        quota_decision=decision,
-                        turn_instance_id=turn_instance_id,
-                        execute=True,
-                    )
+                from ..capabilities.turn_context import attach_turn_context
+
+                attach_turn_context(
+                    payload, registry_path=registry_path, goal_id=args.goal_id,
+                    agent_id=args.agent_id, decision=decision, turn_instance_id=turn_instance_id,
                 )
             capability_action = payload.get("capability_action")
             if isinstance(capability_action, dict):
@@ -294,17 +291,6 @@ def handle_turn_command(
                 capability_action["command_argv"] = [command[0], "--registry", str(registry_path),
                     "--runtime-root", str(runtime_root), *command[1:]]
                 capability_action["command"] = shlex.join(capability_action["command_argv"])
-            if turn_start_hook_dispatch.get("registered_count") or (
-                turn_start_hook_dispatch.get("failures")
-            ):
-                payload["turn_start_capability_hook_dispatch"] = turn_start_hook_dispatch
-                if any(isinstance(result, Mapping) and result.get("local_private_state_mutated") is True
-                       for result in turn_start_hook_dispatch.get("results", [])):
-                    # The pure plan builder has no effects, but live preflight
-                    # hooks may journal an inbox or calendar admission. Disclose
-                    # that write without claiming a host turn or report ran.
-                    payload["effects"]["state_written"] = True
-                    payload["boundary"]["read_only"] = False
         if args.turn_command == "plan":
             if not args.include_transaction_detail:
                 payload.pop("session", None)
@@ -325,6 +311,8 @@ def handle_turn_command(
                 # never run its command as an arbitrary host/shell adapter.
                 payload.update(mode="run_once", status="capability_action_required",
                                execute=bool(args.execute), executed=False)
+                from ..capabilities.turn_start import attach_turn_start_effects
+                attach_turn_start_effects(payload, turn_start_hook_dispatch)
                 print_payload(payload, output_format(args), _render_loopx_turn_plan_markdown)
                 return 0
 
@@ -351,6 +339,8 @@ def handle_turn_command(
         payload = build_turn_error_payload(
             payload, exc, turn_command=args.turn_command,
         )
+    from ..capabilities.turn_start import attach_turn_start_effects
+    attach_turn_start_effects(payload, turn_start_hook_dispatch)
     renderer = (
         _render_loopx_turn_execution_markdown
         if args.turn_command == "run-once"

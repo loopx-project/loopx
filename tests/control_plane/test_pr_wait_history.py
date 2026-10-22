@@ -18,7 +18,8 @@ def test_merged_wait_stays_ready_after_history_growth_and_restart(tmp_path, monk
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
     data = json.loads(registry.read_text())
-    data["goals"][0].update(domain="code", adapter={"kind": "manual"})
+    data["goals"][0].update(domain="code", adapter={"kind": "manual"},
+                            available_capabilities=["external_evidence_poll"])
     registry.write_text(json.dumps(data))
     todo_id = add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent",
         text="Continue the original requirement", claimed_by="agent-a",

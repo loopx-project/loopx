@@ -106,3 +106,32 @@ test("page descriptors reject forged membership, malformed bounds and unbounded 
       ...decision().explore_review as JsonObject, ...patch}}));
   }
 });
+
+test("task-scoped pages replay canonical links without replacing the original global decision basis", () => {
+  const task = {todo_id: "todo_chosen", role: "agent", status: "open", claimed_by: agent,
+    explore_result_node_refs: ["route-a"]};
+  const focused = projectExploreTurnContext({...input, todo_id: task.todo_id, focus_todo: task});
+  const scopedPage = {revision: ((focused.graph as JsonObject).result_page as JsonObject).revision,
+    offset: 3, limit: 3, todo_id: task.todo_id};
+  const replay = projectExploreTurnContext({...input, review_pages: [scopedPage], review_todos: [task]});
+  const ctx = context(replay), proposal = decision([scopedPage]);
+  assert.deepEqual(ctx.explore_basis, original.explore_basis, "admitted replan evidence retains its original identity");
+  assert.equal(qualify(ctx, proposal).accepted, true);
+  assert.equal(qualify(context(projectExploreTurnContext({...input, review_pages: [scopedPage]})), proposal).accepted, false);
+  for (const changed of [{...task, claimed_by: "peer"}, {...task, status: "done"},
+    {...task, explore_result_node_refs: ["different-question"]}]) {
+    const stale = context(projectExploreTurnContext({...input, review_pages: [scopedPage], review_todos: [changed]}));
+    assert.deepEqual(stale.explore_result_pages, []);
+    assert.equal(qualify(stale, proposal).accepted, false);
+  }
+  const forged = {...scopedPage, todo_id: "todo_other"};
+  assert.equal(qualify(ctx, decision([forged])).accepted, false);
+  for (const todo_id of [null, 3, "foreign", "todo_../outside"]) {
+    assert.throws(() => normalizeStrideDecision(decision([{...scopedPage, todo_id}])));
+  }
+  const normalized = normalizeStrideDecision(proposal);
+  const unscoped = normalizeStrideDecision(decision());
+  assert.equal(Object.values(normalized[1]).reduce((a, b) => a + b, 0)
+    - Object.values(unscoped[1]).reduce((a, b) => a + b, 0),
+    JSON.stringify([scopedPage]).length - JSON.stringify([page]).length);
+});

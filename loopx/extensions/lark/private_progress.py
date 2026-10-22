@@ -18,14 +18,14 @@ def presentation_phase(record: Mapping[str, Any], phase: str) -> str:
     """A continuation has its own presentation, alongside the old failure."""
     recovery = record.get("context_recovery") or {}
     if recovery and phase in {"admission", "progress", "terminal", "commission_result"}:
-        return f"{phase}.recovery.{recovery['version']}"
+        return f"{phase}.recovery.{recovery.get('presentation_key', recovery['version'])}"
     return phase
 
 
 def presentation_stream(record: dict[str, Any]) -> dict[str, Any]:
     recovery = record.get("context_recovery") or {}
     if recovery:
-        return record.setdefault("recovery_streams", {}).setdefault(str(recovery["version"]), {})
+        return record.setdefault("recovery_streams", {}).setdefault(str(recovery.get("presentation_key", recovery["version"])), {})
     return record.setdefault("stream", {})
 
 

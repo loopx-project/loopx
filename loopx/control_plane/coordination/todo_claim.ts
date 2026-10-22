@@ -14,6 +14,7 @@ import {
 import {validateContinuationNote, computeContinuationTodoFacts} from "./continuation_note.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
+import {goalObjectiveWorkGuard} from "../goals/goal_objective.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {normalizeRegisteredTodoAgents, normalizeTodoAgent} from "./todo_agents.ts";
 import {
@@ -616,6 +617,9 @@ async function executeClaimAttempt(
     );
   }
 
+  const objective = goalObjectiveWorkGuard(head.head, authority.owner);
+  if (objective !== null) return failure(String(objective.reason_code), String(objective.reason),
+    {goal_objective_guard: objective}, "decision_rejection");
   const acceptance = acceptanceWorkGuard(head.head, input.goal_id, input.todo_id);
   if (acceptance !== null && !acceptance.allowed) {
     return failure(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,

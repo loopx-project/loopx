@@ -6,6 +6,7 @@ import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../..
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
 import { ChatModelMenu } from "./chat-model-menu";
+import type {ReactNode} from "react";
 
 export function ChannelHeader({
   agents,
@@ -44,6 +45,7 @@ export function ChannelHeader({
   scopeUnavailable = false,
   workspaceGrantLabel,
   originalConversationTitle,
+  requestInventory,
 }: {
   agents: WorkspaceAgentOption[];
   agentWorkActive?: boolean;
@@ -53,6 +55,7 @@ export function ChannelHeader({
   /** Set while the steward conversation is scoped to a workspace. */
   workspaceGrantLabel?: string | null;
   originalConversationTitle?: string;
+  requestInventory?: ReactNode;
   managerChannelBinding?: ManagerChannelBinding | null;
   managerChatOpen?: boolean;
   managerRuntime?: ManagerRuntimeSessionReadback | null;
@@ -291,6 +294,7 @@ export function ChannelHeader({
         </nav>
       ) : null}
       <div className="personal-channel-actions">
+        {requestInventory}
         {selectedGoal && onOpenAllWork ? <button type="button" className="personal-icon-button goal-all-work-trigger" aria-label={locale === "zh-CN" ? "打开全部工作" : "Open all work"} aria-expanded={allWorkOpen} aria-haspopup="dialog" onClick={onOpenAllWork}><List size={17} aria-hidden/></button> : null}
         {selectedGoal && !selectedGoal.loadState && onRequestGoalLifecycle ? (
           <GoalLifecycleControl busy={goalLifecycleBusy ?? false} goal={selectedGoal} onRequest={onRequestGoalLifecycle} resumeReviewed={resumeReviewed ?? true} />

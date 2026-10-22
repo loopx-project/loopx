@@ -42,6 +42,23 @@ test('installer failure is actionable and clipboard denial leaves selectable tex
   await elements.get('#copy-diagnostics').onclick();
   assert.equal(elements.get('#diagnostics').selected, true);
 });
+test('download and verification failures retain distinct bounded recovery causes', () => {
+  for (const [code, meaning] of [
+    ['update_download_timeout', /下载超时/],
+    ['update_network_failed', /网络请求失败/],
+    ['update_download_failed', /服务器未能提供安装包/],
+    ['update_signature_invalid', /未通过签名校验/],
+  ]) {
+    const {context, elements} = page();
+    context.packet = {app_version:'1.2.4', state:{phase:'error',details:{code,url:'PRIVATE',signature:'PRIVATE'}}};
+    runInNewContext('render(packet.state); renderDiagnostics(packet)', context);
+    assert.match(elements.get('#update-status').textContent, meaning);
+    assert.match(elements.get('#update-status').textContent, /尚未安装/);
+    const value = JSON.parse(elements.get('#diagnostics').value);
+    assert.equal(value.error_code, code);
+    assert.ok(!JSON.stringify(value).includes('PRIVATE'));
+  }
+});
 test('legacy pairing state reaches diagnostics without private detail', () => {
   const {context, elements} = page();
   context.packet = {
@@ -120,4 +137,51 @@ test('an environment pin cannot be cleared by forgetting a preference', async ()
   runInNewContext('render({phase:"error",details:{code:"update_network_failed"}})', context);
   assert.equal(elements.get('#repair').disabled, true, 'an action response cannot discard known runtime ownership');
   assert.equal(elements.get('#repair').disabled, true);
+});
+
+test('feed results do not replace the native startup state', async () => {
+  for (const state of [
+    {phase:'checking',details:{background:true}},
+    {phase:'error',details:{code:'update_network_failed',background:true}},
+  ]) {
+    for (const startup_state of [{phase:'connecting'},null]) {
+    const {context,elements}=page();
+    elements.get('main').dataset.state='loading';
+    elements.get('#status').textContent='正在打开 LoopX';
+    context.window.__TAURI__={core:{invoke:async()=>({
+      app_version:'1.2.4', state, startup_state,
+    })}};
+    await runInNewContext('refresh()',context);
+    assert.equal(elements.get('main').dataset.state,'loading');
+    assert.equal(elements.get('#status').textContent,startup_state?'正在打开工作区':'正在打开 LoopX');
+    assert.doesNotMatch(elements.get('#boot-detail').textContent,/启动已停止/);
+    }
+  }
+});
+
+test('runtime recovery remains visible while the checked update stays actionable', async () => {
+  const {context,elements}=page();
+  context.window.__TAURI__={core:{invoke:async()=>({
+    app_version:'1.2.4',
+    state:{phase:'available',details:{channel:'stable',version:'1.2.5',background:true}},
+    startup_state:{phase:'runtime_required',details:{code:'runtime_identity_unavailable'}},
+    last_failure:{phase:'error',details:{code:'update_network_failed'}},
+  })}};
+  await runInNewContext('refresh()',context);
+  assert.equal(elements.get('main').dataset.state,'error');
+  assert.equal(elements.get('#boot-elapsed').textContent,'等待恢复');
+  assert.match(elements.get('#status').textContent,/所选运行时尚不能验证/);
+  assert.match(elements.get('#update').textContent,/Install update/);
+  assert.equal(elements.get('#update').disabled,false);
+  assert.equal(JSON.parse(elements.get('#diagnostics').value).error_code,'runtime_identity_unavailable');
+});
+
+test('older native payloads retain their startup recovery behavior', async () => {
+  const {context,elements}=page();
+  context.window.__TAURI__={core:{invoke:async()=>({
+    app_version:'1.2.4',state:{phase:'runtime_required',details:{code:'runtime_identity_unavailable'}},
+  })}};
+  await runInNewContext('refresh()',context);
+  assert.equal(elements.get('main').dataset.state,'error');
+  assert.equal(elements.get('#boot-elapsed').textContent,'等待恢复');
 });

@@ -70,6 +70,17 @@ def test_provider_shape_mismatch_is_not_misclassified_as_empty() -> None:
     dispatch = dispatch_turn_start_hooks([_hook(lambda: malformed)])
 
     assert dispatch["results"] == []
+    # Validation happens after the provider was invoked. An invalid response
+    # cannot certify that its declared local effects did not occur.
+    assert dispatch["uncertain_local_effects"] is True
+    from loopx.capabilities.turn_start import attach_turn_start_effects
+    from loopx.cli_commands.turn_rendering import render_loopx_turn_plan_markdown
+
+    payload = {"ok": True, "effects": {"state_written": False}, "boundary": {"read_only": True}}
+    attach_turn_start_effects(payload, dispatch)
+    assert payload["effects"]["state_written"] is None
+    assert payload["boundary"]["read_only"] is False
+    assert "side_effects: registered capability observation" in render_loopx_turn_plan_markdown(payload)
     assert dispatch["failures"] == [
         {
             "hook_id": "operator_inbox.turn_start_sync",

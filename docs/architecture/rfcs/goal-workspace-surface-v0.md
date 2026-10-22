@@ -764,6 +764,18 @@ serves multiple source listeners and invokes native IO on cache misses; no CPU o
 IO saving is established. This is a read-only increment: no management grant,
 new execution Goal/registry, automatic analysis-pack binding or V12 completion.
 
+
+**Command palette proposal (S5 / M4 keyboard slice).** Quick navigation (⌘K /
+Ctrl-K or the sidebar entry) searches Goals and the current loaded Goal's Todos,
+projected results and existing reviewable previews. It reuses selection, task
+deep links and drawers; search and navigation create no action preview, Agent
+request, quota spend or validation run. Source/Goal changes invalidate the
+palette; read-only sources expose no action previews. This bounded slice does
+not complete M4: the full keyboard map, new action preparation, dark/live-motion
+qualification and installed/live-team evidence retain their existing owners.
+V6/V9 evidence is the focused command-entry test and packaged command-palette
+browser smoke, including a disposable real Todo/status owner and read recovery.
+
 ## 12. Open decisions
 
 | # | Decision | Owner | Options | Recommendation | Needed before |

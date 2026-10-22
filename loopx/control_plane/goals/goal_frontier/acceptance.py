@@ -105,7 +105,8 @@ def acceptance_gaps_from_outcomes(agent_todo_summary: dict[str, Any] | None, *, 
     """Transport the typed owner's scoped coverage gaps to existing replan."""
     contract = (agent_todo_summary or {}).get("goal_acceptance_contract") or {}
     declarations = contract.get("outcome_requirements") or {}
-    return [dict(gap) for gap in declarations.get("acceptance_gaps", [])
+    objective = contract.get("goal_objective") or {}
+    return [dict(gap) for gap in [*declarations.get("acceptance_gaps", []), *objective.get("acceptance_gaps", [])]
         if isinstance(gap, dict) and agent_id and gap.get("agent_id") == agent_id]
 
 

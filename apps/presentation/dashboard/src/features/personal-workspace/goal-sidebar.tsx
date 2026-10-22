@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Bot, ChevronDown, ChevronRight, Focus, LoaderCircle, Pause, Plus, RotateCcw, Settings2, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Bot, ChevronDown, ChevronRight, Focus, LoaderCircle, Pause, Plus, RotateCcw, Search, Settings2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DesktopUpdate } from "./desktop-update";
 import { useGoalOrder } from "./use-goal-order";
@@ -28,6 +28,7 @@ export function GoalSidebar({
   lifecycleBusyGoalIds,
   goalLifecycleOperations,
   onRequestGoalCreate,
+  onOpenCommands,
   onOpenSettings,
   onRetryGoalArchive,
   onRequestGoalLifecycle,
@@ -43,6 +44,7 @@ export function GoalSidebar({
   lifecycleBusyGoalIds?: ReadonlySet<string>;
   goalLifecycleOperations?: readonly ("stop" | "resume" | "delete")[];
   onRequestGoalCreate?: () => void;
+  onOpenCommands?: () => void;
   onOpenSettings?: () => void;
   onRetryGoalArchive?: () => void;
   onRequestGoalLifecycle?: (goal: WorkspaceGoal, operation: "stop" | "resume" | "delete") => void;
@@ -199,6 +201,7 @@ export function GoalSidebar({
       </nav>
 
       <div className="personal-sidebar-footer">
+        {onOpenCommands ? <button className="personal-sidebar-utility" onClick={onOpenCommands} type="button" aria-keyshortcuts="Control+k Meta+k"><Search size={16} /><span>{t("palette.title")}</span></button> : null}
         <DesktopUpdate />
         {onOpenSettings ? (
           <button aria-label={t("settings.open")} className="personal-sidebar-utility" onClick={onOpenSettings} type="button">

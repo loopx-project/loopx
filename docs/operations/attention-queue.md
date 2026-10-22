@@ -105,6 +105,7 @@ Status treats these as user/controller attention:
 - `needs_user_relay`
 - `ready_for_controller_opt_in`
 - `ready_for_user_relay`
+- `state_incomplete`
 
 Status treats these as Codex-ready action:
 
@@ -121,6 +122,11 @@ Status treats these as Codex-ready action:
 `state_refreshed` means a controller updated active state, ledger, or planning
 docs without running a project adapter. The next Codex action is to inspect the
 refreshed state and continue one bounded progress segment.
+
+`state_incomplete` means a readable legacy Markdown active state lacks a
+required Todo source heading, currently `## Agent Todo` (or an accepted alias).
+Status treats the missing projection as unknown work, not as "no work", and
+asks the user or controller to restore the section before relying on the queue.
 
 A registry entry can explicitly override first-screen attention with
 `waiting_on`, `attention_status`, `recommended_action`, `operator_question`, and

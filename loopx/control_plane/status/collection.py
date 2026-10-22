@@ -79,7 +79,7 @@ def collect_status(
     include_task_graph: bool = False,
     goal_id: str | None = None,
     available_capabilities: Any = None,
-    include_public_boundary_scan: bool = True,
+    include_public_boundary_scan: bool = False,
     recent_run_limit: int | None = None,
     include_goal_subagent_configuration: bool = False,
     include_zcode_goal_eligibility: bool = False,

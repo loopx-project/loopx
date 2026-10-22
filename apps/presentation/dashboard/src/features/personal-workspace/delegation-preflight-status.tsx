@@ -40,6 +40,12 @@ const acceptanceActions: Record<Exclude<NonNullable<DelegationPreflight["accepta
 };
 
 export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflight; zh: boolean}) {
+  const lane = check.state === "turn_blocked" && check.turn_eligible === false
+    && check.turn_lane?.scope === "native_turn_lane" ? check.turn_lane.state : null;
+  const busy = lane === "live";
+  const unknown = lane === "foreign_host" || lane === "unreadable";
+  const laneLabel = busy ? (zh ? "执行通道正在处理工作" : "Execution lane is busy")
+    : unknown ? (zh ? "执行通道状态无法确认" : "Execution lane state is unknown") : null;
   const workspaceDetail = check.workspace_state ? workspaceDetails[check.workspace_state] : null;
   const acceptanceDetail = check.state === "acceptance_unavailable" && check.acceptance_reason_code
     && Object.hasOwn(acceptanceDetails, check.acceptance_reason_code) ? acceptanceDetails[check.acceptance_reason_code] : null;
@@ -49,22 +55,26 @@ export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflig
   const executorDetail = check.executor
     ? [check.executor.host, check.executor.reason].filter(Boolean).join(" · ") : check.authority_reason;
   const operationTransport = check.executor?.operation_transport;
-  const operationDetail = operationTransport?.schema_version === "loopx_operation_transport_v0"
+  const operationDetail = !busy && !unknown && operationTransport?.schema_version === "loopx_operation_transport_v0"
     ? operationTransport.configuration_valid === true && operationTransport.runtime_qualified === false
       ? (zh ? "自有原生工具传输已配置，运行未核验；执行仍需精确批准与首次消费"
         : "Owned native tool transport configured, runtime unqualified; exact approval and first consumption still required")
       : (zh ? "操作传输配置未获准；请原配置责任人核对宿主、固定模型/思考深度和 sandbox"
         : "Operation transport configuration not admitted; ask its original owner to review host, pinned model/effort and sandbox")
     : null;
-  const detail = check.state === "workspace_unavailable"
+  const detail = busy || unknown ? null : check.state === "workspace_unavailable"
     ? (workspaceDetail ? (zh ? workspaceDetail.zh : workspaceDetail.en) : null)
     : [acceptanceDetail ? (zh ? acceptanceDetail.zh : acceptanceDetail.en) : null, executorDetail].filter(Boolean).join(" · ");
-  const disclaimer = check.state === "workspace_unavailable"
+  const disclaimer = busy || unknown
+    ? (zh ? "检查不启动新的执行" : "Inspection starts no new execution")
+    : check.state === "workspace_unavailable"
     ? (zh ? "权限、验收与运行时尚未检查；未启动成员" : "Authority, acceptance and runtime uninspected; no member launched")
     : check.state === "authority_unavailable"
       ? (zh ? "未检查或启动执行器" : "No executor was inspected or launched")
       : (zh ? "不代表正在执行" : "Does not mean executing");
-  const nextAction = check.workspace_next_action === "review_operator_workspace_binding"
+  const nextAction = busy ? (zh ? "当前执行结束后重新检查" : "Recheck after the current execution ends")
+    : unknown ? (zh ? "恢复执行状态读回后重新检查" : "Restore execution-state observation, then recheck")
+    : check.workspace_next_action === "review_operator_workspace_binding"
     ? (zh ? "下一步：核对原执行配置的工作目录，再重新检查" : "Next: review the workspace in the original execution configuration, then recheck")
     : check.authority_next_action === "preview_reviewed_goal_authority_promotion"
     ? (zh ? "下一步：预览整 Goal 协调 Authority 晋级" : "Next: preview whole-Goal coordination-authority promotion")
@@ -72,7 +82,7 @@ export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflig
       ? (zh ? "下一步：修复规范 Authority 读回" : "Next: repair canonical authority readback")
       : acceptanceAction ? (zh ? acceptanceAction.zh : acceptanceAction.en) : null;
   return <p role="status">
-    {zh ? labels[check.state].zh : labels[check.state].en}
+    {laneLabel ?? (zh ? labels[check.state].zh : labels[check.state].en)}
     {detail ? ` · ${detail}` : ""}
     {operationDetail ? ` · ${operationDetail}` : ""}
     {nextAction ? ` · ${nextAction}` : ""}

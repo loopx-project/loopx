@@ -205,12 +205,26 @@ def _retry_error_details(error: Any) -> dict[str, Any]:
 def _routing_discovery_timeout(error: Any) -> bool:
     # A fixed native provider diagnostic, never a substring/prose retry grant.
     return (isinstance(error, dict) and error.get("codexErrorInfo") == "other"
-            and error.get("message") == "workspace routing discovery timed out")
+            and error.get("message") in (
+                "workspace routing discovery timed out",
+                "Error running remote compact task: workspace routing discovery timed out",
+            ))
 
 
 def _terminal_turn_error(error: Any, fallback: str) -> CodexChatAgentError:
     """Project only the app-server's typed error, never its arbitrary prose."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
+    if _routing_discovery_timeout(error):
+        failure = CodexChatAgentError(
+            "Codex 上游工作区路由暂时不可用，本轮未完成。",
+            error_code="upstream_transport_failure",
+            gate=_host_tool_gate(
+                "Codex 上游工作区路由暂时不可用，本轮未完成。",
+                "保留原请求；仅在独立核验原生执行项、原消息和授权后允许有界接续。",
+            ),
+        )
+        failure.native_routing_timeout = True
+        return failure
     # Some Responses providers return a structured error without an HTTP
     # status. The typed error still identifies a rejected request; arbitrary
     # nested prose may contain private request details and is never projected.
@@ -1338,10 +1352,18 @@ class CodexChatAgentSession:
                 try:
                     message = waiter.get_nowait()
                 except queue.Empty:
-                    # A streaming reader can route this RPC response while holding
-                    # the fence. Recheck our waiter instead of waiting for an event.
-                    if not self._message_dispatch_lock.acquire(timeout=0.1):
-                        continue
+                    # The reader can route our response while retaining the
+                    # dispatch fence for its next event. Wait on the response,
+                    # which wakes immediately, rather than on that reader's lock.
+                    if not self._message_dispatch_lock.acquire(blocking=False):
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            continue
+                        try:
+                            message = waiter.get(timeout=min(0.1, remaining))
+                        except queue.Empty:
+                            continue
+                        break
                     try:
                         try:
                             message = waiter.get_nowait()
@@ -1380,21 +1402,22 @@ class CodexChatAgentSession:
                                 continue
                     finally:
                         self._message_dispatch_lock.release()
-                if message.get("id") == request_id:
-                    if message.get("error"):
-                        if method in {
-                            "thread/start",
-                            "thread/resume",
-                        } and _is_legacy_model_catalog_error(message.get("error")):
-                            raise _LegacyModelCatalogSchemaError
-                        raise self._runtime_error(
-                            f"Codex app-server rejected {method}."
-                        )
-                    result = message.get("result")
-                    return result if isinstance(result, dict) else {}
-                raise self._runtime_error(
-                    "Codex app-server returned an unexpected response."
-                )
+                break
+            if message.get("id") == request_id:
+                if message.get("error"):
+                    if method in {
+                        "thread/start",
+                        "thread/resume",
+                    } and _is_legacy_model_catalog_error(message.get("error")):
+                        raise _LegacyModelCatalogSchemaError
+                    raise self._runtime_error(
+                        f"Codex app-server rejected {method}."
+                    )
+                result = message.get("result")
+                return result if isinstance(result, dict) else {}
+            raise self._runtime_error(
+                "Codex app-server returned an unexpected response."
+            )
         finally:
             with self._response_waiters_lock:
                 self._response_waiters.pop(request_id, None)
@@ -1542,58 +1565,6 @@ class CodexChatAgentSession:
             if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
                 raise self._runtime_error("Codex returned an invalid control inventory cursor.")
             seen_cursors.add(cursor)
-
-    def failed_request_readback(self, turn_id: str) -> dict[str, Any] | None:
-        """Observe a historical pre-execution failure without resuming it.
-
-        Unlike a same-worker transport retry, this may inspect an older failed
-        request. Every native Turn must be terminal, and the selected request
-        must contain exactly its user input: no answer, tool, correction or
-        unknown item. The Core still owns any new continuation admission.
-        """
-        deadline = time.monotonic() + self.response_timeout_sec
-
-        def terminal() -> dict[str, Any] | None:
-            turns = list(self._control_items("thread/turns/list", {
-                "sortDirection": "desc", "itemsView": "summary",
-            }, deadline))
-            ids = [item.get("id") for item in turns]
-            if (not ids or any(not isinstance(value, str) or not value for value in ids)
-                    or len(set(ids)) != len(ids)
-                    or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in turns)):
-                return None
-            selected = next((item for item in turns if item["id"] == turn_id), None)
-            if not selected or selected.get("status") != "failed":
-                return None
-            info = _retry_error_details(selected.get("error")).get("retry", {}).get("codex_error_info")
-            # `other` is evidence of a failed native request, not permission to
-            # retry it. The typed admission owner separately decides whether
-            # this proven user-only failure is eligible for one continuation.
-            if info in ("contextWindowExceeded", "serverOverloaded", "internalServerError", "other"):
-                return {"codex_error_info": info}
-            if isinstance(info, dict) and len(info) == 1:
-                detail = next(iter(info.values()))
-                status = detail.get("httpStatusCode") if isinstance(detail, dict) else False
-                if isinstance(detail, dict) and "httpStatusCode" in detail and (
-                    status is None or type(status) is int and 500 <= status <= 599
-                ):
-                    return {"codex_error_info": info}
-            return None
-
-        try:
-            proof = terminal()
-            if proof is None:
-                return None
-            items = list(self._control_items("thread/items/list", {"turnId": turn_id}, deadline))
-            if (len(items) != 1 or items[0].get("turnId") != turn_id
-                    or not isinstance(items[0].get("item"), dict)
-                    or items[0]["item"].get("type") != "userMessage"
-                    or not items[0]["item"].get("id") or terminal() != proof):
-                return None
-            return {"thread_id": self.thread_id, "turn_id": turn_id,
-                    "only_original_user_item": True, **proof}
-        except (CodexChatAgentError, OSError, TypeError, ValueError):
-            return None
 
     def transport_retry_readback(self, turn_id: str) -> dict[str, Any] | None:
         """Read native terminal/effect facts; notification history is insufficient.

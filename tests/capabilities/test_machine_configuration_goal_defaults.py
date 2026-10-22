@@ -430,6 +430,7 @@ def test_goal_stride_only_uses_live_review_interval(tmp_path: Path) -> None:
     assert first["effective_configuration"]["configuration"] == {
         "count_unit": "completed_todos", "count": 2,
         "stride_strategy": "evidence_conditioned_v1",
+        "planning_horizon_goal": True,
     }
 
     machine_registry = build_builtin_machine_configuration_registry()
@@ -485,23 +486,31 @@ def test_stride_configuration_rejects_unsupported_or_ambiguous_versions(schema_v
         })
 
 
-def test_horizon_goal_configuration_opt_in_inheritance_and_clear(tmp_path):
+def test_horizon_goal_defaults_on_with_explicit_overrides_and_clear(tmp_path):
     from loopx.chat_goal_configuration_api import _goal_capability_options
     from loopx.capabilities.goal_inspection import inspect_goal_capabilities
 
     _repo, registry_path, runtime_root = _fixture(tmp_path)
     owner = build_builtin_machine_configuration_registry()
+    def effective():
+        inspected = inspect_goal_capabilities(registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=GOAL_ID)["configuration"]
+        return next(x for x in inspected["capability_catalog"]["capabilities"] if x["capability_id"] == "todo_replan_cadence")
+    assert effective()["effective_configuration"]["configuration"]["planning_horizon_goal"] is True
+    _apply_machine_configuration(runtime_root)
+    legacy = effective()
+    assert legacy["effective_configuration"]["configuration"]["planning_horizon_goal"] is True
+    assert "planning_horizon_goal" not in legacy["machine_current"], "readback must not rewrite legacy settings"
     configuration = _machine_configuration()
     configuration["namespaces"]["todo_replan_cadence"] = {
         "schema_version": "todo_replan_cadence_machine_defaults_v2",
         "count_unit": "effective_turns", "count": 4, "stride_strategy": "off",
-        "planning_horizon_goal": True,
+        "planning_horizon_goal": False,
     }
-    assert "planning_horizon_goal" not in _history_goal(registry_path, runtime_root)["execution_profile"]
     preview = configure_machine_configuration(runtime_root=runtime_root, registry=owner, configuration=configuration)
     configure_machine_configuration(runtime_root=runtime_root, registry=owner,
         configuration=configuration, execute=True, expected_plan_revision=preview["plan_revision"])
-    assert _history_goal(registry_path, runtime_root)["execution_profile"]["planning_horizon_goal"] is True
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["planning_horizon_goal"] is False
     for enabled in (False, True):
         options = _goal_capability_options("todo_replan_cadence", {"planning_horizon_goal": enabled})
         configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True, **options)
@@ -515,7 +524,12 @@ def test_horizon_goal_configuration_opt_in_inheritance_and_clear(tmp_path):
         assert entry["effective_configuration"]["configuration"]["planning_horizon_goal"] is enabled
     configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True,
                    clear_execution_planning_horizon_goal=True)
-    assert _history_goal(registry_path, runtime_root)["execution_profile"]["planning_horizon_goal"] is True
+    assert _history_goal(registry_path, runtime_root)["execution_profile"]["planning_horizon_goal"] is False
+    # A pinned cadence is an atomic Goal review configuration, as before.
+    # Its omitted horizon uses the product default, not a device override.
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True,
+                   execution_replan_after_turns=3)
+    assert effective()["effective_configuration"]["configuration"]["planning_horizon_goal"] is True
     before = registry_path.read_bytes()
     with pytest.raises(ValueError, match="planning_horizon_goal"):
         configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True,

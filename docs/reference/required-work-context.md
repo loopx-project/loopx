@@ -40,6 +40,15 @@ Source failure retains the unresolved read, identifies the unavailable source,
 and blocks dependent delivery until recovery and a fresh guard. Reading current
 content is not an execution grant or proof of Goal completion.
 
+For selected work, the acceptance adapter reuses the canonical owner's exact
+Todo inspection. Its top-level `tasks` observations cover that Todo; the full
+Goal contract, configured scope, checks, held work and cumulative outcomes stay
+intact, including other owners' requirements. The separate selected-Todo source
+retains its complete body and declaration. Todo-less reads and the explicit
+`goal-acceptance inspect` command keep their existing full inventory. This
+reduces repeated binding observations without treating a shorter context as
+acceptance, authority or a measured model benefit.
+
 For an exact Todo, the existing command now returns one complete record:
 
 ```sh
@@ -101,6 +110,12 @@ transport flag does not restore the old exact Todo schema.
 偏好只在对应作用域有记录时出现；Explore 和偏好沿用各自 hook 的真实 adapter，
 读取范围由 capability owner 决定。来源失败保留未完成必读项并阻止依赖交付，恢复后
 重新准入；User gate 仍生效。大小告警不截断验收或移除剩余必读项。
+
+已选定工作时，验收 adapter 复用 canonical owner 的精确 Todo 读取，顶层 `tasks`
+只携带该工作的关联观察；完整 Goal 合同、已配置 scope、检查、受阻工作和累计 outcome
+全部保留，包括其他 owner 的要求。选定 Todo 的完整正文与声明仍由独立来源携带。
+没有选定工作的读取及显式 `goal-acceptance inspect` 保留完整列表；正文减少不等于
+验收、执行权限或已经测得模型收益。
 
 `todo list --todo-id …` 默认只返回一份完整 `todo.text`，保留来源、修订、身份、
 状态和关系。精确响应移除列表及角色视图，不保留兼容开关；`--thin` 只用于概览。

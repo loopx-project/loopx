@@ -327,6 +327,36 @@ ledger, todos, gates, quota, and optional task leases remain authoritative. A
 host may consume task graph or cadence projections, but those projections
 remain derived read-only facts and never grant write authority.
 
+### Bounded local Codex activity reads
+
+The local Codex provider verifies the rollout's session header against the
+exact thread selected from the authorized home's read-only store. Activity
+comes from completed host records, not a file's modification time or a Todo
+claim. A recorded open turn is distinct from current liveness: existing event
+freshness rules still apply when the host exits or stops producing events.
+
+Long turns use a resumable reverse search for the nearest start/end marker and
+a forward cursor for newly appended records. Each observation has an 8 MiB
+rollout-read budget, including source checks; initial recovery can require
+multiple observations and stays unknown until the relevant interval is read.
+Giant JSONL records are validated in bounded chunks without retaining message
+strings. Incomplete trailing records are ignored until their newline arrives.
+An end appended during observation cannot certify the earlier open snapshot.
+
+The Chat service keeps optional observation hints beneath its existing runtime
+root, in `observation-cache/codex-activity`. At most 256 fixed slots contain
+hashed source bindings, file identity, byte positions and whitelisted event
+facts. They contain no transcript, raw thread id or source path. Cached facts
+are checked against the source; header mismatch, truncation, replacement,
+changed anchors, malformed records and unavailable stores remain unknown or
+trigger recovery. This assumes the host's JSONL is append-only between such
+source changes; it does not authenticate arbitrary edits to the host store.
+Cache loss or denied cache writes do not grant permissions or prevent a fresh
+bounded read. The provider never writes into the Codex home.
+
+These are provider IO/cache changes under the existing host activity contract,
+not a new execution authority, scheduler, model call or configurable capability.
+
 ## CLI Fallback
 
 Every host integration must document the CLI fallback for the same operation.

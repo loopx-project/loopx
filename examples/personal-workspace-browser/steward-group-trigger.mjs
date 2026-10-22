@@ -36,8 +36,7 @@ export const stewardGroupTriggerScenario = {
       ]) {
         Object.assign(connection, {event_count: 3, last_event_status: "context_only_captured", last_event_reason: reason});
         await page.reload();
-        await page.getByRole("button", {name: "设置", exact: true}).click();
-        await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
+        await page.locator(".personal-settings-page").getByRole("heading", {name: "Lark", exact: true}).waitFor();
         const feedback = row.getByText(detail, {exact: true});
         await feedback.waitFor();
         if (await feedback.evaluate((element) => getComputedStyle(element).whiteSpace) === "nowrap") throw new Error("Recovery feedback is visually truncated");

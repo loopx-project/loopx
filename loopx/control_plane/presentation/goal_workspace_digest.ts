@@ -52,7 +52,7 @@ export type DigestActivity = { actor: string; at: string | null };
 
 export type GoalWorkspaceDigestInput = {
   observedAt: string;
-  /** Declared Goal document content; never an acceptance-contract or progress fallback. */
+  /** Current Goal declaration/revision; never a scoped check or progress fallback. */
   objective?: string | null;
   activation: "active" | "stopped";
   todos: readonly DigestTodo[];

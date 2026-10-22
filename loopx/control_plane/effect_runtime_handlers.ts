@@ -385,6 +385,7 @@ export function createEffectRuntimeHandlers(
     ["goal.acceptance.oracle.plan", lazyHandler(() => import("./goals/acceptance_oracle.ts"), ({planAcceptanceOracle}) => planAcceptanceOracle)],
     ["goal.acceptance.oracle.observe", lazyHandler(() => import("./goals/acceptance_oracle.ts"), ({observeAcceptanceOracles}) => observeAcceptanceOracles)],
     ["goal.acceptance.refine", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({refineLocalGoalAcceptanceOutcome}) => refineLocalGoalAcceptanceOutcome)],
+    ["goal.acceptance.objective", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({updateLocalGoalObjective}) => updateLocalGoalObjective)],
     ["goal.acceptance.inspect", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({inspectLocalGoalAcceptance}) => inspectLocalGoalAcceptance)],
     ["goal.acceptance.configure", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({commitLocalGoalAcceptance}) => commitLocalGoalAcceptance)],
     ["goal.acceptance.verify.commit", lazyHandler(() => import("./goals/acceptance_authority.ts"), ({commitLocalGoalAcceptanceVerification}) => commitLocalGoalAcceptanceVerification)],
@@ -592,6 +593,12 @@ export function createEffectRuntimeHandlers(
       "capability_hook.turn_start.validate_registration",
       lazyHandler(() => import("./capability_hooks.ts"), ({validateTurnStartHookRegistration}) => (params) => validateTurnStartHookRegistration(params.registration)),
     ],
+    ["capability_hook.turn_context.validate_registration", lazyHandler(() => import("./turn_driver/capability_context.ts"),
+      ({validateTurnContextRegistration}) => (params) => validateTurnContextRegistration(params.registration))],
+    ["capability_hook.turn_context.validate", lazyHandler(() => import("./turn_driver/capability_context.ts"),
+      ({validateTurnContextContribution}) => validateTurnContextContribution)],
+    ["capability_hook.turn_context.project", lazyHandler(() => import("./turn_driver/capability_context.ts"),
+      ({projectTurnContextContribution}) => projectTurnContextContribution)],
     [
       "capability_hook.turn_start.validate",
       lazyHandler(() => import("./capability_hooks.ts"), ({validateTurnStartHookInvocation}) => (params) => validateTurnStartHookInvocation({
@@ -805,6 +812,7 @@ export function createEffectRuntimeHandlers(
     ["explore.configuration.plan", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({planExploreConfiguration}) => planExploreConfiguration)],
     ["explore.result.normalize", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({normalizeExploreResultAttachment}) => normalizeExploreResultAttachment)],
     ["explore.execution.normalize", lazyHandler(() => import("./capabilities/explore_execution_observation.ts"), ({normalizeExploreExecutionObservation}) => normalizeExploreExecutionObservation)],
+    ["explore.measurements.normalize", lazyHandler(() => import("./capabilities/explore_measurements.ts"), ({normalizeExploreMeasurementsRequest}) => normalizeExploreMeasurementsRequest)],
     ["explore.result.evolution", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({planExploreQuestionEvolution}) => planExploreQuestionEvolution)],
     ["explore.result.intent", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({produceExploreResultIntent}) => produceExploreResultIntent)],
     ["explore.turn_context", lazyHandler(() => import("./capabilities/explore_turn_context.ts"), ({projectExploreTurnContext}) => projectExploreTurnContext)],

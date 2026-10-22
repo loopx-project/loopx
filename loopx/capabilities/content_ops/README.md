@@ -8,6 +8,39 @@ Connector packets remain preview-level. Local item lifecycle, reference
 preparation and optional video composition have their own delivery boundaries;
 none grants publication authority.
 
+## Creation outcomes / 创作结果
+
+Start with the requested work: its audience, message, factual sources and desired
+form. Use the existing conversation and artifact preview/revision path with the
+host's authoring tools and reusable Content-Ops operations. HTML, games and
+mini-worlds can be standalone works, source material or scenes within a video;
+their mention does not require a new LoopX workbench or a fixed teaching model.
+Choose content, interaction, scene structure and visual style for the brief.
+Templates and renderer examples are starting points, not a universal composition.
+
+Use specialized host tools for custom editable scenes, animation or interactive
+projects when the brief needs them. Their rendered image/video assets can enter
+the existing source-bound composition path; retain the editable project with the
+deliverable. The optional renderer's supported scene kinds bound that renderer,
+not the creative methods available to the Agent. This guidance adds no new
+authoring command or runtime execution permission.
+
+Qualify a creation technique by using it in a real requested work, retaining the
+editable project and sources, and making a meaningful revision. When comparing
+video techniques, use the same factual brief and communication objective, allow
+each technique to shape the film, and review complete results for message,
+visuals, sound, pacing and full production cost. Keep mechanical checks, creative
+judgment, audience observations and untested claims distinct. Follow the shared
+[task-first delivery guide](../../../docs/development/frontend-delivery.md#task-first-delivery--从用户任务开始)
+for the frontend journey; artifact creation does not require its own editor.
+
+从用户要完成的作品出发，明确读者、表达目的、事实来源和作品形式。HTML、Game、
+Mini-World 既可独立交付，也可成为视频中的素材或镜头；按具体 brief 创作，保留
+可修改工程，通过实际作品及修改后的结果验收。复用已有对话和产物预览、反馈、
+修订入口。用同一事实与表达目标比较各项视频能力，允许各自发挥构图与叙事优势，
+同时审阅完整成片的表达、画面、声音、节奏与全部制作成本；机械检查、创意判断、
+观众证据和未验证项分别记录。
+
 The capability also ships a provider-neutral item lifecycle for real local
 operations queues. It preserves stable item identity, revision-bound approval,
 delivery receipts, exact readback, and supersession without copying draft bodies

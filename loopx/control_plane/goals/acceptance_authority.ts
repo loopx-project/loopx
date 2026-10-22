@@ -21,6 +21,8 @@ import {GOAL_ACCEPTANCE_LIFECYCLE_SCHEMA, parseGoalAcceptanceLifecycleTransition
   type GoalAcceptanceLifecycleTransition, type WireExactGoalRef} from "./acceptance_lifecycle.ts";
 
 import {validateOracleResults} from "./acceptance_oracle.ts";
+import {reviseGoalObjective, adoptGoalObjective, goalObjectiveWorkDigest, goalObjectiveWorkGuard, readGoalObjective, currentGoalObjective} from "./goal_objective.ts";
+import {projectCoreGoal} from "../work_items/replan_context.ts";
 
 const RESULT_SCHEMA = "loopx_goal_acceptance_result_v0";
 const RECEIPT_SCHEMA = "loopx_goal_acceptance_operation_v0";
@@ -56,7 +58,7 @@ function source(store: AuthorityStore, result: JsonObject): JsonObject {
 function failure(reason_code: string, reason: string): JsonObject & {schema_version: typeof RESULT_SCHEMA} {
   return {schema_version: RESULT_SCHEMA, status: "failed", changed: false, reason_code, reason};
 }
-function receiptFor(request: JsonObject, kind: "configure" | "verify" | "refine") {
+function receiptFor(request: JsonObject, kind: "configure" | "verify" | "refine" | "revise-objective" | "adopt-objective") {
   // Transport location and dry-run are not operation content. Everything else,
   // including the exact supplied document/results and expected CAS, is bound.
   const content = Object.fromEntries(Object.entries(request).filter(([key]) => !LOCAL_FIELDS.includes(key)));
@@ -220,6 +222,54 @@ export async function refineGoalAcceptanceOutcome(store: AuthorityStore, value: 
   const committed = await command.receipt.commit(store, {operation_id: String(request.operation_id), expected_provider_revision: head.provider_revision,
     next_projection: next, events: [{schema_version: RECEIPT_SCHEMA, kind: "goal_outcome_refined", goal_id: goalId,
       operation_id: request.operation_id, revision: state.revision}], receipts: [{...command.identity, result}]});
+  return replayWithCurrentProjection(store, committed, goalId);
+}
+
+/** Shared objective revisions retain root commitments, checks, Todos and leases.
+ * Only the owner applies a revision; an Agent may acknowledge only its own work. */
+export async function updateGoalObjective(store: AuthorityStore, request: JsonObject): Promise<JsonObject> {
+  acceptanceKeys(request, [...REQUEST_FIELDS, "operation", "document", "source_objective", "registered_agents"], [...LOCAL_FIELDS, "goal_ref", "review_objective_digest"]);
+  acceptanceRequire(request.operation === "revise-objective" || request.operation === "adopt-objective", "unsupported objective operation");
+  for (const field of ["goal_id", "operation_id", "expected_provider_revision"]) requireAuthorityStoreId(request[field], field);
+  acceptanceRequire(Array.isArray(request.registered_agents), "registered Agents are required");
+  const actor = request.actor_agent_id;
+  acceptanceRequire(request.operation === "revise-objective" ? actor === null : typeof actor === "string" && request.registered_agents.includes(actor),
+    "only the trusted owner may revise the shared objective; adoption requires the registered Agent itself");
+  acceptanceRequire(request.dry_run === undefined || typeof request.dry_run === "boolean", "dry_run must be boolean");
+  // Source observations are current admission facts, not caller retry content.
+  const {source_objective: _source, registered_agents: _agents, ...content} = request;
+  acceptanceRequire(request.review_objective_digest === undefined || request.operation === "revise-objective"
+    && typeof request.review_objective_digest === "string" && BARE_SHA256_PATTERN.test(request.review_objective_digest), "invalid reviewed objective digest");
+  const command = receiptFor(content, request.operation);
+  const observation = await command.receipt.observe(store);
+  if (observation.kind === "receipt") return replayWithCurrentProjection(store, observation.result, String(request.goal_id));
+  // Recheck the exact reviewed objective below; unrelated work/peer writes
+  // need no new owner review. Commit still compares the observed provider head.
+  const head = current(observation.authority, request.review_objective_digest !== undefined && observation.authority.status === "loaded"
+    ? {...request, expected_provider_revision: observation.authority.provider_revision} : request);
+  if (!loaded(head)) return source(store, head);
+  const goalId = String(request.goal_id), goalRef = requestGoalRef(request);
+  const next: JsonObject = {...head.head};
+  if (goalRef !== null && readGoalAcceptanceLifecycle(next, goalId) === null) {
+    const plan = planLifecycleTransition(next, goalId, {kind: "bind_existing", goal_ref: goalRef});
+    if (plan.kind === "failure") return source(store, failure(plan.reason_code, plan.reason));
+    next.goal_acceptance_lifecycle = plan.lifecycle;
+    if (plan.kind === "commit" && plan.acceptance !== null) next.goal_acceptance = plan.acceptance;
+    acceptanceRequire(readGoalObjective(head.head) === null, "bind existing objective history through the source lifecycle owner before changing its lifetime");
+  }
+  const root = head.head.shared_goal_intent as JsonObject | undefined;
+  next.goal_objective = request.operation === "revise-objective"
+    ? reviseGoalObjective(next, goalRef, (root?.root_intent as JsonObject | undefined)?.objective ?? projectCoreGoal(request.source_objective).objective, request.registered_agents, request.document)
+    : adoptGoalObjective(next, String(actor), request.document);
+  const objective = readGoalObjective(next)!;
+  if (request.review_objective_digest !== undefined && objective.revisions.at(-1)!.digest !== request.review_objective_digest)
+    return source(store, failure("goal_acceptance_contract_stale", "The reviewed objective basis changed; review a fresh proposal."));
+  const result = {goal_id: goalId, operation_id: request.operation_id, goal_acceptance_contract: projectGoalAcceptance(next, goalId)};
+  if (request.dry_run === true) return source(store, {status: "planned", changed: false, dry_run: true, provider_revision: head.provider_revision, ...result});
+  if (request.operation === "adopt-objective" && canonicalAuthoritySha256(next) === canonicalAuthoritySha256(head.head))
+    return source(store, {status: "no_change", changed: false, provider_revision: head.provider_revision, ...result});
+  const committed = await command.receipt.commit(store, {operation_id: String(request.operation_id), expected_provider_revision: head.provider_revision,
+    next_projection: next, events: [{schema_version: RECEIPT_SCHEMA, kind: request.operation, goal_id: goalId, operation_id: request.operation_id}], receipts: [{...command.identity, result}]});
   return replayWithCurrentProjection(store, committed, goalId);
 }
 
@@ -508,6 +558,8 @@ export async function inspectGoalAcceptance(
   goalId: string,
   todoId?: string,
   goalRef?: WireExactGoalRef,
+  includeWorkDetails = true,
+  agentId?: string,
 ): Promise<JsonObject> {
   const head = await store.loadAuthority();
   if (head.status !== "loaded") return source(store, {...head});
@@ -531,12 +583,14 @@ export async function inspectGoalAcceptance(
   return source(store, {status: "loaded", provider_revision: head.provider_revision,
     revision: state?.revision ?? null, contract_digest: state?.digest ?? null,
     contract: state ? state.document : null, tasks,
-    ...(todoId === undefined ? {} : {todo: todos.get(todoId) ?? null,
+    ...(todoId === undefined || !includeWorkDetails ? {} : {todo: todos.get(todoId) ?? null,
       completion_requirements: acceptanceCompletionRequirements(head.head, goalId, todoId)}),
+    ...(agentId === undefined || currentGoalObjective(head.head) === null ? {} : {objective_work_digest: goalObjectiveWorkDigest(head.head, agentId),
+      goal_objective_guard: goalObjectiveWorkGuard(head.head, agentId)}),
     goal_acceptance_contract: projectGoalAcceptance(head.head, goalId)});
 }
 
-async function local(value: unknown, kind: "inspect" | "configure" | "verify" | "lifecycle" | "refine"): Promise<JsonObject> {
+async function local(value: unknown, kind: "inspect" | "configure" | "verify" | "lifecycle" | "refine" | "objective"): Promise<JsonObject> {
   let store: AuthorityStore | undefined;
   try {
     const request = canonicalAuthorityObject(value, "local acceptance request");
@@ -545,11 +599,18 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify" | 
     const goalId = requireAuthorityStoreId(request.goal_id, "goal_id");
     const run = async () => {
       store = await openLocalAuthorityStore(root, goalId);
-      if (kind === "inspect") return inspectGoalAcceptance(store, goalId,
-        request.todo_id == null ? undefined : requireAuthorityStoreId(request.todo_id, "todo_id"),
-        request.goal_ref === undefined ? undefined : parseWireExactGoalRef(request.goal_ref, "acceptance request goal_ref"));
+      if (kind === "inspect") {
+        acceptanceRequire(request.include_work_details === undefined || typeof request.include_work_details === "boolean",
+          "include_work_details must be boolean");
+        return inspectGoalAcceptance(store, goalId,
+          request.todo_id == null ? undefined : requireAuthorityStoreId(request.todo_id, "todo_id"),
+          request.goal_ref === undefined ? undefined : parseWireExactGoalRef(request.goal_ref, "acceptance request goal_ref"),
+          request.include_work_details !== false,
+          request.agent_id === undefined ? undefined : requireAuthorityStoreId(request.agent_id, "agent_id"));
+      }
       if (kind === "configure") return configureGoalAcceptance(store, request);
       if (kind === "refine") return refineGoalAcceptanceOutcome(store, request);
+      if (kind === "objective") return updateGoalObjective(store, request);
       return kind === "verify"
         ? commitGoalAcceptanceVerification(store, request)
         : transitionGoalAcceptanceLifecycle(store, request);
@@ -584,4 +645,7 @@ export async function commitLocalGoalAcceptanceLifecycleTransition(value: unknow
 
 export async function refineLocalGoalAcceptanceOutcome(value: unknown): Promise<JsonObject> {
   return local(value, "refine");
+}
+export async function updateLocalGoalObjective(value: unknown): Promise<JsonObject> {
+  return local(value, "objective");
 }

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 from ..coordination.coordination_state_contract_generated import (
     ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_SCHEMA,
     ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_SCHEMA,
@@ -55,7 +56,7 @@ def build_quota_planning_packet(
     goal_frontier_projection: Mapping[str, Any] | None,
     replan_selection_context: Mapping[str, Any] | None = None,
     source_status: Mapping[str, Any] | None = None,
-    planning_horizon_goal: bool = False,
+    planning_horizon_goal: bool = DEFAULT_PLANNING_HORIZON_GOAL,
 ) -> dict[str, Any]:
     """Project every requested planning lens through one TypeScript request."""
 

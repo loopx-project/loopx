@@ -759,37 +759,24 @@ def select_quota_todo_summary(
     return summary
 
 
+def _select_todo_source(
+    canonical_value: Any,
+    project_asset_value: Any,
+) -> dict[str, Any] | None:
+    sources = (canonical_value, project_asset_value)
+    if not is_canonical_attention_todo_summary(canonical_value):
+        sources = tuple(reversed(sources))
+    return next((source for source in sources if isinstance(source, dict)), None)
+
+
 def select_quota_todo_source_items(
     canonical_value: Any,
     project_asset_value: Any,
 ) -> list[dict[str, Any]]:
     """Return the authoritative pre-hot-path todo source for semantic checks."""
 
-    canonical_items = (
-        todo_summary_source_items(canonical_value)
-        if isinstance(canonical_value, dict)
-        else None
-    )
-    project_asset_items = (
-        todo_summary_source_items(project_asset_value)
-        if isinstance(project_asset_value, dict)
-        else None
-    )
-    if is_canonical_attention_todo_summary(canonical_value):
-        return canonical_items if canonical_items is not None else project_asset_items or []
-    return project_asset_items if project_asset_items is not None else canonical_items or []
-
-
-def _planning_inventory_source_items(value: Any, *, include_terminal: bool = False) -> list[dict[str, Any]] | None:
-    """Return canonical Todo rows before presentation-lane expansion.
-
-    Planning consumers share domain-state rows instead of rebuilding a larger,
-    order-sensitive union from presentation lanes.
-    """
-
-    if not isinstance(value, dict):
-        return None
-    return todo_planning_source_items(value, include_terminal=include_terminal)
+    source = _select_todo_source(canonical_value, project_asset_value)
+    return todo_summary_source_items(source) if source is not None else []
 
 
 def select_planning_inventory_source_items(
@@ -800,11 +787,8 @@ def select_planning_inventory_source_items(
 ) -> list[dict[str, Any]]:
     """Select the canonical non-terminal rows shared by planning read models."""
 
-    canonical_items = _planning_inventory_source_items(canonical_value, include_terminal=include_terminal)
-    project_asset_items = _planning_inventory_source_items(project_asset_value, include_terminal=include_terminal)
-    if is_canonical_attention_todo_summary(canonical_value):
-        return canonical_items if canonical_items is not None else project_asset_items or []
-    return project_asset_items if project_asset_items is not None else canonical_items or []
+    source = _select_todo_source(canonical_value, project_asset_value)
+    return todo_planning_source_items(source, include_terminal=include_terminal) if source is not None else []
 
 
 def _task_orchestration_authority_items(

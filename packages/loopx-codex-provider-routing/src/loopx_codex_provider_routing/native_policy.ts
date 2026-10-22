@@ -17,7 +17,8 @@ export type Account = {
   secondary_used: number | null;
   credits_available: boolean | null;
 };
-export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number; restart_clients?: boolean };
+export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number;
+  restart_clients?: boolean; force_quit_clients?: boolean };
 
 const number = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const percent = (v: unknown): number | null => number(v) && v >= 0 && v <= 100 ? v : null;
@@ -73,6 +74,8 @@ export function decide(input: {
   const output = (action: string, target: string | null = null, retry_at: number | null = null) =>
     ({ action, target, retry_at, accounts,
       restart_clients: action === "switch" && input.policy.restart_clients === true,
+      force_quit_clients: action === "switch" && input.policy.restart_clients === true
+        && input.policy.force_quit_clients === true,
       valid_until: action === "switch" && !input.manual_slot
         ? Math.min(...accounts.filter(a => a.slot === input.active || a.slot === target).map(a => a.observed_at + 120))
         : null });

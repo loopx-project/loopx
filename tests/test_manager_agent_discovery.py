@@ -183,7 +183,7 @@ def test_conversation_resolves_existing_peer_from_real_read_only_host_store(tmp_
     home = tmp_path / "host"
     home.mkdir()
     rollout = home / "current.jsonl"
-    rollout.write_text(json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": "current"}}) + "\n" + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
         "payload": {"type": "task_complete"}}) + "\n")
     db = home / "state_5.sqlite"
     with sqlite3.connect(db) as connection:

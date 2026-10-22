@@ -6,7 +6,7 @@ import decisionSchema from "../stride_decision_schema.json" with {type: "json"};
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringLiteral} from "../runtime_decode.ts";
-import {normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
+import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
 import {PLANNING_TODO_ID} from "./planning_relations.ts";
 
 export function normalizeStrideStrategy(value: unknown): string {
@@ -108,8 +108,8 @@ function comparisonCandidates(value: unknown): JsonObject[] {
   return value.map(value => {
     const card = requireJsonObject(value, "comparison candidate");
     exactFields(card, ["todo_id", "outcomes"], "comparison candidate");
-    if (!Array.isArray(card.outcomes) || !card.outcomes.length || card.outcomes.length > 3) {
-      throw new EffectRuntimeRequestError("comparison candidate requires at most three scoped outcomes");
+    if (!Array.isArray(card.outcomes) || !card.outcomes.length || card.outcomes.length > EXPLORE_RESULT_PAGE_MAX) {
+      throw new EffectRuntimeRequestError("comparison candidate requires one to twenty scoped outcomes from its result page");
     }
     const outcomes = card.outcomes.map(value => {
       const outcome = requireJsonObject(value, "comparison outcome");
@@ -369,9 +369,11 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
   const deliveredPages = Array.isArray(context.explore_result_pages) ? context.explore_result_pages as JsonObject[] : [];
   for (const page of (explore.result_pages ?? []) as JsonObject[]) {
     const resolved = deliveredPages.find(row => row.revision === page.revision &&
-      row.offset === page.offset && row.limit === page.limit);
-    if (page.revision !== (basis.result_page as JsonObject | null)?.revision || !resolved) {
-      return "Explore result pages require current source replay; reread global pages under the original Turn.";
+      row.offset === page.offset && row.limit === page.limit && row.todo_id === page.todo_id);
+    if (!resolved || page.todo_id === undefined && page.revision !== (basis.result_page as JsonObject | null)?.revision) {
+      return page.todo_id === undefined
+        ? "Explore result pages require current source replay; reread global pages under the original Turn."
+        : "Explore task result pages require current source replay; reread scoped pages under the original Turn.";
     }
     for (const ref of resolved.finding_refs as string[]) allowed.add(ref);
     candidates.push(...comparisonCandidates(resolved.comparison_candidates));

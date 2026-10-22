@@ -566,12 +566,14 @@ def test_real_blender_project_passes_reopen_and_http_download(http_workspace):
     plan = json.loads(
         (root / "packages/loopx-media/examples/blender-handoff.json").read_text()
     )
+    plan["shots"][1]["framing"] = "full_frame"
     prepared = work.prepare(plan, source_directory=work.project)
     ident = prepared["composition_id"]
     ready = work.render(ident, expected_revision=1)
     assert ready["status"] == "ready", ready
     result = ready["result"]
     assert result["qa"]["frames"] == 60
+    assert result["qa"]["full_frame_shots"] == ["route"]
     spatial = result["qa"]["blender_scenes"][0]
     assert spatial["id"] == "route" and spatial["frames"] == 36
     assert spatial["rgba_frames"] == spatial["depth_frames"] == 36
@@ -671,3 +673,98 @@ bpy.ops.render.render(write_still=True)
     attempt = work._record(ident)["attempt"]
     assert work.render(ident, expected_revision=1)["status"] == "ready"
     assert work._record(ident)["attempt"] == attempt
+
+
+@pytest.mark.skipif(
+    os.environ.get("LOOPX_MEDIA_RENDERER_TEST") != "1",
+    reason="explicit optional local renderer qualification",
+)
+@pytest.mark.parametrize("kind", ["image", "video"])
+def test_full_frame_retains_source_edges_and_boundary_through_real_renderer(http_workspace, kind):
+    """A four-corner source falsifies silent crop, old thumbnail and overlay loss."""
+    import subprocess
+    import imageio_ffmpeg
+    from PIL import Image, ImageDraw
+
+    work, exchange = http_workspace
+    _install_source_renderer(work)
+    source = Image.new("RGB", (1200, 600), "#203050")
+    draw = ImageDraw.Draw(source)
+    corners = [(0, 0, 99, 99), (1100, 0, 1199, 99), (0, 500, 99, 599), (1100, 500, 1199, 599)]
+    colors = [(220, 30, 30), (30, 220, 30), (30, 30, 220), (220, 190, 30)]
+    for box, color in zip(corners, colors):
+        draw.rectangle(box, fill=color)
+    source.save(work.project / "source.png")
+    name = "source.png"
+    if kind == "video":
+        name = "source.mp4"
+        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-loop", "1", "-i", str(work.project / "source.png"),
+                        "-t", "3", "-r", "12", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(work.project / name)], check=True)
+    plan = {**brief(), "assets": [{"id": "picture", "path": name, "kind": kind,
+            "sha256": hashlib.sha256((work.project / name).read_bytes()).hexdigest(),
+            "source_ref": "synthetic:four-corner-source", "visibility": "public_safe"}],
+            "shots": [{"id": "view", "kind": "excerpt", "seconds": 3, "title": "Title remains in the timeline",
+                       "asset_id": "picture", "source_ref": "synthetic:four-corner-source", "boundary": "Synthetic source"}]}
+    original = work.prepare(plan, source_directory=work.project)
+    ident = original["composition_id"]
+    legacy = work.render(ident, expected_revision=1)
+    assert legacy["status"] == "ready"
+    with Image.open(work.file(ident, "poster.png")) as image:
+        legacy_pixels = list(image.convert("RGB").getdata())
+    plan["shots"][0]["framing"] = "full_frame"
+    changed = work.prepare(plan, source_directory=work.project, composition_id=ident, expected_revision=1)
+    assert changed["revision"] == 2 and changed["status"] == "prepared"
+    assert changed["shots"][0]["framing"] == "full_frame"
+    with pytest.raises(ValueError, match="revision"):
+        work.render(ident, expected_revision=1)
+    framed = work.render(ident, expected_revision=2)
+    assert framed["status"] == "ready", framed
+    assert framed["result"]["qa"]["full_frame_shots"] == ["view"]
+    with Image.open(work.file(ident, "poster.png")) as image:
+        picture = image.convert("RGB")
+        pixels = list(picture.getdata())
+    def close(pixel, color):
+        return max(abs(a - b) for a, b in zip(pixel, color)) < 20
+    for color in colors:
+        # Each 100px source corner should occupy more area when the inset is removed.
+        assert sum(close(p, color) for p in pixels) > 2 * sum(close(p, color) for p in legacy_pixels)
+    # Full-width source corners remain at the correct sides, including both bottom edges.
+    for color, right, lower in zip(colors, [False, True, False, True], [False, False, True, True]):
+        points = [(i % 640, i // 640) for i, p in enumerate(pixels) if close(p, color)]
+        assert points and (min(x for x, _ in points) > 570 if right else max(x for x, _ in points) < 70)
+        assert (min(y for _, y in points) > 250 if lower else max(y for _, y in points) < 70)
+    # The attribution strip is outside the source, with visible dark text; no crop/overlay.
+    assert any(max(p) < 100 for p in pixels[640 * 330:])
+    from urllib.parse import urlencode
+    query = urlencode({"goal_id": "media-demo", "composition_id": ident, "file": "video.mp4"})
+    status, _, movie = exchange("GET", "/api/chat/content-media/file?" + query)
+    assert status == 200 and hashlib.sha256(movie).hexdigest() == framed["result"]["files"]["video.mp4"]["sha256"]
+
+
+@pytest.mark.skipif(
+    os.environ.get("LOOPX_MEDIA_RENDERER_TEST") != "1",
+    reason="explicit optional local renderer qualification",
+)
+def test_full_frame_video_preserves_display_aspect_before_raw_pixel_conversion(http_workspace):
+    import subprocess
+    import imageio_ffmpeg
+    from PIL import Image
+
+    work, _ = http_workspace
+    _install_source_renderer(work)
+    source = work.project / "anamorphic.mp4"
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=0x203050:s=320x160:r=12:d=1", "-vf", "setsar=2", "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p", str(source)], check=True)
+    plan = {**brief(), "captions": [], "assets": [{"id": "movie", "path": source.name, "kind": "video",
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "source_ref": "synthetic:anamorphic",
+            "visibility": "public_safe"}], "shots": [{"id": "view", "kind": "excerpt", "seconds": 1,
+            "title": "Anamorphic source", "asset_id": "movie", "framing": "full_frame",
+            "source_ref": "synthetic:anamorphic", "boundary": "Synthetic source"}]}
+    prepared = work.prepare(plan, source_directory=work.project)
+    ready = work.render(prepared["composition_id"], expected_revision=1)
+    assert ready["status"] == "ready", ready
+    with Image.open(work.file(prepared["composition_id"], "poster.png")) as image:
+        rows = [y for y in range(360) if max(abs(a-b) for a,b in zip(image.getpixel((320,y)), (32,48,80))) < 8]
+    # 320x160 with SAR=2 displays at 4:1: a full 640px width needs 160px height.
+    assert 158 <= len(rows) <= 162

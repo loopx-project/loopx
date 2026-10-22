@@ -12,6 +12,46 @@ This records producer evidence, not verified execution or utility. Findings,
 replan context and the existing research-history detail retain it; omission
 preserves old events. See the [local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md).
 
+## Quantitative findings
+
+An ordinary result attachment can include `measurements`, saved on its existing
+node-linked finding. The graph and research-history detail retain the values;
+`explore turn-context` supplies bounded `measurement_feedback` to the next turn.
+Manual capture uses `explore finding --node <id> --evidence-ref result:a
+--measurements-json measurements.json`. The file contains one to eight items:
+
+```json
+[{"metric":"quality","value":8,"unit":"points","higher_is_better":true,
+  "comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
+  "evaluation_ref":"evaluator:v1","candidate_ref":"candidate:a","evidence_ref":"result:a"}]
+```
+
+Each result reference must belong to the finding's `evidence_refs`; ordinary
+attachments also require the same `input_revision`. Use a new finding id per
+evaluated candidate, and reuse an id only to correct that finding. Missing values
+are explicit `null`; zero and negative values remain valid measurements.
+
+Comparisons require the same node, metric, unit, direction, comparison scope,
+input revision and evaluator. Producers must change the scope when task,
+model/resource budget or evaluation conditions change, and separate native
+evaluation from local proxies. Explore validates the declared comparison keys,
+not their truth. It computes the latest recorded measurement, historical best
+candidate/source and direction-adjusted improvement against the prior best,
+before applying the context's display limit. Latest follows source-log append
+order, including tied or backfilled timestamps; its ordinal is derived, not
+another persisted fact. Corrected findings replace earlier
+versions in comparisons; original versions remain in history. Counts are records,
+not independent trials. Feedback pages reuse `--result-limit` (1..20, default 3),
+`--result-offset`, `--result-revision` and the optional `--result-node` filter.
+Follow `measurement_feedback_page.next_command` for additional groups, including
+multiple metrics or conditions on one node. The shared revision binds all compared
+sources, including manual findings; a changed source requires restarting the read.
+The next-turn guidance uses this feedback to investigate
+regressions or revisit better candidates before repeating work. Best does not
+identify the current retained candidate, establish causality, satisfy acceptance
+or authorize execution. Actual adoption and outcome benefit require subsequent
+work and evidence; automatic branch rankings remain unchanged.
+
 ## At a Glance
 
 Explore Harness is a supported, default-off optional capability for
@@ -638,12 +678,19 @@ to one question:
 ```sh
 loopx explore turn-context --goal-id <id> --agent-id <agent> --result-limit 10
 loopx explore turn-context --goal-id <id> --agent-id <agent> --result-node <node-id> --result-limit 10
+loopx explore turn-context --goal-id <id> --agent-id <agent> --todo-id <todo-id>
 ```
 
 Page size accepts 1–20; every detail retains applicability and interpretation.
 Planning mode prioritizes one recent refutation per linked question before
-repeated findings on the same question. Evidence-only mode retains recency
-ordering. These reads do not alter planner scores, graph state, claims or quota.
+repeated findings on the same question. An explicit `--todo-id` prioritizes that
+open, own-or-unclaimed task's canonical question links and measurement groups
+ahead of the independent planner's suggestions. Quota and managed-turn callers
+carry their explicit task selection into this read automatically. Other results
+remain available through the same bounded pages; an absent link does not imply
+that no evidence exists. Without a task scope, evidence-only mode retains
+recency ordering. These reads do not alter planner scores, graph state, claims
+or quota, and neither mode is enabled by supplying a task id.
 The dashboard's saved-evidence reader also pages through history; the CLI
 options above control the agent context, not dashboard page size.
 
@@ -657,6 +704,22 @@ rejects changed/unavailable pages. This adds no read-side writes or execution
 permission. Node-filtered and planner-detail reads are not supported by this
 citation path. See the [stride contract](../../../docs/reference/protocols/goal-vision-replan-contract-v0.md#structured-stride-control)
 for the existing decision, budget and original-Turn recovery rules.
+
+A task-scoped `result_page` also includes `todo_id`; copy it alongside the three
+page coordinates when citing that page. Its `next_command` retains the scope.
+Writeback replays the current canonical task links and exact page without
+replacing the original global stride basis or changing its review revision.
+Changed links, a missing/closed task or another agent's claim invalidate the
+scoped page. Restart the read after correcting the scope. Unscoped global reads
+and citations retain their existing behavior. This improves evidence delivery;
+it does not prove that the Agent used it or improved an outcome.
+
+Each comparison card retains every linked outcome on that result page, up to
+the same 20-result bound. Expanding `--result-limit` therefore also makes the
+fourth and later displayed outcomes available to `selected_candidate`; writeback
+replays the same page and exact source digest. The default three-result view
+and the separate number-of-cards limit remain unchanged. A larger page grants
+no execution permission and does not certify the quality of a selection.
 
 Planning context also keeps a bounded `typed_evidence_audit` on suggested
 branches with explicit Todo/node links, and up to three existing exploring

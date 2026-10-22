@@ -12,6 +12,8 @@ import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 import {evaluateCanonicalTaskLeaseProof} from "../../loopx/control_plane/coordination/task_lease_proof.ts";
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {continuationExecutionAuthority} from "../../loopx/control_plane/coordination/continuation_adoption.ts";
+import {updateGoalObjective} from "../../loopx/control_plane/goals/acceptance_authority.ts";
+import {goalObjectiveWorkDigest, readGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
 
 async function loaded(store: AuthorityStore) {
   const result = await store.loadAuthority();
@@ -37,6 +39,39 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
       registered_agents: fixture.registered_agents, now: new Date(fixture.scenario.now)};
     return {store, contender, request, seed, fixture};
   }
+
+  test(`${provider}: an objective revision preserves in-flight recovery but holds new execution until own adoption`, async t => {
+    const {store, contender, request} = await setup(t);
+    const started = await acquire(store, request);
+    assert.equal(started.status, "applied");
+    const before = await loaded(store);
+    const common = {goal_id: request.goal_id, registered_agents: request.registered_agents,
+      source_objective: {registry_objective: "Bootstrap the service"}};
+    assert.equal((await updateGoalObjective(store, {...common, operation: "revise-objective", actor_agent_id: null,
+      operation_id: "revise-current-objective", expected_provider_revision: before.provider_revision,
+      document: {objective: "Maintain and recover the service", reason: "The bootstrap milestone is complete", source_ref: "owner:direction"}})).status, "applied");
+    const replay = await acquire(contender, request);
+    assert.deepEqual(replay.original_receipt, started.original_receipt, "revision does not revoke the in-flight execution's recovery proof");
+    assert.equal((await mutate(store, {...request, operation: "renew", expected_version: 1})).status, "applied");
+    const released = await mutate(store, {...request, operation: "release", expected_version: 2, ttl_seconds: null});
+    assert.equal(released.status, "applied");
+    const releasedVersion = Number((released.lease as JsonObject).version);
+    const next = {...request, idempotency_key: "new-execution", expected_version: releasedVersion};
+    const held = await acquire(contender, next);
+    assert.equal(held.reason_code, "goal_objective_review_required");
+    assert.ok(request.ttl_seconds !== null);
+    const claim = await executeCoordinationTodoClaim(contender, {goal_id: request.goal_id, todo_id: request.todo_id,
+      claimed_by: request.owner, actor_agent_id: request.owner, expected_role: "agent", registered_agents: request.registered_agents,
+      operation_id: "claim-after-revision", dry_run: false, now: request.now,
+      lease_request: {idempotency_key: "new-claim", expected_version: releasedVersion, ttl_seconds: request.ttl_seconds}});
+    assert.equal(claim.reason_code, "goal_objective_review_required");
+    const pending = await loaded(store), revision = readGoalObjective(pending.head)!.revisions.at(-1)!;
+    assert.equal((await updateGoalObjective(store, {...common, operation: "adopt-objective", actor_agent_id: request.owner,
+      operation_id: "adopt-current-objective", expected_provider_revision: pending.provider_revision,
+      document: {revision: revision.revision, digest: revision.digest, work_digest: goalObjectiveWorkDigest(pending.head, request.owner),
+        review_summary: "Reviewed existing work; this Todo remains the next delivery."}})).status, "applied");
+    assert.equal((await acquire(contender, next)).status, "applied", "one peer can continue without waiting for the whole team");
+  });
 
   for (const schema of ["native", "legacy"] as const) {
     test(`${provider} ${schema} User action history cannot grant execution and exact release remains available`, async t => {

@@ -1240,6 +1240,7 @@ export const typedActionsScenario = {
       await page.getByRole("button", { name: /关闭详情/ }).click();
 
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
+      await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       await page.getByRole("heading", { name: "Lark", exact: true }).waitFor({ state: "visible" });
       if (await page.locator(".personal-workspace-shell:visible").count()) throw new Error("Workspace Settings did not replace the workspace shell");
       if (await page.locator(".personal-channel-composer:visible").count()) throw new Error("Workspace Settings left the chat composer visible");
@@ -1301,7 +1302,7 @@ export const typedActionsScenario = {
 
       api.failNextMachineInspection = true;
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
-      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
+      await page.getByRole("radio", { name: "本机设置", exact: true }).check();
       await page.getByRole("heading", { level: 1, name: "能力中心", exact: true }).waitFor({ state: "visible" });
       const loadError = page.getByRole("alert").filter({ hasText: "无法读取机器配置" });
       await loadError.waitFor({ state: "visible" });
@@ -1419,16 +1420,18 @@ export const typedActionsScenario = {
       await page.getByText("Enabled means automatic delivery at validated stage boundaries", { exact: true }).waitFor({ state: "visible" });
       await page.screenshot({ path: resolve(outputDir, "machine-capability-en.png"), fullPage: false, animations: "disabled" });
       await page.getByRole("radio", { name: "One Goal", exact: true }).check();
+      await page.getByRole("combobox", {name: "Target Goal", exact: true}).selectOption("product-release");
       await page.getByRole("button", { name: /Adaptive child capacity/ }).click();
       await page.getByRole("heading", { level: 2, name: "Adaptive child capacity", exact: true }).waitFor({ state: "visible" });
       for (const label of [/^Enabled$/u, /^Child model/u, /^Child reasoning effort/u, /^Maximum children/u, /^Allowed responsibility domains/u]) {
         await page.getByLabel(label).waitFor({ state: "visible" });
       }
       await page.screenshot({ path: resolve(outputDir, "goal-subagent-capability-en.png"), fullPage: false, animations: "disabled" });
+      await page.getByRole("radio", {name: "This device", exact: true}).check();
       await page.getByRole("button", { name: /Language/ }).click();
       await page.getByRole("radio", { name: /Simplified Chinese/ }).click();
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
-      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
+      await page.getByRole("radio", { name: "本机设置", exact: true }).check();
       await page.locator(".personal-settings-body").evaluate((element) => element.scrollTo({ top: 0 }));
       await page.screenshot({ path: resolve(outputDir, "machine-capability-zh-cn.png"), fullPage: false, animations: "disabled" });
       // Steward owns a first-level destination with just model/executor and
@@ -1508,7 +1511,7 @@ export const typedActionsScenario = {
       api.machineInspectionStatus = "invalid";
       api.invalidMachineNamespaces = ["periodic_report"];
       await page.getByRole("button", { name: "能力中心", exact: true }).click();
-      await page.getByRole("radio", { name: "此设备默认", exact: true }).check();
+      await page.getByRole("radio", { name: "本机设置", exact: true }).check();
       await invalidRepair.waitFor({ state: "visible" });
       await page.getByRole("heading", { level: 2, name: "周期报告", exact: true }).waitFor({ state: "visible" });
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
@@ -1574,6 +1577,7 @@ export const typedActionsScenario = {
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
+      await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       const routeMismatchRow = page.locator(".personal-lark-table-row", { hasText: "Product group" });
       try {
         await routeMismatchRow.getByText("消息未匹配当前 Goal Topic", { exact: false }).waitFor({ state: "visible" });
@@ -1610,6 +1614,7 @@ export const typedActionsScenario = {
       const legacyId = legacyConnection.connection_id;
       await page.getByRole("button", { name: "返回工作区", exact: true }).click();
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
+      await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       const legacyRow = page.locator(".personal-lark-table-row", { hasText: "Original Bot" });
       await legacyRow.getByText("待升级", { exact: true }).waitFor({ state: "visible" });
       await legacyRow.getByRole("button", { name: /配置/ }).click();
@@ -1626,6 +1631,7 @@ export const typedActionsScenario = {
       removedConnection.agent_id = "removed-peer";
       await page.getByRole("button", { name: "返回工作区", exact: true }).click();
       await page.locator('.personal-sidebar-utility[aria-label="设置"]').click();
+      await page.locator(".personal-settings-tabs").getByRole("button", {name: "Lark", exact: true}).click();
       await page.locator(".personal-lark-table-row", { hasText: "removed-peer" }).getByRole("button", { name: /配置/ }).click();
       await editDialog.getByRole("alert").filter({ hasText: "不会自动替换" }).waitFor({ state: "visible" });
       if (!(await editDialog.getByRole("button", { name: "保存连接", exact: true }).isDisabled())) throw new Error("Removed recipient remained connectable");

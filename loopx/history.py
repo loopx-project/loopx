@@ -58,7 +58,11 @@ from .control_plane.runtime.time import chronology_key, now_local_iso
 from .doctor import PROMOTION_READINESS_CLASSIFICATIONS
 from .execution_profile import compact_execution_profile
 from .explore_graph import compact_explore_graph_policy
-from .paths import registry_project_root, resolve_runtime_root
+from .paths import (
+    registry_project_root,
+    resolve_runtime_root,
+    validate_goal_id_path_segment as validate_goal_id_path_segment,
+)
 from .presentation.markdown import (
     markdown_code,
     markdown_table_row,
@@ -261,17 +265,6 @@ def write_reserved_run_artifacts(
         )
         markdown_path.write_text(render_markdown(payload) + "\n", encoding="utf-8")
         append_run_index_record(index_path, index_record, allow_nan=False)
-
-
-def validate_goal_id_path_segment(goal_id: str) -> str:
-    value = str(goal_id or "").strip()
-    if not value:
-        raise ValueError("goal id is required")
-    if value in {".", ".."} or "/" in value or "\\" in value:
-        raise ValueError("goal id must be a single path segment")
-    if Path(value).name != value:
-        raise ValueError("goal id must not include path traversal")
-    return value
 
 
 def discover_goal_ids(

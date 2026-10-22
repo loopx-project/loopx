@@ -63,7 +63,11 @@ export function parseTodoTimestampMicros(value: string): bigint | null {
     calendar = parseIsoTimestamp(expanded);
     if (!calendar || calendar.getUTCFullYear() < 1) return null;
   }
-  if (time === undefined) return BigInt(calendar.valueOf()) * 1000n;
+  if (time === undefined) {
+    const result = BigInt(calendar.valueOf()) * 1000n;
+    if (result < -62135596800000000n || result >= 253402300800000000n) return null;
+    return result;
+  }
   const parts = /^(.*?)(Z|z|[+-].*)?$/.exec(time)!;
   function clock(raw: string, offset: boolean): bigint | null {
     const parsed = /^(\d{2})(?:(:?)(\d{2})(?:\2(\d{2}))?)?(?:[.,](\d+))?$/.exec(raw);
@@ -87,5 +91,9 @@ export function parseTodoTimestampMicros(value: string): bigint | null {
     if (parsed === null) return null;
     offset = parts[2][0] === "-" ? -parsed : parsed;
   }
-  return BigInt(calendar.valueOf()) * 1000n + local - offset;
+  const result = BigInt(calendar.valueOf()) * 1000n + local - offset;
+  // Python datetime requires UTC results within 0001-01-01T00:00:00Z to 9999-12-31T23:59:59.999999Z.
+  // -62135596800000000n is 0001-01-01T00:00:00Z, 253402300800000000n is 10000-01-01T00:00:00Z.
+  if (result < -62135596800000000n || result >= 253402300800000000n) return null;
+  return result;
 }

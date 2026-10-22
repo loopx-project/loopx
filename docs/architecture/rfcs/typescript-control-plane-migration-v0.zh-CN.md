@@ -4,7 +4,7 @@
 - 替代 / 关闭：无
 - Proposed by：LoopX maintainers
 - Date：2026-08-15
-- Last revised：2026-10-20
+- Last revised：2026-10-21
 - Scope：LoopX 控制面核心从 Python 到 TypeScript 的增量、replacement-first
   迁移；不长期维护两份语义实现
 - Tracking issue：[#3225](https://github.com/loopx-project/loopx/issues/3225)
@@ -32,7 +32,29 @@ Python builder 和 App 兼容组合逻辑已退役。Python 保留既有 executi
 follow-up wire 契约、真实 runtime transport、已安装调用者，以及匹配的完整
 SQLite CLI 性能。仅减少请求次数不能证明性能收益。
 
+### 全局读取 CLI 调用者接入
+
+既有五个全局读取命令现在使用按命令 parser 和共享 dispatcher。
+`summary_all_registration.py` 统一持有仅解析参数的注册实现，旧注册 import 保留
+同一函数的 alias。完整 parser 的兼容调用者复用相同 handler 分发，旧完整 CLI
+分支已删除。Help 和诊断保留既有 interface；实际读取保留 registry/runtime 解析、
+guard、格式和 typed owner。这不新增领域规则、桥接操作或数据缓存。增量资格验证
+单独计入待合入的 quota 请求作用域接入，避免重复计算其收益。
+
 ### 产品对话与通用异步 inbox
+
+**公共 quota 读取作用域。** `quota/should_run.py` 现在为每次完整公共 quota 读取
+复用既有 executable-revision 请求作用域。兼容 facade 和全局视图共用该生命周期，
+不再在每次 typed 判定前重新解析代码树。已有外层作用域仍可组合；下一次独立读取
+重新解析当前代码。该作用域不缓存调用者的 status 快照或既有 provider/callback
+读取。这不新增数据缓存、桥接操作、语义 owner 或 provider 路由，也不改变调度权限。
+
+**有界 Goal portfolio 读取。** `goal_portfolio.py` 现在在完整 portfolio 读取期间
+复用既有 executable-revision 请求作用域。CLI、Chat context 和 manager inspection
+调用者在 status 与逐 Agent quota 读取之间共用该作用域。嵌套作用域加入当前请求；
+下一次 portfolio 读取重新解析当前代码。Registry、provider 与 run-history 仍实时
+读取，保留既有范围、上限和变化检查。这是有界调用者接入，不新增桥接、数据缓存、
+语义 owner 或 provider 路由。
 
 **接收方 Inbox 读取事务（2026-10-19）。**
 `loopx/control_plane/collaboration/inbox_read.ts` 现在通过既有 typed owner 组合本地源扫描、分页、
@@ -48,6 +70,14 @@ finalize 重新取得 Goal lifetime guard，并在共享 request fence 内重读
 正常 runtime IPC、已安装 HTTP 调用者一致性、
 完整默认 SQLite CLI 性能仍是独立资格门。本次源码切换不证明 R1–R3 或完整异步协作
 生命周期已通过验收。
+
+**Inbox CLI 调用者接入。** 正常 `manager-inbox` 命令族现在使用既有按命令
+parser、共享 dispatcher 和 executable-revision 请求作用域。完整兼容 CLI
+复用同一个 dispatcher，旧 Inbox 重复分支已退役。两条路径保留既有 parser、
+handler、registry／runtime 解析和 native-controller guard。一次命令只解析一次
+可执行代码身份；源记录仍在原锁协议下实时读取，下一次命令重新解析当前代码。
+既有 TypeScript 语义 owner、桥接操作、回执格式和 Python provider IO 均不变。
+这是 Stage 3 调用者接入，不是新的叶子迁移、结果存储，也不证明 R1–R3 已完成。
 
 R1–R3 的 TS 消费者包括 App 产品路径，不只 CLI 结算。
 [App/inbox 融合设计](app-conversation-and-async-inbox-v0.md#ts-and-generic-async-inbox-migrate-with-the-user-path)
@@ -394,6 +424,18 @@ promotion gate。
 
 - 检查点已移至执行账本：[Provider-neutral projection conformance 检查点（2026-09-12）](ledger/typescript-control-plane-migration-v0/2026-09-12-provider-neutral-projection-conformance.zh-CN.md)。
 - 检查点已移至执行账本：[Canonical Todo 展示检查点（2026-09-12）](ledger/typescript-control-plane-migration-v0/2026-09-12-canonical-todo-presentation.zh-CN.md)。
+
+### Quota Todo 来源选择（2026-10-21）
+
+Quota 来源读取与 planning-inventory 读取先选定优先且可用的 summary，
+再调用既有 typed 投影 owner。canonical/legacy 优先级与权威空选择保持不变。
+未选中的行不再跨 runtime transport；未选中行格式错误不会阻断有效的选中来源。
+选中来源的投影失败仍向上传播，不会采用另一来源。
+
+重复的 planning adapter 与被丢弃的投影已删除。Python 保留兼容来源选择，
+直到 quota 与 planning 调用者迁入同一进程。这里不新增 RPC、数据缓存或领域规则实现。
+这个有界调用者改动仍须验证完整命令的 SQLite 性能与已安装 File/SQLite 等价性；
+仅减少请求次数不能证明性能收益。
 
 ### 长程持久化也是迁移收益的一部分
 
@@ -1066,6 +1108,9 @@ Goal 与重放；源码验证不代表已安装宿主采用或整 Goal 资格通
 使用同 UID 私有文件及字节数、SHA-256 摘要绑定；其他 effect 的默认传输边界不变。
 文件缺失、改变、权限不符或超过 64 MiB 时拒绝。Handler 可能已经提交后，无法验证
 的响应仍按不明确结果处理，要求精确回执回读，不能自动重试写入。
+内联响应和私有文件响应都将此规则用于编码无效、JSON 值超限和嵌套过深的情况。
+解码失败不能进入发送前的启动重试路径，也不能抹掉可能已经持久化的事实；
+既有传输 adapter 将其报告为 `runtime_response_ambiguous`。
 
 来源读取和 read/check 归约现在在一次 TypeScript 请求内完成。上下文读取与提交前
 检查各从两次 checkpoint 请求降为一次，完整权威事实不再先返回 Python 再传回 TS。
@@ -1253,6 +1298,13 @@ TypeScript 类型在运行时会被擦除。因此 network/RPC payload、解析�
 而不必在每层重复临时字段检查。Framing、authentication、size limit 等 transport
 检查与 schema validation、semantic invariant 分层负责。未经检查的
 `JSON.parse(...) as T` 不能建立控制面 authority。
+
+Canonical Todo 集合读取在同一个已加载 provider head 内共享 `GoalAcceptanceRead`。
+合同、oracle basis 和工作 guard 复用已验证的 authority、Todo 索引和任务判断。
+guard 保持惰性投影，保留来源 identity 与连续页检查的原拒绝顺序。公开独立 helper
+每次重新读取，返回的容器相互隔离。每个新 provider head 或连续页读取都建立新
+scope。不新增 Python bridge、RPC、持久化缓存或写权限；原生读取测量不证明
+完整 CLI 延迟、安装采用或 PostgreSQL 运行资格。
 
 `as unknown as T` 只允许作为具名迁移缝：cutover PR 必须明确其调用点、上游
 validator、负向边界覆盖和移除 owner。只要 public、持久化、RPC 或 extension
@@ -1699,6 +1751,15 @@ Characterization output 是证据，不是 specification。Pinned 行为若与�
 invariant 冲突，PR 必须披露，并把行为变更单独批准。旧 authority 删除后，promotion
 还要求删除只服务这次实现对比的 characterization machinery；当 fixture 表达 public
 或 persisted compatibility contract 时，可以保留为持久 regression test。
+
+#### Canonical Todo 恢复资格验证（2026-10-21）
+
+Canonical Todo 读回不会使单独声明的 Goal 来源变成可选项。
+该状态文件缺失时，quota 仍拒绝自动执行。恢复 fixture 因此保留原始 Goal 正文，
+只在 capture 后移除旧 Todo 展示。File 与 SQLite CLI 检查覆盖 monitor 修复、
+generation 等待和 capacity 恢复，且不会重建 Todo 展示。
+独立的来源缺失与恢复检查保留 Goal 健康门禁。这里验证有界 Todo 恢复路径；
+完整 Goal 来源迁移仍是独立工作。
 
 ### 性能
 

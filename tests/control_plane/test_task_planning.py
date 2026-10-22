@@ -92,6 +92,33 @@ def test_existing_plan_is_an_incremental_frontier_not_a_new_goal(bound_goal):
     assert all(item["todo_id"] != "todo_peer" for item in packet["existing_todos"])
 
 
+@pytest.mark.parametrize("fine_grained", [False, True])
+def test_planning_scope_is_sufficient_to_start_without_exhaustive_decomposition(bound_goal, fine_grained):
+    registry = bound_goal["registry_path"]
+    contents = json.loads(registry.read_text())
+    if fine_grained:
+        contents["goals"][0]["execution_profile"] = {"turn_granularity": "fine"}
+        registry.write_text(json.dumps(contents))
+    packet = build_task_planning_packet(**bound_goal)
+    planner = packet["planner"]
+    assert planner == goal_planner_contract(fine_grained=fine_grained)
+    for clause in (
+        "minimum sufficient plan: next step and decisive validation",
+        "Diagnostics and feedback may come first to strengthen delivery",
+        "replan uncertain later work",
+        "no fixed-count filler or exhaustive decomposition",
+    ):
+        assert clause in planner["budget_policy"]
+    assert planner["profiles"]["clear_bounded_problem"][
+        "may_reuse_current_todo_when_it_already_represents_the_plan"] is True
+    assert planner["required_before_todo_write"] is True
+    assert packet["execution_handoff"]["requires_quota_guard"] is True
+    assert packet["execution_handoff"]["planning_is_advancement"] is False
+    assert "do not substitute them for the requested deliverable" in planner["first_delivery_guidance"]
+    assert "existing acceptance, feedback and authority limits" in planner["first_delivery_guidance"]
+    assert planner.get("maximum_runnable_todos_written_ahead") == (1 if fine_grained else None)
+
+
 def test_unknown_identity_rejected_without_creating_it(bound_goal):
     with pytest.raises(ValueError, match="not registered"):
         build_task_planning_packet(**(bound_goal | {"agent_id": "unknown"}))

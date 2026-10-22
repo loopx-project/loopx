@@ -12,6 +12,10 @@ should not be the first thing a newcomer has to understand.
 
 For a task-oriented walkthrough, see
 [long-running coding agents with Codex and Claude Code](long-running-coding-agents.md).
+For a first hands-on exercise, start with
+[your first bug-fixing loop](first-bugfix-loop.md)
+([中文实操教程](first-bugfix-loop.zh-CN.md)): reproduce two bugs, check host
+activation, run tests, and inspect a local commit before trying a recurring bug hunt.
 
 ## The Two Commands To Remember
 

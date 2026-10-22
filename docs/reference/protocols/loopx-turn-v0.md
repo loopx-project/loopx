@@ -416,6 +416,33 @@ One driver tick has exactly these ordered phases:
 The driver may stop after any phase. A stop must return a typed result and must
 not silently continue with a different execution mode.
 
+Executing admission entrypoints compose registered TurnStart observations
+before collecting the decision. The capability owns permission resolution,
+provider IO and bounded readback; the shared dispatcher validates the existing
+registration/result contract and isolates failures. Core Turn rendering consumes
+`readback.summary_lines`, without knowing the capability's domain. The same
+registration is used by executing quota guards and compatibility prequota.
+Read-only builders, plans, managed-step and original-journal recovery do not
+invoke new observations. An observer may establish a fact during a business
+wait or compute pause, but it cannot grant host execution or spend authority.
+
+TurnStart results may carry bounded capability-owned `readback` without an
+Agent message-read obligation. Failed/partial/unavailable results may report
+unknown external reads or local effects as `null`; external writes remain an
+explicit boolean. If invocation precedes a rejected/lost result, the dispatcher
+retains `uncertain_local_effects` for declared local writes and callers refresh
+their decision projection. These extensions do not make post-writeback hooks
+effectful or authorize new provider writes.
+
+执行准入入口在决策收集前组合注册的 TurnStart 观察。能力负责权限、provider IO 与
+有界读回；共享 dispatcher 校验既有契约并隔离失败，核心 renderer 只消费通用
+`readback.summary_lines`。执行 quota guard 与兼容 prequota 复用该注册。只读 builder、
+plan、managed-step 和原 journal 恢复不添加观察。业务等待或额度暂停中的事实观察
+不授予宿主执行或扣费权限。失败／退化／不可用结果可用 `null` 表示外部读取或本地效果
+未知，远端写入仍须显式布尔声明。执行后响应丢失／被拒绝时，dispatcher 为已声明的
+本地写入保留 `uncertain_local_effects`，调用方刷新决策投影；post-writeback hook
+继续无效果，不由此获得 provider 写入权限。
+
 ### One Executor Per Turn Lane
 
 A **Turn lane** is one agent working one goal. Phase 5 launches exactly one
@@ -522,9 +549,10 @@ id must validate under the settlement schema. A Todo binding must also match
 the envelope's authoritative selected Todo, including the adaptive primary Todo
 override. A mismatch therefore produces a blocked recovery decision before
 Host or any settlement provider is called, even when the completed phase prefix
-would otherwise resume at durable writeback or a later effect. The current Turn
-driver does not produce Todo-less autonomous-replan transaction Journals, so it
-does not infer such a binding without authoritative Turn lineage.
+would otherwise resume at durable writeback or a later effect. A Todo-less
+autonomous-replan Journal instead retains the original signed quota settlement
+plan and matching obligation. The shared TypeScript envelope owner checks that
+binding for both planning and Journal recovery; a missing Todo never supplies it.
 
 For example, an `in_progress` Journal with a saved Host Result has
 `replay_legal=false` but may continue from `validation` without another Host
@@ -629,7 +657,8 @@ The driver input is a small composition of existing contracts:
 
 `session_handle` is local adapter state. It must not be committed, copied into
 LoopX public state, or treated as identity authority. The stable control-plane
-identity is `(goal_id, agent_id, selected_todo.todo_id)`.
+identity is the original quota settlement binding: Goal/Agent/Todo/Turn, or
+Goal/Agent/autonomous-replan obligation/Turn for admitted empty-frontier planning.
 
 Adapters may support two explicit execution modes:
 
@@ -696,8 +725,8 @@ declared result with progress or accept read-only scale aliases for new writes.
 Valid vocabulary does not establish a qualifying settlement. For new material
 Host results, the validator reuses the existing settlement rule before task
 validation or effect preparation. `surface_only` and `outcome_gap` return
-`validation_failed` at `host_result_contract`: this Host contract carries no
-typed blocker observation. The failed journal retains no prepared writeback;
+`validation_failed` at `host_result_contract`: observation transport does not add
+a no-spend Host closeout. The failed journal retains no prepared writeback;
 ordinary replay has no effects, and a corrected candidate needs a new Turn or
 an explicitly admitted failed-result retry. Historical cached results keep
 their provider readback and settlement recovery; a possibly committed effect
@@ -717,7 +746,7 @@ unchanged.
 不得将所声明结果替换为进展，也不得让只读 scale 别名用于新写入。词汇合法不代表
 满足结算条件。新材料 Host 结果在任务校验或效果准备前复用既有结算规则：
 `surface_only` 与 `outcome_gap` 返回 `host_result_contract` 阶段的
-`validation_failed`，因为当前 Host 合同不携带 typed blocker observation。
+`validation_failed`；新增的 observation 传输不扩展 Host 的免扣额收口路径。
 失败 journal 不留下 prepared 写回；普通重放无效果，修正候选须通过新 Turn 或明确
 准入的失败结果重试。历史缓存结果继续走 provider 读回和结算恢复，不能由新增候选
 校验丢弃可能已经提交的效果。普通 CLI 的 typed blocker 结算保持原行为。合法声明
@@ -754,6 +783,54 @@ Turn 及有效 target ID 必须是非空字符串；声明的 `binding_kind`／`
 本修订收紧此前宽松的损坏输入处理：非法身份在 writeback、扣额或 receipt replay
 前返回 `invalid_identity`。Journal inspection 报告 `settlement_identity_invalid`，
 阻止恢复且不重写记录。合法结构仍需通过当前权限及已有 commit-time fence。
+
+### Receipt-bound planning without a Todo / 无 Todo 的回执绑定规划
+
+When the native quota owner requires a genuine autonomous replan with no selected
+Todo, `turn run-once --host codex-cli --session-scope agent` can execute it with
+an explicit `--turn-instance-id`. The existing Agent conversation, independent
+validator, journal, writeback and quota owners retain the same Goal/Agent/
+obligation/Turn identity. The launch boundary rereads current admission. A
+successful resume through `--resume-turn-key` reads the original result and
+effects; it does not repeat Host work or debit another slot. No surrogate Todo
+or Todo completion is created.
+
+The signed plan and semantic obligation must agree. Missing, conflicting or
+corrupt identity/source evidence refuses execution or recovery. Without a
+genuine replan binding, ordinary Todo-less work remains unbound. Todo-scoped
+sessions and other Host adapters retain their existing no-Todo refusal. Selecting
+the existing `--session-scope todo` retains that boundary; no new execution
+configuration or scheduler is introduced.
+
+Material Host results may supply `progress_observation_json`, a JSON string of
+at most 4096 characters using the existing `typed_progress_observation_v0`
+contract. The adapter preserves it, the existing normalizer validates it, and
+refresh-state judges it against the original obligation. Use observed
+`result_class`, surface/hypothesis/probe or blocker/coverage identifiers, and
+opaque `evidence_ids`; prose and successful process exit do not establish a
+semantic delta. Independent task validation still must pass. Omission or an
+empty string preserves prior behavior. A normalized observation is retained
+with the original Host result for recovery; a stop result cannot carry one.
+
+This qualifies the native planning/settlement transport. Ordinary Inbox request
+admission, trusted idle wake, busy queue handling, App presentation and an
+installed original-message-to-conclusion journey remain separate delivery work.
+An Inbox message cannot be relabeled as an autonomous-replan obligation to use
+this path.
+
+原生 quota owner 确认需要自主重规划且没有选中 Todo 时，既有 Codex Agent 会话可用
+显式 `--turn-instance-id` 执行该规划。Host、独立校验、journal、写回和扣额始终保留
+原 Goal／Agent／obligation／Turn 身份，启动前重读当前准入；按原
+`--resume-turn-key` 恢复只读回原结果和效果，不重跑 Host、不重复扣额，也不造 Todo
+或调用 Todo 完成。签名计划、语义义务或来源证据缺失、冲突、损坏时拒绝。普通无 Todo
+请求不因此获权；Todo 会话及其他 Host 仍保留原拒绝边界。
+
+材料结果可提供不超过 4096 字符的 `progress_observation_json`，复用既有
+`typed_progress_observation_v0`。原 owner 规范化并对照本次原义务判断，独立校验仍须
+通过；摘要或进程成功不能代替语义变化。省略或空串保持旧行为，规范 observation 随
+原 Host 结果持久保存供恢复，停止结果不能携带它。这只是原生规划和结算传输的验收；
+普通 Inbox 准入、可信空闲唤醒、忙碌队列、App 展示和安装态原消息到结论仍待各自交付，
+不能伪造 replan 义务代替原请求。
 
 ### In-flight Turn settlement / 在途 Turn 结算
 

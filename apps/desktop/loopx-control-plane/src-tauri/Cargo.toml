@@ -38,7 +38,7 @@ semver = "1"
 tauri = { version = "2.11.1", features = ["test"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2 = "0.6.4"

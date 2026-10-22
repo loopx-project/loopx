@@ -414,6 +414,33 @@ test("preflight separates task admission, acceptance binding and runtime availab
   assert.throws(() => delegationPreflight({...params, preview: {...preview, effects: {...effects, host_invoked: true}}}));
 });
 
+test("preflight uses scoped native lane facts without inventing App presence", () => {
+  const params = {binding, validation_files_current: true, acceptance: {todo_id: binding.todo_id, state: "ready"},
+    preview: {dry_run: true, status: "preview",
+      effects: {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+      route: {kind: "ready_for_host", would_invoke_host: true, selected_todo_id: binding.todo_id},
+      managed_executor: {executor: "generic-cli", available: null, unavailable_reason: null, execution_profile: null}}};
+  const original = delegationPreflight(params);
+  assert.equal(original.state, "runtime_unverified");
+  assert.equal(original.turn_lane, undefined);
+  for (const state of ["absent", "released", "dead"]) {
+    const {turn_lane, ...observed} = delegationPreflight({...params, lane: {state, holder: "withheld"}});
+    assert.deepEqual(observed, original);
+    assert.deepEqual(turn_lane, {scope: "native_turn_lane", state});
+  }
+  for (const state of ["live", "foreign_host", "unreadable"]) {
+    const observed = delegationPreflight({...params, lane: {state}});
+    assert.equal(observed.state, "turn_blocked");
+    assert.equal(observed.turn_eligible, false);
+    assert.equal(observed.reason, state === "live" ? "turn_lane_in_flight" : "turn_lane_state_unknown");
+    assert.equal(observed.acceptance_ready, true);
+    assert.deepEqual(observed.effects, original.effects);
+    assert.deepEqual(observed.turn_lane, {scope: "native_turn_lane", state});
+  }
+  for (const lane of [null, {}, {state: "idle"}, {state: ["live"]}, {state: true}])
+    assert.throws(() => delegationPreflight({...params, lane}));
+});
+
 const runtimePreflight = (executor: Record<string, unknown>) => delegationPreflight({
   binding, validation_files_current: true, acceptance: {todo_id: binding.todo_id, state: "ready"},
   preview: {dry_run: true, status: "preview",

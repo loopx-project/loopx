@@ -129,9 +129,10 @@ or repair the existing extension and retry. No failure creates publication
 authority, fills missing footage, infers a creative pass or changes a Goal.
 
 Mechanical rendering, creative quality, audience understanding and operations
-impact have separate evidence. Future generated media and interactive
-learning providers should reuse the nearest content owner and comparison
-method; they are not silently activated by this protocol.
+impact have separate evidence. Generated image/video assets and footage from
+authored HTML, game or mini-world works can reuse this source-bound composition
+path. Choose their authoring tools for the requested work; a new form does not
+require another core workbench or activate an unconfigured provider.
 
 ## Blender shot and project readback
 
@@ -169,3 +170,101 @@ missing bpy does not disable ordinary 2D work. A failed 3D attempt retains its
 prepared input and supports retry after dependency repair. No fallback replaces
 3D with a code projection. Mechanical readiness still does not establish
 creative quality, audience understanding or publication approval.
+
+## Per-shot picture framing
+
+An `excerpt` or `blender` shot can opt into `framing: "full_frame"` with
+`loopx-media` 0.3.0. The source fits the available width/height without cropping
+or changing its aspect ratio; a small image may be enlarged. Its complete
+`boundary` is wrapped in a separate measured strip below the picture. Neither
+that strip nor the optional player captions are baked over source pixels.
+The shot title remains timeline/source metadata; put a title that the viewer
+must see in the source artwork, a title shot or timed captions. The fixed studio
+header, drawn shot title and progress bar are omitted for this shot. The
+selected layout's background/text tokens still apply. This is a rendering
+choice, not an audience-understanding or creative-quality judgment.
+
+Omitted framing and explicit `"editorial"` normalize to the original plan
+structure and retain the existing digest/layout. Other values and framing on
+non-spatial shot kinds are refused. Nonempty spatial `body` remains refused.
+Full-frame framing changes the source-bound digest and needs a new revision;
+it cannot inherit earlier content approval. The result additionally requires
+`qa.full_frame_shots` to match the admitted ordered shot IDs. An older provider
+that ignores the field cannot produce a ready result; explicitly upgrade the
+optional package/manifest and retry after doctor. Default framing remains
+compatible with the older provider. No core setting or global installation is
+changed by preparing a full-frame plan.
+
+The Agent prepares this choice in the same brief; the packaged workbench shows
+“Full frame” beside its timeline/source entry and renders, cancels, retries and
+reads back the same composition. Users do not enter source paths or JSON again.
+Disabling the existing extension blocks new renders and keeps verified movies
+readable. To return to editorial framing, prepare a revision without the field
+and render it; an older LoopX core will refuse a plan containing the new field.
+
+中文：`excerpt` 与 `blender` 镜头可选 `framing: "full_frame"`。素材按原比例
+完整放入较大的画面区，必要时放大；来源说明在独立底栏完整换行，工作室页眉、
+片内标题和进度条不再绘制。标题仍在分镜与来源信息中，需要观众看到的标题由素材、
+标题镜头或字幕承载。省略该字段或显式选择 `editorial` 保留原计划摘要与构图。
+此选项需要显式升级 `loopx-media` 0.3.0、注册新 manifest 并运行 doctor；旧渲染器
+若忽略新字段，结果会被拒绝就绪。修改构图需新修订，仍会撤销旧内容批准。
+工作台沿现有入口显示“大画面”并制作、取消、重试和查看；停用扩展阻止新制作但
+保留已校验影片。回到旧构图时，移除字段后保存新修订再制作；旧版核心不会接受
+含新字段的计划。该选项不改变来源可见性、发布权限或全局配置。
+
+## Authoring and comparison practice
+
+The existing brief, revision and verified-file operations support this practical
+author workflow. These are creative decisions; `ready` retains the mechanical
+contract above.
+
+Start with the audience, message and factual source revision. Give each scene
+a communication job, then choose the form that serves it: readable 2D for exact
+guidance, actual interface states for product evidence, or authored spatial and
+interactive scenes when their relationships or actions help. A film need not
+contain every available technique. Keep edited, synthetic and illustrative
+material identified; an association, screenshot or source label does not prove
+an outcome. Preserve missing links and other qualifiers when reframing a source.
+
+Inspect the result at its intended viewing size. A source that fits its frame
+can still have unreadable text. For supplied artwork, resolve transparency on
+the intended background and inspect any crop before encoding. Titles that must
+be seen belong in supported visible content. Player captions, exported subtitle
+files and words drawn into source pixels are different deliverables. Check the
+actual speech and caption windows too: a system speech rate parameter does not
+establish the resulting phrase duration, naturalness or comprehension.
+
+Revise the work in response to an observed problem, keeping the earlier version
+and the reason for the change. Controlled excerpts answer a narrow question
+only when the compared script, sources, timing and other relevant conditions
+are recorded. Fully developed films may deliberately change those conditions
+to serve the same brief. Review each complete film for message, picture, sound,
+pacing, readability, possible misreadings and task fit; do not align different
+scripts at the same timestamp or infer a universal medium ranking. Record
+author judgment separately from independent audience observations. No audience
+evidence means no audience conclusion.
+
+Keep research, setup, paid calls, failed attempts, rework, rendering and review
+in the cost account. A timed render is one stage; missing costs stay unknown.
+Retain an editable project and its sources beside the verified outputs. A
+portable handoff benefits from an actual download, extraction and revised
+export, including playback seeking when comparison depends on it. Reusing a
+technique in the next requested work tests that specific reuse; it does not
+by itself establish audience benefit or lower total cost. Publication remains
+with the existing content-item lifecycle.
+
+中文：以下为创作建议，`ready` 仍代表上述机械合同。先明确读者、表达目的和事实版本，
+再给镜头分配叙事作用，按作用选二维、
+实际界面、空间或交互场景，不必把所有形式塞进一部片。重构图时保留缺口与限定，
+不把截图、关联或来源标签当结果证明。在实际观看尺寸检查文字、透明背景、裁切、
+可见标题及声音/字幕时序；播放器字幕、导出的字幕文件和素材内文字分别核对。
+系统语速参数不等于实际句长、自然度或理解效果。
+
+按观察到的问题实质改稿，保留旧版与修改原因。同条件片段用于回答具体问题，
+充分发展的整片允许按同一 brief 重写，但要记录脚本、来源、时序等混杂，不能
+将异稿按同秒伪装对照。分别审阅表达、画面、声音、节奏、可读性、误读与任务适用性，
+区分作者判断和独立观众证据；没有观众证据就保留未知。成本包含调研、搭建、
+付费调用和失败、返工、渲染、审核，不把局部计时当总成本。保留可修改工程及来源，
+可通过实际下载、解压、改稿导出和所需的播放寻址核对交付。下一作品的真实复用只证明
+该次复用，
+不自动证明理解收益或提效；原生就绪和发布权限的含义保持。

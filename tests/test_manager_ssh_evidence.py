@@ -828,3 +828,60 @@ def test_remote_agent_search_keeps_source_and_audience_scope(remote):
     assert argv[argv.index("--goal-id") + 1] == "remote-goal"
     assert argv[argv.index("--offset") + 1] == "12"
     assert records[-1]["source_id"] == "ssh:research-host"
+
+
+def test_remote_read_rejects_malformed_utf8_stdout(tmp_path):
+    config, channel = _evidence_root(tmp_path)
+
+    def runner(argv, **kwargs):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    packet = remote_evidence(
+        tmp_path,
+        channel,
+        False,
+        window_days=7,
+        scope_valid=lambda: True,
+        config_path=config,
+        runner=runner,
+    )
+
+    assert packet["read_status"] == "unavailable"
+    assert packet["sources"][0]["status"] == "unavailable"
+    assert packet["sources"][0]["reason_code"] == "remote_protocol_unavailable"
+
+
+def test_remote_read_accepts_valid_utf8_chinese_stdout(tmp_path):
+    config, channel = _evidence_root(tmp_path)
+
+    def runner(argv, **kwargs):
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps(
+                {
+                    "schema_version": "manager_evidence_page_v1",
+                    "ok": True,
+                    "rows": [{"goal_id": "remote-goal", "title": "远程测试任务"}],
+                    "source": {"coverage": {"discovered": 1}},
+                    "next_offset": None,
+                },
+                ensure_ascii=False,
+            ),
+            stderr="",
+        )
+
+    packet = remote_evidence(
+        tmp_path,
+        channel,
+        False,
+        window_days=7,
+        scope_valid=lambda: True,
+        config_path=config,
+        runner=runner,
+    )
+
+    assert packet["read_status"] == "read"
+    assert packet["sources"][0]["status"] == "read"
+    assert packet["sources"][0]["fresh"] is True
+    assert packet["sources"][0]["rows_included"] == 1

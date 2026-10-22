@@ -52,7 +52,7 @@ def read_inbox_transaction(root: Path, request: dict, *, scope=None) -> dict:
         ) if key in item} for item in request["items"]]
     # Full source pages may exceed the ordinary wire even when every record is legal.
     snapshot = request["operation"] in {"pending", "turn_start", "receiver_read", "returns"}
-    snapshot = snapshot or len(request.get("rows", [])) > 1
+    snapshot = snapshot or len(request.get("rows", [])) > 1 or request.get("include_agenda") is True
     try:
         result = effect_runtime_result("collaboration.inbox.read", facts, large_local_snapshot=snapshot)
     except EffectRuntimeRejected as exc:

@@ -77,6 +77,28 @@ class PostWritebackSourceRejected(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class TurnContextHookRegistration:
+    """Configured provider IO after governing selection, before host input.
+
+    Registration bounds IO/results; it grants no provider or task authority.
+    """
+
+    hook_id: str
+    capability_id: str
+    readback_slots: tuple[str, ...]
+    producer: Callable[[], Mapping[str, Any]]
+    max_result_bytes: int = 64 * 1024
+
+    def contract(self) -> dict[str, Any]:
+        return {
+            "hook_id": self.hook_id,
+            "capability_id": self.capability_id,
+            "readback_slots": list(self.readback_slots),
+            "max_result_bytes": self.max_result_bytes,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class InteractionProjectionHookRegistration:
     """One read-only capability contribution to an interaction contract."""
 
@@ -170,6 +192,134 @@ class PostWritebackHookRegistration:
         }
 
 
+def _turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    envelope = payload.get("turn_envelope")
+    return (
+        envelope
+        if isinstance(envelope, Mapping)
+        else {
+            "goal_id": payload.get("goal_id"),
+            "agent_id": payload.get("agent_id"),
+        }
+    )
+
+
+def dispatch_turn_context_hooks(
+    payload: dict[str, Any],
+    registrations: Sequence[TurnContextHookRegistration],
+) -> None:
+    contributions: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+    seen_hooks: set[str] = set()
+    seen_slots: set[str] = set()
+    for registration in registrations:
+        try:
+            if registration.hook_id in seen_hooks or seen_slots.intersection(
+                registration.readback_slots
+            ):
+                raise ValueError("duplicate context registration")
+            seen_hooks.add(registration.hook_id)
+            seen_slots.update(registration.readback_slots)
+            effect_runtime_result(
+                "capability_hook.turn_context.validate_registration",
+                {
+                    "registration": registration.contract(),
+                },
+            )
+            if any(key in payload for key in registration.readback_slots):
+                raise ValueError("context readback slot already contributed")
+            result = registration.producer()
+            contribution = effect_runtime_result(
+                "capability_hook.turn_context.validate",
+                {
+                    "registration": registration.contract(),
+                    "result": result,
+                    "source": _turn_context_source(payload),
+                },
+            )
+            readback = contribution.pop("readback")
+            payload.update(readback)
+            if (
+                contribution["context_fields"]
+                or contribution["instructions"]
+                or contribution["result_fields"]
+            ):
+                contributions.append(contribution)
+        except Exception:  # Optional context failures never gate business work.
+            failures.append(
+                {"hook_id": registration.hook_id, "error_code": "context_hook_failed"}
+            )
+    if contributions:
+        payload["turn_context_contributions"] = contributions
+    if failures:
+        payload["turn_context_hook_failures"] = failures
+
+
+def project_turn_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    instructions: list[str] = []
+    result_fields: dict[str, Any] = {}
+    contributions = payload.get("turn_context_contributions")
+    if not isinstance(contributions, list):
+        return {}
+    for item in contributions:
+        try:
+            slots = item["readback_slots"]
+            contribution = effect_runtime_result(
+                "capability_hook.turn_context.project",
+                {
+                    "contribution": item,
+                    "source": _turn_context_source(payload),
+                    "readback": {key: payload.get(key) for key in slots},
+                },
+            )
+            if set(context) & set(contribution["context_fields"]) or set(
+                result_fields
+            ) & set(contribution["result_fields"]):
+                raise ValueError("conflicting capability contribution")
+            context.update(contribution["context_fields"])
+            instructions.extend(contribution["instructions"])
+            result_fields.update(contribution["result_fields"])
+        except (
+            Exception
+        ):  # A stale/private contribution is omitted, never repaired from cached data.
+            continue
+    if not (context or instructions or result_fields):
+        return {}
+    return {
+        **context,
+        "capability_context_fields": list(context),
+        "capability_instructions": instructions,
+        "capability_result_fields": result_fields,
+    }
+
+
+def host_context_projection(request: Mapping[str, Any]) -> dict[str, Any]:
+    fields = request.get("capability_context_fields") or ()
+    projection = {key: request[key] for key in fields if key in request}
+    if (
+        projection
+        or request.get("capability_instructions")
+        or request.get("capability_result_fields")
+    ):
+        projection["capability_instructions"] = list(
+            request.get("capability_instructions") or ()
+        )
+        projection["capability_result_fields"] = dict(
+            request.get("capability_result_fields") or {}
+        )
+    return projection
+
+
+def capability_result_fields(request: Mapping[str, Any] | None) -> dict[str, Any]:
+    value = (
+        request.get("capability_result_fields")
+        if isinstance(request, Mapping)
+        else None
+    )
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 def dispatch_interaction_projection_hooks(
     registrations: Sequence[InteractionProjectionHookRegistration] | None,
 ) -> dict[str, Any]:
@@ -247,6 +397,7 @@ def dispatch_turn_start_hooks(
     contexts: list[dict[str, Any]] = []
     seen_hook_ids: set[str] = set()
     seen_required_read_commands: set[str] = set()
+    uncertain_local_effects = False
     ordered = sorted(registrations or (), key=lambda item: item.hook_id)
     for registration in ordered:
         if registration.hook_id in seen_hook_ids:
@@ -267,6 +418,7 @@ def dispatch_turn_start_hooks(
             result = dict(registration.producer())
         except Exception:  # noqa: BLE001 - capability failures are isolated.
             failures.append(_hook_failure(registration, error_code="producer_failed"))
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         try:
             normalized = effect_runtime_result(
@@ -278,11 +430,13 @@ def dispatch_turn_start_hooks(
             )
         except (EffectRuntimeRejected, RuntimeError, TypeError, ValueError):
             failures.append(_hook_failure(registration, error_code="contract_rejected"))
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         if not isinstance(normalized, Mapping):
             failures.append(
                 _hook_failure(registration, error_code="runtime_result_invalid")
             )
+            uncertain_local_effects |= bool(registration.requested_write_scope)
             continue
         results.append(dict(normalized))
         if normalized.get("agent_read_required") is True and isinstance(
@@ -317,6 +471,7 @@ def dispatch_turn_start_hooks(
         "results": results,
         "required_reads": required_reads,
         "failures": failures,
+        **({"uncertain_local_effects": True} if uncertain_local_effects else {}),
         **({"contexts": contexts} if contexts else {}),
     }
 

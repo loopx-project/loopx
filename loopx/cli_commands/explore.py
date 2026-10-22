@@ -85,7 +85,8 @@ def register_explore_commands(
     add_subcommand_format(context)
     context.add_argument("--goal-id", required=True)
     context.add_argument("--agent-id", required=True)
-    context.add_argument("--result-limit", type=int, default=3, help="Evidence details per page (1..20); default 3.")
+    context.add_argument("--todo-id", help="Prioritize this current task's explicit question links; does not select or claim work.")
+    context.add_argument("--result-limit", type=int, default=3, help="Evidence details and measurement groups per page (1..20); default 3.")
     context.add_argument("--result-offset", type=int, default=0, help="Continue using the previous page's result_revision.")
     context.add_argument("--result-node", help="Read evidence for one question node.")
     context.add_argument("--result-revision", help="Evidence revision returned by the previous page; rejects changed evidence.")
@@ -134,6 +135,7 @@ def register_explore_commands(
     finding.add_argument("--status", choices=sorted(FINDING_STATUSES))
     finding.add_argument("--summary", help="Optional compact public-safe detail.")
     finding.add_argument("--confidence", type=float, help="0..1 confidence.")
+    finding.add_argument("--measurements-json", help="JSON file containing one to eight sourced measurements for this node.")
     _add_common_record_args(finding)
 
     summary = sub.add_parser(
@@ -533,6 +535,7 @@ def handle_explore_command(
             from ..capabilities.explore.turn_context import explore_turn_context
             payload = explore_turn_context(registry_path=Path(str(source_runtime_route["source_registry"])), runtime_root=runtime_root,
                                            goal_id=args.goal_id, agent_id=args.agent_id,
+                                           todo_id=args.todo_id,
                                            result_limit=args.result_limit, result_offset=args.result_offset,
                                            result_node=args.result_node, result_revision=args.result_revision)
         elif args.explore_command == "node":
@@ -578,6 +581,8 @@ def handle_explore_command(
                 evidence_refs=args.evidence_ref,
                 tags=args.tag,
                 supersedes=args.supersedes,
+                measurements=(json.loads(Path(args.measurements_json).read_text(encoding="utf-8"))
+                              if args.measurements_json else None),
             )
             payload = _append_event_payload(event, runtime_root=runtime_root, goal_id=args.goal_id)
         elif args.explore_command == "observe":

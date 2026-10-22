@@ -281,10 +281,41 @@ captured full decision. Historical saved envelopes retain their original
 signatures; this projection change grants no closure or execution authority.
 The 8 KiB warning remains diagnostic when required meaning exceeds it.
 
+Shared DSH/cloud Host input forwards this audit from the signed capsule, with
+the original capture route and hash for additional acceptance/coverage evidence.
+Hosts read its ordered obligations and current judge before proposing closure;
+they return a semantic result while the outer Turn executor owns state, quota
+and scheduler effects. The same input carries the complete existing
+`execution_profile`, including outcome-floor and degradation rules, to size and
+qualify work. Display filtering must not discard those clauses or ordered
+requirements before signing. A new material result carrying `execution_profile`
+must return `work_evidence` and `validation_evidence` as separate arrays of
+1-8 non-empty public-safe strings, at most 240 characters per item and 1,200
+characters per field. The Host must preserve its actual
+`delivery_batch_scale` and `delivery_outcome` rather than replacing them with a
+fixed progress class. The outer Turn executor validates and retains this evidence
+in the typed host result; `turn run-once` projects it as `host_evidence`.
+Legacy journal replay may retain an older material result without these fields.
+Stop results omit both arrays. The profile does not transfer writeback or quota
+ownership. Historical profiles keep their original signature, and inputs without
+either contract retain their prompt.
+
 中文：验收 capsule 完整保留原来源的有序步骤、继续执行说明、当前结束／继续判断、
 认可的证据种类和不能作为证明的条件；展示裁剪不能丢掉条款或列表尾部。新投影使用
 既有签名维度，历史 envelope 的签名不重写。详细验收记录仍从同次捕获读取，体积
 超过 8 KiB 时保留 warning，不以缩短义务或放大预算替代语义验收。
+共享 DSH／云端 Host 输入也从签名 capsule 传递这份 audit，附原捕获路由与哈希，供
+补读验收／覆盖证据；提议收尾前须读取有序义务及当前 judge。Host 返回语义结果，
+状态、quota 和 scheduler 效果仍由外层 Turn executor 执行。同一输入也传递完整的既有
+`execution_profile`，包括成果底线、退化规则和有序要求，供确定工作规模及验收；不能
+在签名前按展示字段丢弃。携带 `execution_profile` 的新 material result 必须分别返回
+`work_evidence` 与 `validation_evidence` 字符串数组：各 1-8 项、每项不超过 240 字符、
+整字段不超过 1,200 字符，且公开安全。Host 必须保留实际
+`delivery_batch_scale` 与 `delivery_outcome`，不能改写成固定的 progress 分类。外层
+Turn executor 验证 typed result 并保留证据，`turn run-once` 以 `host_evidence`
+投影回读；旧 journal replay 可保留缺少这些字段的历史 material result，stop result
+不得返回两组证据。Host 不取得写回或扣额权。历史 profile 保留原签名；两种契约都不
+存在时保持原 prompt。
 
 No new frontend/Lark operation or configuration is introduced. Regenerate saved
 expanded heartbeat prompts to consume the new contract; bootstrap prompts reload
@@ -651,6 +682,71 @@ When enabled, bounded reflection validation, exact independent attestation and
 post-settlement ingest retain their existing rules. Provider failure remains
 fail-open. The host adapter is Python IO transport over the existing capability
 resolver and TypeScript envelope owner, not a new enablement policy.
+
+The capability layer registers post-selection context once for executing native
+Turn and quota/heartbeat guards. Internal `turn_context_contributions` carry
+bounded context fields, instructions and optional text-result schemas; they are
+not provider permissions. Hosts consume the generic `capability_context_fields`,
+`capability_instructions` and `capability_result_fields` projection. The existing
+`reward_memory_recall` readback and 2,400-character reflection limit remain.
+Programmatic callers contributing memory use the registered context path;
+inserting a legacy recall readback alone cannot activate a host contribution.
+An inactive binding leaves ordinary host input, prompt and result schema intact.
+The registered contribution carries the full optional recall only once, in
+host context; its readback retains bounded participation facts without a
+second context copy. If the complete recall would exceed the existing 64 KiB
+contribution budget, that recall context is omitted for the Turn while the
+verified binding, reflection schema and post-settlement ingest remain enabled.
+The hard budget is not raised and omission never grants action authority.
+
+Recovery also reads pre-registration journals that already contain a bounded
+reflection and its independent validation receipt. Without a contribution
+annotation, only this cached result field retains its existing 2,400-character
+wire decoding; new Host results still require registered context. Recovery
+preserves the original result, validation digest and plan without repeating the
+Host or task validator. Current ingest policy, independent evidence and the
+original settlement/idempotency owners still decide any provider effect.
+The cached reader and capability composition reuse the same verified automation
+fact projection in `control_plane/reward_memory.py`; provider policy is not
+copied into the executor.
+
+中文：恢复注册前的执行日志时，保留已准入的有界反思、原独立证明及原 plan；缺少
+贡献 annotation 的旧缓存仅沿用该结果字段原有的 2,400 字符解码，不重新启动 Host
+或 validator，也不为新 Host 输入开启旧接线。provider 效果仍由当前 ingest 策略、
+独立证据及原结算／去重 owner 判定。
+注册贡献只在 host context 中携带一份可选 recall，readback 只保留有界参与事实，
+不再重复正文。若完整 recall 会超过既有 64 KiB contribution 预算，则该 Turn
+省略召回正文，但仍保留已核验绑定、反思 schema 与结算后 ingest；不提高硬预算，
+省略正文也不授予任何 action authority。
+缓存 reader 和能力组合复用 `control_plane/reward_memory.py` 的同一参与事实投影，
+executor 不复制 provider 策略。
+
+TypeScript binds each contribution to the existing governing signature document
+and its source readback. Capture locations and size diagnostics may change;
+actor, authority, binding readback or contribution changes discard that optional
+context. Capabilities cannot overwrite core authority or result fields.
+Ingest-only input omits recalled context. Host adapters preserve enabled optional
+result values for outer bounds/material validation and independent attestation.
+Registered `PostSettlement` callbacks invoke the original ingest/sidecar owners
+after accountable settlement. `post_writeback` remains effect-free. Per-hook
+receipts preserve completed callbacks during partial recovery; provider receipts
+and idempotency remain with their existing owner. Unknown effects remain unknown.
+After terminal settlement, a resume leaves the journal and its original
+`post_settlement` receipt unchanged. When that receipt is uncertain, the owner
+may reconcile the same effect and return `post_settlement_recovery` as current
+readback. The owner retains the durable receipt; this projection grants no new
+work, validation, quota debit or scheduler action.
+
+中文：执行中的 native Turn 与 quota/heartbeat guard 通过注册的选择后上下文路径接入
+记忆；三种宿主消费统一贡献，不再各自判断记忆模式。原 recall 读回和反思大小限制保留，
+只有旧读回而无注册贡献不能开启宿主记忆输入。关闭保持普通输入／指导／schema 原样。
+TS 复用 governing 签名文档和来源绑定，允许捕获定位变化，拒绝 actor／权限／绑定／
+贡献变更及核心字段替换。独立精确证明和可记账结算后，注册的 `PostSettlement` 调用
+原 ingest owner；无副作用的 `post_writeback` 不变。逐 hook 回执与原 provider 去重
+共同恢复，不把不确定效果写成零。终态重放保留原 journal／`post_settlement`，通过原
+owner 对同一效果恢复的当前读回放入 `post_settlement_recovery`；持久回执仍由原 owner
+保管，不触发业务工作、验证、扣额或调度。隔离 File/SQLite／宿主／provider 验证不代表安装态
+App/Lark、模型采用或真实服务资格。
 
 This is a bounded shared-facts step. Heartbeat still has its existing full and
 compact rendering paths; it is not yet the same installed host journey. The

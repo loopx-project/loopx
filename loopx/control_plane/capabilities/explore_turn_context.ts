@@ -6,7 +6,8 @@ import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringA
 import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
-import {normalizeExploreResultPages} from "./explore_result_page.ts";
+import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
+import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
@@ -58,6 +59,21 @@ function branchContext(row: JsonObject, findingSources?: Map<string, JsonObject>
   };
   return result;
 }
+/** Keep the latest scoped counterexample per linked question before its other
+ * findings; recency alone must not supersede evidence on different inputs. */
+function prioritizeLinkedResults(results: JsonObject[], refs: Set<string>): JsonObject[] {
+  const linked = results.filter(row => refs.has(String(row.node_id ?? "")));
+  const refuted = new Set<string>();
+  const counterexamples = linked.filter(row => {
+    const node = String(row.node_id ?? "");
+    if (row.status !== "refuted" || refuted.has(node)) return false;
+    refuted.add(node);
+    return true;
+  });
+  const reserved = new Set(counterexamples);
+  return [...counterexamples, ...linked.filter(row => !reserved.has(row)),
+    ...results.filter(row => !refs.has(String(row.node_id ?? "")))];
+}
 export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const goal = requireNonEmptyString(params.goal_id, "goal_id");
   const agent = requireNonEmptyString(params.agent_id, "agent_id");
@@ -65,6 +81,17 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const gate = requireJsonObject(params.harness_gate, "harness_gate");
   const graph = params.graph_enabled === true;
   const harness = gate.enabled === true;
+  let todoId: string | null = null;
+  let focusedRefs = new Set<string>();
+  if ((graph || harness) && params.todo_id != null) {
+    todoId = requireNonEmptyString(params.todo_id, "Explore task scope");
+    const todo = requireJsonObject(params.focus_todo, "Explore task scope requires a current canonical Todo");
+    if (!PLANNING_TODO_ID.test(todoId) || todo.todo_id !== todoId || todo.role !== "agent"
+      || todo.status !== "open" || todo.done === true || todo.claimed_by && todo.claimed_by !== agent) {
+      throw new EffectRuntimeRequestError("Explore task scope requires an open Todo available to this agent; reread the task");
+    }
+    focusedRefs = new Set(requireStringArray(todo.explore_result_node_refs ?? [], "Explore task question refs"));
+  }
   const projection = requireJsonObject(params.projection, "projection");
   const plan = requireJsonObject(params.plan, "plan");
   // The canonical graph retains creation order; this bounded view needs update order.
@@ -88,33 +115,21 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const attachedResults = findings.filter(row => Array.isArray(row.tags) && row.tags.includes("writeback-result"));
   // Keep the same detail budget, but do not let unrelated newer results evict
   // the applicability of evidence linked to the next selected work item.
-  const linkedResults = attachedResults.filter(row => selectedRefs.has(String(row.node_id ?? "")));
-  // Reserve detail slots for the latest refutation of each linked question.
-  // Repeated findings on one question must not evict another question's scope.
-  // A newer positive observation may apply to different inputs; recency alone
-  // cannot supersede that counterexample. Fill remaining slots by recency.
-  // Projection already resolves revisions of the same finding; no history or
-  // scheduler state is changed here.
-  const refutedQuestions = new Set<string>();
-  const counterexamples = linkedResults.filter(row => {
-    const node = String(row.node_id ?? "");
-    if (row.status !== "refuted" || refutedQuestions.has(node)) return false;
-    refutedQuestions.add(node);
-    return true;
-  });
-  const reserved = new Set(counterexamples);
-  const writebackResults = [
-    ...counterexamples,
-    ...linkedResults.filter(row => !reserved.has(row)),
-    ...attachedResults.filter(row => !selectedRefs.has(String(row.node_id ?? ""))),
-  ];
+  // Explicitly bound work can differ from this independent planner. Prioritize
+  // its canonical links without changing candidates, scores or admission.
+  const plannerResults = prioritizeLinkedResults(attachedResults, selectedRefs);
+  const writebackResults = focusedRefs.size ? prioritizeLinkedResults(plannerResults, focusedRefs) : plannerResults;
   const command = (...args: string[]) => [...route, "explore", ...args, "--goal-id", goal];
   const resultLimit = requireInteger(params.result_limit ?? 3, "result_limit");
   const resultOffset = requireInteger(params.result_offset ?? 0, "result_offset");
-  if (resultLimit < 1 || resultLimit > 20 || resultOffset < 0) {
+  if (resultLimit < 1 || resultLimit > EXPLORE_RESULT_PAGE_MAX || resultOffset < 0) {
     throw new EffectRuntimeRequestError("Use result_limit 1..20 and a nonnegative result_offset");
   }
   const resultNode = params.result_node == null ? null : requireNonEmptyString(params.result_node, "result_node");
+  const measurementFeedback = projectExploreMeasurementFeedback(findings)
+    .filter(item => resultNode === null || item.node_id === resultNode)
+    .sort((a, b) => Number(focusedRefs.has(b.node_id)) - Number(focusedRefs.has(a.node_id))
+      || Number(selectedRefs.has(b.node_id)) - Number(selectedRefs.has(a.node_id)));
   const resultRows = resultNode == null ? writebackResults : writebackResults.filter(row => row.node_id === resultNode);
   const nodeById = new Map(nodes.map(node => [node.node_id, node]));
   // Bind current Todo links to the results on this page. Include the full
@@ -130,7 +145,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       const audit = requireJsonObject(branch.typed_evidence_audit, "Explore evidence audit");
       const linked = new Set(requireStringArray(audit.requested_node_refs ?? [], "Explore node refs")
         .filter(ref => nodeById.has(ref)));
-      const outcomes = page.filter(row => linked.has(String(row.node_id))).slice(0, 3);
+      // The explicit page already bounds these results. A second three-row
+      // cap would display findings that the same page cannot bind at writeback.
+      const outcomes = page.filter(row => linked.has(String(row.node_id)));
       return outcomes.length ? [{todo_id: branch.todo_id, outcomes}] : [];
     });
     if (!linkedCandidates.length) return {};
@@ -166,6 +183,11 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   };
   const resultRevision = createHash("sha256").update(JSON.stringify([
     goal, agent, resultNode, resultRows, resultRows.map(currentQuestion),
+    // Manual findings participate in feedback too, even without a writeback
+    // tag. Bind every compared source before paging either derived view.
+    ...(measurementFeedback.length ? [findings.filter(row => row.measurements !== undefined
+      && (resultNode === null || row.node_id === resultNode))] : []),
+    ...(todoId === null ? [] : [[todoId, [...focusedRefs]]]),
   ])).digest("hex");
   if (params.result_revision != null && params.result_revision !== resultRevision) {
     throw new EffectRuntimeRequestError("Explore evidence changed; restart at result_offset 0 without result_revision");
@@ -177,7 +199,28 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   // Write-time replay uses this same source snapshot and ordering. The caller
   // supplies only page coordinates, never the findings admitted by that page.
   const reviewPages = params.review_pages === undefined ? null : normalizeExploreResultPages(params.review_pages).flatMap(page => {
-    if (!graph || resultNode !== null || page.revision !== resultRevision) {
+    if (!graph || resultNode !== null) return [];
+    if ((page.todo_id ?? null) !== todoId) {
+      // Replay an explicitly read task page from this same canonical snapshot,
+      // without replacing the originally delivered global replan basis. Caller
+      // page coordinates supply no findings, links, ownership or authority.
+      const matches = rows(params.review_todos).filter(row => row.todo_id === page.todo_id);
+      if (page.todo_id !== undefined && matches.length !== 1) return [];
+      try {
+        const replay = projectExploreTurnContext({...params, todo_id: page.todo_id,
+          focus_todo: matches[0], review_pages: undefined, result_offset: page.offset,
+          result_limit: page.limit, result_revision: page.revision});
+        const found = (replay.graph as JsonObject).writeback_results as JsonObject[];
+        const choices = replay.harness as JsonObject | null;
+        return [{...page, finding_refs: found.map(row => row.finding_id),
+          ...(choices?.comparison_candidates ? {comparison_candidates: choices.comparison_candidates,
+            omitted_comparison_candidates: choices.omitted_comparison_candidates} : {})}];
+      } catch (error) {
+        if (error instanceof EffectRuntimeRequestError) return [];
+        throw error;
+      }
+    }
+    if (page.revision !== resultRevision) {
       // A stale query is not an unavailable source. Retain the current bounded
       // context/read route; the replan owner refuses any unresolved citation.
       return [];
@@ -188,10 +231,19 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   });
   const visibleComparisons = comparisonCandidates(visibleResults, resultLimit);
   const remainingResults = Math.max(0, resultRows.length - resultOffset - visibleResults.length);
-  const resultRead = (...args: string[]) => command("turn-context", "--agent-id", agent, ...args);
+  const visibleMeasurements = measurementFeedback.slice(resultOffset, resultOffset + resultLimit);
+  const remainingMeasurements = Math.max(0, measurementFeedback.length - resultOffset - visibleMeasurements.length);
+  const resultRead = (...args: string[]) => command("turn-context", "--agent-id", agent,
+    ...(todoId === null ? [] : ["--todo-id", todoId]), ...args);
+  const nextRead = (remaining: number, count: number) => remaining ? resultRead(
+    "--result-offset", String(resultOffset + count),
+    "--result-limit", String(resultLimit), "--result-revision", resultRevision,
+    ...(resultNode == null ? [] : ["--result-node", resultNode]),
+  ) : null;
   const writeback = exploreResultWritebackAffordance();
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
+    ...(todoId === null ? {} : {todo_id: todoId}),
     ...(reviewPages ? {review_pages: reviewPages} : {}),
     graph: graph ? {
       counts: projection.counts ?? {},
@@ -206,16 +258,14 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
         .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
           summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT),
           ...(row.execution_observation ? {execution_observation: row.execution_observation} : {}),
+          ...(row.measurements ? {measurements: row.measurements} : {}),
           ...currentQuestion(row),
           ...findingDigest(row, findingSources)})),
       result_page: {
         total: resultRows.length, offset: resultOffset, limit: resultLimit,
+        ...(todoId === null ? {} : {todo_id: todoId}),
         remaining: remainingResults, revision: resultRevision,
-        next_command: remainingResults ? resultRead(
-          "--result-offset", String(resultOffset + visibleResults.length),
-          "--result-limit", String(resultLimit), "--result-revision", resultRevision,
-          ...(resultNode == null ? [] : ["--result-node", resultNode]),
-        ) : null,
+        next_command: nextRead(remainingResults, visibleResults.length),
         node_command_template: resultRead("--result-node", "<node-id>", "--result-limit", "10"),
       },
       omitted_nodes: Math.max(0, nodes.length - 3),
@@ -230,9 +280,22 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       optional_question_evolution_example: writeback.optional_question_evolution_example,
       result_writeback_guidance: writeback.guidance,
       result_attachment_template: writeback.attachment_template,
+      optional_measurement_example: writeback.optional_measurement_example,
+      ...(measurementFeedback.length ? {
+        measurement_feedback: visibleMeasurements,
+        omitted_measurement_feedback: remainingMeasurements,
+        measurement_feedback_page: {
+          total: measurementFeedback.length, offset: resultOffset, limit: resultLimit,
+          ...(todoId === null ? {} : {todo_id: todoId}),
+          remaining: remainingMeasurements, revision: resultRevision,
+          next_command: nextRead(remainingMeasurements, visibleMeasurements.length),
+        },
+        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Follow measurement_feedback_page.next_command for omitted groups, or filter by node; existing result limit/offset/revision options apply and changed evidence requires restarting the read.",
+      } : {}),
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),
       record_finding_template: command("finding", "--node", "<node-id>", "--title", "<evidence-backed result>", "--status", "<tentative|confirmed|refuted>"),
-      guidance: "Use result_page.next_command for omitted results or node_command_template for a question; --result-limit can expand each page up to 20. Use existing evidence before repeating a route. Record meaningful hypotheses and supported or refuted results with stable node ids. Fill templates from actual evidence; do not create ceremonial nodes or infer findings from a score alone.",
+      guidance: (todoId === null ? "" : "To cite this task-scoped page, retain todo_id with revision/offset/limit in explore_review.result_pages; keep the original Explore basis revision. Other tasks' evidence remains available. ") +
+        "Use result_page.next_command for omitted results or node_command_template for a question; --result-limit can expand each page up to 20. Use existing evidence before repeating a route. Record meaningful hypotheses and supported or refuted results with stable node ids. Fill templates from actual evidence; do not create ceremonial nodes or infer findings from a score alone.",
     } : null,
     harness: harness ? {
       orchestration_gate: gate,

@@ -1,6 +1,10 @@
 # Manager context delivery
 
 Built-in capability for original intent delivery and receiver-owned replanning.
+The `manager-inbox` CLI uses the shared selected-command dispatcher and one
+executable-revision scope per command. It retains the existing handler and
+live source reads; it does not load the full compatibility CLI or cache request
+records between commands.
 The owner's local manager channel uses registered workers automatically.
 An external conversation requires a trusted operator's sender-bound policy in
 `<runtime-root>/.local/manager-context/policy.json`:
@@ -154,6 +158,20 @@ not a returned answer; a queued conclusion is not delivered; delivery is not
 requester adoption or independent acceptance. A current cancellation is omitted
 only after its active publication reservation is gone. Failed reads and scan or
 prompt overflow remain explicit rather than becoming an empty queue.
+
+The App's steward header exposes the same unfinished-request classification in
+an in-place inventory. `GET /api/chat/request-inventory?session_id=<original-session>`
+reads requests from that exact conversation source, including earlier Sessions
+on its channel and this Chat host. Optional `view=history` retains concluded and
+cancelled requests; `offset` reads the next bounded page. Current binding and
+Goal visibility are checked before and after reading. Original-Chat delivery
+and explicit peer-return consumption remain different receipt paths. The list
+does not mark reads, accept work, start an Agent or certify an overall outcome.
+Unreadable/missing sources and incomplete scans keep counts visibly partial.
+
+管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
+工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
+项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
 
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current

@@ -210,7 +210,7 @@ def build_goal_acceptance_observation(
         item.get("goal_acceptance_contract"), asset.get("goal_acceptance_contract"),
         _dict(item.get("agent_todos")).get("goal_acceptance_contract"),
         _dict(asset.get("agent_todos")).get("goal_acceptance_contract"),
-    ) if isinstance(candidate, dict) and (configured_checks(candidate) is not None or candidate.get("outcome_requirements"))), None)
+    ) if isinstance(candidate, dict) and (configured_checks(candidate) is not None or candidate.get("outcome_requirements") or candidate.get("goal_objective"))), None)
     return {
         "schema_version": GOAL_ACCEPTANCE_OBSERVATION_SCHEMA_VERSION,
         "goal_id": goal_id,

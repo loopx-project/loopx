@@ -66,10 +66,16 @@ class ChatExternalConversations:
                 return {}
         else:
             selected_binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
+        reservation = row.get("context_recovery") or {}
+        admitted = (store.turn_for_client(session["session_id"], reservation["client_turn_id"])
+            if (reservation.get("routing_attempt") or reservation.get("quota_attempt"))
+            and reservation.get("failed_turn_id") == row["turn_id"] else None)
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
             "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "admitted_turn": admitted,
                 "steering_observed": any(event.get("kind") == "turn.steered"
                     for event in store.events_after(session["session_id"], turn["turn_id"], None)),
                 "native_observation": observation, "source_verified": source_verified},
@@ -83,8 +89,9 @@ class ChatExternalConversations:
             if row.get("status") != "accepted":
                 return False
             recovery = row.get("context_recovery")
-            if recovery and row.get("turn_id") != recovery["failed_turn_id"]:
-                return not row.get("delivery_verified")
+            if (recovery and row.get("turn_id") != recovery["failed_turn_id"]
+                    and not row.get("delivery_verified")):
+                return True
             if not row.get("delivery_verified"):
                 return False
             turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
@@ -116,10 +123,11 @@ class ChatExternalConversations:
                 session = self.controller.store.load_session(row["session_id"])
                 turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
                 assert session is not None and turn is not None
-                self.controller._check_codex_home(session)
+                model_auth_home = self.controller._check_codex_home(session)
                 context = self.controller.project_contexts.session_context(session)
-                proof = CodexAppServerAdapter.failed_request_observation(
+                proof = None if plan.get("admitted_turn_id") else CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
+                    model_auth_home=model_auth_home,
                     thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                 selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
                 source = source_observation(selected)
@@ -127,19 +135,30 @@ class ChatExternalConversations:
                 if not plan.get("recovery_eligible"):
                     return row
                 recovery = row.get("context_recovery")
-                if recovery is None:
+                if recovery is None or recovery.get("client_turn_id") != plan["client_turn_id"]:
+                    if recovery is not None:
+                        row.setdefault("context_recovery_history", []).append(deepcopy(recovery))
                     recovery = {"version": MANAGER_CONTEXT_VERSION, "failed_turn_id": row["turn_id"],
                         "native_observation": proof, "source_observation": source,
                         "client_turn_id": plan["client_turn_id"],
                         "failure_notice_delivery_verified": row["delivery_verified"]}
+                    for kind in ("routing", "quota"):
+                        if plan.get(f"{kind}_attempt") is not None:
+                            recovery.update({f"{kind}_attempt": plan[f"{kind}_attempt"],
+                                "presentation_key": f"{MANAGER_CONTEXT_VERSION}.{kind}.{plan[f'{kind}_attempt']}",
+                                "not_before": plan["not_before"]})
                     row["context_recovery"] = recovery
                     _atomic_write_json(path, row)
                 # Freeze correlation before the existing queue can dispatch.
                 self._record_steward_ingress(row, selected, session, plan["client_turn_id"])
-                continued, _ = self.controller.enqueue_turn(session_id=row["session_id"],
-                    client_turn_id=plan["client_turn_id"], message=row["message"],
-                    attachments=row.get("attachments"), origin=row.get("origin", "lark"),
-                    work_dir=context["project"], objective=context["objective"])
+                if plan.get("admitted_turn_id"):
+                    continued = self.controller.store.load_turn(row["session_id"], plan["admitted_turn_id"])
+                    assert continued is not None
+                else:
+                    continued, _ = self.controller.enqueue_turn(session_id=row["session_id"],
+                        client_turn_id=plan["client_turn_id"], message=row["message"],
+                        attachments=row.get("attachments"), origin=row.get("origin", "lark"),
+                        work_dir=context["project"], objective=context["objective"])
                 row.update(turn_id=continued["turn_id"], delivery_verified=False)
                 _atomic_write_json(path, row)
             self.controller.resume_session_queue(session_id=row["session_id"],
@@ -147,7 +166,7 @@ class ChatExternalConversations:
             return row
 
     def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
-        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*", str(turn.get("client_turn_id") or ""))
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-(?:routing|quota)-[1-3])?", str(turn.get("client_turn_id") or ""))
         if match is None:
             return None
         row = self.read_request(match[1])

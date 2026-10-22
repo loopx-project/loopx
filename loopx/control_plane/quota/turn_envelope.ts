@@ -4,12 +4,15 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import {
   interpretQuotaShouldRunPacket,
+  settlementIdentityFromPlan,
+  settlementIdentityPayload,
   type JsonObject,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { requireJsonObject } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
+import { selectedWorkTodoId } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -67,7 +70,6 @@ const CONTRACT_CAPSULE_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "selected_next_due_at", "non_runnable_non_monitor_count",
     "material_transition", "action",
   ],
-  execution_profile: ["cadence", "minimum_scale", "spend_rule", "must_include"],
   execution_obligation: [
     "kind", "contract", "contract_obligation", "must_attempt_work",
     "notify_is_execution_gate", "delivery_allowed", "reason",
@@ -234,6 +236,7 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
     "task_repository", "continuation_policy", "claimed_by", "bound_agent",
     "goal_bound", "blocks_agent", "unblocks_todo_id", "next_due_at",
     "expires_at", "selected_by", "confidence",
+    "resume_when", "resume_ready", "resume_condition",
   ]) {
     if (source[field] !== null && source[field] !== undefined) compact[field] = source[field];
   }
@@ -540,6 +543,12 @@ function contractCapsule(
   }
   const unavailableContext = projectTurnStartUnavailableContext(payload.turn_start_capability_hook_dispatch);
   if (unavailableContext) capsule.unavailable_context = unavailableContext;
+  // Work qualification is behavioral context, including its outcome and
+  // degradation rules. Display-field filtering must not weaken that contract.
+  const executionProfile = object(payload.execution_profile);
+  if (Object.keys(executionProfile).length > 0) {
+    capsule.execution_profile = structuredClone(executionProfile);
+  }
   // These existing source fields govern evidence and continuation, rather
   // than summarize display text. Preserve every clause, order, empty value
   // and current judge without copying the detailed acceptance-gap ledger.
@@ -801,6 +810,43 @@ function turnActionProjection(payload: JsonObject, protocolActionFields: JsonObj
     action.planning_horizon = compactHorizon;
     projection.action = action;
   }
+  // Goal acceptance already travels in work context. Reuse that exact inline
+  // source when present; a different scope/revision or an unavailable source
+  // must retain the horizon's complete evidence instead of a dangling ref.
+  const currentHorizon = object(action.planning_horizon);
+  const core = object(currentHorizon.core_goal);
+  // Keep the full bounded work view, reusing only identical text already
+  // carried by this signed action. Short text is cheaper to leave inline.
+  const selected = object(action.selected_todo);
+  const selectedTextRef = typeof selected.text === "string" ? "$.action.selected_todo.text"
+    : selected.text_ref === "action.recommended_action" ? "$.action.recommended_action" : null;
+  const selectedText = typeof selected.text === "string" ? selected.text : action.recommended_action;
+  if (Object.keys(core).length > 0 && selectedTextRef && Array.isArray(currentHorizon.work_items)) {
+    action.planning_horizon = {...currentHorizon, work_items: currentHorizon.work_items.map(value => {
+      const item = object(value);
+      if (item.todo_id !== selected.todo_id || typeof item.text !== "string"
+        || item.text !== selectedText || item.text.length <= selectedTextRef.length + 4) return value;
+      const {text: _text, ...rest} = item;
+      return {...rest, text_ref: selectedTextRef};
+    })};
+    projection.action = action;
+  }
+  const acceptance = object(core.acceptance_contract);
+  const sources = object(projection.work_context).sources;
+  if (Object.keys(acceptance).length > 0 && Array.isArray(sources)) {
+    const index = sources.findIndex((value) => {
+      const source = object(value);
+      return source.source === "goal_acceptance"
+        && canonicalHash(object(object(source.content).goal_acceptance_contract)) === canonicalHash(acceptance);
+    });
+    if (index >= 0) {
+      const compactCore = {...core};
+      delete compactCore.acceptance_contract;
+      compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
+      action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+      projection.action = action;
+    }
+  }
   // The context owner already bounds these contributions. Replacing them with
   // a reference makes a small contribution require the entire saved decision.
   // Keep the content; the existing envelope budget still reports its cost.
@@ -988,6 +1034,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const operation = request.operation;
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
+  if (operation === "replan_settlement_identity") return {identity: turnEnvelopeReplanSettlementIdentity(
+    requireJsonObject(request.envelope, "turn_envelope"), request.turn_instance_id,
+  )};
   if (operation === "envelope_signature") {
     return turnEnvelopeActionSignatureDocument(request.envelope);
   }
@@ -1001,4 +1050,30 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     );
   }
   throw new EffectRuntimeRequestError("turn envelope operation is unsupported");
+}
+
+/** A scoped planning identity comes from the signed quota plan, never a Host
+ * session or a missing Todo. Journal validation reuses this exact binding rule.
+ */
+export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+  const plan = object(object(envelope.writeback).settlement_plan);
+  const raw = object(plan.identity);
+  if (raw.replan_obligation_id == null && raw.binding_kind !== "autonomous_replan") return null;
+  const parsed = settlementIdentityFromPlan({settlement_plan: plan});
+  if (parsed.failure !== null) throw new EffectRuntimeRequestError(parsed.failure.reason);
+  const identity = parsed.value;
+  const signature = object(envelope.action_signature);
+  if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION
+      || envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+      || selectedWorkTodoId({selected_todo: object(envelope.action).selected_todo,
+        task_orchestration_contract: envelope.task_orchestration_contract}) !== null
+      || identity.binding_kind !== "autonomous_replan"
+      || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
+      || turnInstanceId != null && identity.turn_instance_id !== turnInstanceId
+      || identity.replan_obligation_id !== object(envelope.replan_action_packet).obligation_id
+      || signature.matches !== true || signature.source_hash !== signature.envelope_hash
+      || signature.envelope_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(envelope))) {
+    throw new EffectRuntimeRequestError("Turn replan settlement identity does not match its signed quota admission");
+  }
+  return settlementIdentityPayload(identity);
 }

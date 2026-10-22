@@ -41,6 +41,15 @@ assert.deepEqual(replanCadenceEditorDefaults(
   { count_unit: "completed_todos", count: 4, stride_strategy: "off" },
   "legacy effective intervals retain their own unit and count");
 const inheritedReview = { count_unit: "effective_turns", count: 3, stride_strategy: "off" };
+assert.deepEqual(goalReplanCadenceWriteValue({...inheritedReview, planning_horizon_goal: true}, false, false),
+  {stride_strategy: "off"}, "displaying the default Goal context does not create an override");
+for (const enabled of [true, false]) {
+  assert.deepEqual(goalReplanCadenceWriteValue({...inheritedReview, planning_horizon_goal: enabled}, false, true),
+    {stride_strategy: "off", planning_horizon_goal: enabled}, "explicit horizon choices survive a form save");
+}
+assert.equal(replanCadenceEditorDefaults({...inheritedReview, planning_horizon_goal: false},
+  {...cadenceDefault, planning_horizon_goal: true}).planning_horizon_goal, false,
+  "a sparse Goal form displays the effective machine opt-out");
 assert.deepEqual(goalReplanCadenceEditorValue({ stride_strategy: "evidence_conditioned_v1" }, inheritedReview),
   { ...inheritedReview, stride_strategy: "evidence_conditioned_v1" },
   "strategy-only Goal settings display the live review interval");

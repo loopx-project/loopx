@@ -435,7 +435,14 @@ def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(
 
     async def cli(environment, args, **kwargs):
         calls.append(args)
-        return {"after": {"execution_profile": {"replan_after_effective_turns": 6}}}
+        return {
+            "after": {
+                "execution_profile": {
+                    "replan_after_effective_turns": 6,
+                    "planning_horizon_goal": True,
+                }
+            }
+        }
 
     async def no_pending(**kwargs):
         return SimpleNamespace(return_code=1)
@@ -958,10 +965,10 @@ def test_runner_cadence_persists_through_real_configure_goal(
     assert other not in profile
     strategy = settings.get("stride_strategy")
     assert profile.get("stride_strategy", "off") == (strategy or "off")
-    horizon = settings.get("planning_horizon_goal")
-    assert profile.get("planning_horizon_goal", False) == (horizon or False)
+    horizon = settings.get("planning_horizon_goal", True)
+    assert profile["planning_horizon_goal"] is horizon
     assert agent._replan_receipt() == {field: value,
-        **({"planning_horizon_goal": horizon} if horizon is not None else {}), **({"stride_strategy": strategy}
+        "planning_horizon_goal": horizon, **({"stride_strategy": strategy}
                                                     if strategy is not None else {})}
 
 

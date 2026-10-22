@@ -173,6 +173,23 @@ CLI-only prerequisites are partial delivery; catalog text or a command-copy
 button is not the journey. Reuse the typed capability owner rather than adding
 frontend-only decisions or a setting for a capability with no persistent policy.
 
+For artifact creation, follow the user's request through the existing conversation
+and artifact journey where it can already deliver preview, download, feedback and
+revision. A requested HTML page, game, mini-world or video is an output format,
+not a requirement to build an editor or simulator into LoopX. The Agent can author
+the work with the host's tools and reusable capability/provider operations; add a
+product control only when the accepted workflow needs it. Keep work-specific
+content, rules and scenes in the editable artifact rather than imposing one
+generic example as the capability's product model.
+
+Validate this route with an actual brief, the resulting usable work and a
+meaningful revision. For video, inspect the complete film's message, visuals,
+sound and pacing alongside its editable project and sources. Compare techniques
+on the same communication objective while allowing each its own composition;
+separate rendering/playback correctness from creative judgment, audience evidence
+and complete production cost. A new interface, a fixed demonstration or a passing
+encoder does not answer whether the requested work is good.
+
 Carry the same task through these steps:
 
 1. **Compare the journey.** Write the current and proposed user steps in the

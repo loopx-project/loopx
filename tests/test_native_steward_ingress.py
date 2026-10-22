@@ -15,6 +15,54 @@ def ingress_path(store, row):
         _hash([row["session_id"], "external-" + row["request_ref"]]) + ".json")
 
 
+def test_request_inventory_keeps_native_source_scope_and_holds_revoked_binding(steward, monkeypatch):  # noqa: F811
+    from types import SimpleNamespace
+    from urllib.parse import urlencode
+    from loopx.presentation.request_control_api import RequestControlMixin
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    target = {"goal_id": "registered-work", "agent_id": "worker"}
+    registry = json.loads(runtime.registry_path.read_text())
+    registry["goals"] = [{"id": target["goal_id"], "repo": str(workspace),
+        "coordination": {"registered_agents": [target["agent_id"]]}}]
+    runtime.registry_path.write_text(json.dumps(registry))
+    monkeypatch.setattr(runtime, "resume_session_queue", lambda **_kwargs: None)
+    transport.admit("steward-app", provider.event("steward-app", "inventory-source", "Inspect the existing artifact"))
+    accepted = transport.core.pending()[0]
+    session = store.load_session(accepted["session_id"])
+    turn = store.load_turn(accepted["session_id"], accepted["turn_id"])
+    configure_evidence_scope(runtime.coordination_runtime_root, runtime.registry_path, channel=session["channel_id"],
+        goal_ids=[target["goal_id"]], execute=True)
+    configure_delivery_target(runtime.coordination_runtime_root, runtime.registry_path, channel=session["channel_id"],
+        **target, grant=True, execute=True)
+    receipt = deliver(runtime.coordination_runtime_root, runtime.registry_path, session=session, turn=turn,
+        request=target, source_store=store)
+    calls = capture.read_bytes() if capture.exists() else b""
+
+    class Reader(RequestControlMixin):
+        server = SimpleNamespace(runtime_controller=runtime, chat_store=store, registry_path=runtime.registry_path,
+            selected_goal_id=None)
+        def _send_json(self, value, *, status=200):
+            self.result = (status, value)
+        def _send_error(self, message, **kwargs):
+            self.result = (kwargs.get("status", 400), {"error": message})
+        def read(self):
+            self.path = "/api/chat/request-inventory?" + urlencode({"session_id": session["session_id"]})
+            self._request_inventory_read()
+            return self.result
+
+    reader = Reader()
+    code, value = reader.read()
+    assert code == 200 and value["pending_count"] == 1, value
+    assert value["rows"][0]["request_id"] == receipt["request_id"]
+    # A fresh source read cannot turn a revoked personal binding into local-owner
+    # scope, nor use cached brief content after the authorization disappears.
+    transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    code, refused = reader.read()
+    assert code == 400 and "rows" not in refused
+    assert (capture.read_bytes() if capture.exists() else b"") == calls
+
+
 @pytest.mark.parametrize("separate_coordination_root", [False, True])
 def test_native_ingress_uses_coordination_owner_with_legacy_fallback(steward, monkeypatch, tmp_path, separate_coordination_root):  # noqa: F811
     store, runtime, provider, transport, binding, _, workspace = steward

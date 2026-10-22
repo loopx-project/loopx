@@ -473,20 +473,21 @@ other replan reasons may trigger sooner. Both runtime and worker-profile receipt
 record the resolved cadence. Only newly launched attempts use the new default;
 keep existing runs and archived settings pinned.
 
-### Optional Goal in the planning horizon
+### Default Goal context and advanced opt-out
 
-For `heartbeat-resume` and `heartbeat-explore`, add `--planning-horizon-goal`
-to include the full same-source original Goal and acceptance in preselection
-planning context. `--no-planning-horizon-goal` explicitly disables it. Omission
-retains the ordinary disabled treatment. Plain and native-Goal workers reject
+New `heartbeat-resume` and `heartbeat-explore` trials include the same-source
+original Goal and acceptance in preselection planning context by default.
+`--no-planning-horizon-goal` disables it for rollback or comparison;
+`--planning-horizon-goal` explicitly enables it. Plain and native-Goal workers reject
 this setting. It does not enable stride, Explore or TurnEnvelope.
 
 The adapter writes the shared `execution_profile.planning_horizon_goal` through
 `configure-goal`, checks the effective readback before work, and records an
-explicit setting in both worker profile and runtime receipt. Restore follows
-the same path: an explicit true/false overrides the donor setting. An omitted
-setting encountering an enabled donor fails the readback instead of silently
-labeling the run off. Historical receipts without this field remain absent;
+resolved boolean in both worker profile and runtime receipt, including when
+the command-line option is omitted. Restore follows the same path: the new
+attempt's resolved setting overrides the donor setting and must read back as
+that exact boolean before work. To preserve an older off treatment, explicitly
+pass `--no-planning-horizon-goal`. Historical receipts without this field remain absent;
 report export rejects mismatched or malformed settings.
 
 Compare on/off from the same qualified pre-replan checkpoint with equal remaining

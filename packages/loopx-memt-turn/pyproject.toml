@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopx-memt-turn"
+version = "0.1.0"
+description = "Opt-in MemT Nano host with scoped native memory for LoopX Turns"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = ["mcp==1.30.0", "jinja2>=3.1.6,<4"]
+
+[project.scripts]
+loopx-memt-turn = "loopx_memt_turn.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

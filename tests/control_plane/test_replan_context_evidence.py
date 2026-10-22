@@ -35,6 +35,47 @@ def test_history_contract_errors_are_not_empty_results():
             replan_history_from_status(status, "evidence-goal")
 
 
+@pytest.mark.parametrize("configured", [False, True])
+def test_replan_keeps_open_outcome_requirements_and_their_evidence(configured):
+    declaration = {"schema_version": "loopx_goal_outcomes_v0", "revision": 2,
+        "current_lifetime": True, "execution_authority_granted": False,
+        "goal_completion_assessed": False, "acceptance_gaps": [], "outcomes": [{
+            "id": "artifact", "owner_agent_id": "agent-a", "objective": "Deliver a correct artifact",
+            "todo_ids": ["todo-a"], "work": [{"todo_id": "todo-a", "status": "open"}],
+            "requirements": [{"id": "correct", "description": "Preserve the required behavior",
+                "status": "unverified", "planning_satisfied": False,
+                "agent_review": {"conclusion": "unmet", "basis_current": True,
+                    "independently_verified": False, "evidence_refs": ["probe:negative"],
+                    "note": "The diagnostic exposed a remaining mismatch"}}]}]}
+    acceptance = {"outcome_requirements": declaration}
+    if configured:
+        acceptance.update(outcome_id="artifact", objective="Deliver a correct artifact",
+            criteria=[{"id": "correct", "description": "Preserve the required behavior"}],
+            revision=1, digest="a" * 64, status="failed",
+            tasks=[{"todo_id": "todo-a", "state": "ready", "criterion_ids": ["correct"]}],
+            verification={"contract_revision": 1, "contract_digest": "a" * 64, "todo_id": None,
+                "results": [{"criterion_id": "correct", "passed": False, "exit_code": 1}]})
+    context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
+        goal_acceptance_contract=acceptance)
+    assert context["core_goal"]["acceptance_contract"] == acceptance
+    assert context["core_goal"]["objective_missing"], "a supporting outcome cannot replace root intent"
+    changed = json.loads(json.dumps(acceptance))
+    changed["outcome_requirements"]["outcomes"][0]["requirements"][0]["agent_review"]["evidence_refs"] = ["probe:new"]
+    next_context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
+        goal_acceptance_contract=changed)
+    assert next_context["context_id"] != context["context_id"], "changed outcome evidence belongs to the decision basis"
+
+
+def test_empty_acceptance_stays_absent_and_configured_evidence_survives_without_outcomes():
+    from loopx.control_plane.work_items.replan_context_codec import goal_context_facts
+
+    assert goal_context_facts(None, "evidence-goal", {}) == {}
+    assert goal_context_facts(None, "evidence-goal", {"enabled": False, "criteria": []}) == {}
+    checks = {"objective": "Check one task", "criteria": [], "scope": {"kind": "all_advancement"},
+        "status": "unverified", "tasks": [], "verification": None}
+    assert goal_context_facts(None, "evidence-goal", checks) == {"acceptance_contract": checks}
+
+
 def test_projection_rejects_invalid_typed_records_and_preserves_scoped_prose():
     for invalid in [None, {}, {"schema_version": "future"}]:
         with pytest.raises(ValueError):

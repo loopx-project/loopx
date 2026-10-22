@@ -43,6 +43,7 @@ from .goal_channel_contracts import (
     normalize_lark_topic_event_rejection_reason,
 )
 from .goal_channel_targets import goal_channel_target_for_name
+from .goal_channel_transport import record_event_timing
 from .goal_topic_connections import decide_lark_topic_event
 from .goal_topic_dispatch import ProfileEventDispatch
 from .inbox_reply import CommandRunner, reply_lark_event_inbox
@@ -372,6 +373,23 @@ def _profile_event_lane(
 ) -> tuple[str, ...]:
     """Only serialize transport work; actual ingress re-reads its authority."""
 
+    private_config = dict(snapshot.get("private_profiles") or {}).get(profile)
+    if isinstance(private_config, Mapping):
+        from .conversation_identity import lark_private_source
+
+        try:
+            source = lark_private_source(
+                provider_ref=private_config["provider_ref"], event=event
+            )
+        except (KeyError, TypeError, ValueError):
+            pass  # Malformed hints retain the conservative unmatched lane.
+        else:
+            # Native profiles bypass legacy Goal routing at admission too.
+            # Use the same App/chat/topic (or private sender) source shape for
+            # scheduling, never a grant or a persisted Session selection. Core
+            # still verifies the provider and acquires its fresh source fence.
+            return ("private." + source["source_ref"],)
+
     scoped, _status = _profile_event_route(
         profile=profile, snapshot=snapshot, event=event
     )
@@ -622,9 +640,14 @@ def stream_lark_goal_topic_profile(
     def handle_event(line: str) -> None:
         nonlocal event_count, replied_count, provider_ready
 
+        event = _event_payloads(line)[0]
+        message_id = str(event.get("message_id") or "")
+        record_event_timing(profile, message_id, "dispatch_started")
+        current_snapshot = snapshot_provider()
+        record_event_timing(profile, message_id, "dispatch_snapshot_ready")
         result = poll_lark_goal_topic_profile_once(
             profile=profile,
-            snapshot=snapshot_provider(),
+            snapshot=current_snapshot,
             runtime_root=runtime_root,
             answer=answer,
             consume_runner=lambda _args, payload=line: {
@@ -637,6 +660,7 @@ def stream_lark_goal_topic_profile(
             proposal_deliverer=proposal_deliverer,
             private_admitter=private_admitter,
         )
+        record_event_timing(profile, message_id, "dispatch_returned")
         with result_lock:
             failed = dispatch.failed
             if int(result.get("event_count") or 0) and not provider_ready:
@@ -711,12 +735,15 @@ def stream_lark_goal_topic_profile(
             # Batch-shaped provider records are split before scheduling, so an
             # unrelated conversation in a batch can progress independently too.
             for event in _event_payloads(line):
+                message_id = str(event.get("message_id") or "")
+                record_event_timing(profile, message_id, "received")
                 lane = _profile_event_lane(
                     profile=profile,
                     snapshot=snapshot_provider(),
                     event=event,
                     runtime_root=runtime_root,
                 )
+                record_event_timing(profile, message_id, "lane_ready")
                 if not dispatch.submit(lane, json.dumps(event, ensure_ascii=False)):
                     break
         stream_failed = False

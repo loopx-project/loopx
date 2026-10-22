@@ -282,7 +282,9 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                 }
                 if linked is None:
                     attach_host_thread_activity(
-                        projection, observers=codex_thread_observers()
+                        projection, observers=codex_thread_observers(
+                            cache_root=self.server.runtime_root / "observation-cache" / "codex-activity",
+                        )
                     )
                     attach_host_delivery_windows(
                         projection,

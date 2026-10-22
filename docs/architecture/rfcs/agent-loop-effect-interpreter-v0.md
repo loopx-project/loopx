@@ -471,6 +471,65 @@ shape merely because of its size. Optional memory participation now has one
 compact, signed envelope projection; the Codex CLI adapter preserves default-off
 isolation. This does not qualify installed heartbeat/App adoption or model value.
 
+Memory participation now uses a registered post-selection context contribution,
+composed in the capability layer for native Turn and executing quota/heartbeat
+guards. Codex, DSH and generic CLI hosts transport the same bounded context,
+instructions and optional result fields. The capability owns binding/mode checks;
+adapters retain only host formatting. TypeScript bounds contributions, prevents
+authority/result-field replacement and binds them to the existing governing
+signature document plus their source readback. Adding the original capture's
+location does not invalidate an unchanged decision; changed actors, authority,
+configuration readback or contributions do invalidate optional context.
+
+The generic Python contribution IO lives with the existing registrations and
+dispatchers in `loopx.control_plane.capability_hooks`; there is no parallel Python
+Turn-context module. It calls the TypeScript decoder for validation and source
+binding. Host adapters consume that same hook-owned projection.
+
+Registered `PostSettlement` callbacks call the existing ingest owner after
+independent exact-reflection attestation and accountable writeback/spend. The
+manual-host sidecar adapter uses that registration too. `post_writeback` remains
+effect-free. Per-hook receipts preserve completed work while an uncertain peer
+hook recovers; the provider owner retains write deduplication and reconciliation.
+Terminal replay preserves the original journal/receipt and returns recovered
+owner readback as `post_settlement_recovery`, without repeating settlement.
+File/SQLite native host and isolated provider cases qualify this source path.
+Installed App/Lark adoption, model benefit, complete costs and the three
+convergence acceptances below remain open.
+
+Pre-registration journal recovery retains the already admitted bounded
+reflection and independent validation digest without changing the saved plan,
+reinvoking the Host/validator or activating legacy input for new work. Provider
+effects still use the current ingest policy and original settlement owner;
+cached content alone does not authorize a write.
+
+PR dependency observation now uses the existing registered TurnStart lifecycle
+shared by executing quota guards, native Turns and compatibility prequota.
+Permission comes from the typed Goal/Agent capability owner, including remembered
+host observations and revocation; callers need no repeated flag when permission
+already exists. Capability-owned diagnostics preserve domain policy outside core
+Turn code. The existing complete-source TypeScript plan, merge-fact owner and
+normal execution admission remain authoritative. Goal-local single flight and
+durable per-dependency cadence prevent duplicate concurrent/due reads.
+File/SQLite qualification covers paused/stopped business, generated full/thin
+heartbeat commands, cross-entrypoint observation, revocation, unknown effects,
+unrelated validated work after provider failure and original-journal replay.
+App/Lark's shared context backend consumes canonical readiness without polling.
+Plans, read-only/status/context paths, missing permission and recovery add no
+observation. Installed executor adoption, legitimate recovery of existing live
+owners, sustained scheduling, model outcomes and the three convergence
+acceptances remain open. Installed memory lifecycle adoption remains a separate
+acceptance; post-writeback hooks retain their effect-free contract.
+
+The same captured decision now retains the selected Task's existing continuation
+condition and readiness through the full selection projection, signed envelope
+and actual protocol-host input. File/SQLite qualification distinguishes two
+repositories' identically numbered PRs, preserves the original event time and
+long requirement tail, validates subsequent work, and rejects proof tampering.
+Read-only managed-step and original-journal replay add no observation or debit.
+This closes that fact-delivery omission; installed adoption and model outcomes
+remain outside this qualification.
+
 Bounded planning context now remains inline instead of forcing a full-decision
 read under envelope budget pressure. Its existing owner retains the 3 KiB bound;
 the shared DSH/cloud adapter transports the signed contribution and, for saved
@@ -533,6 +592,36 @@ and reject signature equivalence after a step/order/judge mutation. The existing
 8 KiB diagnostic remains unchanged; required text can exceed it with a warning.
 This closes that transport omission, not the three convergence acceptances or
 permission to retire their active Python/host adapters.
+
+Following the capsule through the actual shared Host input exposed a second
+loss: DSH/cloud retained only its unavailable-context field, so a valid signed
+audit never reached the provider. That adapter now forwards the existing audit
+and original capture route/hash. Real File/SQLite normal/replan captures through
+a protocol-only DSH subprocess cover ordered obligations, the continuing judge,
+insufficient-proof conditions, signature refusal and unchanged source/state.
+The same audit also found work qualification missing: the capsule filtered out
+outcome-floor/degradation rules, and that Host omitted the whole existing
+execution profile. The typed projection now retains it intact and the Host
+forwards it. A new material result carrying that profile returns typed,
+public-safe `work_evidence` and `validation_evidence` arrays and preserves its
+actual delivery scale/outcome; the outer executor validates and retains both.
+Native source oracles and signed mutations cover these rules. Inputs without
+either contract retain their prior prompt, and older journal replay remains
+readable. The outer executor keeps all state/quota/scheduler effects. This
+qualifies clause delivery at that caller, not model adherence, installed
+adoption or complete-cost improvement. Count the cost of restored requirements;
+the earlier incomplete input is not an accepted efficiency baseline.
+
+The complete execution profile adds 138–142 JSON characters/UTF-8 bytes and no
+lines to ordinary Turn plans on the unchanged 96-row public CLI fixture. The
+original base/head differential fails its 64/70-character and 128-byte growth
+allowances; this remains a recorded failure. Qualify the restored outcome-floor
+and degradation fields with a 160-character/byte one-time allowance only when
+the old four-field profile becomes complete, with unchanged signature coverage
+and no other JSON-shape change. Already complete, partial or unrelated changes
+receive no allowance. Keep absolute budgets, line limits, fixture populations,
+complete source/Host clause checks and the production 8 KiB diagnostic. This
+explains the required presentation cost, not model tokens or efficiency gains.
 
 中文：本批修复验收步骤、继续说明和当前判断在 capsule 中丢失的问题；签名一致曾只
 比较已经裁剪过的投影。File/SQLite 同次捕获验证完整条款和篡改后的签名差异；
@@ -649,6 +738,14 @@ hashes intentionally distinguish renderings; this does not change signature
 coverage or make a rendered view a substitute for the original capture.
 Legacy-field access stays in the existing packet owner; the CLI invokes its
 projection function without adding another legacy migration consumer.
+
+The acceptance-context adapter now uses the existing exact Todo inspection for
+selected work. It retains the complete Goal acceptance basis and cumulative
+outcomes, while avoiding a second inventory of unrelated task-binding
+observations and a second selected-Todo body. File/SQLite CLI and actual DSH
+protocol input cover configured checks and outcomes without checks; Todo-less
+inspection still returns its original inventory. This qualifies the scoped IO
+boundary, not live model benefit, installed adoption or total Turn cost.
 
 Next, inventory authorized real Goal captures across active work, peer/replan,
 wait/recovery and optional-capability shapes, then map each retained clause to

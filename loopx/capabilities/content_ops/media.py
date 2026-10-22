@@ -157,7 +157,7 @@ class MediaWorkspace:
                     status = "damaged"; break
         return {"ok": True, "composition_id": composition_id, "revision": record["revision"], "status": status,
                 "title": record["plan"]["title"], "duration_seconds": record["duration_seconds"],
-                "plan_digest": record["plan_digest"], "shots": [{k: shot[k] for k in ("title", "seconds", "kind", "boundary", "source_ref")} for shot in record["plan"]["shots"]],
+                "plan_digest": record["plan_digest"], "shots": [{k: shot[k] for k in ("title", "seconds", "kind", "boundary", "source_ref", "framing") if k in shot} for shot in record["plan"]["shots"]],
                 "updated_at": record["updated_at"], "result": result, "item_state": record["item"]["state"],
                 "error_code": record.get("error_code"), "provider": self.binding().public_readiness(),
                 "visibility": "local_private", "publish_authorized": False}
@@ -219,9 +219,11 @@ class MediaWorkspace:
                     "sources": record["sources"], "attempt_directory": str(_safe_path(bundle, attempt)), "cancel_file": str(cancel)})
                 spatial = [{"id": shot["id"], "frames": round(shot["seconds"] * record["plan"]["fps"])}
                            for shot in record["plan"]["shots"] if shot["kind"] == "blender"]
+                full_frame = [shot["id"] for shot in record["plan"]["shots"] if shot.get("framing") == "full_frame"]
                 result = _owner("result", {"result": result, "plan_digest": record["plan_digest"],
                     "frame_count": record["frame_count"], "narration_mode": record["plan"]["narration"]["mode"],
                     **({"blender_shots": spatial} if spatial else {}),
+                    **({"full_frame_shots": full_frame} if full_frame else {}),
                     **{k: record["plan"][k] for k in ("width", "height", "fps")}})
                 required = {"video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt"}
                 if not required <= set(result["files"]) or set(result["files"]) - RESULT_FILES:

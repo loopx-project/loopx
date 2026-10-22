@@ -56,6 +56,8 @@ class CodexHome:
 
     def thread(self, thread_id: str, records: list[dict[str, Any]], *, archived: int = 0, tail: str = "", rollout: Path | None = None) -> Path:
         path = rollout or self.root / "sessions" / f"rollout-{thread_id}.jsonl"
+        if records and records[0].get("type") != "session_meta":
+            records = [{"timestamp": T0, "type": "session_meta", "payload": {"id": thread_id}}, *records]
         path.write_text("".join(json.dumps(record) + "\n" for record in records) + tail, encoding="utf-8")
         with sqlite3.connect(self.db) as connection:
             connection.execute("INSERT INTO threads VALUES (?, ?, ?)", (thread_id, str(path), archived))
@@ -155,7 +157,7 @@ def test_archived_thread_is_not_read_as_open(home: CodexHome) -> None:
 
 
 def test_line_being_appended_is_ignored(home: CodexHome, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(codex_activity, "_TAIL_CHUNK_BYTES", 16)
+    monkeypatch.setattr(codex_activity, "_OBSERVATION_CHUNK_BYTES", 16)
     home.thread("t", [_event(T0, "task_started"), _item(T1)], tail='{"timestamp": "' + "x" * 80)
     assert _observe(home, "t")["t"] == HostThreadActivity(
         state=HostThreadState.TURN_OPEN, turn_started_at=T0, last_event_at=T1,
@@ -163,7 +165,7 @@ def test_line_being_appended_is_ignored(home: CodexHome, monkeypatch: pytest.Mon
 
 
 def test_lines_spanning_chunks_are_reassembled(home: CodexHome, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(codex_activity, "_TAIL_CHUNK_BYTES", 7)
+    monkeypatch.setattr(codex_activity, "_OBSERVATION_CHUNK_BYTES", 7)
     home.thread("t", [_event(T0, "task_complete"), _event(T1, "task_started"), _item(T2)])
     assert _observe(home, "t")["t"].turn_started_at == T1
 
@@ -208,7 +210,7 @@ def test_malformed_event_payload_cannot_imply_an_open_turn(home: CodexHome, payl
 def test_escaped_event_type_keeps_typed_marker_semantics(home: CodexHome, kind: Any) -> None:
     path = home.thread("t", [_event(T0, "task_started"), _event(T1, kind), _item(T2)])
     lines = path.read_text().splitlines()
-    lines[1] = lines[1].replace('"event_msg"', '"event\\u005fmsg"')
+    lines[2] = lines[2].replace('"event_msg"', '"event\\u005fmsg"')
     path.write_text("\n".join(lines) + "\n")
     expected = HostThreadState.IDLE if isinstance(kind, str) else HostThreadState.UNKNOWN
     assert _observe(home, "t")["t"].state is expected
@@ -227,7 +229,7 @@ def test_unrecognized_rollouts_are_unknown(
     home: CodexHome, monkeypatch: pytest.MonkeyPatch, records: list[dict[str, Any]], tail_limit: int | None, reason: HostThreadUnknownReason,
 ) -> None:
     if tail_limit:
-        monkeypatch.setattr(codex_activity, "_TAIL_LIMIT_BYTES", tail_limit)
+        monkeypatch.setattr(codex_activity, "_OBSERVATION_READ_BYTES", tail_limit)
     home.thread("t", records)
     assert _observe(home, "t")["t"] == HostThreadActivity.unknown(reason)
 

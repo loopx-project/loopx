@@ -231,6 +231,7 @@ def read_remote(
             [*ssh, host, command],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout_seconds,
         )
         if result.returncode:

@@ -8,6 +8,7 @@ import {
   evaluateTurnEnvelope,
   quotaActionSignatureDocument,
   turnEnvelopeActionSignatureDocument,
+  turnEnvelopeReplanSettlementIdentity,
 } from "../../loopx/control_plane/quota/turn_envelope.ts";
 import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
@@ -90,6 +91,36 @@ function payload(): Record<string, unknown> {
   };
 }
 
+test("a Todo-less planning identity must match the original signed quota binding", () => {
+  const identity = {
+    schema_version: "quota_settlement_identity_v1", goal_id: "goal-turn-envelope", agent_id: "agent-ts",
+    turn_instance_id: "planning-turn", binding_kind: "autonomous_replan", binding_id: "replan-original",
+    replan_obligation_id: "replan-original",
+    effect_id: "goal-turn-envelope:agent-ts:autonomous_replan:replan-original:planning-turn",
+  };
+  const source = payload();
+  source.selected_todo = null;
+  source.effective_action = "autonomous_replan_required";
+  source.replan_action_packet = {schema_version: "replan_action_packet_v0", obligation_id: "replan-original"};
+  const cli = (source.interaction_contract as JsonObject).cli_channel as JsonObject;
+  cli.settlement_plan = {schema_version: "quota_settlement_plan_v1", identity, ordered_steps: []};
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+  assert.deepEqual(turnEnvelopeReplanSettlementIdentity(envelope, "planning-turn"), identity);
+  assert.throws(() => turnEnvelopeReplanSettlementIdentity(envelope, "different-turn"), /quota admission/);
+  for (const field of ["goal_id", "agent_id", "replan_obligation_id", "effect_id"]) {
+    const changed = structuredClone(source);
+    const changedCli = (changed.interaction_contract as JsonObject).cli_channel as JsonObject;
+    ((changedCli.settlement_plan as JsonObject).identity as JsonObject)[field] = "different";
+    // Native rebuilding signs the changed bytes too; semantic binding must
+    // still fail rather than treating integrity as execution authority.
+    const changedEnvelope = buildTurnEnvelope({payload: changed, protocol_action_fields: protocolActionFields, scheduler_execution_args: ""});
+    assert.throws(() => turnEnvelopeReplanSettlementIdentity(changedEnvelope, "planning-turn"));
+  }
+  assert.equal(turnEnvelopeReplanSettlementIdentity(buildTurnEnvelope({
+    payload: payload(), protocol_action_fields: protocolActionFields, scheduler_execution_args: "",
+  })), null);
+});
+
 const protocolActionFields = {
   actor: "agent",
   user_action_required: false,
@@ -98,6 +129,39 @@ const protocolActionFields = {
   llm: "no_api",
   agent_action: "advance one bounded segment",
 };
+
+test("work profile retains outcome rules, ordered requirements and signature coverage", () => {
+  const source = payload();
+  const profile = {
+    cadence: "bounded_progress_segment", minimum_scale: "multi_surface_or_implementation",
+    must_include: ["coherent_artifact", "targeted_validation", "state_writeback"],
+    spend_rule: "spend_only_after_artifact_validation_writeback",
+    outcome_floor: {configured: true, surface_streak_threshold: 3,
+      must_advance: ["primary_goal_outcome"],
+      avoid: ["Retain the complete accepted outcome. " + "完整条件 ".repeat(120)]},
+    degradation_policy: {small_scale_streak_threshold: 2, on_degradation: "require_blocker_or_expand_next_batch"},
+  };
+  source.execution_profile = profile;
+  const original = structuredClone(source);
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const projected = (envelope.contract_capsule as JsonObject).execution_profile;
+  assert.deepEqual(projected, profile);
+  const signature = turnEnvelopeActionSignatureDocument(envelope);
+  for (const mutate of [
+    (value: JsonObject) => {value.minimum_scale = "any_operation";},
+    (value: JsonObject) => {value.must_include = [];},
+    (value: JsonObject) => {(value.outcome_floor as JsonObject).must_advance = [];},
+    (value: JsonObject) => {delete value.degradation_policy;},
+  ]) {
+    const changed = structuredClone(envelope);
+    mutate((changed.contract_capsule as JsonObject).execution_profile as JsonObject);
+    assert.notDeepEqual(turnEnvelopeActionSignatureDocument(changed), signature);
+  }
+  assert.deepEqual(source, original);
+  assert.equal((buildTurnEnvelope({payload: payload(), protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""}).contract_capsule as JsonObject).execution_profile, undefined);
+});
 
 test("budget pressure retains complete independent planning context", () => {
   const source = payload();
@@ -665,6 +729,59 @@ test("planning detail stays cold while its action dimension remains signed", () 
   assert.equal(horizon.detail_refs_ref, "$.detail_ref");
 });
 
+test("Goal horizon reuses only identical inline acceptance and keeps its source signed", () => {
+  const source = payload();
+  const acceptance = {revision: 3, scope: {kind: "all_advancement"}, status: "failed",
+    verification: {results: [{criterion_id: "complete", passed: false}]}};
+  source.planning_horizon = {schema_version: "quota_planning_horizon_v0", core_goal: {
+    objective: "Deliver the whole outcome", acceptance_contract: acceptance}};
+  const channel = (source.interaction_contract as JsonObject).agent_channel as JsonObject;
+  channel.work_context = {complete: true, sources: [{source: "goal_acceptance", content: {
+    goal_acceptance_contract: acceptance}}]};
+  const build = () => buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const envelope = build();
+  const core = ((envelope.action as JsonObject).planning_horizon as JsonObject).core_goal as JsonObject;
+  assert.equal(core.acceptance_contract, undefined);
+  assert.equal(core.acceptance_contract_ref, "$.work_context.sources[0].content.goal_acceptance_contract");
+  assert.deepEqual((source.planning_horizon as JsonObject).core_goal,
+    {objective: "Deliver the whole outcome", acceptance_contract: acceptance}, "compaction must not mutate full quota");
+  const signature = turnEnvelopeActionSignatureDocument(envelope);
+  const changed = structuredClone(envelope);
+  const row = ((changed.work_context as JsonObject).sources as JsonObject[])[0];
+  (row.content as JsonObject).goal_acceptance_contract = {...acceptance, status: "accepted"};
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(changed), signature);
+  for (const content of [{goal_acceptance_contract: {...acceptance, revision: 4}}, {},
+    {goal_acceptance_contract: {...acceptance, scope: {kind: "selected_work"}}}]) {
+    channel.work_context = {sources: [{source: "goal_acceptance", content}]};
+    const retained = ((build().action as JsonObject).planning_horizon as JsonObject).core_goal as JsonObject;
+    assert.deepEqual(retained.acceptance_contract, acceptance);
+    assert.equal(retained.acceptance_contract_ref, undefined);
+  }
+});
+
+test("Goal horizon reuses identical selected work text without dropping other work or its bounds", () => {
+  const source = payload();
+  const text = "Deliver the complete candidate and check the independent acceptance before settling.";
+  source.selected_todo = {...source.selected_todo as JsonObject, text};
+  const horizon = {core_goal: {objective: "Finish the whole Goal"},
+    work_items: [{todo_id: "todo-1", text}, {todo_id: "todo-2", text: "Run diagnostic validation"}],
+    completeness: {complete: false, omitted_candidate_todo_count: 3}};
+  source.planning_horizon = horizon;
+  const build = () => buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const projected = () => (build().action as JsonObject).planning_horizon as JsonObject;
+  assert.deepEqual(projected().work_items, [{todo_id: "todo-1", text_ref: "$.action.selected_todo.text"}, horizon.work_items[1]]);
+  assert.deepEqual(projected().completeness, horizon.completeness);
+  assert.equal(horizon.work_items[0].text, text, "full quota source must remain intact");
+  source.recommended_action = text;
+  assert.equal((projected().work_items as JsonObject[])[0].text_ref, "$.action.recommended_action");
+  source.selected_todo = {...source.selected_todo as JsonObject, text: "Different work"};
+  assert.equal((projected().work_items as JsonObject[])[0].text, text);
+  source.planning_horizon = {work_items: horizon.work_items};
+  assert.deepEqual(projected().work_items, horizon.work_items, "Goal opt-out keeps the existing transport");
+});
+
 test("v0 compaction metric preserves Unicode code-point compatibility", () => {
   const source = payload();
   source.reason = "推进一段 🚀";
@@ -768,6 +885,33 @@ test("selected work aliases only an exact complete recommendation", () => {
   const selected = (envelope.action as Record<string, unknown>).selected_todo as Record<string, unknown>;
   assert.equal(selected.text_ref, "action.recommended_action");
   assert.equal(selected.text, undefined);
+});
+
+test("selected dependency keeps its original readiness and event proof signed", () => {
+  const source = payload();
+  const original = source.selected_todo as Record<string, unknown>;
+  Object.assign(original, {
+    resume_when: "pr_merged:owner/repo#42", resume_ready: true,
+    resume_condition: {schema_version: "todo_resume_condition_v0", kind: "pr_merged",
+      satisfied: true, matched_pr_ref: "owner/repo#42", matched_event_id: "original-merge",
+      matched_event_at: "2026-10-01T00:00:00Z", source: "rollout_event_log"},
+  });
+  const envelope = buildTurnEnvelope({payload: source, protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const selected = (envelope.action as Record<string, unknown>).selected_todo as Record<string, unknown>;
+  for (const field of ["resume_when", "resume_ready", "resume_condition"]) {
+    assert.deepEqual(selected[field], original[field]);
+  }
+  const signed = structuredClone(turnEnvelopeActionSignatureDocument(envelope));
+  selected.resume_ready = false;
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), signed);
+  selected.resume_ready = true;
+  (selected.resume_condition as Record<string, unknown>).matched_event_id = "another-event";
+  assert.notDeepEqual(turnEnvelopeActionSignatureDocument(envelope), signed);
+  const historical = buildTurnEnvelope({payload: payload(), protocol_action_fields: protocolActionFields,
+    scheduler_execution_args: ""});
+  const historicalSelected = (historical.action as Record<string, unknown>).selected_todo as Record<string, unknown>;
+  for (const field of ["resume_when", "resume_ready", "resume_condition"]) assert.equal(field in historicalSelected, false);
 });
 
 test("signature document fails closed to the canonical signed dimensions", () => {

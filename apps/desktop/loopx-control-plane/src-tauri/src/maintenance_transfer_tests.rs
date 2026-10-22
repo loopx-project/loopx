@@ -4,7 +4,10 @@ use super::*;
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize},
+        Arc,
+    },
 };
 
 const BODY: &[u8] = b"LoopX synthetic signed update transport fixture. No install or runtime.\n";
@@ -16,6 +19,8 @@ const SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IExvb3BYIHN5bnRoZXRpYyB0cmFuc3B
 struct Server {
     base: String,
     stop: Arc<AtomicBool>,
+    feed_release: Arc<AtomicBool>,
+    requests: Arc<AtomicUsize>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -36,6 +41,10 @@ impl Server {
         listener.set_nonblocking(true).unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let stop = Arc::new(AtomicBool::new(false));
+        let feed_release = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let release = feed_release.clone();
+        let observed = requests.clone();
         let done = stop.clone();
         let url = base.clone();
         let bytes = Arc::new(bytes);
@@ -49,6 +58,8 @@ impl Server {
                 let url = url.clone();
                 let bytes = bytes.clone();
                 let signature = signature.clone();
+                let release = release.clone();
+                let observed = observed.clone();
                 std::thread::spawn(move || {
                     // macOS accepted sockets inherit listener nonblocking mode.
                     stream.set_nonblocking(false).unwrap();
@@ -63,6 +74,16 @@ impl Server {
                     let text = String::from_utf8_lossy(&request[..size]);
                     let path = text.split_whitespace().nth(1).unwrap_or("");
                     let mode = path.trim_start_matches('/').trim_start_matches("feed/");
+                    observed.fetch_add(1, Ordering::Release);
+                    if mode == "manual-pending" {
+                        while !release.load(Ordering::Acquire) && !done.load(Ordering::Acquire) {
+                            pause(&done, Duration::from_millis(10));
+                        }
+                    }
+                    if !path.starts_with("/feed/") && mode == "not-found" {
+                        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        return;
+                    }
                     if (!path.starts_with("/feed/") && mode == "headers") || mode == "feed-stall" {
                         pause(&done, Duration::from_secs(40));
                         return;
@@ -111,6 +132,8 @@ impl Server {
         Self {
             base,
             stop,
+            feed_release,
+            requests,
             thread: Some(thread),
         }
     }
@@ -143,11 +166,85 @@ fn app(key: &str) -> tauri::App<tauri::test::MockRuntime> {
 }
 
 #[test]
+fn manual_native_feed_releases_startup_before_http_finishes() {
+    let app = app(KEY);
+    let server = Server::new();
+    let state = Arc::new(Maintenance::default());
+    let read_state = state.clone();
+    let handle = app.handle().clone();
+    let url = server.feed("manual-pending");
+    let request = tauri::async_runtime::spawn(async move {
+        read_state
+            .run_manual_check(
+                "stable",
+                find_update(&handle, "stable", url, Duration::from_secs(5)),
+                |update| read_state.accept_checked_update("stable", "0.1.0", update),
+            )
+            .await
+    });
+    // Synchronize on the real HTTP request, not a lucky elapsed-time sample.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while server.requests.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(server.requests.load(Ordering::Acquire), 1);
+    assert_eq!(state.reconcile_services(|| Ok(1)).unwrap(), Some(1));
+    assert_eq!(state.recover_connected(|| 2), Some(2));
+    assert_eq!(state.status_snapshot()["phase"], "checking");
+    server.feed_release.store(true, Ordering::Release);
+    let result = tauri::async_runtime::block_on(request).unwrap().unwrap();
+    assert_eq!(result["phase"], "available");
+    assert_eq!(state.status_snapshot(), result);
+    assert!(state.pending.lock().unwrap().is_some());
+    assert_eq!(
+        server.requests.load(Ordering::Acquire),
+        1,
+        "checking must not download the archive"
+    );
+    assert_eq!(state.reconcile_services(|| Ok(3)).unwrap(), Some(3));
+    assert_eq!(
+        state.status_snapshot(),
+        result,
+        "the Install choice remains available in the workspace"
+    );
+}
+
+#[test]
+fn manual_native_feed_timeout_retains_failure_and_allows_service_start() {
+    let app = app(KEY);
+    let server = Server::new();
+    let state = Maintenance::default();
+    let result = tauri::async_runtime::block_on(state.run_manual_check(
+        "stable",
+        find_update(
+            app.handle(),
+            "stable",
+            server.feed("feed-stall"),
+            Duration::from_millis(100),
+        ),
+        |_| panic!("a timed-out feed cannot supply an update candidate"),
+    ));
+    assert_eq!(result.unwrap_err(), "update_check_timeout");
+    assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
+    assert_eq!(
+        state.status_snapshot()["details"]["code"],
+        "update_check_timeout"
+    );
+    assert_eq!(*state.last_failure.lock().unwrap(), state.status_snapshot());
+    assert!(state.pending.lock().unwrap().is_none());
+}
+
+#[test]
 fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
     let app = app(KEY);
     let server = Server::new();
     tauri::async_runtime::block_on(async {
-        for mode in ["fast", "tampered", "truncated"] {
+        for (mode, expected_error) in [
+            ("fast", None),
+            ("tampered", Some("update_signature_invalid")),
+            ("truncated", Some("update_network_failed")),
+            ("not-found", Some("update_download_failed")),
+        ] {
             let update = find_update(
                 app.handle(),
                 "stable",
@@ -158,8 +255,8 @@ fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
             .unwrap()
             .unwrap();
             let result = download_update(&update, |_, _| {}).await;
-            if mode != "fast" {
-                assert!(result.is_err(), "invalid archive was accepted: {mode}");
+            if let Some(expected) = expected_error {
+                assert_eq!(result.unwrap_err(), expected, "archive mode: {mode}");
                 continue;
             }
             let bytes = result.unwrap();
@@ -177,6 +274,44 @@ fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
                 .unwrap()
                 .unwrap();
             assert_eq!(prepared.bytes, BODY);
+        }
+    });
+}
+
+#[test]
+fn background_download_failures_keep_their_cause_without_blocking_local_services() {
+    let app = app(KEY);
+    let server = Server::new();
+    tauri::async_runtime::block_on(async {
+        for (mode, expected) in [
+            ("tampered", "update_signature_invalid"),
+            ("truncated", "update_network_failed"),
+            ("not-found", "update_download_failed"),
+        ] {
+            let state = Maintenance::default();
+            state.publish("ready", json!({}));
+            let generation = state.admit_background_update().unwrap();
+            let result = state
+                .run_background_update(
+                    generation,
+                    "stable",
+                    find_update(
+                        app.handle(),
+                        "stable",
+                        server.feed(mode),
+                        Duration::from_secs(2),
+                    ),
+                    |update| async move {
+                        download_update(&update, |_, _| {}).await?;
+                        panic!("a rejected archive cannot be published to the cache");
+                    },
+                )
+                .await;
+            assert_eq!(result.unwrap_err(), expected);
+            assert_eq!(state.status_snapshot()["details"]["code"], expected);
+            assert_eq!(state.status_snapshot()["details"]["background"], true);
+            assert_eq!(state.recover_connected(|| 1), Some(1));
+            assert!(state.pending.lock().unwrap().is_none());
         }
     });
 }
@@ -292,7 +427,10 @@ fn stalled_update_transfer_remains_bounded() {
         .unwrap()
         .unwrap();
         let start = Instant::now();
-        assert!(tauri::async_runtime::block_on(download_update(&update, |_, _| {})).is_err());
+        assert_eq!(
+            tauri::async_runtime::block_on(download_update(&update, |_, _| {})).unwrap_err(),
+            "update_download_timeout"
+        );
         assert!(
             start.elapsed() < Duration::from_secs(35),
             "stalled {mode} transfer was not bounded"
