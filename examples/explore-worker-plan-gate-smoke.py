@@ -37,6 +37,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "tests" / "control_plane"))
+
+from canonical_authority_fixture import initialize_canonical_authority  # noqa: E402
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection  # noqa: E402
+from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source  # noqa: E402
+from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item  # noqa: E402
 
 from loopx.capabilities.explore.todo_branch_plan import (  # noqa: E402
     MAX_BRANCH_WIDTH,
@@ -387,6 +393,13 @@ def check_cli_gate_states() -> None:
             + "\n",
             encoding="utf-8",
         )
+        for entry in goal_entries:
+            state_path = project / entry["state_file"]
+            groups, _, _ = parse_todo_source(state_path.read_text(encoding="utf-8"))
+            records = [canonical_todo_read_record(structured_todo_item(item, role=role,
+                source_section=item["source_section"])) for role, rows in groups.items() for item in rows]
+            initialize_canonical_authority(runtime_root, entry["id"], build_todo_runtime_shadow_projection(
+                goal_id=entry["id"], todos=records, handoff_mode="soft_claim"), state_path=state_path)
 
         def run_cli(*extra_args: str, fmt: str = "json", check: bool = True):
             result = subprocess.run(
