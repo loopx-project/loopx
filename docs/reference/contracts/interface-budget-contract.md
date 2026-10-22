@@ -10,8 +10,8 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 20500` | `nested_keys <= 525` | `top_level_keys <= 54` |
-| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 24000` | `nested_keys <= 350` | `top_level_keys <= 27` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 20500` | `nested_keys <= 575` | `top_level_keys <= 55` |
+| `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 25000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
 `heartbeat_prompt_json`, the measured payload is the actual
@@ -23,7 +23,7 @@ indentation and Markdown wrappers can make emitted output materially larger;
 the emitted-output qualification matrix below measures that separate boundary
 through the real CLI entry point.
 
-The current quota fixture measures 15,419 characters, 378 nested keys, and 52
+The earlier projection-envelope quota fixture measured 15,419 characters, 378 nested keys, and 52
 top-level keys on `main`. The `quota_should_run` projection envelope raises the
 same workload to 18,636 characters, 513 nested keys, and 53 top-level keys. The
 new keys carry the inherited status sources, direct live-read facts, freshness,
@@ -41,6 +41,30 @@ records the useful contract growth instead of hiding it through compaction.
 嵌套键上限从 386 调至 525，顶层键上限仍为 54。精确 head 仍保留 1,864 字符、
 12 个嵌套键与一个顶层键余量。删除 envelope 行会破坏投影合同，因此这里记录有用的
 合同增长，而不是用压缩隐藏它。
+
+Ordinary reads now require canonical authority, so the smoke explicitly imports
+its disposable fixture through the saved backup/import plan. On the identical
+imported workload, base `0603b49f` and the read-retirement candidate both measure
+20,287 quota characters / 564 nested keys / 54 top-level keys and 24,315 status
+characters / 338 nested keys / 26 top-level keys. This is fixture qualification,
+not candidate payload growth. Retain canonical Task identity, source provenance
+and freshness instead of substituting legacy reads or dropping envelope rows.
+The original 525-key quota and 24,000-character status failures remain recorded;
+their presentation limits become 575 keys and 25,000 characters, leaving 11
+keys and 685 characters. Quota's 54 top-level keys also leave no cadence
+headroom under the earlier ceiling; a 55-key limit retains one key of margin.
+Quota characters, status key counts, fixture population,
+sampling depth and semantic assertions stay unchanged. These limits grant no
+execution authority or change to frozen experiment or promotion criteria.
+
+普通读取现在要求 canonical authority，因此 smoke 通过保存的备份／导入计划显式迁移
+一次性夹具。同一已迁移负载在 base `0603b49f` 与退役候选上完全一致：quota 为
+20,287 字符／564 个嵌套键／54 个顶层键，status 为 24,315 字符／338 个嵌套键／
+26 个顶层键。这是夹具资格补齐，没有候选输出增长。保留 Task 身份、来源与新鲜度，
+不以旧读取或删除 envelope 行代替。原 525 键和 24,000 字符失败记录保留；展示限制
+分别改为 575 键与 25,000 字符，余量为 11 键、685 字符。quota 原 54 个顶层键
+已占满旧限、没有 cadence 余量，改为 55 后保留一个键。quota 字符、status 键数、
+夹具数量、采样深度和语义断言不变；不授予执行权限，也不改变冻结的实验或 promotion 标准。
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact

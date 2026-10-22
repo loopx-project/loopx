@@ -37,6 +37,7 @@ from loopx.status import collect_status  # noqa: E402
 from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     scheduler_execution_context_for_runtime_profile,
 )
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 
 GOAL_ID = "interface-budget-goal"
@@ -79,8 +80,12 @@ SURFACE_BUDGETS = {
         # keys. Keep the complete typed envelope rather than dropping source
         # facts that the consumer must inspect before it spends compute.
         "max_json_chars": 20_500,
-        "max_nested_keys": 525,
-        "max_top_level_keys": 54,
+        # Explicitly importing this same fixture exposes the current canonical
+        # read shape on both base/head: 20,287 chars, 564 nested / 54 top-level
+        # keys. Preserve source/Task provenance; retain 11 nested and one
+        # top-level key of margin for the cadence check.
+        "max_nested_keys": 575,
+        "max_top_level_keys": 55,
     },
     "dashboard_status_json": {
         "owner": "operator dashboard",
@@ -93,7 +98,9 @@ SURFACE_BUDGETS = {
         # The original longer temp root exposes 23,274 chars with unchanged
         # 336 nested / 26 top-level keys. Preserve source revisions and full
         # paths; 24k leaves 726 chars without widening structural guards.
-        "max_json_chars": 24_000,
+        # The same canonical fixture is 24,315 chars on both base/head; the
+        # 25k ceiling retains 685 chars without dropping authority metadata.
+        "max_json_chars": 25_000,
         "max_nested_keys": 350,
         "max_top_level_keys": 27,
     },
@@ -150,6 +157,7 @@ def write_registry(root: Path) -> tuple[Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, project
 
 
