@@ -121,6 +121,13 @@ for (const status of ["open", "deferred"]) {
   });
 }
 
+test("the receipt-bound successor replan fact must be an exact boolean", () => {
+  assert.throws(
+    () => projectReceiptBoundWait({...externalWaitRequest(), receipt_bound_successor_replan: "true"}),
+    /requires a bound Turn and current Todo facts/,
+  );
+});
+
 for (const patch of [{replay_phase: "settled"}, {replay_phase: null},
   {settlement_progress: null}, {settlement_progress: {schema_version: "other",
     state: "writeback_required", next_step: "durable_writeback"}}]) {

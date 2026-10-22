@@ -216,7 +216,9 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   const request = requireJsonObject(value, "receipt-bound wait request");
   if (request.schema_version !== RECEIPT_BOUND_WAIT_REQUEST_SCHEMA ||
       typeof request.turn_instance_id !== "string" || !request.turn_instance_id ||
-      typeof request.agent_id !== "string" || !request.agent_id || !Array.isArray(request.todos)) {
+      typeof request.agent_id !== "string" || !request.agent_id || !Array.isArray(request.todos) ||
+      (request.receipt_bound_successor_replan !== undefined &&
+       typeof request.receipt_bound_successor_replan !== "boolean")) {
     reject("requires a bound Turn and current Todo facts");
   }
   const todos = request.todos.map(row => requireJsonObject(row, "receipt-bound Todo"));
