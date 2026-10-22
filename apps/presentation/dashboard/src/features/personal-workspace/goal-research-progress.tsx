@@ -147,41 +147,51 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
           })}
         </div>
       </div> : <p className="research-effect-empty" role="status">{zh ? "所选范围尚未分析" : "No analysis for the selected scope"}</p>}
-      <details className="research-progress-basis"><summary>{zh ? "来源与用量" : "Sources and usage"}<span>{p.native_outcomes ? "" : (zh ? " · 原生测量未采集" : " · Native measurements uncaptured")}{zh ? " · 完整成本未知" : " · Total cost unknown"}</span></summary><dl>
-        <dt>{zh ? "题目 / 运行" : "Case / run"}</dt><dd>{p.scope.case_id}<br/>{p.scope.run_id}</dd><dt>{zh ? "证据窗口" : "Evidence window"}</dt><dd>{p.scope.window}</dd><dt>{zh ? "取样规则" : "Selection rule"}</dt><dd>{p.selection.rule}</dd>
-        <dt>{zh ? "总体研究片段数" : "Population of episodes"}</dt><dd>{p.selection.population_episodes == null ? (zh ? "未知" : "Unknown") : number(p.selection.population_episodes)}</dd>
-        {result ? <><dt>{zh ? "分析方法" : "Analysis method"}</dt><dd>{result.method_version} · {zh ? "Agent 判读未校准" : "Uncalibrated Agent judgment"}</dd><dt>{zh ? "结果标识" : "Result key"}</dt><dd><code>{result.analysis_key}</code></dd><dt>{zh ? "分析限制" : "Limitations"}</dt><dd>{result.limitations.map((line, i) => <p key={i}>{line}</p>)}</dd></> : null}
-        <dt>{zh ? "来源版本" : "Source revision"}</dt><dd><code>{p.scope.revision}</code></dd>
-      </dl>
-      {p.native_outcomes ? <NativeResults native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
-      <section className="research-usage"><h4>{zh ? "用量与成本" : "Usage and cost"}{measured?.applicability === "historical" ? (zh ? " · 历史捕获" : " · Historical capture") : ""}</h4>
-        <p>{zh ? "只读捕获，窗口可能与以上判读片段及下方 Explore 历史不同。" : "Read-only capture; its window can differ from the judgments above and Explore history below."}</p>
-        <dl className="research-usage-basis">
-          <dt>{zh ? "分析尝试开销" : "Analysis attempt cost"}</dt><dd>{p.job?.usage ? <>
-            {zh ? "第" : "Attempt"} {p.job.attempt ?? "—"} · {zh ? "输入" : "input"} {p.job.usage.input_tokens == null ? "—" : number(p.job.usage.input_tokens)} · {zh ? "输出" : "output"} {p.job.usage.output_tokens == null ? "—" : number(p.job.usage.output_tokens)} tokens
-            {p.job.config ? ` · ${p.job.config.model}` : ""}
-            {p.job.analysis_wall_seconds != null ? ` · ${duration(p.job.analysis_wall_seconds)}` : ""}
-          </> : (zh ? "— 本次分析尝试未测得，不记零" : "— No measurement for this analysis attempt; not zero")}</dd>
-          <dt>{zh ? "合计边界" : "Aggregation boundary"}</dt><dd>{zh ? "分析仅显示当前回执的本次尝试；不含更早失败、恢复、评测或操作者开销。不与求解捕获盲目相加，金额及完整研究成本仍未知。" : "Analysis is this attempt's receipt only; earlier failures, recovery, evaluation and operator work are excluded. It is not blindly added to solver capture. Monetary and complete study costs remain unknown."}</dd>
-        </dl>
-        <dl className="research-progress-values">
-          <div><dt>{zh ? "捕获窗口跨度" : "Captured elapsed time"}</dt><dd>{usage ? duration(usage.elapsed_seconds) : "—"}</dd><small>{usage ? `${number(usage.completed_turns)} ${incomplete ? (zh ? "轮完整记录 · 末轮未完成 · 完整成本未知" : "complete Turns · final Turn incomplete · total cost unknown") : (zh ? "轮完整记录，不是全程总成本" : "complete Turns, not total study cost")}` : (zh ? "尚无完整用量捕获" : "No complete usage capture")}</small></div>
-          <div><dt>{zh ? "未缓存输入" : "Uncached input"}</dt><dd>{usage ? number(usage.uncached_input_tokens) : "—"}</dd><small>{usage ? "tokens" : (zh ? "未测，不记零" : "Unmeasured, not zero")}</small></div>
-          <div><dt>{zh ? "输出" : "Output"}</dt><dd>{usage ? number(usage.output_tokens) : "—"}</dd><small>{usage ? (zh ? "tokens，已含推理" : "tokens, includes reasoning") : (zh ? "未测，不记零" : "Unmeasured, not zero")}</small></div>
-        </dl>
-        {incomplete ? <p className="research-progress-warning">{zh
-          ? "已包含末轮持久化的用量；未记录的请求和后续用量未知，不能据此判定运行已结束。"
-          : "Includes persisted usage from the unfinished Turn. Unrecorded requests and later usage are unknown; this does not establish termination."}</p> : null}
-        {incomplete ? <dl className="research-usage-basis"><dt>{zh ? "未完成轮已观测用量" : "Observed unfinished Turn"}</dt><dd>{incomplete.usage
-          ? `${zh ? "输入" : "Input"} ${number(incomplete.usage.input_tokens)} · ${zh ? "输出" : "output"} ${number(incomplete.usage.output_tokens)} tokens`
-          : (zh ? "尚无计数观测，不记零" : "No counter observation; not zero")}</dd></dl> : null}
-        {usage && measured ? <><p className="research-progress-window"><time dateTime={usage.start}>{stamp(usage.start)}</time> — <time dateTime={usage.end}>{stamp(usage.end)}</time> UTC</p>
-          {measured.applicability === "historical" ? <p className="research-progress-warning">{zh ? "用量来源已变化或不可读；保留历史捕获值，当前用量未核验。" : "The usage source changed or is unavailable. Historical values are retained; current usage is unverified."}</p> : null}
-          <dl className="research-usage-basis"><dt>{zh ? "轮内时间合计" : "Time within Turns"}</dt><dd>{duration(usage.turn_elapsed_seconds)} · {zh ? "含工具和编排；不等于CPU、生成时间或可节省时间。" : "Includes tools and orchestration; not CPU, generation or avoidable time."}</dd>
-            <dt>{zh ? "输入总量" : "Total input"}</dt><dd>{number(usage.input_tokens)} tokens · {zh ? "其中缓存" : "including cached"} {number(usage.cached_input_tokens)}</dd><dt>{zh ? "用量来源" : "Usage source"}</dt><dd>{measured.artifact}<br/><code>{measured.artifact_sha256}</code><br/>{usage.method}</dd>
-            <dt>{zh ? "覆盖边界" : "Coverage limits"}</dt><dd>{usage.method === "codex_observed_session_counters_v1" ? (zh ? "仅已观测计数，含末轮已持久化用量；未记录的请求、后续用量、继承前缀、设置、评测和操作者成本未知。" : "Observed counters include persisted unfinished usage. Unrecorded requests, later usage, inherited prefixes, setup, evaluation and operator costs remain unknown.") : (zh ? "仅本次完整捕获；继承前缀、设置、原生评测、操作者及后续未完成轮不包含。金额与全研究总成本未知。" : "This complete capture only. Inherited prefixes, setup, native evaluation, operator work and later incomplete Turns are excluded. Dollar and total study costs are unknown.")}</dd>
-          </dl></> : null}
-      </section></details>
+      <details className="research-progress-basis"><summary>{zh ? "来源与用量" : "Sources and usage"}<span>{p.native_outcomes ? "" : (zh ? " · 原生测量未采集" : " · Native measurements uncaptured")}{zh ? " · 完整成本未知" : " · Total cost unknown"}</span></summary>
+        <section className="research-usage" aria-label={zh ? "求解用量" : "Solver usage"}>
+          <div className="research-usage-heading"><h4>{zh ? "求解用量" : "Solver usage"}</h4><ContextHelp label={zh ? "用量范围与成本" : "Usage scope and cost"}>
+            <p>{zh ? "只读捕获，窗口可能与判读片段及 Explore 历史不同。金额与完整研究成本未测得，不能从 token 数推算。" : "Read-only capture; its window can differ from the judgments and Explore history. Monetary and complete study costs are unmeasured, not inferred from token counts."}</p>
+            {usage ? <p>{usage.method === "codex_observed_session_counters_v1" ? (zh ? "仅已观测计数；未记录的请求、后续用量、继承前缀、设置、评测和操作者成本未知。" : "Observed counters only. Unrecorded requests, later usage, inherited prefixes, setup, evaluation and operator costs remain unknown.") : (zh ? "仅本次完整捕获；继承前缀、设置、原生评测、操作者及后续未完成轮不包含。" : "This complete capture only; inherited prefixes, setup, native evaluation, operator work and later incomplete Turns are excluded.")}</p> : null}
+          </ContextHelp></div>
+          {measured?.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史捕获：用量来源已变化或不可读，当前用量未核验。" : "Historical capture: the usage source changed or is unavailable; current usage is unverified."}</p> : null}
+          {usage ? <p className="research-usage-scope">{number(usage.completed_turns)} {zh ? "轮完整记录" : "complete Turns"}{incomplete ? (zh ? " · 末轮未完成" : " · final Turn incomplete") : ""}</p> : <p className="research-usage-scope">{zh ? "尚无用量捕获 · 未测，不记零" : "No usage capture · unmeasured, not zero"}</p>}
+          <dl className="research-progress-values">
+            <div><dt>{zh ? "捕获窗口跨度" : "Captured elapsed time"}</dt><dd>{usage ? duration(usage.elapsed_seconds) : "—"}</dd></div>
+            <div><dt>{zh ? "未缓存输入" : "Uncached input"}</dt><dd>{usage ? number(usage.uncached_input_tokens) : "—"}<span> tokens</span></dd></div>
+            <div><dt>{zh ? "输出（含推理）" : "Output (includes reasoning)"}</dt><dd>{usage ? number(usage.output_tokens) : "—"}<span> tokens</span></dd></div>
+          </dl>
+          {incomplete ? <div className="research-usage-tail">
+            <p>{incomplete.usage ? <>{zh ? "其中末轮" : "Of which, unfinished Turn"} · {zh ? "输入" : "input"} <strong>{number(incomplete.usage.input_tokens)}</strong> · {zh ? "输出" : "output"} <strong>{number(incomplete.usage.output_tokens)}</strong> tokens</> : (zh ? "末轮尚无计数观测，不记零" : "No counter observation for the unfinished Turn; not zero")}</p>
+            <p>{zh ? "仅含已持久化用量，不能据此判定运行已结束。" : "Persisted usage only; this does not establish termination."}</p>
+          </div> : null}
+          {usage && measured ? <details className="research-usage-detail"><summary>{zh ? "计数明细与来源" : "Counter details and source"}</summary>
+            <dl className="research-usage-basis">
+              <dt>{zh ? "捕获时间（UTC）" : "Capture window (UTC)"}</dt><dd><time dateTime={usage.start}>{stamp(usage.start)}</time> — <time dateTime={usage.end}>{stamp(usage.end)}</time></dd>
+              <dt>{zh ? "轮内时间合计" : "Time within Turns"}</dt><dd>{duration(usage.turn_elapsed_seconds)}<p>{zh ? "含工具和编排；不等于 CPU、生成时间或可节省时间。" : "Includes tools and orchestration; not CPU, generation or avoidable time."}</p></dd>
+              <dt>{zh ? "输入总量" : "Total input"}</dt><dd>{number(usage.input_tokens)} tokens · {zh ? "其中缓存" : "including cached"} {number(usage.cached_input_tokens)}</dd>
+              <dt>{zh ? "用量来源" : "Usage source"}</dt><dd>{measured.artifact}<code>{measured.artifact_sha256}</code></dd>
+              <dt>{zh ? "计数方法" : "Counter method"}</dt><dd><code>{usage.method}</code></dd>
+            </dl>
+          </details> : null}
+          <div className="research-analysis-cost">
+            <div className="research-usage-heading"><h4>{zh ? "分析尝试" : "Analysis attempt"}</h4><ContextHelp label={zh ? "分析开销范围" : "Analysis cost scope"}>
+              <p>{zh ? "仅当前回执的本次尝试，不含更早失败、恢复、评测或操作者开销。不与求解捕获相加。" : "This attempt's receipt only; earlier failures, recovery, evaluation and operator work are excluded. Not added to solver capture."}</p>
+            </ContextHelp></div>
+            <p>{p.job?.usage ? <>{zh ? "第" : "Attempt"} {p.job.attempt ?? "—"} · {zh ? "输入" : "input"} {p.job.usage.input_tokens == null ? "—" : number(p.job.usage.input_tokens)} · {zh ? "输出" : "output"} {p.job.usage.output_tokens == null ? "—" : number(p.job.usage.output_tokens)} tokens
+              {p.job.analysis_wall_seconds != null ? ` · ${duration(p.job.analysis_wall_seconds)}` : ""}
+            </> : (zh ? "未测得，不记零" : "Unmeasured, not zero")}</p>
+          </div>
+        </section>
+        {p.native_outcomes ? <NativeResults native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
+        <details className="research-source-detail"><summary>{zh ? "分析范围与来源" : "Analysis scope and sources"}</summary><dl className="research-usage-basis">
+          <dt>{zh ? "题目 / 运行" : "Case / run"}</dt><dd>{p.scope.case_id}<br/>{p.scope.run_id}</dd>
+          <dt>{zh ? "证据窗口" : "Evidence window"}</dt><dd>{p.scope.window}</dd><dt>{zh ? "取样规则" : "Selection rule"}</dt><dd>{p.selection.rule}</dd>
+          <dt>{zh ? "总体研究片段数" : "Population of episodes"}</dt><dd>{p.selection.population_episodes == null ? (zh ? "未知" : "Unknown") : number(p.selection.population_episodes)}</dd>
+          {result ? <><dt>{zh ? "分析方法" : "Analysis method"}</dt><dd>{result.method_version} · {zh ? "Agent 判读未校准" : "Uncalibrated Agent judgment"}</dd><dt>{zh ? "结果标识" : "Result key"}</dt><dd><code>{result.analysis_key}</code></dd><dt>{zh ? "分析限制" : "Limitations"}</dt><dd>{result.limitations.map((line, i) => <p key={i}>{line}</p>)}</dd></> : null}
+          {p.job?.config ? <><dt>{zh ? "分析模型" : "Analysis model"}</dt><dd>{p.job.config.model}</dd></> : null}
+          <dt>{zh ? "来源版本" : "Source revision"}</dt><dd><code>{p.scope.revision}</code></dd>
+        </dl></details>
+      </details>
     </> : null}
   </section>;
 }
