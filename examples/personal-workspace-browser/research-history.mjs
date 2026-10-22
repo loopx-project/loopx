@@ -61,6 +61,15 @@ function analysisReadback(selected = "a") {
       final_candidate_delta: selected === "d" ? null : selected === "b" ? -2 : 4,
     };
   }
+  if (selected === "d") {
+    const usage = snapshot.pack.solver_usage.projection;
+    usage.method = "codex_observed_session_counters_v1";
+    usage.incomplete_turn = {turn_id: "unfinished", start: usage.end, observed_through: usage.end,
+      first_line: 4, last_line: 5, counter_observations: 1,
+      usage: {input_tokens: 400, cached_input_tokens: 300, uncached_input_tokens: 100, output_tokens: 8}};
+    usage.input_tokens += 400; usage.cached_input_tokens += 300;
+    usage.uncached_input_tokens += 100; usage.output_tokens += 8;
+  }
   if (selected === "d") {snapshot.pack.result = null; snapshot.pack.job = null; snapshot.pack.native_outcomes.projection.initial = null;}
   return snapshot;
 }
@@ -760,6 +769,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await analysis.press('Escape');
       await progress.getByRole('combobox').selectOption('d'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
+      await progress.locator('.research-progress-basis > summary').click();
+      assert.match(await progress.innerText(), /末轮未完成|final Turn incomplete/);
+      assert.match(await progress.innerText(), /400.*8.*tokens/s, "Persisted unfinished usage is visible without declaring total cost");
+      await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /所选范围尚未分析/);
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');

@@ -787,3 +787,67 @@ def test_large_usage_real_cli_register_readback_and_replay(pack, monkeypatch):
             usage_session_id="solver-session",
         )
     assert len(discover(**scope)["packs"]) == 2
+
+
+def test_observed_usage_preserves_incomplete_cost_and_default_gate(pack):
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+
+    scope, _, old, input_path, sources, _ = pack
+    args = dict(
+        **scope,
+        input_path=input_path,
+        source_root=sources,
+        title=old["title"],
+        usage_jsonl="usage.jsonl",
+        usage_session_id="solver-session",
+    )
+    path = sources / "usage.jsonl"
+    path.write_text("\n".join(_usage_fixture().splitlines()[:-1]) + "\n")
+    before = path.read_bytes()
+    with pytest.raises(EffectRuntimeRejected, match="completed Turn"):
+        register_pack(**args)
+    registered = register_pack(**args, include_incomplete_usage=True)
+    assert registered["analysis_key"] == old["analysis_key"]
+    view = inspect_pack(**scope)["solver_usage"]
+    assert view["projection"]["method"] == "codex_observed_session_counters_v1"
+    assert view["projection"]["input_tokens"] == 140
+    assert view["projection"]["incomplete_turn"]["usage"]["input_tokens"] == 40
+    assert view["projection"]["completed_turns"] == 1
+    assert register_pack(**args, include_incomplete_usage=True) == registered
+    assert path.read_bytes() == before
+    assert inspect_pack(**scope)["job"] is None
+    with pytest.raises(ValueError, match="requires a usage capture"):
+        register_pack(
+            **{**args, "usage_jsonl": None, "usage_session_id": None},
+            include_incomplete_usage=True,
+        )
+    path.write_bytes(before + b'{"broken":')
+    with pytest.raises(ValueError):
+        register_pack(**args, include_incomplete_usage=True)
+    assert inspect_pack(**scope)["solver_usage"]["applicability"] == "historical"
+    path.unlink()
+    assert inspect_pack(**scope)["solver_usage"]["reason_code"] == "source_unavailable"
+
+
+def test_observed_usage_real_cli_without_model_dispatch(pack):
+    scope, _, old, input_path, sources, _ = pack
+    (sources / 'usage.jsonl').write_text('\n'.join(_usage_fixture().splitlines()[:-1]) + '\n')
+    registry = sources.parent / 'registry-observed.json'
+    registry.write_text('{"projects":{}}')
+    prefix = [sys.executable, '-m', 'loopx.entrypoint', '--registry', str(registry),
+              '--runtime-root', str(scope['runtime_root']), '--format', 'json', 'benchmark']
+    args = ['trajectory-pack-register', '--goal-id', scope['owner_goal_id'],
+            '--input-json', str(input_path), '--source-root', str(sources), '--title', old['title'],
+            '--usage-jsonl', 'usage.jsonl', '--usage-session-id', 'solver-session']
+    default = subprocess.run([*prefix, *args], text=True, capture_output=True)
+    assert default.returncode != 0 and 'completed Turn' in default.stdout + default.stderr
+    observed = subprocess.run([*prefix, *args, '--include-incomplete-usage'], text=True, capture_output=True)
+    assert observed.returncode == 0, observed.stdout + observed.stderr
+    record = json.loads(observed.stdout)
+    discovery = subprocess.run([*prefix, 'trajectory-packs', '--goal-id', scope['owner_goal_id']], text=True, capture_output=True)
+    assert discovery.returncode == 0
+    view = next(x for x in json.loads(discovery.stdout)['packs'] if x['pack_id'] == record['pack_id'])
+    assert view['solver_usage']['projection']['input_tokens'] == 140
+    assert view['solver_usage']['projection']['incomplete_turn']['usage']['input_tokens'] == 40
+    assert inspect_pack(**scope, pack_id=record['pack_id'])['job'] is None
+    assert not list(scope['runtime_root'].rglob('receipt.json'))
