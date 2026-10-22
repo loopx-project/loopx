@@ -139,14 +139,14 @@ Add active benchmark smokes only for stable toolkit behavior; experiment-specifi
 validation belongs with the research workspace. Benchmark-native runners,
 adapters, ledgers, scoring reducers and dated packets stay outside the active
 product surface. Follow [archive placement](../../benchmark/README.md#archive-placement):
-retired implementations and dated packets belong under `deprecate/benchmark-legacy/`;
+retired implementations and dated packets stay in Git history, outside the working tree;
 only the explicitly qualified immutable snapshots may remain under `benchmark/`.
 Neither archive category enters active CI benchmark execution.
 
 保留公开/私有边界，以及已交付 provider-neutral toolkit 权限和完整性 smoke。
 新增 active benchmark smoke 只保护稳定 toolkit 行为，实验专属验证归研究工作区。
 Benchmark-native runner、adapter、ledger、scoring reducer 和过期 packet 不进入活跃
-产品面；退役实现和过期 packet 归 `deprecate/benchmark-legacy/`，满足规范条件的不可变
+产品面；退役实现和过期 packet 留在 Git 历史中，不保留在工作树；满足规范条件的不可变
 快照才可留在 `benchmark/`。两类归档都不参与 active CI benchmark 执行。
 
 ## Public-Safe Fixtures / 公开安全 Fixture

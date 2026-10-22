@@ -195,8 +195,8 @@ this capability; the DeepSWE research adapter is its first active caller. The
 summary carries only typed counts, status labels, and content-free notification
 kind counts. It never reopens event payloads, and it marks message and tool-call
 semantics unavailable rather than guessing them. Missing, malformed, or
-inconsistent lifecycle facts fail closed. The similarly named archived reducer
-under `deprecate/benchmark-legacy/` is historical evidence, not a dependency or
+inconsistent lifecycle facts fail closed. The similarly named retired reducer
+in Git history is historical evidence, not a dependency or
 compatibility entry point for this native-runner contract.
 
 ### Formal installed profile and skill discovery
@@ -1461,8 +1461,8 @@ Docker, runner, upload, submission, publication, or production authority.
 
 The active benchmark research program and current public-safe practice live under
 [`benchmark/`](https://github.com/loopx-project/loopx/blob/main/benchmark/README.md). Retired implementations, superseded runners, and dated research
-packets are retained under [`deprecate/benchmark-legacy/`](https://github.com/loopx-project/loopx/blob/main/deprecate/benchmark-legacy/README.md)
-for source archaeology only.
+packets remain available in [Git history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)
+for source archaeology only; the legacy tree is removed from the working tree.
 Immutable experiment snapshots follow the canonical
 [archive placement rules](../../../benchmark/README.md#archive-placement),
 which permit explicitly identified, inert snapshots in `benchmark/`.

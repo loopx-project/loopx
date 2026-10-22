@@ -1372,7 +1372,7 @@ This is a living research RFC, not a frozen benchmark snapshot.
 | 2026-08-16 | Make the current DeepSWE pilot the design-driving practice for the LoopX benchmark capability; treat legacy code/research as candidate reuse and add structured anti-cheating and authority-parity qualification. |
 | 2026-08-23 | Add an engineering readiness ladder and bounded delivery-slice rules so repository construction is tracked separately from C0--C4 research claims. |
 | 2026-08-25 | Add StartupBench, LoopsBench, and WideSearch to the benchmark primer and integration plan as a second, complementary trio; require native metrics per benchmark and keep benchmark material out of reusable LoopX state. |
-| 2026-10-16 | Archive [feedback-first observations](../../../deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md) separately from active practice. Runner source-subset and configuration-projection corrections remain E0/E1 work; mixed-profile, interrupted and running observations do not close E2/E3 or isolate a planning effect. General guard re-entry relaxation is deferred pending affected-caller validation. |
+| 2026-10-16 | Archive [feedback-first observations](https://github.com/loopx-project/loopx/blob/1d60e7edb2a05fe048767444f872934c3adef992/deprecate/benchmark-legacy/edgebench/feedback-first-observations-20261016.md) separately from active practice. Runner source-subset and configuration-projection corrections remain E0/E1 work; mixed-profile, interrupted and running observations do not close E2/E3 or isolate a planning effect. General guard re-entry relaxation is deferred pending affected-caller validation. |
 
 ## 18. References
 
@@ -1396,7 +1396,7 @@ This is a living research RFC, not a frozen benchmark snapshot.
 - [WideSearch dataset](https://huggingface.co/datasets/ByteDance-Seed/WideSearch)
 - [Benchmark research workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md)
 - [DeepSWE research practice](https://github.com/huangruiteng/loopx/blob/main/benchmark/deepswe/README.md)
-- [Legacy benchmark archive](https://github.com/huangruiteng/loopx/blob/main/deprecate/benchmark-legacy/README.md)
+- [Legacy benchmark history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)
 - [Hierarchical Agent Stride Control v0](./hierarchical-agent-stride-control-v0.md)
 - [Research Exploration Control Plane v0](./research-exploration-control-plane-v0.md)
 - [Human Attention Wishlist v0](./human-attention-wishlist-v0.md)

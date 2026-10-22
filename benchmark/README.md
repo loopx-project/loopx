@@ -91,9 +91,10 @@ by itself establish a C2 uplift claim.
 This section owns benchmark archive placement. Two kinds of archive have
 different homes:
 
-- The retired benchmark implementation, legacy abstractions, and standalone
-  dated research packets belong under
-  [`deprecate/benchmark-legacy/`](../deprecate/benchmark-legacy/README.md).
+- Retired benchmark implementations, legacy abstractions, and standalone dated
+  research packets stay in Git history rather than the working tree. The removed
+  [legacy benchmark tree](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy)
+  remains available at its final retained revision for source archaeology.
 - A named, immutable experiment snapshot may live in a versioned directory
   under `benchmark/` when its exact source bytes are needed to inspect a
   historical result. This is a historical reference, not an active runner,

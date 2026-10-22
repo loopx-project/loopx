@@ -29,8 +29,9 @@ establish an equal-budget efficiency gain or a general performance guarantee.
 
 - [Benchmark research workspace](https://github.com/huangruiteng/loopx/blob/main/benchmark/README.md): current protocols,
   benchmark-specific practice, and links to the governing research RFC.
-- [Legacy benchmark archive](https://github.com/huangruiteng/loopx/blob/main/deprecate/benchmark-legacy/README.md):
-  non-active runners, adapters, and historical packets retained for archaeology.
+- [Legacy benchmark history](https://github.com/loopx-project/loopx/tree/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy):
+  retired runners, adapters, and historical packets removed from the working
+  tree and retained in Git history for archaeology.
 - [Agent workflow audits](agent-workflow-audits/): bounded reviews of external
   agent workflow patterns.
 - [Jev external evidence supplement v0 (Chinese)](agent-workflow-audits/jev-external-evidence-supplement-v0.zh-CN.md):

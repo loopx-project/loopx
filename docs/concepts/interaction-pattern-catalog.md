@@ -2923,7 +2923,7 @@ from a meta/controller poll that was only authorized to observe.
 **Validation**
 
 - `regression/external-evidence-observation-real-codex.py`
-- `deprecate/benchmark-legacy/examples/benchmark-lifecycle-state-smoke.py` (retired)
+- [Retired benchmark lifecycle smoke](https://github.com/loopx-project/loopx/blob/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy/examples/benchmark-lifecycle-state-smoke.py) (Git history only)
 - `docs/state-interaction-model.md`
 
 #### IP-015 Benchmark Lifecycle Countability

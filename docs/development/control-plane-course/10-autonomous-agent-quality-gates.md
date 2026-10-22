@@ -718,7 +718,7 @@ outcome baseline 可以消费 readiness receipt，但不能反过来用一个分
 9. `tests/control_plane/test_goal_frontier_replan_rules.py`
 10. `examples/control_plane/quota-agent-scoped-user-gate-smoke.py`
 11. `tests/control_plane/test_goal_vision_blocked_successor.py`
-12. `deprecate/benchmark-legacy/tests/test_skillsbench_turn_runtime.py` (retired)
+12. [已退役的 SkillsBench Turn runtime 测试](https://github.com/loopx-project/loopx/blob/54d42da44283bb414b24f71d16642c25cbcaf5dd/deprecate/benchmark-legacy/tests/test_skillsbench_turn_runtime.py)（仅保留在 Git 历史中）
 
 ## 代表性实验
 

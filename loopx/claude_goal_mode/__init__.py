@@ -17,8 +17,8 @@ NOT use ``/goal``, which judges completion from the transcript). Pieces:
 - ``plugin`` assets           — ``.claude-plugin/plugin.json``, ``commands/loopx.md``,
                                 ``hooks/hooks.json`` (the optional gate)
 
-The retired benchmark-only baseline contract is kept under
-``deprecate/benchmark-legacy`` and is no longer a LoopX runtime module.
+The retired benchmark-only baseline contract remains in Git history and is
+no longer part of the working tree or a LoopX runtime module.
 """
 
 __all__: list[str] = []

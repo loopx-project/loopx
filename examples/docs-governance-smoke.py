@@ -63,14 +63,6 @@ MOVED_PATHS = {
     "docs/protocol-action-packet-router-comparison-v0.md": (
         "docs/reference/protocols/protocol-action-packet-router-comparison-v0.md"
     ),
-    "docs/codex-cli-long-run-benchmark-design.md": (
-        "deprecate/benchmark-legacy/docs/research/long-horizon-agent-benchmarks/"
-        "codex-cli-long-run-benchmark-design.md"
-    ),
-    "docs/codex-cli-long-run-regression.md": (
-        "deprecate/benchmark-legacy/docs/research/long-horizon-agent-benchmarks/"
-        "codex-cli-long-run-regression.md"
-    ),
     "docs/project-skill-delivery.md": (
         "loopx/capabilities/project_skill_delivery/README.md"
     ),
@@ -1003,6 +995,9 @@ def main() -> int:
         "SECURITY.md",
         "SUPPORT.md",
         "COMMUNICATIONS.md",
+        "deprecate/benchmark-legacy",
+        "docs/codex-cli-long-run-benchmark-design.md",
+        "docs/codex-cli-long-run-regression.md",
     ):
         assert not (REPO_ROOT / retired_root_policy).exists(), retired_root_policy
     for governance_contract in (
@@ -1230,7 +1225,6 @@ def main() -> int:
             read("docs/reference/protocols/README.md"),
             read("docs/research/README.md"),
             read("benchmark/README.md"),
-            read("deprecate/benchmark-legacy/README.md"),
             read("docs/showcases/README.md"),
         ]
     )
@@ -1242,7 +1236,6 @@ def main() -> int:
             new_path in combined_public_indexes
             or basename in combined_public_indexes
             or new_path.startswith("docs/archive/")
-            or new_path.startswith("deprecate/benchmark-legacy/")
         ), new_path
 
     for required in [
