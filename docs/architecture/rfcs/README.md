@@ -222,6 +222,11 @@ Paired diffs do not certify translation accuracy.
     governed commit policy/verifier, lease-impact handling and Stage 3+
     qualification remain unshipped. Manager handoff consumes these boundaries;
     it does not provide another amendment writer.
+- [Persistent Goal outcome refinement v0](goal-outcome-refinement-v0.md)
+  ([中文版](goal-outcome-refinement-v0.zh-CN.md))
+  - **Current boundary:** Supporting outcomes preserve cumulative requirements
+    through the existing Goal authority. Installed/model adoption and comparative
+    benefit remain unqualified; declarations do not grant execution authority.
 - [Goal Direction Baseline v0](goal-direction-baseline-v0.md)
   ([中文版](goal-direction-baseline-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only.

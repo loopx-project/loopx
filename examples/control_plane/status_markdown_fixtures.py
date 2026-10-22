@@ -480,6 +480,7 @@ def write_connected_readonly_registry(root: Path) -> Path:
         "updated_at: 2026-01-01T00:00:00+00:00\n"
         "---\n\n"
         "# Connected Readonly Progress\n\n"
+        "## Agent Todo\n\n"
         "## Next Action\n\n"
         f"- {CONNECTED_READONLY_ACTION}\n",
         encoding="utf-8",
@@ -542,7 +543,8 @@ def write_dependency_blocker_registry(root: Path) -> Path:
         "# Dependency Owner Gate\n\n"
         "## User Todo / Owner Review Reading Queue\n\n"
         f"- [ ] {DEPENDENCY_USER_TODO}\n"
-        "  <!-- loopx:todo todo_id=todo_dependency_user_gate task_class=user_gate global_gate=true -->\n",
+        "  <!-- loopx:todo todo_id=todo_dependency_user_gate task_class=user_gate global_gate=true -->\n\n"
+        "## Agent Todo\n",
         encoding="utf-8",
     )
     registry_path.parent.mkdir(parents=True, exist_ok=True)

@@ -100,7 +100,8 @@ def test_real_native_host_lists_goals_and_reads_canonical_history(tmp_path):
     registry = project / "registry.json"
     goals = []
     for goal_id in ("first", "second"):
-        (project / f"{goal_id}.md").write_text("---\nstatus: active\n---\n\n# Research\n")
+        (project / f"{goal_id}.md").write_text(
+            "---\nstatus: active\n---\n\n# Research\n\n## Agent Todo\n")
         goals.append(dict(id=goal_id, status="active", domain="source-read", repo=str(project),
             state_file=f"{goal_id}.md", adapter={"kind": "test_v0", "status": "connected-read-only"},
             authority_sources=[]))

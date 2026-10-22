@@ -52,7 +52,7 @@ def handle_media_command(args) -> dict:
             path = Path(args.plan_json).expanduser()
             if path.stat().st_size > 256 * 1024:
                 raise ValueError("Image intent exceeds 256 KiB")
-            return images.prepare(json.loads(path.read_text()), source_directory=Path(args.source_directory), image_id=args.image_id)
+            return images.prepare(json.loads(path.read_text(encoding="utf-8")), source_directory=Path(args.source_directory), image_id=args.image_id)
         if not args.image_id:
             raise ValueError("Select an image intent")
         if args.operation == "inspect":

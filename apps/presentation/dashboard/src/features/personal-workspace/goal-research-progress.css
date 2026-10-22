@@ -53,7 +53,7 @@
 .research-progress-basis { border-block-start: 1px solid var(--pw-line); margin-block-start: 12px; }
 .research-progress-basis > summary { font-size: var(--text-body); }
 .research-progress-basis > summary > span { color: var(--pw-muted); font-size: var(--text-caption); }
-.research-usage h4 { font-size: var(--text-body); margin-block: 16px 8px; }
+.research-usage h4 { font-size: var(--text-body); font-weight: 500; margin: 0; }
 .research-effect-evidence h4 { font-size: var(--text-caption); line-height: var(--leading-prose); margin: 8px 0; }
 .research-effect-citations { display: flex; flex-wrap: wrap; gap: 4px 20px; }
 .research-progress .research-effect-citations button { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; font: inherit; font-size: var(--text-body); background: transparent; border: 0; border-radius: 0; padding: 4px 0; color: var(--pw-text); cursor: pointer; }
@@ -72,14 +72,26 @@
 .research-native-values strong { font-size: var(--text-body); font-weight: 600; font-variant-numeric: tabular-nums; }
 .research-native-values small { display: block; }
 .research-native-basis { font-size: var(--text-caption); }
-.research-progress-basis > dl, .research-usage-basis { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px 16px; font-size: var(--text-caption); }
+.research-usage-basis { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px 24px; margin-block: 8px 20px; font-size: var(--text-body); line-height: var(--leading-prose); }
 .research-progress-basis dt, .research-usage-basis dt { color: var(--pw-muted); }
 .research-progress-basis dd, .research-usage-basis dd { margin: 0; }
 .research-progress code { font: inherit; font-family: var(--font-mono); }
 .research-progress-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-block: 16px; }
 .research-progress-values > div { min-width: 0; }
-.research-progress-values dt { font-size: var(--text-caption); color: var(--pw-muted); }
-.research-progress-values dd { margin: 4px 0; font-size: var(--text-body); font-weight: 600; font-variant-numeric: tabular-nums; }
+.research-progress-values dt { font-size: var(--text-body); color: var(--pw-muted); }
+.research-progress-values dd { margin: 8px 0; font-size: var(--text-title); font-weight: 600; font-variant-numeric: tabular-nums; }
+.research-progress-values dd > span { font-size: var(--text-body); font-weight: 400; color: var(--pw-muted); }
+.research-usage { padding-block: 12px 8px; }
+.research-usage-heading { display: flex; align-items: center; gap: 4px; }
+.research-progress .research-usage p, .research-progress .research-source-detail p { font-size: var(--text-body); margin-block: 8px; }
+.research-progress .research-usage-scope { margin-block: 4px 20px; }
+.research-usage-tail { border-inline-start: 2px solid var(--pw-caution); padding-inline-start: 16px; margin-block: 20px; }
+.research-usage-tail strong { font-weight: 500; color: var(--pw-text); }
+.research-analysis-cost { border-block-start: 1px solid var(--pw-line); padding-block-start: 16px; margin-block-start: 16px; }
+.research-usage-detail > summary, .research-source-detail > summary { font-size: var(--text-body); }
+.research-usage-basis code { display: block; margin-block-start: 4px; }
+.research-source-detail { border-block-start: 1px solid var(--pw-line); margin-block-start: 16px; }
+.research-progress-basis summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .research-progress-warning { border-inline-start: 2px solid var(--pw-caution); padding-inline-start: 12px; }
 @media (max-width: 1200px) { .research-effect-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px) {
@@ -89,7 +101,7 @@
   .research-effect-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
   .research-assessment > summary { gap: 8px; }
   .research-native-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .research-progress-values { grid-template-columns: 1fr; }
-  .research-progress-basis > dl, .research-usage-basis { grid-template-columns: 1fr; gap: 4px; }
+  .research-progress-values { grid-template-columns: 1fr; gap: 16px; }
+  .research-usage-basis { grid-template-columns: 1fr; gap: 4px; }
   .research-progress-basis dd, .research-usage-basis dd { margin-bottom: 8px; }
 }

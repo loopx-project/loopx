@@ -207,7 +207,12 @@ def test_reused_preview_matches_fresh_cli_and_rereads_validator_and_goal(service
             patch.setattr(runner, "_cli", lambda *args, **kwargs: fresh_cli(runner, *args, **kwargs))
             expected = runner.inspect("analysis")
         assert runner.inspect("analysis") == expected
-        assert expected["state"] == "turn_blocked"
+        # Read-only admission does not scan or publish private workspace content.
+        # The independent publication boundary must still reject this fixture.
+        from loopx.contract import scan_public_boundary
+        assert not scan_public_boundary([unsafe])["ok"]
+        assert expected["state"] == "runtime_unverified"
+        assert not any(expected["effects"].values())
         unsafe.unlink()
         assert runner.inspect("analysis")["state"] == "runtime_unverified"
         assert demo.canonical_tasks(root) == canonical

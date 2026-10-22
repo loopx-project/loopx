@@ -759,6 +759,7 @@ def test_native_target_lookup_keeps_public_value_error(tmp_path: Path, todo_id: 
 def test_public_cli_external_wait_uses_current_successor_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, condition_kind: str, satisfied: bool,
 ) -> None:
+    from canonical_authority_fixture import without_resume_observation_time as stable
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = source_fixture(tmp_path)
@@ -797,18 +798,18 @@ def test_public_cli_external_wait_uses_current_successor_source(
         display = state.read_bytes() if state.exists() else None
         rejected = update(registry, *args, ok=False)
         assert "external-wait successor must be runnable, not resume-gated" in json.dumps(rejected)
-        assert list_goal_todos(registry_path=registry, goal_id="goal-a") == source
+        assert stable(list_goal_todos(registry_path=registry, goal_id="goal-a")) == stable(source)
         assert (state.read_bytes() if state.exists() else None) == display
         return
     update(registry, *args, "--dry-run")
-    assert records(registry) == before
+    assert stable(records(registry)) == stable(before)
     update(registry, *args)
     after = records(registry)
     assert after["todo_target"]["status"] == "open"
     assert after["todo_target"]["resume_ready"] is False
     assert after["todo_target"]["resume_monitor_generation"] == 3
     assert after["todo_target"]["successor_todo_ids"] == ["todo_other"]
-    assert after["todo_other"] == before["todo_other"]
+    assert stable(after["todo_other"]) == stable(before["todo_other"])
     assert after["todo_other"]["resume_ready"] is True
     assert update(registry, *args)["status"] == "replayed"
-    assert records(registry) == after
+    assert stable(records(registry)) == stable(after)

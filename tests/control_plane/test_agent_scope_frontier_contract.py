@@ -160,7 +160,7 @@ def test_cli_should_run_reads_disposable_state_and_emits_v1(tmp_path):
     state = project / ".codex/goals/half-speed/ACTIVE_GOAL_STATE.md"
     with state.open("a", encoding="utf-8") as stream:
         stream.write(
-            "\n## Agent Todo\n\n"
+            "\n"
             "- [ ] [P0] Complete the claimed prerequisite.\n"
             "  <!-- loopx:todo todo_id=todo_prerequisite status=open "
             "task_class=advancement_task claimed_by=codex-main-control -->\n"

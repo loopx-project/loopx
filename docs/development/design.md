@@ -595,6 +595,18 @@ From top to bottom, one reading column with an optional right rail:
 4. **Owner rail.** What needs the owner sits beside the hero as a hairline
    list: glyph, the decision in owner language, relative age, an arrow that
    opens it in place. A quiet Goal shows no empty rail.
+   Do not repeat the same work in a permanently visible task rail. Overview
+   shows up to three compact tasks per responsible owner; the group summary
+   retains its task count and significant state, including blocked work.
+   Expand the remaining tasks in place or open All work for search, filters,
+   completed history and activity. Direct task links reveal their selected row.
+   Read-only acceptance observations begin as one disclosure with gap/guard
+   counts and an explicit partial or unknown state; full reasons, requirements
+   and evidence remain inside. Zero listed gaps never means Goal acceptance.
+   不要在常驻任务侧栏重复展示主栏的工作。概览每位负责人默认最多展示三条紧凑任务，
+   组摘要保留任务数和受阻等重要状态；其余任务就地展开，搜索、筛选、已完成历史与活动
+   从“全部工作”打开。任务直链自动展开选中行。只读验收观察默认折叠，摘要显示缺口、
+   限制数量及“部分观测”或“未知”；完整原因、要求与证据保留在正文，零缺口不等于验收通过。
 5. **Folded composer.** Reading views fold the composer to one line that
    expands on request; conversation views keep it open.
 
@@ -649,7 +661,12 @@ observation"). Reduced motion stops the arc; the ring and core still read live.
   turning a read-only source into a setup task. A known empty state and an
   unobserved source remain different states.
 - **Loading** holds the final geometry with a quiet skeleton; a region does
-  not collapse to one spinner and then jump.
+  not collapse to one spinner and then jump. An initial read is not evidence of
+  an empty or disconnected source. Bind loading, errors and results to the same
+  Goal/source/language/selection; a delayed response cannot borrow another
+  scope's content. Keep one read-status surface across summary and detail,
+  with retry available where the user encountered the failure. A failed refresh
+  may retain the same scope's last result, visibly marked as such.
 - **Region failure** is one announced line (icon, plain cause, how to retry)
   sized to its content. Reserve banners for a whole-surface failure.
 - **Unknown** stays visible as "—" with its reason; it never becomes zero or
@@ -785,5 +802,14 @@ automated readability score or an additional owner approval.
 Record the before/after default view and a representative expanded/error state
 in the existing PR visual evidence, with the data/build boundary. State what
 became easier to find and which detail moved behind which existing entry.
+Read the expanded content as a document: check the main reading text's size,
+the repeated explanations across rows and regions, and whether values remain
+distinct from methods, hashes and provenance. A disclosure can reduce the
+default page while leaving its requested detail unreadable. For a responsive
+disclosure change, inspect that same expanded content at a narrow width too.
+Record those observations separately from data, folding and overflow assertions
+in the review capability's `outcome_impact.user_experience.visual_review`.
+Publish the concrete composition judgment and the unverified scope; passing
+functional checks alone cannot support a visual improvement claim.
 If the main task is still buried, the design review fails even when each
 component is accessible, every field is present and the automated checks pass.

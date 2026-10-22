@@ -141,9 +141,11 @@ When a user names an existing peer for review or other work, keep that Agent
 identity. The directory's `peer_route` is a candidate list, not a selected or
 verified host task. In App/Goal conversations use the existing read tool with
 `view=agent_route`, exact `goal_id` and `agent_id` after discovery. This reuses
-the shared local route observation and audience scope; it is not executor
-readiness or a message submission. Remote sources remain explicitly unsupported
-by this read view. On a trusted host with CLI access, use `resolve-peer-route`
+the shared route observation and audience scope; it is not executor
+readiness or a message submission. For an authorized SSH source, pass its
+`source_id` so observation runs on that source host. Use `host_surface` only
+to narrow a known binding, never to choose a machine or infer authority.
+On a trusted host with CLI access, use `resolve-peer-route`
 for the exact Goal and Agent. It may select one readable task when every other
 binding is explicitly archived. If it still reports ambiguity, use the user's
 exact task link or report the gap; never treat unknown as archived. If a host message tool is

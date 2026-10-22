@@ -160,13 +160,13 @@ def main() -> int:
             "--scan-path",
             str(state_file),
         )
-        if local_state.returncode != 0:
+        if local_state.returncode == 0:
             raise AssertionError(local_state.stderr or local_state.stdout)
         local_state_payload = json.loads(local_state.stdout)
-        if not local_state_payload.get("ok"):
+        if local_state_payload.get("ok"):
             raise AssertionError(local_state_payload)
-        checks = "\n".join(str(item) for item in local_state_payload.get("checks") or [])
-        if "private state scan skipped: 1 local-private files" not in checks:
+        if not any("local_private_state" in error
+                   for error in local_state_payload.get("errors", [])):
             raise AssertionError(local_state_payload)
 
         add_state = run_git(git_project, "add", str(state_file.relative_to(git_project)))
@@ -184,7 +184,7 @@ def main() -> int:
             raise AssertionError(tracked_state.stdout)
         tracked_state_payload = json.loads(tracked_state.stdout)
         tracked_errors = tracked_state_payload.get("errors") or []
-        if not any("ACTIVE_GOAL_STATE.md" in str(item) and "private_doc_url" in str(item) for item in tracked_errors):
+        if not any("ACTIVE_GOAL_STATE.md" in str(item) and "local_private_state" in str(item) for item in tracked_errors):
             raise AssertionError(tracked_state_payload)
 
         tracked_root = run_cli(
@@ -228,13 +228,15 @@ def main() -> int:
             "--scan-path",
             str(state_file),
         )
-        if allowed_state.returncode != 0:
+        if allowed_state.returncode == 0:
             raise AssertionError(allowed_state.stderr or allowed_state.stdout)
         allowed_state_payload = json.loads(allowed_state.stdout)
-        if not allowed_state_payload.get("ok"):
+        if allowed_state_payload.get("ok"):
             raise AssertionError(allowed_state_payload)
-        checks = "\n".join(str(item) for item in allowed_state_payload.get("checks") or [])
-        if "public boundary policy allowed: 1 private_doc_url hits" not in checks:
+        # A document-link policy never makes explicitly selected local state
+        # public, including when Git already tracks that state.
+        if not any("local_private_state" in str(item)
+                   for item in allowed_state_payload.get("errors", [])):
             raise AssertionError(allowed_state_payload)
 
         allowed_root = run_cli(
@@ -247,10 +249,13 @@ def main() -> int:
             "--scan-root",
             str(git_project),
         )
-        if allowed_root.returncode != 0:
+        if allowed_root.returncode == 0:
             raise AssertionError(allowed_root.stderr or allowed_root.stdout)
         allowed_root_payload = json.loads(allowed_root.stdout)
-        if not allowed_root_payload.get("ok"):
+        if allowed_root_payload.get("ok"):
+            raise AssertionError(allowed_root_payload)
+        if not any("local_private_state" in str(item)
+                   for item in allowed_root_payload.get("errors", [])):
             raise AssertionError(allowed_root_payload)
         checks = "\n".join(str(item) for item in allowed_root_payload.get("checks") or [])
         if "public boundary policy allowed: 1 private_doc_url hits" not in checks:

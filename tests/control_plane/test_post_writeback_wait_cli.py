@@ -47,12 +47,9 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
     cycle: bool,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    # Compare complete Todo readbacks at one observation time. Elapsed wall
-    # time changes the derived wait projection without mutating the Todo.
-    monkeypatch.setattr(
-        "loopx.control_plane.todos.resume_condition.now_utc_iso",
-        lambda: "2026-09-20T00:00:00Z",
-    )
+    # The canonical evaluator owns its clock; Python clock patches cannot freeze
+    # it. Compare every persistent/derived fact except that observation timestamp.
+    from canonical_authority_fixture import without_resume_observation_time as stable
     project, runtime, registry = _write_fixture(tmp_path)
     state = _configure_read_only_todo(project)
     _configure_selectable_alternative(project)
@@ -275,7 +272,8 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
     assert final is not None and final.settlement.failure is None
     assert final.writeback_run == original.writeback_run
     rc, after = run("todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0 and after["todos"] == before["todos"], after
+    assert rc == 0 and stable(after["todos"]) == stable(before["todos"]), after
+    assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"]
     rc, next_turn = run(
         "quota",
         "should-run",

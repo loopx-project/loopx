@@ -382,7 +382,7 @@ def _generic_watch_ack(*, frontier_identity: str) -> dict:
 def _append_bounded_watch_todo(state_path, *, claimed_by: str) -> None:
     state_path.write_text(
         state_path.read_text(encoding="utf-8")
-        + "\n## Agent Todo\n\n"
+        + "\n"
         + "- [ ] [P2] Keep the exact bounded watch active.\n"
         + "  <!-- loopx:todo "
         + f"todo_id={MONITOR_ID} status=open task_class=continuous_monitor "

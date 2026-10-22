@@ -69,6 +69,33 @@ def test_interface_budget_uses_visible_goal_mode() -> None:
     assert budget["within_budget"] is True
 
 
+def test_native_profile_long_routes_retain_one_complete_settlement_contract() -> None:
+    root = Path("/fixture") / ("native-profile-" + "x" * 62)
+    cli = str(root / "profile/bin/loopx")
+    registry = str(root / "project/.loopx/registry.json")
+    runtime = str(root / "project/.loopx/runtime")
+    payload = build_heartbeat_prompt(
+        goal_id="native-goal-profile-smoke",
+        agent_id="native-goal-smoke-agent",
+        registered_agents=["native-goal-smoke-agent"],
+        runtime_profile="codex_app_ssh_goal",
+        cli_bin=cli, registry_path=registry, runtime_root=runtime,
+        available_capabilities=["shell", "filesystem_write"], thin=True,
+    )
+    body = payload["task_body"]
+    assert len(body) <= 4000
+    for route in (cli, registry, runtime):
+        assert route in body
+    for obligation in (
+        "selection_command", "settlement_plan.ordered_steps", "next_cli_actions",
+        "identities/effect ids and actual outcomes", "Preserve command flags",
+        "truthful evidence", "ambiguous effects need readback/recovery",
+        "retain original and cumulative outcome requirements",
+        "root continuation, budget or stop criteria",
+    ):
+        assert obligation in body, obligation
+
+
 @pytest.mark.parametrize("mode,limit", [
     ("full", 12800), ("compact", 7600), ("brief", 5400),
     ("thin", 4200), ("visible_goal", 4000),

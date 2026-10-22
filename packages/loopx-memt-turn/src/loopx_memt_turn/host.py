@@ -4,10 +4,10 @@ import asyncio
 from pathlib import Path
 import re
 
-from loopx.control_plane.turn_driver.host_candidate import (
-    build_result, extract_turn_authority, parse_model_json, render_prompt,
+from loopx.extensions.turn_host import (
+    build_result, exact_goal_ref, extract_turn_authority, parse_model_json, render_prompt,
+    validate_loopx_turn_host_result,
 )
-from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
 from loopx.file_lock import exclusive_file_lock, LockAcquisitionPolicy, write_json_atomic
 
 from .config import AdapterError, Config, decode_document, digest
@@ -37,6 +37,14 @@ def work_identity(request: dict) -> dict:
         raise AdapterError("signed_work_identity_required")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", identity["KEY"]):
         raise AdapterError("invalid_turn_key")
+    reference = request.get("goal_ref")
+    if not isinstance(reference, dict) or reference.get("goal_id") != identity["GOAL_ID"]:
+        raise AdapterError("exact_goal_instance_required")
+    try:
+        exact = exact_goal_ref(reference["goal_id"], reference.get("goal_instance_id", ""))
+    except (TypeError, ValueError) as error:
+        raise AdapterError("exact_goal_instance_required") from error
+    identity["GOAL_INSTANCE_ID"] = exact["goal_instance_id"]
     return identity
 
 
@@ -52,8 +60,21 @@ def persist(path: Path, document: dict) -> None:
 
 
 def scope_path(config: Config, identity: dict) -> Path:
-    scope = digest([str(Path(config.workspace).resolve()), identity["GOAL_ID"], identity["AGENT_ID"]])
+    scope = digest(["goal-instance-v1", str(Path(config.workspace).resolve()),
+                    identity["GOAL_ID"], identity["GOAL_INSTANCE_ID"], identity["AGENT_ID"]])
     return Path(config.state_dir) / scope
+
+
+def require_legacy_reconciled(directory: Path) -> None:
+    """Retain the alias format's unknown-effect stop without importing its memory."""
+    head_path = directory / "head.json"
+    head = read_state(head_path)
+    receipts = [path for path in directory.glob("*.json")
+                if re.fullmatch(r"[0-9a-f]{64}\.json", path.name)]
+    if head.get("pending_turn") or (not head and (head_path.exists() or receipts)):
+        raise AdapterError("legacy_memory_requires_operator_reconciliation")
+    if any(read_state(path).get("stage") != "completed" for path in receipts):
+        raise AdapterError("legacy_memory_requires_operator_reconciliation")
 
 
 def adopt_snapshot(head_path: Path, receipt: dict) -> None:
@@ -86,6 +107,8 @@ async def complete_tool_chain(session, tools, reply: dict, config: Config) -> di
     remaining = config.max_tool_calls
     seen_calls: set[str] = set()
     while reply.get("requires_action"):
+        if reply.get("generation_completed") is not True:
+            raise AdapterError("incomplete_generation")
         calls = reply.get("tool_calls", [])
         if not calls:
             raise AdapterError("missing_tool_calls")
@@ -153,8 +176,14 @@ async def run(request: dict, config: Config) -> dict:
         raise AdapterError("memt_disabled")
     identity = work_identity(request)
     directory = scope_path(config, identity)
-    directory.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    directory.mkdir(exist_ok=True, mode=0o700)
-    lock_target = scope_path(config, identity) / "head.json"
-    with exclusive_file_lock(lock_target, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
-        return await execute(request, config, identity)
+    legacy = Path(config.state_dir) / digest([
+        str(Path(config.workspace).resolve()), identity["GOAL_ID"], identity["AGENT_ID"],
+    ])
+    legacy.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # The old host locks this same alias cursor. Hold it through IO so an old
+    # worker cannot create an uncertain effect after the upgrade's preflight.
+    with exclusive_file_lock(legacy / "head.json", policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
+        require_legacy_reconciled(legacy)
+        directory.mkdir(exist_ok=True, mode=0o700)
+        with exclusive_file_lock(directory / "head.json", policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
+            return await execute(request, config, identity)

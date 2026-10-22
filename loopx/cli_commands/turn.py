@@ -329,6 +329,7 @@ def handle_turn_command(
                 goal_admission=strict_goal_admission,
                 operator_environ=operator_environ,
                 operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+                turn_start_hook_dispatch=turn_start_hook_dispatch,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")

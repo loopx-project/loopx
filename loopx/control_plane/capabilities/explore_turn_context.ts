@@ -61,7 +61,7 @@ function branchContext(row: JsonObject, findingSources?: Map<string, JsonObject>
 }
 /** Keep the latest scoped counterexample per linked question before its other
  * findings; recency alone must not supersede evidence on different inputs. */
-function prioritizeLinkedResults(results: JsonObject[], refs: Set<string>): JsonObject[] {
+function prioritizeLinkedResults(results: JsonObject[], refs: Set<string>, fallbackResults = results): JsonObject[] {
   const linked = results.filter(row => refs.has(String(row.node_id ?? "")));
   const refuted = new Set<string>();
   const counterexamples = linked.filter(row => {
@@ -72,7 +72,7 @@ function prioritizeLinkedResults(results: JsonObject[], refs: Set<string>): Json
   });
   const reserved = new Set(counterexamples);
   return [...counterexamples, ...linked.filter(row => !reserved.has(row)),
-    ...results.filter(row => !refs.has(String(row.node_id ?? "")))];
+    ...fallbackResults.filter(row => !refs.has(String(row.node_id ?? "")))];
 }
 export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const goal = requireNonEmptyString(params.goal_id, "goal_id");
@@ -118,7 +118,10 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   // Explicitly bound work can differ from this independent planner. Prioritize
   // its canonical links without changing candidates, scores or admission.
   const plannerResults = prioritizeLinkedResults(attachedResults, selectedRefs);
-  const writebackResults = focusedRefs.size ? prioritizeLinkedResults(plannerResults, focusedRefs) : plannerResults;
+  // Shared links must not inherit another task's planner priority. Use source
+  // recency within the focus and retain planner ordering only outside it.
+  const writebackResults = focusedRefs.size
+    ? prioritizeLinkedResults(attachedResults, focusedRefs, plannerResults) : plannerResults;
   const command = (...args: string[]) => [...route, "explore", ...args, "--goal-id", goal];
   const resultLimit = requireInteger(params.result_limit ?? 3, "result_limit");
   const resultOffset = requireInteger(params.result_offset ?? 0, "result_offset");
@@ -129,7 +132,8 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const measurementFeedback = projectExploreMeasurementFeedback(findings)
     .filter(item => resultNode === null || item.node_id === resultNode)
     .sort((a, b) => Number(focusedRefs.has(b.node_id)) - Number(focusedRefs.has(a.node_id))
-      || Number(selectedRefs.has(b.node_id)) - Number(selectedRefs.has(a.node_id)));
+      || (focusedRefs.has(a.node_id) ? 0
+        : Number(selectedRefs.has(b.node_id)) - Number(selectedRefs.has(a.node_id))));
   const resultRows = resultNode == null ? writebackResults : writebackResults.filter(row => row.node_id === resultNode);
   const nodeById = new Map(nodes.map(node => [node.node_id, node]));
   // Bind current Todo links to the results on this page. Include the full

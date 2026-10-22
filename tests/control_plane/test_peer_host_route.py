@@ -189,8 +189,9 @@ def test_withheld_and_over_budget_candidates_cannot_hide_a_second_binding(tmp_pa
     assert result["selected_route"] is None
 
 
-def test_real_cli_uses_read_only_host_store_and_pins_one_request_after_archived_history(tmp_path):
-    registry = _registry(tmp_path, [_binding("old"), _binding("current")])
+@pytest.mark.parametrize("surface", ["codex-app", "codex-app-ssh"])
+def test_real_cli_uses_source_host_store_and_pins_one_request_after_archived_history(tmp_path, surface):
+    registry = _registry(tmp_path, [_binding("old", host_surface=surface), _binding("current", host_surface=surface)])
     home = tmp_path / "codex-home"
     home.mkdir()
     rollout = home / "current.jsonl"

@@ -58,3 +58,11 @@
 @keyframes analysis-request-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .analysis-spin { animation: none; } }
 @media (max-width: 640px) { .research-analysis { padding: 16px; } .analysis-episode > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; } .analysis-episode-verdicts { grid-column: 1; grid-row: 2; flex-direction: column; gap: 0; } .analysis-episode > summary > svg { grid-column: 2; grid-row: 1 / 3; } .analysis-episode-context { grid-template-columns: 1fr; gap: 12px; } .analysis-method dl { grid-template-columns: 1fr; gap: 2px; } .analysis-method dd { margin-bottom: 8px; } .analysis-pack-choice { flex-direction: column; align-items: stretch; } }
+
+/* Readback has one status surface, shared by the summary and its detail. */
+.analysis-read-error,.analysis-read-empty{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-block:12px;color:var(--pw-muted)}
+.analysis-read-error>button,.analysis-read-empty>button{display:inline-flex;align-items:center;gap:4px;min-height:44px;border:1px solid var(--pw-line);border-radius:6px;padding:8px 12px;color:var(--pw-text);background:var(--pw-bg);font:inherit;cursor:pointer}
+.analysis-read-error>button:disabled,.analysis-read-empty>button:disabled{opacity:.5;cursor:default}
+.analysis-read-loading{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;padding-block:16px}
+.analysis-read-loading>span{height:5rem;border-radius:6px;background:var(--pw-line)}
+@media(max-width:640px){.analysis-read-loading{grid-template-columns:repeat(2,minmax(0,1fr))}}

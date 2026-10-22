@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 
 from loopx.status import collect_status
 from loopx.control_plane.todos.list_readback import list_goal_todos
+from loopx.control_plane.testing.canary_harness import import_fixture_authority
 
 
 def main() -> None:
@@ -36,11 +37,13 @@ def main() -> None:
             "goals": [{"id": "progress-projection", "repo": str(root), "state_file": state.name,
                 "domain": "general", "status": "active", "authority_sources": [],
                 "adapter": {"kind": "test_v0", "status": "connected-read-only"}}]}), encoding="utf-8")
+        # Status reads canonical authority; Markdown is only this fixture's input.
+        import_fixture_authority(registry, "progress-projection")
         payload = collect_status(registry_path=registry, runtime_root_override=str(root / "runtime"),
             limit=5)
         item = next(item for item in payload["attention_queue"]["items"] if item["goal_id"] == "progress-projection")
         assert item["user_todos"]["open_count"] == 21
-        assert len(item["user_todos"]["items"]) == 12
+        assert len(item["user_todos"]["items"]) == 21
         assert item["project_asset"]["user_todos"]["open"] == 21
         assert len(item["project_asset"]["user_todos"]["items"]) == 3
         if args.full:

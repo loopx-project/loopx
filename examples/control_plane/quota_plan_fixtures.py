@@ -346,7 +346,8 @@ def write_cli_fixture(root: Path, *, scoped_agents: bool = False) -> tuple[Path,
             "---\n\n"
             f"# {goal_id}\n\n"
             "## Next Action\n\n"
-            f"- continue {goal_id}\n",
+            f"- continue {goal_id}\n\n"
+            "## Agent Todo\n",
             encoding="utf-8",
         )
         goal_record = {

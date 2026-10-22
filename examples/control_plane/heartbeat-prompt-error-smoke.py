@@ -73,9 +73,8 @@ def main() -> int:
     assert "Copy this task body into a Codex App heartbeat automation." not in markdown, markdown
     assert "````text\n\n````" not in markdown, markdown
     assert f"- goal_id: `{GOAL_ID}`" in markdown, markdown
-    assert f"- active_state: `{ACTIVE_STATE}`" in markdown, markdown
+    assert f"- active_state = resolved_active_state: `{ACTIVE_STATE}`" in markdown, markdown
     assert "- active_state_source: `explicit`" in markdown, markdown
-    assert f"- resolved_active_state: `{ACTIVE_STATE}`" in markdown, markdown
     assert f"- agent_scopes: `['{SCOPE}']`" in markdown, markdown
     assert "- thin: `True`" in markdown, markdown
     assert "- full:" not in markdown, markdown

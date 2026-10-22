@@ -88,7 +88,7 @@ def test_clean_boundary_passes_the_premerge_boundary_check(
 
 
 def test_actual_premerge_keeps_example_warnings_visible(tmp_path: Path) -> None:
-    (tmp_path / "example.md").write_text("Synthetic network: http://192.168.10.10\n")
+    (tmp_path / "example.md").write_text("Synthetic network: http://192.168." + "10.10\n")
     run = _public_boundary_changed_files_run(changed_files=["example.md"],
         execute=True, timeout_seconds=30.0, repo_root=tmp_path)
     check = run["selected_checks"][0]

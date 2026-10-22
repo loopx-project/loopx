@@ -34,7 +34,7 @@ def write_state(project: Path, goal_id: str, title: str) -> str:
         "---\n\n"
         f"# {title}\n\n"
         "## Next Action\n\n"
-        "- Continue the next bounded segment.\n",
+        "- Continue the next bounded segment.\n\n## Agent Todo\n",
         encoding="utf-8",
     )
     return state_file

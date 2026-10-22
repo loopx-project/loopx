@@ -51,6 +51,10 @@ def _review(*, area="product_runtime"):
                             "inspected_path": "Synthetic formatter and its sole internal caller."}
                 for dimension in ("long_horizon", "user_experience")
             }
+            row["outcome_impact"]["user_experience"]["visual_review"] = {
+                "decision": "not_applicable",
+                "reason": "Inspected internal formatter and caller; no rendered surface changes.",
+            }
         if key == "observable_semantics":
             row["decision_text_assessment"] = {"verdict": "not_applicable",
                 "checked_scope": "Synthetic local formatter and its unchanged callers.",
@@ -485,6 +489,123 @@ def test_docs_inapplicability_still_names_the_inspected_path():
     packet, result = _review(area="public_docs")
     del result["evidence"]["problem_context"]["outcome_impact"]["user_experience"]["inspected_path"]
     assert not check_review_result(packet, result)["ok"]
+
+
+def _visual_review():
+    packet, result, experience = _outcome_review("user_experience")
+    experience["decision"] = "improved"
+    visual = {
+        "decision": "inspected",
+        "reason": "主读数独立成组，重复方法说明合并到一个入口；展开后正文保持可读字号。",
+        "content_scope": "Synthetic populated report with 24 long bilingual rows and mixed stale, failed and unknown values.",
+        "expanded_content": True,
+        "responsive_layout": True,
+        "unverified_scope": "仅验证打包页面；未验证安装后的 App，不声称真实用户理解程度改善。",
+        "observations": [
+            {
+                "state": state, "narrow": narrow,
+                "viewport": "390x844" if narrow else "1440x900",
+                "method": "visual_inspection",
+                "observation": "Synthetic declaration: full page values precede shared method details; selected long rationale remains readable with failure visible.",
+                "evidence_ref": f"capture:synthetic-report-{state}-{narrow}",
+                "revision": "a" * 40,
+                "build_boundary": "Packaged synthetic page; this fixture does not execute a visual review.",
+            }
+            for state in ("default", "expanded") for narrow in (False, True)
+        ],
+    }
+    experience["visual_review"] = visual
+    result["review_body"] = result["review_body"].replace(
+        "## 我的整体评价", "## 我的整体评价\n\n" + visual["reason"] + "\n\n" + visual["unverified_scope"])
+    return packet, result, visual
+
+
+def test_declared_visual_coverage_is_not_proof_of_readability():
+    packet, result, _ = _visual_review()
+    checked = check_review_result(packet, result)
+    assert checked["ok"] and checked["approval_consistent"]
+    assert checked["evidence_truth_verified"] is False
+
+
+@pytest.mark.parametrize("omission", ["assessment", "functional_only", "expanded", "narrow_expanded"])
+def test_functional_or_folded_checks_cannot_approve_expanded_readability(omission):
+    packet, result, visual = _visual_review()
+    if omission == "assessment":
+        del result["evidence"]["problem_context"]["outcome_impact"]["user_experience"]["visual_review"]
+    elif omission == "functional_only":
+        for observation in visual["observations"]:
+            observation.update(method="automated_check", observation="All data, folded defaults and overflow assertions pass.")
+    elif omission == "expanded":
+        visual["observations"] = [row for row in visual["observations"] if row["state"] == "default"]
+    else:
+        visual["observations"] = [row for row in visual["observations"] if not (row["state"] == "expanded" and row["narrow"])]
+    checked = check_review_result(packet, result)
+    assert not checked["ok"]
+    assert any("visual_review:" in blocker for blocker in checked["approval_blockers"])
+    result["verdict"] = "REQUEST_CHANGES"
+    result["review_body"] = result["review_body"].replace("English verdict: APPROVE", "English verdict: REQUEST_CHANGES")
+    assert check_review_result(packet, result)["ok"]
+
+
+@pytest.mark.parametrize("decision", ["regression", "not_yet_proven"])
+def test_visual_gap_cannot_be_overridden_by_parent_improved(decision):
+    packet, result, visual = _visual_review()
+    visual["decision"] = decision
+    checked = check_review_result(packet, result)
+    assert not checked["ok"]
+    assert "problem_context:outcome_impact:user_experience:visual_review:blocking_decision" in checked["approval_blockers"]
+
+
+@pytest.mark.parametrize("field", ["revision", "build_boundary", "evidence_ref", "observation", "narrow"])
+def test_visual_observation_names_its_evidence_boundary(field):
+    packet, result, visual = _visual_review()
+    del visual["observations"][-1][field]
+    assert not check_review_result(packet, result)["ok"]
+
+
+@pytest.mark.parametrize("field", ["reason", "unverified_scope"])
+def test_visual_judgment_must_be_visible_in_published_review(field):
+    packet, result, visual = _visual_review()
+    result["review_body"] = result["review_body"].replace(visual[field], "")
+    assert f"review_body:visual_not_published:{field}" in check_review_result(packet, result)["errors"]
+
+
+def test_risk_selected_visual_scope_does_not_require_every_viewport():
+    packet, result, visual = _visual_review()
+    visual.update(expanded_content=False, responsive_layout=False)
+    visual["observations"] = [visual["observations"][0]]
+    assert check_review_result(packet, result)["ok"]
+    visual["observations"][0].update(revision="b" * 40, observation="Unchanged capture reused: current diff changes only the error text; geometry/data/selected viewport and rendered default state are unchanged.")
+    assert check_review_result(packet, result)["ok"]
+
+
+def test_visual_applicability_cannot_contradict_parent():
+    packet, result, _ = _visual_review()
+    result["evidence"]["problem_context"]["outcome_impact"]["user_experience"]["decision"] = "not_applicable"
+    assert not check_review_result(packet, result)["ok"]
+
+
+def test_nonvisual_review_requires_reason_but_no_visual_execution():
+    packet, result = _review(area="public_docs")
+    assert check_review_result(packet, result)["ok"]
+    visual = result["evidence"]["problem_context"]["outcome_impact"]["user_experience"]["visual_review"]
+    visual["reason"] = " "
+    assert not check_review_result(packet, result)["ok"]
+
+
+def test_visual_rejection_through_real_cli(tmp_path, capsys):
+    packet, result, visual = _visual_review()
+    packet_path, result_path = tmp_path / "packet.json", tmp_path / "review.json"
+    packet_path.write_text(json.dumps(packet))
+    visual["observations"] = []
+    result_path.write_text(json.dumps(result))
+    args = ["--format", "json", "pr-review", "--check-result", str(result_path), "--packet", str(packet_path)]
+    assert main(args) == 1
+    assert json.loads(capsys.readouterr().out)["approval_consistent"] is False
+    _, result, _ = _visual_review()
+    result_path.write_text(json.dumps(result))
+    assert main(args) == 0
+    assert json.loads(capsys.readouterr().out)["approval_consistent"] is True
 
 
 def _scoped_review():

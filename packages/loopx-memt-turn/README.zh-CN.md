@@ -14,7 +14,7 @@ MemT 客户端使用 Python，所以此包作为 Python 传输适配器；没有
 
 ## 安装与许可证
 
-需要 Python 3.11+、包含 `turn_driver.host_candidate` 的已审阅 LoopX 源码，
+需要 Python 3.11+、含受支持 `extensions.turn_host` 接缝的 LoopX 2.1.0+，
 以及独立部署的 Nano SGLang 服务。GPU 部署按上游
 [推理指南](https://github.com/MemTensor/MemT-1.0/blob/e75c13d090a6a9d34b29146d901bd84323185f24/inference/README.md)
 操作。本地客户端只加载匹配的 tokenizer 和配置，不加载模型权重；首版仅支持 Nano。
@@ -80,7 +80,7 @@ HTTP 只允许回环地址。
 
 MCP 服务必须自行强制执行当前签名请求的资源与操作范围。服务收到
 `LOOPX_TURN_KEY`、`LOOPX_TURN_GOAL_ID`、`LOOPX_TURN_AGENT_ID`、
-`LOOPX_TURN_TODO_ID` 与 `LOOPX_TURN_WORKSPACE`；这些是范围输入，不是身份认证。
+`LOOPX_TURN_GOAL_INSTANCE_ID`、`LOOPX_TURN_TODO_ID` 与 `LOOPX_TURN_WORKSPACE`；这些是范围输入，不是身份认证。
 适配器不转发模型服务凭据或任意父进程环境变量。它不提供操作系统沙箱。
 不要选用仅凭模型参数或历史记忆就授予无限制操作的服务。
 
@@ -102,7 +102,16 @@ loopx turn run-once --goal-id demo --agent-id analyst --todo-id todo_demo \
 
 ## 持久化、失败与恢复
 
-记忆按解析后的工作区、Goal 和 Agent 隔离。新 Turn 创建 MemT 会话，导入最近
+记忆按解析后的工作区、精确 Goal 生命周期和 Agent 隔离。请求必须携带 executor
+给出的匹配 `goal_ref` 及合法 `goal_instance_id`；只有 alias 或实例不匹配时，在
+任何 IO 前失败。既有仅 alias 的记忆目录不会自动导入或删除；其中 pending 效果
+须单独核对，新实例从空记忆开始。在任何 provider 或 MCP IO 前，宿主同时持有旧
+alias 游标锁和新实例锁。旧目录的 pending head、未完成或孤立回执会返回
+`legacy_memory_requires_operator_reconciliation`；无法读取的状态也拒绝继续。
+旧记录无法标明 Goal 生命周期，因此换实例不能绕过这道门。先停旧 worker，沿
+既有 Turn 恢复 owner 核对精确效果，再显式选择新 `state_dir`；不得删除原证据。
+旧的已完成记录保留原样、不导入，也不阻止新实例从空记忆开始。
+新 Turn 创建 MemT 会话，导入最近
 确认的快照，执行模型/工具链，导出新快照，关闭会话，再写回本地游标。
 服务重启后使用新的 epoch 和显式快照导入。服务端快照目录须持久保存；
 本地回执不包含记忆张量。适配器不记录对话原文、token 数组或模型推理；
@@ -115,6 +124,13 @@ loopx turn run-once --goal-id demo --agent-id analyst --todo-id todo_demo \
 保存时，完整编码 Turn 必须能放入服务端 prefill 限额。溢出、输出截断或候选格式
 错误时显式失败；不会静默裁剪或伪造成功。配置限额约束单次模型请求与工具次数；
 进程总时限由外层 Turn 监督器负责。
+每一轮工具调用（包括 continuation）都须先确认生成完整，再派发工具。截断轮不能
+执行本轮工具或发布快照；之前已经发生的工具效果仍须按原恢复流程核对。
+
+MCP SDK 会将 stdio 子进程脱离父进程组。因此，原始 stdio relay 将实际工具交给
+LoopX 已有 TypeScript 进程监督器。已验证的 POSIX 路径在父进程 EOF、取消或
+父进程强制退出后，先终止工具，再返回监督结果。这不是沙箱，不能约束工具主动
+再次脱离监督。Windows 进程树回收仍是尽力而为，本包未证明其严格停止边界。
 
 重复的完整请求直接返回已存候选，不重复执行模型或工具。同一 Turn key 下请求
 变化、操作员配置变化或工具 schema 变化时失败。重放旧的完整 Turn 不会将新的

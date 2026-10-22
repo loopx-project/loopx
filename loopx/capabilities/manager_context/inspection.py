@@ -19,7 +19,7 @@ READ_TOOL = {
     "name": TOOL_NAME,
     "description": (
         "Read authorized LoopX Core evidence on demand: the global Goal portfolio, "
-        "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents to search before reporting a missing worker; delivery targets are not the discovery inventory. Use view=agent_route with exact goal_id and agent_id to observe an existing local host binding before asking the user for a task link. A readable route is not execution readiness or delivery authority. "
+        "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents to search before reporting a missing worker; delivery targets are not the discovery inventory. Use view=agent_route with exact goal_id and agent_id to observe a binding on the selected source host before asking the user for a task link. A readable route is not execution readiness or delivery authority. "
         "For a current-work overview, start with the index's bounded Agent Todo summaries; "
         "use view=portfolio for source and coverage, and view=todos for needed detail. "
         "Delivery history answers past results, not live activity. "
@@ -45,6 +45,8 @@ READ_TOOL = {
                          "description": "Agent_route only, with goal_id: exact registered Agent to locate. Search view=agents first; does not delegate or create an execution driver."},
             "thread_link": {"type": "string", "minLength": 1,
                             "description": "Agent_route only: optional exact host task link already supplied by the user. Do not guess a link to resolve ambiguous bindings."},
+            "host_surface": {"type": "string", "minLength": 1,
+                             "description": "Agent_route only: optionally narrow to an observed binding's exact host surface. This does not select another machine or grant delivery."},
             "todo_id": {"type": "string", "minLength": 1,
                         "description": "Todos only, with goal_id: read one exact record including its complete permitted text. Recover content_truncated excerpts; a completed record does not authorize new work."},
             "query": {"type": "string", "maxLength": 200, "description": "Agents only: case-insensitive text match on identity and declared responsibility. Omit to browse all permitted registrations."},
@@ -109,7 +111,7 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
         rejected.append("view:must_be_one_of_" + ",".join(READ_VIEWS))
     if "request_id" in arguments and view != "handoffs":
         rejected.append("request_id:only_for_view_handoffs")
-    for name in ("agent_id", "thread_link"):
+    for name in ("agent_id", "thread_link", "host_surface"):
         if name in arguments:
             if view != "agent_route":
                 rejected.append(f"{name}:only_for_view_agent_route")
@@ -405,9 +407,6 @@ class ManagerInspection:
             self.record(result)
             return result
         if source_id != "local":
-            if view == "agent_route":
-                return {"ok": False, "error": "remote_agent_route_not_supported",
-                        "detail": "Observe bindings on the trusted source host with resolve-peer-route; a local host observation cannot qualify a remote route."}
             if not source_id.startswith("ssh:") or view == "handoffs" or (view not in {"portfolio", "agents"} and not goal_id):
                 return {"ok": False, "error": "invalid_remote_read"}
             from .ssh_evidence import read_remote
@@ -430,7 +429,8 @@ class ManagerInspection:
 
                 result = resolve_peer_host_route(self.registry_path, goal_id=goal_id,
                                                 agent_id=arguments["agent_id"],
-                                                thread_link=arguments.get("thread_link"))
+                                                thread_link=arguments.get("thread_link"),
+                                                host_surface=arguments.get("host_surface"))
                 if not self.scope_valid():
                     return {"ok": False, "error": "authorization_changed"}
                 self.record(result)

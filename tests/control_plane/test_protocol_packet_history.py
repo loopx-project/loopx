@@ -90,6 +90,7 @@ def test_release_decision_and_stored_envelope_keep_exact_signature(
         "required_reads": [],
         "write_scope": ["tests/**"],
         "workspace_guard": {},
+        "boundary": {"rule": "stay_in_scope_or_stop"},
     }
     assert turn.observation.protocol_summary == expected_summary
     assert turn.observation.should_run is (not absent)

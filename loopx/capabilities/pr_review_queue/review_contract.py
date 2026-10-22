@@ -7,9 +7,10 @@ from typing import Any
 from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
 from .approval_closeout import approval_closeout_contract
 from .architecture_assessment import ARCHITECTURE_ASSESSMENT
+from .visual_assessment import VISUAL_ASSESSMENT
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 22
+REVIEW_POLICY_REVISION = 23
 
 # Agent-consumed prose is observable behavior even when JSON shape is stable.
 # Reuse the existing semantic verdicts; this is evidence within the same review.
@@ -142,6 +143,7 @@ OUTCOME_IMPACT_ASSESSMENT = {
     "fields": ["decision", "reason", "inspected_path"],
     "applicable_fields": ["before_after", "evidence_refs"],
     "blocking_decisions": ["regression", "not_yet_proven"],
+    "visual_review": VISUAL_ASSESSMENT,
     "rule": (
         "Judge whether the whole PR preserves sustained useful work and the user's ability to reach "
         "the intended outcome, even when its local feature works. For long_horizon, follow the "

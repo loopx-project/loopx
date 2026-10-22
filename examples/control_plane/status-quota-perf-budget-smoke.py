@@ -142,7 +142,7 @@ def run_cli(registry_path: Path, *args: str) -> tuple[dict[str, Any], float]:
     return payload, elapsed
 
 
-def assert_public_scan(payload: dict[str, Any]) -> None:
+def assert_public_scan_is_deferred(payload: dict[str, Any]) -> None:
     checks = "\n".join(
         str(item)
         for item in [
@@ -150,7 +150,7 @@ def assert_public_scan(payload: dict[str, Any]) -> None:
             *((payload.get("contract") or {}).get("checks") or []),
         ]
     )
-    assert "public boundary scan clean: 1 files" in checks, payload
+    assert "public boundary scan deferred for status hot path" in checks, payload
 
 
 def main() -> int:
@@ -182,7 +182,7 @@ def main() -> int:
             AGENT_ID,
         )
         assert status_payload.get("ok") is True, status_payload
-        assert_public_scan(status_payload)
+        assert_public_scan_is_deferred(status_payload)
         assert status_elapsed <= STATUS_BUDGET_SECONDS, (
             status_elapsed,
             STATUS_BUDGET_SECONDS,
@@ -211,21 +211,18 @@ def main() -> int:
         )
 
         public_doc.write_text(
-            f"Public leak probe must be caught by quota scan: {PRIVATE_DOC_MARKER}\n",
+            f"Public leak probe must be caught by explicit outgoing check: {PRIVATE_DOC_MARKER}\n",
             encoding="utf-8",
         )
         leak_payload, _leak_elapsed, leak_returncode, leak_stderr = run_cli_result(
             registry_path,
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_ID,
+            "check",
+            "--scan-path",
+            str(public_doc),
             check=False,
         )
-        assert leak_returncode != 0 or leak_payload.get("status_health_ok") is False, leak_payload
-        assert "status or contract health" in json.dumps(leak_payload) + leak_stderr, leak_payload
+        assert leak_returncode != 0 and leak_payload.get("ok") is False, leak_payload
+        assert "private_doc_url" in json.dumps(leak_payload) + leak_stderr, leak_payload
 
         public_doc.write_text(
             "Public smoke fixture for status/quota perf budgets.\n",
@@ -279,7 +276,7 @@ def main() -> int:
             for item in error_diagnostics
             if isinstance(item, dict)
         ), malformed_status_payload
-        assert_public_scan(malformed_status_payload)
+        assert_public_scan_is_deferred(malformed_status_payload)
         assert malformed_status_elapsed <= STATUS_BUDGET_SECONDS, (
             malformed_status_elapsed,
             STATUS_BUDGET_SECONDS,

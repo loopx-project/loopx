@@ -43,6 +43,10 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
         help="Expected captured solver session identity; required with --usage-jsonl.",
     )
     register.add_argument(
+        "--include-incomplete-usage", action="store_true",
+        help="Observe persisted counters through an unfinished final Turn; requires usage capture. Does not establish complete cost or solver termination.",
+    )
+    register.add_argument(
         "--native-outcomes-json",
         help="Optional provider-recorded native outcomes, relative to source-root; same pack scope, never analyzer scores.",
     )
@@ -92,6 +96,7 @@ def _handle_benchmark_trajectory_command(
                 title=args.title,
                 usage_jsonl=args.usage_jsonl,
                 usage_session_id=args.usage_session_id,
+                include_incomplete_usage=args.include_incomplete_usage,
                 native_outcomes_json=args.native_outcomes_json,
                 base_pack_id=args.base_pack_id,
             )

@@ -327,6 +327,7 @@ def main() -> int:
         assert features["todo_replan_cadence"]["default"] == {
             "count_unit": "effective_turns",
             "count": 6,
+            "planning_horizon_goal": True,
         }
         # Goal-scoped cadence is omitted when no explicit override is present;
         # the machine default remains discoverable through the default field.

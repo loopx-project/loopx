@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (44)
+## Accepted (45)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -40,6 +40,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Goal Direction Baseline (v0)](goal-direction-baseline-v0.md) | Accepted | none | — |
 | [Design follow-up: Goal continuity across restart and replacement](goal-immutability-coherence-defense-v0.md) | Accepted | none | — |
 | [Goal Instance Identity and Orphan Recovery (v0)](goal-instance-identity-and-orphan-recovery-v0.md) | Accepted | none | — |
+| [RFC: Persistent Goal outcome refinement (v0)](goal-outcome-refinement-v0.md) | Accepted | none | — |
 | [RFC: Goal-scoped Capability Portfolio and Connector Lifecycle (v0)](goal-scoped-capability-portfolio-v0.md) | Accepted | none | — |
 | [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | Accepted | none | — |
 | [RFC: Goal Workspace Surface v0](goal-workspace-surface-v0.md) | Accepted | none | — |

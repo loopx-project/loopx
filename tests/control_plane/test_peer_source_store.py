@@ -2,6 +2,7 @@
 
 import json
 import os
+from contextlib import contextmanager
 import subprocess
 import sys
 import threading
@@ -83,7 +84,7 @@ def source_request(tmp_path, monkeypatch, *, provider="file", colocated=False):
 @pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
 @pytest.mark.parametrize("publication", ["transcript", "provider"])
 def test_source_revocation_fences_original_return(tmp_path, monkeypatch, provider, publication):
-    from loopx import file_lock
+    from loopx.control_plane.collaboration import source_policy_fence
     from loopx.capabilities.manager_context import configure_delivery_target
     from loopx.capabilities.manager_context.roundtrip import report
     from loopx.control_plane.collaboration.inbox import acknowledge
@@ -96,7 +97,7 @@ def test_source_revocation_fences_original_return(tmp_path, monkeypatch, provide
            registry=registry, caller_goal_ref=goal_ref)
     entered, release, attempted, revoked = [threading.Event() for _ in range(4)]
     append = store.append_message
-    kernel_acquire = file_lock._try_acquire_kernel_lock
+    thread_lock = source_policy_fence._thread_lock
     revoker, first_attempt, sent = [], [], []
 
     def pause():
@@ -114,12 +115,24 @@ def test_source_revocation_fences_original_return(tmp_path, monkeypatch, provide
         sent.append(revoked.is_set())
         return {"reply_verified": True, "verification_performed": True}
 
-    def observe_lock(handle):
-        acquired = kernel_acquire(handle)
+    @contextmanager
+    def observe_lock(path):
+        lock = thread_lock(path)
         if revoker == [threading.get_ident()] and not first_attempt:
+            # Source writers first contend on the real in-process fence, before
+            # entering the kernel fence. Observe that owner instead of waiting
+            # for a syscall which correctly cannot happen until publication ends.
+            acquired = lock.acquire(blocking=False)
             first_attempt.append(acquired)
             attempted.set()
-        return acquired
+            if acquired:
+                try:
+                    yield
+                finally:
+                    lock.release()
+                return
+        with lock:
+            yield
 
     def revoke():
         revoker.append(threading.get_ident())
@@ -131,7 +144,7 @@ def test_source_revocation_fences_original_return(tmp_path, monkeypatch, provide
         return result
 
     monkeypatch.setattr(store, "append_message", append_message)
-    monkeypatch.setattr(file_lock, "_try_acquire_kernel_lock", observe_lock)
+    monkeypatch.setattr(source_policy_fence, "_thread_lock", observe_lock)
     with ThreadPoolExecutor(max_workers=2) as pool:
         delivery = pool.submit(drain, root, registry, store, sender)
         try:

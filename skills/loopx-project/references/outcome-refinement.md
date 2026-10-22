@@ -9,6 +9,22 @@ outcome objective; subordinate outcomes never replace root continuation, budget
 or stop criteria, including in open-ended research. A local success or plateau
 is not campaign completion. Existing legitimate stops/waits still apply.
 
+## Current operating objective
+
+When explicit user direction makes the recorded Goal objective obsolete, prepare
+an objective proposal with `goal-acceptance prepare-objective`, the proposed
+objective, reason and original user source reference. Reuse a matching pending
+proposal and its existing owner-apply route; do not silently edit the active
+state or infer authorization from peer messages. Progress, artifact revisions,
+diagnostics and Todo routing changes alone do not require an objective revision.
+
+After owner apply, each Agent adopts the current objective through
+`goal-acceptance adopt-objective` with its exact revision, digest and inspected
+`objective_work_digest`. Read the command's current schema before authoring the
+proposal or adoption. Adoption covers only that Agent's Todo/Vision route;
+another peer cannot acknowledge for it, and no unanimous approval is required.
+The current canonical objective takes precedence over superseded source text.
+
 ## Reuse context and batch changes
 
 On a material user deliverable/correction, reuse the complete `goal_acceptance`

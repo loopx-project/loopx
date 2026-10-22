@@ -38,7 +38,7 @@ class Source(GoalSource):
         events += [build_explore_edge_event(goal_id=self.goal_id,from_node='route'+str(i),to_node='route'+str(i+1),edge_type='depends_on',recorded_at='2026-01-01T23:%02d:00Z'%(i*30)) for i in range(2)]
         return events
 assets=pathlib.Path(sys.argv[2])
-servers=[RuntimeWorkspaceServer(Source(n),assets) for n in ('Retained','Fresh','Distinct')]
+servers=[RuntimeWorkspaceServer(Source(n),assets,analysis_runtime_root=pathlib.Path(sys.argv[1]).parent / "analysis") for n in ('Retained','Fresh','Distinct')]
 catalog=[dict(id=s.source.id,label=s.source.label,status_url=s.status_url) for s in servers]
 for s in servers:
     s.catalog=catalog
@@ -61,12 +61,47 @@ try {
   page.on("pageerror", error => errors.push(String(error)));
   const url = new URL("/chat/", catalog[0].status_url);
   url.search = new URLSearchParams({ goalId: "same-goal", view: "overview", statusUrl: process.env.LOOPX_RUNTIME_READER_BEFORE === "1" ? catalog[0].status_url : "/status.json" });
+  let holdAnalysis = true, failAnalysis = false, releaseAnalysis, readStarted;
+  let analysisWrites = 0;
+  await page.route("**/api/chat/research-analysis?*", async route => {
+    if (route.request().method() !== "GET") {analysisWrites++; return route.abort();}
+    if (holdAnalysis) {readStarted(); await new Promise(resolve => {releaseAnalysis = resolve;});}
+    if (failAnalysis) return route.fulfill({status:503, json:{error:"Synthetic analysis transport failure"}});
+    return route.continue();
+  });
   await page.goto(url.toString());
   await page.getByRole("heading", { name: "Retained research", exact: true }).waitFor();
   if (process.env.LOOPX_RUNTIME_READER_BEFORE === "1") {
     await page.screenshot({path:resolve(output,"before-desktop.png")});
   } else {
+    const initialRead = new Promise(resolve => {readStarted = resolve;});
     await page.locator(".personal-goal-tabs").getByRole("button", {name:"研究", exact:true}).click();
+    await initialRead;
+    await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
+    const history = page.getByRole("region", {name:"研究历程",exact:true});
+    await page.screenshot({path:resolve(output,"analysis-pending-desktop.png")});
+    assert.doesNotMatch(await history.innerText(),/尚未接入深度分析|尚无可分析/,
+      "A pending read does not prove an analysis connection is absent");
+    await history.getByRole("status",{name:"正在读取分析"}).waitFor();
+    failAnalysis = true; holdAnalysis = false; releaseAnalysis();
+    const failure = history.getByRole("alert");
+    await failure.waitFor();
+    assert.equal(await history.locator(".research-analysis").count(),0,"Retry is available without opening the analysis panel");
+    await page.screenshot({path:resolve(output,"analysis-failure-desktop.png")});
+    const retryRead = new Promise(resolve => {readStarted = resolve;});
+    holdAnalysis = true;
+    await failure.getByRole("button",{name:"重试读取",exact:true}).click();
+    await retryRead;
+    assert.equal(await failure.getByRole("button",{name:"重试读取",exact:true}).isDisabled(),true);
+    assert.doesNotMatch(await history.innerText(),/尚未接入深度分析|尚无可分析/);
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(output,"analysis-retry-phone.png")});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    failAnalysis = false; holdAnalysis = false; releaseAnalysis();
+    await failure.waitFor({state:"hidden"});
+    await history.locator(".analysis-read-loading").waitFor({state:"hidden"});
+    assert.equal(analysisWrites,0,"Read recovery never starts an analysis");
+    await page.setViewportSize({width:1512,height:982});
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     assert.equal(new URL(new URL(page.url()).searchParams.get("statusUrl")).searchParams.get("source_namespace"),new URL(catalog[0].status_url).searchParams.get("source_namespace"),"the initial relative entry binds its physical source before subsequent navigation");
     assert.equal(await page.getByText("运行来源 · 只读", {exact:true}).count(), 1);
@@ -156,6 +191,7 @@ try {
     await page.setViewportSize({width:390,height:844});
     await page.screenshot({path:resolve(output,"phone.png")});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    assert.equal(analysisWrites,0);
     assert.deepEqual(errors,[]);
   }
   console.log("runtime source workspace browser smoke: ok");

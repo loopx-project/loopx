@@ -19,7 +19,7 @@ def test_persisted_local_evidence_is_omitted_from_public_lifecycle(tmp_path, loc
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
-    state.write_text("---\nstatus: active\n---\n\n# Goal\n", encoding="utf-8")
+    state.write_text("---\nstatus: active\n---\n\n# Goal\n\n## Agent Todo\n", encoding="utf-8")
     registry = project / "registry.json"
     registry.write_text(json.dumps({
         "schema_version": 1, "common_runtime_root": str(runtime),

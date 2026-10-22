@@ -169,7 +169,13 @@ def test_generic_task_bodies_follow_user_language_without_forcing_chinese() -> N
         body = renderer(**kwargs)
         expected_policy = (
             LANGUAGE_POLICY_THIN
-            if renderer in (render_brief_heartbeat_task_body, render_thin_heartbeat_task_body)
+            if renderer in (
+                render_brief_heartbeat_task_body,
+                render_thin_heartbeat_task_body,
+                render_visible_goal_task_body,
+                render_traex_visible_goal_task_body,
+                render_ark_managed_agent_goal_task_body,
+            )
             else LANGUAGE_POLICY
         )
         assert expected_policy in body, renderer.__name__
@@ -219,7 +225,7 @@ def test_language_policy_preserves_blocker_and_native_goal_continuation() -> Non
         body = renderer(**kwargs)
         assert "After settlement recheck quota" in body, renderer.__name__
         assert "should_run=false` + terminal no-follow-up" in body, renderer.__name__
-        assert "otherwise obey the next action or wait guidance" in body, renderer.__name__
+        assert "else next action/wait" in body, renderer.__name__
 
 
 def test_heartbeat_recommendation_mirrors_execution_obligation_in_replan() -> None:

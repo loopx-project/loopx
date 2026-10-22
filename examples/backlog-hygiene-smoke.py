@@ -57,7 +57,7 @@ def write_fixture(
         agent_todo_lines.append(
             "- [ ] [P1] Mirror durable follow-up work into Agent Todo before scheduling.\n"
         )
-    agent_todo_section = "\n## Agent Todo\n\n" + "".join(agent_todo_lines) if agent_todo_lines else ""
+    agent_todo_section = "\n## Agent Todo\n\n" + "".join(agent_todo_lines)
     archive_section = ""
     if archived_done_todos:
         archive_section = "\n## Completed Work Archive\n\n" + "".join(
@@ -136,7 +136,10 @@ def assert_hidden_backlog_warning() -> None:
         guard = run_cli("quota", "should-run", "--goal-id", GOAL_ID, registry_path=registry_path, runtime=runtime)
         assert guard["should_run"] is True, guard
         assert guard["backlog_hygiene_warning"] == warning, guard
-        assert "agent_todo_summary" not in guard, guard
+        assert guard["agent_todo_summary"]["open_count"] == 0, guard
+        assert guard["effective_action"] == "state_projection_gap_repair", guard
+        assert guard["normal_delivery_allowed"] is False, guard
+        assert guard["execution_obligation"]["must_attempt_work"] is True, guard
 
 
 def assert_open_agent_todo_suppresses_warning() -> None:

@@ -52,6 +52,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
                 "",
                 "- Stay quiet until owner evidence changes.",
                 "",
+                "## Agent Todo",
+                "",
             ]
         )
         + "\n",

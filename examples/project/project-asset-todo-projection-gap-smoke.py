@@ -78,6 +78,7 @@ def run_cli(
     runtime: Path,
     *args: str,
     output_format: str = "json",
+    check: bool = True,
 ) -> dict | str:
     result = subprocess.run(
         [
@@ -93,7 +94,7 @@ def run_cli(
             *args,
         ],
         cwd=REPO_ROOT,
-        check=True,
+        check=check,
         capture_output=True,
         text=True,
     )
@@ -141,19 +142,27 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="loopx-project-asset-todo-gap-") as raw_tmp:
         registry_path, runtime = write_fixture(Path(raw_tmp))
+        incomplete = run_cli(registry_path, runtime, "status", check=False)
+        assert incomplete["ok"] is False, incomplete
+        assert any("missing required Todo section(s): Agent Todo" in error
+                   for error in incomplete["contract_errors"]), incomplete
+        state = registry_path.parent.parent / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        state.write_text(state.read_text(encoding="utf-8") + "\n## Agent Todo\n",
+                         encoding="utf-8")
         payload = run_cli(registry_path, runtime, "status")
+        assert payload["ok"] is True, payload
         item = attention_item(payload)  # type: ignore[arg-type]
         project_asset = item["project_asset"]
         projected_gap = project_asset["todo_projection_gap"]
         assert projected_gap["kind"] == "project_asset_todo_projection_gap", projected_gap
-        assert projected_gap["missing_roles"] == ["user", "agent"], projected_gap
+        assert projected_gap["missing_roles"] == ["user"], projected_gap
         assert "user_todos" not in project_asset, project_asset
-        assert "agent_todos" not in project_asset, project_asset
-        assert item["todo_projection_gap"]["missing_roles"] == ["user", "agent"], item
+        assert project_asset["agent_todos"]["open"] == 0, project_asset
+        assert item["todo_projection_gap"]["missing_roles"] == ["user"], item
 
         markdown = run_cli(registry_path, runtime, "status", output_format="markdown")
         assert "todo_projection_gap" in markdown, markdown
-        assert "missing_roles=user,agent" in markdown, markdown
+        assert "missing_roles=user" in markdown, markdown
 
     print("project-asset-todo-projection-gap-smoke ok")
     return 0

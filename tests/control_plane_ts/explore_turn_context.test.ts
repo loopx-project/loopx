@@ -190,3 +190,43 @@ test("task focus rejects missing, foreign and terminal sources and is inert when
   const off = {...request, graph_enabled: false};
   assert.deepEqual(projectExploreTurnContext(off), projectExploreTurnContext({...off, todo_id: null}));
 });
+
+for (const counterexample of [false, true]) {
+  for (const field of ["writeback_results", "measurement_feedback"]) {
+    test(`overlapping planner links cannot reorder current task ${field}, refutation=${counterexample}`, () => {
+      const finding = (id: string, node: string, status = "confirmed") => ({finding_id: id,
+        node_id: node, status, finding: id, tags: ["writeback-result"],
+        measurements: [{metric: "quality", value: 5, unit: "points", higher_is_better: true,
+          comparison_scope: `validation:${node}`, input_revision: "inputs-v1", evaluation_ref: "eval:v1",
+          candidate_ref: `candidate:${id}`, evidence_ref: `result:${id}`} ]});
+      const findings = [finding("current-new", "current"), finding("shared-old", "shared"),
+        ...(counterexample ? [finding("current-negative", "current", "refuted")] : []),
+        finding("planner-only", "other"), finding("unrelated", "unrelated")];
+      const request = {goal_id: "research", agent_id: "worker", route: ["loopx"], graph_enabled: true,
+        harness_gate: {enabled: true}, result_limit: 1,
+        projection: {nodes: [], findings}, todo_id: "todo_current",
+        focus_todo: {todo_id: "todo_current", role: "agent", status: "open", claimed_by: "worker",
+          explore_result_node_refs: ["current", "shared"]}};
+      const expected = field === "measurement_feedback" ? ["current", "shared", "other", "unrelated"]
+        : [...(counterexample ? ["current-negative"] : []), "current-new", "shared-old", "planner-only", "unrelated"];
+      for (const plannedRefs of [["other"], ["shared", "other"]]) {
+        const params = {...request, plan: {selected_branches: [{todo_id: "todo_planned", actionable_open: true,
+          typed_evidence_audit: {requested_node_refs: plannedRefs}}]}};
+        const first = projectExploreTurnContext(params);
+        const all = projectExploreTurnContext({...params, result_limit: 20});
+        const values = (graph: JsonObject) => graph[field].map((row: JsonObject) =>
+          field === "measurement_feedback" ? row.node_id : row.finding_id);
+        assert.deepEqual(values(first.graph as JsonObject), expected.slice(0, 1));
+        assert.deepEqual(values(all.graph as JsonObject), expected);
+        assert.deepEqual((first.harness as JsonObject).selected_branches,
+          (projectExploreTurnContext({...params, todo_id: null}).harness as JsonObject).selected_branches);
+        if (field === "writeback_results") {
+          const page = {todo_id: request.todo_id, revision: (first.graph as JsonObject).result_page.revision,
+            offset: 1, limit: 1};
+          const replay = projectExploreTurnContext({...params, review_pages: [page]});
+          assert.deepEqual(replay.review_pages[0].finding_refs, expected.slice(1, 2));
+        }
+      }
+    });
+  }
+}

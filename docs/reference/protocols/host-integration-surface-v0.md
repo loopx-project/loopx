@@ -51,6 +51,25 @@ not authorization to publish or perform destructive Git operations.
 
 ## Thin Hook Activation
 
+### Separately installed generic-cli transports
+
+Python Turn host providers use `loopx.extensions.turn_host` for signed request
+extraction, prompt/candidate conversion, exact GoalRef validation and candidate
+validation. This supported facade forwards the existing owners. It does not
+perform artifact acceptance or grant claim, lease, writeback or quota authority.
+Private provider-state locks and atomic writes use the existing public
+`loopx.file_lock` API; providers must not import kernel-private executors.
+
+For a local stdio tool whose SDK detaches its child process, pass its argv
+through `supervised_stdio_command` before giving it to the SDK. The raw relay
+retains the existing TypeScript process supervisor until the owned tool group
+is drained, including parent EOF and cancellation. It forwards stream bytes
+without interpreting MCP or tool permissions. POSIX process-group cleanup and
+Windows best-effort tree cleanup retain their existing platform boundary.
+This is not a sandbox for deliberately detached or externally managed tools.
+
+### Lifecycle activation
+
 A host hook may only activate the current LoopX lifecycle. It should:
 
 1. resolve the goal id and registered agent id;

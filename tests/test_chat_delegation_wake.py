@@ -901,6 +901,7 @@ def test_lost_receipt_then_new_conversation_cannot_dispatch_twice(mode, monkeypa
 def test_the_in_turn_tool_pins_the_conversation_it_runs_in(mode, monkeypatch):  # noqa: F811
     """The model supplies the brief, never the wake routing: the host fixes it."""
     from loopx.collaboration_mcp import Delegations
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
 
     pinned = []
 
@@ -910,19 +911,22 @@ def test_the_in_turn_tool_pins_the_conversation_it_runs_in(mode, monkeypatch):  
 
     monkeypatch.setattr(Delegations, "start", start)
     service, sid, _, settings, _ = mode
+    import_fixture_authority(service.controller.registry_path, "research")
     apply(mode, "start", settings=settings)
     adapter = type("A", (), {})()
     adapter.session = type("S", (), {})()
     adapter.goal_driver = type("D", (), {
         "turn_start_handler": None, "stopped": __import__("threading").Event()})()
     turn_id = service.store.load_session(sid)["active_turn_id"]
-    service.prepare(sid, turn_id, adapter, lambda name, arguments: {"ok": True}, lambda *a, **k: None)
-
-    adapter.session.read_tool_handler("loopx_collaboration", {
-        "action": "start", "binding_id": "review", "operation_id": "op-1",
-        "brief": {"schema_version": "collaboration_brief_v0"}})
-
-    assert pinned == [{"session_id": sid, "turn_id": turn_id}]
+    lock = service.prepare(sid, turn_id, adapter, lambda name, arguments: {"ok": True}, lambda *a, **k: None)
+    try:
+        result = adapter.session.read_tool_handler("loopx_collaboration", {
+            "action": "start", "binding_id": "review", "operation_id": "op-1",
+            "brief": {"schema_version": "collaboration_brief_v0"}})
+        assert result["ok"], result
+        assert pinned == [{"session_id": sid, "turn_id": turn_id}]
+    finally:
+        lock.__exit__(None, None, None)
 
 
 # The public reference enumerates the wake receipt vocabulary, and operators read

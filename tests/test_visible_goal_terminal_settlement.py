@@ -13,7 +13,7 @@ def test_visible_goal_delegates_settlement_then_checks_terminal_readback() -> No
 
     # Ordering belongs to the live settlement contract (covered by the real CLI
     # suite), not a second static list embedded in the host objective.
-    settlement = "cli_channel.settlement_plan.ordered_steps"
+    settlement = "settlement_plan.ordered_steps"
     readback = "After settlement recheck quota"
     terminal_readback = (
         "Complete visible Goal only on `should_run=false` + terminal "

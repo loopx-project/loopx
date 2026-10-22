@@ -14,6 +14,7 @@ from ..capabilities.content_ops.media import MediaWorkspace
 from ..capabilities.content_ops.generation import GenerationWorkspace
 from ..capabilities.content_ops.images import ImageWorkspace
 from ..feedback import validate_goal_id
+from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from .goal_source_routing import source_registry_for_goal
 
 CONTENT_MEDIA_PATH = "/api/chat/content-media"
@@ -104,7 +105,7 @@ class ContentMediaRequestMixin:
                 raise ValueError("Invalid file request")
             if pinned and (not version_keys <= set(query)
                            or not re.fullmatch(r"[1-9][0-9]*", query["revision"][0])
-                           or not re.fullmatch(r"[a-f0-9]{64}", query["sha256"][0])):
+                           or not BARE_SHA256_PATTERN.fullmatch(query["sha256"][0])):
                 raise ValueError("Invalid artifact version")
             workspace = self._media_workspace(query["goal_id"][0])
             name = query["file"][0]

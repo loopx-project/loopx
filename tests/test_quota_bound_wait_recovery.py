@@ -247,7 +247,8 @@ def test_bound_wait_recovers_original_turn_before_selecting_successor(
     rc, replay = cli(*refresh_args, cwd=project)
     assert rc == 0 and replay["idempotent_replay"] is True, replay
     assert replay["blocked_retry"] == refresh["blocked_retry"]
-    assert _classification_count(runtime, "blocked_dependency") == 1
+    assert refresh["classification"] == "blocked_attempt"
+    assert _classification_count(runtime, refresh["classification"]) == 1
     rc, spend = cli(
         "quota",
         "spend-slot",

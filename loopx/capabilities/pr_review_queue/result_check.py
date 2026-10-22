@@ -28,6 +28,7 @@ from .architecture_assessment import (
     architecture_publication_errors,
     check_architecture_assessment,
 )
+from .visual_assessment import check_visual_assessment, visual_publication_errors
 
 
 def _missing(value: object) -> bool:
@@ -203,6 +204,8 @@ def _check_outcome_impact(blockers: list[str], value: object) -> None:
         if not isinstance(row, Mapping):
             continue
         decision = row.get("decision")
+        if dimension == "user_experience":
+            blockers.extend(check_visual_assessment(row.get("visual_review"), experience_decision=decision))
         if decision not in contract["decision_values"]:
             blockers.append(f"{row_key}:invalid_decision")
         if decision == "not_applicable":
@@ -630,6 +633,10 @@ def check_review_result(
             ):
                 errors.append("reviewer:runtime_basis_not_published")
     problem_context = evidence.get("problem_context")
+    impact = problem_context.get("outcome_impact") if isinstance(problem_context, Mapping) else None
+    experience = impact.get("user_experience") if isinstance(impact, Mapping) else None
+    if isinstance(experience, Mapping):
+        errors.extend(visual_publication_errors(experience.get("visual_review"), body_text))
     proportionality = evidence.get("change_proportionality")
     if isinstance(proportionality, Mapping):
         errors.extend(architecture_publication_errors(

@@ -29,7 +29,7 @@ from loopx.extensions.lark.manager_reply_parts import (
 )
 
 
-BODY = "\n".join(f"- 条目 {index} " + "x" * 60 for index in range(1, 200))
+BODY = "\n".join(f"- 条目 {index} " + "x" * 60 for index in range(1, 2000))
 
 
 @pytest.fixture
@@ -350,8 +350,8 @@ def test_a_recorded_locator_is_confirmed_instead_of_sending_the_part_again(
     assert PART_ATTEMPT_KEY not in delivery["state"]
 
 
-def test_an_unconfirmed_locator_still_sends_the_part(monkeypatch, delivery):
-    """A locator the provider cannot confirm must not drop the reader's text."""
+def test_an_unconfirmed_locator_stays_pending_without_resending(monkeypatch, delivery):
+    """Missing readback is not proof that a recorded write never happened."""
 
     parts, _ = plan_manager_reply_parts(BODY)
     delivery["state"].update(
@@ -372,9 +372,10 @@ def test_an_unconfirmed_locator_still_sends_the_part(monkeypatch, delivery):
     )
     monkeypatch.setattr(parts_module, "reply_lark_event_inbox", delivery["install"]())
 
-    assert delivery["deliver"](parts)["ok"] is True
+    assert delivery["deliver"](parts) is None
 
-    assert delivery["sends"][0] == parts[0]
+    assert delivery["sends"] == []
+    assert delivery["state"][PART_ATTEMPT_KEY]["attempt"] == ATTEMPT
 
 
 def test_a_confirmed_locator_settles_a_sequence_with_no_new_write(
@@ -427,7 +428,7 @@ def test_a_stalled_sequence_tells_the_reader_once_after_real_retries(
 
     def failing_parts(**kwargs):
         sent_texts.append(kwargs["text"])
-        if kwargs["text"].startswith("("):
+        if kwargs["text"].startswith("（"):
             return {"ok": False, "status": "reply_provider_failed",
                     "idempotency_key": None}
         return {"ok": True, "status": "sent_verified", "idempotency_key": "sha256:n",
@@ -547,7 +548,7 @@ def test_a_notice_the_provider_took_but_did_not_read_back_is_confirmed(
 
     def ambiguous_send(**kwargs):
         sends.append(kwargs["text"])
-        if kwargs["text"].startswith("("):
+        if kwargs["text"].startswith("（"):
             return {
                 "ok": False,
                 "status": "reply_provider_failed",
@@ -638,7 +639,7 @@ def test_a_stall_notice_without_a_locator_survives_its_own_writeback(
 
     def locator_less_send(**kwargs):
         sends.append(kwargs["text"])
-        if kwargs["text"].startswith("("):
+        if kwargs["text"].startswith("（"):
             return {
                 "ok": False,
                 "status": "reply_provider_failed",
@@ -697,3 +698,20 @@ def test_a_stall_notice_without_a_locator_survives_its_own_writeback(
         "attempt": LOCATOR_LESS_ATTEMPT
     }
     assert written[-1]["last_delivery_notice_status"] == "sent_unverified"
+
+
+def test_stall_notice_unknown_write_is_not_repeated(monkeypatch, delivery):
+    parts, _ = plan_manager_reply_parts(BODY)
+    state = _stalled_state(parts, stalls=3, sent=2)
+    writes = []
+    def unknown(**kwargs):
+        writes.append(kwargs["text"])
+        return {"ok": False, "reply_verified": False, "provider_write_attempted": True}
+    monkeypatch.setattr(parts_module, "reply_lark_event_inbox", unknown)
+    for _ in range(2):
+        result = parts_module.deliver_stall_notice(delivery_state=state,
+            delivery_path=delivery["tmp"] / "delivery.json", write_delivery=lambda *_: None,
+            reply_runner=object(), root=delivery["tmp"], config_path=delivery["tmp"] / "config.json",
+            message_id="om_fixture")
+        assert not result["reply_verified"]
+    assert len(writes) == 1

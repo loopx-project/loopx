@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 import test_quota_settlement_cli as fixture
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import (
+    initialize_canonical_authority, isolate_sqlite_runtime,
+    without_resume_observation_time as stable,
+)
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -106,7 +109,7 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
     code, settled = run(*guard_args)
     assert code == 0 and settled["effective_action"] == "heartbeat_settled_skip", settled
     code, after = run("todo", "list", "--goal-id", fixture.GOAL_ID)
-    assert code == 0 and after["todos"] == before["todos"], after
+    assert code == 0 and stable(after["todos"]) == stable(before["todos"]), after
     assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"]
     final = read_heartbeat_settlement(runtime, goal_id=fixture.GOAL_ID,
         agent_id=fixture.AGENT_ID, todo_id=fixture.TODO_ID, turn_instance_id=binding[-1])

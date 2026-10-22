@@ -16,6 +16,7 @@ from .rules import (
     HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE,
     HOST_LOOP_TODO_CLOSEOUT_RULE,
     OPERATOR_LANGUAGE_RULE,
+    OPERATOR_LANGUAGE_RULE_THIN,
     RUNTIME_CAPABILITY_PROJECTION_THIN_RULE,
     RUNTIME_EXECUTION_ROUTING_RULE,
     RUNTIME_REPAIR_ROUTING_RULE,
@@ -495,6 +496,9 @@ def render_traex_visible_goal_task_body(
         permission_rule=permission_rule,
         agent_scope_instruction=agent_scope_instruction,
         host_wait_rule="",
+        # Keep the non-user-source authority clause without introducing the
+        # external wake vocabulary into this interactive host's objective.
+        work_rule=SCOPE_BOUNDED_WORK_RULE.replace("Heartbeat/", "Scheduled/"),
     )
 def _render_goal_task_body(
     *,
@@ -508,6 +512,7 @@ def _render_goal_task_body(
     permission_rule: str,
     agent_scope_instruction: str,
     host_wait_rule: str,
+    work_rule: str = SCOPE_BOUNDED_WORK_RULE,
 ) -> str:
     scope_block = f"\n{agent_scope_instruction}\n" if agent_scope_instruction else ""
     prequota_block = (
@@ -519,31 +524,26 @@ def _render_goal_task_body(
         material_queue_rule=material_queue_rule,
         permission_rule=permission_rule,
     )
-    return f"""Advance LoopX goal `{goal_id}` from `{active_state}` {host_preamble}
+    return f"""Advance goal `{goal_id}` from `{active_state}` {host_preamble}
 {scope_block}
 
 {RUNTIME_EXECUTION_ROUTING_RULE}
 {HOST_LOOP_SAFETY_RULE}
-{OPERATOR_LANGUAGE_RULE}
+{OPERATOR_LANGUAGE_RULE_THIN}
 
-{prequota_block}Each work iteration, read complete successful JSON from:
+{prequota_block}Each work iteration: read complete successful JSON:
 `{quota_guard_command}`
-Use the current `interaction_contract`, not remembered commands.
+Use current `interaction_contract`.
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
-Use `cli_channel.settlement_plan.ordered_steps` when present; preserve identities/flags
-and supply truthful evidence/actual outcomes.
-Do not reconstruct refresh/spend commands. Ambiguous writes need readback/recovery,
-not blind repeats. Repair local entrypoint failures within authority; while the
-contract is unavailable or incomplete, no work/spend and no claim of completion.
+Preserve command flags; truthful evidence.
+Repair entrypoints within authority. Unavailable/incomplete contract: no work/spend/completion claim.
 
-{SCOPE_BOUNDED_WORK_RULE}
-Continue allowed work within user/repository authority; notification controls
-output, not execution. A tool call or settlement is not a stopping target.
+{work_rule}
+Notification controls output only.
 Progress is not a new Goal boundary: do not create a new host Goal merely to
-continue. After settlement recheck quota; use current continuation/wait guidance,
-not repeated unchanged polling.
+continue. After settlement recheck quota; obey continuation/wait, no unchanged polls.
 Complete {completion_subject} only on `should_run=false` + terminal no-follow-up;
-otherwise obey the next action or wait guidance, not completion.{host_wait_rule}
+else next action/wait.{host_wait_rule}
 
 {policy_tail}"""
 def render_ark_managed_agent_goal_task_body(

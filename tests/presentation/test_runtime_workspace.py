@@ -125,7 +125,8 @@ def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, in
     """Exercise actual native CLI/log IO through both shared HTTP consumers."""
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     project.mkdir()
-    (project / "goal.md").write_text("---\nstatus: active\n---\n\n# Research\n")
+    (project / "goal.md").write_text(
+        "---\nstatus: active\n---\n\n# Research\n\n## Agent Todo\n")
     registry = project / "registry.json"
     registry.write_text(json.dumps(dict(schema_version=1, common_runtime_root=str(runtime), goals=[dict(
         id="shared-goal", status="active", domain="source-read", repo=str(project),

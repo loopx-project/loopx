@@ -91,7 +91,9 @@ def _source_path(source_root: Path, artifact: str) -> Path:
     return path
 
 
-def _usage_capture(source_root: Path, artifact: str, session_id: str) -> dict:
+def _usage_capture(
+    source_root: Path, artifact: str, session_id: str, *, include_incomplete: bool = False
+) -> dict:
     data = _source_path(source_root, artifact).read_bytes()
     events = []
     # Transport only the provider's counter/lifecycle fields, not model text,
@@ -141,7 +143,7 @@ def _usage_capture(source_root: Path, artifact: str, session_id: str) -> dict:
         )
     projection = effect_runtime_result(
         "benchmark.trajectory.codex-usage",
-        {"events": events, "session_id": session_id},
+        {"events": events, "session_id": session_id, "include_incomplete": include_incomplete},
         large_local_snapshot=True,
     )
     return {
@@ -243,6 +245,7 @@ def register_pack(
     config: dict | None = None,
     usage_jsonl: str | None = None,
     usage_session_id: str | None = None,
+    include_incomplete_usage: bool = False,
     native_outcomes_json: str | None = None,
     base_pack_id: str | None = None,
 ) -> dict:
@@ -274,13 +277,16 @@ def register_pack(
             **prepared, "previous": _prepared(previous),
         })
         record["base_pack_id"] = _opaque(base_pack_id)
+    if include_incomplete_usage and usage_jsonl is None:
+        raise ValueError("include-incomplete-usage requires a usage capture")
     if (usage_jsonl is None) != (usage_session_id is None):
         raise ValueError(
             "Usage capture and expected session identity must be supplied together"
         )
     if usage_jsonl is not None:
         record["solver_usage"] = _usage_capture(
-            source_root, usage_jsonl, usage_session_id
+            source_root, usage_jsonl, usage_session_id,
+            include_incomplete=include_incomplete_usage,
         )
     if native_outcomes_json is not None:
         data = _source_path(source_root, native_outcomes_json).read_bytes()

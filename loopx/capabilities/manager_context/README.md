@@ -562,6 +562,23 @@ unsupported transport remains an explicit delivery gap. A path mentioned only in
 text is not an attachment. This slice does not qualify local-Web file presentation,
 group disclosure, cross-host transfer or inline video playback. Installed live
 provider qualification remains separate from the synthetic transport regressions.
+
+Oversized Markdown results stay rich posts. The Lark presentation splitter counts
+UTF-8 bytes of the serialized provider request, including escaped JSON, numbering
+and attachments, against the documented 30 KB post bound (30,000 bytes as a
+conservative local interpretation). It keeps the complete
+body across ordered parts without a fixed part-count cap or a plain-text fallback;
+code fences and table column headers continue across oversized blocks. The
+existing private Lark part-delivery journal retains the frozen plan and each
+provider locator. Recovery verifies known writes before continuing never-sent
+parts; unknown writes, changed intent or lost locators cannot be blindly resent.
+Attachments remain on the last concrete post. The adapter marks a composite
+delivery complete only after every part and required attachment readback succeeds.
+An atomic link or table row that cannot fit one post remains an explicit delivery
+failure; it is never silently truncated or sent as plain text.
+Historical single-text receipts remain verify-only compatibility. Intentional
+text and identity-verified mention delivery keep their existing contracts.
+
 Before downgrading to an older runtime that does not understand result files,
 pause the reply pump while any file-bearing result remains pending; an old
 text-only reader cannot certify attachment delivery. Retain the result snapshots

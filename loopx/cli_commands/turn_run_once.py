@@ -72,6 +72,7 @@ def execute_turn_run_once(
     goal_admission: FirstPartyHostGoalAdmission | None,
     operator_environ: Mapping[str, str],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
+    turn_start_hook_dispatch: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
@@ -789,7 +790,7 @@ def execute_turn_run_once(
                     scheduler_execution_context=payload.get("scheduler_execution_context") or {},
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                     # Keep this Turn's already dispatched required reads at launch.
-                    turn_start_hook_dispatch=payload.get("turn_start_capability_hook_dispatch"),
+                    turn_start_hook_dispatch=turn_start_hook_dispatch,
                     goal_ref=goal_ref,
                 )
 

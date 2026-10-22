@@ -201,8 +201,11 @@ def send_return(
     if attachments and result.get("reply_verified") is True:
         # The recorder persists the exact message locator before this read.
         # Failure retains that attempt; recovery only reads it, never resends.
+        from .post_delivery import attachment_reply
+        file_text, file_attempt = attachment_reply(project=project, config_path=config_path,
+            attempt=observed_attempt, text=text)
         verified = verify_result_files(profile=reply["sender_profile"],
-            message_id=observed_attempt["message_ref"], text=text, attachments=attachments, keys=keys,
+            message_id=file_attempt["message_ref"], text=file_text, attachments=attachments, keys=keys,
             runner=runner, private_transport=private_transport)
         result.update(verified)
         if verified.get("reply_verified") is True:
@@ -226,7 +229,7 @@ def verify_return(
     private_transport: Any = None,
 ) -> dict[str, Any]:
     text = present_lark_conversation_text(text)
-    project, config_path, source_verifier, _destination, message_id = _return_inbox(
+    project, config_path, source_verifier, destination, message_id = _return_inbox(
         root=root,
         registry=registry,
         snapshot_provider=snapshot_provider,
@@ -238,6 +241,12 @@ def verify_return(
     )
     if runner is None and isinstance(session.get("steward_context"), dict):
         runner = private_transport._reply_runner
+    def before_resume(_intent: str) -> dict[str, bool]:
+        current = _return_inbox(root=root, registry=registry, snapshot_provider=snapshot_provider,
+            route=route, session=session, turn=turn, cancelled=cancelled, private_transport=private_transport)
+        return {"continue_delivery": current[:2] == (project, config_path)
+                and current[3:] == (destination, message_id)}
+
     runner_kwargs: dict[str, Any] = {"runner": runner} if runner else {}
     attachments = route.get("result_attachments") or []
     keys = ()
@@ -261,11 +270,16 @@ def verify_return(
         attachment_keys=keys,
         attachment_names=tuple(attachment["name"] for attachment in attachments),
         finalize_reactions=not attachments,
+        resume_parts=True,
+        before_send=before_resume,
         **runner_kwargs,
     )
     if attachments and result.get("reply_verified") is True:
+        from .post_delivery import attachment_reply
+        file_text, file_attempt = attachment_reply(project=project, config_path=config_path,
+            attempt=attempt, text=text)
         result.update(verify_result_files(profile=reply["sender_profile"],
-            message_id=attempt["message_ref"], text=text, attachments=attachments, keys=keys,
+            message_id=file_attempt["message_ref"], text=file_text, attachments=attachments, keys=keys,
             runner=runner, private_transport=private_transport))
         if result.get("reply_verified") is True:
             result.update(_verified_reply_result(project=project, config_path=config_path,

@@ -1,7 +1,7 @@
 {
   "schema": "loopx_package_kernel_import_pins_v0",
   "baseline_commit": "70bc98198ce9e8c33e461cc41fe77243d713dcf0",
-  "note": "Exact pin of every `loopx.*` module imported by a co-located package. The monorepo-distribution-split RFC says a package registers through CapabilityRegistry and never imports kernel-private modules; these are the pre-existing edges. Remove an entry in the PR that removes the import. Adding an entry needs a recorded design decision.",
+  "note": "Exact pin of every `loopx.*` module imported by a co-located package. Pre-existing private edges remain migration debt. The supported-host-integration decision in the monorepo-distribution-split RFC Section 5 permits MemT's two public integration imports; it does not permit private kernel imports. Remove an entry in the PR that removes the import. Adding an entry needs a recorded design decision.",
   "imports": {
     "loopx-ark-turn": [
       "loopx.control_plane.turn_driver.host_candidate",
@@ -20,6 +20,10 @@
       "loopx.control_plane.work_items.progress_observation",
       "loopx.control_plane.work_items.progress_result",
       "loopx.entrypoint",
+      "loopx.file_lock"
+    ],
+    "loopx-memt-turn": [
+      "loopx.extensions.turn_host",
       "loopx.file_lock"
     ]
   }

@@ -388,9 +388,13 @@ def test_app_status_route_attaches_codex_thread_activity(tmp_path: Path, monkeyp
     ]
 
 
-def test_remote_codex_surfaces_have_no_local_observer() -> None:
-    assert "codex-app-ssh" not in codex_thread_observers()
-    assert {"codex-app", "codex-cli-tui", "codex-ide-plugin"} <= set(codex_thread_observers())
+def test_ssh_origin_uses_source_host_observer_and_missing_store_stays_unknown(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("LOOPX_CODEX_HOMES", str(tmp_path / "missing-home"))
+    observers = codex_thread_observers()
+    assert {"codex-app", "codex-app-ssh", "codex-cli-tui", "codex-ide-plugin"} <= set(observers)
+    result = observers["codex-app-ssh"](["remote-task"])["remote-task"]
+    assert result.state is HostThreadState.UNKNOWN
+    assert result.reason is HostThreadUnknownReason.THREAD_NOT_FOUND
 
 
 def test_automation_rrule_interval_reads_only_minutely_intervals() -> None:

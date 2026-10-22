@@ -255,3 +255,47 @@ def test_worker_ingress_returns_the_file_through_the_original_app(file_return, s
     drain(sender.root, sender.server.registry_path, transport.core.controller.store, sender)
     assert reply_status(sender.root, {"request_id": route["request_id"]})[0]["status"] == "delivered"
     assert len(replies) == 1 and uploads == [raw]
+
+
+def test_split_file_result_recovers_all_posts_and_downloads_only_the_last(file_return):
+    from datetime import datetime, timedelta, timezone
+
+    sender, session, turn, route, _, provider, transport, replies, workspace, raw, _, uploads, downloads, state = file_return
+    original = transport.runner
+    def unique_posts(args, cwd=None, timeout=None):
+        # Older one-message fixtures reuse an ID. Model distinct remote posts
+        # here without replacing the real source, Core return pump or file IO.
+        prior = provider.messages.get("om_out_worker")
+        result = original(args, cwd, timeout)
+        if ("+messages-reply" in args or "+messages-send" in args) and "--content" in args and "--dry-run" not in args:
+            ref = f"om_out_split_{len(replies)}"
+            provider.messages[ref] = {**provider.messages["om_out_worker"], "message_id": ref}
+            if prior is not None:
+                provider.messages["om_out_worker"] = prior
+            result = {**result, "stdout": json.dumps({"data": {"message_id": ref}})}
+        return result
+    transport.runner = unique_posts
+    body = "## Complete result\n\n" + "完整字段。" * 3000
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"],
+        "conclusion", body, registry=sender.server.registry_path,
+        attachment_refs=["result-fixture.bin"], workspace=workspace)
+    state["download_available"] = False
+    store = transport.core.controller.store
+    drain(sender.root, sender.server.registry_path, store, sender)
+    count = len(replies)
+    assert count > 1 and uploads == [raw], {
+        "status": [{k: item.get(k) for k in ("status", "error", "blocker")} for item in reply_status(sender.root, route)],
+        "journals": [{k: json.loads(p.read_text()).get(k) for k in ("delivery_parts_sent", "last_delivery_status", "delivery_part_started", "delivery_part_attempt")} for p in transport.runtime_root.glob("**/manager-delivery/parts/*.json")],
+    }
+    assert reply_status(sender.root, route)[0]["status"] == "verification_required"
+    messages = [provider.messages[f"om_out_split_{i}"] for i in range(1, count + 1)]
+    content = [json.loads(message["body"]["content"]) for message in messages]
+    assert all(message["msg_type"] == "post" for message in messages)
+    assert all("files" not in part for part in content[:-1])
+    assert content[-1]["files"][0]["key"] == "file_result_fixture"
+    state["download_available"] = True
+    drain(sender.root, sender.server.registry_path, store, sender,
+        now=datetime.now(timezone.utc) + timedelta(minutes=10))
+    assert reply_status(sender.root, route)[0]["status"] == "delivered"
+    assert len(replies) == count and uploads == [raw] and len(downloads) == 2
+    assert all(call[call.index("--message-id") + 1] == f"om_out_split_{count}" for call in downloads)

@@ -155,3 +155,40 @@ def test_native_review_omits_declaration_source_and_recovers_lost_reply(conversa
             "expected_provider_revision": before["provider_revision"], "document": document})
         assert rejected["ok"] is False
         assert cli("inspect")[1] == before
+
+
+def test_native_capacity_detail_guides_new_intent_without_rewriting_envelope(conversation_check):
+    _, cli, _, _, _, _, adapter = conversation_check
+    handler = adapter.session.read_tool_handler
+    request = outcome_request(adapter)
+    request["document"]["requirements"] = [
+        {"id": f"r{i}", "description": "保留证据😀" * 60} for i in range(32)
+    ]
+    created = handler(TOOL["name"], request)
+    assert created["ok"], created
+    original = cli("inspect")[1]
+    review = {"action": "refine_outcome", "operation_id": "oversized-review",
+        "expected_provider_revision": original["provider_revision"],
+        "document": {"outcome_id": "tour", "review": [
+            {"id": f"r{i}", "conclusion": "uncertain", "note": "n" * 512,
+                "evidence_refs": ["e" * 500] * 8} for i in range(32)]}}
+    rejected = handler(TOOL["name"], review)
+    assert rejected["ok"] is False and rejected["error"] == "goal_acceptance_invalid_request", rejected
+    assert "all outcomes in the Goal, not the source count" in rejected["error_detail"]
+    assert "outcome review capacity exceeded" in rejected["error_detail"]
+    assert "new operation id for changed intent" in rejected["next_action"]
+    assert "保留证据" not in str(rejected)
+    assert handler(TOOL["name"], review) == rejected
+    assert cli("inspect")[1] == original
+    compact = {**review, "document": {"outcome_id": "tour", "review": [
+        {**item, "note": "Further validation needed", "evidence_refs": ["artifact:full-report"]}
+        for item in review["document"]["review"]]}}
+    assert handler(TOOL["name"], compact)["error"] == "collaboration_request_rejected"
+    assert cli("inspect")[1] == original, "reserved native intent cannot be silently replaced"
+    compact["operation_id"] = "compact-review"
+    applied = handler(TOOL["name"], compact)
+    assert applied["ok"] and applied["status"] == "applied", applied
+    assert handler(TOOL["name"], compact)["status"] == "replayed"
+    outcome = cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["sources"] == original["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["sources"]
+    assert [{"id": r["id"], "description": r["description"]} for r in outcome["requirements"]] == request["document"]["requirements"]

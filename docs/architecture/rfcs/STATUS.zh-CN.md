@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (44)
+## 已接受 (45)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -37,6 +37,7 @@
 | [RFC：Goal Direction Baseline（目标方向基线）v0](goal-direction-baseline-v0.zh-CN.md) | 已接受 | 无 | — |
 | [后续设计：重启与实例替换中的 Goal 连续性](goal-immutability-coherence-defense-v0.zh-CN.md) | 已接受 | none | — |
 | [Goal 实例身份与孤儿状态恢复（v0）](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：持久化 Goal 成果细化（v0）](goal-outcome-refinement-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Goal 级能力组合与 Connector 生命周期（v0）](goal-scoped-capability-portfolio-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Per-Goal Usage, Token, and Cost Surfacing v0](goal-usage-token-cost-v0.md) | 已接受 | none | — |
 | [RFC：Goal 工作区页面 v0](goal-workspace-surface-v0.zh-CN.md) | 已接受 | 无 | — |

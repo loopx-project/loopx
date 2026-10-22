@@ -40,11 +40,33 @@ def test_completed_turn_restores_snapshot_after_server_restart_and_replays_witho
             assert stat.S_IMODE(receipt.stat().st_mode) == 0o600
 
 
-@pytest.mark.parametrize("identity", [{"goal": "other-goal"}, {"agent": "other-agent"}])
+@pytest.mark.parametrize("identity", [
+    {"goal": "other-goal"}, {"agent": "other-agent"}, {"instance": "ginst_" + "2" * 32},
+])
 def test_separate_owner_does_not_import_another_memory(config, provider, identity):
     execute(config)
     execute(config, turn(2, **identity))
     assert not any(body.get("action") == "import" for _, body in provider.requests)
+
+
+def test_old_instance_pending_turn_does_not_block_new_lifetime(config, provider):
+    provider.fail_action = "export"
+    with pytest.raises(RuntimeError):
+        execute(config)
+    provider.fail_action = None
+    assert execute(config, turn(2, instance="ginst_" + "2" * 32))["result_kind"] == "validated_progress"
+    assert not any(body.get("action") == "import" for _, body in provider.requests)
+
+
+@pytest.mark.parametrize("reference", [None, {}, {"goal_id": "other-goal", "goal_instance_id": "ginst_" + "1" * 32},
+                                        {"goal_id": "public-goal", "goal_instance_id": "legacy"}])
+def test_missing_or_mismatched_goal_instance_never_opens_memory(config, provider, reference):
+    request = turn()
+    request["goal_ref"] = reference
+    with pytest.raises(AdapterError, match="exact_goal_instance"):
+        execute(config, request)
+    assert provider.requests == []
+    assert not Path(config.state_dir).exists()
 
 
 @pytest.mark.parametrize("action", ["export", "publish", "close"])
@@ -133,6 +155,21 @@ def test_exhausted_tool_budget_does_not_commit_partial_history(config, provider)
         execute(config)
     assert failure.value.subgroup(AdapterError) is not None
     assert (Path(config.workspace) / "observations.txt").read_text() == "one\n"
+    assert not provider.snapshots
+
+
+@pytest.mark.parametrize("truncate_continuation", [False, True])
+def test_truncated_tool_round_never_dispatches_its_calls_or_publishes(config, provider, truncate_continuation):
+    config = with_tools(config)
+    calls = ["<tool_call><function=record_observation><parameter=observation>one</parameter></function></tool_call>",
+             "<tool_call><function=record_observation><parameter=observation>two</parameter></function></tool_call>"]
+    provider.replies = calls if truncate_continuation else calls[:1]
+    provider.finishes = ["stop", "length"] if truncate_continuation else ["length"]
+    with pytest.raises(ExceptionGroup) as failure:
+        execute(config)
+    assert failure.value.subgroup(AdapterError) is not None
+    output = Path(config.workspace) / "observations.txt"
+    assert output.read_text() == "one\n" if truncate_continuation else not output.exists()
     assert not provider.snapshots
 
 

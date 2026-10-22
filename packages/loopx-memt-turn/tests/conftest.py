@@ -21,6 +21,7 @@ class Provider:
         self.replies = []
         self.fail_action = None
         self.finish = "stop"
+        self.finishes = []
         self.epoch = "fixture-epoch"
         self.candidate = json.dumps({"result_kind": "validated_progress", "classification": "recorded",
                                      "summary": "Synthetic observation recorded.", "next_action": "Validate the artifact."})
@@ -34,7 +35,8 @@ class Provider:
         if path == "/generate":
             answer = self.replies.pop(0) if self.replies else self.candidate
             ids = [] if "|commit:" in body["rid"] else self.tokenizer.encode(answer) + [self.tokenizer.eos_token_id]
-            return {"output_ids": ids, "meta_info": {"id": body["rid"], "finish_reason": {"type": self.finish}}}
+            finish = self.finishes.pop(0) if self.finishes else self.finish
+            return {"output_ids": ids, "meta_info": {"id": body["rid"], "finish_reason": {"type": finish}}}
         action, session_id = body["action"], body["session"]
         if action == self.fail_action:
             return {"error": "synthetic-private-provider-error"}

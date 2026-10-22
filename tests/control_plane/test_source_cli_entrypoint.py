@@ -254,7 +254,8 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
     future["state_file"] = ".codex/goals/future-independent/ACTIVE_GOAL_STATE.md"
     future_state = registry.parent.parent / future["state_file"]
     future_state.parent.mkdir(parents=True)
-    future_state.write_text("---\nstatus: active\n---\n\n# Future independent Goal\n")
+    future_state.write_text(
+        "---\nstatus: active\n---\n\n# Future independent Goal\n\n## Agent Todo\n")
     registered["goals"].append(future)
     registry.write_text(json.dumps(registered))
     for goal in ("full-speed", "future-independent"):

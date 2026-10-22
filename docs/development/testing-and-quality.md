@@ -1367,6 +1367,19 @@ Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;
 it does not grant execution quota, spending, or provider authority.
 
+The native installed-profile smoke exposed duplicate settlement instructions
+inside the visible Goal body. On identical long installation routes and the
+same two capabilities, removing that duplicate changes 4,118 characters to
+3,934 under the unchanged 4,000-character host limit. The shared quota rule
+still requires selection/reentry, current ordered settlement with its fallback,
+exact identities/effect IDs, actual outcomes and recovery before ambiguous
+retries. Command flags, truthful evidence, unavailable-contract stops and
+cumulative Goal requirements remain explicit. The original overflow stays a
+failure; the installed-profile smoke and semantic assertions qualify the repair.
+
+原生安装 profile 的长路径复现为 4,118 → 3,934 字符；只移除重复结算说明，
+4,000 字符宿主硬边界、完整路由、当前合同、事实证据、恢复与停止条件均不变。
+
 先根据所属合同判断上限的性质，再选择修复方式。这适用于输出尺寸、结构和延迟
 回归预算，不授予执行配额、费用额度或 provider 权限。
 

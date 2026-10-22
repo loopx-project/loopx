@@ -106,6 +106,11 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
         "cfc65091d2710ef298174e6a5280edf55f6cc7acdce8e5688a2ae213b5f4b4ac"
     )
     assert hashlib.sha256(markdown.encode()).hexdigest() == (
+        "e5c10d37ed7cef08e8fa56a450f3c119de92d1ef99e3516ff6b106a8853c8186"
+    )
+    # fd1b23b59 raised the existing body allowance, preserving every clause.
+    # Only that diagnostic number differs from the earlier frozen rendering.
+    assert hashlib.sha256(markdown.replace("max_chars=`5400`", "max_chars=`4800`").encode()).hexdigest() == (
         "29604e41d97963976ab8911e69c6328421aeaf63053cdb12c197dbe9b5291b9b"
     )
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["heartbeat_prompt_brief"]

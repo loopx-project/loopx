@@ -39,6 +39,10 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
     : {replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human"};
   const time = (value: string) => Number.isFinite(Date.parse(value))
     ? new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}).format(new Date(value)) : value;
+  const selectFinding = (id: string, focusReader = false) => {
+    setSelectedId(id);
+    if (focusReader) window.requestAnimationFrame(() => {reader.current?.focus({preventScroll: true}); reader.current?.scrollIntoView({block: "nearest"});});
+  };
   return <section className="goal-team-results goal-explore-results" aria-label={zh ? "Explore 证据" : "Explore evidence"} aria-busy={busy}>
     <header><div className="explore-reader-heading"><h3>{zh ? "已保存的结论" : "Saved findings"}</h3>
       <ContextHelp label={zh ? "结论与关联说明" : "About findings and links"}>
@@ -49,17 +53,27 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
     {error ? <p role="alert">{zh ? "无法核验此页证据；旧内容已清除。请刷新重试。" : "Cannot verify this evidence page; previous content was cleared. Refresh to retry."}</p> : null}
     {page && !page.items.length ? <p>{zh ? "尚无已保存的结论。" : "No saved findings yet."}</p> : null}
     {page && page.items.length > 0 ? <div className="goal-team-results-layout">
-      <nav className="goal-team-result-list" aria-label={zh ? "选择结论" : "Choose a finding"}>
+      <div className="explore-finding-navigation">
+        <div className="explore-finding-picker">
+          <select aria-label={zh ? "选择结论" : "Choose a finding"} value={selectedId} onChange={event => selectFinding(event.target.value)}>
+            {page.items.map((item, index) => <option key={item.finding_id} value={item.finding_id}>{index + 1}. {item.finding} · {statuses[item.status] ?? item.status} · {time(item.last_updated_at)}</option>)}
+          </select>
+        </div>
+        <nav className="goal-team-result-list" aria-label={zh ? "选择结论" : "Choose a finding"}>
         {page.items.map(item => <button type="button" key={item.finding_id} aria-pressed={selectedId === item.finding_id}
-          onClick={() => {setSelectedId(item.finding_id); window.requestAnimationFrame(() => {reader.current?.focus({preventScroll: true}); reader.current?.scrollIntoView({block: "nearest"});});}}>
+          onClick={() => selectFinding(item.finding_id, true)}>
           <span><strong>{item.finding}</strong><small>{statuses[item.status] ?? item.status} · <time dateTime={item.last_updated_at} title={item.last_updated_at}>{time(item.last_updated_at)}</time></small></span>
         </button>)}
-        {cursor ? <button type="button" onClick={() => setCursor(undefined)}>{zh ? "回到首页" : "First page"}</button> : null}
-        {page.next_cursor ? <button type="button" onClick={() => setCursor(page.next_cursor!)}>{zh ? "下一页" : "Next page"}</button> : null}
-      </nav>
+        </nav>
+        <nav className="explore-finding-pagination" aria-label={zh ? "结论分页" : "Finding pages"}>
+          <span>{zh ? `本页 ${page.items.length} / 共 ${page.total} 条` : `${page.items.length} on page / ${page.total} total`}</span>
+          <div>{cursor ? <button type="button" onClick={() => setCursor(undefined)}>{zh ? "回到首页" : "First page"}</button> : null}
+          {page.next_cursor ? <button type="button" onClick={() => setCursor(page.next_cursor!)}>{zh ? "下一页" : "Next page"}</button> : null}</div>
+        </nav>
+      </div>
       {selected ? <div ref={reader} tabIndex={-1} className="goal-team-result-reader" key={selected.finding_id}>
         <h4>{selected.question || selected.finding}</h4>
-        <span className="explore-reader-status">{statuses[selected.status] ?? selected.status}</span>
+        <span className="explore-reader-status">{statuses[selected.status] ?? selected.status} · <time dateTime={selected.last_updated_at}>{time(selected.last_updated_at)}</time></span>
         {selected.measurements ? <ExploreMeasurements measurements={selected.measurements} zh={zh}/> : null}
         {sections ? <div className="explore-finding-prose">
           <section><h5>{zh ? "观察" : "Observation"}</h5><p>{sections.observation}</p></section>
@@ -71,7 +85,8 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
             </div> : null)}</section> : null}
         </div> : <p className="explore-finding-raw">{selected.summary}</p>}
         <details className="explore-reader-details"><summary>{zh ? "来源与范围" : "Sources and scope"}</summary>
-          <dl><dt>{zh ? "记录者" : "Recorded by"}</dt><dd>{selected.agent_id || "—"}</dd>
+          <dl><dt>{zh ? "记录时间" : "Recorded at"}</dt><dd><time dateTime={selected.last_updated_at}>{selected.last_updated_at}</time></dd>
+            <dt>{zh ? "记录者" : "Recorded by"}</dt><dd>{selected.agent_id || "—"}</dd>
             {selected.scope ? <><dt>{zh ? "问题范围" : "Question scope"}</dt><dd>{selected.scope}</dd></> : null}
             {sections ? <><dt>{zh ? "适用范围" : "Applicability"}</dt><dd>{sections.applicability}</dd><dt>{zh ? "输入版本" : "Input revision"}</dt><dd>{sections.inputRevision}</dd></> : null}
             <dt>{zh ? "来源引用" : "Source references"}</dt><dd>{selected.evidence_refs.length ? <ul>{selected.evidence_refs.map((ref, index) => <li key={index}><code>{ref}</code></li>)}</ul> : "—"}</dd>

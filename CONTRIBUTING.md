@@ -190,6 +190,7 @@ touch, mention it in the PR instead of fixing it there.
 | `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |
 | `release-artifacts.yml` | `loopx/`, packaging, and lockfile paths | no | release identity and a release build from this source |
 | `ark-turn.yml` | Turn driver and collaboration paths | no | optional Ark Turn package, stdio MCP, and DSH parity |
+| `memt-turn.yml` | optional MemT package, Turn driver, lock, and packaging paths | no | explicit optional dependency installation, complete adapter workflow, stdio MCP, and driver binding |
 | `dsh-plugin.yml` | DSH plugin and distribution workflow paths | no | Linux/Windows package install and uninstall, typed host contracts, and Linux real LoopX/web runtime admission |
 | `dsh-plugin-publish.yml` | no (manual, published plugin tag) | no | merged release identity, immutable npm package publication, and distribution readback |
 | `frontstage-pages.yml` | README, dashboard, and chat bundle paths | no | public Pages build |

@@ -38,7 +38,10 @@ from loopx.status import collect_status
 def _registry(tmp_path: Path, goal_ids: tuple[str, ...] = ("goal-a", "goal-b")) -> Path:
     registry_path = tmp_path / ".loopx" / "registry.json"
     registry_path.parent.mkdir(parents=True)
-    (tmp_path / "ACTIVE_GOAL_STATE.md").write_text("# Goal\n", encoding="utf-8")
+    (tmp_path / "ACTIVE_GOAL_STATE.md").write_text(
+        "# Goal\n\n## User Todo\n\n## Agent Todo\n\n## Next Action\n\n- Inspect current evidence.\n",
+        encoding="utf-8",
+    )
     registry_path.write_text(
         json.dumps(
             {
@@ -1086,7 +1089,10 @@ def test_real_cli_global_membership_failure_and_recovery(tmp_path):
     global_path = runtime / "registry.global.json"
     global_registry = json.loads(registry.read_text())
     second_state = tmp_path / "SECOND_GOAL_STATE.md"
-    second_state.write_text("# Second Goal\n")
+    second_state.write_text(
+        "# Second Goal\n\n## User Todo\n\n## Agent Todo\n\n## Next Action\n\n- Inspect current evidence.\n",
+        encoding="utf-8",
+    )
     global_registry["goals"].append({**global_registry["goals"][0], "id": "goal-b",
                                      "state_file": str(second_state)})
 

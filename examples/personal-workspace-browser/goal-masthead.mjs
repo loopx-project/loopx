@@ -204,8 +204,8 @@ export const goalMastheadScenario = {
       await quiet.close();
       throw error;
     }
-    // The real producer bounds the queue to 12 and its overview to three while
-    // retaining 21 open decisions. Pass its payload through the shipped parser
+    // The canonical producer retains 21 open decisions and bounds its overview
+    // to three. Pass its payload through the shipped parser
     // and adapter, rather than manufacturing a complete three-item queue.
     const fixtureEnv = { ...process.env, LOOPX_USAGE_PING: "0" };
     if (!["LOOPX_TEST_PYTHON", "LOOPX_PYTHON_BIN", "LOOPX_PYTHON"].some(key => process.env[key])) fixtureEnv.PYTHONPATH = repoRoot;

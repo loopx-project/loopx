@@ -4,7 +4,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-09-26
-- **Last normative revision:** 2026-10-01
+- **Last normative revision:** 2026-10-22
 - **Implementation baseline:** `2f3d13ae9`
 - **Related contracts:** [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md), [Extensions reference](../../reference/extensions.md), [Capability catalog](../../../loopx/capabilities/README.md), [Overall Roadmap v0](loopx-overall-roadmap-v0.md) (S2, S8, S12), [import-boundary tests](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **Tracking issue:** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -164,6 +164,29 @@ lease/quota/effect state. A capability package may only register providers,
 capability contracts and CLI subcommands through `CapabilityRegistry`; it never
 imports kernel-private modules.
 
+### Supported host integration decision
+
+Separately installed `generic-cli` host transports consume the existing Turn
+wire protocol rather than register a capability. Their supported Python seam is
+`loopx.extensions.turn_host`: it re-exports the single kernel owners for signed
+request extraction, candidate construction, Goal instance validation and result
+validation, and supplies a raw stdio relay over the existing TypeScript process
+supervisor. The public `loopx.file_lock` API remains the owner of private
+provider-state locking and atomic writes. Neither import grants work authority.
+
+MemT uses exactly those two public modules; it must not import the executor or
+other kernel-private modules directly. This is an explicit integration seam,
+not permission for arbitrary package-to-kernel imports. The import ratchet
+records both edges. Existing Ark/JEV private edges remain migration debt and
+receive no new exemption. The facade forwards existing behavior; it must not
+copy candidate, acceptance, process-lifetime or locking decisions.
+
+The stdio relay cancels its owned process group on parent EOF, SIGTERM or
+SIGINT and waits for the existing supervisor's cleanup before exiting. POSIX
+process-group behavior and Windows best-effort tree cleanup retain their
+existing qualification boundary. It is process supervision, not a sandbox;
+operator-selected tools retain only their already authorized effects.
+
 ### Responsibility and installation acceptance
 
 Directory regrouping and distribution splitting have separate acceptance.
@@ -269,7 +292,7 @@ changes.
 | Kernel-only install without Node | package-smoke lane on a runner without Node: `pip install loopx-core && loopx --help && loopx status --format json` | exit 0 | Effectful commands excluded |
 | Effectful command without Node fails typed | same runner: `loopx heartbeat-prompt ...` | `node_unavailable` diagnostic, exit non-zero | — |
 | Absent capability package = off state | install `loopx-core` only; `loopx capability list` | capability reported unavailable, core commands unaffected | — |
-| No kernel truth duplicated | import-boundary tests + review of `packages/*/src` for kernel-private imports; interim guard: `tests/architecture/test_package_kernel_import_ratchet.py` pins every `loopx.*` import under `packages/*/src`, fails on a new edge, and requires a retired edge to lower the pin in the same PR | zero violations | Static imports only, as today. The pin currently holds 13 pre-existing edges in 3 packages (`loopx-ark-turn`, `loopx-finance-value-discovery`, `loopx-jev`); a green ratchet proves no growth, not this row, until the pin is empty |
+| No kernel truth duplicated | import-boundary tests + review of `packages/*/src` for kernel-private imports; interim guard: `tests/architecture/test_package_kernel_import_ratchet.py` pins every `loopx.*` import under `packages/*/src`, fails on an unreviewed new edge, and requires a retired edge to lower the pin in the same PR | zero private-kernel violations | Static imports only. The 13 pre-existing edges in Ark, Finance and JEV remain tracked migration debt, separate from MemT's 2 supported public integration imports. A green ratchet does not retire that debt or establish this row; supported public edges need not disappear |
 | Meta-package parity | `pip install loopx` then existing full smoke | identical to pre-split smoke | — |
 
 Deterministic conformance rows above are required for each milestone; no live

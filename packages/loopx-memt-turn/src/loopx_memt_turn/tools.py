@@ -8,6 +8,8 @@ import os
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
 
+from loopx.extensions.turn_host import supervised_stdio_command
+
 from .config import AdapterError, Config
 
 
@@ -69,7 +71,8 @@ async def connect(config: Config, identity: dict):
     environment = {name: os.environ[name] for name in ("PATH", "SYSTEMROOT", "TEMP", "TMP", "LANG") if name in os.environ}
     environment.update({"LOOPX_TURN_" + name: text for name, text in identity.items()})
     environment["LOOPX_TURN_WORKSPACE"] = config.workspace
-    server = StdioServerParameters(command=config.mcp_command[0], args=list(config.mcp_command[1:]),
+    command = supervised_stdio_command(config.mcp_command)
+    server = StdioServerParameters(command=command[0], args=command[1:],
                                    env=environment, cwd=config.workspace)
     async with stdio_client(server) as (reader, writer):
         async with ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=config.timeout_seconds)) as session:

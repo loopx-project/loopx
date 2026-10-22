@@ -124,7 +124,7 @@ Before new execution, each Agent reviews its own Todo/Vision route and records
 `goal-acceptance adopt-objective` with its exact revision/digest and inspected
 `objective_work_digest`. One peer cannot acknowledge for another; no unanimous
 vote or extra write is needed after that revision is adopted. See the
-[operating-objective contract](../../docs/architecture/rfcs/goal-outcome-refinement-v0.md#current-operating-objective).
+[operating-objective procedure](references/outcome-refinement.md#current-operating-objective).
 
 ## Current State, Continued Work And Settlement
 

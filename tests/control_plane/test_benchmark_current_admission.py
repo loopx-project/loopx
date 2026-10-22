@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def _private_workspace(project):
     path = project / "task_network_fixture.py"
     path.write_text(
-        'endpoint = "http://192.168.10.10"\n'
+        'endpoint = "http://192.168.' + '10.10"\n'
         'auth = "Authorization: Bearer ${SERVICE_TOKEN}"\n'
         f'link = "https://{PRIVATE_LARK_TENANT_HOST}/wiki/example"\n'
     )

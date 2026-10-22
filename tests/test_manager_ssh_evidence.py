@@ -89,6 +89,86 @@ def test_remote_source_is_discovered_and_read_without_local_host_metadata(remote
     assert records[-1] == result
 
 
+def _route_packet(**changes):
+    return {"ok": True, "schema_version": "loopx_peer_host_route_v0",
+            "goal_id": "remote-goal", "agent_id": "reviewer", "status": "resolved",
+            "reason": None, "candidate_count": 1,
+            "candidates": [{"host_surface": "codex-app-ssh", "thread_id": "original-task"}],
+            "selected_route": {"host_surface": "codex-app-ssh", "thread_id": "original-task"},
+            "host_delivery": "not_attempted", "authority": "locator_only", **changes}
+
+
+def test_remote_peer_route_uses_the_authorized_source_host(remote):
+    tool, calls, records, _, _ = remote
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(_route_packet()))
+    tool.remote_runner = run
+    query = {"view": "agent_route", "source_id": "ssh:research-host",
+             "goal_id": "remote-goal", "agent_id": "reviewer", "host_surface": "codex-app-ssh"}
+    result = tool.read(TOOL_NAME, query)
+    assert result["status"] == "resolved" and result["source_host"] == "research-host"
+    assert result["host_delivery"] == "not_attempted"
+    command = shlex.split(calls[0][0][-1])
+    assert command[-7:] == ["resolve-peer-route", "--goal-id", "remote-goal", "--agent-id", "reviewer",
+                            "--host-surface", "codex-app-ssh"]
+    assert records[-1] == result
+
+
+@pytest.mark.parametrize("changes", [
+    {"goal_id": "another-goal"}, {"agent_id": "another-agent"},
+    {"host_delivery": "delivered"}, {"authority": "execution"},
+    {"selected_route": {"host_surface": "codex-app", "thread_id": "different-task"}},
+    {"status": "ambiguous"},
+    {"status": "resolved", "selected_route": None},
+    {"candidates": [{"host_surface": "codex-app-ssh", "thread_id": "/home/private/task"}]},
+])
+def test_remote_route_mismatch_never_becomes_delivery_or_another_target(remote, changes):
+    tool, calls, *_ = remote
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(_route_packet(**changes)))
+    tool.remote_runner = run
+    result = tool.read(TOOL_NAME, {"view": "agent_route", "source_id": "ssh:research-host",
+                                 "goal_id": "remote-goal", "agent_id": "reviewer", "host_surface": "codex-app-ssh"})
+    assert len(calls) == 1
+    assert result["reason_code"] == "remote_protocol_unavailable"
+    assert not result["ok"] and not result.get("selected_route")
+
+
+def test_unavailable_remote_route_preserves_the_source_diagnostic(remote):
+    tool, *_ = remote
+    tool.remote_runner = lambda *a, **k: SimpleNamespace(returncode=0, stdout=json.dumps(
+        _route_packet(status="unavailable", reason="thread_not_found", selected_route=None)))
+    result = tool.read(TOOL_NAME, {"view": "agent_route", "source_id": "ssh:research-host",
+                                 "goal_id": "remote-goal", "agent_id": "reviewer"})
+    assert result["status"] == "unavailable" and result["reason"] == "thread_not_found"
+    assert result["host_delivery"] == "not_attempted" and result["selected_route"] is None
+
+
+def test_failed_remote_route_cannot_reuse_cached_portfolio(remote, monkeypatch):
+    tool, *_ = remote
+    def forbidden(*a, **k):
+        pytest.fail("route failure must not read historical portfolio cache")
+    monkeypatch.setattr("loopx.capabilities.manager_context.ssh_evidence._cached_entry", forbidden)
+    tool.remote_runner = lambda *a, **k: SimpleNamespace(returncode=255, stdout="", stderr="")
+    result = tool.read(TOOL_NAME, {"view": "agent_route", "source_id": "ssh:research-host",
+                                 "goal_id": "remote-goal", "agent_id": "reviewer"})
+    assert result["ok"] is False and not result.get("selected_route")
+    assert result["rows"] == [] and not result.get("last_success_at")
+
+
+def test_remote_route_revocation_discards_observed_identity(remote):
+    tool, _, _, channel, config = remote
+    def run(*args, **kwargs):
+        configure(tool.runtime_root, channel=channel, host="research-host", goal_ids=[], execute=True, config_path=config)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(_route_packet()))
+    tool.remote_runner = run
+    result = tool.read(TOOL_NAME, {"view": "agent_route", "source_id": "ssh:research-host",
+                                 "goal_id": "remote-goal", "agent_id": "reviewer"})
+    assert result == {"ok": False, "error": "authorization_changed"}
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -706,12 +786,12 @@ def test_scope_change_between_reads_refuses_the_packet(tmp_path):
 @pytest.mark.parametrize(
     "stderr,returncode,expected",
     [
-        ("huangruiteng@203.0.113.7: Permission denied (gssapi-with-mic).", 255, "ssh_auth_required"),
+        ("operator@203.0.113.7: Permission denied (gssapi-with-mic).", 255, "ssh_auth_required"),
         # A remote command reporting a bare permission error about its own
         # files is not this machine's rejected credential.
         ("loopx: /home/x/.config: Permission denied", 1, "remote_evidence_unavailable"),
         ("ssh: connect to host 203.0.113.7 port 22: Operation timed out", 255, "ssh_host_unreachable"),
-        ("ssh: Could not resolve hostname ark-devbox: Name or service not known", 255, "ssh_host_unreachable"),
+        ("ssh: Could not resolve hostname research-host: Name or service not known", 255, "ssh_host_unreachable"),
         ("bash: line 1: /home/x/.local/bin/loopx: No such file or directory", 127, "remote_cli_missing"),
         ("some other ssh failure", 255, "remote_evidence_unavailable"),
     ],
@@ -739,7 +819,7 @@ def test_an_authentication_failure_is_reported_as_such_not_as_a_dead_host(
             argv,
             255,
             stdout="",
-            stderr="huangruiteng@203.0.113.7: Permission denied (gssapi-with-mic).",
+            stderr="operator@203.0.113.7: Permission denied (gssapi-with-mic).",
         )
 
     packet = remote_evidence(
@@ -769,7 +849,7 @@ def test_an_authentication_failure_is_reported_as_such_not_as_a_dead_host(
     "stderr,returncode,expected_limitation",
     [
         (
-            "huangruiteng@203.0.113.7: Permission denied (gssapi-with-mic).",
+            "operator@203.0.113.7: Permission denied (gssapi-with-mic).",
             255,
             "remote_source_ssh_auth_required",
         ),

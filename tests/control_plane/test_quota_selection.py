@@ -3,7 +3,7 @@ import pytest
 import json
 from pathlib import Path
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, empty_todo_display
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
@@ -148,7 +148,7 @@ def test_public_quota_route_read_keeps_claim_exclusion_and_provider_unchanged(tm
     if provider != "legacy":
         projection = build_todo_runtime_shadow_projection(goal_id="goal-route", todos=records, handoff_mode="soft_claim")
         initialize_canonical_authority(runtime, "goal-route", projection, state_path=state, provider=provider)
-        state.unlink()
+        empty_todo_display(state)
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-route")
     narrative = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-route", "--agent-id", "agent-b",
@@ -184,7 +184,7 @@ def test_quota_uses_complete_owned_commitment_count_before_display_cap(reverse):
     assert all(row["claimed_by"] == "agent-b" for row in result["first_executable_items"])
 
 
-@pytest.mark.parametrize("display", ["legacy", "missing", "stale"])
+@pytest.mark.parametrize("display", ["legacy", "empty", "stale"])
 @pytest.mark.parametrize("scope", ["global_gate=true", "blocks_agent=agent-b"])
 def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, display: str, scope: str):
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
@@ -205,8 +205,8 @@ def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, di
         projection = build_todo_runtime_shadow_projection(goal_id="goal-scope",
             todos=fields["agent_todos"]["items"] + fields["user_todos"]["items"], handoff_mode="soft_claim")
         initialize_canonical_authority(runtime, "goal-scope", projection, state_path=state)
-        if display == "missing":
-            state.unlink()
+        if display == "empty":
+            empty_todo_display(state)
         else:
             state.write_text("# Stale projection\n## User Todo\n- [x] Old approval.\n")
     before = state.read_bytes() if state.exists() else None

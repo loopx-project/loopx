@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from loopx import cli as loopx_cli  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 
 GOAL_ID = "autonomous-replan-fixture"
@@ -256,6 +257,7 @@ def write_fixture(
                 "delivery_outcome": "outcome_progress",
             },
         )
+    import_fixture_authority(registry_path, GOAL_ID)
     return registry_path, runtime
 
 

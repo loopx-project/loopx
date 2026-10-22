@@ -4,7 +4,7 @@
 - **交付成熟度：** Proposal
 - **作者 / 负责人：** LoopX maintainers
 - **创建：** 2026-09-26
-- **最近规范性修订：** 2026-10-01
+- **最近规范性修订：** 2026-10-22
 - **实现基线：** `2f3d13ae9`
 - **相关契约：** [TypeScript 控制面迁移 v0](typescript-control-plane-migration-v0.zh-CN.md)、[Extensions 参考](../../reference/extensions.md)、[Capability 目录](../../../loopx/capabilities/README.md)、[总体路线图 v0](loopx-overall-roadmap-v0.zh-CN.md)（S2、S8、S12）、[import 边界测试](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **跟踪 issue：** [#5072](https://github.com/loopx-project/loopx/issues/5072)
@@ -101,6 +101,23 @@
 
 权威不移动：内核仍是 Goal/Todo/claim/lease/quota/effect 状态的唯一写者。capability 包只能通过 `CapabilityRegistry` 注册 provider、capability 契约和 CLI 子命令，绝不 import 内核私有模块。
 
+### 受支持的宿主接入决策
+
+独立安装的 `generic-cli` 宿主 transport 使用已有 Turn wire protocol，不注册
+新的 capability。其受支持的 Python 接缝为 `loopx.extensions.turn_host`：只转出
+签名请求提取、候选构建、Goal 实例校验与结果校验的现有内核 owner，并提供复用
+已有 TypeScript 进程监督器的原始 stdio relay。公开 `loopx.file_lock` API
+继续负责 provider 私有状态的锁与原子写入。两种 import 都不授予工作权限。
+
+MemT 只使用这两个公开模块，不能直接 import executor 或其他内核私有模块。
+这是明确的接入接缝，不是任意包到内核 import 的许可；import ratchet 钉住这两条
+边。Ark/JEV 的既有私有边仍是迁移积压，不新增豁免。facade 只转发现有行为，
+不能复制候选、验收、进程生命周期或文件锁决策。
+
+stdio relay 在父进程 EOF、SIGTERM 或 SIGINT 时取消所持进程组，并等待已有
+监督器完成回收再退出。POSIX 进程组行为与 Windows 尽力而为的进程树回收仍沿用
+原资格边界。这是进程监督，不是沙箱；操作者选择的工具只保有原先获准的效果。
+
 ### 职责与安装验收
 
 目录重组与发行物拆分分别验收。每次移动说明规则的唯一 owner、变更 caller、
@@ -180,7 +197,7 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 | 无 Node 的仅内核安装 | 无 Node 的 runner 上 package-smoke：`pip install loopx-core && loopx --help && loopx status --format json` | 退出码 0 | 不含有副作用命令 |
 | 无 Node 的有副作用命令类型化失败 | 同一 runner：`loopx heartbeat-prompt ...` | `node_unavailable` 诊断，非零退出 | — |
 | 缺失 capability 包 = off state | 仅安装 `loopx-core`；`loopx capability list` | capability 报告不可用，核心命令不受影响 | — |
-| 无内核真相重复 | import 边界测试 + 审查 `packages/*/src` 是否 import 内核私有模块；过渡守卫：`tests/architecture/test_package_kernel_import_ratchet.py` 钉住 `packages/*/src` 下每一个 `loopx.*` import，新增一条边即失败，退役的边必须在同一 PR 降低 pin | 零违规 | 与现状一致，仅静态 import。pin 当前仍持有 3 个包（`loopx-ark-turn`、`loopx-finance-value-discovery`、`loopx-jev`）的 13 条既有边；守卫变绿只证明不再增长，在 pin 清空之前不满足本行 |
+| 无内核真相重复 | import 边界测试 + 审查 `packages/*/src` 是否 import 内核私有模块；过渡守卫：`tests/architecture/test_package_kernel_import_ratchet.py` 钉住每一个 `loopx.*` import，未经评审的新边失败，退役的边必须在同一 PR 降低 pin | 零内核私有违规 | 仅静态 import。Ark、Finance、JEV 的 13 条既有边仍作为迁移积压跟踪，与 MemT 的 2 条受支持公开接入边区分。守卫变绿不消除积压，也不满足本行；受支持的公开边不要求消失 |
 | meta-package 一致性 | `pip install loopx` 后跑现有完整 smoke | 与拆分前 smoke 一致 | — |
 
 以上确定性一致性行是每个里程碑的必需项；本 RFC 不做任何实机 qualification 或性能主张。

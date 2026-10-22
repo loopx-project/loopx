@@ -164,6 +164,8 @@ def _write_fake_runner(root: Path, workspace: Path) -> Path:
                 "    payload = {",
                 "        'result_kind': 'validated_progress',",
                 "        'classification': 'managed_step_fake_runner',",
+                f"        'work_evidence': ['artifact:{MARKER_NAME}'],",
+                "        'validation_evidence': ['fixture:independent-marker-validator'],",
                 "        'summary': 'Same-Turn retry produced the marker.',",
                 "        'recommended_action': 'Inspect the marker.',",
                 "        'next_action': 'Confirm exactly one quota slot was spent.',",

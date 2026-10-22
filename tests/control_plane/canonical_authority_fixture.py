@@ -7,9 +7,37 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import subprocess
 import tempfile
+
+
+def empty_todo_display(state_path: Path) -> None:
+    """Remove display work without deleting Goal intent, acceptance or stops.
+
+    Quota admission still requires those Goal sections. Empty Todo sections
+    independently prove that the real provider owns work selection; a missing
+    entire Goal is a different, deliberately fail-closed health case.
+    """
+    from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
+
+    state_path.write_text(render_canonical_todo_sections(
+        state_path.read_text(), [], provider_revision="synthetic-empty-display",
+    ).markdown)
+
+
+def without_resume_observation_time(value):
+    """Compare all readback facts except the typed evaluator's observation time."""
+    if isinstance(value, list):
+        return [without_resume_observation_time(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    is_resume = value.get("schema_version") == "todo_resume_condition_v0"
+    if is_resume and "evaluated_at" in value:
+        assert datetime.fromisoformat(value["evaluated_at"].replace("Z", "+00:00")).tzinfo is not None
+    return {key: without_resume_observation_time(item) for key, item in value.items()
+            if not (is_resume and key == "evaluated_at")}
 
 
 def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection: dict, *, state_path: Path, provider: str = "file") -> dict:

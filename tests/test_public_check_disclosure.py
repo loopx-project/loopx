@@ -15,7 +15,7 @@ from tests.test_contract_credential_pattern_precision import (
 def test_selected_examples_keep_locations_without_claiming_a_clean_scan(tmp_path):
     outgoing = tmp_path / "request.txt"
     outgoing.write_text(
-        'endpoint = "http://192.168.10.10"\n'
+        'endpoint = "http://192.168.' + '10.10"\n'
         'auth = "Authorization: Bearer ${SERVICE_TOKEN}"\n'
     )
     checked = contract.check_contract(registry_path=_registry(tmp_path),

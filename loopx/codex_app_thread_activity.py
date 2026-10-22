@@ -29,8 +29,10 @@ from .control_plane.agents.host_thread_activity import (
     HostThreadUnknownReason,
 )
 
-# Remote surfaces such as codex-app-ssh keep their store on another machine.
-CODEX_LOCAL_STORE_SURFACES = frozenset({"codex-app", "codex-cli-tui", "codex-ide-plugin"})
+# The surface describes the session, not the observer's machine. On an SSH
+# source host a codex-app-ssh task has a local store too. Missing local records
+# remain unknown; this observer never connects to another host or starts work.
+CODEX_LOCAL_STORE_SURFACES = frozenset({"codex-app", "codex-app-ssh", "codex-cli-tui", "codex-ide-plugin"})
 
 # An installed app automation drives the app surface; the home's other local
 # surfaces keep their own loop, so the automation cadence is not theirs to carry.

@@ -5,7 +5,7 @@ import pytest
 
 import test_lark_goal_topic_connections as fixtures
 from loopx.chat_store import ChatSessionStore
-from loopx.extensions.lark.manager_returns import send_return
+from loopx.extensions.lark.manager_returns import send_return, verify_return
 from loopx.extensions.lark.goal_topic_runtime import _inbox_config
 from loopx.extensions.lark.goal_topic_connections import decide_lark_topic_event
 from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
@@ -27,9 +27,10 @@ from loopx.capabilities.manager_context import (
 )
 
 
+@pytest.mark.parametrize("text", ["Concrete conclusion", "**Complete field**\n\n" + "测" * 24000], ids=["one-post", "split-posts"])
 @pytest.mark.parametrize("revoke_before_send", [False, True])
 def test_original_source_reply_waits_for_ack_and_rechecks_authority(
-    tmp_path, revoke_before_send
+    tmp_path, revoke_before_send, text
 ):
     kwargs, state, bindings = fixtures._manager_fixture(tmp_path)
     root = tmp_path / "runtime"
@@ -98,6 +99,8 @@ def test_original_source_reply_waits_for_ack_and_rechecks_authority(
     )
     calls = []
     sent = []
+    attempts = []
+    messages = {}
 
     def transport(args):
         calls.append(args)
@@ -116,7 +119,6 @@ def test_original_source_reply_waits_for_ack_and_rechecks_authority(
             assert args[args.index("--message-id") + 1] == "om_return_source"
             assert args[args.index("--msg-type") + 1] == "post"
             content = args[args.index("--content") + 1]
-            assert json.loads(content)["zh_cn"]["content"][0][0] == {"tag": "md", "text": "Concrete conclusion"}
             if "--dry-run" in args:
                 if revoke_before_send:
                     _write(
@@ -126,19 +128,12 @@ def test_original_source_reply_waits_for_ack_and_rechecks_authority(
                 data = {"api": [{"body": {"msg_type": "post", "content": content}}]}
             else:
                 sent.append(args)
-                data = {"data": {"message_id": "om_return_result"}}
+                mid = f"om_return_result_{len(sent)}"
+                messages[mid] = {"message_id": mid, "msg_type": "post", "body": {"content": content}}
+                data = {"data": {"message_id": mid}}
         elif "+messages-mget" in args:
-            data = {
-                "data": {
-                    "items": [
-                        {
-                            "message_id": "om_return_result",
-                            "msg_type": "post",
-                            "content": "Concrete conclusion",
-                        }
-                    ]
-                }
-            }
+            mid = args[args.index("--message-ids") + 1]
+            data = {"data": {"items": [messages[mid]]}}
         else:
             raise AssertionError(args)
         return {"returncode": 0, "stdout": json.dumps(data)}
@@ -151,8 +146,8 @@ def test_original_source_reply_waits_for_ack_and_rechecks_authority(
             route=return_route,
             session=session,
             turn=turn,
-            text="Concrete conclusion",
-            runner=transport,
+            text=text,
+            delivery_attempt_recorder=attempts.append, runner=transport,
         )
 
     with pytest.raises(ValueError, match="initial reply") as pending:
@@ -178,15 +173,20 @@ def test_original_source_reply_waits_for_ack_and_rechecks_authority(
     else:
         result = invoke()
         assert result["reply_verified"] and result["external_write_performed"], result
-        assert len(sent) == 1 and "--idempotency-key" in sent[0]
+        part_count = len(sent)
+        assert part_count >= 1 and "--idempotency-key" in sent[0]
+        if text != "Concrete conclusion":
+            assert part_count > 1
+            parts = [json.loads(m["body"]["content"])["zh_cn"]["content"][0][0]["text"] for m in messages.values()]
+            assert "".join(part.split("\n\n", 1)[1] for part in parts) == text
         assert load_lark_event_inbox_config(project=root, config_path=config)["reply"][
             "received_reaction_policy"
         ] == "retain"
         assert lark_inbox_reaction_receipts(
             inbox=inbox, message_id=event["message_id"]
         )["received"]["reaction_id"] == "reaction_Get"
-        assert invoke()["reply_verified"]
+        assert verify_return(root=root, registry=registry, snapshot_provider=lambda: snapshot,
+            route=return_route, session=session, turn=turn, text=text, attempt=attempts[-1],
+            runner=transport)["reply_verified"]
+        assert len(sent) == part_count
         assert not any("reactions" in call for call in calls)
-        assert sent[0][sent[0].index("--idempotency-key") + 1] == sent[1][
-            sent[1].index("--idempotency-key") + 1
-        ]

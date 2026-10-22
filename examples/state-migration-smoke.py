@@ -49,12 +49,13 @@ def main() -> int:
         legacy_state.parent.mkdir(parents=True)
         legacy_state.write_text(
             "# Goal Harness State\n\n"
-            "Next: run goal-harness quota should-run for goal-harness-meta.\n",
+            "Next: run goal-harness quota should-run for goal-harness-meta.\n\n"
+            "## Agent Todo\n",
             encoding="utf-8",
         )
         other_legacy_state = legacy_project / ".local" / "goals" / OTHER_GOAL_ID / "ACTIVE_GOAL_STATE.md"
         other_legacy_state.parent.mkdir(parents=True)
-        other_legacy_state.write_text("# Other State\n", encoding="utf-8")
+        other_legacy_state.write_text("# Other State\n\n## Agent Todo\n", encoding="utf-8")
         legacy_run_dir = legacy_runtime / "goals" / OLD_GOAL_ID / "runs"
         legacy_run_dir.mkdir(parents=True)
         write_json(

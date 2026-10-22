@@ -162,7 +162,7 @@ def test_handoff_retains_configured_checks_from_each_readback_source(placement, 
     assert handoff["ok"], handoff
     core = handoff["replan_context"]["core_goal"]
     assert core["acceptance_contract"] == (
-        checks if wire in {"v2", "legacy_enabled"} else None
+        document if wire in {"v2", "legacy_enabled"} else None
     )
     assert core["objective"] is None, "A selected check objective is not the whole Goal"
     assert source == before

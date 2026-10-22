@@ -124,6 +124,8 @@ def _write_fake_traex(root: Path, workspace: Path) -> Path:
         {
             "result_kind": "validated_progress",
             "classification": "traex_e2e_marker_written",
+            "work_evidence": [f"artifact:{MARKER_NAME}"],
+            "validation_evidence": ["fixture:independent-marker-validator"],
             "summary": "Wrote the public e2e marker file.",
             "next_action": "Replay idempotently; no further work.",
         }

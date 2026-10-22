@@ -2740,7 +2740,6 @@ def test_notify_cli_compact_quota_joins_same_read_complete_request(tmp_path: Pat
                "user_todos": {"items": [canonical]}}]}}
     before = deepcopy(status)
     reads = []
-    monkeypatch.setattr(goal_channel_cli, "registry_project_root", lambda _: tmp_path)
     monkeypatch.setattr(goal_channel_cli, "collect_status", lambda **kwargs: reads.append(kwargs) or status)
     def quota_from_status(observed, **kwargs):
         assert observed is status

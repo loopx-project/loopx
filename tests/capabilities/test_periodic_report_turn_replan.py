@@ -110,6 +110,8 @@ def test_turn_milestone_intent_is_replay_stable(
         "path_delta_mode": "material_replan",
         "agent_vision_json": json.dumps(vision),
         "summary": "The prior stage closed and an active successor was authored.",
+        "work_evidence": ["fixture:validated-artifact"],
+        "validation_evidence": ["fixture:independent-artifact-check"],
     }
     host_runner = tmp_path / ("turn_replan_dsh_runner.py" if host_kind == "dsh" else "turn_replan_host.py")
     if host_kind == "dsh":

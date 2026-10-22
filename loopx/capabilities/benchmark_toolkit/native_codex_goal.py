@@ -110,6 +110,9 @@ class NativeGoalTurn:
     notifications: list[str] = field(default_factory=list)
     notification_counts: dict[str, int] = field(default_factory=dict)
     error_signatures: list[str] = field(default_factory=list)
+    terminal_error_signature: str | None = None
+    terminal_error_kind: str | None = None
+    terminal_error_http_status: int | None = None
     event_turn_id_observed: bool = False
     terminal_event_observed: bool = False
     turn_status: str = "not_started"
@@ -320,6 +323,10 @@ def observe_native_goal_event(
         turn.turn_id = event_turn_id
         turn.event_turn_id_observed = True
         turn.turn_status = str(event_turn.get("status") or "inProgress")
+        turn.terminal_event_observed = False
+        turn.terminal_error_signature = None
+        turn.terminal_error_kind = None
+        turn.terminal_error_http_status = None
         turn.turn_started_count += 1
         return False
     if event_turn_id and event_turn_id != turn.turn_id:
@@ -337,9 +344,55 @@ def observe_native_goal_event(
         "event_msg:turn_completed",
     }:
         turn.terminal_event_observed = True
-        turn.turn_status = str(event_turn.get("status") or "completed")
+        error = event_turn.get("error") or params.get("error")
+        # JSONL task_complete has no turn.status; an attached error is a failed
+        # Turn, not a successful terminal event. Do not count a repeated error
+        # notification as another failed request or retain its message.
+        turn.turn_status = "failed" if error else str(event_turn.get("status") or "completed")
+        if error:
+            turn.terminal_error_signature = _digest(json.dumps(error, sort_keys=True, default=str))[:12]
+            turn.terminal_error_kind = "unknown"
+            if isinstance(error, Mapping):
+                info = error.get("codexErrorInfo", error.get("codex_error_info"))
+                # Native Codex variants only; unknown/free-text data stays out
+                # of this public receipt. Do not infer HTTP status from prose.
+                scalar_kinds = {"contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded",
+                                "rateLimitExceeded", "serverOverloaded", "cyberPolicy",
+                                "misalignmentPolicyViolation", "internalServerError", "unauthorized",
+                                "badRequest", "threadRollbackFailed", "sandboxError", "other"}
+                http_kinds = {"httpConnectionFailed", "responseStreamConnectionFailed",
+                              "responseStreamDisconnected", "responseTooManyFailedAttempts"}
+                statuses = []
+                if isinstance(info, str) and info in scalar_kinds:
+                    turn.terminal_error_kind = info
+                elif isinstance(info, Mapping) and len(info) == 1:
+                    kind = next(iter(info))
+                    if kind in http_kinds and isinstance(info[kind], Mapping):
+                        turn.terminal_error_kind = kind
+                        statuses.append(info[kind].get("httpStatusCode"))
+                valid = {value for value in statuses if type(value) is int and 100 <= value <= 599}
+                turn.terminal_error_http_status = next(iter(valid)) if len(valid) == 1 else None
         turn.turn_completed_count += 1
     return turn.terminal_event_observed
+
+
+def native_goal_outcome(turn: NativeGoalTurn) -> str:
+    """Classify the latest terminal Turn separately from its Goal's status.
+
+    This is native transport evidence, not task acceptance or retry authority.
+    Historical recoverable errors must not override a later completed Turn.
+    """
+    if not turn.terminal_event_observed:
+        return "unknown"
+    if turn.turn_status in {"failed", "error"}:
+        return "failed"
+    if turn.turn_status in {"interrupted", "cancelled"}:
+        return "cancelled"
+    if turn.turn_status != "completed":
+        return "unknown"
+    return {"complete": "complete", "blocked": "blocked", "paused": "paused",
+            "budgetLimited": "budget_exhausted", "usageLimited": "usage_limited"
+            }.get(turn.post_goal_status, "unknown")
 
 
 def wait_native_goal_turn(
@@ -567,6 +620,9 @@ def compact_native_goal_receipt(turn: NativeGoalTurn) -> dict[str, Any]:
             else None
         ),
         "error_signatures": list(turn.error_signatures),
+        "terminal_error_signature": turn.terminal_error_signature,
+        "terminal_error_kind": turn.terminal_error_kind,
+        "terminal_error_http_status": turn.terminal_error_http_status,
         "public_boundary": {
             "raw_objective_recorded": False,
             "raw_task_instruction_recorded": False,
@@ -588,6 +644,7 @@ __all__ = [
     "attach_native_goal",
     "compact_native_goal_receipt",
     "observe_native_goal_event",
+    "native_goal_outcome",
     "probe_native_goal_process",
     "refresh_native_goal_status",
     "run_native_goal_process",

@@ -183,6 +183,8 @@ def assert_status_and_quota_projection() -> None:
                     "## Objective",
                     "Validate cadence hint projection.",
                     "",
+                    "## Agent Todo",
+                    "",
                     "## Latest Run",
                     "- Run ID: run_thin_2",
                     "- Agent: codex-cadence",

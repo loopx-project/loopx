@@ -169,7 +169,8 @@ def test_one_shot_host_contract_keeps_goal_closure_with_the_host() -> None:
     assert "Progress is not a new Goal boundary" in normalized
     assert "do not create a new host Goal merely to continue" in normalized
     assert "settlement_plan.ordered_steps" in normalized
-    assert "Do not reconstruct refresh/spend commands" in normalized
+    assert "reconstruct static refresh/spend" in normalized
+    assert "ambiguous effects need readback/recovery" in normalized
     assert prompt["progress_refresh_state_command"] not in task_body
     assert prompt["quota_spend_command"] not in task_body
 

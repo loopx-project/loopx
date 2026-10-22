@@ -880,7 +880,7 @@ class LarkPrivateConversations:
                 _atomic_write_json(path, record)
                 return self._deliver(path, record, phase, text, inbox=inbox)
         elif phase_state.get("attempt"):
-            result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"])
+            result = verify_lark_inbox_reply(**kwargs, attempt=phase_state["attempt"], resume_parts=True)
         elif phase_state.get("started"):
             # A crash between provider write and its receipt is ambiguous. Keep
             # the original source recoverable; never resend blindly.
@@ -946,12 +946,35 @@ class LarkPrivateConversations:
         return result.get("ok") is True
 
     def _close_progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
+        if self._retire_progress_parts(path, record, inbox=inbox):
+            return True
         text = "回答已生成，完整结果将单独发送。"
         if not self._edit_progress(path, record, text, inbox=inbox, finalizing=True):
             return False
         presentation_stream(record)["closed"] = True
         _atomic_write_json(path, record)
         return True
+
+    def _retire_progress_parts(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
+        """Verify every concrete draft post before retiring a split draft."""
+        from .post_delivery import POST_PARTS_LOCATOR
+
+        progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
+        stream = presentation_stream(record)
+        attempt = stream.get("confirmed_attempt") or progress.get("attempt") or {}
+        if not POST_PARTS_LOCATOR.fullmatch(str(attempt.get("message_ref") or "")):
+            return False
+        result = verify_lark_inbox_reply(project=self.runtime_root, config_path=inbox(),
+            message_id=record["event"]["message_id"],
+            text=stream.get("confirmed_text") or progress["text"], attempt=attempt,
+            runner=self._reply_runner, finalize_reactions=False,
+            source_authority_verifier=lambda profile, chat, message: self._source_authority(record, profile, chat, message))
+        stream["blocker"] = result.get("blocker")
+        verified = result.get("reply_verified") is True and result.get("ok") is True
+        if verified:
+            stream["closed"] = True
+        _atomic_write_json(path, record)
+        return verified
 
     def _continue_progress(self, path: Path, record: dict[str, Any], *, inbox: Callable[[], Path]) -> bool:
         """Retire a verified draft before creating the next source-bound one.
@@ -965,7 +988,7 @@ class LarkPrivateConversations:
         if not progress.get("verified"):
             return False
         stream = presentation_stream(record)
-        if not stream.get("edit_limit_reached"):
+        if not stream.get("edit_limit_reached") and not self._retire_progress_parts(path, record, inbox=inbox):
             closed = self._edit_progress(path, record, "仍在处理，后续进展见下一条消息。",
                                          inbox=inbox, finalizing=True)
             if not closed and not stream.get("edit_limit_reached"):

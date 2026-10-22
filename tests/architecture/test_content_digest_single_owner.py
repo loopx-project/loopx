@@ -179,6 +179,7 @@ CONSUMER_MODULES = (
     "loopx.chat_action_normalization",
     "loopx.configuration_transaction",
     "loopx.control_plane.agents.execution_facts",
+    "loopx.control_plane.collaboration.conversation_inventory",
     "loopx.control_plane.collaboration.delegation_inventory",
     "loopx.control_plane.collaboration.inbox",
     "loopx.control_plane.collaboration.links",
@@ -212,6 +213,7 @@ CONSUMER_MODULES = (
     "loopx.hosts.checkpoint_retention",
     "loopx.hosts.codex_checkpoint",
     "loopx.presentation.chat_bundle",
+    "loopx.presentation.content_media_api",
     "loopx.presentation.static_site",
 )
 

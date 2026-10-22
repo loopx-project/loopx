@@ -342,7 +342,9 @@ def test_goal_hosts_delegate_spend_to_live_settlement_not_static_templates(
     assert refresh_command not in task_body
     assert spend_command not in task_body
     assert "settlement_plan.ordered_steps" in task_body
-    assert "preserve identities/flags" in task_body
+    assert "preserve exact identities/effect ids and actual outcomes" in task_body
+    assert "Preserve command flags" in task_body
+    assert "truthful evidence" in task_body
     assert "<PUBLIC_SAFE_PROGRESS_CLASSIFICATION>" in refresh_command
     assert "<ACTUAL_DELIVERY_BATCH_SCALE>" in refresh_command
     assert "<ACTUAL_DELIVERY_OUTCOME>" in refresh_command
@@ -400,7 +402,7 @@ def test_goal_hosts_enter_live_contract_without_a_mandatory_skill_detour(
     )
     task_body = " ".join(payload["task_body"].split())
 
-    assert "Use the current `interaction_contract`, not remembered commands" in task_body
+    assert "Use current `interaction_contract`" in task_body
     assert "loopx-project" in task_body
     assert "loopx-self-repair" in task_body
     assert "Progress is not a new Goal boundary" in task_body
@@ -445,7 +447,7 @@ def test_goal_hosts_reuse_thin_dispatch_and_stay_compact() -> None:
             "preserve exact identities/effect ids",
         ):
             assert obligation in payload["task_body"]
-        # Current authority/continuation clauses measure 2,862–3,166 normalized
+        # Current authority/continuation clauses fit 3,200 normalized
         # chars on this fixed fixture. Keep a tight regression guard and the
         # native host's separate hard cap, without shortening those obligations.
         assert payload["interface_budget"]["budget_char_count"] <= 3_200
@@ -1101,7 +1103,7 @@ def test_traex_visible_goal_allows_policy_words_in_goal_identity() -> None:
     )
 
     assert prompt["ok"] is True
-    assert "LoopX goal `scheduler-reliability`" in prompt["task_body"]
+    assert "goal `scheduler-reliability`" in prompt["task_body"]
 
 
 def test_traex_visible_goal_keeps_adversarial_capabilities_outside_task_body(

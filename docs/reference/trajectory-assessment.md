@@ -529,3 +529,39 @@ checkpoint reads are qualified separately from this presentation example.
 ![Goal overview with registered trajectory analysis](../development/assets/research-analysis/first-screen.png)
 
 ![Scoped interpretation and usage reader](../development/assets/research-analysis/summary.png)
+
+
+### Observe an unfinished final Turn
+
+For a captured run that stopped mid-Turn, the curator may explicitly add
+`--include-incomplete-usage` to the same registration command, together with
+`--usage-jsonl` and `--usage-session-id`. This reads persisted counters without
+running a model or changing the solver. The default complete-session contract
+above remains unchanged.
+
+The opt-in method is `codex_observed_session_counters_v1`. Its totals include
+observed counters in the final unfinished Turn. `completed_turns` and `turns`
+still contain only measured completions; `incomplete_turn` identifies the final
+open interval, source lines, observation count and observed delta. With no
+counter in that interval its `usage` is null, never an invented zero. With no
+measured counters anywhere registration fails. Duplicate snapshots do not add
+usage. Both methods reject wrong identity, forks, missing prefixes, gaps, resets,
+unmatched completions and malformed JSONL. Cancellation without a completion
+remains incomplete; recovery that starts another Turn without closing the prior
+one remains unsupported. This opt-in is not a relaxed integrity qualification.
+
+The Research workbench's existing Sources and usage disclosure shows the
+unfinished interval and its persisted input/output next to the capture totals,
+with complete cost unknown. No extra owner confirmation or model run is needed
+to read these facts. An unfinished interval ends at the last supported observed
+event, not at an inferred process death. Observed time includes tools and waits;
+unpersisted requests, later activity, model prices, evaluator costs and operator
+attention remain unknown. Do not sum overlapping captures or repeated pack
+registrations: the pack is a versioned diagnostic, not a billing ledger.
+
+The original source hash and historical/unavailable handling also apply to this
+mode. Select a capture-free or default complete-session pack to stop using it;
+old observations stay readable. The builtin benchmark-toolkit provider and its
+TypeScript reducer retain ownership, with Python restricted to scoped file
+reading and transport. There is no new telemetry, accounting store or scoring
+policy.

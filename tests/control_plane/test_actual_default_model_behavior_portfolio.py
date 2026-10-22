@@ -1365,6 +1365,22 @@ def test_catalog_declares_independent_bounded_repeat_policy() -> None:
     )
 
 
+@pytest.mark.parametrize("scenario_id", [
+    "turn_accepted_replan_successor",
+    "turn_future_primary_fallback",
+    "turn_external_wait_fallback",
+    "turn_planning_horizon_strategic_context",
+])
+def test_planning_scenario_has_an_explicit_scheduler_owner(
+    tmp_path: Path, scenario_id: str,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    for packet in (sources[scenario_id], packets[scenario_id]):
+        assert packet["scheduler_hint"]["action"] == "run_now"
+        assert packet["should_run"] is True
+        assert packet["interaction_contract"]["agent_channel"]["must_attempt"] is True
+
+
 def test_portfolio_preflights_every_scenario_before_actor_spend(tmp_path: Path) -> None:
     sources, packets = _scenario_inputs(tmp_path)
     packets["onboarding_projection_repair"] = {

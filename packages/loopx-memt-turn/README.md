@@ -19,7 +19,7 @@ memory setting.
 
 ## Prerequisites and licensing
 
-Use a reviewed LoopX checkout containing `turn_driver.host_candidate`, Python
+Use LoopX 2.1.0+ with its supported `extensions.turn_host` seam, Python
 3.11+, and a separately operated Nano SGLang service. See the upstream
 [inference guide](https://github.com/MemTensor/MemT-1.0/blob/e75c13d090a6a9d34b29146d901bd84323185f24/inference/README.md)
 for GPU deployment. The local client needs matching tokenizer and configuration
@@ -91,7 +91,7 @@ filesystem tool exposure.
 
 The selected MCP server must enforce the current signed resource/operation
 scope. It receives `LOOPX_TURN_KEY`, `LOOPX_TURN_GOAL_ID`, `LOOPX_TURN_AGENT_ID`,
-`LOOPX_TURN_TODO_ID` and `LOOPX_TURN_WORKSPACE`; those are scope inputs, not
+`LOOPX_TURN_GOAL_INSTANCE_ID`, `LOOPX_TURN_TODO_ID` and `LOOPX_TURN_WORKSPACE`; those are scope inputs, not
 authentication. Provider credentials and arbitrary parent environment values
 are not forwarded. This adapter is not an OS sandbox. Do not select a server
 that grants unrestricted effects based on model arguments or remembered text.
@@ -117,7 +117,20 @@ native memory, not an old host conversation or its authority.
 
 ## Persistence and failure recovery
 
-Memory scopes are isolated by resolved workspace, Goal and Agent. Each new Turn
+Memory scopes are isolated by resolved workspace, exact Goal lifetime and Agent.
+The request must carry the executor's matching `goal_ref` with a valid
+`goal_instance_id`; alias-only or mismatched requests fail before IO. Existing
+alias-only memory directories are not imported or deleted. Reconcile their
+pending effects separately; a new lifetime begins with empty memory.
+Before provider or MCP IO, the host holds the old alias cursor's lock alongside
+the new instance lock. A pending head, unfinished receipt or orphaned receipt
+in that old directory fails with `legacy_memory_requires_operator_reconciliation`;
+unreadable state also fails. Old records cannot identify a Goal lifetime, so
+changing the instance does not bypass this gate. Stop the old worker, reconcile
+its exact effects through the existing Turn recovery owner, then explicitly
+select a new `state_dir`. Do not delete the evidence. Completed old records stay
+untouched and are not imported; they do not block empty new-instance memory.
+Each new Turn
 opens a MemT session, imports the scope's last confirmed snapshot, runs the
 model/tool chain, exports a new snapshot, closes the session, then records the
 new cursor. Server restarts use a new epoch and explicit snapshot import.
@@ -136,6 +149,16 @@ The complete encoded model/tool Turn must fit the server's prefill limit when
 saved. Overflow, truncation and malformed candidate output fail explicitly;
 the adapter does not silently trim history or fabricate a success. Limits apply
 per model request/tool count; the outer Turn supervisor owns the process deadline.
+Every tool round, including a continuation, must complete generation before
+dispatch. A truncated round cannot execute its tools or publish a snapshot;
+earlier tool effects remain real and require ordinary reconciliation.
+
+The MCP SDK detaches its stdio child. A raw stdio relay therefore keeps the
+actual tool under LoopX's existing TypeScript process supervisor. Parent EOF,
+cancellation and hard parent exit terminate the tool before that supervisor
+returns on qualified POSIX paths. This is not a sandbox and does not constrain
+deliberately detached tools. Windows tree cleanup remains best effort and is not
+qualified as a strict stop boundary by this package.
 
 Repeating an identical completed request returns its saved candidate without
 running tools or the model again. A changed request under the same Turn key,

@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, empty_todo_display
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.scheduler import monitor_todo
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
@@ -118,7 +118,7 @@ def test_public_quota_gap_count_uses_real_full_source_without_writing_it(tmp_pat
     projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=fields["agent_todos"]["items"],
                                                      handoff_mode="soft_claim")
     initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
-    state.unlink()
+    empty_todo_display(state)
     before = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
         "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
@@ -246,7 +246,7 @@ def test_cli_due_order_and_successive_turns_preserve_exact_poll_settlement(
         _add_monitor(registry, text="[P1] Observe middle target", target_key="middle",
                      next_due_at="2001-01-01T00:00:00Z"),
     ]
-    state.unlink()  # Canonical authority, not a stale Markdown fallback.
+    empty_todo_display(state)  # Goal intent remains; no display Todo can select work.
 
     def call(*args):
         code, result = run_json_cli_result(

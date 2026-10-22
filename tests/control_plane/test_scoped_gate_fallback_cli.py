@@ -2,7 +2,7 @@
 import json
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, empty_todo_display
 from loopx.control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
@@ -34,7 +34,7 @@ def test_quota_fallback_uses_real_source_and_explicit_relations(tmp_path, monkey
         projection, _ = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime,
                                                              state_path=state, registry_path=registry)
         initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
-        state.unlink()
+        empty_todo_display(state)
     before = state.read_bytes() if state.exists() else None
     authority_before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
