@@ -122,7 +122,11 @@ def _write_fixture(
     required_capability: str | None = None,
     claimed: bool = True,
 ) -> tuple[Path, Path, Path]:
-    """Build owned delivery work; claim-authoring scenarios must opt out."""
+    """Write unmigrated source input; canonical consumers must initialize authority.
+
+    Use ``_initialize_fixture_authority`` after source edits for ordinary reads
+    or writes. Claim-authoring scenarios must also opt out of the initial claim.
+    """
     project = root / "project"
     runtime = root / "runtime"
     state_file = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"

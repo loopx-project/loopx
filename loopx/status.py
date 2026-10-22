@@ -127,10 +127,9 @@ from .control_plane.work_items.autonomous_candidates import (
 from .control_plane.goals.active_state_metadata import (
     parse_state_frontmatter,
 )
-# Explicit source parsing remains available to migration and fixture callers;
-# ordinary status obtains Task authority through the canonical read model.
+# Existing source/fixture callers retain the parser; ordinary status obtains
+# Task authority through the canonical read model.
 from .control_plane.todos.active_state_todo_parser import (
-    active_state_incomplete_warning as active_state_incomplete_warning,
     parse_active_state_todos as parse_active_state_todos,
 )
 from .control_plane.todos.active_state_todos import (
@@ -267,6 +266,7 @@ from .control_plane.todos.todo_semantics import (
 
 
 _PUBLIC_COMPAT_REEXPORTS = {
+    "parse_active_state_todos": "loopx.control_plane.todos.active_state_todo_parser",
     "DREAMING_ADVISORY_CLASSIFICATIONS": "loopx.control_plane.runtime.status_classifications",
     "TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION": "loopx.control_plane.work_items.project_asset",
     "TODO_PROJECTION_VIEW_SCHEMA_VERSION": "loopx.control_plane.work_items.project_asset",
