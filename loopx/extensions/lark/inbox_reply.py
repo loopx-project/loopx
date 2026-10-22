@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -314,6 +315,7 @@ def _deliver_lark_inbox_outbound(
     runner: CommandRunner = _default_runner,
     source_membership_verifier: Callable[[], bool] | None = None,
     source_authority_verifier: SourceAuthorityVerifier | None = None,
+    overlap_source_preflight: bool = False,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -423,12 +425,61 @@ def _deliver_lark_inbox_outbound(
         )
 
     base = ["lark-cli", "--profile", profile]
-    identity_verified, membership_verified = _verified_sender_and_source(
+    content_args = (
+        ["--msg-type", "post", "--content", lark_markdown_post_content(reply_text)]
+        if markdown else ["--text", reply_text]
+    )
+    if attachment_keys:
+        content_args.extend(arg for key in attachment_keys for arg in ("--attachment", key))
+    destination = (
+        [
+            "im",
+            "+messages-send",
+            "--chat-id",
+            chat_id,
+            *content_args,
+        ]
+        if placement == "chat_root"
+        else [
+            "im",
+            "+messages-reply",
+            "--message-id",
+            source_message_id,
+            *content_args,
+            "--reply-in-thread",
+        ]
+    )
+    provider_args = (
+        base
+        + destination
+        + [
+            "--idempotency-key",
+            f"loopx-{digest[:32]}",
+            "--as",
+            "bot",
+            "--format",
+            "json",
+        ]
+    )
+    source_args = dict(
         runner=runner, base=base, profile=profile, chat_id=chat_id,
         message_id=source_message_id, expected_name=str(reply_config["bot_display_name"]),
         source_membership_verifier=source_membership_verifier,
         source_authority_verifier=source_authority_verifier,
     )
+    preview = None
+    if overlap_source_preflight and source_authority_verifier is not None and not expected_lark_mention_identities(reply_text):
+        # Only the native completed, target-frozen stop opts into scheduling.
+        # A dry-run is not authority: join both reads before any intent/write.
+        # Keep the authority callback on its caller's thread and discard the
+        # preview (including its errors) if fresh source verification denies.
+        with ThreadPoolExecutor(max_workers=1) as reads:
+            pending_preview = reads.submit(_call, runner, provider_args + ["--dry-run"])
+            identity_verified, membership_verified = _verified_sender_and_source(**source_args)
+            if identity_verified and membership_verified:
+                preview = pending_preview.result()
+    else:
+        identity_verified, membership_verified = _verified_sender_and_source(**source_args)
     if not identity_verified:
         return _result(
             status="gate_required",
@@ -466,43 +517,8 @@ def _deliver_lark_inbox_outbound(
             format_preflight_passed=True,
         )
 
-    content_args = (
-        ["--msg-type", "post", "--content", lark_markdown_post_content(reply_text)]
-        if markdown else ["--text", reply_text]
-    )
-    if attachment_keys:
-        content_args.extend(arg for key in attachment_keys for arg in ("--attachment", key))
-    destination = (
-        [
-            "im",
-            "+messages-send",
-            "--chat-id",
-            chat_id,
-            *content_args,
-        ]
-        if placement == "chat_root"
-        else [
-            "im",
-            "+messages-reply",
-            "--message-id",
-            source_message_id,
-            *content_args,
-            "--reply-in-thread",
-        ]
-    )
-    provider_args = (
-        base
-        + destination
-        + [
-            "--idempotency-key",
-            f"loopx-{digest[:32]}",
-            "--as",
-            "bot",
-            "--format",
-            "json",
-        ]
-    )
-    preview = _call(runner, provider_args + ["--dry-run"])
+    if preview is None:
+        preview = _call(runner, provider_args + ["--dry-run"])
     provider_preview_verified = bool(
         preview.get("returncode") == 0
         and (
@@ -772,6 +788,7 @@ def reply_lark_event_inbox(
     runner: CommandRunner = _default_runner,
     source_membership_verifier: Callable[[], bool] | None = None,
     source_authority_verifier: SourceAuthorityVerifier | None = None,
+    overlap_source_preflight: bool = False,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -794,6 +811,8 @@ def reply_lark_event_inbox(
     source verification result separately.
     The sender consumes that result once; retries invoke the callback again.
     Ordinary/legacy callers retain independent identity and membership checks.
+    ``overlap_source_preflight`` schedules a readonly preview for a native
+    completed stop; it supplies no authority and both checks must join.
     """
 
     result = _deliver_lark_inbox_outbound(
@@ -807,6 +826,7 @@ def reply_lark_event_inbox(
         runner=runner,
         source_membership_verifier=source_membership_verifier,
         source_authority_verifier=source_authority_verifier,
+        overlap_source_preflight=overlap_source_preflight,
         before_send=before_send,
         delivery_attempt_recorder=delivery_attempt_recorder,
         short_message_limit=short_message_limit,

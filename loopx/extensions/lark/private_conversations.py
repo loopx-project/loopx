@@ -898,7 +898,10 @@ class LarkPrivateConversations:
 
             result = reply_lark_event_inbox(**kwargs, execute=True, before_send=before_send,
                                            delivery_attempt_recorder=attempt, short_message_limit=None,
-                                           content_format="markdown")
+                                           content_format="markdown",
+                                           overlap_source_preflight=bool(kind == "terminal" and self._completed_stop_root(
+                                               record, next((row for row in self.bindings.read()["bindings"]
+                                                             if row.get("binding_id") == record["binding_id"]), {}))))
         # A verified intermediate reply is not completion. A final reply with
         # cleanup owed recovers its original attempt; it must never be resent.
         phase_state["verified"] = result.get("reply_verified") is True and result.get("ok") is True
