@@ -71,6 +71,37 @@ def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection:
     return result
 
 
+def read_fixture_todos(state_path: Path) -> list[dict]:
+    """Read authored input before initializing a disposable canonical fixture."""
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+
+    summary = parse_active_state_todos(
+        state_path.read_text(encoding="utf-8"), state_path=state_path, item_limit=None,
+    )
+    return [
+        *(summary.get("user_todos", {}).get("items") or []),
+        *(summary.get("agent_todos", {}).get("items") or []),
+    ]
+
+
+def initialize_canonical_source_fixture(
+    runtime_root: Path, goal_id: str, *, state_path: Path,
+    provider: str = "file", handoff_mode: str = "soft_claim",
+    leases: list[dict] | None = None,
+) -> dict:
+    """Finalize source authoring once; later changes use the canonical writer."""
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    return initialize_canonical_authority(
+        runtime_root, goal_id,
+        build_todo_runtime_shadow_projection(
+            goal_id=goal_id, todos=read_fixture_todos(state_path),
+            handoff_mode=handoff_mode, leases=leases or [],
+        ),
+        state_path=state_path, provider=provider,
+    )
+
+
 def isolate_sqlite_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
     # Do not reuse an Effect runtime started by the minimum-Node CI step.

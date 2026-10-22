@@ -12,6 +12,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 GOAL_ID = "status-quota-review-parity"
 OTHER_GOAL_ID = "status-quota-review-parity-other"
@@ -200,6 +202,13 @@ def main() -> int:
         (project / "PUBLIC.md").write_text("# Public fixture\n", encoding="utf-8")
         registry_path = write_registry(project, runtime)
         agent_worktree = create_agent_worktree(project, root)
+        from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+
+        for goal_id in (GOAL_ID, OTHER_GOAL_ID):
+            initialize_canonical_source_fixture(
+                runtime, goal_id,
+                state_path=project / f".codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md",
+            )
 
         status = run_cli(
             registry_path,
