@@ -38,17 +38,16 @@ def _source(root: Path, *, provider: str, status: str = "open", extra: str = "",
     prefix += "## Agent Todo\n\n"
     rows = "".join(_row(f"todo_ready_{i}") for i in range(35))
     path.write_text(prefix + ("" if empty else rows + _row(cli.TODO_ID, status=status, extra=extra)))
-    if provider != "legacy":
-        fields = parse_active_state_todos(path.read_text(), goal=goal, item_limit=None)
-        initialize_canonical_authority(
-            runtime, cli.GOAL_ID,
-            build_todo_runtime_shadow_projection(
-                goal_id=cli.GOAL_ID,
-                todos=fields["agent_todos"]["items"] + fields.get("user_todos", {}).get("items", []),
-                handoff_mode=handoff_mode,
-            ),
-            state_path=path, provider=provider,
-        )
+    fields = parse_active_state_todos(path.read_text(), goal=goal, item_limit=None)
+    initialize_canonical_authority(
+        runtime, cli.GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=cli.GOAL_ID,
+            todos=fields["agent_todos"]["items"] + fields.get("user_todos", {}).get("items", []),
+            handoff_mode=handoff_mode,
+        ),
+        state_path=path, provider=provider,
+    )
     return project, runtime, registry, path, prefix
 
 
@@ -76,18 +75,30 @@ def test_stale_markdown_cannot_admit_terminal_or_blocked_work(tmp_path, provider
     assert not guard.get("selected_todo")
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_exact_selection_reaches_work_beyond_display_limits(tmp_path, provider):
     project, runtime, registry, path, prefix = _source(tmp_path, provider=provider)
-    if provider != "legacy":
-        # Goal intent remains readable, while its bounded Todo display cannot
-        # supply the exact candidate from the canonical provider.
-        path.write_text(prefix)
+    # Goal intent remains readable, while its bounded Todo display cannot
+    # supply the exact candidate from the canonical provider.
+    path.write_text(prefix)
     code, guard = _guard(project, runtime, registry)
     assert code == 0, guard
     assert guard["decision"] == "run"
     assert guard["selected_todo"]["todo_id"] == cli.TODO_ID
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == cli.TODO_ID
+
+
+def test_unmigrated_goal_cannot_select_work_from_markdown(tmp_path):
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    state = project / json.loads(registry.read_text())["goals"][0]["state_file"]
+    before = state.read_bytes()
+    code, guard = _guard(project, runtime, registry)
+    assert code != 0 and not guard["ok"], guard
+    assert "canonical authority" in json.dumps(guard).lower()
+    assert not guard.get("selected_todo")
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 0
+    assert cli._spend_run_count(runtime) == 0
+    assert state.read_bytes() == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -143,7 +154,7 @@ def test_canonical_decision_gate_cannot_be_bypassed_by_exact_selection(
     assert cli._spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("extra", [f"excluded_agents={cli.AGENT_ID}", "claimed_by=agent-other",
                                    "required_capabilities=production_access"])
 def test_exact_selection_keeps_executor_and_capability_gates(tmp_path, provider, extra):
@@ -156,11 +167,10 @@ def test_exact_selection_keeps_executor_and_capability_gates(tmp_path, provider,
     assert guard["heartbeat_receipt"]["status"] == "not_committed"
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_absent_current_identity_cannot_be_selected(tmp_path, provider):
     project, runtime, registry, path, prefix = _source(tmp_path, provider=provider, empty=True)
-    if provider != "legacy":
-        path.write_text(prefix + _row(cli.TODO_ID))
+    path.write_text(prefix + _row(cli.TODO_ID))
     code, guard = _guard(project, runtime, registry)
     assert code == 1
     assert guard["decision"] == "skip"
@@ -196,7 +206,11 @@ def _execute(command: str, project: Path, runtime: Path, registry: Path):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(tmp_path, provider):
+@pytest.mark.parametrize("wait_kind", ["resume_at", "pr_merged"])
+@pytest.mark.parametrize("waiting_status", ["open", "deferred"])
+def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
+    tmp_path, provider, wait_kind, waiting_status,
+):
     project, runtime, registry, _, _ = _source(
         tmp_path, provider=provider, extra=f"claimed_by={cli.AGENT_ID}",
     )
@@ -207,22 +221,64 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(tmp_path, 
     # A legitimate native wait changes the runnable frontier; it neither
     # completes the original Todo nor changes the already admitted host Turn.
     due = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat(timespec="seconds")
+    resume_when = f"resume_at:{due}" if wait_kind == "resume_at" else "pr_merged:example/project#1"
     code, updated = cli._run_cli(
         registry, runtime, "todo", "update", "--goal-id", cli.GOAL_ID,
         "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
-        "--resume-when", f"resume_at:{due}", cwd=project,
+        "--status", waiting_status, "--resume-when", resume_when, cwd=project,
     )
     assert code == 0 and updated["ok"] is True, json.dumps(updated)
-    code, refreshed = _refresh(
-        project, runtime, registry,
-        "--vision-state", "vision_on_track", "--vision-summary", "Continue current eligible work.",
-        "--vision-acceptance", "The waiting Todo remains open; the next Turn selects fresh work.",
+    code, recovery = cli._run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--turn-instance-id", cli.TURN_ID, cwd=project,
     )
+    assert code == 0, recovery
+    channel = recovery["interaction_contract"]["cli_channel"]
+    plan = channel.get("settlement_plan")
+    assert plan is not None, recovery
+    assert plan["identity"] == original
+    assert not recovery["normal_delivery_allowed"]
+    assert not recovery.get("selected_todo")
+    assert channel["spend_allowed_now"] is False
+    commands = {step["kind"]: step["command_template"] for step in plan["ordered_steps"]}
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+    envelope = build_turn_envelope(recovery)
+    assert envelope["writeback"]["settlement_plan"] == plan
+    code, refused = cli._run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--todo-id", "todo_ready_0", "--turn-instance-id", cli.TURN_ID, cwd=project,
+    )
+    assert code == 1 and refused["error_code"] == "heartbeat_receipt_identity_conflict", refused
+    refresh = commands["durable_writeback"].replace(
+        "<validated_progress>", "validated_progress",
+    ).replace("<scale>", "implementation").replace("<outcome>", "outcome_progress")
+    refresh += (
+        " --vision-state vision_on_track --vision-summary 'Continue current eligible work.'"
+        " --vision-acceptance 'The waiting Todo remains open; the next Turn selects fresh work.'"
+        " --no-global-sync --suppress-external-sinks"
+    )
+    code, refreshed = _execute(refresh, project, runtime, registry)
     assert code == 0, refreshed
     assert refreshed["vision_checkpoint"]["delivery_boundary"] == "semantic_closeout"
     assert refreshed["vision_checkpoint"]["satisfied"] is True
-    code, spent = _execute(refreshed["settlement_owed"]["command"], project, runtime, registry)
-    assert code == 0 and spent["settlement_progress"]["state"] == "settled", spent
+    code, owed = cli._run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--turn-instance-id", cli.TURN_ID, cwd=project,
+    )
+    assert code == 0 and owed["unsettled_host_turn_recovery"]["repair"] == "quota_spend", owed
+    assert owed["settlement_owed"]["command"] == refreshed["settlement_owed"]["command"]
+    for replayed in (False, True):
+        code, spent = _execute(owed["settlement_owed"]["command"], project, runtime, registry)
+        assert code == 0, spent
+        if replayed:
+            assert spent["idempotent_replay"] and not spent["appended"], spent
+        else:
+            assert spent["settlement_progress"]["state"] == "settled", spent
+    assert cli._classification_count(runtime, "validated_progress") == 1
 
     readback = read_heartbeat_settlement(
         runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
@@ -250,7 +306,7 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(tmp_path, 
     assert cli._spend_run_count(runtime) == 1
     current = list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
                              runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)["todo"]
-    assert current["status"] == "open" and current["resume_ready"] is False
+    assert current["status"] == waiting_status and current["resume_ready"] is False
 
     code, fresh = cli._run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
@@ -339,6 +395,7 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
 
 def test_returned_command_settles_and_repairs_receipts_without_another_debit(tmp_path):
     project, runtime, registry = cli._write_fixture(tmp_path)
+    cli._initialize_fixture_authority(project, runtime)
     code, guard = _guard(project, runtime, registry)
     assert code == 0, guard
     code, refreshed = _refresh(project, runtime, registry)

@@ -410,7 +410,7 @@ def apply_receipt_bound_wait_recovery(
         scheduler_execution_context=scheduler_execution_context)
     if verdict["recovery"].get("repair") == "durable_writeback":
         # Transport the typed recovery through the existing command owner. A
-        # completed Todo is not an executable selected_todo or a new grant.
+        # waiting or completed Todo is not executable work or a new grant.
         from ..work_items.action_selection_contract import render_cli_command_prefix
 
         assert settlement_progress is not None

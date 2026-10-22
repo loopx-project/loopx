@@ -65,6 +65,57 @@ for (const resume_when of ["resume_at:2026-01-01T00:10:00Z", "resume_at:2026-01-
   });
 }
 
+function externalWaitRequest(resume_when = "pr_merged:example/project#1") {
+  const input = request();
+  const waiting = {...input.todos[0]!, resume_when};
+  const evaluated = evaluateTodoResumeConditions({
+    schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: [waiting], source_items: [waiting], evaluated_at: input.observed_at,
+    available_capabilities: [],
+  });
+  const condition = (evaluated.conditions as {condition: Record<string, unknown>}[])[0]!.condition;
+  return {...input, replay_phase: "open", todos: [
+    {...waiting, resume_condition: condition, resume_ready: false},
+  ], settlement_progress: {schema_version: "quota_settlement_progress_v0",
+    state: "writeback_required", next_step: "durable_writeback"}};
+}
+
+for (const resume_when of ["resume_at:2026-01-01T00:10:00Z", "resume_at:2026-01-01T02:00:00Z",
+  "pr_merged:example/project#1", "capacity_available:git_push"]) {
+  for (const status of ["open", "deferred"]) {
+    test(`${status} ${resume_when} retains only the original writeback duty`, () => {
+      const input = externalWaitRequest(resume_when);
+      input.todos[0]!.status = status;
+      const before = structuredClone(input), result = projectReceiptBoundWait(input);
+      assert.equal((result.recovery as Record<string, unknown>).repair, "durable_writeback");
+      assert.equal((result.recovery as Record<string, unknown>).binding_id, input.todo_id);
+      assert.equal((result.recovery as Record<string, unknown>).turn_instance_id, input.turn_instance_id);
+      assert.equal((result.obligation as Record<string, unknown>).delivery_allowed, false);
+      assert.equal((result.obligation as Record<string, unknown>).spend_allowed_now, undefined);
+      assert.deepEqual(input, before);
+    });
+  }
+}
+
+for (const patch of [{replay_phase: "settled"}, {replay_phase: null},
+  {settlement_progress: null}, {settlement_progress: {schema_version: "other",
+    state: "writeback_required", next_step: "durable_writeback"}}]) {
+  test(`an external wait needs original unsettled receipt progress: ${JSON.stringify(patch)}`, () => {
+    assert.deepEqual(projectReceiptBoundWait({...externalWaitRequest(), ...patch}), {status: "none"});
+  });
+}
+
+for (const patch of [{claimed_by: "agent-b"}, {role: "user"}, {archive_state: "archive"},
+  {task_class: "continuous_monitor"}, {resume_ready: true},
+  {resume_condition: {kind: "pr_merged", resume_when: "pr_merged:example/project#2", satisfied: false}},
+  {resume_condition: {kind: "unknown", resume_when: "pr_merged:example/project#1", satisfied: false}}]) {
+  test(`an incompatible external wait cannot borrow writeback: ${JSON.stringify(patch)}`, () => {
+    const input = externalWaitRequest();
+    Object.assign(input.todos[0]!, patch);
+    assert.deepEqual(projectReceiptBoundWait(input), {status: "none"});
+  });
+}
+
 
 test("a deferred Todo closes its original Turn rather than selecting a replacement", () => {
   const input = request();

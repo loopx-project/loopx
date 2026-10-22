@@ -324,7 +324,11 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 #### Heartbeat 与 TurnEnvelope 收敛
 
 沿用既有 M7.4 与 roadmap S2/S3/S6/S8，统一 heartbeat 和 Turn host 消费的
-**执行事实**，宿主效果的所有权仍分别保留。现有大 quota packet 与小 TurnEnvelope
+**执行事实**，宿主效果的所有权仍分别保留。已准入 Todo 随后等待定时、PR 或能力时，
+typed receipt owner 保留原回写与结算路径；即使工作已 deferred，重入也只投影原收尾，
+不恢复业务执行、不选择后继、不创建重试时钟。真实 File/SQLite CLI 验证返回命令、
+拒绝换绑、一次回写与扣额及已结算重放。此源码路径修复不代表安装宿主采用或完整成本验收。
+现有大 quota packet 与小 TurnEnvelope
 都不是仅凭大小就合理的目标形态。可选 memory 参与事实现进入一个有界、签名覆盖的
 envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat/App 或模型收益
 已验收。

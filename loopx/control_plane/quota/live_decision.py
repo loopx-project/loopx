@@ -740,7 +740,10 @@ def build_live_quota_should_run_decision(
         receipt_bound_todo_id and agent_id and turn_instance_id
         and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
         and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
-        and (payload.get("selected_todo") or {}).get("todo_id") != receipt_bound_todo_id
+        and (
+            (payload.get("selected_todo") or {}).get("todo_id") != receipt_bound_todo_id
+            or payload.get("normal_delivery_allowed") is not True
+        )
     ):
         if settlement_readback is not None:
             attach_settlement_progress(
