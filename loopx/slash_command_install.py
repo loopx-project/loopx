@@ -110,7 +110,13 @@ def _loopx_start_goal_arguments_instruction(
         f'"<complete visible $ARGUMENTS>" --host-surface {selected_host}`. '
         "The CLI, not the model, owns parsing supported leading switches and "
         "preserving the remaining goal text. Never split or recompose the "
-        "arguments, and never infer a route from issue/PR wording or URLs."
+        "arguments, and never infer a route from issue/PR wording or URLs. "
+        "Use `--new-peer` only when the user explicitly asks for a fresh, new, "
+        "second, or additional Agent identity rather than continuing or taking "
+        "over an existing lane; pass it as a separate argument before "
+        "`--slash-command-arguments`, or preserve it when supplied as a leading "
+        "visible switch. Do not infer a fresh identity from ordinary task "
+        "wording, registry order, or the availability of another lane."
     )
     if host_surface is None:
         instruction += (
@@ -181,7 +187,7 @@ def _command_prompt_specs(*, cli_bin: str, include_legacy_aliases: bool) -> list
             "command": "/loopx",
             "name": "loopx",
             "description": "Inspect LoopX state, or start concrete project work when arguments are provided.",
-            "argument_hint": "[--fine-grained] [--capability-route issue-fix] [task text]",
+            "argument_hint": "[--fine-grained] [--new-peer] [--capability-route issue-fix] [task text]",
             "instructions": [
                 "Visible command arguments: `$ARGUMENTS`.",
                 "Identify the exact current host surface (codex-app, trae_app, codex-app-ssh, codex-ide-plugin, codex-cli-tui, opencode, opencode2, traex-cli, pi, gemini-cli, cursor-agent, zcode, agy, kiro-cli, deepseek-harness, or ark-managed-agent).",

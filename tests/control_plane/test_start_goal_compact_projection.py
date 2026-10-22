@@ -202,6 +202,32 @@ def _invoke_ark_start_goal_cli(
     return exit_code, payload
 
 
+def _invoke_start_goal_with_slash_arguments(
+    project: Path,
+    raw_arguments: str,
+) -> tuple[int, dict[str, Any]]:
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(
+            [
+                "--format",
+                "json",
+                "start-goal",
+                "--guided",
+                "--project",
+                str(project),
+                "--goal-id",
+                GOAL_ID,
+                "--host-surface",
+                "codex-app",
+                f"--slash-command-arguments={raw_arguments}",
+            ]
+        )
+    payload = json.loads(output.getvalue())
+    assert isinstance(payload, dict)
+    return exit_code, payload
+
+
 def _block_effect_runtime_startup(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -1704,6 +1730,61 @@ def test_start_goal_new_peer_explicitly_allows_fresh_registration(tmp_path: Path
     gate = payload["guided_transaction"]["identity_selection_gate"]
     assert gate["default_action"] == "register_fresh_agent"
     assert gate["fresh_agent_registration"]["recommended"] is True
+
+
+@pytest.mark.parametrize(
+    "raw_arguments",
+    [
+        f"--new-peer {GOAL_TEXT}",
+        f"--fine-grained --new-peer {GOAL_TEXT}",
+        f"--new-peer --capability-route issue-fix {GOAL_TEXT}",
+    ],
+)
+def test_cli_parses_new_peer_from_complete_slash_arguments(
+    tmp_path: Path,
+    raw_arguments: str,
+) -> None:
+    project = _write_connected_project(tmp_path)
+
+    exit_code, payload = _invoke_start_goal_with_slash_arguments(
+        project,
+        raw_arguments,
+    )
+
+    assert exit_code == 0
+    assert payload["goal_text"] == GOAL_TEXT
+    assert payload["new_peer"] is True
+    gate = payload["guided_transaction"]["identity_selection_gate"]
+    assert gate["default_action"] == "register_fresh_agent"
+    assert gate["fresh_agent_registration"]["recommended"] is True
+
+
+@pytest.mark.parametrize(
+    ("raw_arguments", "expected_error"),
+    [
+        ("--new-peer", "must contain goal text after --new-peer"),
+        (
+            f"--new-peer --new-peer {GOAL_TEXT}",
+            "duplicate leading --new-peer switch",
+        ),
+        ("--new-peer-extra " + GOAL_TEXT, "malformed leading --new-peer"),
+    ],
+)
+def test_cli_rejects_ambiguous_new_peer_slash_arguments(
+    tmp_path: Path,
+    raw_arguments: str,
+    expected_error: str,
+) -> None:
+    project = _write_connected_project(tmp_path)
+
+    exit_code, payload = _invoke_start_goal_with_slash_arguments(
+        project,
+        raw_arguments,
+    )
+
+    assert exit_code == 2
+    assert payload["ok"] is False
+    assert expected_error in payload["error"]
 
 
 def test_projection_preserves_multi_goal_selection_actions(tmp_path: Path) -> None:

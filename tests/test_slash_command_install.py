@@ -56,6 +56,9 @@ def test_host_materialization_installs_generated_loopx_entry_skill(
     assert "The CLI, not the model, owns parsing" in skill_text
     assert "Never split or recompose" in skill_text
     assert "never infer a route from issue/PR wording or URLs" in skill_text
+    assert "[--new-peer]" in skill_text
+    assert "explicitly asks for a fresh, new" in skill_text
+    assert "Do not infer a fresh identity" in skill_text
     assert "verified active LoopX Goal/Agent binding" in skill_text
     assert "Do not call `start-goal` for an ordinary phase" in skill_text
     assert "typed Todo/writeback path for the bound agent" in skill_text
