@@ -23,8 +23,9 @@
 .analysis-episode { border-block-end: 1px solid var(--pw-line); }
 .analysis-episode > summary { display: flex; align-items: center; gap: 16px; min-height: 64px; padding-block: 12px; cursor: pointer; list-style: none; }
 .analysis-episode > summary::-webkit-details-marker { display: none; }
-.analysis-episode-name { flex: 1; min-width: 0; font-weight: 500; }
-.analysis-episode-verdicts { display: flex; flex-wrap: wrap; justify-content: end; gap: 4px 24px; }
+.analysis-episode-name { flex: 1; min-width: 0; max-width: 76ch; font-weight: 500; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.analysis-episode[open] > summary .analysis-episode-name { display: block; }
+.analysis-episode-verdicts { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: end; gap: 4px 24px; }
 .analysis-episode > summary > svg { flex-shrink: 0; }
 .analysis-episode[open] > summary > svg { transform: rotate(180deg); }
 .analysis-episode-body { padding-block: 8px 24px; max-width: 90ch; }
