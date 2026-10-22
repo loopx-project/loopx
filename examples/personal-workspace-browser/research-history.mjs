@@ -121,6 +121,7 @@ export const researchHistoryScenario = {
     let collisionOwner, emptyOwner, temporary;
     let context;
     const pages = [];
+    const findingReads = [];
     let unavailable = false;
     let analysisFixture = false, holdOldAnalysis = false, slowStarted, releaseOld, oldDelivered;
     let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
@@ -197,6 +198,8 @@ export const researchHistoryScenario = {
           await route.fulfill({response});
         });
         await page.route("**/api/chat/explore-results?*", async route => {
+          const query = new URL(route.request().url()).searchParams;
+          if (query.get("view") === "findings") findingReads.push({goal: query.get("goal_id"), cursor: query.get("cursor")});
           if (unavailable) return route.fulfill({status: 503, json: {error: "Isolated history transport unavailable"}});
           const response = await fetchWorkspaceBackend(route, owner.base);
           assert.equal(response.status(), 200);
@@ -329,6 +332,30 @@ export const researchHistoryScenario = {
       assert.equal(await reader.locator("h4").textContent(), selectedFinding);
       const returnedScroll = await page.locator(".personal-channel-scroll").evaluate(el => el.scrollTop);
       assert(Math.abs(returnedScroll - readerScroll) < 2, "Returning to Research preserves its reading position");
+      // A populated mobile reader must expose every record without a long
+      // horizontal card strip. The selected record remains complete below it.
+      await page.setViewportSize({width:390, height:844});
+      const picker = evidence.getByRole("combobox", {name:"选择结论"});
+      await picker.waitFor();
+      assert.equal(await evidence.getByRole("navigation", {name:"选择结论"}).isVisible(), false);
+      const lastFinding = await picker.locator("option").last().getAttribute("value");
+      await picker.selectOption(lastFinding);
+      assert.equal(await reader.locator("h4").count(), 1);
+      await reader.getByText("来源与范围", {exact:true}).click();
+      assert((await reader.textContent()).includes(lastFinding), "Selected identity is available in full provenance");
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+      await page.setViewportSize({width:1512, height:982});
+      await evidence.getByRole("button", {name:"下一页",exact:true}).click();
+      await reader.waitFor();
+      assert(findingReads.at(-1).cursor, "Exercise an actual later findings page");
+      const graphCapture = JSON.parse(await readFile(resolve(repoRoot,'apps/presentation/dashboard/src/data/fixtures/edgebench-graph-checkpoint-history.json')));
+      const readsBeforeSwitch = findingReads.length;
+      await page.locator('.personal-goal-link',{hasText:graphCapture.display_name}).click();
+      await saved.locator(":scope > summary").click();
+      await reader.waitFor();
+      const newReads = findingReads.slice(readsBeforeSwitch).filter(read => read.goal === graphCapture.goal_id);
+      assert(newReads.length > 0);
+      assert(newReads.every(read => read.cursor === null), "A different Goal starts from its own first page, never the previous Goal's cursor");
       await saved.locator(":scope > summary").click();
       const readback=await(await fetch(`${owner.base}/fixture/readback`)).json();
       assert.equal(readback.source_unchanged,true);

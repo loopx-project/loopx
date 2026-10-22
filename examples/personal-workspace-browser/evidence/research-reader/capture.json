@@ -1,0 +1,39 @@
+{
+  "boundary": "Packaged production frontend with real read-only HTTP owner and synthetic research events. Not installed-App or model-quality evidence.",
+  "baseline_bundle_source_revision": "49d794463244397aaf28db62a31bd3605daefaf4",
+  "baseline_reader_identical_to": "2babbdbda",
+  "after_source_files": {
+    "apps/presentation/dashboard/src/features/personal-workspace/goal-explore-results.tsx": "dc9ae2f13fec71f63d22ff3acea11a3e76dfbbeddbb31c005e02e9ca9191841f",
+    "apps/presentation/dashboard/src/features/personal-workspace/goal-explore-results.css": "fffc233de626e7273da5b51e1ca520233dc146b4fb4ff950dc8ad104981d3fce"
+  },
+  "fixture": {
+    "goals": 1,
+    "questions": 45,
+    "findings": 45,
+    "events": 90,
+    "statuses": [
+      "confirmed",
+      "refuted",
+      "tentative"
+    ],
+    "content": "Repeated long Chinese titles; original positive, negative and unknown observations; source references and scope retained."
+  },
+  "viewports": {
+    "desktop": [
+      1512,
+      982
+    ],
+    "mobile": [
+      390,
+      844
+    ]
+  },
+  "images": {
+    "reader-before-mobile.png": "86643b00cfd526fba880758a136b69e21b90b0f614f856101698f6bdc3b76d0c",
+    "reader-after-mobile.png": "b05e7a3d396b3614c5436efcf2747fffa39577f658e8a782ef192dc351629d27",
+    "reader-after-desktop.png": "62bd4f1839bcb1e64a5c83a4ada38b3bf3bc6a34eded17507ebb7068bf9a2c3d",
+    "reader-after-details-mobile.png": "1cf3d6f508f609233d3728154b5d632cc7f33bfeacd54a0c1160112c76c9423f",
+    "reader-after-first-desktop.png": "e19aa2bdedc2ae323a7b78e99632236690b0f48ade04602823562d635614aef3"
+  },
+  "observed": "Narrow reader replaces the horizontal record strip with one native selector; complete selected finding remains body text. Desktop retains bounded master/detail navigation. Exact timestamp and provenance are touch/keyboard-accessible in Sources and scope. Full Research viewport remains history-first."
+}
