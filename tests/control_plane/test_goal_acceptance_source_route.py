@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import shlex
 import threading
 
 import pytest
@@ -126,10 +127,52 @@ def test_global_proposal_owner_apply_and_peer_adoption_use_source(source_app):
     assert global_cli("inspect", override=shared)[1] == before
 
 
+def test_returned_cli_proposal_commands_complete_without_app(source_app):
+    project, _, source, global_cli, request, source_registry, shared = source_app
+    decoy = global_cli("inspect", override=shared)[1]
+    original = (project / "state.md").read_bytes()
+    document = project / "cli-objective.json"
+    document.write_text(json.dumps({"objective": "Maintain exports and recovery", "reason": "The owner requested ongoing recovery",
+        "source_ref": "message:owner-direction"}))
+    code, prepared = global_cli("prepare-objective", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "cli-only-source-direction", "--execute")
+    assert code == 0, prepared
+    commands = prepared["next_cli_actions"]
+    # Execute the actual returned argv through the public CLI; no imports of
+    # the proposal owner and no HTTP/App operations complete this workflow.
+    registry = source_registry.parent / "global.json"
+    code, inspected = run_json_cli_result(*shlex.split(commands[0])[1:], registry_path=registry)
+    assert code == 0 and inspected["proposal"] == prepared["proposal"], inspected
+    code, applied = run_json_cli_result(*shlex.split(commands[1])[1:], registry_path=registry)
+    assert code == 0 and applied["proposal"]["status"] == "applied", applied
+    current = source("inspect", "--agent-id", "agent-a")[1]
+    objective = current["goal_acceptance_contract"]["goal_objective"]
+    assert objective["objective"] == "Maintain exports and recovery"
+    assert applied["current"]["provider_revision"] == current["provider_revision"]
+    assert applied["current"]["goal_acceptance_contract"] == current["goal_acceptance_contract"]
+    document.write_text(json.dumps({"revision": objective["revision"], "digest": objective["digest"],
+        "work_digest": current["objective_work_digest"], "review_summary": "My export work includes recovery validation."}))
+    code, adopted = global_cli("adopt-objective", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "cli-only-source-adoption", "--expected-provider-revision", current["provider_revision"], "--execute")
+    assert code == 0, adopted
+    # App is only an independent observer of the CLI's resulting canonical state.
+    status, app = request("GET", f"/api/chat/goal-acceptance?goal_id={GOAL}")
+    assert status == 200 and app["goal_acceptance_contract"] == source("inspect")[1]["goal_acceptance_contract"]
+    assert {p["agent_id"]: p["current"] for p in app["goal_acceptance_contract"]["goal_objective"]["peer_adoption"]} == {"agent-a": True, "agent-b": False}
+    assert (project / "state.md").read_bytes() == original
+    assert global_cli("inspect", override=shared)[1] == decoy
+
+
 @pytest.mark.parametrize("failure", ["missing", "unreadable", "removed", "unpromoted", "stopped"])
 def test_unavailable_or_stopped_source_never_falls_back_to_shared(source_app, failure):
     project, _, source, global_cli, request, registry, shared = source_app
     before = global_cli("inspect", override=shared)[1]
+    document = project / "pending-objective.json"
+    document.write_text(json.dumps({"objective": "Maintain reliable export recovery", "reason": "Recorded owner direction includes recovery",
+        "source_ref": "message:owner-direction"}))
+    code, prepared = global_cli("prepare-objective", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "before-source-failure", "--execute")
+    assert code == 0, prepared
     revision = source("inspect")[1]["provider_revision"]
     payload = json.loads(registry.read_text())
     if failure == "missing":
@@ -153,6 +196,8 @@ def test_unavailable_or_stopped_source_never_falls_back_to_shared(source_app, fa
                        "requirements": [{"id": "content", "description": "Retain content"}],
                        "source": {"ref": "message:later", "summary": "Owner requested an export"}}})
     assert status == 409 and refused["ok"] is False
+    code, refused = global_cli("apply-proposal", "--proposal-id", prepared["proposal"]["proposal_id"], "--execute")
+    assert code == 1 and refused["ok"] is False, refused
     assert global_cli("inspect", override=shared)[1] == before
 
 
