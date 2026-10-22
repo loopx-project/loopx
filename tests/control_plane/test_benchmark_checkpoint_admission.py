@@ -18,7 +18,7 @@ from loopx.control_plane.goals import activation_service
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
 from tests.control_plane import test_quota_settlement_cli as fixture
 from tests.control_plane.host_process_fixture import write_python_host_fixture
-from tests.control_plane.test_benchmark_current_admission import _environment, _quota
+from tests.control_plane.test_benchmark_current_admission import _environment, _private_workspace, _quota
 from tests.control_plane.test_codex_operation_launch import _bindings
 
 
@@ -115,7 +115,8 @@ Path("checkpoint-settlement.json").write_text(json.dumps({"refresh":updated,"spe
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop", "original_event_changed", None])
+@pytest.mark.parametrize("refusal", ["source_compute_zero", "missing_state", "stop",
+    "original_event_changed", "original_settlement_changed", "original_action_changed", None])
 def test_checkpoint_resume_rechecks_current_source_with_original_guard(tmp_path, monkeypatch, provider, refusal):
     _run_checkpoint(tmp_path, monkeypatch, provider, refusal=refusal, todo_bound=False)
 
@@ -126,11 +127,17 @@ def test_checkpoint_todo_bound_closeout_keeps_original_host(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_checkpoint_resume_keeps_private_workspace_and_original_receipt(tmp_path, monkeypatch, provider):
+    _run_checkpoint(tmp_path, monkeypatch, provider,
+        refusal=None, todo_bound=False, workspace_change=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_checkpoint_unbound_guard_selects_existing_work_in_original_turn(tmp_path, monkeypatch, provider):
     _run_checkpoint(tmp_path, monkeypatch, provider, refusal=None, todo_bound=False, unbound=True)
 
 
-def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unbound=False):
+def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unbound=False, workspace_change=False):
     unbound = unbound or refusal == "original_event_changed"
     env, project, runtime, source, state = _environment(
         tmp_path, monkeypatch, provider, replan="todo" if todo_bound or unbound else True)
@@ -178,6 +185,9 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
             if todo_bound:
                 assert held["quota"]["heartbeat_receipt"]["settlement_identity"]["todo_id"] == fixture.SELECTED_REPLAN_TODO_ID
             env["FIXTURE_HELD_QUOTA"] = str(held["path"])
+            if workspace_change:
+                _private_workspace(project)
+                assert _quota(source, runtime, project)["status_health_ok"] is True
             if refusal == "source_compute_zero":
                 changed = configure_goal(registry_path=source, goal_id=fixture.GOAL_ID, quota_compute=0, execute=True)
                 assert changed["written"], changed
@@ -201,6 +211,14 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
                 # unbound receipt merely because both have no selected Todo.
                 held["quota"] = {**held["quota"], "heartbeat_receipt": {
                     **original_receipt, "event_id": "different-committed-guard-event"}}
+            elif refusal == "original_settlement_changed":
+                original_receipt = held["quota"]["heartbeat_receipt"]
+                assert original_receipt["settlement_identity"]
+                held["quota"] = {**held["quota"], "heartbeat_receipt": {
+                    **original_receipt, "settlement_identity": {
+                        **original_receipt["settlement_identity"], "effect_id": "different-original-effect"}}}
+            elif refusal == "original_action_changed":
+                held["quota"] = {**held["quota"], "effective_action": "skip"}
             return captured
 
         monkeypatch.setattr(hook, "_capture", captured_then_changed)
@@ -237,6 +255,8 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
         assert error is not None and {
             "source_compute_zero":"goal_launch_not_allowed", "missing_state":"goal_launch_not_allowed",
             "stop":"goal_stopped", "original_event_changed":"heartbeat_launch_original_binding_changed",
+            "original_settlement_changed":"heartbeat_launch_original_binding_changed",
+            "original_action_changed":"goal_launch_not_allowed",
         }[refusal] in str(error)
         assert not (project / "checkpoint-business.json").exists()
         assert fixture._heartbeat_receipt_events(runtime, HELD_TURN) == observations["events"]

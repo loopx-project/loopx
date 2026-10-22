@@ -325,13 +325,13 @@ def register_quota_command(
     quota_parser.add_argument(
         "--scan-root",
         default=default_public_scan_root(),
-        help="Public files to scan for obvious private material. Defaults to the LoopX install root.",
+        help="Compatibility scope metadata; quota defers public scans. Use loopx check for outgoing content.",
     )
     quota_parser.add_argument(
         "--scan-path",
         action="append",
         default=[],
-        help="Specific public file or directory to scan. Repeatable. Overrides --scan-root when set.",
+        help="Compatibility scope metadata. Repeatable; does not request a public scan.",
     )
     quota_parser.add_argument(
         "--use-projection-cache",

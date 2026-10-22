@@ -198,7 +198,8 @@ CONTENT_OPS_CATALOG_ENTRY: dict[str, Any] = {
         "Layout acceptance is deterministic and never implies creator approval or publishing authority.",
     ],
     "next_real_step": (
-        "Turn the aggregated surface into a small review/feed UI where a user "
-        "can score source items, angles, and drafts."
+        "Use the caller's brief to create and revise a usable work through "
+        "the existing conversation and artifact journey. Evaluate the result "
+        "and sources; add a product control only when that workflow needs it."
     ),
 }

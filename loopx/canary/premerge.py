@@ -205,21 +205,26 @@ def _public_boundary_changed_files_run(
             unreadable_directories = [
                 str(item) for item in boundary.get("unreadable_directories") or []
             ]
+            unreadable_files = [str(item) for item in boundary.get("unreadable_files") or []]
+            missing_roots = [str(item) for item in boundary.get("missing_scan_roots") or []]
+            warnings = [str(item) for item in boundary.get("warnings") or []]
+            complete_ok = bool(boundary.get("ok")) and not (
+                unreadable_directories or unreadable_files or missing_roots
+            )
+            label = "completed with warnings" if warnings else "clean"
             check.update(
                 {
-                    "status": (
-                        "passed"
-                        if boundary.get("ok") and not unreadable_directories
-                        else "failed"
-                    ),
-                    "ok": bool(boundary.get("ok")) and not unreadable_directories,
+                    "status": "passed" if complete_ok else "failed",
+                    "ok": complete_ok,
                     "duration_seconds": round(time.monotonic() - started, 3),
                     "stdout_tail": (
-                        f"public boundary scan clean: {boundary.get('scanned_files')} files"
-                        if boundary.get("ok") and not unreadable_directories
+                        f"public boundary scan {label}: {boundary.get('scanned_files')} files"
+                        if complete_ok
                         else ""
                     ),
-                    "stderr_tail": "\n".join(hits + unreadable_directories)[-800:],
+                    "stderr_tail": "\n".join(dict.fromkeys(
+                        hits + warnings + unreadable_files + unreadable_directories + missing_roots
+                    ))[-800:],
                     "boundary": {
                         "scanned_files": boundary.get("scanned_files"),
                         "skipped_private_state_files": boundary.get("skipped_private_state_files"),

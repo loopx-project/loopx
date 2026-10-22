@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 import {RefreshCw} from "lucide-react";
 import {fetchExploreResults, type ExploreResultPage} from "../../data/chat";
+import {ExploreMeasurements} from "./explore-measurements";
 
 /** Read-only saved evidence, including history when Explore has been disabled. */
 export function GoalExploreResults({goalId, zh}: {goalId: string; zh: boolean}) {
@@ -44,6 +45,7 @@ export function GoalExploreResults({goalId, zh}: {goalId: string; zh: boolean}) 
       {selected ? <div ref={reader} tabIndex={-1} className="goal-team-result-reader" style={{overflowWrap: "anywhere"}}>
         <h4>{selected.question || selected.finding}</h4>
         {selected.scope ? <p>{zh ? "问题范围" : "Question scope"}: {selected.scope}</p> : null}
+        {selected.measurements ? <ExploreMeasurements measurements={selected.measurements} zh={zh}/> : null}
         <p style={{whiteSpace: "pre-wrap", overflowWrap: "anywhere"}}>{selected.summary}</p>
         <p>{zh ? "记录状态" : "Recorded status"}: {selected.status}</p>
         <p>{zh ? "记录者" : "Recorded by"}: {selected.agent_id || "—"}</p>

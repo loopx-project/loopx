@@ -39,8 +39,8 @@ def register_status_commands(
         "--scan-root",
         default=default_public_scan_root(),
         help=(
-            "Public files to scan for obvious private material. "
-            "Defaults to the LoopX install root."
+            "Compatibility scope metadata; operational status defers public scans. "
+            "Use loopx check for outgoing content."
         ),
     )
     status_parser.add_argument(
@@ -48,8 +48,7 @@ def register_status_commands(
         action="append",
         default=[],
         help=(
-            "Specific public file or directory to scan. Repeatable. "
-            "Overrides --scan-root when set."
+            "Compatibility scope metadata. Repeatable; does not request a public scan."
         ),
     )
     status_parser.add_argument("--limit", type=int, default=5)
@@ -143,8 +142,8 @@ def register_status_commands(
         "--scan-root",
         default=default_public_scan_root(),
         help=(
-            "Public files to scan for obvious private material. "
-            "Defaults to the LoopX install root."
+            "Compatibility scope metadata; operational status defers public scans. "
+            "Use loopx check for outgoing content."
         ),
     )
     diagnose_parser.add_argument(
@@ -152,8 +151,7 @@ def register_status_commands(
         action="append",
         default=[],
         help=(
-            "Specific public file or directory to scan. Repeatable. "
-            "Overrides --scan-root when set."
+            "Compatibility scope metadata. Repeatable; does not request a public scan."
         ),
     )
     diagnose_parser.add_argument("--limit", type=int, default=5)
@@ -186,8 +184,8 @@ def register_status_commands(
         "--scan-root",
         default=default_public_scan_root(),
         help=(
-            "Public files to scan for obvious private material. "
-            "Defaults to the LoopX install root."
+            "Compatibility scope metadata; operational status defers public scans. "
+            "Use loopx check for outgoing content."
         ),
     )
     review_packet_parser.add_argument(
@@ -195,8 +193,7 @@ def register_status_commands(
         action="append",
         default=[],
         help=(
-            "Specific public file or directory to scan. Repeatable. "
-            "Overrides --scan-root when set."
+            "Compatibility scope metadata. Repeatable; does not request a public scan."
         ),
     )
     review_packet_parser.add_argument(

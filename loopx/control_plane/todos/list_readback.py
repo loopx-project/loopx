@@ -18,7 +18,10 @@ from ..coordination.local_authority import (
     canonical_todo_summary_fields,
     read_canonical_todos_if_promoted,
 )
-from .active_state_todo_parser import parse_todo_source
+from .active_state_todo_parser import (
+    active_state_incomplete_warning,
+    parse_todo_source,
+)
 from .contract import normalize_todo_claimed_by, normalize_todo_id, normalize_todo_status
 from .goal_todo_projection import (
     exact_archived_todo_summaries,
@@ -106,6 +109,7 @@ def list_goal_todos(
         runtime_root=runtime_root,
         goal_id=goal_id,
     )
+    state_incomplete: dict[str, Any] | None = None
     if canonical_read is not None:
         projected = todo_summaries_from_fields(
             fields=(retained_todo_summary_fields(
@@ -128,6 +132,7 @@ def list_goal_todos(
         if not resolved_state_file.exists():
             raise ValueError(f"active state file does not exist: {resolved_state_file}")
         state_text = resolved_state_file.read_text(encoding="utf-8")
+        state_incomplete = active_state_incomplete_warning(state_text)
         projected = goal_todo_summaries(
             goal,
             state_text=state_text,
@@ -220,6 +225,15 @@ def list_goal_todos(
         "state_file": str(resolved_state_file),
         "project": str(resolved_project) if resolved_project else None,
     }
+    if state_incomplete:
+        payload["ok"] = False
+        payload["error_code"] = "state_incomplete"
+        payload["error"] = (
+            "active state is structurally incomplete; missing required Todo "
+            f"section(s): {', '.join(state_incomplete['missing_sections'])}; "
+            f"{state_incomplete['recommended_action']}"
+        )
+        payload["state_incomplete"] = state_incomplete
     if canonical_read is not None:
         payload["authority_read"] = {
             "source_authority": canonical_read["source_authority"],

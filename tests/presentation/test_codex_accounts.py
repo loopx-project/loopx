@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 import plistlib
+import signal
 import shutil
 from pathlib import Path
 import subprocess
@@ -22,7 +23,8 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="Native slot effects 
 
 @pytest.mark.skipif(sys.platform != "darwin" or shutil.which("swiftc") is None,
                     reason="Actual AppKit registration requires macOS and Swift")
-def test_normal_quit_waits_for_owned_cold_app_registration(native, tmp_path):
+@pytest.mark.parametrize("force", [False, True])
+def test_normal_quit_waits_for_owned_cold_app_registration(native, tmp_path, force):
     """A PID can exist before NSRunningApplication supplies executableURL."""
     bundle = tmp_path / "ColdFixture.app"
     executable = bundle / "Contents/MacOS/ColdFixture"
@@ -36,6 +38,14 @@ def test_normal_quit_waits_for_owned_cold_app_registration(native, tmp_path):
 Thread.sleep(forTimeInterval: 1.0)
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
+''' + (f'''try! String(ProcessInfo.processInfo.processIdentifier).write(toFile: {json.dumps(str(tmp_path / 'app.pid'))}, atomically: true, encoding: .utf8)
+''' if force else '') + '''
+''' + ('''class RefuseQuit: NSObject, NSApplicationDelegate {
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { .terminateCancel }
+}
+let delegate = RefuseQuit()
+app.delegate = delegate
+''' if force else '') + '''
 app.run()
 ''')
     subprocess.run(["swiftc", str(source), "-framework", "Cocoa", "-o", str(executable)],
@@ -43,17 +53,42 @@ app.run()
     host_type = importlib.import_module("loopx_codex_provider_routing.native_host").NativeHost
     host = object.__new__(host_type)
     host.home, host.spec = tmp_path, {}
+    host.not_after = None
     host.revision = lambda: "fixture-selection"
+    def running(*_):
+        if not force:
+            return process.pid if process.poll() is None else None
+        try:
+            owned = int((tmp_path / "app.pid").read_text())
+            os.kill(owned, 0)
+            return owned
+        except (FileNotFoundError, ProcessLookupError):
+            return None
+
     host.apps = SimpleNamespace(
         app_bundle=lambda *_: bundle, executable=lambda _: executable,
-        running=lambda *_: process.pid if process.poll() is None else None,
+        running=running,
     )
-    process = subprocess.Popen([str(executable)], start_new_session=True)
+    # Launch Services supplies the process-generation date used by force quit.
+    # The original cold-start case continues to launch its Popen child directly.
+    process = subprocess.Popen(["/usr/bin/open", "-n", "-g", "-W", str(bundle)] if force
+                               else [str(executable)], start_new_session=True)
     try:
-        assert host.close_client("fixture-selection", timeout=10) is True
-        assert process.wait(timeout=5) == 0
+        if force:
+            deadline = time.monotonic() + 10
+            while not (tmp_path / "app.pid").exists() and time.monotonic() < deadline:
+                time.sleep(.05)
+            assert (tmp_path / "app.pid").exists()
+        assert host.close_client("fixture-selection", timeout=0.5 if force else 10, force=force) is True
+        if force:
+            assert running() is None
+            process.wait(timeout=5)
+        else:
+            assert process.wait(timeout=5) == 0
     finally:
-        # Only this test's Popen child may be cleaned up after a failed oracle.
+        # Only the uniquely created fixture PID and our opener are owned here.
+        if force and running() is not None:
+            os.kill(running(), signal.SIGKILL)
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=5)
@@ -187,6 +222,89 @@ def test_manual_native_selection_wins_over_queued_automatic_choice(native, tmp_p
     result = provider.tick(manual_slot="b", expected_selection="initial", operation_id="stale")
     assert result["action"] == "selection_changed"
     assert transport.active == "a"
+
+
+@pytest.mark.parametrize("status", [200, 302, 401, 403, 429])
+def test_configured_socks_fallback_keeps_auth_on_stdin_and_rejects_denials(native, monkeypatch, status):
+    from loopx_codex_provider_routing import native_host as module
+
+    monkeypatch.setattr(module.urllib.request, "getproxies", lambda: {"all": "socks5h://127.0.0.1:1080"})
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/usr/bin/curl")
+    monkeypatch.setattr(module, "trusted_file", lambda path: path)
+    calls = []
+
+    def send(command, **parameters):
+        calls.append(command)
+        assert "fixture-access" not in repr(command) and "fixture-account" not in repr(command)
+        assert b"Authorization: Bearer fixture-access" in parameters["input"]
+        assert "--proto" in command and "--location" not in command and "--insecure" not in command
+        return SimpleNamespace(returncode=0, stdout=b'{"rate_limit":{"allowed":true}}\n' + str(status).encode())
+
+    monkeypatch.setattr(module.subprocess, "run", send)
+    if status == 200:
+        assert json.loads(module.socks_usage("fixture-access", "fixture-account"))["rate_limit"]["allowed"]
+    else:
+        with pytest.raises(module.HostError, match="auth_required" if status in (401, 403) else "quota_unavailable"):
+            module.socks_usage("fixture-access", "fixture-account")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status", [None, 401, 403, 429])
+def test_usage_falls_back_only_after_transport_failure(native, monkeypatch, status):
+    from loopx_codex_provider_routing import native_host as module
+
+    calls = []
+
+    def unavailable(*args, **kwargs):
+        if status is None:
+            raise module.urllib.error.URLError("fixture transport unavailable")
+        raise module.urllib.error.HTTPError(args[0].full_url, status, "fixture denial", {}, None)
+
+    def fallback(token, account):
+        calls.append((token, account))
+        return b'{"rate_limit":{"allowed":true},"private":"discarded"}'
+
+    monkeypatch.setattr(module.urllib.request, "build_opener", lambda *_: SimpleNamespace(open=unavailable))
+    monkeypatch.setattr(module, "socks_usage", fallback)
+    raw = json.dumps({"tokens": {"access_token": "fixture-token", "account_id": "fixture-account"}}).encode()
+    if status is None:
+        assert module.read_usage(raw) == {"rate_limit": {"allowed": True}}
+        assert calls == [("fixture-token", "fixture-account")]
+    else:
+        with pytest.raises(module.HostError, match="auth_required" if status in (401, 403) else "quota_unavailable"):
+            module.read_usage(raw)
+        assert calls == []
+
+
+def test_paused_observer_adopts_a_later_native_choice_without_another_quit(native, tmp_path):
+    provider, transport, clock = configured(native, tmp_path)
+    state = provider._load()
+    state.update(failure_count=3, action="client_quit_timeout", code="client_quit_timeout")
+    native.atomic(provider.path, state)
+    transport.active, transport.revision = "b", "later-native-choice"
+    restarted = native.NativeAccounts(tmp_path, transport=transport, clock=clock)
+    before = len(transport.calls)
+    result = restarted.tick()
+    assert result["active_slot"] == "b" and result["action"] == "selection_changed"
+    assert result["accounts"] == [] and restarted._load()["failure_count"] == 0
+    assert [operation for operation, _ in transport.calls[before:]] == ["status"]
+    assert restarted.tick()["action"] == "selection_changed"
+    assert all(operation != "switch" for operation, _ in transport.calls[before:])
+    clock.now += 301
+    assert restarted.tick()["action"] == "ready"
+
+
+def test_paused_unchanged_selection_does_not_repeat_usage_or_shutdown(native, tmp_path):
+    provider, transport, clock = configured(native, tmp_path)
+    state = provider._load()
+    state.update(failure_count=3, action="client_quit_timeout", code="client_quit_timeout")
+    native.atomic(provider.path, state)
+    before = len(transport.calls)
+    for _ in range(2):
+        clock.now += 301
+        assert provider.tick()["action"] == "client_quit_timeout"
+    assert [operation for operation, _ in transport.calls[before:]] == ["status", "status"]
+    assert provider._load()["failure_count"] == 3
 
 
 def test_lost_reply_recovers_readback_without_replaying_switch(native, tmp_path):
@@ -486,6 +604,52 @@ def client_host(native, monkeypatch):
                                    app_bundle=lambda *_: None, running=lambda *_: state["pid"], open_app=reopen)
     monkeypatch.setattr(module.subprocess, "run", quit)
     return adapter, state, module
+
+
+@pytest.mark.parametrize("fault", [None, "selection", "new-process", "stale-quota", "unreadable-launch"])
+def test_force_quit_requires_the_same_observed_launch_and_selection(native, monkeypatch, fault):
+    adapter, state, module = client_host(native, monkeypatch)
+    adapter.not_after = None
+    forced = []
+
+    def stalled(command, **parameters):
+        if parameters["input"] == module.QUIT:
+            if fault == "selection":
+                state["revision"] = "manual-choice"
+            if fault == "new-process":
+                state["pid"] = 33
+            if fault == "stale-quota":
+                adapter.not_after = time.time() - 1
+            return SimpleNamespace(stdout="{}" if fault == "unreadable-launch" else
+                json.dumps({"launch_time": 1000, "accepted": True}))
+        forced.append(command)
+        assert parameters["input"] == module.FORCE_QUIT
+        assert 'launchDate.timeIntervalSince1970) !== Number(argv[2])' in parameters["input"]
+        assert command[-3:] == ["11", "/synthetic/GPT.app/Contents/MacOS/GPT", "1000"]
+        state["pid"] = None
+
+    monkeypatch.setattr(module.subprocess, "run", stalled)
+    if fault is None:
+        assert adapter.close_client("initial", timeout=0, force=True)
+        assert len(forced) == 1
+    else:
+        with pytest.raises(module.HostError):
+            adapter.close_client("initial", timeout=0, force=True)
+        assert not forced
+    assert state["active"] == "a" and state["switch"] == 0
+
+
+def test_force_permission_is_independent_and_survives_reconfiguration(native, tmp_path):
+    provider, transport, _ = configured(native, tmp_path)
+    assert provider._load()["policy"].get("force_quit_clients") is not True
+    provider.configure(expected_revision=1, enabled=True, slots=["a", "b"],
+                       restart_clients=True, force_quit_clients=True)
+    provider.configure(expected_revision=2, enabled=False, slots=["a", "b"])
+    assert provider._load()["policy"]["force_quit_clients"] is True
+    assert provider.tick()["action"] == "disabled"
+    assert not any(operation == "switch" for operation, _ in transport.calls)
+    with pytest.raises(native.HostError, match="invalid_policy"):
+        provider.configure(expected_revision=3, enabled=False, slots=["a", "b"], force_quit_clients="yes")
 
 
 def test_normal_quit_precedes_native_idle_transaction_and_same_route_reopen(native, monkeypatch):

@@ -6,7 +6,7 @@ import decisionSchema from "../stride_decision_schema.json" with {type: "json"};
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringLiteral} from "../runtime_decode.ts";
-import {normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
+import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
 import {PLANNING_TODO_ID} from "./planning_relations.ts";
 
 export function normalizeStrideStrategy(value: unknown): string {
@@ -108,8 +108,8 @@ function comparisonCandidates(value: unknown): JsonObject[] {
   return value.map(value => {
     const card = requireJsonObject(value, "comparison candidate");
     exactFields(card, ["todo_id", "outcomes"], "comparison candidate");
-    if (!Array.isArray(card.outcomes) || !card.outcomes.length || card.outcomes.length > 3) {
-      throw new EffectRuntimeRequestError("comparison candidate requires at most three scoped outcomes");
+    if (!Array.isArray(card.outcomes) || !card.outcomes.length || card.outcomes.length > EXPLORE_RESULT_PAGE_MAX) {
+      throw new EffectRuntimeRequestError("comparison candidate requires one to twenty scoped outcomes from its result page");
     }
     const outcomes = card.outcomes.map(value => {
       const outcome = requireJsonObject(value, "comparison outcome");

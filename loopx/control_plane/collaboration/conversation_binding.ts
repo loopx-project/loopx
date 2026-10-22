@@ -493,16 +493,18 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
       || recovery.steering_observed !== false
-      || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded"].includes(String(failed.error_code))
+      || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded", "usage_limit_exceeded"].includes(String(failed.error_code))
       || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
+  const retryKind = failed.error_code === "usage_limit_exceeded" ? "quota" : "routing";
+  const attemptKey = `${retryKind}_attempt`;
   if (recovery.admitted_turn != null && previous !== null && previous.failed_turn_id === failed.turn_id
-      && Number.isSafeInteger(previous.routing_attempt) && Number(previous.routing_attempt) >= 1
-      && Number(previous.routing_attempt) <= 3 && previous.version === version) {
+      && Number.isSafeInteger(previous[attemptKey]) && Number(previous[attemptKey]) >= 1
+      && Number(previous[attemptKey]) <= 3 && previous.version === version) {
     // A crash after queue admission must adopt that exact canonical Turn,
     // even if it has already executed. This branch never creates model work.
     const admitted = requireJsonObject(recovery.admitted_turn, "admitted recovery Turn");
-    const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-routing-${previous.routing_attempt}`;
+    const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-${retryKind}-${previous[attemptKey]}`;
     if (previous.client_turn_id !== client || admitted.client_turn_id !== client
         || admitted.session_id !== current.session_id || admitted.turn_id === failed.turn_id
         || typeof row.message !== "string" || typeof row.origin !== "string"
@@ -558,15 +560,18 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
  */
 function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, previous: JsonObject | null, version: number): JsonObject | null {
-  if (!["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
+  const quota = failed.error_code === "usage_limit_exceeded";
+  const kind = quota ? "quota" : "routing";
+  const attemptKey = `${kind}_attempt`;
+  if (!quota && !["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
   // An unfinished older reservation must finish under its original identity.
-  if (previous !== null && previous.failed_turn_id === failed.turn_id && previous.routing_attempt === undefined) return null;
+  if (previous !== null && previous.failed_turn_id === failed.turn_id && previous[attemptKey] === undefined) return null;
   const observed = recovery.native_observation == null ? null
     : requireJsonObject(recovery.native_observation, "native failure readback");
-  if (observed && observed.pre_execution_routing_timeout !== true) return null;
+  if (observed && !quota && observed.pre_execution_routing_timeout !== true) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const reserved = previous?.failed_turn_id === failed.turn_id;
-  const priorAttempt = previous?.routing_attempt ?? 0;
+  const priorAttempt = previous?.[attemptKey] ?? 0;
   if (!Number.isSafeInteger(priorAttempt) || Number(priorAttempt) < 0) return no;
   const attempt = Number(priorAttempt) + (reserved ? 0 : 1);
   if (attempt < 1 || attempt > 3 || typeof current.upstream_thread_id !== "string"
@@ -579,16 +584,19 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
     // has been established. A proven routing timeout always obeys backoff.
     return observed ? no : null;
   }
-  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-routing-${attempt}`;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-${kind}-${attempt}`;
   if (reserved && (previous?.client_turn_id !== client || previous.version !== version)) return no;
   const candidate = {...no, recovery_candidate: true, client_turn_id: client,
-    routing_attempt: attempt, not_before: new Date(notBefore).toISOString(),
+    [attemptKey]: attempt, not_before: new Date(notBefore).toISOString(),
     session_id: current.session_id, failed_turn_id: failed.turn_id,
     native_thread_ids: [sessionIdentity(current.upstream_thread_id, "current native thread")]};
   if (!observed) return candidate;
   return {...candidate, recovery_eligible: recovery.source_verified === true
     && observed.thread_id === current.upstream_thread_id && observed.turn_id === failed.upstream_turn_id
-    && observed.codex_error_info === "other" && observed.only_pre_execution_items === true};
+    && (quota ? observed.codex_error_info === "usageLimitExceeded" && observed.only_original_user_item === true
+      && observed.quota_available === true && typeof observed.quota_observed_at === "number"
+      && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
+      : observed.codex_error_info === "other" && observed.only_pre_execution_items === true)};
 }
 
 /** A labelled observation of the same authorized context and canonical queue.

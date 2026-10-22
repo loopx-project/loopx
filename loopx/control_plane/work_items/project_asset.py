@@ -306,6 +306,7 @@ def attach_active_state_project_asset_fields(
         "backlog_hygiene_warning",
         "state_projection_gap",
         "completed_todo_archive_warning",
+        "state_incomplete",
     ):
         value = item.get(key) if isinstance(item.get(key), dict) else None
         if value:

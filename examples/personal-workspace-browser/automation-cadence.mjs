@@ -151,7 +151,7 @@ export const automationCadenceScenario = {
       await page.locator(".personal-goal-link", { hasText: "Multi Agent Projection" }).click();
       await page.getByRole("button", { name: "Goal 设置", exact: true }).click();
       await page.getByRole("button", { name: "自动执行间隔", exact: true }).click();
-      await page.locator(".personal-settings-goal-target").getByText("Multi Agent Projection", { exact: true }).waitFor();
+      if (await page.getByRole("combobox", {name: "目标 Goal", exact: true}).inputValue() !== "multi-agent-projection") throw new Error("Cadence settings lost the explicit Goal target");
       const panel = page.getByRole("region", { name: "自动执行间隔" });
       const target = panel.getByLabel("修改对象", { exact: true });
       const minutes = panel.getByLabel("最短间隔（分钟）", { exact: true });
@@ -251,8 +251,11 @@ export const automationCadenceScenario = {
       await page.screenshot({ path: resolve(outputDir, "mobile-automation-cadence-inherited.png"), fullPage: false, animations: "disabled" });
       if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error("Cadence settings overflowed the mobile viewport");
       await page.setViewportSize({ width: 1512, height: 982 });
+      await page.getByRole("radio", { name: "本机设置", exact: true }).check();
       await page.getByRole("button", { name: "语言", exact: true }).click();
       await page.getByRole("radio", { name: "English", exact: true }).click();
+      await page.getByRole("radio", { name: "One Goal", exact: true }).check();
+      await page.getByRole("combobox", {name: "Target Goal", exact: true}).selectOption("multi-agent-projection");
       await page.getByRole("button", { name: "Automatic execution interval", exact: true }).click();
       await page.getByLabel("Applies to", { exact: true }).selectOption("agent:codex-latest-lane");
       await page.getByText("This scope: 10 min · inherited minimum: 0 min.", { exact: true }).waitFor();

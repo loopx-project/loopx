@@ -13,7 +13,7 @@ from ...control_plane.capability_hooks import (
     TurnStartHookRegistration,
     dispatch_turn_start_hooks,
 )
-from ...control_plane.effect_runtime import effect_runtime_result
+from ...control_plane.effect_runtime import effect_runtime_request_scope, effect_runtime_result
 from ...explore_graph import compact_explore_graph_policy
 from ...control_plane.todos.list_readback import list_goal_todos
 from .result_log import (
@@ -57,6 +57,7 @@ def read_replan_explore_context(*, source_status: Mapping, goal_id: str, agent_i
         return {"ok": False, "goal_id": goal_id, "agent_id": agent_id}
 
 
+@effect_runtime_request_scope()
 def explore_turn_context(
     *, registry_path: Path, runtime_root: Path, goal_id: str, agent_id: str,
     result_limit: int = 3, result_offset: int = 0,

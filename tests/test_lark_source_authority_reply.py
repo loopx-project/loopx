@@ -160,3 +160,66 @@ def test_a_boolean_is_not_a_verified_source_identity(completed_group_stop):  # n
         runner=transport._reply_runner, source_authority_verifier=lambda *_: True)
     assert not result["ok"] and not result["sender_identity_verified"]
     assert not provider.calls and not provider.writes
+
+
+@pytest.mark.parametrize("change,source_first", [(None, False), (None, True),
+    ("app", False), ("revoke", False), ("sender", False), ("root", False), ("preview", False)])
+def test_completed_stop_overlaps_preview_but_joins_fresh_authority(completed_group_stop, monkeypatch, change, source_first):  # noqa: F811
+    _, provider, transport, root, event, record = completed_group_stop
+    transport._inbox(record)
+    source_entered, release_source, source_done = (threading.Event() for _ in range(3))
+    preview_entered, release_preview, preview_done = (threading.Event() for _ in range(3))
+    source = transport._source_authority
+    runner = transport.runner
+
+    def verify(*args):
+        source_entered.set()
+        assert release_source.wait(5)
+        result = source(*args)
+        source_done.set()
+        return result
+
+    def call(args, cwd=None, timeout=None):
+        if "+messages-reply" in args and "--dry-run" in args:
+            preview_entered.set()
+            assert release_preview.wait(5)
+            result = runner(args, cwd, timeout)
+            if change == "preview":
+                result = {"returncode": 0, "stdout": '{"ok":true,"api":[]}'}
+            preview_done.set()
+            return result
+        return runner(args, cwd, timeout)
+
+    monkeypatch.setattr(transport, "_source_authority", verify)
+    monkeypatch.setattr(transport, "runner", call)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        pending = worker.submit(_deliver, transport, record, phase="terminal")
+        try:
+            assert source_entered.wait(2)
+            assert preview_entered.wait(2), "readonly preview must not wait for source IO"
+            assert not provider.writes and not record["deliveries"].get("terminal", {}).get("started")
+            if change == "app":
+                provider.profile_apps["notes-app"] = "cli_other"
+            elif change == "revoke":
+                transport.bindings.disconnect(record["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            elif change == "sender":
+                provider.messages[event["message_id"]]["sender"] = {"id": "ou_other", "sender_type": "user"}
+            elif change == "root":
+                provider.messages[root["message_id"]]["mentions"] = []
+            if source_first:
+                release_source.set()
+                assert source_done.wait(2)
+                assert not provider.writes and not record["deliveries"].get("terminal", {}).get("started")
+            release_preview.set()
+            assert preview_done.wait(2)
+            assert not provider.writes and not record["deliveries"].get("terminal", {}).get("started")
+        finally:
+            release_preview.set()
+            release_source.set()
+        assert pending.result(timeout=5) is (change is None)
+    if change is None:
+        assert provider.topic_writes == [("oc_community", root["message_id"], "Original source result")]
+        assert record["deliveries"]["terminal"]["verified"]
+    else:
+        assert not provider.writes and not provider.reaction_creates
+        assert not record["deliveries"]["terminal"].get("started")

@@ -38,6 +38,11 @@ const searchSchema = z.object({
   research_pack: z.unknown().optional(),
   research_analysis: z.unknown().optional(),
   research_analysis_goal: z.unknown().optional(),
+  // Settings view state is validated by its local reader, just like research
+  // focus. Preserve it across workspace navigation without granting a target.
+  settings_scope: z.unknown().optional(),
+  settings_goal: z.unknown().optional(),
+  settings_tab: z.unknown().optional(),
   // Stable Goal/Agent working conversation; empty string opens the directory.
   workAgent: z.string().regex(/^[A-Za-z0-9._:-]{0,200}$/).optional().catch(undefined),
   todo: z.string().regex(/^[A-Za-z0-9._:-]{1,200}$/).optional().catch(undefined),

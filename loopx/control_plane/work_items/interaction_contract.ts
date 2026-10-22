@@ -384,7 +384,16 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   const prefix = requireNonEmptyString(request.command_prefix, "command_prefix");
   const goalArg = shellQuote(goalId);
   const add = (command: string, source: string, reason: string) => {
-    if (!reads.some(read => read.command === command)) reads.push({command, source, reason, ordering: "before_work"});
+    const existing = reads.find(read => read.command === command);
+    if (!existing) {
+      reads.push({command, source, reason, ordering: "before_work"});
+      return;
+    }
+    // One command is one read, but it may carry multiple independently
+    // applicable obligations. Merge guidance without duplicating replay.
+    const current = typeof existing.reason === "string" ? existing.reason : "";
+    if (!current) existing.reason = reason;
+    else if (!current.includes(reason)) existing.reason = `${current} ${reason}`;
   };
   const stateFile = readArgument(request.goal_state_file, "goal_state_file");
   if (stateFile) add(`cat -- ${shellQuote(stateFile)}`, "goal_state",
