@@ -6,6 +6,7 @@ research-point qualification. Typed quota/artifact owners retain those rules.
 from __future__ import annotations
 
 import hashlib
+import os
 import select
 import socket
 import subprocess
@@ -183,6 +184,34 @@ class CheckpointWake:
                 "deadline_epoch_ms": window * 1000,
             }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
 
+    def _write_input(self, process, body, command, deadline, timeout, *, phase_limited):
+        # A Host can stop draining stdin during startup. Keep pipe backpressure
+        # inside the same wake deadline, before entering the listener loop.
+        stream = process.stdin
+        pending = memoryview(body.encode(stream.encoding, stream.errors))
+        descriptor = stream.fileno()
+        os.set_blocking(descriptor, False)
+        try:
+            while pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if phase_limited:
+                        self.receipt["budget_exhausted"] = True
+                    raise subprocess.TimeoutExpired(command, timeout)
+                if not select.select([], [descriptor], [], min(.1, remaining))[1]:
+                    continue
+                try:
+                    written = os.write(descriptor, pending[:65536])
+                except BlockingIOError:
+                    continue
+                except BrokenPipeError:
+                    # Match communicate(): retain the Host's output/exit so an
+                    # early auth or provider failure keeps its real cause.
+                    break
+                pending = pending[written:]
+        finally:
+            stream.close()  # No buffered writes: all input used the raw pipe.
+
     def run(self, execution, body, wake, session_wake, stdout, stderr, timeout, *, phase_limited=False):
         from .worker import child_process, heartbeat_launch_check, native_command
         from .sessions import BenchmarkSessionWake
@@ -202,8 +231,8 @@ class CheckpointWake:
                                check_current_launch=heartbeat_launch_check(
                                    launch_env, session_wake, original_quota=original_quota)) as process:
                 self.receipt["host_invoked"] = True
-                process.stdin.write(body)
-                process.stdin.close()
+                self._write_input(process, body, command, deadline, timeout,
+                                  phase_limited=phase_limited)
                 while process.poll() is None:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:

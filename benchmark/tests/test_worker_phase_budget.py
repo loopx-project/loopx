@@ -97,7 +97,8 @@ def _listen_without_capture(monkeypatch):
 
 @pytest.mark.parametrize("listener", [False, True])
 def test_started_phase_timeout_is_budget_stop_and_preserves_partial_output(tmp_path, monkeypatch, listener):
-    env, project, _runtime, _source, state, _clock = _phase_worker(tmp_path, monkeypatch)
+    env, project, _runtime, _source, state, _clock = _phase_worker(
+        tmp_path, monkeypatch, work_seconds=3)
     if listener:
         _listen_without_capture(monkeypatch)
     before = state.read_bytes()
@@ -266,3 +267,62 @@ def test_phase_stop_cli_replays_scheduler_stop_without_new_host(tmp_path, monkey
     assert receipt.get("budget_exhausted") is True and receipt["ok"] is False
     assert "goal_complete=false" in capsys.readouterr().out
     _assert_reaped(project)
+
+
+@pytest.mark.parametrize("listener", [False, True])
+@pytest.mark.parametrize("independent", [None, 3])
+def test_input_backpressure_obeys_selected_deadline(tmp_path, monkeypatch, listener, independent):
+    env, project, *_ = _phase_worker(tmp_path, monkeypatch, work_seconds=6, independent=independent)
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "x" * 262144)
+    if listener:
+        _listen_without_capture(monkeypatch)
+    Path(env["CODEX_BIN"]).write_text(f"#!{sys.executable}\n" + """
+import json,os,pathlib,sys,time
+pathlib.Path('pid').write_text(str(os.getpid()))
+print(json.dumps({'type':'thread.started','thread_id':'original-native'}),flush=True)
+time.sleep(10)
+pathlib.Path('late-input-read').write_text('reached')
+sys.stdin.read()
+time.sleep(60)
+""")
+    receipt = worker.run_once(env)
+    _assert_reaped(project)
+    assert receipt["timed_out"] and not receipt["ok"]
+    assert receipt["session"]["session_id"] == "original-native"
+    assert not (project / "late-input-read").exists()
+    if independent is None:
+        assert receipt.get("budget_exhausted") is True
+        assert "host_failure" not in receipt
+    else:
+        assert not receipt.get("budget_exhausted")
+        assert receipt["host_failure"]["kind"] == "unknown"
+
+
+@pytest.mark.parametrize("early_failure", [False, True])
+def test_checkpoint_large_input_delivers_utf8_eof_or_preserves_early_failure(
+        tmp_path, monkeypatch, early_failure):
+    import hashlib
+    env, project, *_ = _phase_worker(tmp_path, monkeypatch, work_seconds=30)
+    body = "完整输入\n" * 65536
+    expected = hashlib.sha256(body.encode()).hexdigest()
+    monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: body)
+    _listen_without_capture(monkeypatch)
+    Path(env["CODEX_BIN"]).write_text(f"#!{sys.executable}\n" + f"""
+import hashlib,json,os,pathlib,sys
+pathlib.Path('pid').write_text(str(os.getpid()))
+print(json.dumps({{'type':'thread.started','thread_id':'original-native'}}),flush=True)
+if {early_failure!r}:
+    print(json.dumps({{'type':'turn.failed','error':{{'code':'invalid_api_key'}}}}),flush=True)
+    sys.exit(1)
+assert hashlib.sha256(sys.stdin.buffer.read()).hexdigest() == {expected!r}
+print(json.dumps({{'type':'turn.completed'}}),flush=True)
+""")
+    receipt = worker.run_once(env)
+    _assert_reaped(project)
+    assert not receipt.get("budget_exhausted") and not receipt["timed_out"]
+    if early_failure:
+        assert not receipt["ok"] and receipt["return_code"] == 1
+        assert receipt["host_failure"]["kind"] == "auth_failed"
+    else:
+        assert receipt["ok"] and receipt["return_code"] == 0
+        assert "host_failure" not in receipt
