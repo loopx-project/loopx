@@ -95,6 +95,9 @@ try {
   const recover = evidence.getByRole("button", {name: "恢复原执行", exact: true});
   await recover.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-original-recovery-mobile.png")});
+  await page.setViewportSize({width: 1280, height: 900});
+  await page.screenshot({path: resolve(outputDir, "team-original-recovery-desktop.png")});
+  await page.setViewportSize({width: 390, height: 844});
   await recover.click();
   for (let attempt = 0; attempt < 30; attempt++) {
     const actual = await command("task-inspect");
