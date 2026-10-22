@@ -641,6 +641,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       const closedPositions = await metricPositions();
       await benefitMetric.focus(); await benefitMetric.press('Enter');
       assert.deepEqual(await metricPositions(), closedPositions, 'Reading evidence must not reorder or resize any of the six comparable metrics');
+      await page.waitForFunction(() => document.activeElement?.classList.contains('research-effect-evidence'));
       assert.equal(await metricDetail.evaluate(element => element === document.activeElement), true, 'Keyboard opening reaches the evidence region');
       assert.equal(await effects.locator('[aria-expanded="true"]').count(), 1);
       await metricDetail.press('Escape');
@@ -665,12 +666,20 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       const citedOriginal = history.getByRole('region', {name: '引用原文', exact: true});
       await citedOriginal.getByText(/Diagnostic measurements/).waitFor();
       assert.match(await citedOriginal.innerText(), /Diagnostic measurements do not test native utility/);
+      const analysisClosed = async () => {
+        assert.equal(await history.getByRole('region', {name: '轨迹深度分析', exact: true}).count(), 0,
+          'Reading one original must not expand a second list of the same analysis episodes');
+        assert.equal(new URL(page.url()).searchParams.has('research_analysis'), false,
+          'Citation reads preserve the explicit analysis navigation state');
+      };
+      await analysisClosed();
       const sourceReached = () => page.waitForFunction(() => {
         const source = document.querySelector('[aria-label="引用原文"]');
         const rect = source?.getBoundingClientRect();
         return source === document.activeElement && rect.top >= 0 && rect.bottom <= innerHeight;
       });
       await sourceReached();
+      await page.screenshot({path: resolve(outputDir, 'research-citation-desktop.png'), animations: 'disabled'});
       await citedOriginal.press('Escape');
       await page.waitForFunction(() => document.activeElement?.closest('.research-effect-evidence'));
       assert(await sourceTrigger.evaluate(element => element === document.activeElement), 'Closing the source returns to the exact citation trigger');
@@ -685,31 +694,35 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await citedOriginal.getByText(/Diagnostic measurements/).waitFor();
       await sourceReached();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await analysisClosed();
+      await page.screenshot({path: resolve(outputDir, 'research-citation-mobile.png'), animations: 'disabled'});
       await citedOriginal.press('Escape');
-      // A late response after closing analysis must not reopen it or steal focus.
+      // Closing just the original invalidates its pending response too.
       const lateCitation = new Promise(resolve => {citationStarted = resolve;});
       await sourceTrigger.click();
       await lateCitation;
-      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await citedOriginal.getByRole('button', {name: '关闭原文', exact: true}).click();
       const citationDelivered = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/citation'));
       releaseCitation();
       await citationDelivered;
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       holdCitation = false;
       assert.equal(await citedOriginal.count(), 0);
-      await page.waitForFunction(() => document.activeElement?.getAttribute('aria-expanded') === 'false' && /查看分析/.test(document.activeElement.textContent));
+      assert(await sourceTrigger.evaluate(element => element === document.activeElement));
+      await analysisClosed();
       failedCitation = true;
       await sourceTrigger.click();
       await citedOriginal.getByRole('alert').waitFor();
       await sourceReached();
       assert.match(await citedOriginal.innerText(), /Synthetic citation transport unavailable/);
+      await analysisClosed();
       await citedOriginal.press('Escape');
       failedCitation = false;
       await sourceTrigger.click();
       await citedOriginal.getByText(/Diagnostic measurements/).waitFor();
       await sourceReached();
       await citedOriginal.press('Escape');
-      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await analysisClosed();
       await page.setViewportSize({width: 1280, height: 900});
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await progress.locator(".research-progress-values dd").filter({hasText: /^100 tokens$/}).count(), 1, "Uncached input is shown without charging cache twice");
@@ -758,7 +771,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await improvement.getByRole('button', {name: '查看原文', exact: true}).click();
       await citedOriginal.getByText(/Synthetic original evidence/).waitFor();
       await citedOriginal.press('Escape');
-      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await analysisClosed();
       await improvement.locator('summary').click();
       await basis.locator(':scope > summary').click();
       const nativeResults = progress.getByRole('region', {name: '原生测量', exact: true});
@@ -775,7 +788,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await citedOriginal.getByText(/Synthetic original evidence/).waitFor();
       assert.match(await citedOriginal.innerText(), /Synthetic original evidence/);
       await citedOriginal.press('Escape');
-      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await analysisClosed();
       await basis.locator(':scope > summary').click();
       await benefitMetric.click();
       assert.match(await progress.innerText(), /0 \/ 1/);
@@ -799,12 +812,40 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await firstEpisode.innerText(), /utility was not tested/);
       assert.equal(await firstEpisode.getByText('The diagnostic changed, but original-objective utility was not tested.', {exact: true}).count(), 1,
         'A rationale appears once, not again in the other judgments');
+      const analysisCitation = firstEpisode.locator('.analysis-citations button').first();
+      await analysisCitation.click();
+      await citedOriginal.getByText(/Diagnostic measurements/).waitFor();
+      await sourceReached();
+      assert.equal(await analysis.isVisible(), true, 'An explicitly opened analysis stays open when reading its original');
+      await citedOriginal.press('Escape');
+      await page.waitForFunction(() => document.activeElement?.closest('.analysis-citations'));
+      assert(await analysisCitation.evaluate(element => element === document.activeElement));
+      holdCitation = true;
+      const analysisCitationPending = new Promise(resolve => {citationStarted = resolve;});
+      await analysisCitation.click();
+      await analysisCitationPending;
+      await analysis.getByRole('button', {name: '关闭分析', exact: true}).click();
+      const analysisCitationDelivered = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/citation'));
+      releaseCitation();
+      await analysisCitationDelivered;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      holdCitation = false;
+      assert.equal(await citedOriginal.count(), 0, 'Closing the parent cancels a pending original without reopening either reader');
+      await analysisClosed();
+      await page.waitForFunction(() => document.activeElement?.getAttribute('aria-expanded') === 'false' && /查看分析/.test(document.activeElement.textContent));
+      await history.getByRole('button', {name: '查看分析', exact: true}).click();
+      await firstEpisode.locator(':scope > summary').click();
       await firstEpisode.locator(':scope > summary').press('Enter');
       await analysis.getByRole('button', {name: '分析范围', exact: true}).focus();
       await analysis.getByRole('tooltip').waitFor({state: 'visible'});
       await page.keyboard.press('Escape');
       await analysis.getByRole('tooltip').waitFor({state: 'hidden'});
       assert.equal(await analysis.isVisible(), true, 'Dismissing help must not close the analysis or lose context');
+      await firstEpisode.locator(':scope > summary').click();
+      holdCitation = true;
+      const scopedCitationPending = new Promise(resolve => {citationStarted = resolve;});
+      await analysisCitation.click();
+      await scopedCitationPending;
       const started = new Promise(resolve => {slowStarted = resolve;});
       const delivered = new Promise(resolve => {oldDelivered = resolve;});
       holdOldAnalysis = true;
@@ -814,8 +855,12 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.getByRole("combobox").selectOption("b".repeat(64));
       await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis B$/}).waitFor();
       assert.equal(await progress.getByRole("combobox").evaluate(select => select === document.activeElement), true, "The source selector keeps keyboard focus across loading");
+      const scopedCitationDelivered = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/citation'));
+      releaseCitation(); await scopedCitationDelivered; holdCitation = false;
       releaseOld(); await delivered; holdOldAnalysis = false;
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await citedOriginal.count(), 0, 'A late original from a previous pack cannot appear in the new scope');
+      assert.equal(await progress.getByRole('combobox').evaluate(select => select === document.activeElement), true);
       assert.equal(await analysis.locator("header p").first().textContent(), "Synthetic analysis B", "A delayed same-Goal read cannot undo a pack selection");
       assert.match(await progress.innerText(), /历史捕获|historical/i);
       assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '0', 'A rejected candidate does not create realized gain');
@@ -900,7 +945,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await nativeCitation.focus(); await nativeCitation.press('Enter');
       await citedOriginal.waitFor();
       await citedOriginal.press('Escape');
-      await history.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await analysisClosed();
       // Analysis sources do not require an Explore log. The real read-only
       // backend must keep their measurements discoverable with zero events.
       const emptyFixture = resolve(temporary, "empty.json");

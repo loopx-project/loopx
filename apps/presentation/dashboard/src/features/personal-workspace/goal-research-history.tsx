@@ -1,7 +1,7 @@
 import {useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
 import {ArrowLeft, Circle, FlaskConical, GitBranch, RefreshCw} from "lucide-react";
-import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
+import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
@@ -263,6 +263,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     <ResearchAnalysisStatus analysis={analysis}/>
     <ResearchProgressSummary analysis={analysis}/>
     <ResearchAnalysisPanel analysis={analysis}/>
+    <ResearchCitationPanel analysis={analysis}/>
     {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
     {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
       {lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
