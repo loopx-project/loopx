@@ -97,6 +97,19 @@ for (const resume_when of ["resume_at:2026-01-01T00:10:00Z", "resume_at:2026-01-
   }
 }
 
+for (const resume_when of ["resume_at:2026-01-01T00:10:00Z",
+  "pr_merged:example/project#1", "capacity_available:git_push"]) {
+  test(`an already satisfied ${resume_when} still owes the original writeback`, () => {
+    const input = externalWaitRequest(resume_when);
+    input.todos[0]!.resume_ready = true;
+    Object.assign(input.todos[0]!.resume_condition as Record<string, unknown>, {satisfied: true});
+    const result = projectReceiptBoundWait(input);
+    assert.equal((result.recovery as Record<string, unknown>).repair, "durable_writeback");
+    assert.equal((result.recovery as Record<string, unknown>).binding_id, input.todo_id);
+    assert.equal((result.obligation as Record<string, unknown>).delivery_allowed, false);
+  });
+}
+
 for (const patch of [{replay_phase: "settled"}, {replay_phase: null},
   {settlement_progress: null}, {settlement_progress: {schema_version: "other",
     state: "writeback_required", next_step: "durable_writeback"}}]) {
@@ -106,7 +119,7 @@ for (const patch of [{replay_phase: "settled"}, {replay_phase: null},
 }
 
 for (const patch of [{claimed_by: "agent-b"}, {role: "user"}, {archive_state: "archive"},
-  {task_class: "continuous_monitor"}, {resume_ready: true},
+  {task_class: "continuous_monitor"},
   {resume_condition: {kind: "pr_merged", resume_when: "pr_merged:example/project#2", satisfied: false}},
   {resume_condition: {kind: "unknown", resume_when: "pr_merged:example/project#1", satisfied: false}}]) {
   test(`an incompatible external wait cannot borrow writeback: ${JSON.stringify(patch)}`, () => {

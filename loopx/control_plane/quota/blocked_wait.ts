@@ -257,27 +257,30 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
     const reason = "The advancement Todo bound to this Turn is blocked. Inspect its existing effects and evidence, then close only this original attempt with a typed blocked writeback without spending. Keep the Todo blocked and its validator intact; no retry clock or execution is authorized. A fresh host Turn may select independent work.";
     return boundRecovery(request, "blocked_writeback", reason, wait);
   }
+  const condition = jsonObject(todo.resume_condition);
+  const kind = condition?.kind;
+  const resumeWhen = kind !== "monitor_changed" && kind !== "todo_done"
+    ? normalizeTodoResumeWhen({
+      schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION, resume_when: todo.resume_when,
+    })
+    : null;
+  const externalWait = !!resumeWhen && condition?.kind === resumeWhen.split(":", 1)[0] &&
+    condition.resume_when === resumeWhen;
+  // A later external wait removes executable work, not the original Turn's
+  // verified writeback duty. A due wait can become runnable before settlement;
+  // it still cannot discard the original identity or authorize new work.
+  if (["open", "deferred"].includes(String(todo.status)) &&
+      todo.task_class === "advancement_task" &&
+      writebackRequired && request.replay_phase === "open" && externalWait) {
+    const reason = "The original admitted Turn still owes durable writeback. Its later external wait cannot discard that identity. Inspect existing effects and record only the validated original result, then settle once under the original identity. Keep the wait unchanged; do not repeat business work, select a successor, or invent a retry clock.";
+    return boundRecovery(request, "durable_writeback", reason);
+  }
   if (!["open", "deferred"].includes(String(todo.status)) ||
       todo.task_class !== "advancement_task" || todo.resume_ready !== false) return {status: "none"};
   // This projection repairs registered Todo dependencies. Other wait kinds
   // retain their existing route: in particular, a valid long timer must not
   // be rejected by the separate 1–30 minute blocked-retry writeback budget.
-  const condition = jsonObject(todo.resume_condition);
-  const kind = condition?.kind;
   if (kind !== "monitor_changed" && kind !== "todo_done") {
-    // A later external wait removes executable work, not the original Turn's
-    // verified writeback duty. Keep this separate from blocked no-spend wait
-    // qualification: a long timer or PR wait does not create a retry clock.
-    if (writebackRequired && request.replay_phase === "open" && condition?.satisfied === false) {
-      const resumeWhen = normalizeTodoResumeWhen({
-        schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION, resume_when: todo.resume_when,
-      });
-      if (resumeWhen && condition.kind === resumeWhen.split(":", 1)[0] &&
-          condition.resume_when === resumeWhen) {
-        const reason = "The original admitted Turn still owes durable writeback. Its later external wait cannot discard that identity. Inspect existing effects and record only the validated original result, then settle once under the original identity. Keep the wait unchanged; do not repeat business work, select a successor, or invent a retry clock.";
-        return boundRecovery(request, "durable_writeback", reason);
-      }
-    }
     return {status: "none"};
   }
   if (currentCompletionCondition(todo, todos)?.invalid_state === "dependency_cycle") {

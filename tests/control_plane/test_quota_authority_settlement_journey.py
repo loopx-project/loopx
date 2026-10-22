@@ -208,8 +208,9 @@ def _execute(command: str, project: Path, runtime: Path, registry: Path):
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("wait_kind", ["resume_at", "pr_merged"])
 @pytest.mark.parametrize("waiting_status", ["open", "deferred"])
+@pytest.mark.parametrize("wait_phase", ["pending", "due"])
 def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
-    tmp_path, provider, wait_kind, waiting_status,
+    tmp_path, provider, wait_kind, waiting_status, wait_phase,
 ):
     project, runtime, registry, _, _ = _source(
         tmp_path, provider=provider, extra=f"claimed_by={cli.AGENT_ID}",
@@ -220,7 +221,8 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
 
     # A legitimate native wait changes the runnable frontier; it neither
     # completes the original Todo nor changes the already admitted host Turn.
-    due = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat(timespec="seconds")
+    delta = timedelta(minutes=20 if wait_phase == "pending" else -1)
+    due = (datetime.now(timezone.utc) + delta).isoformat(timespec="seconds")
     resume_when = f"resume_at:{due}" if wait_kind == "resume_at" else "pr_merged:example/project#1"
     code, updated = cli._run_cli(
         registry, runtime, "todo", "update", "--goal-id", cli.GOAL_ID,
@@ -306,7 +308,9 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
     assert cli._spend_run_count(runtime) == 1
     current = list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
                              runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)["todo"]
-    assert current["status"] == waiting_status and current["resume_ready"] is False
+    assert current["status"] == waiting_status
+    timer_due = wait_kind == "resume_at" and wait_phase == "due"
+    assert current["resume_ready"] is timer_due
 
     code, fresh = cli._run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
@@ -315,7 +319,11 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
     )
     assert code == 0 and fresh["decision"] in ("run", "autonomous_replan_required"), fresh
     assert fresh["heartbeat_receipt"]["turn_instance_id"] == "turn-after-semantic-progress"
-    assert (fresh.get("selected_todo") or {}).get("todo_id") != cli.TODO_ID
+    selected_fresh_id = (fresh.get("selected_todo") or {}).get("todo_id")
+    if timer_due and waiting_status == "open":
+        assert selected_fresh_id == cli.TODO_ID
+    else:
+        assert selected_fresh_id != cli.TODO_ID
     if fresh["decision"] == "autonomous_replan_required":
         assert fresh["replan_action_packet"]["obligation_id"]
     assert fresh["effective_action"] != "unsettled_host_turn_recovery"
