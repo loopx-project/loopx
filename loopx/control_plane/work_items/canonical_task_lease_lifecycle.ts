@@ -5,7 +5,7 @@ import {openLocalAuthorityStoreHandle, localAuthorityOpenFailure,
   type LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
 import {loadLegacyCoordinationWriterFence} from "../coordination/legacy_writer_fence.ts";
 import {
-  canonicalWriteRouteFailure,
+  canonicalAuthorityRouteFailure,
   withCanonicalWriter,
   type CanonicalBusinessWrite,
 } from "../coordination/local_authority_write.ts";
@@ -95,7 +95,7 @@ export async function withCanonicalTaskLeaseAuthority(
     if (error instanceof ShadowManagementError || error instanceof TaskLeaseAcquireError) return {...rejected(error.code, error.message), ...error.payload};
     if (error instanceof EffectRuntimeLockTimeoutError) return rejected("lock_acquire_timeout", "canonical lease maintenance lock timed out");
     return {...rejected("canonical_lease_route_failed", error instanceof Error ? error.message : "canonical lease route failed"),
-      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
+      ...localAuthorityOpenFailure(error), ...canonicalAuthorityRouteFailure(error)};
   }
 }
 

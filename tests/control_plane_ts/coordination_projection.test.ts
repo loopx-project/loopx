@@ -17,6 +17,7 @@ import {
   TODO_CANONICAL_READ_RECORD_SCHEMA,
 } from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_authority_store.ts";
+import {engageCanonicalRoute} from "./local_promotion_fixture.ts";
 import {LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
 import {listLocalCoordinationTodos} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 import {
@@ -27,6 +28,7 @@ import {
 
 test("native provider Todo creation and archival need no Markdown address", async () => {
   const root = await mkdtemp(join(tmpdir(), "loopx-domain-todo-"));
+  await engageCanonicalRoute(root);
   const store = new FileAuthorityStore(root, "goal-a");
   const initial = await store.commitAuthority({
     expected_provider_revision: null,
@@ -393,6 +395,7 @@ for (const native of [false, true]) {
     assert.throws(() => validateCoordinationTodoReadModel({...head,
       todo_read_model: {...head.todo_read_model, todo_count: 2}}, head.goal_id), /count mismatch/);
     const root = await mkdtemp(join(tmpdir(), "loopx-upgrade-todo-"));
+    await engageCanonicalRoute(root, head.goal_id);
     const store = new FileAuthorityStore(root, head.goal_id);
     const initial = await store.commitAuthority({expected_provider_revision: null,
       operation_id: "historical-head", events: [{schema_version: "bootstrap_v0"}],

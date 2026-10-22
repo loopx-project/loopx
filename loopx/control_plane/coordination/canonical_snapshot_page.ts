@@ -8,6 +8,7 @@ import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/proj
 import {authorityStoreSourceAuthority, type AuthorityStore} from "./authority_store.ts";
 import {canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {canonicalTodoCollection} from "./local_authority_read.ts";
+import {canonicalAuthorityRouteFailure, requireCanonicalAuthority} from "./local_authority_write.ts";
 import {openRuntimeAuthorityStore, requireLocalAuthorityRuntimeRoot, localAuthorityOpenFailure,
   type LocalAuthorityProviderDependencies} from "./local_authority_provider.ts";
 
@@ -161,13 +162,15 @@ export async function readCanonicalSnapshotPage(value: unknown,
     const input = requireJsonObject(value, "canonical snapshot request");
     const root = requireLocalAuthorityRuntimeRoot(input.runtime_root);
     const goal = requireAuthorityStoreId(input.goal_id, "goal id");
+    await requireCanonicalAuthority(root, goal, "todo_snapshot");
     const store = await openRuntimeAuthorityStore(root, goal, dependencies, {existingOnly: true});
     return await readCanonicalSnapshotFromStore(input, store, completeBytes);
   } catch (error) {
     return {schema_version: CANONICAL_SNAPSHOT_PAGE_RESULT, status: "failed",
       reason_code: error instanceof SnapshotReadError ? error.code : "canonical_snapshot_request_invalid",
       reason: error instanceof Error ? error.message : "canonical snapshot read failed",
-      decision_read_from_provider: true, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
+      decision_read_from_provider: true, legacy_fallback_used: false,
+      ...localAuthorityOpenFailure(error), ...canonicalAuthorityRouteFailure(error)};
   }
 }
 

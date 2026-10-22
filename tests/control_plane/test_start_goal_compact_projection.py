@@ -40,17 +40,20 @@ def _isolate_ambient_ssh_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SSH_CLIENT", raising=False)
 
 
-def _write_connected_project(root: Path) -> Path:
+def _write_connected_project(root: Path, *, todos_body: str | None = None) -> Path:
     project = root / "project"
     state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
     state_file.parent.mkdir(parents=True)
-    state_file.write_text("# Active Goal State\n", encoding="utf-8")
+    state_file.write_text("# Active Goal State\n" + (
+        f"## Objective\n{GOAL_TEXT}\n## Agent Todo\n{todos_body}\n"
+        if todos_body is not None else ""), encoding="utf-8")
     registry = project / ".loopx" / "registry.json"
     registry.parent.mkdir(parents=True)
     registry.write_text(
         json.dumps(
             {
                 "schema_version": "0.1",
+                "common_runtime_root": str(root / "runtime"),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -69,6 +72,17 @@ def _write_connected_project(root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
+
+    active, _, _ = parse_todo_source(state_file.read_text())
+    records = [canonical_todo_read_record(structured_todo_item(
+        item, role="agent", source_section="Agent Todo", text_limit=None,
+    )) for item in active["agent"]]
+    initialize_canonical_authority(root / "runtime", GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=records), state_path=state_file)
     return project
 
 
@@ -1104,7 +1118,7 @@ def test_start_goal_binds_selected_lane_before_todo_writeback(
     project = _write_connected_project(tmp_path)
     source_registry = project / ".loopx" / "registry.json"
     runtime = tmp_path / "runtime"
-    runtime.mkdir()
+    runtime.mkdir(exist_ok=True)
     source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
     source_payload["common_runtime_root"] = str(runtime)
     source_registry.write_text(
@@ -1177,7 +1191,7 @@ def test_fresh_agent_registration_preserves_guided_runtime_root(
     project = _write_connected_project(tmp_path)
     source_registry = project / ".loopx" / "registry.json"
     runtime = tmp_path / "runtime"
-    runtime.mkdir()
+    runtime.mkdir(exist_ok=True)
     source_payload = json.loads(source_registry.read_text(encoding="utf-8"))
     source_payload["common_runtime_root"] = str(runtime)
     source_payload["goals"][0]["coordination"]["registered_agents"] = []
@@ -1309,6 +1323,12 @@ def test_guided_state_commands_share_explicit_runtime_root(
     project = _write_connected_project(tmp_path)
     runtime = project / "explicit-runtime"
     runtime.mkdir()
+    from canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[]),
+        state_path=project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md")
 
     payload = build_start_goal_guided_packet(
         project=project,
@@ -2113,17 +2133,7 @@ def _write_connected_project_with_todos(
     *,
     todos_body: str,
 ) -> Path:
-    project = _write_connected_project(root)
-    state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
-    state_file.write_text(
-        "# Active Goal State\n"
-        "## Objective\n"
-        f"{GOAL_TEXT}\n"
-        "## Agent Todo\n"
-        f"{todos_body}\n",
-        encoding="utf-8",
-    )
-    return project
+    return _write_connected_project(root, todos_body=todos_body)
 
 
 def _write_connected_project_with_runnable_agent_todo(root: Path) -> Path:

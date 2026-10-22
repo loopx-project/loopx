@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..contract import check_contract, render_contract_markdown
+from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from ..control_plane.runtime.status_projection_cache import (
     load_status_projection_cache,
     resolve_status_projection_cache_runtime_root,
@@ -284,6 +285,9 @@ def handle_status_command(
                 ],
             },
         }
+        if isinstance(exc, LocalCoordinationAuthorityUnavailable):
+            payload["error_code"] = exc.code
+            payload["authority_read"] = exc.payload
     print_payload(payload, output_format(args), render_status_markdown)
     return 0 if payload.get("ok") else 1
 

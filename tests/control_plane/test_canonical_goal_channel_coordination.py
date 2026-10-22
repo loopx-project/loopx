@@ -36,7 +36,7 @@ def test_empty_canonical_ownership_never_revives_display_claim_or_local_lease(tm
 def test_explicit_empty_observation_is_not_unspecified():
     observed = build_goal_channel_projection(goal_id=GOAL_ID, status_item=_status_item(claimed_by='stale-agent'), active_leases=[])
     assert observed['active_leases'] == []
-    assert observed['coordination_authority']['state'] == 'promotion_required'
+    assert observed['coordination_authority']['state'] == 'unavailable'
     assert observed['mode'] == 'read_only'
     assert observed['truth_contract']['write_authority'] == 'none'
 

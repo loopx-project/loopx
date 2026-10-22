@@ -16,7 +16,7 @@ import { authorityStoreCommitFixture } from "./authority_store_conformance.ts";
 import * as mutations from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
 import * as reads from "../../loopx/control_plane/coordination/local_authority_read.ts";
 const runtime = {...mutations, ...reads};
-import { qualifiedShadow, promotionRequest, engageFence } from "./local_promotion_fixture.ts";
+import { qualifiedShadow, promotionRequest, engageFence, engageCanonicalRoute } from "./local_promotion_fixture.ts";
 import {
   engageLegacyCoordinationWriterFence,
   loadLegacyCoordinationWriterFence,
@@ -252,6 +252,7 @@ test("a PostgreSQL selector is a service-owned, identity-fenced switch", async t
   assert.equal(handle.provider, "postgresql");
   assert.equal(handle.sourceAuthority, "postgresql_v0");
   assert.equal(handle.store, store);
+  await engageCanonicalRoute(directory, "goal");
   const listed = await runtime.listLocalCoordinationTodos({
     schema_version: runtime.LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
     runtime_root: directory,

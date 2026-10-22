@@ -8,7 +8,7 @@ import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
 import {COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA} from "./todo_archive.ts";
 import {readCoordinationOwnership} from "./ownership_observation.ts";
 import {executeTodoContinuation} from "./todo_continuation.ts";
-import {canonicalWriteRouteFailure, withCanonicalWriter} from "./local_authority_write.ts";
+import {canonicalAuthorityRouteFailure, requireCanonicalAuthority, withCanonicalWriter} from "./local_authority_write.ts";
 import { ShadowManagementError, withShadowMaintenanceLock } from "./shadow_management.ts";
 import { isAbsolute, join } from "node:path";
 import {readFile, realpath} from "node:fs/promises";
@@ -489,7 +489,7 @@ export async function pollLocalCoordinationMonitor(value: unknown,
     return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, status: "failed", changed: false,
       reason_code: error instanceof ShadowManagementError ? error.reason_code : "invalid_local_monitor_poll_request",
       reason: error instanceof Error ? error.message : String(error), ...evidence,
-      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
+      ...localAuthorityOpenFailure(error), ...canonicalAuthorityRouteFailure(error)};
   }
 }
 
@@ -1096,7 +1096,7 @@ export async function claimLocalCoordinationTodo(
       decision_read_from_provider: true,
       legacy_fallback_used: false,
       ...localAuthorityOpenFailure(error),
-      ...canonicalWriteRouteFailure(error),
+      ...canonicalAuthorityRouteFailure(error),
     };
   }
 }
@@ -1166,7 +1166,7 @@ export async function createLocalCoordinationTodo(
       reason: error instanceof Error ? error.message : "invalid Todo create request",
       ...providerEvidence,
       ...localAuthorityOpenFailure(error),
-      ...canonicalWriteRouteFailure(error),
+      ...canonicalAuthorityRouteFailure(error),
     };
   }
 }
@@ -1272,7 +1272,7 @@ export async function updateLocalCoordinationTodo(
       reason: error instanceof Error ? error.message : "invalid Todo update request",
       ...providerEvidence,
       ...localAuthorityOpenFailure(error),
-      ...canonicalWriteRouteFailure(error),
+      ...canonicalAuthorityRouteFailure(error),
     };
   }
 }
@@ -1395,7 +1395,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
       reason: error instanceof Error ? error.message : "invalid local Todo terminal request",
       ...providerEvidence,
       ...localAuthorityOpenFailure(error),
-      ...canonicalWriteRouteFailure(error),
+      ...canonicalAuthorityRouteFailure(error),
     };
   }
 }
@@ -1447,7 +1447,7 @@ export async function archiveLocalCoordinationTodos(
       reason: error instanceof Error ? error.message : "invalid local Todo archive request",
       ...providerEvidence,
       ...localAuthorityOpenFailure(error),
-      ...canonicalWriteRouteFailure(error),
+      ...canonicalAuthorityRouteFailure(error),
     };
   }
 }
@@ -1478,7 +1478,7 @@ export async function acknowledgeLocalCoordinationTodoArchive(
         "invalid_local_coordination_todo_archive_ack_request",
       reason: error instanceof Error ? error.message : "invalid archive acknowledgement",
       ...localAuthorityOpenFailure(error),
-      ...canonicalWriteRouteFailure(error),
+      ...canonicalAuthorityRouteFailure(error),
     };
   }
 }
@@ -1502,7 +1502,7 @@ export async function continueLocalTodo(
     return {ok: false, status: "failed",
       reason_code: error instanceof ShadowManagementError ? error.reason_code : "invalid_continuation_request",
       reason: error instanceof Error ? error.message : "Invalid continuation request", ...evidence,
-      ...localAuthorityOpenFailure(error), ...canonicalWriteRouteFailure(error)};
+      ...localAuthorityOpenFailure(error), ...canonicalAuthorityRouteFailure(error)};
   }
 }
 
@@ -1514,6 +1514,7 @@ export async function observeLocalCoordinationOwnership(value: unknown): Promise
     if (input.schema_version !== "loopx_local_ownership_observation_request_v0") throw new Error("ownership observation schema mismatch");
     const root = runtimeRoot(input.runtime_root);
     const goalId = requireAuthorityStoreId(input.goal_id, "goal id");
+    await requireCanonicalAuthority(root, goalId, "ownership_observation");
     const store = await openLocalAuthorityStore(root, goalId);
     sourceAuthority = sourceAuthorityFor(store);
     return {...await readCoordinationOwnership(store, goalId, input.observed_at as string),
@@ -1521,7 +1522,8 @@ export async function observeLocalCoordinationOwnership(value: unknown): Promise
   } catch (error) {
     return {schema_version: "loopx_ownership_observation_result_v0", status: "failed",
       reason_code: "coordination_observation_unavailable", source_authority: sourceAuthority,
-      decision_read_from_provider: true, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
+      decision_read_from_provider: true, legacy_fallback_used: false,
+      ...localAuthorityOpenFailure(error), ...canonicalAuthorityRouteFailure(error)};
   }
 }
 

@@ -250,7 +250,7 @@ def test_unconfigured_shadow_inspection_matches_full_cli_without_import(
     ("authority-shadow", "status", "local_authority_shadow_adapter", True),
     ("authority-shadow", "status", "local_authority_shadow_readback", False),
     ("authority-shadow", "drain", "local_authority_shadow_adapter", False),
-    ("todo", "list", "local_authority_shadow_readback", True),
+    ("todo", "list", "local_authority_shadow_readback", False),
 ])
 def test_explicit_shadow_action_uses_only_its_required_modules_without_writing(
     tmp_path, monkeypatch, command, action, missing, expected_ok, isolated_todo_distribution,  # noqa: F811 -- shared fixture
@@ -280,7 +280,9 @@ def test_explicit_shadow_action_uses_only_its_required_modules_without_writing(
     assert child.returncode == (0 if expected_ok else 1)
     result = json.loads(child.stdout)
     assert result["ok"] is expected_ok
-    if not expected_ok:
+    if command == "todo":
+        assert result["error_code"] == "canonical_authority_required"
+    elif not expected_ok:
         assert missing in result["error"]
     after = {str(path.relative_to(tmp_path)): path.read_bytes()
              for root in (registry.parent, state.parent, runtime)

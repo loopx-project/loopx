@@ -22,6 +22,7 @@ import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordinat
 import {executeCanonicalTaskLeaseAcquire} from "../../loopx/control_plane/coordination/task_lease_acquire.ts";
 import {executeCoordinationTodoTerminalLifecycle, type CoordinationTodoTerminalLifecycleInput} from "../../loopx/control_plane/coordination/todo_terminal_lifecycle.ts";
 import {canonicalTodoCollection, listLocalCoordinationTodos, readLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_read.ts";
+import {engageCanonicalRoute} from "./local_promotion_fixture.ts";
 
 const now = new Date("2026-09-17T12:00:00Z");
 const todo = (extra: JsonObject = {}): JsonObject => ({schema_version: "todo_domain_record_v0",
@@ -286,6 +287,7 @@ for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["post
 
 test("canonical list/read expose only enabled public-safe acceptance sidecars", async t => {
   const {store, root} = await seeded(t, "file", "bound");
+  await engageCanonicalRoute(root);
   const records = [todo(), todo({todo_id: "todo_new", text: "New work"}),
     todo({todo_id: "todo_monitor", task_class: "continuous_monitor"}),
     todo({todo_id: "todo_gate", role: "user", task_class: "user_gate"})];

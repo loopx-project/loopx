@@ -43,8 +43,8 @@ from ..turn_driver.lane_fence import (
     turn_lane_liveness,
     turn_lane_target,
 )
-from ..work_items.local_lease_record import TaskLeaseError, read_lease
-from ..work_items.task_lease import lease_expires_at, normalize_goal_id, task_lease_path
+from ..work_items.task_lease import lease_expires_at, normalize_goal_id
+from ..work_items.local_lease_record import TaskLeaseError
 from .management_projection import LEASE_STATUS_UNAVAILABLE, projected_agent_goals
 
 # One agent can hold one lane per Goal; the row reports the strongest fact.
@@ -170,7 +170,7 @@ def _open_todo_leases(
 ) -> tuple[list[Mapping[str, Any]], set[str]] | None:
     """Readable leases and unreadable Todo IDs; ``None`` if authority is unreadable.
 
-    After cutover the canonical head is the only lease source; its failure is
+    The canonical head is the only lease source; its failure is
     reported, never replaced by the local files it superseded. The failure
     classes are the ones the ownership observation already isolates.
     """
@@ -181,24 +181,8 @@ def _open_todo_leases(
         )
     except (OSError, RuntimeError, ValueError):
         return None
-    if canonical is not None:
-        leases = [lease for lease in canonical.get("leases") or [] if isinstance(lease, Mapping)]
-        unreadable_todo_ids: set[str] = set()
-    else:
-        leases = []
-        unreadable_todo_ids = set()
-        for todo_id in sorted(todo_ids):
-            try:
-                lease = read_lease(
-                    task_lease_path(runtime_root=runtime_root, goal_id=goal_id, todo_id=todo_id)
-                )
-            except (TaskLeaseError, OSError):
-                # Keep the affected claimant uncertain without hiding healthy peers.
-                unreadable_todo_ids.add(todo_id)
-                continue
-            if lease:
-                leases.append(lease)
-    return [lease for lease in leases if lease.get("todo_id") in todo_ids], unreadable_todo_ids
+    return [lease for lease in canonical["leases"]
+        if isinstance(lease, Mapping) and lease.get("todo_id") in todo_ids], set()
 
 
 def _lease_fact(lease: Mapping[str, Any], *, at: datetime) -> dict[str, Any]:

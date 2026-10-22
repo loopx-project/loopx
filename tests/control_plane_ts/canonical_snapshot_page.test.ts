@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {mkdtemp, rm, readdir} from "node:fs/promises";
+import {mkdtemp, rm, readdir, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -16,6 +16,10 @@ import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/a
 import {goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 import {reviseGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
 import {collectSnapshot, registerCanonicalSnapshotConformance, seedSnapshot, snapshotRequest, snapshotFixture} from "./canonical_snapshot_conformance.ts";
+import {engageCanonicalRoute} from "./local_promotion_fixture.ts";
+import {legacyCoordinationWriterFencePath} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
+import {listLocalCoordinationTodos, readLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_read.ts";
+import {observeLocalCoordinationOwnership} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
 
 async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
   const root = await mkdtemp(join(tmpdir(), "canonical-snapshot-"));
@@ -117,6 +121,7 @@ for (const position of [null, -1, true, "128", 0.5]) {
 test("a missing runtime provider read does not initialize a replacement authority", async t => {
   const root = await mkdtemp(join(tmpdir(), "canonical-missing-"));
   t.after(() => rm(root, {recursive: true, force: true}));
+  await engageCanonicalRoute(root);
   const before = await readdir(root);
   const result = await readCanonicalSnapshotPage(snapshotRequest({runtime_root: root}));
   assert.equal(result.status, "missing");
@@ -126,6 +131,36 @@ test("a missing runtime provider read does not initialize a replacement authorit
   assert.deepEqual(await readCanonicalSnapshot(snapshotRequest({runtime_root: root})), result);
   assert.deepEqual(await readdir(root), before);
 });
+
+for (const fence of ["missing", "corrupt"] as const) {
+  test(`ordinary current reads reject a ${fence} cutover before opening any provider`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "unmigrated-read-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    if (fence === "corrupt") {
+      await engageCanonicalRoute(root);
+      await writeFile(legacyCoordinationWriterFencePath(root, "goal-a"), "{");
+    }
+    const before = await readdir(root);
+    const dependencies = {createStore: () => assert.fail("unadmitted read opened a provider")};
+    const results = [
+      await readCanonicalSnapshotPage(snapshotRequest({runtime_root: root}), dependencies),
+      await listLocalCoordinationTodos({schema_version: "loopx_local_coordination_todo_list_request_v0",
+        runtime_root: root, goal_id: "goal-a"}, dependencies),
+      await readLocalCoordinationTodo({schema_version: "loopx_local_coordination_todo_read_request_v0",
+        runtime_root: root, goal_id: "goal-a", todo_id: "todo_a"}, dependencies),
+      await observeLocalCoordinationOwnership({schema_version: "loopx_local_ownership_observation_request_v0",
+        runtime_root: root, goal_id: "goal-a", observed_at: "2026-09-29T00:00:00Z"}),
+    ];
+    for (const result of results) {
+      assert.equal(result.reason_code, fence === "missing"
+        ? "canonical_authority_required" : "canonical_authority_fence_invalid");
+      assert.equal(result.decision_read_from_provider, false);
+      assert.equal(result.legacy_fallback_used, false);
+      assert.equal("todos" in result, false);
+    }
+    assert.deepEqual(await readdir(root), before);
+  });
+}
 
 test("ordering uses Unicode code points rather than JavaScript default UTF-16 sorting", async t => {
   const {store} = await fixture(t);

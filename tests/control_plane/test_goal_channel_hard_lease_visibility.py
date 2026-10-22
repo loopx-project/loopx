@@ -72,6 +72,22 @@ def _write_active_lease(
     return lease
 
 
+def _seed_observation(runtime: Path, *, claimed_by: str, leases: list[dict[str, Any]]) -> None:
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
+
+    state = runtime / "source.md"
+    state.write_text("# Goal\n\n## Agent Todo\n")
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[
+        canonical_todo_read_record(structured_todo_item({
+            "todo_id": TODO_ID, "status": "open", "claimed_by": claimed_by,
+            "text": "Observe canonical ownership", "task_class": "advancement_task",
+        }, role="agent", source_section="Agent Todo")),
+    ])
+    projection["leases"] = leases
+    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state)
+
+
 def _active_leases(projection: dict[str, Any]) -> list[dict[str, Any]]:
     leases = projection.get("active_leases")
     assert isinstance(leases, list)
@@ -86,6 +102,7 @@ def _entries_with_status(
 
 def test_divergent_hard_lease_is_surfaced_with_conflict_reason(tmp_path: Path) -> None:
     lease = _write_active_lease(tmp_path, owner="agent-a")
+    _seed_observation(tmp_path, claimed_by="agent-b", leases=[lease])
     projection = build_goal_channel_projection(
         goal_id=GOAL_ID,
         status_item=_status_item(claimed_by="agent-b"),
@@ -113,6 +130,7 @@ def test_divergent_hard_lease_is_surfaced_with_conflict_reason(tmp_path: Path) -
 
 def test_matching_hard_lease_is_surfaced_without_conflict(tmp_path: Path) -> None:
     lease = _write_active_lease(tmp_path, owner="agent-a")
+    _seed_observation(tmp_path, claimed_by="agent-a", leases=[lease])
     projection = build_goal_channel_projection(
         goal_id=GOAL_ID,
         status_item=_status_item(claimed_by="agent-a"),
@@ -133,6 +151,7 @@ def test_matching_hard_lease_is_surfaced_without_conflict(tmp_path: Path) -> Non
 
 
 def test_soft_only_goal_preserves_previous_projection_shape(tmp_path: Path) -> None:
+    _seed_observation(tmp_path, claimed_by="agent-b", leases=[])
     projection = build_goal_channel_projection(
         goal_id=GOAL_ID,
         status_item=_status_item(claimed_by="agent-b"),
@@ -144,15 +163,14 @@ def test_soft_only_goal_preserves_previous_projection_shape(tmp_path: Path) -> N
     ]
 
 
-def test_missing_runtime_root_preserves_previous_projection_shape() -> None:
+def test_missing_runtime_root_never_promotes_display_claims_to_ownership() -> None:
     projection = build_goal_channel_projection(
         goal_id=GOAL_ID,
         status_item=_status_item(claimed_by="agent-b"),
     )
 
-    assert _active_leases(projection) == [
-        {"todo_id": TODO_ID, "owner_agent": "agent-b", "status": "soft_claim"}
-    ]
+    assert _active_leases(projection) == []
+    assert projection["coordination_observation"]["status"] == "unavailable"
 
 
 def test_expired_lease_is_not_surfaced(tmp_path: Path) -> None:
@@ -176,6 +194,8 @@ def test_expired_lease_is_not_surfaced(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(lease), encoding="utf-8")
 
+    _seed_observation(tmp_path, claimed_by="agent-b", leases=[lease])
+
     projection = build_goal_channel_projection(
         goal_id=GOAL_ID,
         status_item=_status_item(claimed_by="agent-b"),
@@ -189,6 +209,10 @@ def test_corrupt_lease_degrades_to_typed_note(tmp_path: Path) -> None:
     lease_dir = task_lease_dir(runtime_root=tmp_path, goal_id=GOAL_ID)
     lease_dir.mkdir(parents=True, exist_ok=True)
     (lease_dir / f"{TODO_ID}.json").write_text("{not json", encoding="utf-8")
+    _seed_observation(tmp_path, claimed_by="agent-b", leases=[{
+        "todo_id": TODO_ID, "goal_id": GOAL_ID, "schema_version": "unknown",
+        "status": "active", "expires_at": "2099-01-01T00:00:00Z",
+    }])
 
     projection = build_goal_channel_projection(
         goal_id=GOAL_ID,
@@ -208,7 +232,8 @@ def test_corrupt_lease_degrades_to_typed_note(tmp_path: Path) -> None:
 
 
 def test_attach_goal_channel_projection_forwards_runtime_root(tmp_path: Path) -> None:
-    _write_active_lease(tmp_path, owner="agent-a")
+    lease = _write_active_lease(tmp_path, owner="agent-a")
+    _seed_observation(tmp_path, claimed_by="agent-b", leases=[lease])
     item = _status_item(claimed_by="agent-b")
     attach_goal_channel_projection(
         item,
@@ -225,17 +250,18 @@ def test_attach_goal_channel_projection_forwards_runtime_root(tmp_path: Path) ->
     assert hard[0]["reason"] == "owner_conflicts_with_claim"
 
 
-def test_lease_released_between_glob_and_read_is_skipped(
+def test_canonical_observation_never_opens_local_lease_files(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """A lease unlinked after the directory listing is not labeled corrupt."""
+    """Canonical ownership has no file-listing race or local read fallback."""
 
     from loopx.control_plane.work_items import task_lease as task_lease_module
 
-    _write_active_lease(tmp_path, owner="agent-a")
+    lease = _write_active_lease(tmp_path, owner="agent-a")
+    _seed_observation(tmp_path, claimed_by="agent-b", leases=[lease])
 
     def _raise_file_not_found(path: Path) -> dict[str, Any] | None:
-        raise FileNotFoundError(path)
+        pytest.fail("canonical observation opened a legacy lease file")
 
     monkeypatch.setattr(task_lease_module, "read_lease", _raise_file_not_found)
     projection = build_goal_channel_projection(
@@ -244,9 +270,9 @@ def test_lease_released_between_glob_and_read_is_skipped(
         runtime_root=tmp_path,
     )
 
-    assert _entries_with_status(projection, "hard_lease") == []
+    assert len(_entries_with_status(projection, "hard_lease")) == 1
     assert _entries_with_status(projection, "hard_lease_unreadable") == []
-    # soft claim entry is unaffected by the vanished lease file
+    # The claim and lease come from the same provider snapshot.
     assert _entries_with_status(projection, "soft_claim")
 
 
@@ -255,7 +281,8 @@ def test_html_renderer_shows_hard_lease_conflict_fields(tmp_path: Path) -> None:
         render_goal_channel_projection_html,
     )
 
-    _write_active_lease(tmp_path, owner="agent-a")
+    lease = _write_active_lease(tmp_path, owner="agent-a")
+    _seed_observation(tmp_path, claimed_by="agent-b", leases=[lease])
     projection = build_goal_channel_projection(
         goal_id=GOAL_ID,
         status_item=_status_item(claimed_by="agent-b"),

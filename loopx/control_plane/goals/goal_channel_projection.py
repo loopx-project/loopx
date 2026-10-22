@@ -355,14 +355,7 @@ def build_goal_channel_projection(
         observe_goal_coordination,
     )
 
-    explicit = None if active_leases is None else [
-        _compact_coordination_entry({**{key: item[key] for key in ("todo_id", "status", "lease_until", "write_scope") if key in item},
-                                     "owner_agent": _first_text(item.get("owner_agent"), item.get("claimed_by"), limit=120)})
-        for item in _as_mappings(active_leases)
-        if _text(item.get("todo_id"), limit=120) or _first_text(item.get("owner_agent"), item.get("claimed_by"), limit=120)
-    ]
-    observation = observe_goal_coordination(runtime_root=runtime_root, goal_id=str(goal_id),
-        agent_todos=agent_todos, explicit_entries=explicit)
+    observation = observe_goal_coordination(runtime_root=runtime_root, goal_id=str(goal_id))
     raw_keys = _raw_material_keys(
         status_item_dict,
         status_payload_dict,

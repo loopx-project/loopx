@@ -67,8 +67,6 @@ def active_state_todo_fields(
     load_rollout_events: Callable[..., list[dict[str, Any]]],
     rollout_event_log_path: Callable[[Path, str], Path],
     max_todo_index_rollout_events_per_goal: int,
-    parse_active_state_todos: Callable[..., dict[str, Any]],
-    active_state_incomplete_warning: Callable[[str], dict[str, Any] | None],
     parse_issue_meta_surface: Callable[[str], dict[str, Any] | None],
     backlog_hygiene_warning: Callable[..., dict[str, Any] | None],
     completed_todo_archive_warning: Callable[[dict[str, Any] | None], dict[str, Any] | None],
@@ -93,29 +91,17 @@ def active_state_todo_fields(
     # Inspect authority before the display file. A missing/stale projection is
     # not an empty Todo collection, and an unavailable provider must fail closed.
     canonical_reader = todo_snapshot.read if todo_snapshot is not None else read_canonical_todos_if_promoted
-    canonical = (
-        canonical_reader(runtime_root=runtime_root, goal_id=goal_id)
-        if runtime_root is not None and goal_id else None
-    )
+    if runtime_root is None or not goal_id:
+        raise ValueError("canonical Todo status requires a runtime root and Goal identity")
+    canonical = canonical_reader(runtime_root=runtime_root, goal_id=goal_id)
     state_path = resolve_goal_local_path(goal.get("state_file"), goal, fallback_base=Path.cwd())
-    if canonical is None and state_path is not None:
-        from ..goals.legacy_event_source import require_no_legacy_todo_events
-        require_no_legacy_todo_events(goal, state_path=state_path)
-    if canonical is None and (state_path is None or not state_path.exists()):
-        return {}
     try:
         state_text = state_path.read_text(encoding="utf-8") if state_path is not None else ""
     except OSError:
-        if canonical is None:
-            return {}
         state_text = ""
     except UnicodeError:
-        if canonical is None:
-            raise
         state_text = ""
     next_action_entries = active_state_next_action_entries(state_text, limit=3)
-    from .next_action_runtime import bound_next_action_todo_ids
-    preferred_todo_ids = bound_next_action_todo_ids(state_text)
     events = (
         [dict(event) for event in rollout_events]
         if rollout_events is not None
@@ -128,36 +114,18 @@ def active_state_todo_fields(
         )
     if runtime_root is not None and goal_id:
         events = TodoResumeRolloutEvents(events, runtime_root=runtime_root, goal_id=goal_id)
-    if canonical is not None:
-        from ..goals.acceptance import observe_canonical_goal_acceptance
-        acceptance = observe_canonical_goal_acceptance(canonical,
-            registry_path=source_registry, goal_id=goal_id)
-        fields = canonical_todo_summary_fields(
-            canonical["todos"],
-            rollout_events=events,
-            goal_acceptance_contract=acceptance,
-            goal_acceptance_work_guards=canonical.get(
-                "goal_acceptance_work_guards"
-            ),
-        )
-        # Canonical observation/successor transactions now support current
-        # lease proof. Scheduling exposes due work; mutation admission still
-        # validates the caller's proof and never falls back to the old writer.
-    else:
-        fields = parse_active_state_todos(
-            state_text,
-            goal=goal,
-            state_path=state_path,
-            preferred_todo_ids=preferred_todo_ids,
-            rollout_events=events,
-        )
-        state_incomplete = active_state_incomplete_warning(state_text)
-        if state_incomplete:
-            fields["state_incomplete"] = state_incomplete
+    from ..goals.acceptance import observe_canonical_goal_acceptance
+    acceptance = observe_canonical_goal_acceptance(canonical,
+        registry_path=source_registry, goal_id=goal_id)
+    fields = canonical_todo_summary_fields(
+        canonical["todos"], rollout_events=events,
+        goal_acceptance_contract=acceptance,
+        goal_acceptance_work_guards=canonical.get("goal_acceptance_work_guards"),
+    )
     # An explicit canonical objective revision owns current intent. A scoped
     # check objective still cannot substitute for Goal intent. Keep this status
     # field as display content; admission uses the native revision and guard.
-    revised_objective = ((acceptance or {}).get("goal_objective") or {}).get("objective") if canonical is not None else None
+    revised_objective = ((acceptance or {}).get("goal_objective") or {}).get("objective")
     fields["goal_objective"] = public_safe_compact_text(
         revised_objective or parse_state_frontmatter(state_text).get("objective"), limit=1000,
     )
@@ -169,18 +137,15 @@ def active_state_todo_fields(
         fields["active_state_next_action_entries"] = next_action_entries
     if goal_id and admission_goal is not None:
         source = recommendation_source_context(admission_goal, state_text,
-            source_registry=source_registry, todo_fields=fields if canonical is not None else None)
+            source_registry=source_registry, todo_fields=fields)
         fields["recommendation_context"] = source
         sole_agent = len(registered_agent_ids_for_goal(admission_goal)) == 1
         # Default multi-agent status needs source facts, not an RPC and full
         # journal scan per peer. Detail and sole-agent readback request routes.
         if include_agent_next_actions or sole_agent:
             # Binding uses full task facts, never a bounded display page.
-            route_fields = fields if canonical is not None else parse_active_state_todos(
-                state_text, goal=goal, state_path=state_path, rollout_events=events, item_limit=None,
-            )
             runs = recommendation_runs(runtime_root, goal_id) if runtime_root else []
-            routes = project_agent_next_actions(goal, route_fields, source=source, runs=runs)
+            routes = project_agent_next_actions(goal, fields, source=source, runs=runs)
             if sole_agent and routes:
                 fields["next_action_basis"] = routes[0]["next_action_basis"]
             if include_agent_next_actions and routes:

@@ -54,7 +54,6 @@ from ..control_plane.todos.mutation_api import (
     update_goal_todo,
 )
 from ..control_plane.todos.list_readback import list_goal_todos
-from ..control_plane.todos.path_resolution import resolve_todo_state
 from .todo_argument_validation import (
     validate_capability_gap_options,
     validate_shared_todo_options,
@@ -197,12 +196,6 @@ def _validated_replan_successor_obligation(
         runtime_root=runtime_root, goal_id=args.goal_id,
     )
     state_text = ""
-    if todo_fields is None:
-        _, _, state_text, _ = resolve_todo_state(
-            registry_path=registry_path,
-            goal_id=args.goal_id,
-            **_todo_path_args(args),
-        )
     existing_runs, _ = load_index(
         runtime_root / "goals" / args.goal_id / "runs" / "index.jsonl"
     )

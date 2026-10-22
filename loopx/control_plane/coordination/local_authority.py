@@ -1,8 +1,8 @@
 """Python adapter for provider-first local coordination reads.
 
 TypeScript remains the semantic owner of canonical projection validation.  The
-Python CLI only detects whether cutover is engaged, invokes that owner, and
-fails closed instead of consulting the legacy Markdown projection.
+Python CLI invokes that owner for admission and snapshot validation, and fails
+closed instead of consulting the legacy Markdown projection.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ LOCAL_AUTHORITY_SOURCES = ("file_v0", "sqlite_v0", "postgresql_v0")
 
 
 class LocalCoordinationAuthorityUnavailable(RuntimeError):
-    """Canonical coordination state cannot safely answer a post-cutover read."""
+    """Canonical coordination state cannot safely answer an ordinary read."""
 
     def __init__(self, message: str, *, code: str, payload: Mapping[str, Any]) -> None:
         super().__init__(message)
@@ -70,7 +70,7 @@ class LocalCoordinationAuthorityRejection(
 
 
 class CanonicalAuthorityRequired(LocalCoordinationAuthorityRejection):
-    """A normal write targeted a Goal that has not completed authority migration."""
+    """An ordinary operation targeted a Goal before authority migration."""
 
     def __init__(
         self,
@@ -247,16 +247,12 @@ def claim_canonical_todo_if_promoted(
 def read_canonical_todos_if_promoted(
     *, runtime_root: Path, goal_id: str, include_leases: bool = False,
     projection_readback: Mapping[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """Return canonical Todos after cutover, or ``None`` before cutover.
+) -> dict[str, Any]:
+    """Read canonical Todos or fail with the native migration/recovery cause.
 
-    Presence of the durable writer fence is the mode switch. Once present,
-    every malformed, missing, or unavailable provider response is terminal for
-    this read; callers must never recover by reading Markdown.
+    The historical import name no longer permits pre-cutover Markdown reads.
+    Explicit migration captures use the dedicated source inspection owner.
     """
-
-    if not local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id):
-        return None
 
     result = read_canonical_snapshot(
         rpc=effect_runtime_result,
@@ -272,6 +268,10 @@ def read_canonical_todos_if_promoted(
             payload={"source_authority": "file_v0"},
         )
     payload = dict(result)
+    if payload.get("reason_code") == "canonical_authority_required":
+        raise CanonicalAuthorityRequired(
+            goal_id=goal_id, operation="todo_read", payload=payload,
+        )
     todos = payload.get("todos")
     todo_read_model = payload.get("todo_read_model")
     if (
@@ -333,10 +333,10 @@ class CanonicalTodoSnapshot:
 
     def __init__(self) -> None:
         self._reads: dict[
-            tuple[Path, str], dict[str, Any] | None | LocalCoordinationAuthorityUnavailable
+            tuple[Path, str], dict[str, Any] | LocalCoordinationAuthorityUnavailable
         ] = {}
 
-    def read(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any] | None:
+    def read(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any]:
         key = (runtime_root.expanduser().resolve(strict=False), goal_id)
         if key not in self._reads:
             try:
@@ -362,8 +362,8 @@ class CanonicalTodoSnapshot:
 def read_canonical_todo_fields_if_promoted(
     *, runtime_root: Path, goal_id: str,
     rollout_events: list[dict[str, Any]] | None = None,
-) -> dict[str, Any] | None:
-    """Read one unbounded planning snapshot; None alone permits legacy parsing.
+) -> dict[str, Any]:
+    """Read one complete canonical planning snapshot, including empty state.
 
     Empty canonical state is authoritative. Provider failures propagate; this
     read neither repairs Markdown nor grants mutation/promotion authority.
@@ -374,7 +374,6 @@ def read_canonical_todo_fields_if_promoted(
         canonical_todo_summary_fields(canonical["todos"], rollout_events=rollout_events,
             goal_acceptance_contract=canonical.get("goal_acceptance_contract"),
             goal_acceptance_work_guards=canonical.get("goal_acceptance_work_guards"))
-        if canonical is not None else None
     )
 
 

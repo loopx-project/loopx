@@ -5,6 +5,7 @@ import type {AuthorityStoreConformanceFactory} from "./authority_store_conforman
 import {productionScaleCoordinationFixture} from "./production_scale_coordination_fixture.ts";
 import {listLocalCoordinationTodos, readLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 import {LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA, LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
+import {canonicalReadRoot} from "./local_promotion_fixture.ts";
 
 export function registerProjectionConfirmationConformance(name: string, factory: AuthorityStoreConformanceFactory): void {
   for (const shape of ["native", "legacy"] as const) test(`${name}: projection confirmation observes current full source (${shape})`, async context => {
@@ -20,7 +21,8 @@ export function registerProjectionConfirmationConformance(name: string, factory:
       next_projection: fixture.projection, events: [], receipts: []});
     assert.equal(seeded.status, "applied");
     const dependencies = {createStore: () => store};
-    const request = {schema_version: LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA, goal_id: goal, runtime_root: "/synthetic-runtime"};
+    const request = {schema_version: LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA, goal_id: goal,
+      runtime_root: await canonicalReadRoot(context, goal)};
     const plain = await listLocalCoordinationTodos(request, dependencies);
     assert.equal(plain.status, "loaded");
     assert.equal(Object.hasOwn(plain, "projection_readback"), false);

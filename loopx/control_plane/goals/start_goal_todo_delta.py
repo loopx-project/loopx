@@ -17,13 +17,12 @@ from typing import Any
 from ..coordination.local_authority import read_canonical_todo_fields_if_promoted
 from ...history import load_registry
 from ...paths import resolve_runtime_root
-from ...control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from ...control_plane.todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
 )
 from ...control_plane.todos.todo_semantics import todo_item_is_actionable_open
 from ...project_prompt import render_cli_command_prefix, shell_arg
-from ...registry import registry_goals, resolve_state_file
+from ...registry import registry_goals
 
 GUIDED_TODO_DELTA_SCHEMA_VERSION = "loopx_guided_todo_delta_v0"
 
@@ -44,10 +43,10 @@ def existing_runnable_agent_frontier(
     whose resume condition is satisfied (or absent) enter the frontier.
     Blocked, deferred, monitor, blocker, resume-blocked, or peer-claimed
     Todos never enter the frontier. Returns ``None`` whenever the frontier
-    cannot be proven (not connected, unknown goal, missing legacy state, or
-    nothing runnable), so callers keep the unconditional planning contract.
-    After cutover only canonical records count; provider unavailability raises
-    instead of being mistaken for an empty frontier. A missing display is safe
+    is not connected, the Goal is unknown, or nothing is runnable, so callers
+    keep the unconditional planning contract. Only canonical records count;
+    an unmigrated Goal or unavailable provider raises instead of being mistaken
+    for an empty frontier. A missing display is safe
     to ignore, not permission to reconstruct its non-Todo narrative.
     """
     if inspection.get("connection_state") != "connected":
@@ -64,26 +63,12 @@ def existing_runnable_agent_frontier(
     )
     if registry_goal is None:
         return None
-    state_file = resolve_state_file(
-        Path(str(inspection.get("project") or "")),
-        registry_goal.get("state_file"),
-    )
     parsed = read_canonical_todo_fields_if_promoted(
         runtime_root=resolve_runtime_root(
             registry_payload or {}, runtime_root_arg, registry_path=registry_path,
         ),
         goal_id=resolved_goal_id,
     )
-    if parsed is None:
-        if state_file is None or not state_file.is_file():
-            return None
-        try:
-            state_text = state_file.read_text(encoding="utf-8")
-        except OSError:
-            return None
-        parsed = parse_active_state_todos(
-            state_text, goal=registry_goal, state_path=state_file, item_limit=None,
-        )
     agent_summary = parsed.get("agent_todos") if isinstance(parsed, dict) else None
     items = (
         agent_summary.get("items", []) if isinstance(agent_summary, dict) else []

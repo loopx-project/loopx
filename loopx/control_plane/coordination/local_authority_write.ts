@@ -23,13 +23,13 @@ export type CanonicalBusinessWrite =
   | "task_lease_release"
   | "goal_create";
 
-export class CanonicalWriteRouteError extends Error {
+export class CanonicalAuthorityRouteError extends Error {
   readonly code: "canonical_authority_required" | "canonical_authority_fence_invalid";
   readonly payload: JsonObject;
 
-  constructor(code: CanonicalWriteRouteError["code"], goalId: string, operation: CanonicalBusinessWrite, reason: string) {
+  constructor(code: CanonicalAuthorityRouteError["code"], goalId: string, operation: string, reason: string) {
     super(reason);
-    this.name = "CanonicalWriteRouteError";
+    this.name = "CanonicalAuthorityRouteError";
     this.code = code;
     this.payload = {
       status: "failed",
@@ -49,23 +49,24 @@ export class CanonicalWriteRouteError extends Error {
   }
 }
 
-export function canonicalWriteRouteFailure(error: unknown): JsonObject {
-  return error instanceof CanonicalWriteRouteError ? {...error.payload, reason: error.message} : {};
+export function canonicalAuthorityRouteFailure(error: unknown): JsonObject {
+  return error instanceof CanonicalAuthorityRouteError ? {...error.payload, reason: error.message} : {};
 }
 
 interface CanonicalWriterOptions {
   businessWrite?: CanonicalBusinessWrite;
 }
 
-/** Call only while holding the Goal maintenance lock. */
-export async function requireCanonicalBusinessWrite(
+/** Ordinary reads and writes require the same completed Goal cutover.
+ * Explicit source inspection/import keeps its own migration admission. */
+export async function requireCanonicalAuthority(
   root: string,
   goalId: string,
-  operation: CanonicalBusinessWrite,
+  operation: string,
 ): Promise<void> {
   const fence = await loadLegacyCoordinationWriterFence(root, goalId);
   if (fence.status === "missing") {
-    throw new CanonicalWriteRouteError(
+    throw new CanonicalAuthorityRouteError(
       "canonical_authority_required",
       goalId,
       operation,
@@ -73,7 +74,7 @@ export async function requireCanonicalBusinessWrite(
     );
   }
   if (fence.status === "failed") {
-    throw new CanonicalWriteRouteError(
+    throw new CanonicalAuthorityRouteError(
       "canonical_authority_fence_invalid",
       goalId,
       operation,
@@ -93,7 +94,7 @@ export async function withCanonicalWriter<T>(
   return await withFileMutationLock(shadowMaintenanceLockPath(root, goalId), async () => {
     await requireShadowPrimaryWriteAllowed(root, goalId);
     if (options.businessWrite !== undefined) {
-      await requireCanonicalBusinessWrite(root, goalId, options.businessWrite);
+      await requireCanonicalAuthority(root, goalId, options.businessWrite);
     }
     return await write();
   }, CANONICAL_WRITER_LOCK_TIMEOUT_MS);

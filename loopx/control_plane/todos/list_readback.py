@@ -18,15 +18,10 @@ from ..coordination.local_authority import (
     canonical_todo_summary_fields,
     read_canonical_todos_if_promoted,
 )
-from .active_state_todo_parser import (
-    active_state_incomplete_warning,
-    parse_todo_source,
-)
 from .contract import normalize_todo_claimed_by, normalize_todo_id, normalize_todo_status
 from .goal_todo_projection import (
     exact_archived_todo_summaries,
     retained_todo_summary_fields,
-    goal_todo_summaries,
     todo_summaries_from_fields,
 )
 from .list_projection import (
@@ -109,55 +104,28 @@ def list_goal_todos(
         runtime_root=runtime_root,
         goal_id=goal_id,
     )
-    state_incomplete: dict[str, Any] | None = None
-    if canonical_read is not None:
-        projected = todo_summaries_from_fields(
-            fields=(retained_todo_summary_fields(
-                canonical_todo_items(canonical_read["todos"]), rollout_events=rollout_events,
-            ) if read_scope == "completed_history" else canonical_todo_summary_fields(
-                canonical_read["todos"],
-                rollout_events=rollout_events,
-                goal_acceptance_contract=canonical_read.get("goal_acceptance_contract"),
-                goal_acceptance_work_guards=canonical_read.get("goal_acceptance_work_guards"),
-            )),
-            source="file_authority",
+    projected = todo_summaries_from_fields(
+        fields=(retained_todo_summary_fields(
+            canonical_todo_items(canonical_read["todos"]), rollout_events=rollout_events,
+        ) if read_scope == "completed_history" else canonical_todo_summary_fields(
+            canonical_read["todos"],
             rollout_events=rollout_events,
-            roles=roles,
-            status=status,
-            todo_id=normalized_todo_id,
-            agent_id=normalized_agent_id,
-            limit=limit,
-        )
-    else:
-        if not resolved_state_file.exists():
-            raise ValueError(f"active state file does not exist: {resolved_state_file}")
-        state_text = resolved_state_file.read_text(encoding="utf-8")
-        state_incomplete = active_state_incomplete_warning(state_text)
-        projected = goal_todo_summaries(
-            goal,
-            state_text=state_text,
-            state_path=resolved_state_file,
-            rollout_events=rollout_events,
-            roles=roles,
-            status=status,
-            todo_id=normalized_todo_id,
-            agent_id=normalized_agent_id,
-            limit=limit,
-            include_retained=read_scope == "completed_history",
-        )
+            goal_acceptance_contract=canonical_read.get("goal_acceptance_contract"),
+            goal_acceptance_work_guards=canonical_read.get("goal_acceptance_work_guards"),
+        )),
+        source="file_authority",
+        rollout_events=rollout_events,
+        roles=roles,
+        status=status,
+        todo_id=normalized_todo_id,
+        agent_id=normalized_agent_id,
+        limit=limit,
+    )
     if read_scope == "active" and normalized_todo_id and not projected.todos:
-        if canonical_read is not None:
-            archived_items = [
-                item
-                for item in canonical_todo_items(canonical_read["todos"])
-                if item.get("archive_state") == "archive"
-            ]
-        else:
-            _active_items, archived_items, _source_sections = parse_todo_source(
-                state_text,
-                goal=goal,
-                state_path=resolved_state_file,
-            )
+        archived_items = [
+            item for item in canonical_todo_items(canonical_read["todos"])
+            if item.get("archive_state") == "archive"
+        ]
         archived_projection = exact_archived_todo_summaries(
             archived_items=archived_items,
             source=projected.source,
@@ -177,14 +145,7 @@ def list_goal_todos(
     # evaluated identity/status/guards. List and thin projections stay bounded;
     # a hot summary is never treated as the original request.
     if normalized_todo_id and not thin and len(todos) == 1:
-        if canonical_read is not None:
-            source_items = canonical_read["todos"]
-        else:
-            active, archived, _sections = parse_todo_source(
-                state_text, goal=goal, state_path=resolved_state_file,
-            )
-            source_items = [*active["user"], *active["agent"], *archived]
-        _restore_full_source_body(todos[0], normalized_todo_id, source_items)
+        _restore_full_source_body(todos[0], normalized_todo_id, canonical_read["todos"])
     unfiltered_count = projected.unfiltered_count
     uncapped_todo_count = projected.uncapped_todo_count
 
@@ -225,24 +186,14 @@ def list_goal_todos(
         "state_file": str(resolved_state_file),
         "project": str(resolved_project) if resolved_project else None,
     }
-    if state_incomplete:
-        payload["ok"] = False
-        payload["error_code"] = "state_incomplete"
-        payload["error"] = (
-            "active state is structurally incomplete; missing required Todo "
-            f"section(s): {', '.join(state_incomplete['missing_sections'])}; "
-            f"{state_incomplete['recommended_action']}"
-        )
-        payload["state_incomplete"] = state_incomplete
-    if canonical_read is not None:
-        payload["authority_read"] = {
-            "source_authority": canonical_read["source_authority"],
-            "provider_revision": canonical_read.get("provider_revision"),
-            "cursor": canonical_read.get("cursor"),
-            "todo_read_model": canonical_read.get("todo_read_model"),
-            "decision_read_from_provider": True,
-            "legacy_fallback_used": False,
-        }
+    payload["authority_read"] = {
+        "source_authority": canonical_read["source_authority"],
+        "provider_revision": canonical_read.get("provider_revision"),
+        "cursor": canonical_read.get("cursor"),
+        "todo_read_model": canonical_read.get("todo_read_model"),
+        "decision_read_from_provider": True,
+        "legacy_fallback_used": False,
+    }
     if normalized_agent_id:
         payload["agent_id_filter"] = normalized_agent_id
         payload["unfiltered_todo_count"] = unfiltered_count

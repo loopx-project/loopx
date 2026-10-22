@@ -267,23 +267,10 @@ def read_fallback_source_snapshot(
 ) -> list[dict[str, Any]]:
     # IO dependencies are loaded on demand; the public frontier package also
     # serves the history/quota read models during their initial import.
-    from ....history import load_registry
-    from ....state_refresh import resolve_goal_state
     from ...coordination.local_authority import read_canonical_todos_if_promoted
-    from ...todos.active_state_todo_parser import parse_todo_source
 
     canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
-    if canonical is not None:
-        # Failure after promotion must not consult the Markdown projection.
-        return canonical["todos"]
-    goal, _, state_file = resolve_goal_state(
-        registry=load_registry(registry_path), goal_id=goal_id,
-        project_override=None, state_file_override=None,
-    )
-    if goal is None:
-        raise ValueError("fallback source goal is absent")
-    groups, archived, _ = parse_todo_source(state_file.read_text(encoding="utf-8"))
-    return [*groups["user"], *groups["agent"], *archived]
+    return canonical["todos"]
 
 
 def live_fallback_authority_items(

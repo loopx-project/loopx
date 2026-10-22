@@ -581,31 +581,25 @@ def inspect_native_task_lease(
     """Project source facts; the typed reader owns lease interpretation."""
     from ..coordination.local_authority import (
         LOCAL_AUTHORITY_SOURCES, LocalCoordinationAuthorityUnavailable,
-        local_authority_is_promoted,
     )
     from ..effect_runtime import (
         CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS,
-        DEFAULT_REQUEST_TIMEOUT_SECONDS,
         effect_runtime_result,
     )
 
     for attempt in range(TASK_LEASE_AUTHORITY_SNAPSHOT_ATTEMPTS):
-        canonical = local_authority_is_promoted(runtime_root=runtime_root, goal_id=goal_id)
-        # Source records are retained history, never a current execution policy.
-        # No retired Todo projection is needed to report them read-only.
-        authority = _canonical_lease_authority_facts(registry_path, goal_id) if canonical else task_lease_acquire_authority_facts(
-            registry_path=registry_path, goal_id=goal_id, todo_id=todo_id,
-        )
+        # Migration inventory reads retained source leases through its own owner.
+        # Ordinary inspection never selects the legacy Todo/lease source.
+        authority = _canonical_lease_authority_facts(registry_path, goal_id)
         request = {
             "schema_version": "loopx_task_lease_inspect_request_v0",
-            "source": "canonical" if canonical else "legacy",
+            "source": "canonical",
             "runtime_root": str(runtime_root.resolve()), "goal_id": goal_id,
             "todo_id": todo_id, "authority": authority,
         }
         result = effect_runtime_result(
             "task_lease.inspect.native", request,
-            timeout=(CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS
-                     if canonical else DEFAULT_REQUEST_TIMEOUT_SECONDS),
+            timeout=CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS,
         )
         if not isinstance(result, dict) or result.get("schema_version") != TASK_LEASE_SCHEMA_VERSION or result.get("action") != "inspect" or not isinstance(result.get("ok"), bool):
             raise RuntimeError("native lease inspection result shape mismatch")
@@ -613,13 +607,13 @@ def inspect_native_task_lease(
             continue
         if result.get("ok") is not True:
             code = str(result.get("error_code") or "task_lease_inspection_unavailable")
-            exception = LocalCoordinationAuthorityUnavailable if canonical and code != "corrupt_lease" else TaskLeaseError
+            exception = LocalCoordinationAuthorityUnavailable if code != "corrupt_lease" else TaskLeaseError
             raise exception(str(result.get("error") or "lease inspection unavailable"), code=code, payload=result)
-        if not isinstance(result.get("active"), bool) or (canonical and (
+        if not isinstance(result.get("active"), bool) or (
             result.get("source_authority") not in LOCAL_AUTHORITY_SOURCES
             or not isinstance(result.get("provider_revision"), str)
             or result.get("legacy_fallback_used") is not False
-        )):
+        ):
             raise RuntimeError("native lease inspection omitted source evidence")
         return result
     raise RuntimeError("native lease inspection exhausted source retries")

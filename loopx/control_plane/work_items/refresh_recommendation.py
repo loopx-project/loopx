@@ -8,7 +8,6 @@ from typing import Any
 from ..agents.agent_lane_recommendation import build_agent_lane_next_action
 from ..coordination.local_authority import read_canonical_todos_if_promoted, canonical_todo_summary_fields
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
-from ..todos.active_state_todo_parser import parse_active_state_todos
 from ..todos.contract import normalize_todo_id
 from ...feedback import validate_local_control_text
 from ...state_projection import active_state_next_action_entries
@@ -31,8 +30,8 @@ RECOMMENDED_ACTION_SOURCE_DEFAULT = "default_refresh_action"
 class RefreshPlanningSource:
     state_text: str
     events: list[dict[str, Any]]
-    todo_fields: dict[str, Any] | None
-    canonical_snapshot: dict[str, Any] | None
+    todo_fields: dict[str, Any]
+    canonical_snapshot: dict[str, Any]
 
 
 def load_refresh_planning_source(
@@ -50,25 +49,24 @@ def load_refresh_planning_source(
     """
     events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
     canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
-    if canonical is not None:
-        from ..goals.acceptance import observe_canonical_goal_acceptance
-        oracle_registry = registry_path
-        if canonical.get("goal_acceptance_oracle_observation_basis") is not None and oracle_registry is not None:
-            from .recommendation_source_io import load_recommendation_source_goal
-            # A shared roster's checkout is display data, including on refresh
-            # paths without --next-action. Observe the current source workspace.
-            oracle_registry, _ = load_recommendation_source_goal(oracle_registry, goal_id)
-        acceptance = observe_canonical_goal_acceptance(canonical,
-            registry_path=oracle_registry, goal_id=goal_id)
+    from ..goals.acceptance import observe_canonical_goal_acceptance
+    oracle_registry = registry_path
+    if canonical.get("goal_acceptance_oracle_observation_basis") is not None and oracle_registry is not None:
+        from .recommendation_source_io import load_recommendation_source_goal
+        # A shared roster's checkout is display data, including on refresh
+        # paths without --next-action. Observe the current source workspace.
+        oracle_registry, _ = load_recommendation_source_goal(oracle_registry, goal_id)
+    acceptance = observe_canonical_goal_acceptance(canonical,
+        registry_path=oracle_registry, goal_id=goal_id)
     fields = canonical_todo_summary_fields(
         canonical["todos"], rollout_events=events,
         goal_acceptance_contract=acceptance,
         goal_acceptance_work_guards=canonical.get("goal_acceptance_work_guards"),
-    ) if canonical is not None else None
+    )
     try:
         text = state_path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        if fields is None or require_display:
+        if require_display:
             raise FileNotFoundError(f"state file does not exist: {state_path}") from None
         text = ""
     return RefreshPlanningSource(text, events, fields, canonical)
@@ -82,28 +80,6 @@ def _first_valid_action(values: list[str]) -> str | None:
             continue
         return value
     return None
-
-
-def _agent_todo_summary(
-    state_text: str,
-    *,
-    registry_goal: dict[str, Any] | None,
-    state_path: Path | None,
-    settlement_todo_id: str | None,
-    rollout_events: list[dict[str, Any]] | None,
-    todo_fields: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    preferred = {settlement_todo_id} if settlement_todo_id else None
-    parsed = todo_fields if todo_fields is not None else parse_active_state_todos(
-        state_text,
-        goal=registry_goal,
-        state_path=state_path,
-        preferred_todo_ids=preferred,
-        rollout_events=rollout_events,
-        item_limit=None,
-    )
-    summary = parsed.get("agent_todos")
-    return summary if isinstance(summary, dict) else None
 
 
 def _exact_todo(
@@ -171,14 +147,8 @@ def resolve_refresh_recommendation(
             text_limit=500,
         )
         shared_action = _first_valid_action(next_action_entries)
-        summary = _agent_todo_summary(
-            state_text,
-            registry_goal=registry_goal,
-            state_path=state_path,
-            settlement_todo_id=settlement_todo_id,
-            rollout_events=rollout_events,
-            todo_fields=todo_fields,
-        )
+        observed = todo_fields.get("agent_todos") if todo_fields is not None else None
+        summary = observed if isinstance(observed, dict) else None
         lane_candidate = build_agent_lane_next_action(
             agent_identity={"agent_id": agent_id} if agent_id else None,
             agent_todo_summary=summary,

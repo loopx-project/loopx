@@ -106,7 +106,7 @@ def test_status_uses_provider_and_allows_native_monitor_writeback_without_displa
         state.unlink()
     for name in ("parse_active_state_todos",):
         monkeypatch.setattr(
-            f"loopx.status.{name}",
+            f"loopx.control_plane.todos.active_state_todo_parser.{name}",
             lambda *_args, **_kwargs: pytest.fail("promoted read must not parse legacy Todos"),
         )
     fields = active_state_todo_fields(goal, runtime_root=runtime)
@@ -148,17 +148,46 @@ def test_empty_canonical_collection_is_an_explicit_empty_read_model(tmp_path):
         assert fields[f"{role}_todos"]["total_count"] == 0
 
 
-def test_unpromoted_status_retains_markdown_without_starting_authority(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda *_args, **_kwargs: pytest.fail("unpromoted reads must not start TS authority"),
-    )
+def test_global_status_keeps_unmigrated_goal_visible_without_hiding_canonical_work(
+    promoted_goal, tmp_path,
+):
+    from loopx.status import collect_status
+
+    goal, runtime, _ = promoted_goal
+    old_state = tmp_path / "legacy.md"
+    old_state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Obsolete work\n")
+    unmigrated = {**goal, "id": "legacy-goal", "state_file": str(old_state)}
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [goal, unmigrated],
+                                   "common_runtime_root": str(runtime)}))
+    payload = collect_status(registry_path=registry, runtime_root_override=str(runtime),
+                             scan_roots=[], limit=5, include_public_boundary_scan=False)
+    items = {item["goal_id"]: item for item in payload["attention_queue"]["items"]}
+    assert items[goal["id"]]["agent_todos"]["items"][0]["todo_id"] == "todo_canonical"
+    refused = items["legacy-goal"]
+    assert refused["error_code"] == "canonical_authority_required"
+    assert refused["todo_source"] == "unavailable"
+    assert refused["authority_read"]["legacy_fallback_used"] is False
+    assert "agent_todos" not in refused
+    assert "Obsolete work" in old_state.read_text()
+
+
+@pytest.mark.parametrize("display_exists", [False, True])
+def test_unmigrated_status_refuses_markdown_before_reading_it(tmp_path, monkeypatch, display_exists):
     state = tmp_path / "state.md"
     goal = {"id": "goal-a", "repo": str(tmp_path), "state_file": str(state)}
-    assert active_state_todo_fields(goal, runtime_root=tmp_path / "runtime") == {}
-    state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Legacy work\n")
-    fields = active_state_todo_fields(goal, runtime_root=tmp_path / "runtime")
-    assert fields["agent_todos"]["items"][0]["text"] == "Legacy work"
+    if display_exists:
+        state.write_text("# Goal\n\n## Agent Todo\n\n- [ ] Legacy work\n")
+    original = state.read_bytes() if display_exists else None
+    monkeypatch.setattr(
+        "loopx.control_plane.todos.active_state_todo_parser.parse_active_state_todos",
+        lambda *_args, **_kwargs: pytest.fail("ordinary status must never parse legacy Todos"),
+    )
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as error:
+        active_state_todo_fields(goal, runtime_root=tmp_path / "runtime")
+    assert error.value.code == "canonical_authority_required"
+    assert error.value.payload["legacy_fallback_used"] is False
+    assert (state.read_bytes() if state.exists() else None) == original
 
 
 @pytest.mark.parametrize(

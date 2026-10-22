@@ -32,8 +32,8 @@ def test_snapshot_isolates_nested_consumers_and_runtime_goal_keys(tmp_path, monk
     assert authority.CanonicalTodoSnapshot().read(**args)['provider_revision'] == 'rev-b'
 
 
-@pytest.mark.parametrize('initial', [None, {'todos': [], 'provider_revision': 'empty'}])
-def test_empty_and_unpromoted_observations_are_not_cache_misses(tmp_path, monkeypatch, initial):
+def test_empty_canonical_observations_are_not_cache_misses(tmp_path, monkeypatch):
+    initial = {'todos': [], 'provider_revision': 'empty'}
     calls = []
     def read(**kwargs):
         calls.append(kwargs)

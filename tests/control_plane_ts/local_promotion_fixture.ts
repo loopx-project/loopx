@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import {tmpdir} from "node:os";
+import type {TestContext} from "node:test";
 import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import { canonicalAuthoritySha256 as sha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {
@@ -13,6 +15,25 @@ import { bootstrapCoordinationRuntimeShadow, COORDINATION_RUNTIME_SHADOW_BOOTSTR
 import { projection as fileProjection, sourceRequest, pendingEntry, settleFiles } from "./shadow_file_fixture.ts";
 import {deliverShadowEntry} from "../../loopx/control_plane/coordination/shadow_entry_delivery.ts";
 import {entrySelection} from "./shadow_file_fixture.ts";
+import {atomicWriteJson} from "../../loopx/control_plane/effect_runtime_io.ts";
+import {legacyCoordinationWriterFencePath} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
+
+/** Synthetic completed route for tests that seed a provider directly. */
+export async function engageCanonicalRoute(root: string, goalId = "goal-a"): Promise<void> {
+  await atomicWriteJson(legacyCoordinationWriterFencePath(root, goalId), {
+    schema_version: LEGACY_COORDINATION_WRITER_FENCE_SCHEMA,
+    state: "engaged", goal_id: goalId, fence_id: "canonical-test-route",
+    source_version: "state:test", source_projection_sha256: "a".repeat(64),
+    expected_shadow_provider_revision: `file:1:${"a".repeat(24)}`,
+  });
+}
+
+export async function canonicalReadRoot(context: TestContext, goalId: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "canonical-read-route-"));
+  context.after(() => rm(root, {recursive: true, force: true}));
+  await engageCanonicalRoute(root, goalId);
+  return root;
+}
 
 function todoRecord(overrides: Record<string, unknown> = {}) {
   return {schema_version: "todo_item_v0", todo_id: "todo_a", role: "agent", status: "open",

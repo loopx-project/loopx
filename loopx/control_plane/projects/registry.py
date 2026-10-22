@@ -16,6 +16,7 @@ from ...paths import (
 )
 from ..runtime.document_io import atomic_write_state_text as _atomic_write_text
 from ..coordination.local_authority import (
+    CanonicalAuthorityRequired,
     read_canonical_todos_if_promoted,
     require_canonical_authority,
 )
@@ -176,20 +177,21 @@ def _bind_project_goal_storage(
         and isinstance(existing_goal.get("creation_operation_id"), str)
         and existing_goal["creation_operation_id"] != ""
     )
-    existing_authority = (
-        read_canonical_todos_if_promoted(
-            runtime_root=effective_root,
-            goal_id=goal_id,
-        )
-        if existing_goal is None or not resumable_creation
-        else None
-    )
+    existing_authority = None
+    if not resumable_creation:
+        try:
+            existing_authority = read_canonical_todos_if_promoted(
+                runtime_root=effective_root, goal_id=goal_id,
+            )
+        except CanonicalAuthorityRequired:
+            # A new registration enters the explicit creation transaction.
+            # An existing unmigrated Goal must use its migration owner.
+            if existing_goal is not None:
+                raise
     if existing_goal is None and existing_authority is not None:
         raise ValueError(
             f"goal_id is already bound to canonical authority through another registry: {goal_id}"
         )
-    if existing_goal is not None and existing_authority is None and not resumable_creation:
-        require_canonical_authority(goal_id=goal_id, operation="goal_create")
     storage_target = (
         existing_target
         if existing_goal is not None

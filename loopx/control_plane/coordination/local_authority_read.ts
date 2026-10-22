@@ -12,6 +12,7 @@ import {CoordinationProjectionRead, indexCoordinationProjectionTodos, validateCo
 import {LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA, LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
   LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA, LOCAL_COORDINATION_TODO_READ_RESULT_SCHEMA} from "./coordination_state_contract.generated.ts";
 import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/projection_delivery.ts";
+import {canonicalAuthorityRouteFailure, requireCanonicalAuthority} from "./local_authority_write.ts";
 import {completionTurnOperationId,
   COORDINATION_TODO_TERMINAL_LIFECYCLE_RECEIPT_SCHEMA} from "./todo_terminal_lifecycle.ts";
 
@@ -242,6 +243,7 @@ export async function readLocalCoordinationTodo(
     const root = runtimeRoot(input.runtime_root);
     const goalId = requireAuthorityStoreId(input.goal_id, "goal id");
     const todoId = requireAuthorityStoreId(input.todo_id, "todo id");
+    await requireCanonicalAuthority(root, goalId, "todo_read");
     const store = await openRuntimeStore(root, goalId, dependencies);
     sourceAuthority = sourceAuthorityFor(store);
     const head = await store.loadAuthority();
@@ -281,6 +283,7 @@ export async function readLocalCoordinationTodo(
       decision_read_from_provider: true,
       legacy_fallback_used: false,
       ...localAuthorityOpenFailure(error),
+      ...canonicalAuthorityRouteFailure(error),
     };
   }
 }
@@ -302,6 +305,7 @@ export async function listLocalCoordinationTodos(
     }
     const root = runtimeRoot(input.runtime_root);
     const goalId = requireAuthorityStoreId(input.goal_id, "goal id");
+    await requireCanonicalAuthority(root, goalId, "todo_list");
     const store = await openRuntimeStore(root, goalId, dependencies);
     sourceAuthority = sourceAuthorityFor(store);
     const head = await store.loadAuthority();
@@ -347,6 +351,7 @@ export async function listLocalCoordinationTodos(
       decision_read_from_provider: true,
       legacy_fallback_used: false,
       ...localAuthorityOpenFailure(error),
+      ...canonicalAuthorityRouteFailure(error),
     };
   }
 }

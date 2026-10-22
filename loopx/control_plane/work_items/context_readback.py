@@ -14,7 +14,6 @@ from ..effect_runtime import effect_runtime_result
 from ..coordination.local_authority import read_canonical_todos_if_promoted
 from ..goals.acceptance import inspect_goal_acceptance
 from ..goals.state_resolution import resolve_goal_state
-from ..todos.active_state_todo_parser import parse_todo_source
 from ..todos.list_readback import list_goal_todos
 from ..todos.summary_item import todo_text_content_revision
 
@@ -42,33 +41,14 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id,
             raise ValueError("selected Todo identity is unavailable")
         canonical = read_canonical_todos_if_promoted(
             runtime_root=runtime_root, goal_id=goal_id)
-        if canonical is not None:
-            records = canonical["todos"]
-            source_name = canonical["source_authority"]
-            authority_read = {
-                "source_authority": source_name,
-                "provider_revision": canonical.get("provider_revision"),
-                "decision_read_from_provider": True,
-                "legacy_fallback_used": False,
-            }
-        else:
-            if not isinstance(state_file, Path):
-                raise ValueError("selected Todo source requires the current Goal state read")
-            source_bytes = state_file.read_bytes()
-            revision = "sha256:" + sha256(source_bytes).hexdigest()
-            if expected_state_revision and expected_state_revision != revision:
-                raise ValueError("selected Todo source changed after the Goal state read")
-            state_text = source_bytes.decode("utf-8")
-            active, archived, _sections = parse_todo_source(
-                state_text, state_path=state_file)
-            records = [*active["user"], *active["agent"], *archived]
-            source_name = "markdown_active_state"
-            authority_read = {
-                "source_authority": source_name,
-                "provider_revision": revision,
-                "decision_read_from_provider": False,
-                "legacy_fallback_used": False,
-            }
+        records = canonical["todos"]
+        source_name = canonical["source_authority"]
+        authority_read = {
+            "source_authority": source_name,
+            "provider_revision": canonical.get("provider_revision"),
+            "decision_read_from_provider": True,
+            "legacy_fallback_used": False,
+        }
         matches = [item for item in records
             if item.get("todo_id") == todo_id
             and item.get("archive_state", "active") != "archive"]

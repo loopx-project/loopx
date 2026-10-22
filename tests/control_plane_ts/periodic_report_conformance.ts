@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {canonicalReadRoot} from './local_promotion_fixture.ts';
 import type {AuthorityStoreConformanceFactory} from './authority_store_conformance.ts';
 import {productionScaleCoordinationFixture} from './production_scale_coordination_fixture.ts';
 import {coordinationTodoReadModel} from '../../loopx/control_plane/coordination/coordination_projection.ts';
@@ -28,7 +29,7 @@ export function registerPeriodicReportConformance(name: string, factory: Authori
     assert.equal(seeded.status,'applied');
     const before = await store.loadAuthority();
     const source = await listLocalCoordinationTodos({schema_version:LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
-      goal_id:goal,runtime_root:'/synthetic-runtime'}, {createStore:()=>store});
+      goal_id:goal,runtime_root:await canonicalReadRoot(context,goal)}, {createStore:()=>store});
     assert.equal(source.status,'loaded');
     const records = source.todos as JsonObject[];
     assert.equal(records.length,fixture.expected_initial_todo_count);

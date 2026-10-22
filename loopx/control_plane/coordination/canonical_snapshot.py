@@ -75,6 +75,10 @@ def read_canonical_snapshot(
                             "source_authority",
                             "decision_read_from_provider",
                             "legacy_fallback_used",
+                            "goal_id",
+                            "operation",
+                            "write_admitted",
+                            "recovery",
                         )
                         if key in page
                     },

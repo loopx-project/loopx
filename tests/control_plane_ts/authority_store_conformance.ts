@@ -32,6 +32,7 @@ import {registerAuthoritySourceConformance} from "./authority_source_conformance
 import {registerNativePlanningUpdateConformance} from "./native_planning_update_conformance.ts";
 import {registerCompletionValidationBindingConformance} from "./completion_validation_binding_conformance.ts";
 import {coordinationCommandFixture} from "./coordination_command_fixture.ts";
+import {canonicalReadRoot} from "./local_promotion_fixture.ts";
 
 import type {
   AuthorityStore,
@@ -275,7 +276,7 @@ export function registerAuthorityStoreConformance(
       operation_id: "capture-source", events: [], next_projection: captured, receipts: []});
     assert.equal(result.status, "applied");
     const read = await listLocalCoordinationTodos({schema_version: LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
-      runtime_root: "/unused", goal_id: goalId, include_leases: true}, {createStore: () => contender});
+      runtime_root: await canonicalReadRoot(t, goalId), goal_id: goalId, include_leases: true}, {createStore: () => contender});
     assert.equal(read.status, "loaded");
     assert.deepEqual(read.todos, captured.todos);
     assert.deepEqual(read.leases, captured.leases);
@@ -590,7 +591,7 @@ export function registerAuthorityStoreConformance(
       expected_provider_revision: null, events: [], receipts: [], next_projection: projection});
     assert.equal(seeded.status, "applied");
     const request = {schema_version: LOCAL_COORDINATION_TODO_LIST_REQUEST_SCHEMA,
-      runtime_root: "/synthetic-runtime", goal_id: goal};
+      runtime_root: await canonicalReadRoot(t, goal), goal_id: goal};
     const plain = await listLocalCoordinationTodos(request, {createStore: () => store});
     assert.equal(plain.status, "loaded");
     assert.equal(Object.hasOwn(plain, "leases"), false); // Default-off response parity.
