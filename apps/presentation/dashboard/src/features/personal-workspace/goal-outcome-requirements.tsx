@@ -22,6 +22,11 @@ function stateLabel(item: Requirement, fresh: boolean, zh: boolean) {
     : stateLabels(zh)[displayState(item)];
   return fresh ? label : `${zh ? "历史" : "Recorded"} · ${label}`;
 }
+function requirementKey(outcome: OutcomeRequirements["outcomes"][number], requirement: Requirement): string {
+  // Native IDs are opaque and may contain colons. Keep both identities
+  // unambiguous instead of relying on a separator the vocabulary forbids.
+  return JSON.stringify([outcome.id, requirement.id]);
+}
 
 /** One native declaration/readback owner. The form only appends a requirement. */
 export function GoalOutcomeRequirements({goalId, declaration, fresh, canManage, providerRevision, onRefresh}: {
@@ -38,7 +43,7 @@ export function GoalOutcomeRequirements({goalId, declaration, fresh, canManage, 
     || current && requirement.agent_review?.basis_current && requirement.agent_review.conclusion === "unmet")
     .sort((a, b) => stateOrder.indexOf(displayState(a.requirement)) - stateOrder.indexOf(displayState(b.requirement)));
   const preview = attention.slice(0, 3);
-  const visible = new Set((all ? rows : preview).map(row => `${row.outcome.id}:${row.requirement.id}`));
+  const visible = new Set((all ? rows : preview).map(row => requirementKey(row.outcome, row.requirement)));
   const labels = stateLabels(zh);
   if (!declaration.outcomes.length) return null;
   return <section className={`goal-outcomes${all ? " is-expanded" : ""}`} aria-label={zh ? "支撑成果" : "Supporting outcomes"}>
@@ -92,17 +97,17 @@ function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, vi
       await onRefresh();
     } finally {setBusy(false);}
   }
-  const shown = all || outcome.requirements.some(item => visible.has(`${outcome.id}:${item.id}`));
+  const shown = all || outcome.requirements.some(item => visible.has(requirementKey(outcome, item)));
   return <article className="goal-outcome" hidden={!shown}>
     <header><h5>{outcome.objective}</h5><span>{outcome.requirements.length} {zh ? "项要求" : "requirements"}</span></header>
     {stateOrder.map(state => {
       const requirements = outcome.requirements.filter(item => displayState(item) === state);
       if (!requirements.length) return null;
-      const hasVisible = requirements.some(item => visible.has(`${outcome.id}:${item.id}`));
+      const hasVisible = requirements.some(item => visible.has(requirementKey(outcome, item)));
       return <details className="goal-outcome-status-group" key={state} hidden={!hasVisible} open={!all || groupsOpen[state] === true}
         onToggle={event => {const open = event.currentTarget.open; if (all) setGroupsOpen(previous => ({...previous, [state]: open}));}}>
         <summary hidden={!all}>{!fresh ? (zh ? "历史 · " : "Recorded · ") : ""}{stateLabels(zh)[state]} · {requirements.length}</summary>
-        <ul className="goal-overview-criteria goal-outcome-criteria">{requirements.map(requirement => <li key={requirement.id} hidden={!visible.has(`${outcome.id}:${requirement.id}`)}>
+        <ul className="goal-overview-criteria goal-outcome-criteria">{requirements.map(requirement => <li key={requirement.id} hidden={!visible.has(requirementKey(outcome, requirement))}>
           <RequirementRow requirement={requirement} fresh={fresh} zh={zh}/>
         </li>)}</ul>
       </details>;
