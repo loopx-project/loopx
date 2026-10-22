@@ -96,11 +96,16 @@ the terminal-error fields and may complete normally.
 
 The EdgeBench adapter carries this outcome through artifact collection into
 `runtime-receipt.json`. If a native Goal fails after execution starts, its
-`final_result.json` still retains native scores, with explicit `runtime_status`
-and `native_goal_outcome`; the presence of that file alone is not successful
-completion or result qualification. Ordinary non-native profile handling is
-unchanged. Adopt this behavior only for newly pinned attempts; frozen histories
-retain their original receipts and require explicit post-run classification.
+`partial_result.json` retains the complete native scoring result, with explicit
+`runtime_status` and `native_goal_outcome`. Failed, cancelled, usage-limited and
+unknown native outcomes do not publish `final_result.json`: existing SForge
+consumers use that file as a completion marker without interpreting the outcome
+labels. Handled terminal stops retain the existing final-result behavior;
+neither artifact grants result qualification. Ordinary non-native profile
+handling is unchanged. Adopt this behavior only for newly pinned attempts;
+frozen histories retain their original receipts and require explicit post-run
+classification. Roll back by pinning the previous source for another new attempt,
+not by renaming artifacts in a frozen run.
 
 The optional `native_goal_continue: true` loop retains the original task's
 requirements and evaluation rules after completion. Its continuation prompt no

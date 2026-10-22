@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -154,13 +155,18 @@ def test_edgebench_retains_failed_native_score_without_claiming_completion(tmp_p
     _write_native_final_result(tmp_path, score, status=status, agent="fixture", task="fixture",
                               run_id="fixture", model="fixture", effort="high",
                               native_goal_outcome=receipt["native_goal_outcome"])
-    final = json.loads((tmp_path / "final_result.json").read_text())
-    assert final["best_score"] == 12.5
-    assert final["runtime_status"] == "runner_failed"
-    assert final["native_goal_outcome"] == "failed"
+    partial = json.loads((tmp_path / "partial_result.json").read_text())
+    assert all(partial[key] == value for key, value in score.to_dict().items())
+    assert partial["runtime_status"] == "runner_failed"
+    assert partial["native_goal_outcome"] == "failed"
+    assert not (tmp_path / "final_result.json").exists()
+    assert not (tmp_path / "partial_result.json.tmp").exists()
 
 
-@pytest.mark.parametrize("outcome,expected_code", [("failed", 1), ("blocked", 0), (None, 1)])
+@pytest.mark.parametrize("outcome,expected_code", [
+    ("failed", 1), ("usage_limited", 1), ("cancelled", 130), (None, 1),
+    ("complete", 0), ("blocked", 0), ("paused", 0), ("budget_exhausted", 0),
+])
 def test_edgebench_cli_persists_native_outcome_even_when_transport_exits_zero(tmp_path, monkeypatch, outcome, expected_code):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -185,7 +191,7 @@ def test_edgebench_cli_persists_native_outcome_even_when_transport_exits_zero(tm
     trial = tmp_path / "runs" / "attempt" / "fixture"
     def completed_scoring(**kwargs):
         assert kwargs["disable_auto_resume"] is True
-        (trial / "started_at").touch()
+        (trial / "started_at").write_text("2024-01-01T00:00:00Z\n1704067200\n")
         return RunResult(runtime_seconds=2, best_score=4, total_rounds=1)
     monkeypatch.setattr(run, "run_agent", completed_scoring)
     (tmp_path / "fixture.json").write_text("{}")
@@ -196,10 +202,35 @@ def test_edgebench_cli_persists_native_outcome_even_when_transport_exits_zero(tm
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt["native_goal_outcome"] == (outcome or "unknown")
     assert receipt["score_countable"] is False
-    assert receipt["status"] == ("terminal" if expected_code == 0 else "runner_failed")
-    final = json.loads((trial / "final_result.json").read_text())
-    assert final["runtime_status"] == receipt["status"]
-    assert final["best_score"] == 4
+    assert receipt["status"] == ("terminal" if expected_code == 0 else
+                                  "cancelled" if expected_code == 130 else "runner_failed")
+    terminal = expected_code == 0
+    artifact = trial / ("final_result.json" if terminal else "partial_result.json")
+    result = json.loads(artifact.read_text())
+    assert result["runtime_status"] == receipt["status"]
+    assert result["best_score"] == 4 and result["total_rounds"] == 1
+    assert (trial / "final_result.json").exists() is terminal
+    assert (trial / "partial_result.json").exists() is not terminal
+
+    # Exercise the real consumer through normal directory discovery and HTTP
+    # rendering: outcome labels alone cannot override its completion marker.
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from sforge.visualizer.scanner import RunsIndex
+    from sforge.visualizer.server import create_app
+
+    discovered, = RunsIndex(tmp_path / "runs").list_runs(include_submissions=False)
+    assert discovered.has_final is terminal
+    assert discovered.aborted is not terminal
+    with TestClient(create_app(tmp_path / "runs")) as client:
+        response = client.get("/")
+    assert response.status_code == 200
+    group = response.text.split('data-run-id="attempt"', 1)[1].split("</details>", 1)[0]
+    done = re.search(r'font-medium">(\d+)<span[^>]*>/1</span> done', group)
+    assert done and int(done[1]) == int(terminal)
+    assert (">done</span>" in group) is terminal
+    assert (">aborted</span>" in group) is not terminal
 
 
 @pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
@@ -261,8 +292,10 @@ def test_docker_collection_preserves_real_worker_outcome(tmp_path, goal, turn, e
         _write_native_final_result(tmp_path, RunResult(runtime_seconds=observed.elapsed_seconds, best_score=7),
                                   status=status, agent="fixture", task="fixture", run_id="fixture",
                                   model="fixture", effort="high", native_goal_outcome=native["native_goal_outcome"])
-        final = json.loads((tmp_path / "final_result.json").read_text())
-        assert final["best_score"] == 7 and final["runtime_status"] == expected_status
+        artifact = tmp_path / ("final_result.json" if expected_status == "terminal" else "partial_result.json")
+        result = json.loads(artifact.read_text())
+        assert result["best_score"] == 7 and result["runtime_status"] == expected_status
+        assert (tmp_path / "final_result.json").exists() is (expected_status == "terminal")
     finally:
         if not cleaned:
             backend.cleanup_container(handle)

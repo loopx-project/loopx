@@ -87,7 +87,7 @@ def _result_status(*, interrupted, started, runtime_seconds, exit_code, timed_ou
 
 def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort,
                                feedback="native", native_goal_outcome=None):
-    """Preserve native scores separately from the solver's terminal outcome."""
+    """Retain partial native scores without publishing a completion marker."""
     if status != "terminal" and not (native_goal_outcome and result.runtime_seconds > 0):
         return
     final = dict(agent=agent, task=task, run_id=run_id, model=model, effort=effort,
@@ -97,9 +97,11 @@ def _write_native_final_result(trial, result, *, status, agent, task, run_id, mo
     if feedback == "best-only":
         final["evaluation_coverage"] = "online_only"
         final["offline_scoring_complete"] = False
-    pending = trial / "final_result.json.tmp"
+    # SForge consumers treat final_result.json itself as a completed run.
+    destination = trial / ("final_result.json" if status == "terminal" else "partial_result.json")
+    pending = destination.with_suffix(".json.tmp")
     pending.write_text(json.dumps(final, indent=2, ensure_ascii=False))
-    pending.replace(trial / "final_result.json")
+    pending.replace(destination)
 
 
 def _task_default(task_id: str, key: str, explicit: int | None, fallback: int) -> int:

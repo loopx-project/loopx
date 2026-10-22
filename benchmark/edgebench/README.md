@@ -185,6 +185,12 @@ GNU timeout after verified execution entry is a normal budget stop. Other nonzer
 or unknown exits, including an early exit with code 124, are `runner_failed` and
 do not publish `final_result.json`. Keep their captures and failure evidence;
 do not count an initial artifact's score as a solver outcome.
+For native Goals with positive runtime, `partial_result.json` preserves the full
+scoring result and its `runtime_status` / `native_goal_outcome` without making
+SForge's visualizer count the attempt as done. Handled terminal stops retain
+`final_result.json`; its presence does not independently qualify a score. Use
+new source pins for new attempts and leave frozen histories unchanged; see the
+[native outcome contract](../runtime/RUNTIME.md) for rollback and classification.
 
 New native archive-submission trials default to **no periodic auto-evaluation**
 (`--eval-interval 0`) and **3,600 seconds between accepted active submissions**.
