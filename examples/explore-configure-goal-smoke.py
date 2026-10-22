@@ -12,12 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "tests" / "control_plane"))
-
-from canonical_authority_fixture import initialize_canonical_authority  # noqa: E402
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection  # noqa: E402
-from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source  # noqa: E402
-from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
 GOAL_ID = "explore-configure-fixture"
 
@@ -95,11 +90,7 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     runtime_root = root / "runtime"
-    groups, _, _ = parse_todo_source(state_file.read_text(encoding="utf-8"))
-    records = [canonical_todo_read_record(structured_todo_item(item, role=role,
-        source_section=item["source_section"])) for role, rows in groups.items() for item in rows]
-    initialize_canonical_authority(runtime_root, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=records, handoff_mode="soft_claim"), state_path=state_file)
+    import_fixture_authority(registry, GOAL_ID)
     return registry, runtime_root
 
 
