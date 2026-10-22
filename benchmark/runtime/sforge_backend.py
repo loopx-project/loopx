@@ -11,6 +11,7 @@ from sforge.harness.backend.docker_backend import DockerBackend
 from sforge.harness.network_isolation import AllowedEndpoint, resolve_hostname
 
 from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
+from .provider_failure import observe_terminal_provider_failure
 
 
 class RecordingDockerBackend(DockerBackend):
@@ -25,6 +26,7 @@ class RecordingDockerBackend(DockerBackend):
         self.execution_start_marker = None
         self.execution_receipt = None
         self.native_goal_receipt = None
+        self.provider_failure_receipt = None
         self.auth_ips = [] if oauth_proxy else resolve_hostname("auth.openai.com", logger)
         if not oauth_proxy and not self.auth_ips:
             raise RuntimeError("Cannot resolve Codex OAuth endpoint")
@@ -125,6 +127,10 @@ class RecordingDockerBackend(DockerBackend):
                     observations.append({"artifact": name, "collected": False,
                                          "error_kind": type(error).__name__})
             (self.log_dir / "artifact-collection.json").write_text(json.dumps(observations))
+            self.provider_failure_receipt = observe_terminal_provider_failure(
+                self.log_dir / "native-sessions" / "sessions",
+                self.log_dir / "worker-sessions" / "sessions",
+            )
             # A native-Goal worker owns exactly one wake (including opt-in
             # continuation Goals). Read its retained receipt after collection;
             # don't infer completion from a shell exit or solver output prose.

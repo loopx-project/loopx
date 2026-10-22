@@ -414,6 +414,8 @@ def main(argv=None):
         ))
     except Exception as error:
         receipt.update(status="runner_failed", error_kind=type(error).__name__)
+        if provider_failure := getattr(backend, "provider_failure_receipt", None):
+            receipt["provider_failure"] = provider_failure
         receipt_path.write_text(json.dumps(receipt, indent=2))
         raise
     finally:
@@ -438,6 +440,8 @@ def main(argv=None):
     receipt["execution"] = execution
     if native:
         receipt.update(native)
+    if provider_failure := getattr(backend, "provider_failure_receipt", None):
+        receipt["provider_failure"] = provider_failure
     _write_native_final_result(trial, result, status=status, agent=agent.name,
                                task=task.task_id, run_id=args.run_id,
                                model=args.model, effort=args.effort, feedback=args.feedback,
