@@ -33,7 +33,7 @@ from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
 from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
-    DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
+    DEFAULT_TIMEOUT_SECONDS, PROFILES, SUBMISSION_RECOVERY_ROOT, SForgeWorker,
 )
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import source_pins
@@ -126,6 +126,8 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
+    parser.add_argument("--submission-recovery", action="store_true",
+                        help="Retain native submission identity and recover lost acceptance replies on a fresh heartbeat trial")
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
@@ -197,6 +199,10 @@ def main(argv=None):
         parser.error("--stride-strategy requires a heartbeat worker")
     if args.planning_horizon_goal is not None and not args.worker.startswith("heartbeat-"):
         parser.error("--planning-horizon-goal requires a heartbeat worker")
+    if args.submission_recovery and (not args.worker.startswith("heartbeat-")
+            or args.feedback != "native" or args.restore_checkpoint is not None
+            or args.checkpoint_request is not None):
+        parser.error("--submission-recovery requires a fresh native-feedback heartbeat trial without checkpoint capture")
     checkpoint_request = None
     if args.checkpoint_request is not None:
         if not args.worker.startswith("heartbeat-"):
@@ -239,6 +245,8 @@ def main(argv=None):
                        os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"))
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
+    if args.submission_recovery and task.game_mode:
+        raise ValueError("Submission recovery requires a non-game task with the native sforge-submit entrypoint")
     blind_endpoint = None
     feedback_prompt = None
     workspace_instructions = None
@@ -309,6 +317,7 @@ def main(argv=None):
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          workspace_instructions=workspace_instructions,
                          task_objective=task_objective,
+                         submission_recovery=args.submission_recovery,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          native_goal_continue=args.native_goal_continue,
@@ -336,6 +345,13 @@ def main(argv=None):
         judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
         admin_secret=get_admin_secret(args.log_dir), logger=logger, sampler=sampler,
     ) if args.feedback == "best-only" else None)
+    submission_receipts = None
+    if args.submission_recovery:
+        from benchmark.runtime.submission_receipts import NativeSubmissionReceipts
+
+        submission_receipts = NativeSubmissionReceipts(trial=trial, run_id=args.run_id, task_id=args.task,
+            judge_url=args.judge_url.replace("host.docker.internal", "127.0.0.1"),
+            remote_root=SUBMISSION_RECOVERY_ROOT, logger=logger)
     checkpoint = None
     if args.checkpoint_controller_file is not None:
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
@@ -345,6 +361,7 @@ def main(argv=None):
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
+                                     **({"submission_receipts": submission_receipts} if submission_receipts is not None else {}),
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
@@ -375,6 +392,7 @@ def main(argv=None):
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,
+        **({"submission_recovery": True} if args.submission_recovery else {}),
         "eval_interval": args.eval_interval, "submission_cooldown": args.submission_cooldown,
         "status": "starting", "score_countable": False,
         **({"restore_phase_extension_seconds": args.restore_phase_extension_seconds}
@@ -419,6 +437,8 @@ def main(argv=None):
     finally:
         if feedback is not None:
             feedback.close()
+        if submission_receipts is not None:
+            submission_receipts.close()
     # Native cancellation and swallowed Docker failures return runtime=0.
     # Observe the signal independently; never infer cancellation from output prose.
     execution = backend.execution_receipt or {}

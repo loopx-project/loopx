@@ -104,6 +104,60 @@ Only `benchmark/runtime` is overlaid from the runner archive; installed LoopX
 code remains at the product pin. Both revisions are recorded. Without separate
 runner settings, the existing single-checkout contract applies.
 
+## Native submission recovery
+
+Add `--submission-recovery` to a **fresh** `heartbeat-resume` or
+`heartbeat-explore` non-game trial with `--feedback native` to retain the native client's
+exact submitted archive and operation identity. The option is off by default.
+It works with the worker's existing OAuth or custom-endpoint authentication and
+does not enable a research mode or change the selected stride policy. Checkpoint
+capture and restored trials are outside this slice and reject the option.
+
+The qualified native client is `loopx-agent/EdgeBench` at
+`071a884012754127f28f5b84be10f533a42db527`. It already polls for a terminal result
+and supports `sforge-submit --list` and `sforge-submit --result ID`. Recovery adds
+a durable journal around that same script; changed or ambiguous script anchors
+refuse installation before the entrypoint is replaced.
+
+- A normal submission retains its actual archive before the single native POST.
+  Results continue through the native polling and display path.
+- If the acceptance reply is lost, repeat the normal submit command. A small
+  host publisher reads token-visible native history. After the native entry is
+  terminal, it hashes the accepted archive; an unambiguous match recovers the
+  original submission ID and reads its result. Pending entries remain unknown
+  because the native service may still be writing their archive.
+  The command prints the recovered operation and archive identity. Changes made
+  in the workspace since that operation are not submitted by this recovery call.
+- If acceptance cannot be determined, the command stops without another POST.
+  A dispatch marker written just before a crash cannot prove whether the request
+  reached the native service. There is no automatic replay or exactly-once
+  guarantee without native idempotency support. Only the pinned provider's
+  proven pre-admission refusal messages permit a later explicit new submission;
+  a generic HTTP error is insufficient proof that no round was allocated.
+- A preparation that never reached the dispatch boundary can be retired when a
+  later command packages a different candidate. A late process holding the old
+  operation then fails its dispatch check. Once dispatch may have begun, only
+  the original operation can be recovered.
+
+The publisher sends only accepted submission identities and archive digests to
+the worker; it does not poll terminal result payloads, copy accepted archives
+back, or unpack source manifests. Its small receipt packet and immutable native
+bindings live in the private trial directory; the worker's operation journal and
+snapshots are collected through the existing worker-control artifact path. Keep
+these candidate artifacts private. Recovery covers repeated client calls in the
+same trial; it does not retrofit an old trial or reconstruct a removed container.
+
+This option does not create Explore evidence, complete Todos, wake a scheduler,
+or enforce per-model-request Stop/wait admission. Native admission, evaluation,
+cooldowns, budgets and scoring keep their existing owners. Mechanical recovery
+checks do not establish improved research quality or scores.
+
+中文：显式添加 `--submission-recovery`，可在新的原生反馈 heartbeat 实验中保留
+实际提交快照，并在受理回复丢失时恢复原 submission ID。普通反馈仍由原生脚本读取；
+无法确认受理时不自动重发。恢复调用会明确展示原操作归属，不会把工作区的新候选
+当成旧结果的来源。本片不包含研究模式、Todo 等待、自动唤醒或逐请求准入，
+也不支持接管旧 checkpoint。
+
 For an explicitly selected best-only trial, start the dedicated online judge with the same task
 and private log roots. It requires a pinned SForge revision with bounded
 asynchronous judge capacity (`judge_max_concurrent` / `judge_max_pending`).

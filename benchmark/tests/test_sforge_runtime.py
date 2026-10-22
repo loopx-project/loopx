@@ -405,6 +405,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     backend.checkpoint = None
     backend.log_dir = tmp_path / "artifacts"
     backend.feedback = None
+    backend.submission_receipts = None
     copied, cleaned = [], []
     def archive(handle, remote):
         copied.append(str(remote))
@@ -978,6 +979,7 @@ def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeyp
     backend.log_dir = tmp_path / "collected"
     backend.blind_api_endpoint = None
     backend.feedback = None
+    backend.submission_receipts = None
     backend.execution_command = "synthetic solver"
     monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *a, **k:
         SimpleNamespace(exit_code=1, timed_out=False, elapsed_seconds=310,

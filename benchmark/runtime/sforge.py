@@ -32,6 +32,7 @@ from .worker import PHASE_WORK_RESERVE_SECONDS
 # Experiment profiles, local to the research runner; not new LoopX modes.
 PROFILES = ("official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore")
 DEFAULT_TIMEOUT_SECONDS = 18 * 60 * 60
+SUBMISSION_RECOVERY_ROOT = f"{_CONTROL}/native-submission-recovery"
 
 
 class SForgeEnvironment:
@@ -90,6 +91,7 @@ class SForgeWorker(CodexAgent):
                  feedback: str = "native",
                  workspace_instructions: str | None = None,
                  task_objective: str | None = None,
+                 submission_recovery: bool = False,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
                  native_goal_continue: bool = False,
@@ -108,6 +110,12 @@ class SForgeWorker(CodexAgent):
         ):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
+        if not isinstance(submission_recovery, bool) or (submission_recovery and (
+                not profile.startswith("heartbeat-") or feedback != "native"
+                or warm_start is not None or checkpoint_request is not None
+                or checkpoint_request_path is not None)):
+            raise ValueError("submission_recovery requires a fresh native-feedback heartbeat worker without checkpoint capture")
+        self.submission_recovery = submission_recovery
         if timeout_seconds <= PHASE_WORK_RESERVE_SECONDS:
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
         if not config.agent_model or not config.agent_effort:
@@ -336,8 +344,11 @@ class SForgeWorker(CodexAgent):
                 f"Path({str(hook)!r}).read_bytes(); Path('/etc/codex/hooks.json').read_bytes()"], user="agent")
             if result.exit_code:
                 raise RuntimeError("Best-only Codex delivery hooks are unreadable by worker")
+        if self.submission_recovery:
+            self._install_submission_recovery(backend, handle)
         (log_dir / "worker-profile.json").write_text(json.dumps({
             "profile": self.profile, "model": self._config.agent_model,
+            **({"submission_recovery": True} if self.submission_recovery else {}),
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
             "loopx_usage_ping_enabled": False,
@@ -357,6 +368,40 @@ class SForgeWorker(CodexAgent):
             **(self.runtime._replan_receipt() if self.runtime and
                self.profile.startswith("heartbeat-") else {}),
         }, indent=2))
+
+    def _install_submission_recovery(self, backend, handle):
+        from .submission_recovery import instrument_submit_script
+
+        if getattr(backend, "submission_receipts", None) is None:
+            raise ValueError("submission_recovery requires the native accepted-archive receipt publisher")
+        capability = backend.exec_run(handle, [f"{_PYTHON}/bin/python3", "-c",
+            "from benchmark.runtime.submission_recovery import prepare_submission; "
+            "from benchmark.runtime.submission_receipts import read_archive"],
+            environment={"PYTHONPATH": _SRC, "LOOPX_USAGE_PING": "0"}, user="agent")
+        if capability.exit_code:
+            raise RuntimeError("Native submission recovery is unavailable in the pinned runner source")
+        native = backend.exec_run(handle, ["cat", "/usr/local/bin/sforge-submit"], user="root")
+        if native.exit_code:
+            raise RuntimeError("The native submission entrypoint is unavailable")
+        script = instrument_submit_script(native.output, ["env", f"PYTHONPATH={_SRC}",
+            f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.submission_recovery"],
+            SUBMISSION_RECOVERY_ROOT)
+        directories = [f"{SUBMISSION_RECOVERY_ROOT}/{name}" for name in ("intents", "snapshots")]
+        for command in (["mkdir", "-p", *directories],
+                        ["chown", "agent:agent", *directories],
+                        ["chmod", "0700", *directories],
+                        ["touch", f"{SUBMISSION_RECOVERY_ROOT}/submission.lock"],
+                        ["chown", "agent:agent", f"{SUBMISSION_RECOVERY_ROOT}/submission.lock"]):
+            if backend.exec_run(handle, command, user="root").exit_code:
+                raise RuntimeError("Could not prepare the native submission journal")
+        # Validate every pinned native script anchor before replacing the entry.
+        with tempfile.TemporaryDirectory(prefix="native-submission-client-") as directory:
+            path = Path(directory) / "sforge-submit"
+            path.write_text(script, encoding="utf-8")
+            path.chmod(0o755)
+            backend.copy_to_container(handle, path, PurePosixPath("/usr/local/bin/sforge-submit"))
+        if backend.exec_run(handle, ["chmod", "0755", "/usr/local/bin/sforge-submit"], user="root").exit_code:
+            raise RuntimeError("The submission recovery entrypoint is not executable")
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):
         if self.workspace_instructions is not None and not self.instructions_installed and self.warm_start is None:
@@ -496,4 +541,6 @@ class SForgeWorker(CodexAgent):
             self.backend.execution_start_marker = execution_start_marker
         if self.feedback == "best-only":
             self.backend.start_feedback(self.handle)
+        if self.submission_recovery:
+            self.backend.submission_receipts.start(self.backend, self.handle)
         return command
