@@ -11,11 +11,11 @@ import hashlib
 from datetime import UTC, datetime
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
-from ...paths import effective_runtime_root
+from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ..coordination.local_authority import local_authority_is_promoted
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
@@ -42,18 +42,45 @@ class GoalAcceptanceRejected(ValueError):
         self.payload = {"error_detail": detail}
 
 
+class GoalAcceptanceRoute(TypedDict):
+    registry_path: Path
+    runtime_root: str
+    goal_id: str
+
+
+def goal_acceptance_route(
+    registry_path: Path, goal_id: str, runtime_root: str | None = None,
+) -> GoalAcceptanceRoute:
+    """Route a presentation request; its runtime owns the proposal store.
+
+    Keep the service runtime for a directly served project, but never let the
+    global App's conversation store override a Goal's declared source runtime.
+    """
+    source = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+    root = source["source_runtime_root"]
+    if runtime_root is not None and not source["routed_to_source_registry"]:
+        root = runtime_root
+    return {"registry_path": Path(source["source_registry"]),
+            "runtime_root": root, "goal_id": goal_id}
+
+
 def _routing(
     registry_path: Path,
     goal_id: str,
     runtime_root: str | None,
     agent_id: str | None = None,
-) -> dict[str, Any]:
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    # A direct CLI override remains an explicit diagnostic/recovery route.
+    source = resolve_goal_source_runtime_route(
+        registry_path=registry_path, goal_id=goal_id, runtime_root_override=runtime_root,
+    )
+    registry_path = Path(source["source_registry"])
     goal = load_goal_from_registry(registry_path, goal_id)
     if goal is None:
         raise ValueError("Goal acceptance requires a registered Goal")
     if agent_id is not None and agent_id not in registered_agent_ids_for_goal(goal):
         raise ValueError("Goal acceptance caller must be a registered Agent")
-    root = effective_runtime_root(registry_path, runtime_root)
+    root = Path(source["source_runtime_root"])
     if not local_authority_is_promoted(runtime_root=root, goal_id=goal_id):
         raise ValueError(
             "Goal acceptance requires an existing canonical authority; activation never promotes a provider"
@@ -65,7 +92,7 @@ def _routing(
     goal_instance_id = goal.get("goal_instance_id")
     if goal_instance_id is not None:
         route["goal_ref"] = exact_goal_ref(goal_id, goal_instance_id)
-    return route
+    return registry_path, goal, route
 
 
 def _result(
@@ -130,8 +157,7 @@ def refine_goal_outcome(
     runtime_root: str | None = None, execute: bool = False,
 ) -> dict[str, Any]:
     """Record scoped planning intent, never configure validators or attest success."""
-    route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    goal = load_goal_from_registry(registry_path, goal_id)
+    registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     if "owner_agent_id" in refinement and refinement["owner_agent_id"] not in registered_agent_ids_for_goal(goal):
         raise ValueError("Outcome owner must be a registered Agent")
     # The registry's legacy omitted-status form denotes an active Goal too.
@@ -150,8 +176,7 @@ def update_goal_objective(
     """Adapt explicit owner revisions or a registered Agent's own adoption."""
     from ..work_items.replan_context_codec import goal_context_facts
 
-    route = _routing(registry_path, goal_id, runtime_root, agent_id)
-    goal = load_goal_from_registry(registry_path, goal_id)
+    registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
         raise ValueError("Objective updates require an active Goal")
     return _result("goal.acceptance.objective", {**route, "actor_agent_id": agent_id,
@@ -174,9 +199,10 @@ def inspect_goal_acceptance(
     validation_workspace_path: Path | None = None,
 ) -> dict[str, Any]:
     """Read one canonical basis; command declarations stay inside the host."""
+    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     basis = _result(
         _INSPECT_METHOD,
-        {**_routing(registry_path, goal_id, runtime_root, agent_id),
+        {**route,
          **({"agent_id": agent_id} if agent_id is not None else {}),
          **({"todo_id": todo_id} if todo_id is not None else {}),
          **({"include_work_details": False} if not include_work_details else {})},
@@ -256,7 +282,8 @@ def goal_task_validation_files_current(
     *, registry_path: Path, runtime_root: str, goal_id: str, agent_id: str, todo_id: str,
 ) -> bool:
     """Check declared validator assets without executing output validation."""
-    route = {**_routing(registry_path, goal_id, runtime_root, agent_id), "todo_id": todo_id}
+    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    route["todo_id"] = todo_id
     basis = _result(_INSPECT_METHOD, route).get("completion_requirements")
     if not isinstance(basis, dict) or not basis.get("criteria"):
         return False
@@ -298,7 +325,8 @@ def validate_goal_task_acceptance(
     Completion still runs its own fresh validation and atomic TS commit. This
     entrypoint cannot accept supplied commands, pass flags or saved receipts.
     """
-    route = {**_routing(registry_path, goal_id, runtime_root, agent_id), "todo_id": todo_id}
+    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    route["todo_id"] = todo_id
     basis = _result(_INSPECT_METHOD, route).get("completion_requirements")
     if not isinstance(basis, dict) or not basis.get("criteria"):
         raise ValueError("delegated task requires configured owner-bound checks")
@@ -325,7 +353,7 @@ def configure_goal_acceptance(
     review_context_digest: str | None = None,
 ) -> dict[str, Any]:
     """Explicit local-owner configuration; Agent tool callers have no writer."""
-    route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     return _result(
         "goal.acceptance.configure",
         {
@@ -510,7 +538,7 @@ def verify_goal_acceptance(
     operation_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the configured acceptance checks against a frozen canonical basis."""
-    route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     basis = inspect_goal_acceptance(registry_path=registry_path, goal_id=goal_id, runtime_root=runtime_root, agent_id=agent_id)
     if expected_provider_revision is not None and basis["provider_revision"] != expected_provider_revision:
         raise ValueError("Acceptance changed; reload the current contract before checking.")

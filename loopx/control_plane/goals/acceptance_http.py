@@ -29,7 +29,7 @@ class GoalAcceptanceRequestMixin:
         raise NotImplementedError
 
     def _goal_acceptance_inspect(self) -> None:
-        from .acceptance import inspect_goal_acceptance, public_goal_acceptance
+        from .acceptance import inspect_goal_acceptance, public_goal_acceptance, goal_acceptance_route
 
         try:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
@@ -41,9 +41,8 @@ class GoalAcceptanceRequestMixin:
                 raise ValueError("one goal_id is required")
             result = public_goal_acceptance(
                 inspect_goal_acceptance(
-                    registry_path=self.server.registry_path,
-                    runtime_root=str(self.server.runtime_root),
-                    goal_id=query["goal_id"][0],
+                    **goal_acceptance_route(self.server.registry_path, query["goal_id"][0],
+                                            str(self.server.runtime_root)),
                 )
             )
             self._send_json({**result, "goal_id": query["goal_id"][0]})
@@ -59,7 +58,7 @@ class GoalAcceptanceRequestMixin:
             configure_goal_acceptance,
             refine_goal_outcome,
             public_goal_acceptance,
-            verify_goal_acceptance,
+            verify_goal_acceptance, goal_acceptance_route,
         )
 
         try:
@@ -85,9 +84,8 @@ class GoalAcceptanceRequestMixin:
             ):
                 raise ValueError("Goal and current provider revision are required")
             common: dict[str, Any] = {
-                "registry_path": self.server.registry_path,
-                "runtime_root": str(self.server.runtime_root),
-                "goal_id": goal_id,
+                **goal_acceptance_route(self.server.registry_path, goal_id,
+                                        str(self.server.runtime_root)),
                 "execute": True,
             }
             if action == "refine":

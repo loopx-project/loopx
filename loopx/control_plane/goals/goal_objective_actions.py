@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from ...chat_action_store import ChatActionStore, ActionConflictError, normalize_idempotency_key
 from ...file_lock import exclusive_file_lock
-from .acceptance import inspect_goal_acceptance, update_goal_objective, public_goal_acceptance
+from .acceptance import inspect_goal_acceptance, update_goal_objective, public_goal_acceptance, goal_acceptance_route, GoalAcceptanceRoute
 
 
 def prepare_objective_revision(*, registry_path: Path, runtime_root: str | None,
@@ -27,7 +27,7 @@ def prepare_objective_revision(*, registry_path: Path, runtime_root: str | None,
         raise ValueError("objective proposal needs objective, reason and an opaque source_ref")
     parameters = service._normalize("goal.update", {"goal_id": goal_id, **document, "prepared_by": agent_id})
     operation_id = normalize_idempotency_key(operation_id)
-    inspect_goal_acceptance(registry_path=registry_path, runtime_root=str(root), goal_id=goal_id, agent_id=agent_id)
+    inspect_goal_acceptance(**service._objective_route(goal_id), agent_id=agent_id)
     if not execute:
         _, preview = service._objective_preview(parameters)
         return {**public_goal_acceptance(preview), "prepared": False, "executed": False}
@@ -51,8 +51,8 @@ class GoalObjectiveActionMixin:
     store: ChatActionStore
     registry_path: Path
 
-    def _objective_route(self, goal_id: str) -> dict[str, Any]:
-        return {"registry_path": self.registry_path, "runtime_root": str(self.store.root.parent.parent), "goal_id": goal_id}
+    def _objective_route(self, goal_id: str) -> GoalAcceptanceRoute:
+        return goal_acceptance_route(self.registry_path, goal_id, str(self.store.root.parent.parent))
 
     def _objective_preview(self, parameters: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         route = self._objective_route(parameters["goal_id"])
