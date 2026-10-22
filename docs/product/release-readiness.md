@@ -229,7 +229,8 @@ For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
 `tag` set to that existing release and `browser_fixture_commit` set to a full,
 merged commit SHA. Only the personal-workspace fixture, typed-actions,
-goal-work-map, goal-workspace-m2 and workspace-locale browser-smoke files are
+goal-work-map, goal-workspace-m2, lark-cli-missing, pr-review-agent-order and
+workspace-locale browser-smoke files are
 extracted from that commit;
 its other changes are not applied to the product checkout. All candidate files
 must remain regular source files before any correction is copied; deletion or a

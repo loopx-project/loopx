@@ -71,6 +71,8 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
         "examples/personal-workspace-browser/typed-actions.mjs",
         "examples/personal-workspace-browser/goal-work-map.mjs",
         "examples/personal-workspace-browser/goal-workspace-m2.mjs",
+        "examples/personal-workspace-browser/lark-cli-missing.mjs",
+        "examples/personal-workspace-browser/pr-review-agent-order.mjs",
         "apps/presentation/dashboard/smoke/workspace-locale-browser-smoke.mjs",
     )
     recover = workflow_run(workflow, "Resolve browser fixture correction without rebuilding product bytes")
