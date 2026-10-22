@@ -42,6 +42,7 @@ def register_goal_acceptance_command(subparsers: Any, add_format: Any) -> None:
        --operation-id ID --expected-provider-revision REV --execute
      adoption.json: {"revision":1, "digest":"<goal_objective.digest>", "work_digest":"<objective_work_digest>", "review_summary":"How my current work fits"}
      Use exact values from inspect; each peer adopts only for itself.
+     Own work review/adoption needs no human reply or unanimous peer vote.
 All steps require --goal-id GOAL. Proposal preparation alone requires neither
 owner input nor adoption; only an applied objective revision needs adoption.
 Authority, budgets, stops and existing gated actions remain binding.''',
