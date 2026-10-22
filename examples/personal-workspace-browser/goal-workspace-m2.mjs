@@ -177,6 +177,11 @@ export const goalWorkspaceM2Scenario = {
       await railDialog.waitFor({state:'hidden'});
       await now.locator('[data-todo-id="scale-199"][aria-pressed="true"]').waitFor();
       assert.equal(await remaining.evaluate(node=>node.open),true,"Selecting later work reveals its owner row");
+      await remaining.locator(':scope > summary').click();
+      await railTrigger.click();
+      await rail.locator('[data-todo-id="scale-191"]').click();
+      await now.locator('[data-todo-id="scale-191"][aria-pressed="true"]').waitFor();
+      assert.equal(await remaining.evaluate(node=>node.open),true,"A different selection in the same closed group also reveals its row");
       await page.locator('.personal-drawer-close').click();
       await now.getByRole('button',{name:'看板',exact:true}).click();
       assert.equal(await now.locator('.personal-task-card[data-work-class]').count(),200);

@@ -157,7 +157,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
             {!readOnly && group.ownerId && onOpenAgentConversation ? <button type="button" className="goal-owner-conversation" data-agent-id={group.ownerId} aria-label={zh ? `与 ${ownerName(group.ownerId)} 对话` : `Talk to ${ownerName(group.ownerId)}`} onClick={() => onOpenAgentConversation(group.ownerId!)}>{zh ? "工作记录" : "Work conversation"}</button> : null}
           </header>
           {group.todoIds.slice(0, 3).map(id => task(id))}
-          {group.todoIds.length > 3 ? <RemainingWork key={group.ownerId ?? ""} selected={group.todoIds.slice(3).includes(selectedTodoId ?? "")}
+          {group.todoIds.length > 3 ? <RemainingWork key={group.ownerId ?? ""} selectedTodoId={group.todoIds.slice(3).includes(selectedTodoId ?? "") ? selectedTodoId : null}
             label={zh ? `其余 ${group.todoIds.length - 3} 项任务` : `${group.todoIds.length - 3} more tasks`}>
             {group.todoIds.slice(3).map(id => task(id))}
           </RemainingWork> : null}
@@ -176,8 +176,8 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
   </>;
 }
 
-function RemainingWork({selected, label, children}: {selected: boolean; label: string; children: ReactNode}) {
+function RemainingWork({selectedTodoId, label, children}: {selectedTodoId: string | null; label: string; children: ReactNode}) {
   const disclosure = useRef<HTMLDetailsElement>(null);
-  useEffect(() => {if (selected && disclosure.current) disclosure.current.open = true;}, [selected]);
+  useEffect(() => {if (selectedTodoId && disclosure.current) disclosure.current.open = true;}, [selectedTodoId]);
   return <details className="goal-work-more" ref={disclosure}><summary>{label}</summary>{children}</details>;
 }
