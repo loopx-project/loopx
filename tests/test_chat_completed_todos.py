@@ -340,6 +340,36 @@ def test_canonical_history_includes_archives_without_widening_active_lists(tmp_p
                 assert detail["completion_validation_revision_history"] == records[0]["completion_validation_revision_history"]
             if suffix:
                 assert all(row["claimed_by"] == "agent-a" for row in rows)
+        # Search the retained source, not just the first 40 displayed rows.
+        def search(suffix):
+            with urlopen(base + suffix) as response:
+                return json.load(response)
+
+        first = search("")
+        assert "todo_history_0" not in {row["todo_id"] for row in first["items"]}
+        for term in ("TODO_HISTORY_0", "  Completed TASK 0:  "):
+            found = search("&q=" + quote(term))
+            assert [row["todo_id"] for row in found["items"]] == ["todo_history_0"]
+            assert found["total"] == 1 and found["next_cursor"] is None
+            assert found["items"][0]["text"] == records[0]["text"]
+        assert search("&q=todo_history_0&agent_id=agent-a")["total"] == 0
+        assert search("&q=todo_history_0&agent_id=agent-b")["total"] == 1
+        assert search("&q=Retain%20full%20evidence")["total"] == 0
+        assert search("&q=no-such-task")["items"] == []
+        matched = search("&q=COMPLETED%20TASK&agent_id=agent-a")
+        assert matched["total"] == 42
+        cursor = matched["next_cursor"]
+        for suffix in ("&q=other&agent_id=agent-a", "&q=completed%20task", ""):
+            with pytest.raises(HTTPError) as conflict:
+                search(suffix + "&cursor=" + quote(cursor))
+            assert conflict.value.code == 409
+        last = search("&q=completed%20task&agent_id=agent-a&cursor=" + quote(cursor))
+        assert len(last["items"]) == 2 and last["next_cursor"] is None
+        assert search("&q=completed%20task&agent_id=agent-a&cursor=" + quote(cursor)) == last
+        with pytest.raises(HTTPError) as invalid:
+            search("&q=" + "x" * 257)
+        assert invalid.value.code == 400
+        assert search("&q=%20%20")["total"] == 85
         after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="history-goal")
         assert after["provider_revision"] == before["provider_revision"]
         assert after["todos"] == before["todos"]

@@ -301,7 +301,7 @@ export function GoalTasksView({
         ))}
         {!scheduleItems.length ? <p className="personal-task-empty">{t("tasks.emptySchedules")}</p> : null}
       </TaskLane>
-      <CompletedTaskLane key={`${goal.goalId}:${selectedLaneId}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled && historyActive} listView={listView} onSelect={onSelect} selectedTodoId={selectedTodoId} />
+      <CompletedTaskLane searchable key={`${goal.goalId}:${selectedLaneId}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled && historyActive} listView={listView} onSelect={onSelect} selectedTodoId={selectedTodoId} />
       </div>
       {isEmpty ? (
         <p className="personal-task-empty">

@@ -17,13 +17,15 @@ const pageSchema = z.object({
 });
 
 /** Fixed-height previews keep layout/DOM cost bounded; the drawer retains full text. */
-export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevision = 0, listView = false, onSelect, selectedTodoId = null, query = "" }: {
+export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevision = 0, listView = false, onSelect, selectedTodoId = null, query = "", searchable = false }: {
   goal: WorkspaceGoal; agentId: string; seed: WorkspaceAgentTodo[]; enabled: boolean;
-  selectedTodoId?: string | null; query?: string;
+  selectedTodoId?: string | null; query?: string; searchable?: boolean;
   refreshRevision?: number; listView?: boolean; onSelect: (selection: WorkspaceDrawerSelection) => void;
 }) {
   const { t } = useWorkspaceI18n();
   const historyId = useId();
+  const [searchDraft, setSearchDraft] = useState("");
+  const [historySearch, setHistorySearch] = useState("");
   const [expanded, setExpanded] = useState(false);
   const visible = !listView || expanded;
   const rowHeight = listView ? 96 : 148;
@@ -49,11 +51,12 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
   // A workspace reread invalidates the independent history snapshot, even if
   // the directory, selected Goal and completed count did not change. Keep the
   // user's list expansion; cancel old pages before opening a fresh cursor.
-  const resetSnapshot = useEffectEvent(() => {
+  function resetSnapshot(search: string) {
     request.current?.abort();
     request.current = null;
-    setRows(seed);
-    setTotal(agentId === "all" ? goal.doneTodoCount ?? null : null);
+    setHistorySearch(search);
+    setRows(search ? [] : seed);
+    setTotal(!search && agentId === "all" ? goal.doneTodoCount ?? null : null);
     setCursor(undefined);
     setMore(false);
     setBusy(false);
@@ -62,8 +65,9 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
     setFocused(null);
     if (scroll.current) scroll.current.scrollTop = 0;
     setViewport({ top: 0, height: scroll.current?.clientHeight ?? 600 });
-  });
-  useEffect(() => { resetSnapshot(); }, [refreshRevision]);
+  }
+  const refreshSnapshot = useEffectEvent(() => resetSnapshot(historySearch));
+  useEffect(() => { refreshSnapshot(); }, [refreshRevision]);
   const needsPage = cursor === undefined || viewport.top + viewport.height >= rows.length * rowHeight - rowHeight * 2;
   useEffect(() => {
     if (!enabled || !visible || (!needsPage && !more) || cursor === null || error || request.current) return;
@@ -74,6 +78,7 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
     const query = new URLSearchParams({ goal_id: goal.goalId });
     if (agentId !== "all") query.set("agent_id", agentId);
     if (cursor) query.set("cursor", cursor);
+    if (historySearch) query.set("q", historySearch);
     void fetch(`/api/chat/completed-todos?${query}`, { signal: controller.signal }).then(async (response) => {
       if (controller.signal.aborted) return;
       if (response.status === 409) setExpired(true);
@@ -87,7 +92,7 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
     }).catch(() => { if (!controller.signal.aborted) setError(true); }).finally(() => {
       if (!controller.signal.aborted) { request.current = null; setBusy(false); }
     });
-  }, [enabled, visible, needsPage, cursor, error, retry, goal.goalId, agentId, busy, more]);
+  }, [enabled, visible, needsPage, cursor, error, retry, goal.goalId, agentId, busy, more, historySearch]);
   useEffect(() => {
     if (scroll.current) scroll.current.scrollTop = 0;
     setViewport({ top: 0, height: scroll.current?.clientHeight ?? 600 });
@@ -99,7 +104,12 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
   const indices = Array.from({ length: Math.max(0, last - first) }, (_, index) => first + index);
   if (focused !== null && focused < visibleRows.length && !indices.includes(focused)) indices.push(focused);
   return <section className={`personal-object-list personal-task-lane${listView ? " personal-completed-list" : ""}`} data-testid="completed-task-lane">
-    <header>{listView ? <button type="button" aria-controls={historyId} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><span aria-hidden="true">{expanded ? "▾" : "▸"}</span> {t("tasks.completed")}</button> : <strong><i aria-hidden="true" className="personal-kanban-dot tone-done" />{t("tasks.completed")}</strong>}<span>{total ?? "—"}</span></header>
+    <header>{listView ? <button type="button" aria-controls={historyId} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><span aria-hidden="true">{expanded ? "▾" : "▸"}</span> {t("tasks.completed")}</button> : <strong><i aria-hidden="true" className="personal-kanban-dot tone-done" />{t("tasks.completed")}</strong>}<span>{historySearch && total !== null ? t("tasks.historyMatches", {count: total}) : total ?? "—"}</span></header>
+    {searchable && visible ? <form className="personal-history-search" role="search" aria-label={t("tasks.historySearch")} onSubmit={event => { event.preventDefault(); resetSnapshot(searchDraft.trim()); }}>
+      <input aria-label={t("tasks.historySearch")} placeholder={t("tasks.historySearchPlaceholder")} type="search" maxLength={256} value={searchDraft} onChange={event => setSearchDraft(event.target.value)} disabled={!enabled} />
+      <button type="submit" disabled={!enabled}>{t("tasks.historySearchSubmit")}</button>
+      {historySearch ? <button type="button" onClick={() => { setSearchDraft(""); resetSnapshot(""); }}>{t("tasks.historySearchClear")}</button> : null}
+    </form> : null}
     <div id={historyId} hidden={!visible} aria-label={t("tasks.completed")} className="personal-task-lane-scroll" ref={scroll} role="region" tabIndex={0} onScroll={(event) => setViewport({ top: event.currentTarget.scrollTop, height: event.currentTarget.clientHeight })}>
       <div className="personal-completed-window" style={{ height: visibleRows.length * rowHeight }}>
         {indices.map((index) => {
@@ -112,7 +122,7 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
         })}
       </div>
       <div className="personal-completed-footer" role="status">
-        {busy ? t("tasks.historyLoading") : error ? <><span>{t(expired ? "tasks.historyExpired" : "tasks.historyError")}</span><button type="button" onClick={() => { if (expired) { setCursor(undefined); if (scroll.current) scroll.current.scrollTop = 0; } setExpired(false); setError(false); setRetry((value) => value + 1); }}>{t("tasks.historyRetry")}</button></> : !enabled ? t("tasks.historyLocalOnly") : cursor === null ? t("tasks.historyEnd") : <button type="button" onClick={() => setMore(true)}>{t("tasks.historyMore")}</button>}
+        {busy ? t("tasks.historyLoading") : error ? <><span>{t(expired ? "tasks.historyExpired" : "tasks.historyError")}</span><button type="button" onClick={() => { if (expired) { setCursor(undefined); if (scroll.current) scroll.current.scrollTop = 0; } setExpired(false); setError(false); setRetry((value) => value + 1); }}>{t("tasks.historyRetry")}</button></> : !enabled ? t("tasks.historyLocalOnly") : cursor === null ? (historySearch && total === 0 ? t("tasks.historySearchEmpty") : t("tasks.historyEnd")) : <button type="button" onClick={() => setMore(true)}>{t("tasks.historyMore")}</button>}
       </div>
     </div>
   </section>;

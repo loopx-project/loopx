@@ -2160,3 +2160,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-lazy-loading { margin: 0; padding: 24px; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
 
 .personal-legacy-steering-drafts { color: var(--pw-muted); font-size: var(--text-caption); overflow-wrap: anywhere; }
+
+.personal-history-search { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; }
+.personal-history-search input { flex: 1 1 120px; min-width: 0; width: 100%; }
+.personal-history-search input, .personal-history-search button { min-height: 36px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); padding: 6px 8px; font: inherit; }
+.personal-history-search button { cursor: pointer; }

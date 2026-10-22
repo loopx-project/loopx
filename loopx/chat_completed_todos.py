@@ -188,7 +188,11 @@ class CompletedTodoRequestMixin:
         goal_id = query.get("goal_id", [""])[0]
         agent_id = query.get("agent_id", [""])[0]
         cursor = query.get("cursor", [""])[0]
+        search = query.get("q", [""])[0].strip()
         try:
+            if len(search) > 256:
+                raise ValueError("history_search_too_long")
+            search = search.casefold()
             self._registry_and_goal(goal_id)
 
             def load():
@@ -220,10 +224,12 @@ class CompletedTodoRequestMixin:
                     for _, item in ordered
                     if item.get("todo_id") and item.get("task_class") != "continuous_monitor"
                     and (not agent_id or item.get("claimed_by") == agent_id)
+                    and (not search or search in str(item["todo_id"]).casefold()
+                         or search in str(item.get("text") or item.get("title") or "").casefold())
                 ]
 
             self._send_json(self.server.completed_todo_pages.page(
-                scope=(goal_id, agent_id), cursor=cursor, load=load,
+                scope=(goal_id, agent_id, search), cursor=cursor, load=load,
             ))
         except ValueError as exc:
             expired = str(exc) == "history_cursor_expired"

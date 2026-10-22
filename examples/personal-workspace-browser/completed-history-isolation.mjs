@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
-import {mkdtemp, rm, symlink} from "node:fs/promises";
+import {mkdtemp, readFile, rm, symlink} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join, resolve} from "node:path";
 import {createInterface} from "node:readline";
@@ -53,11 +53,72 @@ export const completedHistoryIsolationScenario = {
       const lane = page.getByTestId("completed-task-lane");
       const scroll = lane.getByRole("region");
       await lane.getByText("Retained task 84", {exact: true}).waitFor();
+      await page.screenshot({path: resolve(outputDir, "completed-history-search-unfiltered.png"), animations: "disabled"});
+      const search = lane.getByRole("searchbox", {name: "搜索完成历史"});
+      const submit = lane.getByRole("button", {name: "搜索", exact: true});
+      // The oldest task is outside the initial page; title and ID searches
+      // must ask the real retained-history owner before claiming no match.
+      await search.fill("TODO_RETAINED_0");
+      await submit.click();
+      await lane.getByText("Retained task 0", {exact: true}).waitFor();
+      assert.equal(await lane.getByText("Retained task 84", {exact: true}).count(), 0);
+      await page.screenshot({path: resolve(outputDir, "completed-history-search-desktop.png"), animations: "disabled"});
+      await search.fill("not-a-task");
+      await search.press("Enter");
+      await lane.getByText("没有匹配的已完成任务", {exact: true}).waitFor();
+      await search.fill("  retained TASK 5  ");
+      await submit.click();
+      await lane.getByText("Retained task 59", {exact: true}).waitFor();
+      await page.setViewportSize({width: 390, height: 844});
+      await search.scrollIntoViewIfNeeded();
+      assert.ok(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: resolve(outputDir, "completed-history-search-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1440, height: 1000});
+      // An interrupted older query must never replace the newer search.
+      let releaseOld, sawOld, finishedOld;
+      const held = new Promise(resolve => { releaseOld = resolve; });
+      const started = new Promise(resolve => { sawOld = resolve; });
+      const finished = new Promise(resolve => { finishedOld = resolve; });
+      await page.route("**/api/chat/completed-todos?*", async route => {
+        if (new URL(route.request().url()).searchParams.get("q") !== "todo_retained_1") return route.fallback();
+        const response = await fetchWorkspaceBackend(route, origin);
+        sawOld();
+        await held;
+        try { await route.fulfill({response}); } catch { /* The old request was aborted. */ }
+        finally { finishedOld(); }
+      });
+      await search.fill("todo_retained_1");
+      await submit.click();
+      await started;
+      await search.fill("todo_retained_0");
+      await submit.click();
+      await lane.getByText("Retained task 0", {exact: true}).waitFor();
+      releaseOld();
+      await finished;
+      assert.equal(await lane.getByText("Retained task 1", {exact: true}).count(), 0);
+      // A failed first search page is retryable without losing the query.
+      let failSearch = true;
+      await page.route("**/api/chat/completed-todos?*", async route => {
+        if (failSearch && new URL(route.request().url()).searchParams.get("q") === "task 2") {
+          failSearch = false;
+          return route.fulfill({status: 503, json: {error: "Synthetic read unavailable"}});
+        }
+        return route.fallback();
+      });
+      await search.fill("task 2");
+      await submit.click();
+      await lane.getByText("历史加载失败，已显示的内容仍可查看。", {exact: true}).waitFor();
+      await lane.getByRole("button", {name: "重新加载", exact: true}).click();
+      await lane.getByText("Retained task 29", {exact: true}).waitFor();
+      assert.equal(await search.inputValue(), "task 2");
+      await lane.getByRole("button", {name: "清除", exact: true}).click();
+      await lane.getByText("Retained task 84", {exact: true}).waitFor();
       let slowFinished = false;
       slowRead = fetch(`${origin}/api/chat/completed-todos?goal_id=slow-goal`).then(async response => {
         assert.equal(response.status, 200);
         return response.json();
       }).finally(() => { slowFinished = true; });
+      void slowRead.catch(() => {});
       await receive("slow-read");
       const nextPage = page.waitForResponse(response => {
         const parsed = new URL(response.url());
@@ -90,6 +151,24 @@ export const completedHistoryIsolationScenario = {
       await lane.getByText("Retained task 0", {exact: true}).scrollIntoViewIfNeeded();
       assert.ok(await page.locator("body").evaluate(element => element.scrollWidth <= innerWidth + 1));
       await page.screenshot({path: resolve(outputDir, "completed-history-isolation-mobile.png"), animations: "disabled"});
+      const remoteUrl = new URL(url);
+      remoteUrl.searchParams.set("statusUrl", "http://127.0.0.1:8976/status.json");
+      const localHistoryReads = [];
+      const remote = await openWorkspacePage(browser, remoteUrl.href, {beforeGoto: async (_api, remotePage) => {
+        const snapshot = JSON.parse(await readFile(resolve(repoRoot, "examples/status.example.json"), "utf8"));
+        await remotePage.route("http://127.0.0.1:8976/status.json*", route => route.fulfill({json: snapshot}));
+        remotePage.on("request", request => {
+          if (new URL(request.url()).pathname === "/api/chat/completed-todos") localHistoryReads.push(request.url());
+        });
+      }});
+      try {
+        await remote.page.locator(".personal-goal-row").first().locator(".personal-goal-link").click();
+        await remote.page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "任务", exact: true}).click();
+        const remoteSearch = remote.page.getByRole("searchbox", {name: "搜索完成历史"});
+        await remoteSearch.waitFor();
+        assert.equal(await remoteSearch.isDisabled(), true);
+        assert.deepEqual(localHistoryReads, [], "Remote source never queries local completed history");
+      } finally { await remote.close(); }
       const inspection = await command("inspect");
       assert.equal(inspection.store_unchanged, true);
       assert.equal(inspection.posts, 0);
@@ -98,12 +177,13 @@ export const completedHistoryIsolationScenario = {
       assert.deepEqual(context.errors.filter(error => !error.includes("503")), []);
       return {coverageEntries: context.coverageEntries, note: "Real HTTP cached history progresses independently; 503 recovery retains rows, reaches all85 results and starts no Turn."};
     } catch (error) {
+      console.error(error);
       if (context) await context.page.screenshot({path: resolve(outputDir, "completed-history-isolation-failed.png"), animations: "disabled"});
       throw error;
     } finally {
       if (!backend.killed && backend.exitCode === null) {
         backend.stdin.write("release\n");
-        if (slowRead) await slowRead;
+        if (slowRead) await slowRead.catch(() => {});
       }
       if (context) {
         await context.page.unrouteAll({behavior: "wait"});
