@@ -108,7 +108,13 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 
     envelope = build_turn_envelope(packet)
-    assert envelope["work_context"] == channel["work_context"]
+    assert channel["work_context"]["selected_todo_text_verified"] is True
+    assert envelope["work_context"] == {
+        key: value
+        for key, value in channel["work_context"].items()
+        if key != "selected_todo_text_verified"
+    }
+    assert envelope["action"]["selected_todo"]["text_source_verified"] is True
     request = build_loopx_turn_host_request(build_loopx_turn_plan(envelope,
         host="codex-cli", execution_mode="isolated-headless", turn_instance_id="export-context-turn"))
     runner = tmp_path / "runner.py"
@@ -125,6 +131,7 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     prompt = (tmp_path / "received.txt").read_text()
     authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
     assert authority["work_context"] == envelope["work_context"]
+    assert authority["selected_todo"]["text_source_verified"] is True
     changed = deepcopy(request)
     acceptance = next(row["content"] for row in changed["turn_envelope"]["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")

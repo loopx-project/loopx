@@ -99,4 +99,12 @@ def write_turn_validated_completion(
     except LocalCoordinationAuthorityRejection as exc:
         # A typed owner rejection proves that this attempt did not write. Lost
         # responses and unavailable authority still raise for receipt recovery.
-        return {**exc.payload, "ok": False, "appended": False, "completed": False}
+        diagnostics = dict(exc.payload)
+        diagnostics.setdefault("reason_code", exc.code)
+        diagnostics.setdefault("reason", str(exc))
+        return {
+            **diagnostics,
+            "ok": False,
+            "appended": False,
+            "completed": False,
+        }

@@ -204,7 +204,13 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert reads[-1]["content"]["todo"]["text"] == expected
     assert json.dumps(context).count(expected) == 1
     assert envelope["required_reads"] == channel["required_reads"]
-    assert envelope["work_context"] == context
+    assert context["selected_todo_text_verified"] is True
+    assert envelope["work_context"] == {
+        key: value
+        for key, value in context.items()
+        if key != "selected_todo_text_verified"
+    }
+    assert envelope["action"]["selected_todo"]["text_source_verified"] is True
     selected = envelope["action"]["selected_todo"]
     assert selected["todo_id"] == "todo_cursor_work"
     read = reads[-1]
@@ -235,7 +241,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     authority = extract_turn_authority(request)
     assert authority["selected_todo"]["todo_id"] == "todo_cursor_work"
     assert authority["required_reads"] == channel["required_reads"]
-    assert authority["work_context"] == context
+    assert authority["work_context"] == envelope["work_context"]
+    assert authority["selected_todo"]["text_source_verified"] is True
     assert read["command"] in render_prompt(authority)
 
     # A fresh CLI process must recover current requirements from the same owner,
