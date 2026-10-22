@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 import hashlib
 import logging
@@ -27,7 +27,7 @@ from .team_plan_confirmation import (
 SnapshotProvider = Callable[[], Mapping[str, Any]]
 ProfilePoller = Callable[[str, threading.Event], None]
 ManagerRouteReconciler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
-ProfileWorkerFingerprint = tuple[str, str, tuple[str, ...]]
+ProfileWorkerFingerprint = tuple[str, str, str, tuple[str, ...]]
 ProfileWorker = tuple[threading.Event, threading.Thread, ProfileWorkerFingerprint]
 
 
@@ -226,6 +226,7 @@ class LarkGoalTopicRuntimeService:
         return (
             str(profile_config.get("cli_bin") or "lark-cli"),
             str(profile_config.get("bot_app_id") or profile_config.get("binding_id") or ""),
+            str(profile_config.get("consumer_ref") or ""),
             callback_chats,
         )
 
@@ -337,11 +338,16 @@ class LarkGoalTopicRuntimeService:
                     # profile lease. Otherwise both paths use the App digest.
                     digest = str(profile_config.get("consumer_ref") or (
                         hashlib.sha256((app_id or profile).encode("utf-8")).hexdigest()[:32]))
-                    lease = Path.home() / ".loopx" / "lark-consumers" / digest
-                    with try_exclusive_file_lock(
-                        lease, operation="lark_event_consumer"
-                    ) as acquired:
-                        if acquired is None:
+                    digests = {digest}
+                    if app_id:
+                        digests.add(hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32])
+                    # A legacy/shared consumer holds both identities: wait for
+                    # the old process and fence new aliases on other servers.
+                    with ExitStack() as leases:
+                        acquired = [leases.enter_context(try_exclusive_file_lock(
+                            Path.home() / ".loopx" / "lark-consumers" / key,
+                            operation="lark_event_consumer")) for key in sorted(digests)]
+                        if any(lease is None for lease in acquired):
                             self._update_health(
                                 profile,
                                 status="standby",

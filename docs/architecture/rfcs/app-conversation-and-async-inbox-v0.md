@@ -54,7 +54,8 @@ route preserves the other. HTTP/Core fixtures cover setup, missing owner login,
 App mismatch and route removal; this does not qualify remote Agent delivery or
 an installed provider roundtrip.
 Legacy group entries without a stored App id use the freshly verified private
-profile identity while retaining the original profile-scoped consumer lease.
+profile identity while holding both the original profile-scoped lease and the
+App-scoped lease, fencing old processes and new aliases together.
 Setup checks the effective shared configuration before publishing the Core
 binding; an App identity change before publication is rejected without changing
 that binding. Real HTTP/Core/runtime-refresh fixtures cover this path and cold

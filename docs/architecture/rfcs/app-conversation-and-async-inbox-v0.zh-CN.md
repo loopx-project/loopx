@@ -40,7 +40,8 @@ Lark 页面选择一个非默认 App、当前可用工作区和宿主 executor�
 覆盖配置、本人未登录、App 不匹配和路由移除，不代表远程 Agent 投递或安装态
 provider 往返已通过。
 未保存 App id 的旧群聊配置使用刚核验的私聊 profile 身份，同时保留原 profile
-级 consumer lease。配置在发布 Core 绑定前校验实际共享组合；发布前 App 身份变化
+级 consumer lease 及 App 级 lease，同时隔离旧进程与新别名。配置在发布 Core
+绑定前校验实际共享组合；发布前 App 身份变化
 则拒绝，绑定保持不变。真实 HTTP/Core/runtime-refresh fixture 覆盖此路径及冷启动
 监听发现，不发送 provider 消息或执行模型。
 

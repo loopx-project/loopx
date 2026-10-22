@@ -43,33 +43,42 @@ def test_legacy_consumer_stays_standby_until_original_profile_owner_exits(tmp_pa
             "provider_ref": identity_ref("cli_public_fixture"), "bot_app_id": "cli_public_fixture",
             "consumer_ref": hashlib.sha256(b"cli_public_fixture").hexdigest()[:32]}
     started = threading.Event()
-    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile",
-        lambda **_: started.set() or {"ok": True, "status": "stopped"})
+    probes = []
+    def stream(**_):
+        if shared_private:
+            app_lease = lease.parent / hashlib.sha256(b"cli_public_fixture").hexdigest()[:32]
+            alias = subprocess.run([sys.executable, "-c",
+                "import fcntl,sys\nf=open(sys.argv[1],'a')\ntry:\n "
+                "fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError:\n sys.exit(7)",
+                str(app_lease.with_name(app_lease.name + ".lock"))],
+                capture_output=True, timeout=5)
+            probes.append((alias.returncode, alias.stderr))
+        started.set()
+        return {"ok": True, "status": "stopped"}
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", stream)
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: snapshot,
         runtime_root=tmp_path / "runtime", runtime_controller=object())
-    stop = threading.Event()
-    worker = threading.Thread(target=service._poll_profile, args=(profile, stop))
+    successor = None
     try:
-        worker.start()
+        service.refresh()
         deadline = time.monotonic() + 2
         while service.health_snapshot().get(profile, {}).get("status") != "standby" and time.monotonic() < deadline:
             threading.Event().wait(.01)
         assert service.health_snapshot()[profile]["status"] == "standby"
         assert not started.is_set()
-        stop.set()
-        worker.join(2)
+        service.close()
         owner.stdin.close()
         assert owner.wait(2) == 0
-        resumed_stop = threading.Event()
-        successor = threading.Thread(target=service._poll_profile, args=(profile, resumed_stop))
-        successor.start()
-        assert started.wait(2)
-        resumed_stop.set()
-        successor.join(2)
+        successor = LarkGoalTopicRuntimeService(snapshot_provider=lambda: snapshot,
+            runtime_root=tmp_path / "runtime", runtime_controller=object())
+        successor.refresh()
+        assert started.wait(2), successor.health_snapshot()
+        if shared_private:
+            assert probes[0][0] == 7, probes[0]
     finally:
-        stop.set()
-        worker.join(2)
         service.close()
+        if successor is not None:
+            successor.close()
         if owner.poll() is None:
             owner.stdin.close()
             owner.wait(2)
