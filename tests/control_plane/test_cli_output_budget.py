@@ -1742,6 +1742,8 @@ def test_brief_long_path_budget_retains_semantics_across_parent_depths(
 ) -> None:
     from types import SimpleNamespace
 
+    from managed_effect_runtime_fixture import stop_disposable_effect_runtimes
+
     # Use the native namespace on every host, without changing pathlib or the
     # product's platform checks. Keep raw output measurements for enforcement.
     monkeypatch.setitem(globals(), "os", SimpleNamespace(name="nt", environ=os.environ))
@@ -1782,8 +1784,11 @@ def test_brief_long_path_budget_retains_semantics_across_parent_depths(
 
     monkeypatch.setitem(globals(), "_assert_mode_variant_budgets", capture_root)
     monkeypatch.setitem(globals(), "_invoke_cli", capture_output)
-    with tempfile.TemporaryDirectory(prefix="loopx-depth-") as directory:
+    with tempfile.TemporaryDirectory(prefix="loopx-depth-") as directory, contextlib.ExitStack() as cleanup:
         base = Path(directory).resolve()
+        # Each depth can start a real runtime in that temporary namespace.
+        # Retire only these owned processes before Windows removes their cwd.
+        cleanup.callback(stop_disposable_effect_runtimes, base)
         # Do not silently climb to an unqualified writable ancestor to fit.
         if len(str(base.joinpath(*("d" for _ in range(12))) / "loopx-brief-")) + 8 > 128:
             pytest.skip("Native temp namespace cannot fit the qualified depth-12 layout")
