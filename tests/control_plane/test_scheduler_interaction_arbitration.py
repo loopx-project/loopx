@@ -482,6 +482,33 @@ def test_terminal_state_is_projected_into_final_interaction_contract() -> None:
     assert contract["cli_channel"]["spend_after_validation"] is False
 
 
+def test_quiet_monitor_cannot_inherit_delivery_without_attempt() -> None:
+    payload = {
+        "goal_id": "monitor-delivery-invariant",
+        "state": "eligible",
+        "should_run": True,
+        "normal_delivery_allowed": True,
+        "recovery_delivery_allowed": False,
+        "self_repair_allowed": False,
+        "effective_action": "monitor_quiet_skip",
+        "heartbeat_recommendation": {"notify": "DONT_NOTIFY"},
+        "execution_obligation": {
+            "kind": "work_lane_contract",
+            "must_attempt_work": False,
+        },
+    }
+
+    contract = build_interaction_contract(
+        payload,
+        scheduler_execution_context=APP_CONTEXT,
+    )
+
+    assert contract["mode"] == "monitor_quiet_skip"
+    assert contract["agent_channel"]["must_attempt"] is False
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert contract["agent_channel"]["quiet_noop_allowed"] is True
+
+
 def test_terminal_contract_with_open_action_fails_closed() -> None:
     payload = _payload(
         mode="terminal_no_followup",

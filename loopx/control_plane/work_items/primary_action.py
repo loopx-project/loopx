@@ -450,4 +450,8 @@ def interaction_execution_flags(
         scoped_user_gate_fallback=scoped_user_gate_fallback,
         bounded_delivery_with_user_notice=bounded_delivery_with_user_notice,
     )
+    # Delivery is execution. A quiet monitor or any other non-attempt lane may
+    # inherit should_run=true from the broader quota decision, but that must not
+    # manufacture delivery permission without an admitted attempt.
+    delivery_allowed = must_attempt and delivery_allowed
     return must_attempt, delivery_allowed
