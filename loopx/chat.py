@@ -8,7 +8,9 @@ from typing import Any, Iterable, Mapping
 from urllib.parse import unquote
 
 from .control_plane.todos.mutation_api import add_goal_todo
-from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+from .control_plane.coordination.local_authority import (
+    LocalCoordinationAuthorityUnavailable,
+)
 from .public_safe_text import LOCAL_PATH_SURFACE_PATTERN
 from .control_plane.work_items.governed_transition_proposal import (
     STEWARD_TEAM_PLAN_PREVIEW_KIND,
@@ -54,22 +56,27 @@ def _root_character_atoms(
         pattern = r"(?:[/\\]|%2[fF]|%5[cC])"
         return options, pattern
 
-    if is_windows and char.isascii() and char.isalpha():
-        lower_char = char.lower()
-        upper_char = char.upper()
-        lower_enc = f"%{ord(lower_char):02X}"
-        upper_enc = f"%{ord(upper_char):02X}"
-        options = (
-            (lower_char, True),
-            (lower_enc, True),
-            (upper_enc, True),
+    if is_windows and char.lower() != char.upper():
+        variants = {char, char.lower(), char.upper()}
+        encoded_variants = {
+            "".join(f"%{byte:02X}" for byte in variant.encode("utf-8"))
+            for variant in variants
+            if variant
+        }
+        options = tuple((variant, True) for variant in variants) + tuple(
+            (variant, True) for variant in encoded_variants
         )
-        pattern = f"(?:(?i:{re.escape(char)})|(?i:{lower_enc}|{upper_enc}))"
+        pattern = (
+            "(?i:"
+            + "|".join(
+                re.escape(variant) for variant in sorted(variants | encoded_variants)
+            )
+            + ")"
+        )
         return options, pattern
 
     encoded = "".join(
-        f"%{byte:02X}"
-        for byte in char.encode("utf-8", errors="surrogateescape")
+        f"%{byte:02X}" for byte in char.encode("utf-8", errors="surrogateescape")
     )
     options = ((char, False), (encoded, True))
     pattern = f"(?:{re.escape(char)}|(?i:{encoded}))"
@@ -85,8 +92,7 @@ def _local_path_pattern(replacements: list[tuple[str, str]]) -> re.Pattern[str]:
         if not component:
             return ""
         return "".join(
-            _root_character_atoms(char, is_windows=is_windows)[1]
-            for char in component
+            _root_character_atoms(char, is_windows=is_windows)[1] for char in component
         )
 
     roots = "|".join(
@@ -195,7 +201,9 @@ def resolve_attached_completion_replay(
 
 
 def _stable_digest(payload: dict[str, Any], *, length: int = 24) -> str:
-    stable = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    stable = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()[:length]
 
 
@@ -214,7 +222,9 @@ def redact_local_paths(
     redacted = str(text or "")
     replacements = _protected_path_replacements(protected_paths)
 
-    def _normalize_path_parts(value: str, *, fold_case: bool = False) -> tuple[str, ...]:
+    def _normalize_path_parts(
+        value: str, *, fold_case: bool = False
+    ) -> tuple[str, ...]:
         decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
         if fold_case and re.match(r"^[A-Za-z]:/", decoded):
             decoded = decoded.casefold()
@@ -225,8 +235,10 @@ def redact_local_paths(
             if part in {"", "."}:
                 continue
             if part == "..":
-                if parts and parts[-1] != ".." and not (
-                    len(parts) == 1 and re.match(drive_pattern, parts[0])
+                if (
+                    parts
+                    and parts[-1] != ".."
+                    and not (len(parts) == 1 and re.match(drive_pattern, parts[0]))
                 ):
                     parts.pop()
                 elif not absolute:
@@ -235,17 +247,18 @@ def redact_local_paths(
             parts.append(part)
         return tuple(parts)
 
-    path_parts = lambda value: _normalize_path_parts(value, fold_case=True)
-    display_path_parts = lambda value: _normalize_path_parts(value, fold_case=False)
+    def path_parts(value: str) -> tuple[str, ...]:
+        return _normalize_path_parts(value, fold_case=True)
+
+    def display_path_parts(value: str) -> tuple[str, ...]:
+        return _normalize_path_parts(value, fold_case=False)
 
     def has_parent_segment(value: str) -> bool:
         decoded = unquote(value, errors="surrogateescape").replace("\\", "/")
         return ".." in decoded.split("/")
 
     private_roots = [
-        path_parts(raw)
-        for raw, label in replacements
-        if label == "[local-path]"
+        path_parts(raw) for raw, label in replacements if label == "[local-path]"
     ]
 
     def replace_absolute_path(match: re.Match[str]) -> str:
@@ -262,8 +275,7 @@ def redact_local_paths(
                     "\\", "/"
                 )
                 if any(
-                    value == normalized_root
-                    or value.startswith(f"{normalized_root}/")
+                    value == normalized_root or value.startswith(f"{normalized_root}/")
                     for value in candidate_forms
                 ):
                     return f"{label}{suffix}"
@@ -295,7 +307,9 @@ def redact_local_paths(
     return _local_path_pattern(replacements).sub(replace_absolute_path, redacted)
 
 
-def redact_response_markdown(text: str, *, protected_paths: Iterable[Path | str] = ()) -> str:
+def redact_response_markdown(
+    text: str, *, protected_paths: Iterable[Path | str] = ()
+) -> str:
     """Keep local inline-link labels without publishing unusable destinations.
 
     This bounded display repair handles balanced inline links, not reference
@@ -309,7 +323,12 @@ def redact_response_markdown(text: str, *, protected_paths: Iterable[Path | str]
         marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
         if fence is not None:
             lines.append(line)
-            if marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1] and not line[marker.end():].strip():
+            if (
+                marker
+                and marker[1][0] == fence[0]
+                and len(marker[1]) >= fence[1]
+                and not line[marker.end() :].strip()
+            ):
                 fence = None
             continue
         if marker:
@@ -340,7 +359,7 @@ def redact_response_markdown(text: str, *, protected_paths: Iterable[Path | str]
                     continue
                 depth += (line[end] == "[") - (line[end] == "]")
                 end += 1
-            if depth or line[end:end + 1] != "(":
+            if depth or line[end : end + 1] != "(":
                 cursor = end
                 continue
             destination_start, close, depth = end + 1, end + 1, 1
@@ -353,7 +372,7 @@ def redact_response_markdown(text: str, *, protected_paths: Iterable[Path | str]
             if depth:
                 cursor = close
                 continue
-            destination = line[destination_start:close - 1]
+            destination = line[destination_start : close - 1]
             decoded = unquote(destination)
             local = decoded.lstrip("< ").lower().startswith("file:") or any(
                 redact_local_paths(value, protected_paths=protected) != value
@@ -361,7 +380,7 @@ def redact_response_markdown(text: str, *, protected_paths: Iterable[Path | str]
             )
             if local:
                 image_start = start - 1 if start and line[start - 1] == "!" else start
-                edits.append((image_start, close, line[start + 1:end - 1]))
+                edits.append((image_start, close, line[start + 1 : end - 1]))
             cursor = close
         cursor = 0
         chunks: list[str] = []
@@ -370,7 +389,9 @@ def redact_response_markdown(text: str, *, protected_paths: Iterable[Path | str]
             cursor = end
         chunks.append(line[cursor:])
         lines.append("".join(chunks))
-    return redact_local_paths("".join(lines), protected_paths=protected, project_relative=True)
+    return redact_local_paths(
+        "".join(lines), protected_paths=protected, project_relative=True
+    )
 
 
 class VisibleResponseStreamFilter:
@@ -418,7 +439,9 @@ class VisibleResponseStreamFilter:
                     if not remaining:
                         return True
                     for token, case_insensitive in options:
-                        comparable = remaining.casefold() if case_insensitive else remaining
+                        comparable = (
+                            remaining.casefold() if case_insensitive else remaining
+                        )
                         candidate = token.casefold() if case_insensitive else token
                         if candidate.startswith(comparable):
                             return True
@@ -437,18 +460,20 @@ class VisibleResponseStreamFilter:
         for index, character in enumerate(pending[:search_limit]):
             if character in self._FLUSH_BOUNDARIES:
                 boundary = index + 1
-            elif (
-                character in self._SPACED_SENTENCE_ENDINGS
-                and pending[index + 1 : index + 2] in {" ", "\t"}
-            ):
+            elif character in self._SPACED_SENTENCE_ENDINGS and pending[
+                index + 1 : index + 2
+            ] in {" ", "\t"}:
                 boundary = index + 2
         if boundary < 0 and len(pending) >= self._MAX_PENDING_CHARS:
             prefix = pending[: self._MAX_PENDING_CHARS + 1]
             paths = list(self._local_path_pattern.finditer(pending))
             whitespace = max(
-                (index for index, character in enumerate(prefix)
-                 if character in " \t"
-                 and not any(match.start() <= index < match.end() for match in paths)),
+                (
+                    index
+                    for index, character in enumerate(prefix)
+                    if character in " \t"
+                    and not any(match.start() <= index < match.end() for match in paths)
+                ),
                 default=-1,
             )
             # A declared root itself can span several chunks or contain spaces.
@@ -475,18 +500,24 @@ class VisibleResponseStreamFilter:
         if final:
             ready = self.visible_pending
             self.visible_pending = ""
-            return redact_local_paths(ready, protected_paths=self.protected_paths, project_relative=True)
+            return redact_local_paths(
+                ready, protected_paths=self.protected_paths, project_relative=True
+            )
         # One chunk can hold several safe boundaries. Keep cutting until none
         # is left, so an early sentence never holds back a long tail that the
         # length fallback would otherwise release.
         ready_length = 0
-        while (boundary := self._next_boundary(self.visible_pending[ready_length:])) > 0:
+        while (
+            boundary := self._next_boundary(self.visible_pending[ready_length:])
+        ) > 0:
             ready_length += boundary
         if not ready_length:
             return ""
         ready = self.visible_pending[:ready_length]
         self.visible_pending = self.visible_pending[ready_length:]
-        return redact_local_paths(ready, protected_paths=self.protected_paths, project_relative=True)
+        return redact_local_paths(
+            ready, protected_paths=self.protected_paths, project_relative=True
+        )
 
     def feed(self, chunk: str) -> str:
         if self.envelope_started:
@@ -554,14 +585,21 @@ def _normalize_proposals(
         ):
             # Never turn an invalid explicit target into an unscoped proposal.
             continue
-        text = _compact_line(redact_local_paths(str(raw.get("text") or ""), protected_paths=protected_paths), limit=400)
+        text = _compact_line(
+            redact_local_paths(
+                str(raw.get("text") or ""), protected_paths=protected_paths
+            ),
+            limit=400,
+        )
         if not text:
             continue
         priority = str(raw.get("priority") or "P1").upper()
         if priority not in {"P0", "P1", "P2"}:
             priority = "P1"
         rationale = _compact_line(
-            redact_local_paths(str(raw.get("rationale") or ""), protected_paths=protected_paths),
+            redact_local_paths(
+                str(raw.get("rationale") or ""), protected_paths=protected_paths
+            ),
             limit=500,
         )
         proposals.append(
@@ -660,7 +698,9 @@ def _normalize_protected_action(
     }
 
 
-def _normalize_gate(value: Any, *, protected_paths: Iterable[Path | str]) -> dict[str, str] | None:
+def _normalize_gate(
+    value: Any, *, protected_paths: Iterable[Path | str]
+) -> dict[str, str] | None:
     if not isinstance(value, dict):
         return None
     kind = _compact_line(value.get("kind"), limit=80)
@@ -687,18 +727,26 @@ def _normalize_gate(value: Any, *, protected_paths: Iterable[Path | str]) -> dic
     }
 
 
-def _normalize_goal_draft(payload: Mapping[str, Any], *, protected_paths: Iterable[Path | str]) -> dict[str, Any] | None:
+def _normalize_goal_draft(
+    payload: Mapping[str, Any], *, protected_paths: Iterable[Path | str]
+) -> dict[str, Any] | None:
     if payload.get("goal_draft") is None:
         return None
     from .control_plane.effect_runtime import effect_runtime_result
 
-    draft = effect_runtime_result("collaboration.goal_draft", dict(payload)).get("draft")
+    draft = effect_runtime_result("collaboration.goal_draft", dict(payload)).get(
+        "draft"
+    )
     if not draft:
         return None
     # Python owns transport redaction; the shared TypeScript owner admits structure.
     return {
-        key: [redact_local_paths(option, protected_paths=protected_paths) for option in field]
-        if isinstance(field, list) else redact_local_paths(field, protected_paths=protected_paths)
+        key: [
+            redact_local_paths(option, protected_paths=protected_paths)
+            for option in field
+        ]
+        if isinstance(field, list)
+        else redact_local_paths(field, protected_paths=protected_paths)
         for key, field in draft.items()
     }
 
@@ -712,6 +760,7 @@ def normalize_agent_response(
     """Normalize one structured provider response to the public Chat contract."""
 
     from .capabilities.manager_context import normalize_request
+
     handoff = normalize_request(payload.get("context_handoff"))
     protected = tuple(protected_paths)
     message = redact_response_markdown(
@@ -773,7 +822,9 @@ def parse_agent_response(
             if isinstance(salvaged, str) and salvaged.strip():
                 return {
                     "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
-                    "message": redact_response_markdown(salvaged, protected_paths=protected).strip(),
+                    "message": redact_response_markdown(
+                        salvaged, protected_paths=protected
+                    ).strip(),
                     "proposals": [],
                     "protected_action": None,
                     "gate": None,
@@ -806,7 +857,9 @@ def parse_agent_response(
         raw_text = visible or salvaged_message
     return {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
-        "message": redact_response_markdown(raw_text, protected_paths=protected).strip(),
+        "message": redact_response_markdown(
+            raw_text, protected_paths=protected
+        ).strip(),
         "proposals": [],
         "protected_action": None,
         "gate": None,
@@ -847,9 +900,17 @@ def _compact_todo_payload(payload: dict[str, Any], *, applied: bool) -> dict[str
         "goal_id": str(payload.get("goal_id") or ""),
         "todo_id": str(payload.get("todo_id") or ""),
         "text": str(record.get("text") if record else payload.get("todo") or ""),
-        "status": str(record.get("status") if record else payload.get("status") or "open"),
-        "task_class": str(record.get("task_class") or payload.get("task_class") or "advancement_task"),
-        "action_kind": str(record.get("action_kind") or payload.get("action_kind") or CHAT_TODO_ACTION_KIND),
+        "status": str(
+            record.get("status") if record else payload.get("status") or "open"
+        ),
+        "task_class": str(
+            record.get("task_class") or payload.get("task_class") or "advancement_task"
+        ),
+        "action_kind": str(
+            record.get("action_kind")
+            or payload.get("action_kind")
+            or CHAT_TODO_ACTION_KIND
+        ),
     }
     return {
         "ok": bool(payload.get("ok")),
@@ -915,8 +976,11 @@ def _todo_no_write_receipt(
         "status": "not_applied",
         "outcome": "preview_stale",
         "write_attempted": write_attempted,
-        **({"current_preview_id": _todo_preview_fingerprint(current_preview)}
-            if not write_attempted and state_revision is None else {}),
+        **(
+            {"current_preview_id": _todo_preview_fingerprint(current_preview)}
+            if not write_attempted and state_revision is None
+            else {}
+        ),
         "state_revision": state_revision or _todo_revision(current_preview),
     }
     receipt["receipt_id"] = _stable_digest(receipt)
@@ -943,16 +1007,27 @@ def _add_review_todo(
         action_kind=CHAT_TODO_ACTION_KIND,
         dry_run=dry_run,
         **({"operation_id": operation_id} if operation_id is not None else {}),
-        **({"expected_provider_revision": expected_provider_revision}
-            if expected_provider_revision is not None else {}),
+        **(
+            {"expected_provider_revision": expected_provider_revision}
+            if expected_provider_revision is not None
+            else {}
+        ),
     )
 
 
 def _bound_todo_review_preview(
-    *, registry_path: Path, goal_id: str, text: str, priority: str | None,
+    *,
+    registry_path: Path,
+    goal_id: str,
+    text: str,
+    priority: str | None,
 ) -> dict[str, Any]:
     payload = _add_review_todo(
-        registry_path=registry_path, goal_id=goal_id, text=text, priority=priority, dry_run=True,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        text=text,
+        priority=priority,
+        dry_run=True,
     )
     if payload.get("decision_read_from_provider") is not True:
         return payload
@@ -961,7 +1036,11 @@ def _bound_todo_review_preview(
     # provider head. Confirmation uses this same operation and revision.
     try:
         return _add_review_todo(
-            registry_path=registry_path, goal_id=goal_id, text=text, priority=priority, dry_run=True,
+            registry_path=registry_path,
+            goal_id=goal_id,
+            text=text,
+            priority=priority,
+            dry_run=True,
             operation_id="chat-todo:" + _todo_preview_fingerprint(payload),
             expected_provider_revision=_todo_revision(payload),
         )
@@ -971,7 +1050,8 @@ def _bound_todo_review_preview(
         raise TodoReviewPreviewConflict(
             "stale todo preview; preview the proposal again before applying",
             receipt=_todo_no_write_receipt(
-                goal_id=goal_id, current_preview=payload,
+                goal_id=goal_id,
+                current_preview=payload,
                 state_revision=exc.payload.get("current_provider_revision"),
             ),
         ) from exc
@@ -985,7 +1065,10 @@ def build_todo_review_preview(
     priority: str | None = None,
 ) -> dict[str, Any]:
     payload = _bound_todo_review_preview(
-        registry_path=registry_path, goal_id=goal_id, text=text, priority=priority,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        text=text,
+        priority=priority,
     )
     compact = _compact_todo_payload(payload, applied=False)
     compact["preview_id"] = _todo_preview_fingerprint(payload)
@@ -1001,7 +1084,10 @@ def apply_todo_review_preview(
     preview_id: str,
 ) -> dict[str, Any]:
     current_preview = _bound_todo_review_preview(
-        registry_path=registry_path, goal_id=goal_id, text=text, priority=priority,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        text=text,
+        priority=priority,
     )
     if not preview_id or preview_id != _todo_preview_fingerprint(current_preview):
         raise TodoReviewPreviewConflict(
@@ -1018,18 +1104,26 @@ def apply_todo_review_preview(
             text=text,
             priority=priority,
             dry_run=False,
-            **({"expected_provider_revision": _todo_revision(current_preview),
-                "operation_id": current_preview["operation_id"]}
-                if current_preview.get("decision_read_from_provider") is True else {}),
+            **(
+                {
+                    "expected_provider_revision": _todo_revision(current_preview),
+                    "operation_id": current_preview["operation_id"],
+                }
+                if current_preview.get("decision_read_from_provider") is True
+                else {}
+            ),
         )
     except LocalCoordinationAuthorityUnavailable as exc:
         if exc.code != "provider_revision_mismatch":
             raise
         # Only a conclusive owner rejection proves no write. Unknown commit
         # responses keep their existing original-operation recovery contract.
-        receipt = _todo_no_write_receipt(goal_id=goal_id,
-            current_preview=current_preview, write_attempted=True,
-            state_revision=exc.payload.get("current_provider_revision"))
+        receipt = _todo_no_write_receipt(
+            goal_id=goal_id,
+            current_preview=current_preview,
+            write_attempted=True,
+            state_revision=exc.payload.get("current_provider_revision"),
+        )
         raise TodoReviewPreviewConflict(
             "stale todo preview; preview the proposal again before applying",
             receipt=receipt,

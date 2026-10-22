@@ -10,25 +10,50 @@ from urllib.request import urlopen
 
 import pytest
 
-from loopx.chat import VisibleResponseStreamFilter, parse_agent_response, redact_local_paths, redact_response_markdown
+from loopx.chat import (
+    VisibleResponseStreamFilter,
+    parse_agent_response,
+    redact_local_paths,
+    redact_response_markdown,
+)
 from loopx.chat_acp import ACPStdioAdapter
 from loopx.chat_status_api import ChatStatusRequestMixin
 
 
-@pytest.mark.parametrize("root", ["/custom-volume/private-state", "/custom-volume/private state", r"Q:\private state"])
+@pytest.mark.parametrize(
+    "root",
+    [
+        "/custom-volume/private-state",
+        "/custom-volume/private state",
+        r"Q:\private state",
+    ],
+)
 def test_declared_roots_hide_the_entire_descendant_and_preserve_json(root):
     separator = "\\" if root.startswith("Q:") else "/"
     child = root + separator + "private" + separator + "gate.json"
     paths = ["/custom-project", root]
-    assert redact_local_paths(f"Stopped at {child}.", protected_paths=paths) == "Stopped at [local-path]."
-    assert json.loads(redact_local_paths(json.dumps({"path": child}), protected_paths=paths)) == {"path": "[local-path]"}
-    assert parse_agent_response(f"Stopped at {child}.", protected_paths=paths)["message"] == "Stopped at [local-path]."
+    assert (
+        redact_local_paths(f"Stopped at {child}.", protected_paths=paths)
+        == "Stopped at [local-path]."
+    )
+    assert json.loads(
+        redact_local_paths(json.dumps({"path": child}), protected_paths=paths)
+    ) == {"path": "[local-path]"}
+    assert (
+        parse_agent_response(f"Stopped at {child}.", protected_paths=paths)["message"]
+        == "Stopped at [local-path]."
+    )
 
 
 def test_project_label_requires_a_complete_path_boundary():
     root = "/custom-volume/project"
-    assert redact_local_paths(f"{root}/a.txt and {root}.", protected_paths=[root]) == "[project] and [project]."
-    unrelated = f"{root}-backup/a.txt relative{root}/a.txt https://example.org{root}/a.txt"
+    assert (
+        redact_local_paths(f"{root}/a.txt and {root}.", protected_paths=[root])
+        == "[project] and [project]."
+    )
+    unrelated = (
+        f"{root}-backup/a.txt relative{root}/a.txt https://example.org{root}/a.txt"
+    )
     assert redact_local_paths(unrelated, protected_paths=[root]) == unrelated
 
 
@@ -80,11 +105,14 @@ def test_dot_segment_encoded_alias_of_private_root_is_fully_redacted(tmp_path):
 
     aliased_path = f"{project}/./runtime%20private/gate.json"
     assert Path(aliased_path).resolve() == secret_file.resolve()
-    assert redact_local_paths(
-        aliased_path,
-        protected_paths=[str(project), str(private_alias)],
-        project_relative=True,
-    ) == "[local-path]"
+    assert (
+        redact_local_paths(
+            aliased_path,
+            protected_paths=[str(project), str(private_alias)],
+            project_relative=True,
+        )
+        == "[local-path]"
+    )
 
 
 @pytest.mark.parametrize(
@@ -99,36 +127,42 @@ def test_dot_segment_alias_before_protected_root_keeps_project_file_and_hides_pr
     safe_path = f"{aliased_project}/notes/report.md"
     private_path = f"{aliased_project}/runtime/private/{'s' * 190}/gate.json"
 
-    assert parse_agent_response(safe_path, protected_paths=protected_paths)["message"] == (
-        "./notes/report.md"
-    )
-    assert parse_agent_response(private_path, protected_paths=protected_paths)["message"] == (
-        "[local-path]"
-    )
+    assert parse_agent_response(safe_path, protected_paths=protected_paths)[
+        "message"
+    ] == ("./notes/report.md")
+    assert parse_agent_response(private_path, protected_paths=protected_paths)[
+        "message"
+    ] == ("[local-path]")
     for text, expected in [
         (safe_path + "\n", "./notes/report.md\n"),
         (private_path + "\n", "[local-path]\n"),
     ]:
         for split in range(len(text) + 1):
             stream = VisibleResponseStreamFilter(protected_paths=protected_paths)
-            actual = stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            actual = (
+                stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            )
             assert actual == expected
 
 
 def test_parent_segment_alias_before_protected_root_hides_the_path():
     project = "/custom-volume/project"
     aliased_private = "/custom-volume/other/../project/runtime/private/gate.json"
-    assert Path(aliased_private).resolve() == Path(
-        "/custom-volume/project/runtime/private/gate.json"
-    ).resolve()
-    assert parse_agent_response(
-        aliased_private, protected_paths=[project, f"{project}/runtime"]
-    )["message"] == "[local-path]"
+    assert (
+        Path(aliased_private).resolve()
+        == Path("/custom-volume/project/runtime/private/gate.json").resolve()
+    )
+    assert (
+        parse_agent_response(
+            aliased_private, protected_paths=[project, f"{project}/runtime"]
+        )["message"]
+        == "[local-path]"
+    )
 
     escaped_project = f"{project}/../other/private.txt"
-    assert parse_agent_response(escaped_project, protected_paths=[project])["message"] == (
-        "[project]"
-    )
+    assert parse_agent_response(escaped_project, protected_paths=[project])[
+        "message"
+    ] == ("[project]")
 
 
 def test_canonical_private_path_shapes_and_public_urls():
@@ -137,42 +171,67 @@ def test_canonical_private_path_shapes_and_public_urls():
     assert redact_local_paths(public) == public
 
 
-@pytest.mark.parametrize("destination", [
-    "/custom-volume/project/report.md#result", "/custom-volume/project/a(b).md:12",
-    '</custom-volume/project/a file.md> "title"',
-    "file:///custom-volume/project/report.md", "%2Fcustom-volume%2Fproject%2Freport.md",
-    r"Q:\private state\report.md",
-])
-def test_response_local_links_keep_labels_without_broken_or_private_destinations(destination):
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "/custom-volume/project/report.md#result",
+        "/custom-volume/project/a(b).md:12",
+        '</custom-volume/project/a file.md> "title"',
+        "file:///custom-volume/project/report.md",
+        "%2Fcustom-volume%2Fproject%2Freport.md",
+        r"Q:\private state\report.md",
+    ],
+)
+def test_response_local_links_keep_labels_without_broken_or_private_destinations(
+    destination,
+):
     text = f"- [报告 [结果]]({destination})；[公开来源](https://example.org/a(b))."
-    result = parse_agent_response(text, protected_paths=["/custom-volume/project", r"Q:\private state"])["message"]
+    result = parse_agent_response(
+        text, protected_paths=["/custom-volume/project", r"Q:\private state"]
+    )["message"]
     assert result == "- 报告 [结果]；[公开来源](https://example.org/a(b))."
 
 
 def test_response_link_repair_preserves_code_and_does_not_rewrite_status_json():
     link = "[label](/custom-volume/project/report.md)"
     code = f"`{link}`\n```md\n{link}\n```\n"
-    assert redact_response_markdown(code, protected_paths=["/custom-volume/project"]) == code.replace(
-        "/custom-volume/project/report.md", "./report.md")
-    assert json.loads(redact_local_paths(json.dumps({"message": link}), protected_paths=["/custom-volume/project"])) == {
-        "message": "[label]([project])"}
-    raw = '<loopx-review-json>' + json.dumps({"message": link}) + '</loopx-review-json>'
-    assert parse_agent_response(raw, protected_paths=["/custom-volume/project"])["message"] == "label"
+    assert redact_response_markdown(
+        code, protected_paths=["/custom-volume/project"]
+    ) == code.replace("/custom-volume/project/report.md", "./report.md")
+    assert json.loads(
+        redact_local_paths(
+            json.dumps({"message": link}), protected_paths=["/custom-volume/project"]
+        )
+    ) == {"message": "[label]([project])"}
+    raw = "<loopx-review-json>" + json.dumps({"message": link}) + "</loopx-review-json>"
+    assert (
+        parse_agent_response(raw, protected_paths=["/custom-volume/project"])["message"]
+        == "label"
+    )
 
 
-@pytest.mark.parametrize("root,child", [
-    ("/custom-volume/project", "/notes/report.md:12"),
-    ("/custom-volume/project space", "/notes/report.md"),
-    (r"Q:\project", r"\notes\report.md"),
-])
+@pytest.mark.parametrize(
+    "root,child",
+    [
+        ("/custom-volume/project", "/notes/report.md:12"),
+        ("/custom-volume/project space", "/notes/report.md"),
+        (r"Q:\project", r"\notes\report.md"),
+    ],
+)
 def test_response_and_split_stream_retain_the_project_filename(root, child):
     text = f"Read back `{root}{child}`.\n"
     expected = "Read back `./" + child.lstrip("/\\").replace("\\", "/") + "`.\n"
     assert redact_response_markdown(text, protected_paths=[root]) == expected
-    assert parse_agent_response(text, protected_paths=[root])["message"] == expected.strip()
+    assert (
+        parse_agent_response(text, protected_paths=[root])["message"]
+        == expected.strip()
+    )
     for split in range(len(text) + 1):
         stream = VisibleResponseStreamFilter(protected_paths=[root])
-        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
+        assert (
+            stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            == expected
+        )
 
 
 def test_answer_path_presentation_does_not_relax_nested_private_roots_or_structured_fields():
@@ -183,47 +242,77 @@ def test_answer_path_presentation_does_not_relax_nested_private_roots_or_structu
     assert parse_agent_response(text, protected_paths=paths)["message"] == (
         "`./notes/report.md`; `[local-path]`; `[local-path]`."
     )
-    raw = '<loopx-review-json>' + json.dumps({
-        "message": text,
-        "proposals": [{"kind": "todo", "text": f"Read {root}/notes/report.md", "rationale": f"See {secret_root}/private/gate.json"}],
-    }) + '</loopx-review-json>'
+    raw = (
+        "<loopx-review-json>"
+        + json.dumps(
+            {
+                "message": text,
+                "proposals": [
+                    {
+                        "kind": "todo",
+                        "text": f"Read {root}/notes/report.md",
+                        "rationale": f"See {secret_root}/private/gate.json",
+                    }
+                ],
+            }
+        )
+        + "</loopx-review-json>"
+    )
     parsed = parse_agent_response(raw, protected_paths=paths)
     assert parsed["message"].startswith("`./notes/report.md`")
     assert parsed["proposals"][0]["text"] == "Read [project]"
     assert parsed["proposals"][0]["rationale"] == "See [local-path]"
 
 
-@pytest.mark.parametrize("private_path", [
-    "/custom-volume/project/./runtime/private/gate.json",
-    "/custom-volume/project//runtime/private/gate.json",
-    "/custom-volume/project/runtime/./private/gate.json",
-    "/custom-volume/project/%2e/runtime/private/gate.json",
-    "/custom-volume/project/runtime%2fprivate/gate.json",
-    "/custom-volume%2Fproject%2Fruntime%2Fprivate%2Fgate.json",
-    "%2Fcustom-volume%2fproject%2fruntime%2fprivate%2fgate.json",
-    r"Q:\project\.\runtime\private\gate.json",
-    r"Q:\project\\runtime\private\gate.json",
-    r"Q:\project\.\RUNTIME\private\gate.json",
-    r"Q:%5Cproject%5CRUNTIME%5Cprivate%5Cgate.json",
-])
-def test_answer_and_every_stream_split_hide_equivalent_nested_private_paths(private_path):
-    paths = [r"Q:\project", r"Q:\project\runtime"] if private_path.startswith("Q:") else [
-        "/custom-volume/project", "/custom-volume/project/runtime",
-    ]
+@pytest.mark.parametrize(
+    "private_path",
+    [
+        "/custom-volume/project/./runtime/private/gate.json",
+        "/custom-volume/project//runtime/private/gate.json",
+        "/custom-volume/project/runtime/./private/gate.json",
+        "/custom-volume/project/%2e/runtime/private/gate.json",
+        "/custom-volume/project/runtime%2fprivate/gate.json",
+        "/custom-volume%2Fproject%2Fruntime%2Fprivate%2Fgate.json",
+        "%2Fcustom-volume%2fproject%2fruntime%2fprivate%2fgate.json",
+        r"Q:\project\.\runtime\private\gate.json",
+        r"Q:\project\\runtime\private\gate.json",
+        r"Q:\project\.\RUNTIME\private\gate.json",
+        r"Q:%5Cproject%5CRUNTIME%5Cprivate%5Cgate.json",
+    ],
+)
+def test_answer_and_every_stream_split_hide_equivalent_nested_private_paths(
+    private_path,
+):
+    paths = (
+        [r"Q:\project", r"Q:\project\runtime"]
+        if private_path.startswith("Q:")
+        else [
+            "/custom-volume/project",
+            "/custom-volume/project/runtime",
+        ]
+    )
     text = f"Read back `{private_path}`.\n"
     expected = "Read back `[local-path]`.\n"
     assert redact_response_markdown(text, protected_paths=paths) == expected
-    assert parse_agent_response(text, protected_paths=paths)["message"] == expected.strip()
+    assert (
+        parse_agent_response(text, protected_paths=paths)["message"] == expected.strip()
+    )
     for split in range(len(text) + 1):
         stream = VisibleResponseStreamFilter(protected_paths=paths)
-        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
+        assert (
+            stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            == expected
+        )
 
 
-@pytest.mark.parametrize("root,private_root,separator,path_separator", [
-    ("/custom-volume/project", "/custom-volume/project/runtime", "%2F", "%2F"),
-    ("/custom-volume/project", "/custom-volume/project/runtime", "%2f", "/"),
-    (r"Q:\project", r"Q:\project\runtime", "%5c", "%5C"),
-])
+@pytest.mark.parametrize(
+    "root,private_root,separator,path_separator",
+    [
+        ("/custom-volume/project", "/custom-volume/project/runtime", "%2F", "%2F"),
+        ("/custom-volume/project", "/custom-volume/project/runtime", "%2f", "/"),
+        (r"Q:\project", r"Q:\project\runtime", "%5c", "%5C"),
+    ],
+)
 def test_answer_and_every_stream_split_hide_private_paths_with_encoded_root_separator(
     root, private_root, separator, path_separator
 ):
@@ -232,34 +321,54 @@ def test_answer_and_every_stream_split_hide_private_paths_with_encoded_root_sepa
     expected = "Read back `[local-path]`.\n"
     paths = [root, private_root]
     assert redact_local_paths(private_path, protected_paths=paths) == "[local-path]"
-    assert redact_local_paths(private_path, protected_paths=paths, project_relative=True) == "[local-path]"
-    assert parse_agent_response(text, protected_paths=paths)["message"] == expected.strip()
+    assert (
+        redact_local_paths(private_path, protected_paths=paths, project_relative=True)
+        == "[local-path]"
+    )
+    assert (
+        parse_agent_response(text, protected_paths=paths)["message"] == expected.strip()
+    )
     for split in range(len(text) + 1):
         stream = VisibleResponseStreamFilter(protected_paths=paths)
-        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
+        assert (
+            stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            == expected
+        )
 
 
 def test_project_answer_retains_safe_filename_after_encoded_root_separator():
     root = "/custom-volume/project"
     text = f"Read {root}%2fnotes%2Freport.md."
-    assert redact_local_paths(text, protected_paths=[root], project_relative=True) == "Read ./notes/report.md."
-    assert parse_agent_response(text, protected_paths=[root])["message"] == "Read ./notes/report.md."
+    assert (
+        redact_local_paths(text, protected_paths=[root], project_relative=True)
+        == "Read ./notes/report.md."
+    )
+    assert (
+        parse_agent_response(text, protected_paths=[root])["message"]
+        == "Read ./notes/report.md."
+    )
 
 
 def test_project_answer_retains_safe_filename_after_encoded_root_components():
     root = "/custom-volume/project"
     text = f"Read {root.replace('/', '%2F')}%2Fnotes%2Freport.md."
     expected = "Read ./notes/report.md."
-    assert redact_local_paths(text, protected_paths=[root], project_relative=True) == expected
+    assert (
+        redact_local_paths(text, protected_paths=[root], project_relative=True)
+        == expected
+    )
     assert parse_agent_response(text, protected_paths=[root])["message"] == expected
     for split in range(len(text) + 1):
         stream = VisibleResponseStreamFilter(protected_paths=[root])
-        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected
+        assert (
+            stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            == expected
+        )
 
 
 def _run_acp_answer(tmp_path, *, project, agent_work_dir, text):
     provider = tmp_path / "synthetic_acp.py"
-    provider.write_text('''import json, sys
+    provider.write_text("""import json, sys
 for line in sys.stdin:
     request = json.loads(line)
     method = request.get("method")
@@ -277,22 +386,30 @@ for line in sys.stdin:
     else:
         continue
     print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
-''')
+""")
     events = []
     adapter = ACPStdioAdapter.start(
-        command=(sys.executable, str(provider), text), work_dir=project,
+        command=(sys.executable, str(provider), text),
+        work_dir=project,
         agent_work_dir=agent_work_dir,
-        startup_timeout_sec=5, idle_timeout_sec=5, hard_timeout_sec=10,
+        startup_timeout_sec=5,
+        idle_timeout_sec=5,
+        hard_timeout_sec=10,
     )
     try:
-        response = adapter.start_turn("Report fixture locations", lambda kind, payload: events.append((kind, payload)))
+        response = adapter.start_turn(
+            "Report fixture locations",
+            lambda kind, payload: events.append((kind, payload)),
+        )
     finally:
         adapter.close_session()
 
     return response, events
 
 
-def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filename(tmp_path):
+def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filename(
+    tmp_path,
+):
     project = tmp_path / "project"
     private = project / "runtime private"
     private.mkdir(parents=True)
@@ -313,11 +430,20 @@ def test_acp_stdio_final_and_stream_hide_private_aliases_and_keep_public_filenam
     )
 
     assert response["message"] == expected.strip()
-    assert "".join(payload["text"] for kind, payload in events if kind == "answer.delta") == expected
-    assert [payload["response"]["message"] for kind, payload in events if kind == "answer.final"] == [expected.strip()]
+    assert (
+        "".join(payload["text"] for kind, payload in events if kind == "answer.delta")
+        == expected
+    )
+    assert [
+        payload["response"]["message"]
+        for kind, payload in events
+        if kind == "answer.final"
+    ] == [expected.strip()]
 
 
-@pytest.mark.parametrize("encoding", ["uppercase", "lowercase-separators", "mixed-root-byte"])
+@pytest.mark.parametrize(
+    "encoding", ["uppercase", "lowercase-separators", "mixed-root-byte"]
+)
 def test_acp_stdio_stream_hides_a_long_percent_encoded_private_root(tmp_path, encoding):
     project = tmp_path / "project"
     project.mkdir()
@@ -335,15 +461,24 @@ def test_acp_stdio_stream_hides_a_long_percent_encoded_private_root(tmp_path, en
     )
 
     assert response["message"] == "[local-path]"
-    assert "".join(
-        payload["text"] for kind, payload in events if kind == "answer.delta"
-    ) == "[local-path]\n"
+    assert (
+        "".join(payload["text"] for kind, payload in events if kind == "answer.delta")
+        == "[local-path]\n"
+    )
 
 
-@pytest.mark.parametrize("suffix", ["/../other/private.txt", "/notes/../../private.txt", "/%2e%2e/private.txt"])
+@pytest.mark.parametrize(
+    "suffix",
+    ["/../other/private.txt", "/notes/../../private.txt", "/%2e%2e/private.txt"],
+)
 def test_answer_paths_do_not_present_traversal_as_project_files(suffix):
     text = "/custom-volume/project" + suffix
-    assert parse_agent_response(text, protected_paths=["/custom-volume/project"])["message"] == "[project]"
+    assert (
+        parse_agent_response(text, protected_paths=["/custom-volume/project"])[
+            "message"
+        ]
+        == "[project]"
+    )
 
 
 def test_stream_holds_a_long_project_filename_until_its_boundary():
@@ -356,10 +491,14 @@ def test_stream_holds_a_long_project_filename_until_its_boundary():
     assert stream.feed(path[300:] + "\n") + stream.finish() == "./" + relative + "\n"
 
 
-@pytest.mark.parametrize("root", [
-    "/custom-volume/private-state", "/custom-volume/private state",
-    "/custom-volume/" + "r" * 190,
-])
+@pytest.mark.parametrize(
+    "root",
+    [
+        "/custom-volume/private-state",
+        "/custom-volume/private state",
+        "/custom-volume/" + "r" * 190,
+    ],
+)
 def test_stream_does_not_split_a_long_custom_path_before_redacting(root):
     stream = VisibleResponseStreamFilter(protected_paths=["/custom-project", root])
     path = root + "/" + "s" * 190 + "/gate.json"
@@ -370,9 +509,7 @@ def test_stream_does_not_split_a_long_custom_path_before_redacting(root):
 def test_stream_holds_a_long_fully_encoded_private_root_until_redacting():
     root = "/custom-volume/" + "private segment " * 18
     path = quote(root + "/secret/gate.json", safe="")
-    stream = VisibleResponseStreamFilter(
-        protected_paths=["/custom-project", root]
-    )
+    stream = VisibleResponseStreamFilter(protected_paths=["/custom-project", root])
     streamed = "".join(stream.feed(character) for character in path)
     assert streamed == ""
     assert stream.feed("\n") + stream.finish() == "[local-path]\n"
@@ -389,7 +526,10 @@ def test_stream_holds_long_encoded_private_root_prefix_until_redacting(encoding)
 
     # The complete-path classifier accepts these spellings. The streaming
     # filter must hold the same long root before its 160-character fallback.
-    assert redact_local_paths(encoded, protected_paths=["/custom-project", root]) == "[local-path]"
+    assert (
+        redact_local_paths(encoded, protected_paths=["/custom-project", root])
+        == "[local-path]"
+    )
     stream = VisibleResponseStreamFilter(protected_paths=["/custom-project", root])
     streamed = "".join(stream.feed(character) for character in encoded)
     assert streamed == ""
@@ -398,10 +538,18 @@ def test_stream_holds_long_encoded_private_root_prefix_until_redacting(encoding)
 
 def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):
     root = Path("/custom-volume/private-state")
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", lambda **kwargs: {
-        "ok": True, "runtime_root": str(root), "diagnostic": str(root / "private/gate.json"),
-    })
-    monkeypatch.setattr("loopx.chat_status_api.attach_host_thread_activity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "loopx.chat_status_api.collect_status",
+        lambda **kwargs: {
+            "ok": True,
+            "runtime_root": str(root),
+            "diagnostic": str(root / "private/gate.json"),
+        },
+    )
+    monkeypatch.setattr(
+        "loopx.chat_status_api.attach_host_thread_activity",
+        lambda *args, **kwargs: None,
+    )
 
     class Handler(ChatStatusRequestMixin, BaseHTTPRequestHandler):
         def do_GET(self):
@@ -429,7 +577,9 @@ def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        with urlopen(f"http://127.0.0.1:{server.server_port}/status.json", timeout=5) as response:
+        with urlopen(
+            f"http://127.0.0.1:{server.server_port}/status.json", timeout=5
+        ) as response:
             payload = json.load(response)
             assert payload["ok"] is True
             assert payload["runtime_root"] == "[local-path]"
@@ -438,7 +588,10 @@ def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):
             dashboard_api = payload["local_dashboard_api"]
             assert dashboard_api["source"] == "chat"
             assert dashboard_api["status_url"] == "/status.json"
-            assert dashboard_api["presentation_surfaces_url"] == "/extension-presentation-surfaces"
+            assert (
+                dashboard_api["presentation_surfaces_url"]
+                == "/extension-presentation-surfaces"
+            )
             assert dashboard_api["presentation_detail_url"] == "/extension-projection"
     finally:
         server.shutdown()
@@ -455,15 +608,26 @@ def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):
         (r"Q%3A%5CPROJECT%5Cnotes%5Creport.md", "./notes/report.md"),
     ],
 )
-def test_windows_encoded_case_aliases_honor_private_roots_and_safe_files(path, expected):
+def test_windows_encoded_case_aliases_honor_private_roots_and_safe_files(
+    path, expected
+):
     roots = [r"Q:\project", r"Q:\project\runtime"]
-    assert redact_local_paths(path, protected_paths=roots, project_relative=True) == expected
+    assert (
+        redact_local_paths(path, protected_paths=roots, project_relative=True)
+        == expected
+    )
     text = f"File {path}.\n"
     expected_text = f"File {expected}.\n"
-    assert parse_agent_response(text, protected_paths=roots)["message"] == expected_text.strip()
+    assert (
+        parse_agent_response(text, protected_paths=roots)["message"]
+        == expected_text.strip()
+    )
     for split in range(len(text) + 1):
         stream = VisibleResponseStreamFilter(protected_paths=roots)
-        assert stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish() == expected_text
+        assert (
+            stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            == expected_text
+        )
 
 
 @pytest.mark.parametrize(
@@ -479,3 +643,57 @@ def test_windows_encoded_case_aliases_stream_character_by_character(path):
     streamed = "".join(stream.feed(character) for character in path)
     assert streamed == ""
     assert stream.feed("\n") + stream.finish() == "[local-path]\n"
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (r"q:\PRÓJÉCT\RUNTIME\secret.txt", "[local-path]"),
+        (r"q%3A%5CPR%C3%93J%C3%89CT%5CRUNTIME%5Csecret.txt", "[local-path]"),
+        (r"q:\PRÓJÉCT\notes\sécret.md", "./notes/sécret.md"),
+        (r"q%3A%5CPR%C3%93J%C3%89CT%5Cnotes%5Cs%C3%A9cret.md", "./notes/sécret.md"),
+    ],
+)
+def test_windows_unicode_case_aliases_honor_private_roots_and_safe_files(
+    path, expected
+):
+    roots = [r"Q:\Prójéct", r"Q:\Prójéct\runtime"]
+    assert (
+        redact_local_paths(path, protected_paths=roots, project_relative=True)
+        == expected
+    )
+    text = f"File {path}.\n"
+    expected_text = f"File {expected}.\n"
+    assert (
+        parse_agent_response(text, protected_paths=roots)["message"]
+        == expected_text.strip()
+    )
+    for split in range(len(text) + 1):
+        stream = VisibleResponseStreamFilter(protected_paths=roots)
+        assert (
+            stream.feed(text[:split]) + stream.feed(text[split:]) + stream.finish()
+            == expected_text
+        )
+
+
+def test_acp_stdio_stream_hides_encoded_windows_unicode_case_alias(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    path = r"q%3A%5CPR%C3%93J%C3%89CT%5CRUNTIME%5Csecret.txt"
+    response, events = _run_acp_answer(
+        tmp_path,
+        project=project,
+        agent_work_dir=Path(r"Q:\Prójéct\runtime"),
+        text=path + "\n",
+    )
+
+    assert response["message"] == "[local-path]"
+    assert (
+        "".join(payload["text"] for kind, payload in events if kind == "answer.delta")
+        == "[local-path]\n"
+    )
+    assert [
+        payload["response"]["message"]
+        for kind, payload in events
+        if kind == "answer.final"
+    ] == ["[local-path]"]
