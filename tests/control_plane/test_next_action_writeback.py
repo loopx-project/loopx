@@ -7,6 +7,10 @@ import sys
 import pytest
 
 import loopx.state_refresh as refresh
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+from loopx.control_plane.testing.canary_harness import run_json_cli
+from loopx.control_plane.todos.provider_projection import project_current_canonical_todos
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.work_items.recommendation_source_io import RecommendationWritebackRejected
 from loopx.status import collect_status
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
@@ -42,6 +46,13 @@ def fixture(tmp_path, agents=("agent-a",)):
             "state_file": state.name, "coordination": {"registered_agents": list(agents)}}
     runtime = tmp_path / "runtime"
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [goal]}))
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    items, _, _ = parse_todo_source(STATE)
+    projection = build_todo_runtime_shadow_projection(goal_id=goal["id"],
+        todos=[{"schema_version": "todo_item_v0", **item} for item in items["agent"]],
+        leases=[], handoff_mode="soft_claim")
+    initialize_canonical_authority(runtime, goal["id"], projection, state_path=state)
+    project_current_canonical_todos(registry_path=registry, runtime_root=runtime, goal_id=goal["id"])
     return registry, state, runtime, goal
 
 
@@ -67,6 +78,7 @@ def routes(registry, runtime, root):
 @pytest.mark.parametrize("agents", [("agent-a",), ("agent-a", "agent-b")])
 def test_personal_step_reuses_resolution_and_preserves_state_and_ownership(tmp_path, agents):
     registry, state, runtime, _ = fixture(tmp_path, agents)
+    original_state = state.read_text()
     before, selected = routes(registry, runtime, tmp_path)
     result = write(registry, runtime, next_action_basis=selected["agent-a"]["next_action_basis"])
     receipt = result["recommended_action_resolution"]
@@ -74,7 +86,7 @@ def test_personal_step_reuses_resolution_and_preserves_state_and_ownership(tmp_p
     assert receipt["todo_id"] == "todo_parser"
     assert result["progress_scope"] == "agent_lane" and result["agent_id"] == "agent-a"
     assert "active_state_next_action_update" not in result
-    assert state.read_text() == STATE
+    assert state.read_text() == original_state
     run = json.loads((runtime / "goals/next-action-goal/runs/index.jsonl").read_text())
     assert run["recommended_action_resolution"] == receipt
     _, after = routes(registry, runtime, tmp_path)
@@ -85,6 +97,7 @@ def test_personal_step_reuses_resolution_and_preserves_state_and_ownership(tmp_p
 
 def test_multi_agent_steps_are_independent_and_report_scope_does_not_grant_authority(tmp_path):
     registry, state, runtime, _ = fixture(tmp_path, ("agent-a", "agent-b"))
+    original_state = state.read_text()
     _, before = routes(registry, runtime, tmp_path)
     write(registry, runtime, next_action_basis=before["agent-a"]["next_action_basis"])
     _, after_a = routes(registry, runtime, tmp_path)
@@ -94,24 +107,26 @@ def test_multi_agent_steps_are_independent_and_report_scope_does_not_grant_autho
     _, after_b = routes(registry, runtime, tmp_path)
     assert after_b["agent-a"]["next_step"] == after_a["agent-a"]["next_step"]
     assert after_b["agent-b"]["next_step"] == "Evaluate the incumbent."
-    assert state.read_text() == STATE
+    assert state.read_text() == original_state
 
 
 @pytest.mark.parametrize("agents,actor", [([], "agent-a"), (["agent-b"], "agent-a"), (["agent-a"], None)])
 def test_unknown_or_unattributed_steps_do_not_append(tmp_path, agents, actor):
     registry, state, runtime, _ = fixture(tmp_path, agents)
+    original_state = state.read_text()
     with pytest.raises(ValueError):
         write(registry, runtime, agent_id=actor)
-    assert state.read_text() == STATE
+    assert state.read_text() == original_state
     assert not (runtime / "goals/next-action-goal/runs/index.jsonl").exists()
 
 
 def test_dry_run_checks_binding_without_writing_or_appending(tmp_path):
     registry, state, runtime, _ = fixture(tmp_path)
+    original_state = state.read_text()
     result = write(registry, runtime, dry_run=True)
     assert result["recommended_action_resolution"]["todo_id"] == "todo_parser"
     assert result["appended"] is False
-    assert state.read_text() == STATE
+    assert state.read_text() == original_state
     assert not (runtime / "goals/next-action-goal/runs/index.jsonl").exists()
 
 
@@ -129,6 +144,7 @@ def test_explicit_matching_step_keeps_task_binding_and_is_not_replan_evidence(tm
 @pytest.mark.parametrize("length", [1200, 1201])
 def test_cli_next_step_budget_checks_trimmed_text_before_append(tmp_path, length):
     registry, state, runtime, goal = fixture(tmp_path)
+    original_state = state.read_text()
     result = subprocess.run(
         [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
          "--runtime-root", str(runtime), "refresh-state", "--goal-id", goal["id"],
@@ -146,7 +162,7 @@ def test_cli_next_step_budget_checks_trimmed_text_before_append(tmp_path, length
         assert result.returncode == 1, payload
         assert payload["error"] == "next_action exceeds 1200 characters"
         assert not index.exists()
-    assert state.read_text() == STATE
+    assert state.read_text() == original_state
 
 
 def test_same_actor_concurrent_cli_writers_cannot_commit_one_old_basis_twice(tmp_path):
@@ -178,7 +194,11 @@ def test_final_commit_rechecks_relevant_source_facts(tmp_path, monkeypatch, chan
             data["goals"][0]["coordination"]["registered_agents"].append("offline-peer")
             registry.write_text(json.dumps(data))
         elif change == "task":
-            state.write_text(STATE.replace("Inspect the parser.", "Inspect the changed parser contract."))
+            run_json_cli("todo", "update", "--goal-id", "next-action-goal",
+                "--todo-id", "todo_parser", "--agent-id", "agent-a",
+                "--text", "Inspect the changed parser contract.",
+                "--update-operation-id", "fixture-task-race",
+                registry_path=registry, runtime_root=runtime)
         else:
             state.write_text("# A changed acceptance basis\n" + STATE)
         return result
@@ -191,7 +211,7 @@ def test_final_commit_rechecks_relevant_source_facts(tmp_path, monkeypatch, chan
 
 def test_step_does_not_destroy_binding_or_block_completion_projection(tmp_path):
     registry, state, runtime, _ = fixture(tmp_path, ("agent-a", "agent-b"))
-    bound = STATE.replace("- Preserve the current shared route.",
+    bound = state.read_text().replace("- Preserve the current shared route.",
         "- [P1] Inspect the parser.\n<!-- loopx:next-action schema=loopx_next_action_binding_v0 todo_id=todo_parser -->")
     state.write_text(bound)
     write(registry, runtime)
@@ -199,7 +219,9 @@ def test_step_does_not_destroy_binding_or_block_completion_projection(tmp_path):
     completed = bound.replace("todo_parser status=open", "todo_parser status=done").splitlines()
     assert settle_completed_todo_next_action(completed, completed_todo_id="todo_parser")
     assert "todo_id=todo_evaluate" in "\n".join(completed)
-    state.write_text("\n".join(completed))
+    run_json_cli("todo", "complete", "--goal-id", "next-action-goal",
+        "--todo-id", "todo_parser", "--agent-id", "agent-a", "--evidence", "fixture completion",
+        registry_path=registry, runtime_root=runtime)
     _, after = routes(registry, runtime, tmp_path)
     assert "agent-a" not in after
     assert "next_step" not in after["agent-b"]
@@ -208,10 +230,16 @@ def test_step_does_not_destroy_binding_or_block_completion_projection(tmp_path):
 def test_task_change_invalidates_step_and_no_eligible_task_cannot_accept_one(tmp_path):
     registry, state, runtime, _ = fixture(tmp_path)
     write(registry, runtime)
-    state.write_text(STATE.replace("Inspect the parser.", "Inspect another parser interface."))
+    run_json_cli("todo", "update", "--goal-id", "next-action-goal",
+        "--todo-id", "todo_parser", "--agent-id", "agent-a",
+        "--text", "Inspect another parser interface.", "--update-operation-id", "fixture-task-change",
+        registry_path=registry, runtime_root=runtime)
     _, changed = routes(registry, runtime, tmp_path)
     assert "next_step" not in changed["agent-a"]
-    state.write_text(STATE.replace("todo_parser status=open", "todo_parser status=blocked"))
+    run_json_cli("todo", "update", "--goal-id", "next-action-goal",
+        "--todo-id", "todo_parser", "--agent-id", "agent-a", "--status", "blocked",
+        "--reason", "Wait for a new artifact.", "--update-operation-id", "fixture-task-blocked",
+        registry_path=registry, runtime_root=runtime)
     with pytest.raises(RecommendationWritebackRejected, match="No selected eligible"):
         write(registry, runtime)
 
@@ -235,11 +263,12 @@ def shared_fixture(tmp_path):
 
 def test_shared_reads_and_writes_use_source_roster_tasks_and_route(tmp_path):
     registry, mirror, state, runtime, _ = shared_fixture(tmp_path)
+    original_state = state.read_text()
     _, selected = routes(mirror, runtime, tmp_path)
     assert set(selected) == {"agent-a", "agent-b"}
     result = write(mirror, runtime, next_action_basis=selected["agent-a"]["next_action_basis"])
     assert result["recommended_action_resolution"]["todo_id"] == "todo_parser"
-    assert state.read_text() == STATE
+    assert state.read_text() == original_state
     assert "stale mirror route" in (tmp_path / "stale-state.md").read_text()
 
 
@@ -296,10 +325,11 @@ def test_canonical_step_uses_tasks_without_a_markdown_display(canonical_projecti
 def test_unavailable_canonical_reader_never_uses_stale_markdown(tmp_path, monkeypatch):
     from loopx.control_plane.work_items import refresh_recommendation
     registry, state, runtime, _ = fixture(tmp_path)
+    original_state = state.read_text()
     def unavailable(**kwargs):
         raise RuntimeError("canonical source is unavailable")
     monkeypatch.setattr(refresh_recommendation, "read_canonical_todos_if_promoted", unavailable)
     with pytest.raises(RuntimeError, match="canonical source is unavailable"):
         write(registry, runtime)
-    assert state.read_text() == STATE
+    assert state.read_text() == original_state
     assert not (runtime / "goals/next-action-goal/runs/index.jsonl").exists()

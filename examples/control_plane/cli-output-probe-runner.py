@@ -12,6 +12,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
+from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
 
 PROBE_SCHEMA_VERSION = "loopx_cli_output_probe_v0"
 FIXTURE_CONTRACT_VERSION = "loopx_cli_output_public_fixture_v0"
@@ -193,6 +195,7 @@ def _default_rows(
                 root,
                 scenario,
             )
+            import_fixture_authority(registry_path, probe.GOAL_ID)
             for output_format in ("json", "markdown"):
                 commands = probe._surface_commands(
                     project=project,
@@ -269,6 +272,7 @@ def _variant_rows(
         fixture_root / "mode_variants",
         probe.SCENARIOS[0],
     )
+    import_fixture_authority(registry_path, probe.GOAL_ID)
     rows: list[dict] = []
     for output_format in ("json", "markdown"):
         commands = probe._mode_variant_commands(
@@ -343,6 +347,7 @@ def _blocking_gate_rows(
             f"blocks_agent={probe.AGENT_IDS[0]} "
             "unblocks_todo_id=todo_fixture_000 -->\n"
         )
+    import_fixture_authority(registry_path, probe.GOAL_ID)
     command = probe._mode_variant_commands(
         project=project,
         runtime=runtime,
@@ -404,6 +409,7 @@ def _multi_subagent_rows(probe, semantics, fixture_root, *, enforce_budget=True)
         "model_config": {"model": "example-small", "reasoning_effort": "max"},
     }
     registry_path.write_text(json.dumps(registry))
+    import_fixture_authority(registry_path, probe.GOAL_ID)
     variant_id = "quota_should_run_turn_envelope"
     command = probe._mode_variant_commands(
         project=project, runtime=runtime, registry_path=registry_path,

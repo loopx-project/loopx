@@ -431,6 +431,40 @@ qualified replacement replan-context projection and remains a review signal.
 Coverage-only to dense replan context has a measured, one-time allowance on its
 three affected JSON surfaces; dense-to-dense changes retain ordinary limits.
 
+### Canonical CLI fixture qualification
+
+Ordinary CLI reads require canonical authority. Both differential arms explicitly
+back up and import the same complete synthetic source before measuring; fixture
+setup is outside the measured commands. On base `887d66551` and the read-retirement
+candidate, all 96 rows retain their population, format, semantic keys and growth
+checks. Every JSON character count is identical. Quota small/multi-agent JSON is
+24,099/24,820 characters; their characterization ceilings become 25,000/25,500.
+Canonical source witnesses and complete User context remain in the packet.
+
+The Markdown renderer removes only the second, identical instruction copy,
+retaining its wording and placement before the complete JSON source details.
+Small/crowded quota becomes 9,558/10,225 characters and 182/166 lines, 475 characters
+less than the same canonical baseline. Their limits become 10,000/10,500 characters
+and 190/180 lines. Explicit quota detail modes use 10,000 characters/190 lines.
+TurnEnvelope measures 10,681 JSON characters, 12,268 with multi-subagent, and
+4,521 Markdown characters/135 lines; its stdout limits become 13,000/4,800
+characters and 140 Markdown lines. The original failures remain validation
+evidence. Other limits, collection growth, wire-byte targets, execution authority
+and frozen experiment criteria do not change.
+
+普通 CLI 读取要求 canonical authority。差分两臂在测量前都显式备份并导入同一份完整
+合成来源，夹具准备不计入被测命令。base `887d66551` 与退役候选的 96 行保留原数量、
+格式、语义键及增长检查，全部 JSON 字符数相同。quota 小型／多 Agent 为
+24,099／24,820 字符，展示上限调整为 25,000／25,500；保留 canonical 来源见证及
+完整 User 上下文。
+
+Markdown 仅去掉第二份完全相同的 instruction，原措辞仍位于完整 JSON 来源详情之前。
+quota 小型／拥挤夹具为 9,558／10,225 字符、182／166 行，比同一 canonical 基线各少
+475 字符；上限调整为 10,000／10,500 字符、190／180 行。显式 quota detail 使用
+10,000 字符／190 行。TurnEnvelope 为 10,681 JSON 字符，启用多子 Agent 后为
+12,268；Markdown 为 4,521 字符／135 行，stdout 上限调整为 13,000／4,800 字符、
+140 行。原失败保留；其它限制、集合增长、wire-byte 目标、执行权限及冻结实验标准不变。
+
 ### Native fixture qualification
 
 The opt-in captured TurnEnvelope heartbeat has a separate 400-character body

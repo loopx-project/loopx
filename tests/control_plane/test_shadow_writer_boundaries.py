@@ -388,6 +388,11 @@ def test_migration_refuses_overwriting_a_managed_target_before_copy(tmp_path: Pa
 def test_public_refresh_step_does_not_write_owned_paragraph(tmp_path: Path) -> None:
     registry, state, root = fixture(tmp_path)
     seed_todo(state, "Inspect the bounded result.")
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry, GOAL)
+    revision = cli(registry, "todo", "list", "--goal-id", GOAL)["authority_read"]["provider_revision"]
+    cli(registry, "todo", "project-markdown", "--goal-id", GOAL,
+        "--provider-revision", revision, "--execute")
     before = state.read_bytes()
     result = cli(registry, "refresh-state", "--goal-id", GOAL, "--agent-id", "agent-a",
         "--next-action", "Compare the current evidence.", "--no-global-sync")

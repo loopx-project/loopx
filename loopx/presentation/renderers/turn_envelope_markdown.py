@@ -19,8 +19,9 @@ def work_context_lines(context: dict[str, Any]) -> list[str]:
         if isinstance(instruction, str) and instruction:
             lines.append(f"- work_context_instruction: {instruction}")
         return lines
+    details = {key: value for key, value in context.items() if key != "instruction"}
     return ["", "## Current work context", "", context.get("instruction", ""),
-        "", "```json", json.dumps(context, ensure_ascii=False, indent=2), "```", ""]
+        "", "```json", json.dumps(details, ensure_ascii=False, indent=2), "```", ""]
 
 
 def turn_envelope_budget_warning_lines(payload: dict[str, Any]) -> list[str]:
