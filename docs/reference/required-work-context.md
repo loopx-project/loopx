@@ -21,6 +21,13 @@ not automatically copy that whole document into every response or infer Goal
 intent by trimming headings. Read it before dependent work. Enabled scoped
 acceptance does not replace the original Goal intent.
 
+The Goal availability adapter still reads and UTF-8-validates the complete file
+and hashes all bytes for its revision. Only its path and revision cross the
+internal context-projection bridge; the typed owner does not consume the file
+body there. Missing files and invalid UTF-8 still block dependent delivery.
+Removing that unused internal copy does not shorten the Agent's required Goal
+read or establish model-token, latency or outcome gains.
+
 Already delivered sources disappear from `required_reads`; unresolved provider
 reads retain exact commands and ordering. The typed interaction owner owns this
 selection and fulfillment policy in both ordinary packets and TurnEnvelope.
@@ -105,6 +112,10 @@ transport flag does not restore the old exact Todo schema.
 混合了其他 Todo 和历史证据的 Goal Markdown 文件保留为 `required_reads` 中的全文
 读取命令：quota 核验来源可用性，不每轮自动灌入整个文件，也不按标题猜测哪些文字
 可以替代原始 Goal。依赖交付前仍须读取；局部验收不能替代整体目标。
+Goal 可用性 adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；内部
+context projection 桥接只传路径与修订，typed owner 不在这里消费文件正文。
+文件缺失或非法 UTF-8 仍阻止依赖交付。移除内部未使用副本不会缩短 Agent 的 Goal
+必读范围，也不代表已取得模型 token、延迟或任务效果收益。
 已附带的内容不要求重复读取；未提供的 provider 内容继续保留精确命令与顺序。
 `work_context.complete` 只表示未发现来源失败，未完成的必读义务仍然有效。
 偏好只在对应作用域有记录时出现；Explore 和偏好沿用各自 hook 的真实 adapter，

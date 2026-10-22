@@ -25,8 +25,10 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id):
             registry=load_registry(registry_path), goal_id=goal_id,
             project_override=None, state_file_override=None)
         source_bytes = state_file.read_bytes()
-        text = source_bytes.decode("utf-8")
-        return {"state_file": str(state_file), "text": text,
+        # Validate the entire source, including its tail. The typed owner keeps
+        # Goal consumption as a pending read and does not consume this body.
+        source_bytes.decode("utf-8")
+        return {"state_file": str(state_file),
             "revision": "sha256:" + sha256(source_bytes).hexdigest()}
     if source == "goal_acceptance":
         # The typed acceptance owner scopes task-binding observations while
