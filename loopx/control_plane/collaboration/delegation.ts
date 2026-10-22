@@ -332,7 +332,15 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   const executor = requireJsonObject(preview.managed_executor, "selected executor");
   requireThat([true, false, null].includes(executor.available as boolean | null), "runtime availability required");
   requireThat(typeof route.would_invoke_host === "boolean", "Turn admission observation required");
-  const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id;
+  // Reuse the file-lock owner's liveness facts. These describe only the native
+  // Turn lane, never the presence/availability of an App or CLI conversation.
+  // Omission preserves earlier callers; an explicit unknown fails closed.
+  const lane = params.lane === undefined ? null : requireJsonObject(params.lane, "Turn lane observation");
+  if (lane !== null) requireThat(typeof lane.state === "string"
+    && ["live", "released", "dead", "absent", "foreign_host", "unreadable"].includes(lane.state),
+  "invalid Turn lane observation");
+  const laneBlocked = lane !== null && !["released", "dead", "absent"].includes(String(lane.state));
+  const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id && !laneBlocked;
   const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
   const acceptanceFacts = delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current);
   const pinned = acceptanceFacts.acceptance_ready;
@@ -345,12 +353,15 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     ...acceptanceFacts, authority_ready: true, authority_reason: null,
     authority_state: "promoted", authority_next_action: "none",
     promotion_from_surface_allowed: false,
+    ...(lane === null ? {} : {turn_lane: {scope: "native_turn_lane", state: lane.state}}),
+    ...(laneBlocked ? {reason: lane!.state === "live" ? "turn_lane_in_flight" : "turn_lane_state_unknown"} : {}),
     executor: {host: executor.executor, available: executor.available,
       reason: executor.unavailable_reason, profile: executor.execution_profile,
       ...(executor.operation_transport ? {operation_transport: executor.operation_transport} : {}),
       ...delegationRuntimeFacts(executor)},
     effects,
-    note: "Point-in-time preflight, not an execution permit or evidence of running work. "
+    note: (laneBlocked ? "Native Turn lane is busy or unknown; retain the request and inspect again after its holder settles or observation is restored. " : "")
+      + "Point-in-time preflight, not an execution permit or evidence of running work. "
       + "Start rechecks admission; inspect original operations before dispatching replacements. "
       + "Runtime probes have the selected executor's scope, not remote capacity guarantees.",
   };

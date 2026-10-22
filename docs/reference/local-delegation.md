@@ -5,6 +5,83 @@ its result after the requesting conversation disappears. The same interface is
 available to a coordinating member. DSH and an optional cloud provider use the
 existing Turn entrypoint; there is no steward-specific scheduler or task store.
 
+Ordinary Inbox delivery without a pre-created Todo has a separate
+[activation gap](#ordinary-inbox-activation-boundary). The configuration below
+does not close that gap.
+
+## Ordinary Inbox activation boundary
+
+**Current boundary:** saving an authorized request is supported; automatically
+starting its recipient without an exact canonical Todo is not qualified by this
+task-bound executor. This section records the missing integration, not a new
+configuration format or execution grant. It belongs to the existing
+[S3 collaboration, S4 host and S7 budget boundaries](../architecture/rfcs/loopx-overall-roadmap-v0.md#2-portfolio-streams-outcomes-gaps-and-executable-slices).
+
+Three existing owners explain why selecting an Agent-scoped conversation is
+insufficient:
+
+| Boundary | Current behavior | Missing integration |
+| --- | --- | --- |
+| [Inbox dispatch](../../loopx/capabilities/manager_context/execution.py) and [binding selection](../../loopx/control_plane/collaboration/delegation.ts) | A selected execution binding names an exact Todo, recipient, requester and operator-owned Host configuration. A context-only delivery submits no execution. | Admit a bounded review of the saved original request under explicit existing execution authority, without asking the sender to manufacture a Todo. |
+| [Turn planning](../../loopx/control_plane/turn_driver/driver.py) | Agent-scoped conversation reuse changes Session identity; Host-bound Turn lineage still requires a Todo. Even a valid quota decision with no selected Todo can fail here with `missing_turn_lineage`. | Carry the admitted request through the existing Turn owner with a truthful unavailable state until that route is implemented. Removing the lineage check alone is insufficient. |
+| [Settlement identity](../../loopx/control_plane/effect_program.ts) and [source admission](../../loopx/control_plane/quota/accounting_admission.py) | An unbound observation is not a request-bound delivery/accounting contract. A Todo or replan obligation must not be invented to obtain one. | Define and validate original-request identity, once-only settlement and recovery in the existing typed owners before enabling a Host launch. |
+
+The decisive counterexample uses a disposable File or SQLite Goal with no Todos
+and one successfully saved peer request. With an empty Next Action and available
+quota, `quota should-run` can return `normal_run`, `delivery_allowed=true`, the
+required Inbox read and no selected Todo. The real `turn run-once` planning path
+then refuses before invoking a Host. This demonstrates a missing executable
+contract; it does not prove idle presence, authorize that request's effects or
+qualify automatic activation. Retain the full request and the separate admission
+and refusal observations when diagnosing this case.
+
+Implement the remaining journey through those owners in this order:
+
+1. After successful durable Inbox delivery, the trusted Host offers the original
+   request to the existing execution owner. Pin the complete Goal instance,
+   recipient, source grant, request revision and original return route. Current
+   authorization must explicitly cover this processing; registration, delivery
+   permission and a discoverable conversation do not substitute for it.
+2. Admit Inbox reading and independent assessment without a pre-created exact
+   Todo. The receiver may answer directly, defer or reject with reasons, reuse
+   existing work, or plan necessary work through the canonical Todo workflow.
+   The review admission must not silently grant repository writes, arbitrary
+   task execution or protected external effects.
+3. Check fresh Host availability through its owning runtime and retain the
+   existing native single-flight fence across the preview/start race. Busy work
+   keeps its original queue; consume arrivals, including requests received after
+   an Inbox read, at the next legal processing point. Unknown or unavailable
+   Host state stays unavailable. Native lane liveness alone proves no App idle
+   state. Add neither another scheduler nor unbounded polling.
+4. Persist the launch intent before spawning. Reconcile the same original
+   operation after restart, concurrent offers, a crash before spawn or a lost
+   start response. Merge wake opportunities without dropping individual
+   requests; ambiguous started work is not permission to execute again. Preserve
+   pause/stop, quota, revoked-source and replacement-Goal fences at execution
+   and settlement, including the no-effect refusal paths.
+5. Return the actual receiver conclusion through the saved conversation route.
+   Validate the packaged App/CLI journey and a relevant failure/recovery case,
+   then qualify the installed Host separately. Expose saved, pending,
+   unavailable, executing, assessed and returned facts through existing caller
+   surfaces. Synthetic Hosts, ACKs, a valid receipt or a completed unrelated
+   Todo cannot establish original-message processing and result delivery.
+
+中文：普通 Inbox 请求可以合法保存；现有 task-bound executor 尚不能证明在未预建
+精确 Todo 时自动唤醒并处理。现有 dispatch/binding 绑定明确的 Todo 与执行 grant；
+Agent 范围的会话复用也不取消 Turn 的任务 lineage；unbound 观察并非原请求的执行
+和扣额合同。真实 File/SQLite 反例中，零 Todo、有合法收件及可用额度的 Goal 可以
+得到允许运行和必读 Inbox 的 quota 决策，随后仍在原生 Turn 规划阶段被拒绝，未调用
+Host。因此不能只删除 Todo 检查、伪造 replan obligation 或隐藏创建任务来取得执行。
+
+后续沿现有 typed owner 补齐原请求的准入、结算及恢复身份，再接持久投递后的可信
+Host 触发。先允许收件阅读与独立评估；直接回答、延期、拒绝、复用或规划任务均由
+接收方经规范流程决定，不能附赠写代码或外部效果权限。完整 Goal 实例、接收方、
+来源 grant、请求版本和原会话必须保留。宿主真实忙闲与启动竞争仍由现有 owner
+判定；忙碌保留队列，在后续合法处理点消费新到请求，未知状态不能当空闲。复用原
+operation 覆盖并发、重启、落盘后启动前崩溃和启动回执丢失，不重复执行、扣额或
+副作用，保留停止、预算、撤权及 Goal 替换边界。最终以打包及安装态原消息实际
+处理、故障恢复和原会话结论分别验收；源码反例、合成 Host 或 ACK 不代替这些结果。
+
 ## Activate
 
 First register the participating Agents and give each intended canonical Todo
@@ -52,6 +129,26 @@ completion, unchanged artifacts and receiver adoption. Inspection never starts
 work or configures owner acceptance. Disable by removing the exact binding
 from the operator configuration; existing operations retain their history and
 cannot re-execute or return accepted evidence under a revoked grant.
+
+A Chat handoff with a separate source execution grant can recover when its
+requester exits after saving the original operation but before starting the
+worker. Replaying that handoff rechecks the source Turn and exact grant, then
+rejoins only its original `prepared` operation. The worker retains this
+precondition across process startup under the existing execution lock. A busy
+worker is observed; an operation that has already reached `running`, returned
+or stopped is not automatically resumed by this replay. Uncertain Host work
+still needs explicit original-operation reconciliation. Recovery preserves the
+original Inbox request, binding, conversation and governed Turn; it creates no
+replacement task, grant or scheduler. This remains the explicit task-bound
+route described here, not general automatic activation of an idle Inbox owner.
+
+中文：另有来源执行授权的 Chat 交接，在原 operation 已保存、worker 尚未启动时
+请求方退出，可重放同一交接恢复。重放重新核对来源 Turn 与精确 grant，只续接原
+`prepared` operation；worker 启动后仍在既有执行锁内核对同一前置条件。忙碌 worker
+仅被观察，已进入 `running`、已返回或已停止的执行不因该重放自动恢复；Host 结果
+不确定时仍须显式对账原执行。原 Inbox 请求、binding、对话与受治理 Turn 均保留，
+不创建替代任务、授权或调度器。这仍是本文的精确任务绑定路径，不代表普通 Inbox
+空闲接收者的自动激活已完成。
 
 Member completion uses the ordinary active-Goal continuation, including legacy
 non-hard-lease routes. It does not declare terminal `no_followup` for a
@@ -792,6 +889,22 @@ scope reduction or configuration switch is needed for normal `.bin` links.
 无需删除正常依赖、缩小声明或新增开关，不改变任务归属、权限或验收。
 
 ### Check a binding before new work
+
+Inspection reads the member's native Turn lane without taking its lock. A live
+holder reports `turn_blocked` / `turn_lane_in_flight`; an unreadable or foreign-host
+holder reports `turn_lane_state_unknown`. Both prevent the Chat handoff from
+submitting another worker and preserve its saved Inbox context. Recheck after the
+holder settles or observation is restored. Released/dead/absent native holders
+do not prove an App conversation is idle. The executing Turn still owns the
+single-flight fence if another execution races the preview. This adds neither a
+background retry nor ordinary Inbox activation without a bound task.
+
+中文：检查绑定时只读成员原生 Turn 通道，不抢占锁。正在执行返回
+`turn_blocked` / `turn_lane_in_flight`；记录不可读或属于其他宿主时返回
+`turn_lane_state_unknown`。两者均阻止 Chat 交接提交另一个 worker，已保存的
+Inbox 上下文保留；当前执行结束或状态读回恢复后重新检查。原生 holder 已释放、
+退出或不存在，不证明 App 会话空闲。预览之后发生竞争仍由实际 Turn 的单执行者
+锁处理。本改动不新增后台重试，也不实现无绑定任务的普通 Inbox 激活。
 
 `delegate inspect --binding-id independent-review` uses the same task,
 workspace, host, model/effort and validator arguments as an actual delegation,

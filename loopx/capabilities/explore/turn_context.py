@@ -13,7 +13,7 @@ from ...control_plane.capability_hooks import (
     TurnStartHookRegistration,
     dispatch_turn_start_hooks,
 )
-from ...control_plane.effect_runtime import effect_runtime_result
+from ...control_plane.effect_runtime import effect_runtime_request_scope, effect_runtime_result
 from ...explore_graph import compact_explore_graph_policy
 from ...control_plane.todos.list_readback import list_goal_todos
 from .result_log import (
@@ -57,12 +57,13 @@ def read_replan_explore_context(*, source_status: Mapping, goal_id: str, agent_i
         return {"ok": False, "goal_id": goal_id, "agent_id": agent_id}
 
 
+@effect_runtime_request_scope()
 def explore_turn_context(
     *, registry_path: Path, runtime_root: Path, goal_id: str, agent_id: str,
     result_limit: int = 3, result_offset: int = 0,
     result_node: str | None = None, result_revision: str | None = None,
     include_finding_digests: bool = False,
-    review_pages=None,
+    review_pages=None, todo_id: str | None = None,
 ):
     if type(include_finding_digests) is not bool:
         raise ValueError("include_finding_digests must be an explicit boolean")
@@ -70,7 +71,9 @@ def explore_turn_context(
     require_registered_agent_id(
         registry_path=registry_path, goal_id=goal_id, agent_id=agent_id
     )
-    projection, plan = {}, {}
+    projection, plan, focus, todos = {}, {}, {}, {}
+    page_tasks = {row["todo_id"] for row in review_pages
+                  if isinstance(row, Mapping) and isinstance(row.get("todo_id"), str)} if isinstance(review_pages, list) else set()
     if graph or gate["enabled"]:
         events = load_explore_result_events_strict(
             explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
@@ -81,7 +84,7 @@ def explore_turn_context(
             events, goal_id=goal_id, finding_limit=len(events),
             mermaid_node_limit=3,
         )
-    if gate["enabled"]:
+    if gate["enabled"] or graph and (todo_id is not None or page_tasks):
         todos = list_goal_todos(
             registry_path=registry_path,
             goal_id=goal_id,
@@ -90,6 +93,7 @@ def explore_turn_context(
             agent_id=agent_id,
             runtime_root_arg=str(runtime_root),
         )
+    if gate["enabled"]:
         plan = build_explore_todo_branch_plan(
             goal_id=goal_id,
             agent_id=agent_id,
@@ -98,6 +102,15 @@ def explore_turn_context(
             orchestration=goal.get("spawn_policy"),
             width=3,
         )
+    # Transport only the existing identity/link fields consumed by the typed
+    # reader, not task descriptions, notes or unrelated acceptance material.
+    scopes = {row["todo_id"]: {key: row[key] for key in (
+        "todo_id", "role", "status", "done", "claimed_by", "explore_result_node_refs") if key in row}
+        for row in todos.get("todos", []) if row.get("todo_id") == todo_id or row.get("todo_id") in page_tasks}
+    if (graph or gate["enabled"]) and todo_id is not None:
+        # Reuse the canonical open-task snapshot, including waiting tasks
+        # omitted by the independent planner. The typed owner checks scope.
+        focus = {"todo_id": todo_id, "focus_todo": scopes.get(todo_id)}
     route = [
         "loopx",
         "--registry",
@@ -116,6 +129,8 @@ def explore_turn_context(
             "harness_gate": gate,
             "projection": projection,
             "plan": plan,
+            **focus,
+            **({"review_todos": [scopes[key] for key in sorted(page_tasks) if key in scopes]} if page_tasks else {}),
             "route": route,
             "result_limit": result_limit,
             "result_offset": result_offset,
@@ -134,6 +149,7 @@ def extend_turn_start_dispatch(
     runtime_root: Path,
     goal_id: str,
     agent_id: str | None,
+    todo_id: str | None = None,
 ):
     if not agent_id:
         return dispatch
@@ -173,6 +189,7 @@ def extend_turn_start_dispatch(
             goal_id,
             "--agent-id",
             agent_id,
+            *(["--todo-id", todo_id] if todo_id is not None else []),
         ]
     )
     hook = TurnStartHookRegistration(
@@ -183,7 +200,7 @@ def extend_turn_start_dispatch(
         producer=produce,
         context_reader=lambda: explore_turn_context(
             registry_path=registry_path, runtime_root=runtime_root,
-            goal_id=goal_id, agent_id=agent_id),
+            goal_id=goal_id, agent_id=agent_id, todo_id=todo_id),
         required_read={
             "kind": "explore_turn_context",
             "command": command,

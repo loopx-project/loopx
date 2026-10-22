@@ -21,6 +21,42 @@ from .todo_summary import (
 from ..runtime.time import now_utc_iso
 
 
+REQUIRED_TODO_SOURCE_SECTIONS: tuple[tuple[str, str], ...] = (("agent", "Agent Todo"),)
+
+
+def active_state_incomplete_warning(state_text: str) -> dict[str, Any] | None:
+    """Identify required Todo source headings absent from legacy Markdown.
+
+    A present-but-empty heading is a valid empty projection. A missing heading
+    is not: callers cannot distinguish a truncated source from a goal with no
+    work, so repairs stay visible to status and Todo readback.
+    """
+    lines = state_text.splitlines()
+    visible = visible_markdown_lines(lines)
+    present_roles = {
+        region.role
+        for region in find_todo_source_regions(lines, visible=visible)
+    }
+    missing_sections = [
+        (role, heading)
+        for role, heading in REQUIRED_TODO_SOURCE_SECTIONS
+        if role not in present_roles
+    ]
+    if not missing_sections:
+        return None
+    return {
+        "kind": "state_incomplete",
+        "source": "markdown_active_state",
+        "roles": [role for role, _heading in missing_sections],
+        "required_roles": [role for role, _heading in REQUIRED_TODO_SOURCE_SECTIONS],
+        "missing_sections": [heading for _role, heading in missing_sections],
+        "recommended_action": (
+            "restore the missing Agent Todo section from the last known good "
+            "active state, then rerun `loopx status`"
+        ),
+    }
+
+
 def parse_todo_source(
     state_text: str,
     *,

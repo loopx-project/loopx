@@ -23,7 +23,7 @@ from .capabilities.multi_subagent.cli import (
     register_native_child_commands, handle_native_child_command,
 )
 from .cli_commands.todo_continuation import register_todo_continuation, handle_todo_continuation
-from .cli_commands.manager_inbox import register_manager_inbox, handle_manager_inbox
+from .cli_commands.manager_inbox import register_manager_inbox
 from .cli_commands.delegation import register_delegation
 from .capabilities.content_ops.cli import (
     handle_content_ops_command,
@@ -121,7 +121,6 @@ from .cli_commands import (
     handle_review_batch_command,
     handle_registry_admin_command,
     handle_starter_command,
-    handle_summary_all_command,
     handle_support_control_command,
     handle_handoff_mode_command,
     handle_task_lease_command,
@@ -813,19 +812,6 @@ def main(argv: list[str] | None = None) -> int:
             print_payload, output_format,
         )
 
-    if args.command == "manager-inbox":
-        from .control_plane.projects.registry_codec import load_project_registry
-        from .paths import resolve_runtime_root
-
-        return handle_manager_inbox(
-            args,
-            registry_path,
-            resolve_runtime_root(
-                load_project_registry(registry_path),
-                args.runtime_root,
-                registry_path=registry_path,
-            ),
-        )
     lark_inbox_result = handle_lark_inbox_command(
         args,
         registry_path=registry_path,
@@ -835,16 +821,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     if lark_inbox_result is not None:
         return lark_inbox_result
-
-    summary_all_result = handle_summary_all_command(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=args.runtime_root,
-        output_format=output_format,
-        print_payload=print_payload,
-    )
-    if summary_all_result is not None:
-        return summary_all_result
 
     pr_review_result = handle_pr_review_command(
         args,

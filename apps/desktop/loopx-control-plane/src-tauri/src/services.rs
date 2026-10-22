@@ -127,8 +127,17 @@ struct OwnedService {
 
 impl OwnedService {
     fn stop(&mut self) {
+        #[cfg(target_os = "macos")]
+        let group = self.child.id();
         let _ = self.child.kill();
         let _ = self.child.wait();
+        #[cfg(target_os = "macos")]
+        if let Err(error) = crate::service_lifetime::wait_for_group_exit(group) {
+            eprintln!(
+                "LoopX owned {} stop not confirmed: {error}",
+                self.kind.label()
+            );
+        }
     }
 }
 
@@ -350,7 +359,11 @@ fn connect_owned_service(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = command.group_spawn().map_err(|error| {
+    #[cfg(target_os = "macos")]
+    let child = crate::service_lifetime::spawn(&command);
+    #[cfg(not(target_os = "macos"))]
+    let child = command.group_spawn();
+    let child = child.map_err(|error| {
         ServiceError(format!(
             "could not start private LoopX {}: {error}",
             kind.label()

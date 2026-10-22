@@ -7,6 +7,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..effect_runtime import effect_runtime_request_scope
+
 if TYPE_CHECKING:
     from ..goals.goal_frontier.fallback_source import FallbackTodoSource
 
@@ -541,6 +543,7 @@ def _apply_missing_state_health_guidance(
         payload["recommended_action"] = recommended
 
 
+@effect_runtime_request_scope()
 def build_quota_should_run(
     status_payload: dict[str, Any],
     *,

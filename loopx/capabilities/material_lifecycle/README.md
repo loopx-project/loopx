@@ -64,6 +64,9 @@ flowchart LR
    dual-read reconciliation, cutover receipt, and reversible recovery.
 7. **Bounded Explore intake**: only from a named evidence gap, provider budget,
    candidate budget, and stop condition.
+8. **Derived-state integrity**: repair ranked summary counts without changing
+   membership or order, and bind archive-driven rank removal to the resulting
+   authority revision.
 
 ## The Core Invariants
 
@@ -81,6 +84,12 @@ flowchart LR
 - Recall is advisory; ranking evidence must be promoted by exact read.
 - Proposal and apply receipt are separate.
 - Apply and rollback require explicit owner gates and revision checks.
+- Every derived authority revision resolves to one applied ranking-lineage
+  receipt; projection does not inherit an older plan receipt by revision name.
+- Derived ranking receipts bind the same normalized Goal or project owner as
+  their source packet, and an underfilled or empty Top-N reports its real count.
+- Archiving a ranked material removes only that material and preserves every
+  remaining entry identity and relative order.
 
 ## Typical Uses
 
@@ -93,6 +102,8 @@ flowchart LR
   reason and stable source reference.
 - Run bounded exploration for a specific evidence gap without turning search
   into unbounded collection.
+- Repair stale derived counts and archive a ranked material without breaking
+  the next readable projection.
 
 Ordinary one-off reading, summarization, or web research does not require this
 capability unless the project has explicitly activated a managed material

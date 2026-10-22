@@ -4,6 +4,7 @@ import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceTheme } from "./workspace-theme";
 
 export function WorkspaceShell({
+  overlay,
   drawer,
   drawerMode = "panel",
   drawerOpen,
@@ -14,6 +15,7 @@ export function WorkspaceShell({
   sidebar,
   theme = "loopx",
 }: {
+  overlay?: ReactNode;
   drawer?: ReactNode;
   drawerMode?: "inspector" | "inspector-full" | "panel";
   drawerOpen: boolean;
@@ -62,6 +64,7 @@ export function WorkspaceShell({
 
   return (
     <section className={`personal-workspace-shell${drawerOpen ? " has-drawer" : ""}${drawerOpen && drawerMode.startsWith("inspector") ? " has-task-inspector" : ""}${drawerMode === "inspector-full" ? " is-task-inspector-full" : ""}${mobileSidebarOpen ? " mobile-sidebar-open" : ""}`} data-pw-theme={theme}>
+      {overlay}
       {mobileSidebarOpen ? <button aria-hidden className="personal-sidebar-backdrop" onClick={onCloseMobileSidebar} tabIndex={-1} type="button" /> : null}
       <aside
         aria-label={mobileSidebarOpen ? t("header.goalNavigation") : undefined}

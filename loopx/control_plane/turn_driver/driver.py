@@ -9,6 +9,7 @@ from hashlib import sha256
 from typing import Any
 
 from ..agent_context import envelope_agent_context
+from ..effect_program import SettlementIdentity
 from .subagent_host_adapter import (
     project_child_context_adapter,
     supported_child_context_modes,
@@ -20,6 +21,7 @@ from .subagent_execution_topology import (
 from ..quota.turn_envelope import (
     TURN_ENVELOPE_SCHEMA_VERSION,
     turn_envelope_action_signature_document,
+    turn_envelope_replan_settlement_identity,
 )
 from ..scheduler.execution_context import (
     scheduler_execution_context_for_turn,
@@ -204,10 +206,26 @@ def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
     return _mapping(action.get("selected_todo"))
 
 
+def _receipt_bound_replan_identity(
+    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+) -> SettlementIdentity | None:
+    """Transport the quota owner's signed binding; never invent an obligation.
+
+    Older Todo envelopes retain their established construction. Empty-frontier
+    planning needs the existing scoped identity from the complete settlement
+    plan, as well as its matching semantic obligation and original Turn.
+    """
+    raw = turn_envelope_replan_settlement_identity(envelope, turn_instance_id=turn_instance_id)
+    if raw is None:
+        return None
+    return SettlementIdentity.from_runtime_payload(raw)
+
+
 def _turn_lineage(
     envelope: Mapping[str, Any],
     *,
     selected_todo: Mapping[str, Any],
+    settlement_identity: SettlementIdentity | None = None,
 ) -> dict[str, str]:
     signature_document = turn_envelope_action_signature_document(envelope)
     action = _mapping(signature_document.get("action"))
@@ -223,12 +241,15 @@ def _turn_lineage(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    return {
+    lineage = {
         "goal_id": str(envelope.get("goal_id") or ""),
         "agent_id": str(envelope.get("agent_id") or ""),
         "todo_id": str(selected_todo.get("todo_id") or ""),
         "action_hash": action_hash,
     }
+    if settlement_identity is not None:
+        lineage["replan_obligation_id"] = str(settlement_identity.replan_obligation_id)
+    return lineage
 
 
 def _session_plan(
@@ -258,7 +279,8 @@ def _session_plan(
             "binding_status": "not_applicable",
             "context_policy": context_policy,
         }, None
-    if not all(lineage.values()):
+    if (not all(lineage.get(field) for field in (*identity_fields, "action_hash"))
+            or not (lineage.get("todo_id") or lineage.get("replan_obligation_id"))):
         return {
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "reject",
@@ -314,7 +336,14 @@ def reconcile_failed_turn_session_request(
 
     envelope = _mapping(request.get("turn_envelope"))
     selected_todo = selected_turn_todo(envelope)
-    lineage = _turn_lineage(envelope, selected_todo=selected_todo)
+    try:
+        settlement_identity = (None if selected_todo else _receipt_bound_replan_identity(
+            envelope, turn_instance_id=None,
+        ))
+    except (ValueError, RuntimeError) as exc:
+        raise FailedTurnSessionRecoveryError("turn_lineage_missing", str(exc)) from exc
+    lineage = _turn_lineage(envelope, selected_todo=selected_todo,
+                            settlement_identity=settlement_identity)
     planned_session = _mapping(request.get("session"))
     session, session_error = _session_plan(
         route=LoopXTurnRoute.READY_FOR_HOST,
@@ -474,12 +503,21 @@ def build_loopx_turn_plan(
         else LoopXTurnRoute.CONTRACT_ERROR
     )
     selected_todo = selected_turn_todo(envelope)
-    # Replanning an empty frontier is valid, but this Host executor settles
-    # against a Todo. Preserve the replan packet for the controller to resolve;
-    # do not turn the absence of a successor into a malformed Host session.
-    if route is LoopXTurnRoute.REPLAN_REQUIRED and not selected_todo:
-        route = LoopXTurnRoute.BLOCKED
-    lineage = _turn_lineage(envelope, selected_todo=selected_todo)
+    settlement_identity = None
+    identity_error = None
+    if route is LoopXTurnRoute.REPLAN_REQUIRED:
+        try:
+            settlement_identity = _receipt_bound_replan_identity(
+                envelope, turn_instance_id=turn_instance_id,
+            )
+        except (ValueError, RuntimeError) as exc:
+            identity_error = str(exc)
+            route = LoopXTurnRoute.CONTRACT_ERROR
+        if (not selected_todo and identity_error is None
+                and (settlement_identity is None or session_scope != "agent")):
+            route = LoopXTurnRoute.BLOCKED
+    lineage = _turn_lineage(envelope, selected_todo=selected_todo,
+                            settlement_identity=settlement_identity)
     session, session_error = _session_plan(
         route=route,
         lineage=lineage,
@@ -489,6 +527,7 @@ def build_loopx_turn_plan(
     )
     if session_error:
         route = LoopXTurnRoute.CONTRACT_ERROR
+    session_error = identity_error or session_error
     would_invoke_host = route in {
         LoopXTurnRoute.READY_FOR_HOST,
         LoopXTurnRoute.REPAIR_REQUIRED,
@@ -505,8 +544,10 @@ def build_loopx_turn_plan(
         execution_mode=execution_mode,
         scheduler_owner=str(context_projection.get("scheduler_owner") or ""),
         session_action=str(session.get("action") or "none"),
-        turn_instance_id=turn_instance_id,
+        turn_instance_id=(turn_instance_id if turn_instance_id is not None else
+                          (settlement_identity.turn_instance_id if settlement_identity else None)),
         goal_ref=goal_ref,
+        settlement_identity=settlement_identity,
     )
     execution_topology = build_subagent_execution_topology(
         turn_envelope=envelope,

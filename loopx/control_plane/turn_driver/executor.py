@@ -96,6 +96,7 @@ LOOPX_TURN_JOURNAL_INSPECTION_SCHEMA_VERSION = "loopx_turn_journal_inspection_v1
 LOOPX_TURN_TASK_VALIDATION_SCHEMA_VERSION = "loopx_turn_task_validation_v0"
 HOST_RESULT_MAX_BYTES = 12_000
 HOST_AGENT_VISION_JSON_MAX_CHARS = 3_200
+HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS = 4_096
 HOST_REWARD_MEMORY_REFLECTION_JSON_MAX_CHARS = 2_400
 HOST_PATH_DELTA_MODES = {"", "unchanged", "material_replan"}
 HOST_RESULT_TEXT_LIMITS = (
@@ -128,6 +129,7 @@ HOST_RESULT_FIELDS = {
     "vision_unchanged_reason",
     "path_delta_mode",
     "agent_vision_json",
+    "progress_observation_json",
     "summary",
     "reward_memory_reflection_json",
     *HOST_RESULT_EVIDENCE_LIMITS,
@@ -378,7 +380,7 @@ def validate_loopx_turn_host_result(
         }
     allowed_fields = HOST_RESULT_FIELDS | subagent.subagent_host_result_fields(plan) | set(optional_fields)
     if from_journal:
-        allowed_fields = allowed_fields | {"agent_vision"}
+        allowed_fields = allowed_fields | {"agent_vision", "progress_observation"}
     unknown = sorted(set(result) - allowed_fields)
     if unknown:
         errors.append("unsupported host result fields: " + ", ".join(unknown))
@@ -440,7 +442,24 @@ def validate_loopx_turn_host_result(
                 normalized[field] = text
             else:
                 errors.append("non-material host results cannot declare optional capability results")
+    progress_observation = None
     if material:
+        raw_progress = result.get("progress_observation_json", "")
+        try:
+            from ..work_items.progress_observation import normalize_progress_observation
+
+            if from_journal and "progress_observation" in result:
+                if "progress_observation_json" in result:
+                    raise ValueError("cached progress observation cannot also supply JSON")
+                progress_observation = normalize_progress_observation(result["progress_observation"])
+            elif not isinstance(raw_progress, str):
+                raise ValueError("progress_observation_json must be a JSON string")
+            elif raw_progress.strip():
+                if len(raw_progress) > HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS:
+                    raise ValueError("progress_observation_json exceeds the Host result limit")
+                progress_observation = normalize_progress_observation(json.loads(raw_progress))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"invalid progress observation: {exc}")
         try:
             normalized["delivery_batch_scale"] = require_delivery_batch_scale(
                 result.get("delivery_batch_scale")
@@ -452,7 +471,7 @@ def validate_loopx_turn_host_result(
                 result.get("delivery_outcome")
             ).value
             if not from_journal:
-                # This Host contract carries no typed blocker observation.
+                # Observation transport does not add a no-spend Host closeout.
                 # Refuse new candidates before preparing an impossible write.
                 # Saved results retain provider readback/recovery: an effect
                 # may already have committed under an older producer.
@@ -497,17 +516,20 @@ def validate_loopx_turn_host_result(
         str(result.get("path_delta_mode") or "").strip()
         or str(result.get("agent_vision_json") or "").strip()
         or (from_journal and "agent_vision" in result)
+        or ("progress_observation_json" in result and result["progress_observation_json"] != "")
+        or (from_journal and "progress_observation" in result)
         or any(field in result for field in HOST_RESULT_EVIDENCE_LIMITS)
     ):
         errors.append(
             "non-material host results cannot declare path_delta_mode or "
-            "agent_vision_json, or work/validation evidence"
+            "agent_vision_json, progress observation, or work/validation evidence"
         )
     if subagent.subagent_execution_topology(plan) is not None:
         subagent.observe_subagent_host_result(plan, result, normalized, errors)
     return {
         "ok": not errors,
-        "result": normalized,
+        "result": (normalized if progress_observation is None else
+                   {**normalized, "progress_observation": progress_observation}),
         "errors": errors,
     }
 

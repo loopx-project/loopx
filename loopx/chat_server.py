@@ -1601,6 +1601,7 @@ class ChatRequestHandler(
                 }
             )
         get_dispatch: dict[str, Callable[[], None]] = {
+            "/api/chat/request-inventory": self._request_inventory_read,
             GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,

@@ -12,6 +12,20 @@ export const workspaceLocaleStorageKey = "loopx-pw-locale";
 export type WorkspaceLocale = "en" | "zh-CN";
 
 const en = {
+  "palette.title": "Quick navigation",
+  "palette.scope": "Goals and the current Goal’s tasks, results and existing previews.",
+  "palette.readOnly": "Read-only source · browse Goals, tasks and results.",
+  "palette.search": "Search by name or ID",
+  "palette.matches": "Destinations",
+  "palette.goal": "Goal",
+  "palette.todo": "Task",
+  "palette.output": "Result",
+  "palette.proposal": "Review preview",
+  "palette.loading": "Loading",
+  "palette.unavailable": "Source unavailable",
+  "palette.noMatches": "No matches. Try another name.",
+  "palette.empty": "No Goals are available in this source.",
+  "palette.keys": "↑ ↓ Select · Enter Open · Esc Close · Ctrl/⌘ K",
   "zcode.executionFailed": "ZCode native execution failed. Check the host session and model configuration, then read status again.",
   "zcode.goalBasisChanged": "Goal acceptance criteria or declared sources changed after this native Goal started. The target stays paused; stop it and start again so the native session consumes the current basis.",
   "zcode.goalBasisUnavailable": "No proven current Goal basis is available for this native Goal: either the current basis could not be read, or the binding started before a basis was recorded. The target stays paused; read status, then stop and start again so the native session consumes the current basis.",
@@ -1633,6 +1647,20 @@ const en = {
 export type WorkspaceMessageKey = keyof typeof en;
 
 const zhCN: Record<WorkspaceMessageKey, string> = {
+  "palette.title": "快速导航",
+  "palette.scope": "目标，以及当前目标中的任务、成果和已有预览。",
+  "palette.readOnly": "只读来源 · 浏览目标、任务和成果。",
+  "palette.search": "按名称或 ID 搜索",
+  "palette.matches": "导航位置",
+  "palette.goal": "目标",
+  "palette.todo": "任务",
+  "palette.output": "成果",
+  "palette.proposal": "查看预览",
+  "palette.loading": "加载中",
+  "palette.unavailable": "来源不可用",
+  "palette.noMatches": "没有匹配项，请尝试其他名称。",
+  "palette.empty": "此来源中暂无可用目标。",
+  "palette.keys": "↑ ↓ 选择 · Enter 打开 · Esc 关闭 · Ctrl/⌘ K",
   "zcode.executionFailed": "ZCode 原生执行失败。请检查宿主会话与模型配置，再回读状态。",
   "zcode.goalBasisChanged": "该原生 Goal 启动后，Goal 验收条件或声明来源已变更。目标保持暂停；请先停止再启动，让原生会话消费当前依据。",
   "zcode.goalBasisUnavailable": "该原生 Goal 没有可证明的当前依据：当前依据无法读取，或该绑定在记录依据之前就已启动。目标保持暂停；请回读状态，然后先停止再启动，让原生会话消费当前依据。",

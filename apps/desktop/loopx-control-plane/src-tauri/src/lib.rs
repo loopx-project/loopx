@@ -6,6 +6,8 @@ mod prepared_update;
 mod runtime_ancestry;
 mod runtime_selection;
 mod service_endpoints;
+#[cfg(target_os = "macos")]
+mod service_lifetime;
 mod services;
 mod update_backup;
 mod upgrade_request;
@@ -110,6 +112,9 @@ fn workspace_navigation(
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    service_lifetime::run_if_requested();
+
     // Release builds load the versioned LoopX Chat workspace that ships inside
     // the installed `loopx` release, so `loopx update` refreshes the frontend
     // and backend together instead of reusing a separately built asset bundle.

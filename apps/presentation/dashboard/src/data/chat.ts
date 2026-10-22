@@ -3,6 +3,7 @@ import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } fro
 import { normalizeGoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { parseTurnStep, type TurnStep } from "./turn-steps.js";
 import { z } from "zod";
+import {normalizeExploreMeasurements} from "../../../../../loopx/control_plane/capabilities/explore_measurements.js";
 import { actionSourceBasisSchema, todoUpdateSourceBasisSchema } from "./action-source-basis.js";
 
 import {
@@ -2665,6 +2666,7 @@ const exploreResultPageSchema = z.object({
     finding_id: z.string(), finding: z.string(), summary: z.string(), status: z.string(),
     node_id: z.string(), question: z.string(), scope: z.string(), agent_id: z.string(),
     evidence_refs: z.array(z.string()), last_updated_at: z.string(),
+    measurements: z.unknown().transform(normalizeExploreMeasurements).optional(),
     linked_todos: z.array(z.object({
       todo_id: z.string(), text: z.string(), status: z.string(), claimed_by: z.string(),
     })),

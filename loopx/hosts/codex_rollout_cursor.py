@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from .codex_rollout_json import SMALL_RECORD_BYTES, MetadataLine
-from .control_plane.agents.host_thread_activity import (
+from ..control_plane.agents.host_thread_activity import (
     HostThreadActivity,
     HostThreadState,
     HostThreadUnknownReason,

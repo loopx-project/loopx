@@ -7,7 +7,7 @@ import {projectGoalObjective, currentGoalObjective} from "./goal_objective.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {AuthorityStoreProtocolError, authorityUnicodeCompare, canonicalAuthorityBytes,
   canonicalAuthorityObject, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {indexCoordinationProjectionTodos, validateCoordinationTodoReadModel} from "../coordination/coordination_projection.ts";
+import {CoordinationProjectionRead, indexCoordinationProjectionTodos} from "../coordination/coordination_projection.ts";
 import {COMPLETION_VALIDATION_BINDING_RECEIPT_SCHEMA,
   completionValidationRevisionHistory} from "../todos/completion_validation_revision.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
@@ -329,13 +329,18 @@ export function acceptanceApplies(todo: JsonObject): boolean {
     (todo.status === "open" || todo.status === "blocked") && todo.done === false;
 }
 export function acceptanceTodos(head: JsonObject, goalId: string): ReadonlyMap<string, JsonObject> {
-  validateCoordinationTodoReadModel(head, goalId);
-  return indexCoordinationProjectionTodos(head, goalId).todos;
+  const read = new CoordinationProjectionRead(head, goalId);
+  read.validateTodoReadModel();
+  return read.todoIndex.todos;
 }
 export function goalAcceptanceWorkDigest(head: JsonObject, goalId: string, scope?: AcceptanceScope): string {
   // This semantic fingerprint is independent of provider row representation.
   // Projection and mutation callers separately validate the canonical read model.
   const todos = indexCoordinationProjectionTodos(head, goalId).todos;
+  return acceptanceWorkDigest(todos, scope, head);
+}
+function acceptanceWorkDigest(todos: ReadonlyMap<string, JsonObject>, scope: AcceptanceScope | undefined,
+  head: JsonObject): string {
   const objective = currentGoalObjective(head)?.revisions.at(-1)?.digest;
   const digest = (work: unknown) => canonicalAuthoritySha256(objective === undefined ? work : {work, objective});
   if (scope?.kind === "selected_work") return digest(scope.todo_ids.map(todo_id => ({
@@ -380,10 +385,11 @@ export function readGoalAcceptanceAuthority(head: JsonObject, goalId: string): G
   }
   const document = normalizeGoalAcceptanceDocument(state.document);
   acceptanceRequire(state.digest === canonicalAuthoritySha256(document), "acceptance contract digest mismatch");
+  const declaredBindings = new Map(document.bindings.map(binding => [binding.todo_id, binding]));
   const bindings = list(state.bindings, "canonical bindings", 4096).map(value => {
     const binding = canonicalAuthorityObject(value, "canonical binding");
     acceptanceKeys(binding, ["todo_id", "todo_semantic_digest", "revision", "criterion_ids", "confirmed_by"]);
-    const declared = document.bindings.find(item => item.todo_id === binding.todo_id);
+    const declared = typeof binding.todo_id === "string" ? declaredBindings.get(binding.todo_id) : undefined;
     acceptanceRequire(declared && binding.confirmed_by === "owner" && binding.revision === state.revision &&
       typeof binding.todo_semantic_digest === "string" && BARE_SHA256_PATTERN.test(binding.todo_semantic_digest) &&
       canonicalAuthoritySha256(binding.criterion_ids) === canonicalAuthoritySha256(declared.criterion_ids), "invalid owner-confirmed acceptance binding");
@@ -431,12 +437,7 @@ export function readGoalAcceptance(head: JsonObject, goalId: string): Acceptance
  * They contain only already pinned files and oracle refs, never commands or
  * a new result. Public summaries keep using the acceptance projection. */
 export function goalAcceptanceOracleObservationBasis(head: JsonObject, goalId: string): JsonObject | null {
-  const authority = readGoalAcceptanceAuthority(head, goalId);
-  const state = authority.kind === "legacy" ? authority.state
-    : authority.owner_matches && authority.lifecycle.state === "active" ? authority.state : null;
-  const criteria = state?.document.criteria.filter(criterion => criterion.oracle !== undefined)
-    .map(criterion => ({id: criterion.id, validation_files: criterion.validation_files, oracle: criterion.oracle!})) ?? [];
-  return state && criteria.length ? {revision: state.revision, digest: state.digest, criteria} : null;
+  return new GoalAcceptanceRead(head, goalId).oracleBasis();
 }
 
 export function bindGoalAcceptanceStateOwner(
@@ -457,6 +458,10 @@ export function bindGoalAcceptanceStateOwner(
 
 export function acceptanceTask(todoId: string, todo: JsonObject | undefined, state: AcceptanceState): AcceptanceTask {
   const binding = state.bindings.find(item => item.todo_id === todoId);
+  return acceptanceTaskForBinding(todoId, todo, state, binding);
+}
+function acceptanceTaskForBinding(todoId: string, todo: JsonObject | undefined, state: AcceptanceState,
+  binding: AcceptanceBinding | undefined): AcceptanceTask {
   const reason_code = !binding ? "goal_acceptance_unbound" : !todo || !acceptanceBindingMatches(todo, binding.todo_semantic_digest)
     ? "goal_acceptance_stale" : "goal_acceptance_ready";
   return {todo_id: todoId, state: !binding ? "unbound" : reason_code === "goal_acceptance_stale" ? "stale" : "ready",
@@ -492,56 +497,138 @@ export function normalizeAcceptanceResults(value: unknown, expectedIds?: readonl
   return results;
 }
 
-function projectAcceptanceChecks(head: JsonObject, goalId: string): JsonObject {
-  const authority = readGoalAcceptanceAuthority(head, goalId);
-  const exactProjection = authority.kind === "exact"
-    ? {lifecycle_state: authority.lifecycle.state, goal_ref: authority.lifecycle.goal_ref}
-    : {};
-  const state = authority.kind === "legacy" ? authority.state
-    : authority.owner_matches ? authority.state : null;
-  if (!state || authority.kind === "exact" && authority.lifecycle.state !== "active") {
-    return {...exactProjection};
+/** Reuse only within one loaded provider head; every public read starts fresh. */
+export class GoalAcceptanceRead {
+  private readonly head: JsonObject;
+  private readonly goalId: string;
+  private readonly read: CoordinationProjectionRead;
+  private authority: GoalAcceptanceAuthority | undefined;
+  private todoReadModel: JsonObject | undefined;
+  private bindings: ReadonlyMap<string, AcceptanceBinding> | undefined;
+  private readonly tasks = new Map<string, AcceptanceTask>();
+
+  constructor(head: JsonObject, goalId: string, read = new CoordinationProjectionRead(head, goalId)) {
+    this.head = head;
+    this.goalId = goalId;
+    this.read = read;
   }
-  const todos = acceptanceTodos(head, goalId);
-  const taskIds = new Set(state.document.scope?.kind === "selected_work" ? state.document.scope.todo_ids
-    : [...todos.values()].filter(advancement).map(todo => String(todo.todo_id)));
-  for (const binding of state.bindings) taskIds.add(binding.todo_id);
-  const tasks = [...taskIds].sort(authorityUnicodeCompare).map(key => acceptanceTask(key, todos.get(key), state));
-  const held = tasks.filter(task => task.applicable && task.state !== "ready");
-  const receipt = state.verification;
-  let status = "unverified";
-  if (receipt) {
-    if (receipt.contract_revision !== state.revision || receipt.contract_digest !== state.digest ||
-        receipt.work_digest !== goalAcceptanceWorkDigest(head, goalId, state.document.scope)) status = "stale";
-    else if (receipt.results.some(item => !item.passed)) status = "failed";
-    else if (receipt.todo_id !== null) status = "partial";
-    else status = "accepted";
+
+  private readAuthority(): GoalAcceptanceAuthority {
+    return this.authority ??= readGoalAcceptanceAuthority(this.head, this.goalId);
   }
-  if (held.length) status = "held";
-  return {...exactProjection, ...(state.document.scope === undefined ? {} : {scope: state.document.scope}),
-    ...(state.document.outcome_id === undefined ? {} : {outcome_id: state.document.outcome_id}),
-    revision: state.revision, digest: state.digest, objective: state.document.objective,
-    non_goals: state.document.non_goals, criteria: state.document.criteria.map(criterion => ({id: criterion.id, description: criterion.description,
-      ...(criterion.oracle === undefined ? {} : {oracle: projectAcceptanceOracle(criterion, receipt?.results.find(row => row.criterion_id === criterion.id), status === "stale" || status === "held")})})),
-    tasks, held_todo_ids: held.map(task => task.todo_id), status,
-    verification: receipt ? {operation_id: receipt.operation_id, contract_revision: receipt.contract_revision,
-      contract_digest: receipt.contract_digest, todo_id: receipt.todo_id, results: receipt.results} : null};
+
+  validateTodoReadModel(): JsonObject {
+    this.todoReadModel ??= this.read.validateTodoReadModel();
+    return structuredClone(this.todoReadModel);
+  }
+
+  private bindingIndex(state: AcceptanceState): ReadonlyMap<string, AcceptanceBinding> {
+    if (this.bindings === undefined) {
+      const bindings = new Map<string, AcceptanceBinding>();
+      for (const binding of state.bindings) {
+        if (!bindings.has(binding.todo_id)) bindings.set(binding.todo_id, binding);
+      }
+      this.bindings = bindings;
+    }
+    return this.bindings;
+  }
+
+  private task(todoId: string, todo: JsonObject | undefined, state: AcceptanceState): AcceptanceTask {
+    let task = this.tasks.get(todoId);
+    if (task === undefined) {
+      task = acceptanceTaskForBinding(todoId, todo, state, this.bindingIndex(state).get(todoId));
+      this.tasks.set(todoId, task);
+    }
+    return task;
+  }
+
+  oracleBasis(): JsonObject | null {
+    const authority = this.readAuthority();
+    const state = authority.kind === "legacy" ? authority.state
+      : authority.owner_matches && authority.lifecycle.state === "active" ? authority.state : null;
+    const criteria = state?.document.criteria.filter(criterion => criterion.oracle !== undefined)
+      .map(criterion => ({id: criterion.id, validation_files: criterion.validation_files, oracle: criterion.oracle!})) ?? [];
+    return state && criteria.length ? structuredClone({revision: state.revision, digest: state.digest, criteria}) : null;
+  }
+
+  private checks(): JsonObject {
+    const authority = this.readAuthority();
+    const exactProjection = authority.kind === "exact"
+      ? {lifecycle_state: authority.lifecycle.state, goal_ref: authority.lifecycle.goal_ref}
+      : {};
+    const state = authority.kind === "legacy" ? authority.state
+      : authority.owner_matches ? authority.state : null;
+    if (!state || authority.kind === "exact" && authority.lifecycle.state !== "active") {
+      return {...exactProjection};
+    }
+    this.validateTodoReadModel();
+    const todos = this.read.todoIndex.todos;
+    const taskIds = new Set(state.document.scope?.kind === "selected_work" ? state.document.scope.todo_ids
+      : [...todos.values()].filter(advancement).map(todo => String(todo.todo_id)));
+    for (const binding of state.bindings) taskIds.add(binding.todo_id);
+    const tasks = [...taskIds].sort(authorityUnicodeCompare).map(key => this.task(key, todos.get(key), state));
+    const held = tasks.filter(task => task.applicable && task.state !== "ready");
+    const receipt = state.verification;
+    let status = "unverified";
+    if (receipt) {
+      if (receipt.contract_revision !== state.revision || receipt.contract_digest !== state.digest ||
+          receipt.work_digest !== acceptanceWorkDigest(todos, state.document.scope, this.head)) status = "stale";
+      else if (receipt.results.some(item => !item.passed)) status = "failed";
+      else if (receipt.todo_id !== null) status = "partial";
+      else status = "accepted";
+    }
+    if (held.length) status = "held";
+    return {...exactProjection, ...(state.document.scope === undefined ? {} : {scope: state.document.scope}),
+      ...(state.document.outcome_id === undefined ? {} : {outcome_id: state.document.outcome_id}),
+      revision: state.revision, digest: state.digest, objective: state.document.objective,
+      non_goals: state.document.non_goals, criteria: state.document.criteria.map(criterion => ({id: criterion.id, description: criterion.description,
+        ...(criterion.oracle === undefined ? {} : {oracle: projectAcceptanceOracle(criterion, receipt?.results.find(row => row.criterion_id === criterion.id), status === "stale" || status === "held")})})),
+      tasks, held_todo_ids: held.map(task => task.todo_id), status,
+      verification: receipt ? {operation_id: receipt.operation_id, contract_revision: receipt.contract_revision,
+        contract_digest: receipt.contract_digest, todo_id: receipt.todo_id, results: receipt.results} : null};
+  }
+
+  contract(): JsonObject {
+    const checks = structuredClone(this.checks());
+    const outcomes = projectGoalOutcomes(this.head, this.goalId, checks);
+    const objective = projectGoalObjective(this.head);
+    return {...checks, ...(outcomes === null ? {} : {outcome_requirements: outcomes}),
+      ...(objective === null ? {} : {goal_objective: objective})};
+  }
+
+  workGuards(todoIds: readonly string[]): Record<string, JsonObject> {
+    const authority = this.readAuthority();
+    const state = authority.kind === "legacy" ? authority.state
+      : authority.owner_matches ? authority.state : null;
+    if (!state) return {};
+    this.validateTodoReadModel();
+    const todos = this.read.todoIndex.todos, bindings = this.bindingIndex(state);
+    const retiring = authority.kind === "exact" && authority.lifecycle.state === "retiring";
+    return Object.fromEntries(todoIds.flatMap(todoId => {
+      const todo = todos.get(todoId);
+      if (!acceptanceRequired(state, todoId, todo, bindings.get(todoId) ?? null)) return [];
+      const task = this.task(todoId, todo, state);
+      return [[todoId, {allowed: !retiring && task.state === "ready", ...task,
+        criterion_ids: [...task.criterion_ids],
+        ...(retiring ? {reason_code: "goal_acceptance_goal_retiring",
+          reason: "The Goal instance is retiring; acceptance cannot authorize more work."} : {}),
+        revision: state.revision, digest: state.digest}]];
+    }));
+  }
 }
 
 /** Outcomes extend the existing acceptance read, even before checks are configured.
  * No declaration preserves the original projection byte-for-byte. */
 export function projectGoalAcceptance(head: JsonObject, goalId: string): JsonObject {
-  const checks = projectAcceptanceChecks(head, goalId);
-  const outcomes = projectGoalOutcomes(head, goalId, checks);
-  const objective = projectGoalObjective(head);
-  return {...checks, ...(outcomes === null ? {} : {outcome_requirements: outcomes}), ...(objective === null ? {} : {goal_objective: objective})};
+  return new GoalAcceptanceRead(head, goalId).contract();
 }
 
 /** Explicit selection and confirmed bindings survive mutable work fields.
  * The guarded Agent cannot escape acceptance by changing role/class/status. */
-function acceptanceRequired(state: AcceptanceState, todoId: string, todo: JsonObject | undefined): boolean {
+function acceptanceRequired(state: AcceptanceState, todoId: string, todo: JsonObject | undefined,
+  binding: AcceptanceBinding | null = state.bindings.find(binding => binding.todo_id === todoId) ?? null): boolean {
   return acceptanceIncludes(state.document.scope, todoId) &&
-    (state.document.scope?.kind === "selected_work" || state.bindings.some(binding => binding.todo_id === todoId) ||
+    (state.document.scope?.kind === "selected_work" || binding !== null ||
       todo === undefined || acceptanceApplies(todo));
 }
 
@@ -557,21 +644,7 @@ export function projectGoalAcceptanceWorkGuards(
   goalId: string,
   todoIds: readonly string[],
 ): Record<string, JsonObject> {
-  const authority = readGoalAcceptanceAuthority(head, goalId);
-  const state = authority.kind === "legacy" ? authority.state
-    : authority.owner_matches ? authority.state : null;
-  if (!state) return {};
-  const todos = acceptanceTodos(head, goalId);
-  const retiring = authority.kind === "exact" && authority.lifecycle.state === "retiring";
-  return Object.fromEntries(todoIds.flatMap(todoId => {
-    const todo = todos.get(todoId);
-    if (!acceptanceRequired(state, todoId, todo)) return [];
-    const task = acceptanceTask(todoId, todo, state);
-    return [[todoId, {allowed: !retiring && task.state === "ready", ...task,
-      ...(retiring ? {reason_code: "goal_acceptance_goal_retiring",
-        reason: "The Goal instance is retiring; acceptance cannot authorize more work."} : {}),
-      revision: state.revision, digest: state.digest}]];
-  }));
+  return new GoalAcceptanceRead(head, goalId).workGuards(todoIds);
 }
 
 /** Trusted execution adapter only. Run these commands at the inspected provider

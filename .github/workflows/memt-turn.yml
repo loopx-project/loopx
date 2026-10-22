@@ -1,0 +1,35 @@
+name: Optional MemT Turn
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/memt-turn.yml"
+      - "packages/loopx-memt-turn/**"
+      - "loopx/control_plane/turn_driver/**"
+      - "loopx/file_lock.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adapter-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e '.[test]' -e packages/loopx-memt-turn
+      # Explicit test-only installation; upstream retains its noncommercial license.
+      - run: python -m pip install 'memt-sglang[client] @ git+https://github.com/MemTensor/MemT-1.0.git@e75c13d090a6a9d34b29146d901bd84323185f24#subdirectory=inference'
+      - run: python -m pytest -q packages/loopx-memt-turn/tests tests/test_loopx_turn_driver.py tests/test_turn_managed_executor_binding.py
+      - run: python -m ruff check packages/loopx-memt-turn

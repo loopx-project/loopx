@@ -26,6 +26,7 @@ from ..control_plane.quota.settlement import (
     SettlementStepKind,
     read_heartbeat_settlement,
 )
+from ..control_plane.quota.spend_sources import quota_spend_source_for_execution_context
 from ..control_plane.work_items.autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
 )
@@ -147,6 +148,8 @@ def execute_turn_run_once(
                 or transaction.get("turn_key")
                 or ""
             ),
+            replan_obligation_id=(raw_identity.get("replan_obligation_id")
+                                  if isinstance(raw_identity, Mapping) else None),
         )
         persisted_effect_id = str(raw_identity.get("effect_id") or "")
         if (
@@ -203,12 +206,14 @@ def execute_turn_run_once(
                 details={
                     **dict(details),
                     "settlement_effect_id": settlement_identity.effect_id,
+                    **({"replan_obligation_id": settlement_identity.replan_obligation_id}
+                       if settlement_identity.replan_obligation_id else {}),
                 },
                 idempotency_fields=[
                     "goal_id",
                     "event_kind",
                     "agent_id",
-                    "todo_id",
+                    *(("todo_id",) if settlement_identity.todo_id else ()),
                     "run_id",
                     *(("goal_ref",) if goal_ref is not None else ()),
                     *(("status",) if event_kind == "todo_complete" else ()),
@@ -254,12 +259,13 @@ def execute_turn_run_once(
             result_kind = str(result.get("result_kind") or "")
             if result_kind in {"repair_required", "replan_required"}:
                 todo_id = str(selected_todo.get("todo_id") or "")
-                if not todo_id:
+                if not todo_id and not settlement_identity.replan_obligation_id:
                     raise ValueError(
                         f"{result_kind} requires one selected todo for typed writeback"
                     )
             # Diagnostics already live in the journal's typed host_result.
             # Do not overwrite task context before refresh can reject a result.
+            progress_observation = result.get("progress_observation")
             refresh = refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
@@ -276,10 +282,15 @@ def execute_turn_run_once(
                 delivery_outcome=str(result["delivery_outcome"]),
                 delivery_workspace_path=delivery_workspace_path,
                 todo_id=settlement_identity.todo_id,
+                replan_obligation_id=settlement_identity.replan_obligation_id,
                 turn_instance_id=settlement_identity.turn_instance_id,
                 agent_id=args.agent_id,
                 progress_scope="goal",
                 autonomous_replan_recorded=result_kind == "replan_required",
+                progress_observation=(
+                    dict(progress_observation)
+                    if isinstance(progress_observation, dict) else None
+                ),
                 agent_vision_packet=(
                     dict(result["agent_vision"])
                     if isinstance(result.get("agent_vision"), dict)
@@ -463,9 +474,14 @@ def execute_turn_run_once(
                 goal_id=args.goal_id,
                 slots=1,
                 execute=True,
-                source="adapter",
+                source=(quota_spend_source_for_execution_context(
+                    payload.get("scheduler_execution_context"),
+                ) if settlement_identity.replan_obligation_id else "adapter"),
                 agent_id=args.agent_id,
                 workspace_path=delivery_workspace_path,
+                replan_obligation_id=settlement_identity.replan_obligation_id,
+                turn_instance_id=(settlement_identity.turn_instance_id
+                                  if settlement_identity.replan_obligation_id else None),
                 available_capabilities=args.available_capabilities,
                 scheduler_execution_context=(
                     payload.get("scheduler_execution_context")

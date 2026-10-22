@@ -4,7 +4,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
-function item(value: unknown): JsonObject | null {
+export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   const row = requireJsonObject(value, "delegation observation");
   const direction = requireStringLiteral(row.direction, ["incoming", "outgoing"], "delegation direction");
   const request = requireJsonObject(row.request, "delegation request");
@@ -22,7 +22,9 @@ function item(value: unknown): JsonObject | null {
   const results = row.results.map(value => requireJsonObject(value, "delegation result"))
     .filter(result => result.request_revision === (control?.revision ?? 1));
   const incomplete = results.filter(result => result.status !== "delivered" && result.status !== "superseded");
-  const unconsumed = results.filter(result => result.consumed !== true);
+  // Peer returns require their requester acknowledgement. An original Chat
+  // return has a delivery receipt, not a synthetic peer-consumption receipt.
+  const unconsumed = request.source_kind === "peer" ? results.filter(result => result.consumed !== true) : [];
   let step: string;
   if (kind === "receipt_unavailable" || row.evidence_unavailable === true) step = "recover_evidence";
   else if (cancelled) step = "reconcile_reservation";
@@ -69,7 +71,7 @@ export function projectDelegationTurnItems(params: JsonObject): JsonObject {
   if (!Array.isArray(params.observations) || params.observations.length > 128) {
     throw new EffectRuntimeRequestError("delegation observation batch must contain at most 128 requests");
   }
-  const rows = params.observations.map(item).filter((value): value is JsonObject => value !== null);
+  const rows = params.observations.map(projectDelegationTurnItem).filter((value): value is JsonObject => value !== null);
   return {items: visibleRows(rows), incoming_count: rows.filter(row => row.direction === "incoming").length,
     outgoing_count: rows.filter(row => row.direction === "outgoing").length};
 }

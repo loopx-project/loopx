@@ -186,6 +186,23 @@ def active_state_todo_attention_item(
     lifecycle_fields = goal_lifecycle_fields(goal, current_run)
     goal_id = str(goal.get("id") or "unknown-goal")
 
+    state_incomplete = fields.get("state_incomplete")
+    if isinstance(state_incomplete, dict):
+        item = attention_item(
+            goal_id=goal_id,
+            status="state_incomplete",
+            waiting_on="user_or_controller",
+            severity="high",
+            recommended_action=str(
+                state_incomplete.get("recommended_action")
+                or "restore the missing active-state Agent Todo section"
+            ),
+            source="active_state",
+            **lifecycle_fields,
+        )
+        item["state_incomplete"] = state_incomplete
+        return item
+
     if user_gate_action or user_gate_items:
         return attention_item(
             goal_id=goal_id,

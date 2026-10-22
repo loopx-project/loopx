@@ -23,6 +23,12 @@ LoopX Core
 
 ## Runtime Responsibilities
 
+The experimental [MemT Nano Turn host](../../packages/loopx-memt-turn/README.md)
+is a separately installed `generic-cli` execution provider. Its native memory
+is scoped advisory history, not canonical work state or accepted Reward Memory.
+It is disabled by default and has no automatic host selection. Real GPU benefit
+and App/Lark configuration remain unqualified; review its licensing before use.
+
 Capability and extension are code and delivery boundaries. At runtime, keep
 four responsibilities distinct:
 

@@ -25,6 +25,14 @@ with `loopx update`.
 
 Background network requests do not hold service supervision. A slow or failed
 check/download cannot prevent local startup or recovery of an owned child.
+Manual **Check for updates** also leaves service supervision available while
+reading the feed. Its result remains in the existing update panel after the
+local workspace opens; an available update does not require installation to
+finish startup. A newer check or an explicit maintenance action supersedes a
+late response before it can admit a candidate. Apply, repair, rollback and
+restart retain their exclusive native transaction and recovery boundaries.
+Startup failures and feed results remain separate: an unusable local runtime
+keeps its recovery message while a successful check still offers Install.
 The existing update panel reports background progress or a prepared update;
 manual actions cancel/supersede background work and retain their original
 installation, restart, backup and rollback controls. A CLI-requested App upgrade
@@ -68,6 +76,11 @@ message; a failure never certifies that an update was installed.
 Progress and failures use the
 existing update panel; background IO does not hold the service supervisor or
 restart a running workspace.
+
+手动「检查更新」的网络等待也不占用本地服务启动或恢复锁。已有合格组件时，
+工作区照常打开，检查结果与重试入口保留在原更新面板；发现更新不要求先安装
+才能进入。较新的检查或明确维护操作使迟到响应失效，不能覆盖当前候选。
+安装、修复、回滚与重启仍遵守原生独占事务及恢复边界。
 
 手动与后台下载复用原生更新器：连接上限十秒、单次读取无响应上限三十秒、完整下载
 上限三十分钟。持续有进展的下载可超过三十秒；下载的连接和读取期限仅在清单检查后
@@ -205,6 +218,15 @@ Recovery does not restart services or submit a task. Slow committed documents
 are allowed to finish; boot pages retain the framework's reload behavior.
 This changes post-crash navigation only; other platforms keep their existing
 handoff policy.
+
+The macOS App's two private Core services also follow the native process's
+lifetime after an abrupt App crash. Each runs with a helper from the same
+native executable. Losing the App's private pipe stops only that helper's own
+process group; reopening does not leave an additional pair of services behind.
+A service exit still reaches the existing supervisor for recovery. Shared
+development services and other platforms keep their existing process policy.
+This process cleanup does not establish the cause or visual recovery of a
+WebContent blank screen, and it does not replay a failed task.
 
 The opt-in macOS regression uses a hidden incognito window, a synthetic local
 server and a separate App identifier. It terminates only that window's own

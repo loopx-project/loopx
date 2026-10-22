@@ -35,6 +35,16 @@ PROJECT_WORK_OBJECTIVE = (
     "Do not create an implicit Goal or borrow the global manager identity."
 )
 
+_ISOLATED_WORK_GUIDANCE = (
+    "System temporary directories are outside this workspace-only grant; shell "
+    "here-documents can fail before the intended file write. Prefer the patch "
+    "tool or direct file writes inside the granted workspace. For dependent "
+    "steps, inspect the preceding tool result and exit code, then read back the "
+    "required artifact before starting the next step. Awaiting a tool call does "
+    "not mean its command succeeded. If a prerequisite fails, repair and verify "
+    "it before continuing; keep independent work separate."
+)
+
 
 class ChatProjectContexts:
     def __init__(self, roots: list[Path], *, workspace_grant: str = "workspace_write",
@@ -103,6 +113,9 @@ class ChatProjectContexts:
         if session.get("goal_id") is not None or session.get("channel_id") != selected["channel_id"]:
             raise ValueError("project conversation channel mismatch")
         objective = PROJECT_WORK_OBJECTIVE if selected["context"]["grant"] == "workspace_write" else PROJECT_CONVERSATION_OBJECTIVE
+        if (selected["context"]["grant"] == "workspace_write"
+                and selected["context"].get("filesystem_scope") == "workspace_only"):
+            objective += " " + _ISOLATED_WORK_GUIDANCE
         return {"project": Path(selected["context"]["workspace_path"]),
                 "objective": objective + " " + conversation_answer_instruction(),
                 "title": Path(selected["context"]["workspace_path"]).name}

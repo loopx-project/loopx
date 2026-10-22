@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_registry import registered_agent_ids_for_goal
+from .control_plane.effect_runtime import effect_runtime_request_scope
 from .control_plane.goals.activation import goal_activation_state
 from .control_plane.goals.goal_ref_validation import exact_goal_ref
 from .control_plane.quota.should_run import build_quota_should_run
@@ -327,6 +328,7 @@ def _read_goal(
     return row
 
 
+@effect_runtime_request_scope()
 def build_goal_portfolio(
     *,
     registry_path: Path,

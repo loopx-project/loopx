@@ -1,6 +1,8 @@
 """Real CLI and conversation effects; scripted callers are not model evidence."""
 import json
 
+import pytest
+
 from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 from test_goal_acceptance_prepared_action import conversation_check as conversation_check
 from loopx.chat_action_store import ChatActionStore
@@ -14,6 +16,72 @@ def prepare_source(project):
     registry = json.loads(path.read_text())
     registry["goals"][0]["coordination"]["registered_agents"] = ["agent-a", "agent-b"]
     path.write_text(json.dumps(registry))
+
+
+def apply_objective(project, cli, objective):
+    document = {"objective": objective, "reason": "Keep the current direction explicit", "source_ref": "message:owner"}
+    path = project / "objective.json"
+    path.write_text(json.dumps(document))
+    code, prepared = cli("prepare-objective", "--agent-id", "agent-a", "--document", str(path),
+        "--operation-id", "prepare-guidance", "--execute")
+    assert code == 0 and prepared["proposal"]["status"] == "preview_ready", prepared
+    service = ChatActionService(
+        store=ChatActionStore(project.parent / "runtime" / "chat" / "actions"),
+        registry_path=project.parent / "registry.json",
+    )
+    assert service.apply(prepared["proposal"]["proposal_id"])["proposal"]["status"] == "applied"
+
+
+@pytest.mark.parametrize("acceptance_kind", ["configured-checks", "cumulative-outcome"])
+def test_objective_and_acceptance_guidance_share_real_inline_goal_read(acceptance_goal, acceptance_kind):
+    project, acceptance_file, cli, run = acceptance_goal
+    prepare_source(project)
+    apply_objective(project, cli, "Maintain the export with complete acceptance")
+    current = cli("inspect")[1]
+    if acceptance_kind == "configured-checks":
+        code, configured = cli("configure", "--document", str(acceptance_file), "--operation-id", "guidance-checks",
+            "--expected-provider-revision", current["provider_revision"], "--execute")
+        assert code == 0 and configured["status"] == "applied", configured
+    else:
+        outcome = {"outcome_id": "tour", "owner_agent_id": "agent-a",
+            "objective": "Maintain the export with complete acceptance",
+            "requirements": [{"id": "export", "description": "Retain the exported artifact"}],
+            "todo_ids": ["todo_export"],
+            "source": {"ref": "message:outcome", "summary": "The Goal requires the export artifact"}}
+        outcome_path = project / "outcome.json"
+        outcome_path.write_text(json.dumps(outcome))
+        current = cli("inspect")[1]
+        code, refined = cli("refine", "--agent-id", "agent-a", "--document", str(outcome_path),
+            "--operation-id", "guidance-outcome", "--expected-provider-revision",
+            current["provider_revision"], "--execute")
+        assert code == 0 and refined["status"] == "applied", refined
+
+    before = cli("inspect", "--agent-id", "agent-a")[1]
+    objective = before["goal_acceptance_contract"]["goal_objective"]
+    adoption_path = project / "adoption.json"
+    adoption_path.write_text(json.dumps({"revision": objective["revision"], "digest": objective["digest"],
+        "work_digest": before["objective_work_digest"],
+        "review_summary": "Reviewed the export and current acceptance before adopting the revision."}))
+    code, adopted = cli("adopt-objective", "--agent-id", "agent-a", "--document", str(adoption_path),
+        "--operation-id", "guidance-adoption", "--expected-provider-revision",
+        before["provider_revision"], "--execute")
+    assert code == 0, adopted
+
+    admission = run("quota", "should-run", "--codex-app", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")[1]
+    context = admission["interaction_contract"]["agent_channel"]["work_context"]
+    source = next(row for row in context["sources"] if row["source"] == "goal_acceptance")
+    reason = source["reason"]
+    assert "revision/digest" in reason and "own objective_work_digest" in reason
+    required = [
+        clause for clause in (
+            ("cumulative requirements", "switching work", "Agent review", "Scoped acceptance never replaces Goal intent")
+            if acceptance_kind == "cumulative-outcome"
+            else ("non-goals", "criteria", "scope/revision", "Scoped acceptance does not replace Goal intent")
+        )
+    ]
+    assert all(clause in reason for clause in required), reason
+    reads = admission["interaction_contract"]["agent_channel"]["required_reads"]
+    assert not any(read["source"] == "goal_acceptance" for read in reads), "one inline read should fulfill the command"
 
 
 def test_native_proposal_owner_apply_and_separate_peer_adoption(acceptance_goal, monkeypatch):

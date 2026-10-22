@@ -31,6 +31,7 @@ from .control_plane.runtime.run_index_duplicates import (
 )
 from .control_plane.runtime.file_reads import iter_utf8_file_reads
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
+from .control_plane.todos.active_state_todo_parser import active_state_incomplete_warning
 from .control_plane.todos.authoring_scope import todo_contract_diagnostics
 from .history import (
     RunHistoryAudit,
@@ -532,11 +533,28 @@ def _todo_contract_diagnostics(
         if not state_file or not state_file.exists():
             continue
         try:
-            lines = state_file.read_text(encoding="utf-8").splitlines()
+            state_text = state_file.read_text(encoding="utf-8")
+            lines = state_text.splitlines()
         except (OSError, UnicodeError) as exc:
             add_error(
                 "active_state_read_failed",
                 f"{goal_id}: cannot read active state for todo contract check: {exc}",
+            )
+            continue
+        try:
+            state_incomplete = active_state_incomplete_warning(state_text)
+        except ValueError as exc:
+            add_error(
+                "active_state_read_failed",
+                f"{goal_id}: cannot parse active state for todo contract check: {exc}",
+            )
+            continue
+        if state_incomplete:
+            add_error(
+                "state_incomplete",
+                f"{goal_id}: active state is structurally incomplete; missing required "
+                f"Todo section(s): {', '.join(state_incomplete['missing_sections'])} "
+                f"(state_file={state_file}); {state_incomplete['recommended_action']}",
             )
             continue
 
