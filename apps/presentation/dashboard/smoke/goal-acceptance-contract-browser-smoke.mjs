@@ -25,7 +25,7 @@ from loopx.status import collect_status
 fixture = runpy.run_path('tests/test_delivery_review.py')
 with tempfile.TemporaryDirectory() as directory:
     registry, runtime = fixture['make_project'](Path(directory))
-    print(json.dumps(collect_status(registry_path=registry, runtime_root_override=str(runtime), scan_roots=[], limit=20, goal_id='release-demo', include_public_boundary_scan=False)))
+    print(json.dumps(collect_status(registry_path=registry, runtime_root_override=str(runtime), limit=20, goal_id='release-demo')))
 `], { cwd: root, encoding: "utf8" }));
 if (payload) payload.run_history.goals[0].acceptance_observation = acceptance;
 const server = packaged
@@ -159,8 +159,58 @@ try {
     payload.run_history.goals[0].acceptance_observation = acceptance;
     await page.reload({waitUntil: "networkidle"});
     const review = page.locator(".delivery-review");
+    const openEvidence = async () => {
+      const evidence = page.locator(".goal-overview-evidence");
+      if (await evidence.count() && await evidence.getAttribute("open") === null) {
+        await evidence.locator(":scope > summary").focus();
+        await page.keyboard.press("Enter");
+      }
+    };
+    await openEvidence();
     const refresh = review.getByRole("button", { name: locale === "en" ? "Refresh snapshot" : "刷新快照", exact: true });
     const exportButton = review.getByRole("button", { name: locale === "en" ? "Export delivery snapshot" : "导出交付快照", exact: true });
+    if (locale === "en") {
+      const requirement = (id, description, status) => ({
+        id, description, status, planning_satisfied: status === "accepted",
+      });
+      const collision = {
+        schema_version: "loopx_goal_outcomes_v0", revision: 1, current_lifetime: true,
+        execution_authority_granted: false, goal_completion_assessed: false,
+        outcomes: [
+          {
+            id: "plan", owner_agent_id: "author", objective: "First colliding outcome", revision: 1,
+            requirements: [
+              requirement("section:opening", "Colon in the requirement id", "failed"),
+              requirement("detail", "Second unmet requirement", "failed"),
+              requirement("closing", "Third unmet requirement", "failed"),
+            ],
+            todo_ids: [], sources: [], work: [],
+          },
+          {
+            id: "plan:section", owner_agent_id: "author", objective: "Second colliding outcome", revision: 1,
+            requirements: [requirement("opening", "Unrelated met requirement", "accepted")],
+            todo_ids: [], sources: [], work: [],
+          },
+        ],
+      };
+      const projected = {...acceptance, goal_acceptance_contract: {outcome_requirements: collision}};
+      response = {...snapshot, acceptance: projected};
+      payload.run_history.goals[0].acceptance_observation = projected;
+      await page.reload({waitUntil: "networkidle"});
+      const outcomes = page.locator(".goal-outcomes");
+      await outcomes.waitFor();
+      const visibleRows = outcomes.locator(".goal-outcome-criteria > li:not([hidden])");
+      assert.equal(await visibleRows.count(), 3, "Colon-bearing outcome/requirement pairs keep only three preview rows");
+      await outcomes.locator(":scope > .goal-outcomes-more").click();
+      assert.equal(await visibleRows.count(), 4, "Expanding reveals the unrelated fourth requirement");
+      response = structuredClone(snapshot);
+      payload.run_history.goals[0].acceptance_observation = acceptance;
+      await page.reload({waitUntil: "networkidle"});
+      if (await navigation.isVisible()) await navigation.click();
+      await page.locator(".personal-goal-link").first().click();
+      await page.getByRole("button", {name: "Overview", exact: true}).click();
+      await openEvidence();
+    }
     const openAdvanced = async () => {
       await openInspection();
       const advanced = section.locator(".delivery-check-advanced");
@@ -181,6 +231,7 @@ try {
       // real SQLite/HTTP/CLI journey.
       if (responseStatus === 200) {
         await page.reload({waitUntil: "networkidle"});
+        await openEvidence();
         // Goal activation can finish after the page's network-idle boundary.
         // Compare the completed delivery view, never its loading placeholder.
         await review.locator(".delivery-chain").waitFor();

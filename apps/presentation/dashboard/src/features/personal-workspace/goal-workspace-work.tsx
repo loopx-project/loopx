@@ -120,6 +120,9 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       {!compact ? <time dateTime={todo.completedAt ?? undefined}>{todo.completedAt ? new Date(todo.completedAt).toLocaleDateString(locale) : "—"}</time> : null}
     </button>;
   }
+  const quietWork = digest.work.coverage === "complete" && digest.work.total === 0
+    && digest.needsYou.availability === "ok" && digest.needsYou.blocking === 0
+    && digest.needsYou.optional === 0 && !attention.length;
   const sectionLabels = {needsYou: zh ? "等待决定" : "Needs a decision", open: zh ? "未完成" : "Open", blocked: zh ? "受阻与延后" : "Blocked and deferred", done: zh ? "已完成" : "Done"};
   const activity = items.filter(item => (item.kind === "run" && item.run.goalId === goal.goalId && ["completed", "failed", "interrupted"].includes(item.run.status))
     || (item.kind === "output" && item.output.goalId === goal.goalId)
@@ -144,15 +147,15 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       </button>)}{!activity.length ? <p>{zh ? "当前时间线尚无已完成或返回的记录。" : "No completed work or returned results in this timeline."}</p> : null}</div>}
       <footer className="goal-work-scope">{zh ? "统计仅覆盖此 Goal；任务与历史可能分批载入。" : "Counts cover this Goal; tasks and history may be loaded in bounded pages."}<time dateTime={digest.observedAt}>{new Date(digest.observedAt).toLocaleTimeString(locale)}</time></footer>
     </aside>;
-  return <><div className="goal-workspace-composition">
+  return <><div className={`goal-workspace-composition${quietWork && !railOpen ? " is-quiet" : ""}`}>
     <div className="goal-workspace-document">
       <section className="goal-now" aria-label={zh ? "当前工作" : "Now"}>
         <header className="goal-now-header"><h2>{zh ? "当前工作" : "Now"}</h2>
-          <div role="group" aria-label={zh ? "工作视图" : "Work view"} className="goal-work-lenses">
+          {!quietWork ? <div role="group" aria-label={zh ? "工作视图" : "Work view"} className="goal-work-lenses">
             {(["owner", "board", "map"] as const).map(value => <button key={value} type="button" aria-pressed={lens === value} onClick={() => {setVisited(current => new Set([...current, value])); setLens(value);}}>
               {value === "owner" ? (zh ? "按负责人" : "By owner") : value === "board" ? (zh ? "看板" : "Board") : (zh ? "关系图" : "Map")}
             </button>)}
-          </div>
+          </div> : null}
           {!readOnly ? <AddTask goal={goal} proposals={proposals} onPreview={onPreview} onSelect={select}/> : null}
         </header>
         {digest.work.coverage !== "complete" ? <p className="goal-work-scope" role="status">{zh ? `当前列出 ${digest.work.listedOpen} 项；总数或覆盖范围不完整。` : `${digest.work.listedOpen} items listed; total or coverage is incomplete.`}</p> : null}
@@ -169,10 +172,10 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       </section>
       <section className="goal-workspace-results" aria-label={zh ? "成果" : "Results"}><h2>{zh ? "成果" : "Results"}</h2>{results}</section>
     </div>
-    {compactRail ? <dialog className="goal-work-rail-dialog" aria-label={zh ? "全部工作" : "All work"} ref={dialog} onCancel={event => {event.preventDefault(); onCloseRail();}}>
+    {!quietWork || railOpen ? compactRail ? <dialog className="goal-work-rail-dialog" aria-label={zh ? "全部工作" : "All work"} ref={dialog} onCancel={event => {event.preventDefault(); onCloseRail();}}>
       <button type="button" className="goal-work-rail-close" onClick={onCloseRail}>{zh ? "关闭全部工作" : "Close all work"}</button>
       {rail}
-    </dialog> : rail}
+    </dialog> : rail : null}
   </div>
   </>;
 }

@@ -345,6 +345,75 @@ test("delta-only refinement resolves immutable intent without permitting foreign
   assert.throws(() => refineGoalOutcome(head, goal, null, "other", delta), /own outcomes/);
 });
 
+for (const provider of ["file", "sqlite"] as const) test(`${provider}: repeated reviews retain full declaration provenance`, async t => {
+  const root = await mkdtemp(join(tmpdir(), "outcome-review-")); t.after(() => rm(root, {recursive: true, force: true}));
+  const store = provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
+  const original = fixture();
+  let state = refineGoalOutcome(original, goal, null, "author", patch());
+  for (let index = 1; index < 64; index++) state = refineGoalOutcome({...original, goal_outcomes: state}, goal, null, "author", {
+    outcome_id: "tour", source: {ref: `message:origin-${index}`, summary: "Retained declaration provenance"},
+  });
+  const origins = structuredClone(state.outcomes[0].sources);
+  await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+    next_projection: {...original, goal_outcomes: state}, events: [], receipts: []});
+  for (let index = 1; index <= 3; index++) {
+    const before = await inspectGoalAcceptance(store, goal);
+    const request = {goal_id: goal, actor_agent_id: "author", operation_id: `review-${index}`,
+      expected_provider_revision: before.provider_revision, refinement: {outcome_id: "tour", review: [
+        {id: "opening", conclusion: "met", evidence_refs: [`artifact:tour-${index}`], note: "Read the retained opening"},
+      ]}};
+    const applied = await refineGoalAcceptanceOutcome(store, request);
+    assert.equal(applied.status, "applied");
+    assert.equal((await refineGoalAcceptanceOutcome(store, request)).status, "replayed");
+    const readback = await inspectGoalAcceptance(store, goal);
+    const outcomes = ((readback.goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject).outcomes as JsonObject[];
+    assert.deepEqual(outcomes[0].sources, origins);
+    assert.equal(outcomes[0].revision, 64 + index);
+    const requirement = (outcomes[0].requirements as JsonObject[])[0];
+    assert.equal(requirement.description, "Keep the opening");
+    assert.equal(requirement.status, "unverified");
+    assert.deepEqual((requirement.agent_review as JsonObject).evidence_refs, [`artifact:tour-${index}`]);
+    assert.equal((requirement.agent_review as JsonObject).independently_verified, false);
+    assert.equal((await refineGoalAcceptanceOutcome(store, {...request, operation_id: `stale-${index}`})).status, "conflict");
+    for (const refinement of [
+      {outcome_id: "tour", requirements: [{id: "new", description: "A new obligation"}]},
+      {outcome_id: "tour", source: {ref: "message:overflow", summary: "Another declaration origin"}},
+      {outcome_id: "tour", source: {...origins[0], summary: "Rewrite old provenance"}},
+    ]) await assert.rejects(() => refineGoalAcceptanceOutcome(store, {...request,
+      operation_id: `rejected-${index}`, expected_provider_revision: readback.provider_revision, refinement}));
+    assert.deepEqual(await inspectGoalAcceptance(store, goal), readback, "rejected declarations must not commit or prune origins");
+  }
+  const withoutSource = patch(); delete withoutSource.source;
+  assert.throws(() => refineGoalOutcome(original, goal, null, "author", withoutSource), /require source provenance/);
+  const head = {...original, goal_outcomes: state};
+  assert.throws(() => refineGoalOutcome(head, goal, null, "other", {outcome_id: "tour", review: []}), /own outcomes/);
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {outcome_id: "tour", review: []}), /every retained requirement/);
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {outcome_id: "tour", source: null}), /outcome source/);
+});
+
+test("work-link maintenance preserves origins while new requirements still need provenance", () => {
+  const original = authorityProjectionFixture(goal, [
+    {todo_id: "todo_tour", role: "agent", status: "open", done: false, archive_state: "active", text: "Produce the tour", task_class: "advancement_task", claimed_by: "author"},
+    {todo_id: "todo_next", role: "agent", status: "open", done: false, archive_state: "active", text: "Validate the tour", task_class: "advancement_task", claimed_by: "author"},
+    {todo_id: "todo_peer", role: "agent", status: "open", done: false, archive_state: "active", text: "Peer work", task_class: "advancement_task", claimed_by: "peer"},
+  ]);
+  const first = refineGoalOutcome(original, goal, null, "author", patch({review: [
+    {id: "opening", conclusion: "met", evidence_refs: ["artifact:tour-v1"], note: "Read the original tour"},
+  ]}));
+  const head = {...original, goal_outcomes: first};
+  const linked = refineGoalOutcome(head, goal, null, "author", {outcome_id: "tour", todo_ids: ["todo_next"]});
+  assert.deepEqual(linked.outcomes[0].todo_ids, ["todo_tour", "todo_next"]);
+  assert.deepEqual(linked.outcomes[0].sources, first.outcomes[0].sources);
+  assert.deepEqual(linked.outcomes[0].requirements, first.outcomes[0].requirements);
+  const observed = (projectGoalAcceptance({...original, goal_outcomes: linked}, goal).outcome_requirements as JsonObject).outcomes as JsonObject[];
+  const requirement = (observed[0].requirements as JsonObject[])[0];
+  assert.equal((requirement.agent_review as JsonObject).basis_current, false, "new work cannot retain an old review's current basis");
+  assert.equal(requirement.planning_satisfied, false);
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {outcome_id: "tour", todo_ids: ["todo_peer"]}), /another Agent/);
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {outcome_id: "tour",
+    requirements: [{id: "order", description: "Retain ordering"}]}), /require source provenance/);
+});
+
 for (const provider of ["file", "sqlite"] as const) test(`${provider}: referenced checks bind reviewed requirements, preserve disabled checks and replay`, async t => {
   const root = await mkdtemp(join(tmpdir(), "referenced-check-")); t.after(() => rm(root, {recursive: true, force: true}));
   const store = provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);

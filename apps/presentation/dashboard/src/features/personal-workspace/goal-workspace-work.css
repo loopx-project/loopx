@@ -77,3 +77,12 @@
 }
 
 .goal-owner-group > header .goal-owner-conversation { margin-left: auto; padding: 6px 8px; min-height: 44px; border: 0; background: transparent; color: var(--pw-text); font: inherit; font-size: var(--text-caption); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+
+/* Known empty regions yield space; loading, partial coverage and errors still mount. */
+.goal-workspace-composition.is-quiet { grid-template-columns: minmax(0, 1fr); }
+.goal-workspace-results:has(> h2:only-child) { display: none; }
+.goal-workspace-results .personal-files-list.is-empty > header { display: none; }
+.goal-workspace-results .personal-files-list.is-empty:has(> header:only-child) { display: none; }
+.goal-workspace-results:has(> .personal-files-list.is-empty > header:only-child):not(:has(> :not(h2):not(.personal-files-list.is-empty))) { display: none; }
+.goal-workspace-results :is(.personal-files-list, .goal-team-results) { border: 0; border-radius: 0; box-shadow: none; padding: 12px 0; margin: 0; background: transparent; }
+.goal-workspace-results .personal-files-list.is-empty { padding: 0; }

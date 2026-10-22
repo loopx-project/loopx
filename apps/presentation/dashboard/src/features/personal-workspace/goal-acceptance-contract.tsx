@@ -21,13 +21,9 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
   overview?: boolean; children?: ReactNode;
 }) {
   const zh = useWorkspaceI18n().locale === "zh-CN";
-  const [detailsExpanded, setDetailsExpanded] = useState(() => !overview || typeof window === "undefined" || !window.matchMedia("(max-width: 640px)").matches);
+  const [detailsExpanded, setDetailsExpanded] = useState(!overview);
   useEffect(() => {
-    if (!overview) return;
-    const media = window.matchMedia("(max-width: 640px)");
-    const update = () => setDetailsExpanded(!media.matches);
-    update(); media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    setDetailsExpanded(!overview);
   }, [goalId, overview]);
   const client = useQueryClient();
   const queryKey = ["goal-acceptance-readback", goalId];
@@ -164,9 +160,6 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
     {compact || overview && !checksConfigured && !plan ? children : null}
     {outcomes}
     {compact ? <>
-      {overview ? <p className="goal-overview-note">{contract !== undefined
-        ? (zh ? "成果核对默认可用；尚未配置自动检查。" : "Outcome review is available by default; no automated checks are configured.")
-        : (zh ? "此来源未提供自动检查命令（可选）。" : "This source has not provided automated check commands (optional).")}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
     </> : <section className={`delivery-acceptance-contract${overview ? " is-overview" : ""}`} aria-label={copy.title} aria-busy={busy}>
     <div className="delivery-acceptance-content">

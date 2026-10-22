@@ -1,17 +1,24 @@
+import {z} from "zod";
 import {useEffect, useRef, useState} from "react";
 import {useWorkspaceI18n} from "./i18n";
 import "./content-media-workbench.css";
 import {ContentGeneratedImages} from "./content-generated-images";
 import {ContentGeneratedFootage} from "./content-generated-footage";
 
-type Provider = {status: string; enabled: boolean | null; next_action: string | null};
-type Composition = {
-  composition_id: string; revision: number; status: string; title: string; duration_seconds: number;
-  shots: {title: string; seconds: number; kind: string; boundary: string; source_ref: string; framing?: "full_frame"}[];
-  result: {files: Record<string, {sha256: string; bytes: number}>; qa: {frames: number; full_decode: string; narration: {mode: string}; blender_scenes?: {project_reopened: boolean}[]}; cost: {render_wall_seconds: number}} | null;
-  provider: Provider;
-};
-type Library = {ok: boolean; compositions: Composition[]; provider: Provider};
+// Validate the read boundary before mounting optional media into a Goal's
+// existing results. An incomplete response must not unmount unrelated reports.
+const providerSchema = z.object({status: z.string(), enabled: z.boolean().nullable(), next_action: z.string().nullable()});
+const compositionSchema = z.object({
+  composition_id: z.string(), revision: z.number(), status: z.string(), title: z.string(), duration_seconds: z.number(),
+  shots: z.array(z.object({title: z.string(), seconds: z.number(), kind: z.string(), boundary: z.string(), source_ref: z.string(), framing: z.literal("full_frame").optional()})),
+  result: z.object({files: z.record(z.string(), z.object({sha256: z.string(), bytes: z.number()})),
+    qa: z.object({frames: z.number(), full_decode: z.string(), narration: z.object({mode: z.string()}), blender_scenes: z.array(z.object({project_reopened: z.boolean()})).optional()}),
+    cost: z.object({render_wall_seconds: z.number()})}).nullable(),
+  provider: providerSchema,
+}).refine(item => !item.result || item.status !== "ready" || ["video.mp4", "poster.png", "captions.vtt", "captions.srt", "transcript.txt"].every(name => item.result!.files[name]), "Missing ready-artifact file identity");
+const librarySchema = z.object({ok: z.literal(true), compositions: z.array(compositionSchema), provider: providerSchema});
+type Composition = z.infer<typeof compositionSchema>;
+type Library = z.infer<typeof librarySchema>;
 const ENDPOINT = "/api/chat/content-media";
 
 export function ContentMediaWorkbench({goalId}: {goalId: string}) {
@@ -34,7 +41,7 @@ export function ContentMediaWorkbench({goalId}: {goalId: string}) {
     const current = generation.current;
     const sequence = ++readSequence.current;
     try {
-      const value: Library = await request("list");
+      const value = librarySchema.parse(await request("list"));
       if (current === generation.current && sequence === readSequence.current) {setLibrary(value); setError("");}
     } catch {if (current === generation.current && sequence === readSequence.current) {setWatching(false); setError(copy("作品暂不可读，请重新读取。", "Cannot read compositions. Recheck the workspace."));}}
   }

@@ -333,6 +333,13 @@ design source and use the system for unspecified details. For production
 interactions follow task-first delivery above; label simulations and prototypes
 without claiming packaged or installed readback.
 
+Carry the primary user question, default-versus-detail choices and the
+[populated whole-page review](docs/development/design.md#populated-page-review)
+in the existing task/PR evidence. Inspect the affected page with long, repeated
+content and mixed states, not only isolated components or a quiet fixture.
+Reading the contract and passing UI tests do not establish that the page is
+readable; name the observed composition and any remaining failure.
+
 ## Public And Private Boundary
 
 Never publish private department/team/customer/meeting/reporting/strategy or

@@ -119,3 +119,39 @@ def test_outcome_observations_never_replace_or_emit_member_deliveries(conversati
         assert handler(TOOL["name"], arguments)["ok"]
         assert controller.store.load_session(sid)["loopx_deliveries"] == deliveries
     assert not any(kind == "collaboration.execution" for kind, _ in adapter.events)
+
+
+def test_native_review_omits_declaration_source_and_recovers_lost_reply(conversation_check, monkeypatch):
+    _, cli, _, _, _, _, adapter = conversation_check
+    handler = adapter.session.read_tool_handler
+    created = handler(TOOL["name"], outcome_request(adapter))
+    assert created["ok"], created
+    origins = created["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["sources"]
+    request = {"action": "refine_outcome", "operation_id": "review-tour",
+        "expected_provider_revision": created["provider_revision"], "document": {"outcome_id": "tour",
+            "review": [{"id": "opening", "conclusion": "met", "evidence_refs": ["artifact:tour-v2"],
+                "note": "Read the artifact and retained opening"}]}}
+    original = acceptance.refine_goal_outcome
+
+    def lose_reply(**arguments):
+        original(**arguments)
+        raise OSError("response lost after review commit")
+
+    monkeypatch.setattr(acceptance, "refine_goal_outcome", lose_reply)
+    assert handler(TOOL["name"], request)["ok"] is False
+    monkeypatch.setattr(acceptance, "refine_goal_outcome", original)
+    replay = handler(TOOL["name"], request)
+    assert replay["ok"] and replay["status"] == "replayed", replay
+    outcome = cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["revision"] == 2 and outcome["sources"] == origins
+    assert outcome["requirements"][0]["agent_review"]["evidence_refs"] == ["artifact:tour-v2"]
+    assert outcome["requirements"][0]["status"] == "unverified"
+    before = cli("inspect")[1]
+    for document in [
+        {"outcome_id": "tour", "requirements": [{"id": "extra", "description": "New obligation"}]},
+        {"outcome_id": "new", "objective": "New outcome", "requirements": [{"id": "extra", "description": "New obligation"}]},
+    ]:
+        rejected = handler(TOOL["name"], {**request, "operation_id": "missing-origin-" + document["outcome_id"],
+            "expected_provider_revision": before["provider_revision"], "document": document})
+        assert rejected["ok"] is False
+        assert cli("inspect")[1] == before

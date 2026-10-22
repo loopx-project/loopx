@@ -10,6 +10,24 @@ hairline surfaces, and restrained accent system documented in the
 not affiliated with Vercel. The reference is an inspiration and token source;
 this document owns the LoopX-specific decisions.
 
+## Using This Contract
+
+`AGENTS.md` requires this read for UI work; a Markdown link does not automatically
+load this file into every host or prove that an Agent applied it. Existing
+sessions may retain older instructions. Keep one canonical contract here rather
+than copying rules into another prompt or installing a competing design system.
+
+Use the existing task brief and PR evidence, without a new approval form:
+
+1. Before editing, name the user's primary question and map the affected content
+   to the [default view or requested detail](#explanations-on-demand). Inspect
+   the actual page and existing primitives, then apply the relevant tokens.
+2. Implement that hierarchy across the whole page. A complete state contract
+   does not require showing every field and explanation by default.
+3. Run the [populated page review](#populated-page-review) on the built result.
+   Report the observed result, tested revision and remaining gaps. A checklist
+   tick, source read or passing component test is not the visual verdict.
+
 ## Product Character
 
 LoopX should feel:
@@ -95,6 +113,15 @@ Owner-facing state follows four rules:
   requests still needing follow-up, not distinct tasks or accepted outcomes.
   Show an unavailable or partial count honestly; put full current briefs,
   linked work, provenance and original conversations behind row expansion.
+  A Goal's supporting outcomes need the same bounded reading hierarchy: show
+  requirement-state counts once, then at most three requirements needing attention
+  in the default overview. Group them by their declared outcome; keep failed,
+  held, changed and partial observations visible in the summary. Make the full
+  collection available in one expansion, including unverified and passing work.
+  Clamp long requirement text only in collapsed rows; expansion restores its
+  complete text and evidence. Explain Agent review versus independent checks once
+  at section level. Overview check details stay collapsed at every viewport;
+  an operation's consequences and actual failures remain visible.
 - **Owner language first.** Primary copy uses the owner's words. Protocol ids,
   gate kinds, preview mechanics and executor profiles belong in a collapsed
   diagnostics disclosure.
@@ -125,6 +152,29 @@ The primary view presents the result, its unit and scope, material uncertainty,
 and the next useful action. A truthful interface does not need to repeat its
 methodology in every component. Review the whole viewport for repeated scope,
 source, method and limitation paragraphs before adding another note.
+
+Choose a default treatment by the user's task, before choosing components:
+
+| Content | Default presentation | On request |
+| --- | --- | --- |
+| Current outcome, progress, owner decision or main research result | The page's primary reading region, with the status and scope needed to interpret it | Its existing evidence and action reader |
+| Repeated supporting outcomes, requirements or analysis episodes | Comparable compact rows: identity, meaningful result/status and a relevant exception; shared context appears once | Expand the selected item for complete requirements, rationale, evidence and history |
+| Definitions, methodology and routine provenance | One named contextual entry for the related region | Shared help or existing details, without repeating it inside every row |
+| Failure, stale evidence, unknown result, missing permission or consequential cost | A concise marker at the affected item/action, including disagreement that changes trust | Cause, recovery instructions and full evidence |
+
+Repeated items must not default to a stack of full documents. For example, a
+supporting-outcome list must not render every requirement, Agent review and
+independent-check explanation before the reader reaches the next main region.
+Keep the summary's actual verification state visible; open the chosen item in
+place, with its complete content and original evidence reachable. A disclosure
+must not duplicate the same content above and below its trigger.
+
+As data grows, preserve access to every item through the existing list,
+pagination or history, with honest coverage. Do not silently keep only recent
+or successful items. Reduce default expansion and repetition before adding
+nested panels, smaller text, fixed-height text walls or more explanatory copy.
+Summary wording must come from declared identities and states, not guessed
+labels, invented completion or a new frontend score.
 
 - Keep the smallest qualifier needed to read a value correctly beside it:
   selected sample, partial window, uncalibrated, unknown or historical. Keep
@@ -516,6 +566,19 @@ observation"). Reduced motion stops the arc; the ring and core still read live.
 
 ### States that are designed, not defaulted
 
+- **Empty or sparse Goal overview** keeps the same content frame and clear
+  hierarchy as a populated one. Use the existing Goal identity as the anchor;
+  show available current work directly instead of hiding the main content
+  behind a disclosure while absence messages fill the page. Keep a genuinely
+  missing declared objective as one concise source-status line, without
+  inventing it from tasks or an Agent summary. An unconfigured optional check
+  belongs in the existing Goal information/configuration detail, not a primary
+  empty-state paragraph. Failed reads, unavailable authority and consequential
+  restrictions remain visible. Align information/history entries with their
+  region and use readable labels; retain long native identities in detail.
+  Let the region shrink to its useful content, without decorative filler or
+  turning a read-only source into a setup task. A known empty state and an
+  unobserved source remain different states.
 - **Loading** holds the final geometry with a quiet skeleton; a region does
   not collapse to one spinner and then jump.
 - **Region failure** is one announced line (icon, plain cause, how to retry)
@@ -552,6 +615,7 @@ design sources or evidence that LoopX has shipped the same interaction.
 | Linear Reviews ([official interaction](https://linear.app/docs/diffs), [creator post](https://x.com/artman/status/2107130290053447824)) | Quiet segmented view switch; hairline file list with compact counts; generous reading column beside dense data | Code-review specific structure |
 | Up.computer ([launch video](https://x.com/krl_grn/status/2107478644226396339)) | Status word as a quiet prefix in a list ("Working"); collapsible "worked for" and tool-call steps; composer with model and permission inline | Parallel chat panes as the primary layout |
 | Agent Dashboard design spec ([source](https://github.com/wildware-uk/agent-dashboard/blob/main/docs/superpowers/specs/2026-08-25-agent-dashboard-design.md)) | New items animate in; an "N new" affordance instead of moving the reader; pending decisions pinned above the feed | Name-hashed avatar colors as identity |
+| Awesome Design Skills, Agentic ([inspected source](https://github.com/bergside/awesome-design-skills/blob/f631a09b4fcc0166f2e2c1a8c81906ef680c57e8/skills/agentic/SKILL.md)) | Delegated tasks and clear outcomes; concrete component states, anti-patterns and reviewable acceptance | Its visual tokens and a second installed design system; source guidance is not evidence of LoopX usability |
 
 ## UI Reproduction Workflow
 
@@ -571,7 +635,8 @@ For UI implementation, migration, or reproduction:
 6. Validate desktop and mobile layouts in a real browser.
 7. Capture screenshots for first-screen or high-fidelity changes.
 8. Compare spacing, typography, borders, color, and interaction states—not
-   only component presence.
+   only component presence. Apply the populated page review below to the actual
+   affected composition, not just its most polished component.
 
 When reproducing an existing approved LoopX surface, visual and behavioral
 parity is required. Framework migration alone must not alter the UI.
@@ -620,3 +685,34 @@ placeholder fixture:
 - [ ] Changed values and entering rows move once, by token; idle content is still.
 - [ ] Glyphs follow the status glyph family; color is never the only signal.
 - [ ] Touched stylesheets use theme tokens, not new raw hex values.
+
+### Populated Page Review
+
+Use the affected feature's representative, public-safe data as well as the
+showcase composition. A quiet showcase alone cannot expose a long requirements
+list or repeated analysis explanations. This is a human/browser review, not an
+automated readability score or an additional owner approval.
+
+- [ ] With all optional details closed, the first viewport answers the task's
+      primary question. Routine requirements and self-review explanations do
+      not push the main progress, result, graph or owner action out of view.
+- [ ] Compare a small case with a realistically large one containing long
+      Chinese/English text and mixed verified, unverified, stale and failed
+      items. The larger case stays scannable; no item, exception or later page
+      section disappears to make the screenshot cleaner.
+- [ ] Also inspect empty, sparse and source-unavailable views. Their composition
+      still has a clear anchor; optional setup omissions do not dominate, useful
+      current work stays visible, and real source gaps remain identifiable.
+- [ ] Open a representative item and read its complete requirements, rationale
+      and evidence once. Check keyboard/touch access, delayed loading, closing
+      and return to the same item. Long content remains readable when expanded.
+- [ ] Inspect the entire page as well as the first viewport at desktop and
+      narrow widths. Count repeated explanations across regions, remove or share
+      them, and check that failures, uncertainty and action consequences remain
+      visible with help closed. Do not fix density by shrinking body text.
+
+Record the before/after default view and a representative expanded/error state
+in the existing PR visual evidence, with the data/build boundary. State what
+became easier to find and which detail moved behind which existing entry.
+If the main task is still buried, the design review fails even when each
+component is accessible, every field is present and the automated checks pass.

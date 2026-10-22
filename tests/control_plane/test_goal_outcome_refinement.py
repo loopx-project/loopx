@@ -96,6 +96,27 @@ def test_native_refinement_refusals_preserve_committed_requirements(acceptance_g
         assert cli("inspect")[1] == before
 
 
+def test_review_only_cli_retains_origins_and_requires_provenance_for_new_requirements(acceptance_goal):
+    project, _, cli, _ = acceptance_goal
+    declared = refinement([{"id": "opening", "description": "Keep the introduction"}], "message:first")
+    assert record(project, cli, declared, "declare")[0][0] == 0
+    origins = cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["sources"]
+    for index in range(2):
+        review = {"outcome_id": "tour", "review": [{"id": "opening", "conclusion": "uncertain",
+            "evidence_refs": [f"artifact:tour-{index}"], "note": "The introduction needs further validation"}]}
+        (code, result), args = record(project, cli, review, f"review-{index}")
+        assert code == 0 and result["status"] == "applied", result
+        assert cli(*args)[1]["status"] == "replayed"
+        outcome = cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+        assert outcome["sources"] == origins and outcome["revision"] == index + 2
+        assert outcome["requirements"][0]["agent_review"]["evidence_refs"] == [f"artifact:tour-{index}"]
+    before = cli("inspect")[1]
+    (code, rejected), _ = record(project, cli, {"outcome_id": "tour",
+        "requirements": [{"id": "order", "description": "Retain the order"}]}, "missing-source")
+    assert code == 1 and "require source provenance" in rejected["error_detail"], rejected
+    assert cli("inspect")[1] == before
+
+
 def test_typed_outcome_gaps_are_transported_only_to_their_agent():
     gap = {"kind": "goal_outcome_uncovered", "agent_id": "author", "outcome_id": "tour", "requirement_ids": ["opening"]}
     summary = {"goal_acceptance_contract": {"enabled": False, "outcome_requirements": {"acceptance_gaps": [gap]}}}
@@ -142,13 +163,15 @@ def test_native_done_work_reenters_existing_frontier_without_accepting_outcome(a
     assert cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["requirements"][0]["status"] == "unverified"
 
 
-def test_default_review_uses_one_existing_writeback_and_preserves_verification_boundary(acceptance_goal):
+@pytest.mark.parametrize("include_source", [False, True])
+def test_default_review_uses_one_existing_writeback_and_preserves_verification_boundary(acceptance_goal, include_source):
     project, _, cli, run = acceptance_goal
     requirement = {"id": "opening", "description": "Keep the introduction"}
     assert record(project, cli, refinement([requirement], "message:first"), "first")[0][0] == 0
     (project / "tour.txt").write_text("Intro\nDelegation\nBoard\n")
-    patch = {"outcome_id": "tour", "source": {"ref": "artifact:tour-v1"}}
-    patch["source"]["summary"] = "Reviewed the produced artifact against all retained requirements"
+    patch = {"outcome_id": "tour"}
+    if include_source:
+        patch["source"] = {"ref": "artifact:tour-v1", "summary": "Reviewed the produced artifact against all retained requirements"}
     patch["review"] = [{"id": "opening", "conclusion": "met", "evidence_refs": ["tour.txt#introduction"], "note": "Read the artifact and confirmed its introduction remains"}]
     envelope = {"operation_id": "review-tour", "expected_provider_revision": cli("inspect")[1]["provider_revision"], "refinement": patch}
     document = project / "outcome-update.json"
@@ -161,6 +184,7 @@ def test_default_review_uses_one_existing_writeback_and_preserves_verification_b
     code, applied = run(*args)
     assert code == 0, json.dumps(applied)
     result = applied["goal_outcome_update"]["goal_acceptance_contract"]
+    assert len(result["outcome_requirements"]["outcomes"][0]["sources"]) == (2 if include_source else 1)
     assert "enabled" not in result and "criteria" not in result, "review is a default capability"
     req = result["outcome_requirements"]["outcomes"][0]["requirements"][0]
     assert req["agent_review"]["conclusion"] == "met" and req["planning_satisfied"]

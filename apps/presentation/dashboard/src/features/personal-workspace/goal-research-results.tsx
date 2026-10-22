@@ -8,7 +8,7 @@ export type GoalResearchApi = {indexUrl: string; detailUrl: string; goals: RunGo
 type Result = {surface: PresentationSurface; projection?: PresentationProjectionEnvelope; error?: string};
 
 /** The active Goal's published research; the extension index owns availability. */
-export function GoalResearchResults({goalId, api, zh}: {goalId: string; api: GoalResearchApi; zh: boolean}) {
+export function GoalResearchResults({goalId, api, zh, hideEmpty = false}: {goalId: string; api: GoalResearchApi; zh: boolean; hideEmpty?: boolean}) {
   const [results, setResults] = useState<Result[]>([]);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -39,6 +39,7 @@ export function GoalResearchResults({goalId, api, zh}: {goalId: string; api: Goa
     return () => {current = false;};
   }, [goalId, api.indexUrl, api.detailUrl, revision]);
 
+  if (hideEmpty && !busy && !error && !results.length) return null;
   return <section className="goal-team-results goal-research-results min-w-0 [overflow-wrap:anywhere]"
     aria-label={zh ? "研究成果" : "Research results"} aria-busy={busy}>
     <header><div><h3>{zh ? "研究成果" : "Research results"}</h3></div>

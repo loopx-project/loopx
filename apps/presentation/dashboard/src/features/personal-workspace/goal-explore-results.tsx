@@ -4,7 +4,7 @@ import {fetchExploreResults, type ExploreResultPage} from "../../data/chat";
 import {ExploreMeasurements} from "./explore-measurements";
 
 /** Read-only saved evidence, including history when Explore has been disabled. */
-export function GoalExploreResults({goalId, zh}: {goalId: string; zh: boolean}) {
+export function GoalExploreResults({goalId, zh, hideEmpty = false}: {goalId: string; zh: boolean; hideEmpty?: boolean}) {
   const [page, setPage] = useState<ExploreResultPage | null>(null);
   const [selectedId, setSelectedId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,6 +27,7 @@ export function GoalExploreResults({goalId, zh}: {goalId: string; zh: boolean}) 
     } finally {if (current === generation.current) setBusy(false);}
   }
   const selected = page?.items.find(item => item.finding_id === selectedId);
+  if (hideEmpty && page && !busy && !error && !page.items.length && page.total === 0 && !page.next_cursor) return null;
   return <section className="goal-team-results goal-explore-results" aria-label={zh ? "Explore 证据" : "Explore evidence"} aria-busy={busy}>
     <header><div><h3>{zh ? "Explore 证据" : "Explore evidence"}</h3>
       <p>{zh ? "已保存的观察与结论，包括历史记录。保存不代表已验证或被后续决策采用。" : "Saved observations and conclusions, including history. Saving does not establish validation or adoption by later decisions."}</p></div>

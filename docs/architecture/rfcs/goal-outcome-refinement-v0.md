@@ -213,6 +213,16 @@ these invalidates its basis. Evidence references are Agent assertions: v0 does
 not resolve or fingerprint the cited artifacts, so editing an artifact requires
 another review. Do not call a retained reference proof of freshness or quality.
 
+Declaration provenance and progress evidence have separate lifetimes. Creation
+and new requirements need `source`; existing-outcome reviews and work-link
+maintenance may omit it, preserving all retained origins, including at the
+64-source limit. New observations belong in `review[].evidence_refs`, its note,
+owning material and operation receipt. Native `refine_outcome` similarly omits
+`source_summary` for these updates while retaining its host-bound request/retry
+envelope. Explicit sources remain additive and immutable; overflow fails with
+guidance rather than dropping provenance or raising the limit. A new declaration
+cannot use the review path to evade provenance, ownership or check authority.
+
 The existing admitted-work context carries the complete outcome declaration;
 when inline content is present, no duplicate acceptance inspection is required.
 Changes can accompany ordinary `refresh-state --goal-outcome-update-json`, or one
