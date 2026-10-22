@@ -125,7 +125,7 @@ _EVENT_DIAGNOSTIC_PREFIX = "[event] "
 _EVENT_EXIT_REASON = re.compile(r"\(reason: (limit|timeout|signal)\)$")
 
 
-def _active_profile_configs(snapshot: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+def _active_group_profile_configs(snapshot: Mapping[str, object]) -> dict[str, dict[str, str]]:
     target_payload = snapshot.get("target_payload")
     target_payload = target_payload if isinstance(target_payload, Mapping) else {}
     binding_payloads = snapshot.get("binding_payloads")
@@ -155,11 +155,43 @@ def _active_profile_configs(snapshot: Mapping[str, Any]) -> dict[str, dict[str, 
                     "bot_app_id": str(identity.get("bot_app_id") or ""),
                 },
             )
-    for profile, config in dict(snapshot.get("private_profiles") or {}).items():
-        if profile in profiles:
-            raise ValueError("an App cannot own both private and group listeners")
-        profiles[profile] = dict(config)
     return profiles
+
+
+def _active_profile_configs(snapshot: Mapping[str, object]) -> dict[str, dict[str, str]]:
+    from .conversation_identity import identity_ref
+
+    profiles = _active_group_profile_configs(snapshot)
+    private = snapshot.get("private_profiles")
+    for profile, config in (private.items() if isinstance(private, Mapping) else []):
+        if profile in profiles:
+            stored_app_id = profiles[profile].get("bot_app_id")
+            app_id = stored_app_id or config.get("bot_app_id")
+            if (config.get("audience", "owner") != "owner" or not app_id
+                    or identity_ref(app_id) != config.get("provider_ref")):
+                raise ValueError("shared listener requires the same verified App and separate audiences")
+            profiles[profile] = {**profiles[profile], **dict(config)}
+            if not stored_app_id:
+                # Keep the pre-upgrade group lease until its original owner
+                # exits. Verified private discovery supplies identity, not a
+                # reason to start a second consumer under a new App key.
+                profiles[profile]["consumer_ref"] = hashlib.sha256(profile.encode("utf-8")).hexdigest()[:32]
+        else:
+            profiles[profile] = dict(config)
+    return profiles
+
+
+def _native_profile_event(snapshot: Mapping[str, Any], profile: str, event: Mapping[str, object]) -> bool:
+    """Select a transport lane only; its original owner still admits the input.
+
+    An owner-private binding may share one consumer with legacy group routes.
+    A private rejection never falls through to a group authority or vice versa.
+    """
+    config = dict(snapshot.get("private_profiles") or {}).get(profile)
+    return isinstance(config, Mapping) and not (
+        config.get("audience", "owner") == "owner" and event.get("chat_type") == "group"
+        and profile in _active_group_profile_configs(snapshot)
+    )
 
 
 def _default_simple_runner(args: list[str]) -> Mapping[str, Any]:
@@ -372,7 +404,7 @@ def _profile_event_lane(
     """Only serialize transport work; actual ingress re-reads its authority."""
 
     private_config = dict(snapshot.get("private_profiles") or {}).get(profile)
-    if isinstance(private_config, Mapping):
+    if isinstance(private_config, Mapping) and _native_profile_event(snapshot, profile, event):
         from .conversation_identity import lark_private_source
 
         try:
@@ -466,7 +498,7 @@ def poll_lark_goal_topic_profile_once(
     event_statuses: list[str] = []
     event_reasons: list[str | None] = []
     for event in events:
-        if profile in dict(snapshot.get("private_profiles") or {}):
+        if _native_profile_event(snapshot, profile, event):
             private_result = private_admitter(profile, dict(event)) if private_admitter else {"status": "private_admission_unavailable"}
             event_statuses.append(str(private_result.get("status") or "unknown"))
             event_reasons.append(None)

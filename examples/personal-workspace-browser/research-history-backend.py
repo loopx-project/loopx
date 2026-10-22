@@ -71,7 +71,7 @@ def main():
             log.parent.mkdir(parents=True)
             log.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in capture["events"]))
             initialize_canonical_authority(runtime, captured_goal, build_todo_runtime_shadow_projection(
-                goal_id=captured_goal, todos=[], handoff_mode="soft_claim"), state_path=state, provider="sqlite")
+                goal_id=captured_goal, todos=capture.get("todos", []), handoff_mode="soft_claim"), state_path=state, provider="sqlite")
             original.update({path: path.read_bytes() for path in (state, log)})
         registry = root / "registry.json"
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": goals}))
@@ -91,7 +91,7 @@ def main():
                     "/api/chat/capabilities", "/api/chat/endpoints", "/api/chat/sessions", "/api/chat/goal-configuration",
                     "/api/chat/research-analysis",
                     "/api/actions", "/api/chat/goals/contexts", "/api/chat/goal-results",
-                    "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics",
+                    "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics", "/api/chat/todo/detail",
                     "/api/chat/delivery-review", "/api/chat/goal-acceptance", "/api/chat/projects",
                     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH, DEFAULT_EXTENSION_PROJECTION_PATH,
                 } or path.startswith("/chat/"):

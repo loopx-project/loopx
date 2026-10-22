@@ -540,3 +540,32 @@ test("declared outcomes remain required reads without enabled checks after a wor
   const off = projectInteractionRequiredReads({...facts, goal_outcomes_present: false}).required_reads as JsonObject[];
   assert.ok(!off.some(read => read.source === "goal_acceptance"));
 });
+
+
+test("Goal narrative fulfillment needs complete source and ordered region lineage", () => {
+  const read = {source: "goal_state", command: "cat -- goal.md"};
+  const region = {role: "agent", start_line: 4, end_line: 8, revision: `sha256:${"b".repeat(64)}`};
+  const content = {state_file: "goal.md", text: "Keep original goal and final stops.\n",
+    revision: `sha256:${"a".repeat(64)}`, excluded_todo_regions: [region]};
+  const project = (value: JsonObject) => projectInteractionWorkContext({
+    required_reads: [read], source_results: [{command: read.command, content: value}],
+  });
+  const fulfilled = project(content);
+  assert.deepEqual(fulfilled.required_reads, []);
+  assert.deepEqual((fulfilled.work_context as JsonObject).sources, [{...read, content}]);
+  for (const invalid of [
+    {...content, text: null}, {...content, revision: "invalid"}, {...content, state_file: ""},
+    {...content, excluded_todo_regions: []},
+    {...content, excluded_todo_regions: [{...region, role: "objective"}]},
+    {...content, excluded_todo_regions: [{...region, start_line: 0}]},
+    {...content, excluded_todo_regions: [{...region, end_line: 3}]},
+    {...content, excluded_todo_regions: [{...region, revision: "invalid"}]},
+    {...content, excluded_todo_regions: [region, region]},
+  ]) {
+    const rejected = project(invalid);
+    assert.deepEqual(rejected.required_reads, [read]);
+    assert.equal((rejected.work_context as JsonObject).complete, false);
+    assert.deepEqual((rejected.work_context as JsonObject).sources ?? [], []);
+  }
+  assert.deepEqual(project({text: content.text}).required_reads, [read]);
+});

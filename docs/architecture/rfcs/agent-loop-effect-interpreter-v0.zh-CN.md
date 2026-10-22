@@ -510,6 +510,13 @@ conformance 覆盖拒绝与恢复。最终 no-followup 保留既有结算顺序�
 CLI 与 DSH 协议输入覆盖已配置检查、仅声明 outcome 两种情形；无选定工作的读取
 仍返回原列表。这只验证局部 IO 边界，不能替代真实模型收益、安装采用或整轮成本。
 
+Goal 来源上下文现复用原 writer 的严格归属 parser，分离显式标记的生成 Todo 区域，
+通过共享 typed context owner 原样传递其余全部文字，附带完整文件摘要与被分离区域
+的来源记录。未标记／混合文档保留渐进式全文读取，归属错误拒绝。此处改变默认上下文
+交付，不改变 canonical Todo authority、源文件或累计验收。File/SQLite 原生 guard
+与签名 DSH 协议输入验证这一来源边界；模型采用、安装态 App/Lark、完整 Turn 成本
+及三条收敛验收仍未完成。任意大段正文完整保留，不做截断。
+
 下一步先调查获准真实 Goal 的活跃工作、peer/replan、等待/恢复和可选能力形态，
 将每条保留义务映射到共享 typed owner 与实际消费者，再完成一族调用方迁移，最后
 退役其旧投影。用同次捕获决策比较 full/thin heartbeat 与 Turn，将必需详情补读、

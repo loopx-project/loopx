@@ -66,7 +66,8 @@ class ChatConversationBindings:
                   executor_endpoint_id: str, context_kind: str = "project",
                   project_grant: str | None = None, goal_scope: str | None = None,
                   audience: str | None = None, group_refs: list[str] | None = None,
-                  available_group_refs: list[str] | None = None) -> dict[str, Any]:
+                  available_group_refs: list[str] | None = None,
+                  expected_provider_ref: str | None = None) -> dict[str, Any]:
         if goal_scope is not None and (context_kind != "steward" or goal_scope not in {"selected", "all_registered"}):
             raise ValueError("select a supported steward Goal scope")
         if project_grant is None:
@@ -74,6 +75,8 @@ class ChatConversationBindings:
         if project_grant not in {"workspace_read", "workspace_write"} or (context_kind != "project" and project_grant != "workspace_read"):
             raise ValueError("workspace write authorization is only available for project Chat")
         observation = self.observe(transport_ref, audience=audience or "owner")
+        if expected_provider_ref is not None and observation["provider_ref"] != expected_provider_ref:
+            raise ValueError("the selected App changed before binding publication; verify it again")
         candidate = {
             "schema_version": "loopx_chat_conversation_binding_v0",
             "binding_id": uuid.uuid4().hex[:24], "transport_ref": transport_ref,

@@ -792,6 +792,7 @@ def build_loopx_bootstrap_command_pack(
     )
     has_registered_agents = bool(registered_agents)
     binding_missing = thread_binding.get("status") == "missing"
+    stable_unbound_thread = bool(normalized_thread_id and binding_missing)
     thread_binding["selection_required"] = bool(
         explicit_goal_start
         and not new_peer
@@ -804,7 +805,7 @@ def build_loopx_bootstrap_command_pack(
 
     fresh_agent_default = bool(
         explicit_goal_start
-        and (new_peer or not has_registered_agents)
+        and (new_peer or not has_registered_agents or stable_unbound_thread)
     )
 
     bootstrap_preview_command = _bootstrap_command(

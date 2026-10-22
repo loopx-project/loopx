@@ -211,13 +211,21 @@ for boundary reads, model support, result acceptance and configuration readback.
 
 ## Validation
 
-After connect or refresh, run the smallest useful set:
+Choose validation for the operation actually performed:
 
-```bash
-loopx registry
-loopx status
-loopx check --scan-path <PUBLIC_SAFE_FILE_OR_DIR>
-```
+- After connection, routing changes or state repair, verify the affected registry
+  route and Goal status through the relevant procedure. Use the command's complete
+  readback when it proves the result; request missing facts with scoped
+  `loopx registry` or `loopx status` reads.
+- For ordinary admitted work, validate the deliverable and consume the current
+  `interaction_contract` settlement receipts. A successful `refresh-state` does
+  not itself require another registry/status discovery or public-boundary scan
+  of private working evidence. Do not create extra validation manifests merely
+  to certify those same receipts. Preserve fresh admission, required source
+  reads, leases, required checks and failed/uncertain writeback recovery.
+- Before public submission or export, run `loopx check --scan-path
+  <PUBLIC_SAFE_FILE_OR_DIR>` on the actual publication candidates and inspect
+  the result. Private settlement does not replace this boundary check.
 
 For multi-project UI updates, use the current resolved global registry to refresh
 the dashboard status JSON:

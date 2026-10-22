@@ -9,16 +9,15 @@ import sys
 
 import pytest
 
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope, turn_envelope_action_signature_document
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.host_candidate import _canonical_hash
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_agent_context import POLICY
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, SELECTED_REPLAN_TODO_ID,
     _bind_selected_replan_guard, _configure_selected_todo_replan_fixture,
-    _initialize_git_checkout, _run_cli, _write_fixture,
+    _initialize_fixture_authority, _initialize_git_checkout, _run_cli, _write_fixture,
 )
 
 
@@ -35,11 +34,9 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     config = json.loads(registry.read_text())
     config["goals"][0]["spawn_policy"] = {**POLICY, "spawn_allowed": mode != "off"}
     registry.write_text(json.dumps(config))
-    code, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
-    assert code == 0, listed
-    initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=listed["todos"],
-    ), state_path=state, provider=provider)
+    # Ordinary reads reject unmigrated Goals. Bootstrap the disposable canonical
+    # fixture through its explicit conversion helper before exercising delivery.
+    _initialize_fixture_authority(project, runtime, provider=provider)
 
     capture = tmp_path / "capture"
     code, envelope = _run_cli(registry, runtime, "quota", "should-run",
@@ -124,11 +121,9 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     state.write_text(state.read_text() + f"\n## Accepted scope and stop\n\n{stop}\n")
     goal_bytes = state.read_bytes()
     _initialize_git_checkout(project)
-    code, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
-    assert code == 0, listed
-    initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=listed["todos"],
-    ), state_path=state, provider=provider)
+    # Ordinary reads reject unmigrated Goals. Bootstrap the disposable canonical
+    # fixture through its explicit conversion helper before exercising delivery.
+    _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "host-replan-turn"
     code, initial = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
