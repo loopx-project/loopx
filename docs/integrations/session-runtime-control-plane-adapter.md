@@ -110,6 +110,22 @@ Validation: `python -m pytest tests/test_chat_codex_home.py tests/test_chat_agen
 and `python examples/macos-dashboard-launchagent-status-smoke.py`. The latter
 exercises the actual installer with fixture LaunchAgents, not real services.
 
+### Workspace-only artifact preparation (implemented)
+
+Writable `workspace_only` project conversations now receive default guidance to
+prefer direct workspace file writes, inspect command results and exit codes,
+and read back prerequisite artifacts before starting dependent work. System
+temporary directories remain denied; shell here-documents may fail before the
+intended write. A returned tool call alone is not evidence of command success.
+This is model guidance, with no additional permissions or mechanical workflow
+enforcement. Read-only, ordinary host and steward contexts retain their prior
+instructions. The same context builder serves local Chat and bound Lark topics.
+
+中文：可写的 `workspace_only` 项目对话现在默认提示直接在工作区写文件，检查命令结果
+与退出码，并在依赖步骤开始前读回前置产物。系统临时目录仍被拒绝，shell here-document
+可能在真正写文件前失败；工具调用返回不代表命令成功。这是模型指引，不增加权限或
+机械工作流约束。只读、普通宿主与管家对话保留原指令；本机 Chat 与绑定飞书话题共用该上下文。
+
 ### Projection boundary
 
 The host session log is the raw fact source. LoopX run history is a
