@@ -110,6 +110,17 @@ for (const resume_when of ["resume_at:2026-01-01T00:10:00Z",
   });
 }
 
+for (const status of ["open", "deferred"]) {
+  test(`${status} due wait cannot replace an original successor replan`, () => {
+    const input = externalWaitRequest("resume_at:2026-01-01T00:10:00Z");
+    input.todos[0]!.status = status;
+    input.todos[0]!.resume_ready = true;
+    Object.assign(input.todos[0]!.resume_condition as Record<string, unknown>, {satisfied: true});
+    assert.deepEqual(projectReceiptBoundWait({...input, receipt_bound_successor_replan: true}),
+      {status: "none"});
+  });
+}
+
 for (const patch of [{replay_phase: "settled"}, {replay_phase: null},
   {settlement_progress: null}, {settlement_progress: {schema_version: "other",
     state: "writeback_required", next_step: "durable_writeback"}}]) {

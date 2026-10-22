@@ -271,7 +271,8 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   // it still cannot discard the original identity or authorize new work.
   if (["open", "deferred"].includes(String(todo.status)) &&
       todo.task_class === "advancement_task" &&
-      writebackRequired && request.replay_phase === "open" && externalWait) {
+      writebackRequired && request.replay_phase === "open" &&
+      request.receipt_bound_successor_replan !== true && externalWait) {
     const reason = "The original admitted Turn still owes durable writeback. Its later external wait cannot discard that identity. Inspect existing effects and record only the validated original result, then settle once under the original identity. Keep the wait unchanged; do not repeat business work, select a successor, or invent a retry clock.";
     return boundRecovery(request, "durable_writeback", reason);
   }

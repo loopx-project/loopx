@@ -366,6 +366,7 @@ def apply_receipt_bound_wait_recovery(
     monitor_phase: str | None = None,
     settlement_progress: dict[str, Any] | None = None,
     replay_phase: ReceiptBoundReplayPhase | None = None,
+    receipt_bound_successor_replan: bool = False,
 ) -> bool:
     """Read full provider facts only when a replay lost its executable binding."""
     from ..todos.list_readback import list_goal_todos
@@ -394,6 +395,7 @@ def apply_receipt_bound_wait_recovery(
         "monitor_phase": monitor_phase,
         "settlement_progress": settlement_progress,
         "replay_phase": replay_phase.value if replay_phase else None,
+        "receipt_bound_successor_replan": receipt_bound_successor_replan,
     }, large_local_snapshot=True)
     if verdict.get("status") == "none":
         return False
