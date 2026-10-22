@@ -151,7 +151,10 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Per-Todo and fixed semantic growth are accounted for separately.
             # Canonical source witnesses use the full Markdown context carrier;
             # the unchanged 36-Todo fixture emits 10,225 chars / 166 lines.
-            "crowded": {"json": 40_000, "markdown": 10_500},
+            # Native Windows paired base/head both emit 40,701 JSON chars.
+            # Retain complete routes/context and bounded host-path headroom;
+            # line, per-Todo/fixed growth and all other ceilings stay unchanged.
+            "crowded": {"json": 42_000, "markdown": 10_500},
             # Matched canonical base/head both emit 24,820 JSON characters.
             "multi_agent": {"json": 25_500, "markdown": 7_000},
         },

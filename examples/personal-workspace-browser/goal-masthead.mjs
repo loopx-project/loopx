@@ -5,8 +5,8 @@ import { resolveTestPython } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
-// The Goal masthead keeps identity, the stop control and six typed vitals on
-// every Goal view. Expected values follow the vital semantics, not the render:
+// The Goal masthead keeps identity and the stop control across Goal views;
+// six typed vitals belong to Overview. Expected values follow their semantics:
 // the fixture Goal reports the same 4087 completed advancement Todos as the
 // completed-history read, has three open and two deferred advancement Todos
 // plus a done monitor, two blocking decisions, a 7-day usage window and one
@@ -125,10 +125,14 @@ export const goalMastheadScenario = {
       assert.equal(await openLane.locator("header > span").innerText(), "5", "The board lists the same open work the strip counts");
       await page.locator('[data-goal-panel="tasks"]').getByTestId("completed-task-lane").locator("header", { hasText: "4087" }).waitFor({ timeout: 10_000 });
       await page.locator(".personal-goal-tabs button", { hasText: "对话" }).click();
-      await page.getByTestId("goal-vitals").waitFor({ state: "visible" });
+      await page.locator('.personal-goal-tabs button[aria-current="page"]', { hasText: "对话" }).waitFor();
+      assert.equal(await page.getByTestId("goal-vitals").count(), 0, "Reading views do not repeat Overview statistics");
+      assert.equal(await page.locator(".personal-channel-title h1").innerText(), title, "Switching views retains Goal identity");
+      assert.equal(await page.locator(".goal-lifecycle-trigger").count(), 1, "The lifecycle control remains available outside Overview");
       assert.equal(actionRequests.length, 0, "Opening the Goal, switching views and focusing vitals sends no action request");
 
       await page.locator(".personal-goal-tabs button", { hasText: "概览" }).click();
+      await page.getByTestId("goal-vitals").waitFor({ state: "visible" });
       const stop = page.locator(".goal-lifecycle-trigger");
       await stop.click();
       const dialog = page.getByRole("dialog", { name: "停止这个 Goal？" });
@@ -171,10 +175,12 @@ export const goalMastheadScenario = {
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-1024.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-phone.png"), animations: "disabled" });
-      await page.locator(".personal-goal-tabs button", { hasText: "对话" }).click();
-      await page.screenshot({ path: resolve(outputDir, "goal-masthead-phone-chat.png"), animations: "disabled" });
       const overflow = await page.getByTestId("goal-vitals").evaluate((strip) => strip.scrollWidth - strip.clientWidth);
       assert.ok(overflow <= 1, "The phone grid fits without horizontal scrolling");
+      await page.locator(".personal-goal-tabs button", { hasText: "对话" }).click();
+      await page.locator('.personal-goal-tabs button[aria-current="page"]', { hasText: "对话" }).waitFor();
+      assert.equal(await page.getByTestId("goal-vitals").count(), 0, "Phone reading views also omit Overview statistics");
+      await page.screenshot({ path: resolve(outputDir, "goal-masthead-phone-chat.png"), animations: "disabled" });
       assert.equal(session.errors.length, 0, session.errors.join(" | "));
       coverageEntries.push(...await session.close());
     } catch (error) {

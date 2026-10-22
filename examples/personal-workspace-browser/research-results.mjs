@@ -62,12 +62,11 @@ export const researchResultsScenario = {
       assert.equal(indexes, 0, "Research must remain lazy in the directory before a Goal is opened");
       assert.equal(reads, 0, "No Goal's research body is read from the directory");
       await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
-      // Overview and Files have independent exact projection reads. Do not
-      // race navigation against the first read or count it as duplicate work.
-      const overviewResults = page.getByRole("region", {name: "研究成果", exact: true});
-      await overviewResults.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
-      assert.equal(indexes, 1, "Overview must read the extension inventory once");
-      assert.equal(reads, 1, "Overview must verify its exact projection once");
+      await page.locator('.personal-goal-tabs button[aria-current="page"]', {hasText: "概览"}).waitFor();
+      // Outputs belong to Files; merely opening Overview must not fetch them.
+      assert.equal(await page.getByRole("region", {name: "研究成果", exact: true}).count(), 0);
+      assert.equal(indexes, 0, "Overview must not read the extension inventory");
+      assert.equal(reads, 0, "Overview must not read an output projection");
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "研究成果", exact: true});
       await results.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
@@ -76,8 +75,8 @@ export const researchResultsScenario = {
       assert.match(await results.textContent(), /Source height unknown/);
       assert.match(await results.textContent(), /2026-01-15/);
       assert.match(await results.textContent(), /review_due/);
-      assert.equal(indexes, 2, "Files must independently read the extension inventory once");
-      assert.equal(reads, 2, "Files must independently verify its exact projection once");
+      assert.equal(indexes, 1, "Files must read the extension inventory once");
+      assert.equal(reads, 1, "Files must verify its exact projection once");
       assert.equal(await results.getByTestId("research-detail-ref-hash").textContent(), projection.payload_sha256);
       await page.screenshot({path: resolve(outputDir, "research-results-desktop.png"), animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});
