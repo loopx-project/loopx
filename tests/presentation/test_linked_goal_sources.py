@@ -19,13 +19,17 @@ import pytest
 from test_research_analysis_api import workspace as workspace
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import register_pack
 from loopx.capabilities.explore.result_log import (
-    append_explore_result_event, build_explore_edge_event, build_explore_node_event,
+    append_explore_result_event, build_explore_edge_event, build_explore_node_event, build_explore_finding_event,
     explore_history_rows, explore_result_log_path,
 )
 from loopx.control_plane.status.goal_source import GoalSource
 
 
 def native_source(w):
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+
     source_root = w['tmp_path'] / 'original'
     source_root.mkdir()
     registry, runtime = source_root / 'registry.json', source_root / 'runtime'
@@ -37,6 +41,15 @@ def native_source(w):
         {'id': 'solver-goal', 'repo': str(source_root), 'state_file': 'active.md',
          'status': 'active', 'domain': 'source-read', 'authority_sources': [],
          'adapter': {'kind': 'test_v0', 'status': 'connected-read-only'}}]}))
+    rows, _, _ = parse_todo_source(state.read_text())
+    for todo in rows['agent']:
+        todo['schema_version'] = 'todo_item_v0'
+    initialize_canonical_authority(runtime, 'solver-goal', build_todo_runtime_shadow_projection(
+        goal_id='solver-goal', todos=rows['agent'], handoff_mode='soft_claim'), state_path=state, provider='sqlite')
+    for goal in ('research-owner', 'other-owner'):
+        initialize_canonical_authority(w['tmp_path'] / 'runtime', goal,
+            build_todo_runtime_shadow_projection(goal_id=goal, todos=[], handoff_mode='soft_claim'),
+            state_path=w['tmp_path'] / 'active.md', provider='sqlite')
     log = explore_result_log_path(runtime, 'solver-goal')
     for name in ('question', 'attempt'):
         append_explore_result_event(log, build_explore_node_event(goal_id='solver-goal',
@@ -221,9 +234,10 @@ def test_original_task_detail_cannot_follow_a_replaced_source(workspace):
     assert removed.value.code == 409
     replacement = copy.deepcopy(raw)
     replacement['id'] = 'replacement'
-    state = Path(raw['registry']).parent / 'active.md'
-    state.write_text(state.read_text().replace('Check the original question against its evidence',
-        'Check the replacement question against its own evidence'))
+    from loopx.todos import update_goal_todo
+    update_goal_todo(registry_path=Path(raw['registry']), runtime_root_arg=raw['runtime_root'],
+        goal_id='solver-goal', todo_id='todo_original',
+        text='Check the replacement question against its own evidence')
     request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': replacement})
     with pytest.raises(HTTPError) as replaced:
         request(old_url)
@@ -278,6 +292,11 @@ def test_removed_parent_does_not_poison_other_local_or_source_goals(workspace):
     (source_registry.parent / 'other.md').write_bytes((source_registry.parent / 'active.md').read_bytes())
     registry['goals'].append({**registry['goals'][0], 'id': 'other-solver', 'state_file': 'other.md'})
     source_registry.write_text(json.dumps(registry))
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    initialize_canonical_authority(Path(raw['runtime_root']), 'other-solver',
+        build_todo_runtime_shadow_projection(goal_id='other-solver', todos=[], handoff_mode='soft_claim'),
+        state_path=source_registry.parent / 'other.md', provider='sqlite')
     other = {**raw, 'id': 'other-source', 'scope': {'goal_id': 'other-solver'}}
     request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
     request('/api/chat/goal-sources', {'parent_goal_id': 'other-owner', 'source': other})
@@ -301,3 +320,87 @@ def test_removed_parent_does_not_poison_other_local_or_source_goals(workspace):
         'source_namespace': GoalSource.parse(raw).namespace})
     assert len(json.loads(w['server'].registry_path.read_text())['goal_source_links']) == 1
     assert source_registry.read_bytes() == before and not w['count'].exists()
+
+
+def test_original_saved_findings_keep_full_text_associations_and_source_fences(workspace):
+    """Actual source CLI + normal App HTTP; no model or source mutations."""
+    from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
+    from threading import Thread
+
+    w = workspace
+    raw, request, _ = native_source(w)
+    state = Path(raw['registry']).parent / 'active.md'
+    log = explore_result_log_path(Path(raw['runtime_root']), 'solver-goal')
+    summary = "Counterexample. " + "Bounded observation. " * 70 + "Retain the original scope."
+    for index in range(43):
+        append_explore_result_event(log, build_explore_finding_event(goal_id='solver-goal',
+            node_id='question', finding_id=f'finding{index}', title=f'Observation {index}',
+            summary=summary, status='refuted', evidence_refs=['artifact:counterexample']))
+    before = {path: path.read_bytes() for path in (state, log, Path(raw['registry']))}
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    namespace = GoalSource.parse(raw).namespace
+    query = urlencode({'goal_id': 'solver-goal', 'source_namespace': namespace})
+    endpoint = '/api/chat/explore-results?'
+    first = request(endpoint + query + '&view=findings')
+    assert first['total'] == 43 and len(first['items']) == 40
+    item = first['items'][0]
+    assert item['finding_id'] and 'event_kind' not in item
+    assert item['summary'] == summary and item['status'] == 'refuted'
+    assert item['question'] == 'question' and item['scope'] == 'Original native record'
+    assert item['evidence_refs'] == ['artifact:counterexample']
+    assert item['linked_todos'] == [] and item['linked_todos_available'] is False
+    assert request(endpoint + query)['items'] == first['items']
+    cursor_query = urlencode({'cursor': first['next_cursor']})
+    assert len(request(endpoint + query + '&view=findings&' + cursor_query)['items']) == 3
+    assert request(endpoint + query + '&view=history')['total'] == 46
+    for suffix, status in (('&view=history&' + cursor_query, 409),
+                           ('&view=invalid', 400), ('&view=findings&view=history', 400)):
+        with pytest.raises(HTTPError) as rejected:
+            request(endpoint + query + suffix)
+        assert rejected.value.code == status
+    with pytest.raises(HTTPError) as rejected:
+        request(endpoint + query, origin='https://other.example')
+    assert rejected.value.code == 403
+
+    # Malformed/wrong-Goal evidence fails closed and invalidates previous pages.
+    events = log.read_text().splitlines()
+    wrong = json.loads(events[-1]); wrong['goal_id'] = 'unrelated'
+    log.write_text('\n'.join([*events[:-1], json.dumps(wrong)]))
+    with pytest.raises(HTTPError) as corrupt:
+        request(endpoint + query)
+    assert corrupt.value.code == 409
+    assert str(w['tmp_path']) not in corrupt.value.read().decode()
+    log.write_bytes(before[log])
+    with pytest.raises(HTTPError):
+        request(endpoint + query + '&' + cursor_query)
+    assert request(endpoint + query)['total'] == 43
+
+    # The prepared source adapter serves the same finding shape as the real App.
+    source_server = RuntimeWorkspaceServer(GoalSource.parse(raw), w['tmp_path'])
+    worker = Thread(target=source_server.serve_forever, daemon=True); worker.start()
+    try:
+        with urlopen(f'http://127.0.0.1:{source_server.server_port}' + endpoint + query + '&view=findings', timeout=30) as response:
+            assert json.load(response)['items'] == first['items']
+    finally:
+        source_server.shutdown(); worker.join(timeout=5); source_server.server_close()
+
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner',
+        'goal_id': 'solver-goal', 'source_namespace': namespace})
+    with pytest.raises(HTTPError) as removed:
+        request(endpoint + query)
+    assert removed.value.code == 409
+    # The source binding cannot change while a read is in flight.
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    reader = w['server'].goal_source_catalog.resolve('solver-goal')[1]
+    original = reader.findings
+    def unlink_during_read(*args, **kwargs):
+        page = original(*args, **kwargs)
+        request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner',
+            'goal_id': 'solver-goal', 'source_namespace': namespace})
+        return page
+    reader.findings = unlink_during_read
+    with pytest.raises(HTTPError) as replaced:
+        request(endpoint + query)
+    assert replaced.value.code == 409
+    assert all(path.read_bytes() == data for path, data in before.items())
+    assert not w['count'].exists()

@@ -78,8 +78,8 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
             <dt>{zh ? "记录标识" : "Record identifiers"}</dt><dd><code>{selected.finding_id} · {selected.node_id}</code></dd></dl>
           {sections ? <details><summary>{zh ? "完整原文" : "Full original text"}</summary><p className="explore-finding-raw">{selected.summary}</p></details> : null}
         </details>
-        <details className="explore-reader-details"><summary>{zh ? "关联任务" : "Linked tasks"} · {selected.linked_todos.length}</summary>
-          {selected.linked_todos.length ? <ul className="explore-linked-tasks">{selected.linked_todos.map(todo => <li key={todo.todo_id}>
+        <details className="explore-reader-details"><summary>{zh ? "关联任务" : "Linked tasks"} · {selected.linked_todos_available === false ? "—" : selected.linked_todos.length}</summary>
+          {selected.linked_todos_available === false ? <p>{zh ? "此来源暂不提供完整的任务关联读取。" : "Complete task associations are not available from this source."}</p> : selected.linked_todos.length ? <ul className="explore-linked-tasks">{selected.linked_todos.map(todo => <li key={todo.todo_id}>
             <details><summary><span>{todo.text}</span><small>{statuses[todo.status] ?? todo.status} · {todo.claimed_by || "—"}</small></summary>
               <p>{todo.text}</p><code>{todo.todo_id}</code></details>
           </li>)}</ul> : <p>{zh ? "当前及已完成任务中未找到关联。" : "No links found in current or completed tasks."}</p>}

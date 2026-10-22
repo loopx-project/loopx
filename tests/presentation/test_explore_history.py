@@ -41,6 +41,12 @@ def test_history_keeps_updates_in_snapshot_isolates_goal_and_view_and_never_writ
         {"id": name, "repo": str(tmp_path), "state_file": "active.md"}
         for name in ("history-fixture", "other-goal")
     ]}))
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    for goal_id in ("history-fixture", "other-goal"):
+        initialize_canonical_authority(runtime, goal_id,
+            build_todo_runtime_shadow_projection(goal_id=goal_id, todos=[], handoff_mode="soft_claim"),
+            state_path=state, provider="sqlite")
     log = explore_result_log_path(runtime, "history-fixture")
     for hour in range(19):
         append_explore_result_event(log, build_explore_node_event(

@@ -105,6 +105,12 @@ def test_real_native_host_lists_goals_and_reads_canonical_history(tmp_path):
             state_file=f"{goal_id}.md", adapter={"kind": "test_v0", "status": "connected-read-only"},
             authority_sources=[]))
     registry.write_text(json.dumps(dict(schema_version=1, common_runtime_root=str(runtime), goals=goals)))
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    for goal_id in ("first", "second"):
+        initialize_canonical_authority(runtime, goal_id,
+            build_todo_runtime_shadow_projection(goal_id=goal_id, todos=[], handoff_mode="soft_claim"),
+            state_path=project / f"{goal_id}.md", provider="sqlite")
     cli = Path(sys.executable).with_name("loopx")
     assert cli.is_file(), "Use the source checkout's prepared Python environment"
     source = GoalSource.parse({**manifest(scope={"all_registered": True}), "registry": str(registry),

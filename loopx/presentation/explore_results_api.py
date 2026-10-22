@@ -10,6 +10,7 @@ from ..capabilities.explore.result_log import (
     explore_history_rows,
     explore_result_log_path,
     load_explore_result_events_strict,
+    validate_explore_result_event,
 )
 
 
@@ -17,10 +18,6 @@ def _result_rows(runtime_root, goal_id, registry_path):
     events = load_explore_result_events_strict(
         explore_result_log_path(runtime_root, goal_id), goal_id=goal_id,
     )
-    projection = build_explore_result_projection(
-        events, goal_id=goal_id, finding_limit=len(events),
-    )
-    nodes = {node["node_id"]: node for node in projection["nodes"]}
     # Reuse canonical active/history readback; an association is not adoption.
     todos = {}
     for view in ({}, {"status": "done", "read_scope": "completed_history"}):
@@ -29,8 +26,18 @@ def _result_rows(runtime_root, goal_id, registry_path):
             goal_id=goal_id, role="agent", **view,
         )["todos"]:
             todos[todo["todo_id"]] = todo
+    return _finding_rows(events, todos.values(), goal_id=goal_id)
+
+
+def _finding_rows(events, todos, *, goal_id):
+    """Same Explore projection and task associations for every physical source."""
+    events = [validate_explore_result_event(event, expected_goal_id=goal_id) for event in events]
+    projection = build_explore_result_projection(
+        events, goal_id=goal_id, finding_limit=len(events),
+    )
+    nodes = {node["node_id"]: node for node in projection["nodes"]}
     links = {}
-    for todo in todos.values():
+    for todo in todos or []:
         for node_id in todo.get("explore_result_node_refs") or []:
             links.setdefault(node_id, []).append({
                 "todo_id": todo["todo_id"], "text": todo["text"],
@@ -38,6 +45,7 @@ def _result_rows(runtime_root, goal_id, registry_path):
             })
     return [
         {**finding, "linked_todos": links.get(finding["node_id"], []),
+         **({"linked_todos_available": False} if todos is None else {}),
          "question": nodes.get(finding["node_id"], {}).get("title", ""),
          "scope": nodes.get(finding["node_id"], {}).get("summary", "")}
         for finding in projection["findings"]
@@ -58,31 +66,41 @@ def _history_rows(runtime_root, goal_id):
 
 class ExploreResultsRequestMixin:
     def _explore_results(self):
-        query = parse_qs(urlparse(self.path).query)
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
         goal_id = query.get("goal_id", [""])[0]
         try:
+            if any(len(values) != 1 for values in query.values()):
+                self._send_error("Choose one Goal, source and Explore view.", status=400)
+                return
+            view = query.get("view", ["findings"])[0]
+            if view not in {"findings", "history"}:
+                self._send_error("Unknown Explore view.", status=400)
+                return
             from .goal_source_routing import linked_goal_source
             resolved = linked_goal_source(self.server, goal_id)
             if resolved is not None:
                 if not self._require_loopback_origin():
                     return
-                if query.get("view", ["history"]) != ["history"]:
-                    self._send_error("Use the original source history.", status=400)
-                    return
                 row, reader = resolved
                 if query.get("source_namespace") != [reader.source.namespace]:
                     self._send_error("Source identity changed; refresh the Goal.", status=409)
                     return
-                self._send_json(reader.history(goal_id, query.get("cursor", [""])[0]))
+                cursor = query.get("cursor", [""])[0]
+                page = (reader.history(goal_id, cursor) if view == "history" else
+                        reader.findings(goal_id, cursor, projector=_finding_rows))
+                latest = linked_goal_source(self.server, goal_id)
+                if latest is None or latest[1].source.namespace != reader.source.namespace:
+                    self._send_error("Source identity changed; refresh the Goal.", status=409)
+                    return
+                self._send_json(page)
+                return
+            if "source_namespace" in query:
+                self._send_error("Source identity changed; refresh the Goal.", status=409)
                 return
             runtime_root = self._goal_result_scope(goal_id)
             if runtime_root is None:
                 return
             # Local HTTP view selection; canonical event vocabularies are unchanged.
-            view = query.get("view", ["findings"])[0]
-            if view not in {"findings", "history"}:
-                self._send_error("Unknown Explore view.", status=400)
-                return
             page = self.server.completed_todo_pages.page(
                 scope=("explore_history" if view == "history" else "explore_results", goal_id),
                 cursor=query.get("cursor", [""])[0],

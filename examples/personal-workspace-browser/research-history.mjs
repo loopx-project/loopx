@@ -908,6 +908,34 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await page.getByRole('button', {name: 'About deep analysis', exact: true}).click();
       await page.getByText('This action reuses existing judgments without a model call; original usage stays with the previous version.', {exact: true}).waitFor();
       await page.keyboard.press('Escape');
+      // A source can expose complete saved findings without a complete Task
+      // association endpoint. Unknown links must never be presented as zero.
+      await page.route("**/api/chat/explore-results?*", route => {
+        const query = new URL(route.request().url()).searchParams;
+        if (query.get("view") === "history") return route.fallback();
+        assert.equal(query.get("view"), "findings");
+        return route.fulfill({json: {ok: true, goal_id: query.get("goal_id"), total: 2, next_cursor: null,
+          items: [0, 1].map(index => ({finding_id: `saved-${index}`, node_id: "question", finding: `Saved observation ${index + 1}`,
+            question: "Does this observation support the original objective?", scope: "Fixed synthetic input",
+            summary: "The measured change did not improve the original objective. Keep the negative result and investigate the next unresolved question. " +
+              "The observation applies to the fixed input only; comparison with a different input remains unverified.",
+            status: "refuted", agent_id: "researcher", evidence_refs: ["artifact:fixed-input"],
+            last_updated_at: "2026-01-01T12:00:00Z", linked_todos: [], linked_todos_available: false}))}});
+      });
+      await page.getByText("Read saved findings", {exact: true}).click();
+      const sourceReader = page.getByRole("region", {name: "Explore evidence", exact: true});
+      const sourceBody = sourceReader.locator(".goal-team-result-reader");
+      await sourceBody.waitFor();
+      await sourceBody.getByText("Linked tasks · —", {exact: true}).click();
+      assert.match(await sourceBody.innerText(), /Complete task associations are not available/);
+      assert.doesNotMatch(await sourceBody.innerText(), /No links found/);
+      await page.setViewportSize({width: 1440, height: 1000});
+      await sourceReader.evaluate(element => element.scrollIntoView({block: "start"}));
+      await page.screenshot({path: resolve(outputDir, "source-saved-findings-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await sourceBody.scrollIntoViewIfNeeded();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: resolve(outputDir, "source-saved-findings-mobile.png"), animations: "disabled"});
       assert.equal(analysisWrites, 0, "Cached, reload, switch and keyboard reading never request execution");
       assert.equal(api.turnRequests.length, 0, "Reading the graph cannot start an Agent");
       return {note: "Three unchanged real checkpoint histories through production HTTP + packaged UI; per-Goal complete pagination, genuine negative evidence, no invented edges, reload/back/forward, mobile and failed refresh. Separate synthetic coincident-target regression; no benchmark qualification or model dispatch.",

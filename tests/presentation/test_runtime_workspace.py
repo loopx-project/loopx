@@ -131,6 +131,11 @@ def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, in
         id="shared-goal", status="active", domain="source-read", repo=str(project),
         state_file="goal.md", adapter={"kind": "test_v0", "status": "connected-read-only"},
         authority_sources=[])])))
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    initialize_canonical_authority(runtime, "shared-goal",
+        build_todo_runtime_shadow_projection(goal_id="shared-goal", todos=[], handoff_mode="soft_claim"),
+        state_path=project / "goal.md", provider="sqlite")
     cli = Path(sys.executable).with_name("loopx")
     assert cli.is_file(), "Use the source checkout's prepared Python environment"
     source = GoalSource("native", "Native", str(registry), str(runtime), str(cli),
@@ -138,7 +143,7 @@ def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, in
     events = [build_explore_node_event(goal_id="shared-goal", node_id=f"question{i}",
                                      title=f"Question {i}") for i in range(43)]
     log = runtime / "goals" / "shared-goal" / "explore-result-log.jsonl"
-    log.parent.mkdir(parents=True)
+    log.parent.mkdir(parents=True, exist_ok=True)
     valid = "\n".join(json.dumps(event) for event in events).encode()
     log.write_bytes(valid)
     routes = ("/api/goal-source/history?goal_id=shared-goal",

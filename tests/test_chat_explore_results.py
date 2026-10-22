@@ -18,8 +18,8 @@ from loopx.control_plane.todos.contract import (
 )
 
 
-@pytest.mark.parametrize("canonical", [False, True])
-def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, monkeypatch, canonical):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, monkeypatch, provider):
     registry = tmp_path / "registry.json"
     runtime = tmp_path / "runtime"
     (tmp_path / "active.md").write_text("# Synthetic Goal\n")
@@ -40,7 +40,6 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
             summary="Counterexample at input revision A " + "c" * 1700 + "; do not transfer beyond the tested scope.",
             evidence_refs=["artifact:counterexample"], agent_id="worker",
         ))
-    from loopx.todos import list_goal_todos
     state = tmp_path / "active.md"
     linked = "todo_linked0001"
     linked_metadata = format_todo_metadata_line(
@@ -70,20 +69,21 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
         + " -->\n",
         encoding="utf-8",
     )
-    if canonical:
-        from pathlib import Path
-        monkeypatch.syspath_prepend(str(Path(__file__).parent / "control_plane"))
-        from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-        from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-        isolate_sqlite_runtime(tmp_path, monkeypatch)
-        rows = list_goal_todos(registry_path=registry, goal_id="evidence-goal")["todos"]
-        rows += list_goal_todos(registry_path=registry, goal_id="evidence-goal", role="agent",
-                               status="done", read_scope="completed_history")["todos"]
-        initialize_canonical_authority(runtime, "evidence-goal",
-            build_todo_runtime_shadow_projection(goal_id="evidence-goal", todos=rows, handoff_mode="soft_claim"),
-            state_path=state, provider="sqlite")
-        # The reader must prefer canonical association over stale presentation.
-        state.write_text("# Synthetic Goal\n")
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    active, archived, _ = parse_todo_source(state.read_text())
+    rows = active['agent'] + archived
+    for row in rows:
+        row['schema_version'] = 'todo_item_v0'
+    for goal in ('evidence-goal', 'other-goal'):
+        initialize_canonical_authority(runtime, goal,
+            build_todo_runtime_shadow_projection(goal_id=goal,
+                todos=rows if goal == 'evidence-goal' else [], handoff_mode='soft_claim'),
+            state_path=state, provider=provider)
+    # Canonical associations survive a stale presentation document.
+    state.write_text("# Synthetic Goal\n")
     before = log.read_bytes()
     state_before = state.read_bytes()
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
@@ -127,16 +127,13 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
         assert str(tmp_path).encode() not in corrupt.value.read()
         log.write_bytes(before)
         assert read(base + "evidence-goal")["total"] == 41
-        if not canonical:
-            # Missing Todo authority must not masquerade as an unlinked finding.
-            state.unlink()
-            with pytest.raises(HTTPError) as missing:
-                read(base + "evidence-goal")
-            assert missing.value.code == 409
-            state.write_bytes(state_before)
-            assert len(read(base + "evidence-goal")["items"][0]["linked_todos"]) == 2
-            state.write_text("# Synthetic Goal\n")
-            assert read(base + "evidence-goal")["items"][0]["linked_todos"] == []
+        state.unlink()
+        assert len(read(base + "evidence-goal")["items"][0]["linked_todos"]) == 2
+        # Missing canonical authority is not an empty, unlinked result.
+        from loopx.presentation.explore_results_api import _result_rows
+        from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
+        with pytest.raises(CanonicalAuthorityRequired):
+            _result_rows(tmp_path / "missing-runtime", "evidence-goal", registry)
     finally:
         server.shutdown()
         server.server_close()
