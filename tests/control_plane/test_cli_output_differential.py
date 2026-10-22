@@ -78,6 +78,106 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
     }
 
 
+def test_base_ceiling_observation_is_bounded_and_contains_only_metrics():
+    import runpy
+    from pathlib import Path
+    from loopx.control_plane.testing.cli_output_budget import CLI_OUTPUT_BUDGET_BY_ID
+
+    smoke = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    rows = [
+        _row(
+            row_id=f"surface/{surface}/crowded/json", surface_id=surface,
+            scenario="crowded", chars=spec.max_chars["crowded"]["json"] + 1,
+            lines=1, raw_output="unbounded source text must stay private",
+        )
+        for surface, spec in list(CLI_OUTPUT_BUDGET_BY_ID.items())[:5]
+    ]
+    # Variant receipts have separate contracts; this diagnostic must not claim
+    # they are covered by default-surface ceilings.
+    receipt = _receipt(*rows, _row(
+        row_id="variant/status/small/json", variant_id="status_task_graph_detail",
+    ), _row(
+        row_id="surface/status/small/json", variant_id="status_task_graph_detail",
+    ))
+    original = copy.deepcopy(receipt)
+    observation = smoke["_base_ceiling_observation"](receipt)
+    assert observation["scope"] == "default_surface_baselines"
+    assert observation["failure_count"] == 5
+    assert observation["omitted_count"] == 1
+    assert [row["row_id"] for row in observation["rows"]] == [row["row_id"] for row in rows[:4]]
+    assert all(set(row) == {"row_id", "base", "current_ceiling"} for row in observation["rows"])
+    assert all(row["base"]["chars"] == row["current_ceiling"]["chars"] + 1 for row in observation["rows"])
+    assert "unbounded source text" not in json.dumps(observation)
+    assert receipt == original
+    assert len(json.dumps(observation)) < 3000  # The outer smoke retains this tail.
+    clean = smoke["_base_ceiling_observation"](_receipt(_row(chars=1, lines=1)))
+    assert clean["failure_count"] == 0 and clean["rows"] == []
+
+
+def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
+    monkeypatch, capsys,
+):
+    import runpy
+    from pathlib import Path
+    from loopx.control_plane.testing.cli_output_budget import (
+        CLI_OUTPUT_BUDGET_BY_ID, assert_cli_output_baseline,
+    )
+
+    smoke = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    main = smoke["main"]
+    namespace = main.__globals__
+    spec = CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"]
+    chars = spec.max_chars["crowded"]["json"] + 1
+    row = _row(
+        row_id="surface/quota_should_run/crowded/json", surface_id="quota_should_run",
+        scenario="crowded", chars=chars, lines=1,
+    )
+    probes, git_commands = [], []
+
+    def git_transport(command, **_):
+        git_commands.append(command)
+        if "add" in command:
+            base_test = Path(command[-2]) / namespace["PROBE_TEST"].relative_to(namespace["REPO_ROOT"])
+            base_test.parent.mkdir(parents=True)
+            base_test.write_text("# Synthetic historical fixture\n")
+
+    def probe_transport(**kwargs):
+        probes.append(kwargs["enforce_budget"])
+        if not kwargs["enforce_budget"]:
+            kwargs["receipt_path"].write_text(json.dumps(_receipt(row)))
+        else:
+            # Exercise the real ceiling failure. The diagnostic must neither
+            # skip enforcement nor turn an unchanged over-budget base green.
+            assert_cli_output_baseline(
+                spec, scenario="crowded", output_format="json", text="{}",
+                measurement={"chars": chars, "lines": 1},
+            )
+
+    monkeypatch.setitem(namespace, "_run", git_transport)
+    monkeypatch.setitem(namespace, "_run_probe", probe_transport)
+    monkeypatch.setitem(namespace, "_is_ancestor", lambda *_: True)
+    monkeypatch.setattr(sys, "argv", ["probe", "--base-ref", "synthetic-base"])
+    with pytest.raises(AssertionError, match="baseline ceiling"):
+        main()
+    assert probes == [False, True]
+    assert "remove" in git_commands[-1]
+    output = capsys.readouterr().out
+    prefix = "cli-output-base-current-ceilings "
+    assert output.startswith(prefix)
+    observation = json.loads(output.removeprefix(prefix))
+    assert observation["base_ref"] == "synthetic-base"
+    assert observation["rows"] == [{
+        "row_id": row["row_id"], "base": {"chars": chars, "lines": 1},
+        "current_ceiling": {"chars": chars - 1, "lines": spec.max_lines["crowded"]["json"]},
+    }]
+
+
 @pytest.mark.parametrize("coverage", ["turn_envelope_action_dimensions_v0", "turn_envelope_action_dimensions_v2"])
 def test_complete_work_profile_growth_is_one_time_and_preserves_other_guards(coverage):
     from loopx.control_plane.testing.cli_output_differential import _compare_row
