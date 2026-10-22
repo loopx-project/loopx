@@ -461,12 +461,14 @@ def _deliver_lark_inbox_outbound(
             "json",
         ]
     )
-    source_args = dict(
-        runner=runner, base=base, profile=profile, chat_id=chat_id,
-        message_id=source_message_id, expected_name=str(reply_config["bot_display_name"]),
-        source_membership_verifier=source_membership_verifier,
-        source_authority_verifier=source_authority_verifier,
-    )
+    def verify_source() -> tuple[bool, bool]:
+        return _verified_sender_and_source(
+            runner=runner, base=base, profile=profile, chat_id=chat_id,
+            message_id=source_message_id, expected_name=str(reply_config["bot_display_name"]),
+            source_membership_verifier=source_membership_verifier,
+            source_authority_verifier=source_authority_verifier,
+        )
+
     preview = None
     if overlap_source_preflight and source_authority_verifier is not None and not expected_lark_mention_identities(reply_text):
         # Only the native completed, target-frozen stop opts into scheduling.
@@ -475,11 +477,11 @@ def _deliver_lark_inbox_outbound(
         # preview (including its errors) if fresh source verification denies.
         with ThreadPoolExecutor(max_workers=1) as reads:
             pending_preview = reads.submit(_call, runner, provider_args + ["--dry-run"])
-            identity_verified, membership_verified = _verified_sender_and_source(**source_args)
+            identity_verified, membership_verified = verify_source()
             if identity_verified and membership_verified:
                 preview = pending_preview.result()
     else:
-        identity_verified, membership_verified = _verified_sender_and_source(**source_args)
+        identity_verified, membership_verified = verify_source()
     if not identity_verified:
         return _result(
             status="gate_required",
