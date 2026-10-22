@@ -79,13 +79,17 @@ export const goalSuggestionsScenario = {
       assert.match(await stewardRow.innerText(), /询问下一步[\s\S]*看阻塞[\s\S]*查证据/, "The shipped steward prompt row stays below");
       await page.screenshot({ path: resolve(outputDir, "goal-suggestions-row.png"), animations: "disabled" });
 
-      // Decisions: acting in place opens the overview with its owner rail.
+      // Decisions open the owner rail as a modal; return through its close control.
       await row.locator('button[data-suggestion="open_decisions"]').click();
       await page.getByTestId("goal-vitals").waitFor({ state: "visible" });
       const overview = page.locator(".goal-overview, [data-testid=\"goal-overview\"]").first();
       await overview.waitFor({ state: "visible", timeout: 10_000 });
-      assert.match(await page.locator("main, .personal-channel-body, body").first().innerText(), new RegExp(gateText.slice(0, 20)), "The overview shows the waiting decision");
+      const decisions = page.getByRole("dialog", { name: "全部工作", exact: true });
+      await decisions.waitFor({ state: "visible" });
+      assert.match(await decisions.innerText(), new RegExp(gateText), "The decision rail shows the waiting decision");
       await page.screenshot({ path: resolve(outputDir, "goal-suggestions-decisions.png"), animations: "disabled" });
+      await decisions.getByRole("button", { name: "关闭全部工作", exact: true }).click();
+      await decisions.waitFor({ state: "hidden" });
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
       await summary.waitFor({ state: "visible", timeout: 15_000 });
       if (!(await row.isVisible())) await summary.click();
