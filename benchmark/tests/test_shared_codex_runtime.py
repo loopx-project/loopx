@@ -196,12 +196,16 @@ def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():
     clock[0] = 0
     calls.clear()
     def completing(suffix, timeout):
-        calls.append(suffix[:40])
+        calls.append(suffix)
         tick(400)
         return "complete"
     rounds, outcome = native_goal_rounds(completing, budget_seconds=1000, continue_after_complete=True, clock=lambda: clock[0], reserve_seconds=300)
     assert (rounds, outcome) == (2, "complete")
     assert calls[0] == "" and calls[1].startswith("\n\nContinuation 1")
+    assert "600 seconds remain" in calls[1]
+    assert "original task under its existing requirements and evaluation rules" in calls[1]
+    assert "not by a prior improvement claim" in calls[1]
+    assert "submit only if it improves" not in calls[1]
     # A Goal still active at the budget edge is normal exhaustion, not a failure.
     clock[0] = 0
     def never_ends(suffix, timeout):

@@ -79,6 +79,11 @@ Native Goal continuation stays with Codex; blocked Goals are not automatically
 unblocked. Plain exec versus Goal app-server also changes transport; it does
 not isolate the continuation effect alone.
 
+The optional `native_goal_continue: true` loop retains the original task's
+requirements and evaluation rules after completion. Its continuation prompt no
+longer requires a candidate to improve on an accepted best before submission.
+Continuation remains off by default, with the same deadline and reserve rules.
+
 `turn` requires `validation_command`, an argv list for an independently
 protected validator available inside the task environment. It receives the
 normalized candidate result on stdin. Missing validation fails before execution.
@@ -166,6 +171,14 @@ host prepares two inputs before staging:
 For a task-entry comparison, pin the same source and vary only `task_entry`;
 keep task inputs, scoring, model, budget and evaluation windows fixed. Include
 planning time in the common run budget.
+
+New `loopx-planned` invocations deliver the product planning packet without the
+previous benchmark research-strategy prefix. Only explicitly selected execution
+observation tool context is added. This applies to both Harbor and SForge callers;
+task content, the Core first-delivery contract, identity/readback validation and
+host deadline enforcement remain unchanged. Pin the runner revision when comparing
+planning policies. This adapter change does not qualify model adoption, earlier
+evaluation or outcome improvement.
 
 The model writes or reuses actual task Todos through the public CLI. The worker
 reads the product packet again and checks the input digest, identity, Todo ids
