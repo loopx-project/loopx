@@ -150,7 +150,8 @@ def test_current_source_replay_and_different_successor_do_not_certify_selected_w
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("tagged", [False, True], ids=["manual-measurement", "writeback-result"])
+def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, monkeypatch, provider, tagged):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     monkeypatch.setenv("PYTHONPATH", str(fixture.REPO_ROOT))
@@ -175,7 +176,7 @@ def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, mo
     actor.probe(request, "retained")
     for index in range(4):
         measurements = project / f"measurement-{index}.json"
-        measurements.write_text(json.dumps([{"metric": "quality", "value": index,
+        measurements.write_text(json.dumps([{"metric": "quality", "value": 3 - index,
             "unit": "points", "higher_is_better": True,
             "comparison_scope": "validation:owned-v1", "input_revision": "owned-input-v1",
             "evaluation_ref": "evaluator:owned-v1", "candidate_ref": f"candidate:scope-{index}",
@@ -183,7 +184,8 @@ def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, mo
         cli("explore", "finding", *identity, "--finding-id", f"wide-result-{index}",
             "--node", "comparison-retained", "--title", f"Observed input scope {index}",
             "--summary", f"Only the recorded input scope {index}; other inputs remain unknown.",
-            "--status", "confirmed", "--tag", "writeback-result", "--evidence-ref", f"measured:scope-{index}",
+            "--status", "confirmed", *(("--tag", "writeback-result") if tagged else ()),
+            "--evidence-ref", f"measured:scope-{index}",
             "--measurements-json", str(measurements))
     turn = "wide-page-review"
     cli("quota", "should-run", *identity, "--codex-app", "--turn-instance-id", turn)
@@ -196,17 +198,20 @@ def test_wide_result_page_replays_every_linked_outcome_at_writeback(tmp_path, mo
     # Choose a quantified outcome omitted by the default three-row view.
     visible = {row["finding_id"]: row for row in page["graph"]["writeback_results"]}
     default_refs = {row["finding_id"] for row in control["explore_basis"]["comparison_candidates"][0]["outcomes"]}
-    selected = {"todo_id": fixture.TODO_ID, **next(row for row in reversed(card["outcomes"])
-        if row["finding_id"] not in default_refs and visible[row["finding_id"]].get("measurements"))}
-    measurement = visible[selected["finding_id"]]["measurements"][0]
-    assert measurement["evidence_ref"] == visible[selected["finding_id"]]["evidence_refs"][0]
     [feedback] = page["graph"]["measurement_feedback"]
     assert feedback["measured_count"] == 4
-    assert feedback["best"]["candidate_ref"] == "candidate:scope-3"
+    assert feedback["best"]["candidate_ref"] == "candidate:scope-0"
+    assert feedback["best"]["value"] == 3 and feedback["latest"]["measurement"]["value"] == 0
+    selected = {"todo_id": fixture.TODO_ID, **next(row for row in card["outcomes"]
+        if row["finding_id"] == feedback["best"]["finding_id"])}
+    assert selected["finding_id"] not in default_refs, "an older best must remain selectable beyond the first page"
+    measurement = visible[selected["finding_id"]]["measurements"][0]
+    assert measurement["evidence_ref"] == visible[selected["finding_id"]]["evidence_refs"][0]
     decision = deepcopy(control["minimal_example"])
     decision["explore_review"] = {"revision": control["explore_basis"]["revision"],
         "disposition": "used", "considered_refs": [selected["finding_id"]],
-        "selected_candidate": selected, "reason": "This exact measured scope informs the next experiment.",
+        "selected_candidate": selected,
+        "reason": "Revisit the same-scope best quality of 3 before repeating the latest candidate's score of 0.",
         "result_pages": [{k: page["graph"]["result_page"][k] for k in ("revision", "offset", "limit", "todo_id")}]}
     packet = actor.vision(request, selected["finding_id"], outcome="replan")
     packet.update(stride_decision=decision, todo_delta=["retain:" + fixture.TODO_ID])
