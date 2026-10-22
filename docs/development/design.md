@@ -802,5 +802,14 @@ automated readability score or an additional owner approval.
 Record the before/after default view and a representative expanded/error state
 in the existing PR visual evidence, with the data/build boundary. State what
 became easier to find and which detail moved behind which existing entry.
+Read the expanded content as a document: check the main reading text's size,
+the repeated explanations across rows and regions, and whether values remain
+distinct from methods, hashes and provenance. A disclosure can reduce the
+default page while leaving its requested detail unreadable. For a responsive
+disclosure change, inspect that same expanded content at a narrow width too.
+Record those observations separately from data, folding and overflow assertions
+in the review capability's `outcome_impact.user_experience.visual_review`.
+Publish the concrete composition judgment and the unverified scope; passing
+functional checks alone cannot support a visual improvement claim.
 If the main task is still buried, the design review fails even when each
 component is accessible, every field is present and the automated checks pass.

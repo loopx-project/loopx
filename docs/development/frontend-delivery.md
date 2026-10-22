@@ -226,6 +226,9 @@ Carry the same task through these steps:
    and reuse existing provenance details instead of adding footnotes to each card.
    Record the default-versus-detail choices in this same brief. Requirements,
    reviews and evidence must remain reachable without all rendering expanded.
+   Design the requested detail as well as its closed summary: comparable rows,
+   readable body text and one place for shared explanations. Moving the same
+   repeated text wall behind a disclosure does not complete this step.
 3. **Implement and challenge.** Use the smallest meaningful regression derived
    from the accepted outcome. Select realistic populated data and one negative
    or recovery path likely to falsify the claim: multiple owners, out-of-order
@@ -261,6 +264,12 @@ Carry the same task through these steps:
    Reject an information dump from the rendered evidence even when all fields
    and controls pass their local checks; report missing dense-page evidence as
    unverified rather than marking the design contract satisfied by a read receipt.
+   Fill the capability-owned `visual_review` with actual default/expanded
+   observations and the affected narrow composition, using the same captures
+   and revision boundaries. Keep automated data/folding/overflow checks distinct
+   from visual inspection. Publish the observed hierarchy, repetition and reading
+   quality, plus unverified scope; do not generalize a closed-view pass to the
+   whole page. A nonvisual change records why this review is not applicable.
 6. **Deliver and read back.** Report the observable improvement, evidence limits
    and whether code is proposed, merged, packaged or installed. After an
    authorized upgrade, reopen the exact installed surface and check the same
