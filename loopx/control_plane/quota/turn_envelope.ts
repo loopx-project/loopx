@@ -835,7 +835,6 @@ function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): st
 export function turnEnvelopeActionSignatureDocument(value: unknown): JsonObject {
   const envelope = requireJsonObject(value, "turn_envelope");
   assertSupportedQuotaPacket(envelope);
-  assertSupportedQuotaPacket(object(envelope.contract_capsule));
   const responsePlanValue = envelope.response_plan;
   const signature: JsonObject = {
     schema_version: ACTION_SIGNATURE_SCHEMA_VERSION,
@@ -963,7 +962,6 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   assertSupportedQuotaPacket(payload);
   const envelope = requireJsonObject(request.envelope, "captured decision envelope");
   assertSupportedQuotaPacket(envelope);
-  assertSupportedQuotaPacket(object(envelope.contract_capsule));
   const path = scalarString(request.captured_decision_path, "capture path");
   const turnId = scalarString(request.turn_instance_id, "capture Turn identity");
   const turnKey = scalarString(request.turn_key, "capture Turn key");
@@ -1018,7 +1016,6 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
  */
 export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
   assertSupportedQuotaPacket(envelope);
-  assertSupportedQuotaPacket(object(envelope.contract_capsule));
   const plan = object(object(envelope.writeback).settlement_plan);
   const raw = object(plan.identity);
   if (raw.replan_obligation_id == null && raw.binding_kind !== "autonomous_replan") return null;

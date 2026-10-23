@@ -112,17 +112,43 @@ def test_packet_free_release_record_keeps_original_signature_and_authority():
     assert (decision, envelope) == before
 
 
+@pytest.mark.parametrize("location", ["top_level", "contract_capsule"])
 @pytest.mark.parametrize(
     "value", [None, {}, [], "", False, {"schema_version": "unknown"}]
 )
-def test_presence_is_rejected_in_decision_or_witness_even_when_empty(value):
+def test_presence_is_rejected_in_decision_or_witness_even_when_empty(value, location):
     decision, envelope = deepcopy(MODERN["decision"]), deepcopy(MODERN["envelope"])
-    decision["protocol_action_packet"] = value
+    source = decision if location == "top_level" else decision.setdefault(location, {})
+    source["protocol_action_packet"] = value
     envelope["contract_capsule"]["protocol_action_packet"] = value
+    before = deepcopy((decision, envelope))
+    for reader in (
+        interpret_quota_should_run_packet,
+        build_turn_envelope,
+        quota_action_signature_document,
+        render_quota_should_run_markdown,
+    ):
+        with pytest.raises(EffectRuntimeRejected, match=ERROR):
+            reader(decision)
+    for use_envelope in (False, True):
+        with pytest.raises(EffectRuntimeRejected, match=ERROR):
+            _project_quota_cli_payload(
+                decision,
+                Namespace(turn_envelope=use_envelope, quota_command="should-run"),
+                frozenset(),
+                None,
+            )
     with pytest.raises(EffectRuntimeRejected, match=ERROR):
-        build_turn_envelope(decision)
+        bind_turn_decision_capture(
+            decision,
+            MODERN["envelope"],
+            captured_decision_path="capture.json",
+            turn_instance_id="fixture-turn",
+            turn_key="sha256:" + "0" * 64,
+        )
     with pytest.raises(EffectRuntimeRejected, match=ERROR):
         extract_turn_authority({"turn_envelope": envelope})
+    assert (decision, envelope) == before
 
 
 @pytest.mark.parametrize(

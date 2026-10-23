@@ -302,8 +302,10 @@ export function effectProgramFromOrderedSteps(
  * to strip a signed dimension and reinterpret the remaining record.
  */
 export function assertSupportedQuotaPacket(packet: JsonObject): void {
-  if (Object.hasOwn(packet, "protocol_action_packet")) {
-    throw new EffectRuntimeRequestError("unsupported format: protocol_action_packet; use a fresh typed quota decision");
+  for (const source of [packet, asObject(packet.contract_capsule)]) {
+    if (Object.hasOwn(source, "protocol_action_packet")) {
+      throw new EffectRuntimeRequestError("unsupported format: protocol_action_packet; use a fresh typed quota decision");
+    }
   }
 }
 
