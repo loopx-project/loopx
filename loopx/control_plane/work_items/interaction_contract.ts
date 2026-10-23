@@ -82,8 +82,17 @@ export function projectBlockedSuccessorWaitObservation(request: JsonObject): Jso
 
 export const INTERACTION_CONTRACT_SCHEMA_VERSION =
   "loopx_interaction_contract_v0";
+export const INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION =
+  "interaction_execution_facts_v0";
+export const INTERACTION_EXECUTION_DECISION_SCHEMA_VERSION =
+  "interaction_execution_decision_v0";
 
 const USER_CHANNEL_NOTIFICATION_POLICIES = ["NOTIFY", "DONT_NOTIFY"] as const;
+
+// Interaction mode names the obligation; derive its existing compatibility
+// spelling from the owner-generated effective-action value.
+const EXTERNAL_OBSERVATION_MODE =
+  EffectiveAction.EXTERNAL_EVIDENCE_OBSERVE.replace("observe", "observation");
 
 export interface UserInteractionChannel extends JsonObject {
   action_required: boolean;
@@ -133,6 +142,297 @@ interface InteractionConsistencyFacts {
   quiet_noop_allowed: boolean;
   spend_allowed_now: boolean;
   spend_after_validation: boolean;
+}
+
+interface PermissionFact {
+  present: boolean;
+  value: boolean | null;
+}
+
+export interface InteractionExecutionDecision extends JsonObject {
+  schema_version: typeof INTERACTION_EXECUTION_DECISION_SCHEMA_VERSION;
+  mode: string;
+  must_attempt: boolean;
+  delivery_allowed: boolean;
+  quiet_noop_allowed: boolean;
+  attempt_basis: string;
+  delivery_basis: string;
+  normalization_diagnostics: string[];
+}
+
+function optionalString(value: unknown, label: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new EffectRuntimeRequestError(`${label} must be a string or null`);
+  }
+  return value;
+}
+
+function permissionFact(
+  source: JsonObject,
+  field: string,
+  label: string,
+): PermissionFact {
+  if (!Object.hasOwn(source, field)) return {present: false, value: null};
+  const value = source[field];
+  if (value === null) return {present: true, value: null};
+  return {present: true, value: requireBoolean(value, label)};
+}
+
+function quietModeAllowsNoop(
+  mode: string,
+  agentScopeActions: ReadonlySet<string>,
+): boolean {
+  return agentScopeActions.has(mode) || [
+    "monitor_quiet_skip",
+    "mapped_noop_if_unchanged",
+    "quota_throttled",
+    "blocked_wait",
+    "user_gate_cooldown_wait",
+    "terminal_no_followup",
+    "peer_coordination_blocked",
+    "agent_monitor_only",
+    "skip",
+  ].includes(mode);
+}
+
+/**
+ * One domain owner for the selected interaction mode and its execution facts.
+ * Python transports bounded source facts and renders compatibility fields from
+ * this decision; it does not infer a second attempt/delivery permission.
+ */
+export function projectInteractionExecution(value: unknown): InteractionExecutionDecision {
+  const request = requireJsonObject(value, "interaction execution facts");
+  if (request.schema_version !== INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION) {
+    throw new EffectRuntimeRequestError(
+      `interaction_execution_facts.schema_version must be ${INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION}`,
+    );
+  }
+  const action = optionalString(request.effective_action, "effective_action") ?? "";
+  const state = optionalString(request.state, "state") ?? "";
+  const obligationValue = request.canonical_execution;
+  if (obligationValue !== undefined && obligationValue !== null
+      && (typeof obligationValue !== "object" || Array.isArray(obligationValue))) {
+    throw new EffectRuntimeRequestError("canonical_execution must be an object or null");
+  }
+  const obligation = obligationValue == null ? {} : obligationValue as JsonObject;
+  const attemptFact = permissionFact(
+    obligation,
+    "must_attempt_work",
+    "canonical_execution.must_attempt_work",
+  );
+  const canonicalDelivery = permissionFact(
+    obligation,
+    "delivery_allowed",
+    "canonical_execution.delivery_allowed",
+  );
+  const normalDelivery = permissionFact(
+    request,
+    "normal_delivery_allowed",
+    "normal_delivery_allowed",
+  );
+  const recoveryDelivery = permissionFact(
+    request,
+    "recovery_delivery_allowed",
+    "recovery_delivery_allowed",
+  );
+  const selfRepair = permissionFact(
+    request,
+    "self_repair_allowed",
+    "self_repair_allowed",
+  );
+  const userRequired = requireBoolean(request.user_required, "user_required");
+  const scopedFallback = requireBoolean(
+    request.scoped_user_gate_fallback,
+    "scoped_user_gate_fallback",
+  );
+  const notificationSuppressed = requireBoolean(
+    request.user_gate_notification_suppressed,
+    "user_gate_notification_suppressed",
+  );
+  const notifyUserOnGate = requireBoolean(
+    request.notify_user_on_gate,
+    "notify_user_on_gate",
+  );
+  const notifyUserOnOpenTodo = requireBoolean(
+    request.notify_user_on_open_todo,
+    "notify_user_on_open_todo",
+  );
+  const stopIfUnchanged = requireBoolean(
+    request.stop_if_unchanged,
+    "stop_if_unchanged",
+  );
+  const blockedSuccessorWaitObservation = requireBoolean(
+    request.blocked_successor_wait_observation,
+    "blocked_successor_wait_observation",
+  );
+  const observationRequired = requireBoolean(
+    request.observation_required,
+    "observation_required",
+  );
+  const replanRequired = requireBoolean(
+    request.replan_required,
+    "replan_required",
+  );
+  const agentScopeActions = new Set(
+    requireStringArray(
+      request.agent_scope_frontier_actions,
+      "agent_scope_frontier_actions",
+    ),
+  );
+
+  if (attemptFact.value === false && canonicalDelivery.value === true) {
+    throw new EffectRuntimeRequestError(
+      "canonical_execution.delivery_allowed cannot be true when must_attempt_work is false",
+      "interaction_contract.delivery_without_attempt",
+    );
+  }
+
+  let deliverySource = "none";
+  let rawDelivery = false;
+  if (canonicalDelivery.present) {
+    rawDelivery = canonicalDelivery.value === true;
+    deliverySource = canonicalDelivery.value === null ? "canonical_null" : "canonical";
+  } else if (normalDelivery.value === true) {
+    rawDelivery = true;
+    deliverySource = "compatibility_normal";
+  } else if (recoveryDelivery.value === true) {
+    rawDelivery = true;
+    deliverySource = "compatibility_recovery";
+  } else if (selfRepair.value === true) {
+    rawDelivery = true;
+    deliverySource = "compatibility_self_repair";
+  }
+  let rawAttempt = attemptFact.value === true;
+  if (action === EffectiveAction.GOVERNED_CAPABILITY_INTENT) {
+    rawDelivery = rawAttempt;
+    deliverySource = "canonical_attempt";
+  }
+
+  const fixedBeforeUserGate = ([
+    EffectiveAction.HEARTBEAT_SETTLED_SKIP,
+    EffectiveAction.GOVERNED_CAPABILITY_INTENT,
+    EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY,
+    EffectiveAction.AGENT_MONITOR_ONLY,
+    EffectiveAction.MONITOR_DUE,
+    EffectiveAction.TERMINAL_NO_FOLLOWUP,
+    EffectiveAction.PEER_COORDINATION_BLOCKED,
+    EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED,
+  ] as readonly string[]).includes(action)
+    || action === EffectiveAction.SCOPED_USER_GATE_FALLBACK || scopedFallback
+    || notificationSuppressed;
+  const userGateApplies = userRequired && !fixedBeforeUserGate;
+  const boundedNotice = userGateApplies && rawAttempt && rawDelivery;
+
+  let mustAttempt = rawAttempt;
+  let deliveryAllowed = rawDelivery;
+  if (userGateApplies && !boundedNotice) {
+    mustAttempt = false;
+    deliveryAllowed = false;
+  }
+  if (action === EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED) {
+    mustAttempt = true;
+  }
+  if (blockedSuccessorWaitObservation) {
+    mustAttempt = true;
+  }
+
+  let mode: string;
+  if (action === EffectiveAction.HEARTBEAT_SETTLED_SKIP) {
+    mode = "heartbeat_settled_skip";
+  } else if (action === EffectiveAction.GOVERNED_CAPABILITY_INTENT) {
+    mode = action;
+  } else if (action === EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY) {
+    mode = action;
+  } else if (action === EffectiveAction.AGENT_MONITOR_ONLY) {
+    mode = "agent_monitor_only";
+  } else if (action === EffectiveAction.MONITOR_DUE) {
+    mode = "monitor_due";
+  } else if (action === EffectiveAction.TERMINAL_NO_FOLLOWUP || state === "terminal_no_followup") {
+    mode = "terminal_no_followup";
+  } else if (action === EffectiveAction.PEER_COORDINATION_BLOCKED) {
+    mode = action;
+  } else if (scopedFallback) {
+    mode = "scoped_user_gate_fallback";
+  } else if (notificationSuppressed) {
+    mode = "user_gate_cooldown_wait";
+  } else if (action === EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED) {
+    mode = "automation_prompt_upgrade";
+  } else if (userRequired) {
+    if (boundedNotice) {
+      mode = "bounded_delivery_with_user_notice";
+    } else if (notifyUserOnGate || state === "operator_gate") {
+      mode = "user_gate";
+    } else if (notifyUserOnOpenTodo) {
+      mode = "user_todo_blocker_push";
+    } else {
+      mode = "user_action_required";
+    }
+  } else if (observationRequired) {
+    mode = EXTERNAL_OBSERVATION_MODE;
+  } else if (replanRequired) {
+    mode = "autonomous_replan";
+  } else if (action === EffectiveAction.COORDINATE_TASK_BUNDLE) {
+    mode = "task_orchestration";
+  } else if (agentScopeActions.has(action)) {
+    mode = action;
+  } else if (action === EffectiveAction.MONITOR_QUIET_SKIP) {
+    mode = "monitor_quiet_skip";
+  } else if (recoveryDelivery.value === true || action === EffectiveAction.OUTCOME_FLOOR_RECOVERY) {
+    mode = "outcome_floor_recovery";
+  } else if (action === EffectiveAction.CAPABILITY_BRIDGE_REPAIR) {
+    mode = "capability_bridge_repair";
+  } else if (action === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    mode = action;
+  } else if (action === EffectiveAction.BOUNDARY_PROJECTION_REPAIR) {
+    mode = "boundary_projection_repair";
+  } else if (selfRepair.value === true) {
+    mode = "control_plane_self_repair";
+  } else if (stopIfUnchanged) {
+    mode = "mapped_noop_if_unchanged";
+  } else if (deliveryAllowed) {
+    mode = "bounded_delivery";
+  } else if (state === "blocked_health") {
+    mode = "health_blocked";
+  } else if (state === "throttled") {
+    mode = "quota_throttled";
+  } else if (state === "waiting" || state === "focus_wait") {
+    mode = "blocked_wait";
+  } else {
+    mode = "skip";
+  }
+
+  if (mode === "mapped_noop_if_unchanged") {
+    deliveryAllowed = false;
+    deliverySource = "mapped_noop";
+  }
+  deliveryAllowed = mustAttempt && deliveryAllowed;
+  const normalizationDiagnostics: string[] = [];
+  if (rawDelivery && !mustAttempt) {
+    normalizationDiagnostics.push("interaction_contract.delivery_without_attempt");
+  }
+  const quietNoopAllowed = !userRequired && !mustAttempt && quietModeAllowsNoop(mode, agentScopeActions);
+  const attemptBasis = blockedSuccessorWaitObservation
+    ? "blocked_successor_observation"
+    : action === EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED
+      ? "automation_prompt_upgrade"
+      : attemptFact.present
+        ? "canonical"
+        : "none";
+  if (!deliveryAllowed && deliverySource !== "none") {
+    deliverySource = mustAttempt ? deliverySource : "attempt_required";
+  }
+
+  return {
+    schema_version: INTERACTION_EXECUTION_DECISION_SCHEMA_VERSION,
+    mode,
+    must_attempt: mustAttempt,
+    delivery_allowed: deliveryAllowed,
+    quiet_noop_allowed: quietNoopAllowed,
+    attempt_basis: attemptBasis,
+    delivery_basis: deliverySource,
+    normalization_diagnostics: normalizationDiagnostics,
+  };
 }
 
 /** The scheduler and typed consumers share these rules, not independent copies. */

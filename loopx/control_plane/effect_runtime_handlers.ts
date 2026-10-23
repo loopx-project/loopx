@@ -803,6 +803,7 @@ export function createEffectRuntimeHandlers(
 
     ["turn.settlement.reduce", lazyHandler(() => import("./turn_driver/settlement.ts"), ({reduceTurnSettlementTransaction}) => reduceTurnSettlementTransaction)],
     ["turn.host_todo_completion.evaluate", lazyHandler(() => import("./turn_driver/host_todo_completion.ts"), ({evaluateHostTodoCompletion}) => evaluateHostTodoCompletion)],
+    ["work_item.interaction_execution.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectInteractionExecution}) => projectInteractionExecution)],
     ["work_item.interaction_reads.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectInteractionRequiredReads}) => projectInteractionRequiredReads)],
     ["work_item.blocked_wait_observation.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectBlockedSuccessorWaitObservation}) => projectBlockedSuccessorWaitObservation)],
     ["work_item.context.plan", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({planInteractionWorkContext}) => planInteractionWorkContext)],
