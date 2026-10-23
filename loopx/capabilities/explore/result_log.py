@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ...file_lock import exclusive_file_lock
+from ...control_plane.runtime.time import chronology_key
 
 
 EXPLORE_RESULT_EVENT_SCHEMA_VERSION = "loopx_explore_result_event_v0"
@@ -1086,7 +1087,7 @@ def build_explore_result_projection(
         _node_view(event, finding_count=finding_counts.get(str(event.get("result_id")), 0))
         for event in sorted(
             _fold_by_result_id(scoped, event_kind=EVENT_KIND_NODE),
-            key=lambda item: str(item.get("first_recorded_at") or ""),
+            key=lambda item: chronology_key(item.get("first_recorded_at")),
         )
     ]
     edges = [
@@ -1095,7 +1096,7 @@ def build_explore_result_projection(
     edges = [*edges, *_materialized_parent_edges(nodes, edges)]
     findings = sorted(
         (_finding_view(event) for event in folded_findings),
-        key=lambda item: item["last_updated_at"],
+        key=lambda item: chronology_key(item["last_updated_at"]),
         reverse=True,
     )
 

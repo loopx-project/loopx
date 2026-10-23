@@ -5,6 +5,24 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {projectStrideExploreBasis, strideReviewMismatch} from "../../loopx/control_plane/work_items/stride_policy.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
 
+test("recent questions use UTC instants, preserve microseconds and retain legacy timestamps", () => {
+  for (const timestamps of [
+    ["2026-01-02T08:00:00+08:00", "2026-01-02T00:01:00Z", "2026-01-01T19:02:00-05:00"],
+    ["2026-01-02T08:00:00.000001+08:00", "2026-01-02T00:00:00.000002Z"],
+    ["unknown", "2026-01-02T00:00:00"],
+  ]) {
+    const nodes = timestamps.map((last_updated_at, index) => ({node_id: `node-${index}`, last_updated_at}));
+    const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
+      graph_enabled: true, harness_gate: {enabled: false},
+      projection: {nodes, findings: [], edges: []}, plan: {}};
+    const original = structuredClone(request);
+    const result = projectExploreTurnContext(request).graph as JsonObject;
+    assert.deepEqual(result.recent_nodes.map(row => row.node_id), nodes.map(row => row.node_id).reverse());
+    assert.deepEqual(request, original);
+    assert.equal(projectExploreTurnContext({...request, graph_enabled: false}).graph, null);
+  }
+});
+
 test("next-turn evidence exposes current question state and relation changes invalidate old pages", () => {
   const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
     graph_enabled: true, harness_gate: {enabled: false}, result_limit: 1,

@@ -3,6 +3,7 @@ import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
@@ -11,6 +12,14 @@ import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
+}
+function newestNodeFirst(left: JsonObject, right: JsonObject): number {
+  const a = String(left.last_updated_at ?? ""), b = String(right.last_updated_at ?? "");
+  const at = parseTodoTimestampMicros(a.trim()), bt = parseTodoTimestampMicros(b.trim());
+  // Compare instants before bounding context. Retain deterministic legacy rows
+  // after dated evidence, without rewriting their original timestamps.
+  return (at !== null && bt !== null ? Number(bt - at) : Number(bt !== null) - Number(at !== null))
+    || b.localeCompare(a);
 }
 function compact(row: JsonObject, fields: string[]): JsonObject {
   return Object.fromEntries(fields.filter(key => row[key] !== undefined)
@@ -95,8 +104,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const projection = requireJsonObject(params.projection, "projection");
   const plan = requireJsonObject(params.plan, "plan");
   // The canonical graph retains creation order; this bounded view needs update order.
-  const nodes = rows(projection.nodes).sort((a, b) =>
-    String(b.last_updated_at ?? "").localeCompare(String(a.last_updated_at ?? "")));
+  const nodes = rows(projection.nodes).sort(newestNodeFirst);
   const findings = rows(projection.findings);
   if (params.include_finding_digests != null && typeof params.include_finding_digests !== "boolean") {
     throw new EffectRuntimeRequestError("include_finding_digests must be a boolean");
