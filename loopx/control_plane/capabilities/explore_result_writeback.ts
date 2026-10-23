@@ -67,6 +67,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
       "Keep raw logs local.",
       "Attach measurements when an evaluation returns quantitative evidence: include its metric, unit, explicit direction, candidate and result reference. Use the same comparison_scope only for the same task, evaluator, model/resource budget and evaluation conditions; separate local proxies from native results.",
       "input_revision identifies the evaluated task/data revision; evaluation_ref identifies the evaluator/scoring protocol version. Keep both stable across candidates only when those conditions are verified unchanged. Put candidate code/artifact revisions in candidate_ref and individual evaluation/submission receipts in evidence_ref, not in the comparison keys. The measurement input revision and evidence reference must match this finding. If comparability is unknown, keep results separate and explain the uncertainty; never invent a shared version to obtain a delta.",
+      "To reuse explicitly verified conditions, optional measurement_context supplies comparison_scope, input_revision and evaluation_ref for observations that omit those fields; conflicting fields reject. CLI finding accepts the same context via --measurement-context-json. This copies declared conditions, not proof of comparability.",
       "Use null for an unmeasured value. Read measurement_feedback before repeating a measured route: compare the latest recorded candidate with its same-scope best, investigate regressions and retain useful alternatives; a score does not itself close or authorize work.",
       "When an experiment has execution evidence, attach execution_observation: preserve its exact candidate and input version, planned versus executed method, change reason and measured resources. Missing measurements are null, not zero. A finding source digest is not an executable digest. Result evidence must name the candidate it actually evaluated, including delayed or regressing results; it does not certify current workspace quality or Goal completion.",
       "Observations allow 320 characters, interpretations 1200; the complete scoped summary is preserved within 2000 characters.",
@@ -83,7 +84,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
 }
 
 const FIELDS = ["schema_version", "node_id", "question", "applicability", "input_revision",
-  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements"];
+  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context"];
 // Reuse the persisted Explore node/edge vocabulary, distinct from finding status.
 const QUESTION_STATUSES = ["open", "exploring", "blocked", "resolved", "dead_end"] as const;
 const RELATION_TYPES = ["subtopic_of", "depends_on", "answers", "supports", "refutes", "leads_to"] as const;
@@ -166,7 +167,11 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
   });
   const execution = Object.hasOwn(row, "execution_observation")
     ? normalizeExploreExecutionObservation({observation: row.execution_observation}) : null;
-  const measurements = Object.hasOwn(row, "measurements") ? normalizeExploreMeasurements(row.measurements) : null;
+  if (Object.hasOwn(row, "measurement_context") && !Object.hasOwn(row, "measurements")) {
+    throw new EffectRuntimeRequestError("measurement_context requires measurements");
+  }
+  const measurements = Object.hasOwn(row, "measurements")
+    ? normalizeExploreMeasurements(row.measurements, row.measurement_context) : null;
   if (measurements?.some(item => item.input_revision !== text(row.input_revision, "input_revision", 160)
     || !refs.includes(item.evidence_ref))) {
     throw new EffectRuntimeRequestError("measurements must retain this finding's input revision and evidence references");
@@ -189,7 +194,7 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
 }
 /** Explicit reference, not inferred evidence. Preserve every route item verbatim. */
 function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedScope: unknown): JsonObject {
-  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements"];
+  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context"];
   if (Object.keys(row).some(key => !fields.includes(key))) {
     throw new EffectRuntimeRequestError("Explore path_delta attachment contains unknown fields");
   }

@@ -42,6 +42,7 @@ def handle_todo_list_command(
             project=Path(args.project).expanduser() if args.project else None,
             state_file=Path(args.state_file).expanduser() if args.state_file else None,
             runtime_root_arg=runtime_root_arg,
+            json_references=(format_name or str(getattr(args, "format", None) or "markdown")) == "json",
         )
     except Exception as exc:
         from ..usage_ping import capture_failure
@@ -56,6 +57,7 @@ def handle_todo_list_command(
     )
     output_format = format_name or str(getattr(args, "format", None) or "markdown")
     if (payload.get("ok") and not args.todo_id and not args.todo_thin
+            and "todo_list_record_references" not in payload
             and output_format == "json"):
         try:
             payload = effect_runtime_result(

@@ -285,6 +285,12 @@ labels, invented completion or a new frontend score.
   per-cell footnotes. On wide screens, use a compact value band so the related
   graph or result remains nearby; reflow on narrower screens. Merge optional
   source, method and cost material into the existing disclosure where practical.
+  In recorded measurement groups, align values and units, keep direction and
+  zero/unknown differences visible, and share one source disclosure across the
+  group. Requested provenance uses readable label/value rows with complete
+  identities; it must not become a smaller-font wall of hashes and paragraphs.
+  已记录的测量按组对齐数值与单位，保留方向、零和未测量的区别，共用一个来源入口；
+  展开来源后使用正常字号的标签/值排版，完整身份可读，不堆小字哈希与段落。
 - In an expanded assessment, make items comparable before asking the owner to
   read their evidence: one compact row per declared item, with its identity and
   actual judgment. Show the shared interpretation once on demand. Expand an

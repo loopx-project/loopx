@@ -182,6 +182,30 @@ Schema changes are explicit: unknown `user_version`, foreign tables or a
 different goal/incarnation fail closed. No automatic migration, identity
 rotation, corruption repair, or network-filesystem sharing is supported.
 
+### Cursor covering index
+
+New version-2 databases include a non-unique index over `commits(cursor)`.
+The existing explicit V1-to-V2 migration uses the same table builder and creates
+its index inside the migration transaction. The narrower index reduces the
+pages SQLite visits for the exact continuity count; the count remains dependent
+on retained history. Head, parent, digest, checkpoint and original-receipt proofs
+are unchanged. The index stores no new authority or operation receipt.
+
+Ordinary reads and writes do not add the index to existing version-2 databases.
+Those databases retain their current query plan and remain supported without a
+rebuild. This additive physical index leaves `user_version=2`, metadata and all
+logical rows unchanged; earlier V2 readers can read indexed databases, and the
+current reader accepts databases without the index. Reverting the binary does
+not require deleting it. Any existing-Goal rebuild still requires the existing
+explicit migration/recovery route and its authorization, rather than an implicit
+upgrade during a command.
+
+The index adds storage pages and write maintenance. Measure those costs with
+matched reads and writes, page/WAL traffic and complete CLI calls under the
+original declared profile. Keep unmeasured payload, headroom and elapsed rows
+explicit; a faster count alone does not qualify all of D2. Provider selection
+and migration permission do not change with this index.
+
 ## Read integrity
 
 Direct retries follow the [authority operation replay contract](authority-operation-replay.md):

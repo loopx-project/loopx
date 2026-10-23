@@ -227,7 +227,7 @@ def test_large_display_context_preserves_full_source_without_expanding_transport
     assert result["done_count"] == 1000 and result["total_count"] == 1000
     assert len(result["items"]) == 12
     assert result["recent_completed_advancement_items"][0]["handoff_note"]["summary"] == "a" * 279 + "..."
-    assert calls == ["todo.summary.project", "todo.context.page"]
+    assert calls == ["todo.read"]
 
 
 def test_byte_bounded_context_batches_retain_every_record(monkeypatch):

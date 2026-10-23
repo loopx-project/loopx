@@ -61,6 +61,12 @@ from loopx.todos import (
 )
 
 
+def _assert_same_todo_content(current, expected):
+    assert current["projection_envelope"]["coverage"] == expected["projection_envelope"]["coverage"]
+    assert {key: value for key, value in current.items() if key != "projection_envelope"} == {
+        key: value for key, value in expected.items() if key != "projection_envelope"}
+
+
 def _engage_fence(runtime_root: Path, goal_id: str = "goal-a") -> None:
     path = legacy_coordination_writer_fence_path(
         runtime_root=runtime_root,
@@ -1116,29 +1122,13 @@ def test_todo_list_uses_provider_after_cutover_even_when_markdown_disagrees(
         ),
         encoding="utf-8",
     )
-    _engage_fence(runtime_root)
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=[{
+        "schema_version": "todo_item_v0", "todo_id": "todo_provider", "index": 1,
+        "role": "agent", "status": "open", "done": False, "text": "provider Todo",
+        "task_class": "advancement_task", "archive_state": "active", "source_section": "Agent Todo",
+    }])
+    initialize_canonical_authority(runtime_root, "goal-a", projection, state_path=state_file)
     state_file.unlink()
-    monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda method, params, **_kwargs: single_snapshot_page({
-            "status": "loaded",
-            "todos": [
-                {
-                    "todo_id": "todo_provider",
-                    "role": "agent",
-                    "status": "open",
-                    "text": "provider Todo",
-                }
-            ],
-            "todo_read_model": _todo_read_model(1),
-            "provider_revision": "file:2",
-            "cursor": "2",
-            "source_authority": "file_v0",
-            "decision_read_from_provider": True,
-            "legacy_fallback_used": False,
-        }),
-    )
-
     result = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
 
     assert result["source"] == "file_authority"
@@ -1255,7 +1245,7 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
     assert preview["status"] == "planned"
     assert preview["todo_changed"] is True
     assert preview["lease_changed"] is True
-    assert list_goal_todos(registry_path=registry_path, goal_id="goal-a") == before
+    _assert_same_todo_content(list_goal_todos(registry_path=registry_path, goal_id="goal-a"), before)
 
     applied = json.loads(
         subprocess.run(
@@ -1298,7 +1288,7 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
     preview_edit = invoke_edit([*edit, "--dry-run"])
     assert preview_edit.returncode == 0, preview_edit.stdout + preview_edit.stderr
     assert json.loads(preview_edit.stdout)["status"] == "planned"
-    assert list_goal_todos(registry_path=registry_path, goal_id="goal-a") == after
+    _assert_same_todo_content(list_goal_todos(registry_path=registry_path, goal_id="goal-a"), after)
     first_edit = invoke_edit(edit)
     assert first_edit.returncode == 0, first_edit.stdout + first_edit.stderr
     assert json.loads(first_edit.stdout)["status"] == "applied"

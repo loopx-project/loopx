@@ -409,10 +409,13 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     def archive(handle, remote):
         copied.append(str(remote))
         payload = io.BytesIO()
+        event = json.dumps({"type": "event_msg", "payload": {"type": "task_complete",
+            "error": {"message": "PRIVATE-SENTINEL", "codex_error_info": {
+                "response_too_many_failed_attempts": {"http_status_code": 429}}}}}).encode() + b"\n"
         with tarfile.open(fileobj=payload, mode="w") as bundle:
-            member = tarfile.TarInfo("session.jsonl")
-            member.size = 2
-            bundle.addfile(member, io.BytesIO(b"{}"))
+            member = tarfile.TarInfo("sessions/fixture/session.jsonl")
+            member.size = len(event)
+            bundle.addfile(member, io.BytesIO(event))
         return payload.getvalue()
     monkeypatch.setattr(backend, "copy_from_container", archive)
     monkeypatch.setattr(DockerBackend, "cleanup_container",
@@ -426,6 +429,40 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     assert cleaned == ["fixture-container"]
     assert all(row["collected"] for row in json.loads(
         (backend.log_dir / "artifact-collection.json").read_text()))
+    assert backend.provider_failure_receipt == {
+        "schema_version": "codex_terminal_provider_failure_v0",
+        "kind": "response_too_many_failed_attempts",
+        "http_status_code": 429,
+    }
+    assert "PRIVATE-SENTINEL" not in json.dumps(backend.provider_failure_receipt)
+
+
+def test_provider_observation_failure_cannot_skip_native_cleanup(tmp_path, monkeypatch):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    backend.checkpoint = None
+    backend.log_dir = tmp_path / "artifacts"
+    backend.feedback = None
+    backend.provider_failure_receipt = None
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w"):
+        pass
+    monkeypatch.setattr(backend, "copy_from_container", lambda *args: payload.getvalue())
+    monkeypatch.setattr("benchmark.runtime.sforge_backend.observe_terminal_provider_failure",
+                        lambda *args: (_ for _ in ()).throw(TypeError("unknown event shape")))
+    cleaned = []
+    monkeypatch.setattr(DockerBackend, "cleanup_container",
+                        lambda self, handle, logger: cleaned.append(handle))
+
+    backend.cleanup_container("fixture-container")
+
+    assert cleaned == ["fixture-container"]
+    assert backend.provider_failure_receipt is None
+    observations = json.loads((backend.log_dir / "artifact-collection.json").read_text())
+    assert {"artifact": "provider-failure-observation", "collected": False,
+            "error_kind": "TypeError"} in observations
 
 
 @pytest.mark.parametrize("fail", [False, True])

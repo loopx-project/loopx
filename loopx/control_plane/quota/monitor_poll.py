@@ -819,19 +819,24 @@ def record_quota_monitor_poll_for_decision(
             agent_id=decision_agent_id,
             effect_id=effect_id,
         )
-    canonical_source = None
     if execute and (safe_todo_id or safe_target_key) and not use_current_task_lease:
         from ..coordination.local_authority import (
+            CanonicalAuthorityRequired,
             read_canonical_todos_if_promoted,
         )
 
-        # Provider loss is not permission to recover from a historical source.
-        # None alone means the source is unmigrated; the original quota owner
-        # may still validate and settle its existing transaction below.
-        canonical_source = read_canonical_todos_if_promoted(
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-        )
+        # Selected-provider failure always refuses. Only an existing transaction
+        # may reach the typed recovery owner before fresh canonical admission;
+        # file existence routes the request, never validates its receipt.
+        try:
+            read_canonical_todos_if_promoted(
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+            )
+        except CanonicalAuthorityRequired:
+            if not _monitor_poll_receipt_path(runtime_root, goal_id, effect_id).exists():
+                raise
+            recovery_effect_id = effect_id
     decision = _decision_packet(
         before,
         goal_id=goal_id,
@@ -938,15 +943,6 @@ def record_quota_monitor_poll_for_decision(
         # Validate explicit claim routing before quota reserves a pending effect.
         # Exact retries keep their frozen admission if registry membership changed.
         receipt_path = _monitor_poll_receipt_path(runtime_root, goal_id, effect_id)
-        if (execute and not use_current_task_lease and canonical_source is None
-                and not receipt_path.exists()):
-            from ..coordination.local_authority import require_canonical_authority
-
-            # This existence check only routes the original operation while
-            # holding quota admission. TypeScript validates its contents,
-            # fingerprint and frozen decision before replay or provider dispatch.
-            # Without it, refuse before creating a new pending reservation.
-            require_canonical_authority(goal_id=goal_id, operation="monitor_poll")
         if next_claimed_by and registry_path is not None and not receipt_path.exists():
             plan_todo_authoring_scope(
                 command="create", role="agent", goal_id=goal_id,

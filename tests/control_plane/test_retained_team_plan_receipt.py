@@ -1,4 +1,7 @@
+
 """Recover a fixed 1.x receipt through the current public adapter."""
+
+from canonical_authority_fixture import assert_todo_read_unchanged
 import json
 from pathlib import Path
 
@@ -46,5 +49,5 @@ def test_original_1x_team_receipt_survives_canonical_later_writes(tmp_path, monk
         apply_team_plan(registry_path=registry, goal_id="goal-a", agent_id=None,
             proposal={**history["plan"], "objective": "Changed original intent"},
             expected_state_fingerprint=history["basis"])
-    assert list_goal_todos(registry_path=registry, goal_id="goal-a") == before
+    assert_todo_read_unchanged(list_goal_todos(registry_path=registry, goal_id="goal-a"), before)
     assert state.read_bytes() == display

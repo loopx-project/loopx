@@ -183,11 +183,25 @@ def private_handoff(request):
                 assert not thread.is_alive()
 
 
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('enabled', [False, True])
 @pytest.mark.parametrize('private_handoff', [False, True], indirect=True)
-def test_real_worker_generated_guard_selection_reentry_and_settle_once(tmp_path, enabled, private_handoff):
+def test_real_worker_generated_guard_selection_reentry_and_settle_once(
+    tmp_path, monkeypatch, provider, enabled, private_handoff,
+):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
+    state = project / f'.codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md'
+    original_state = state.read_bytes()
+    rc, refused = _run_cli(registry, runtime, 'todo', 'list', '--goal-id', GOAL_ID)
+    assert rc == 1 and refused['error_code'] == 'canonical_authority_required', refused
+    assert refused['legacy_fallback_used'] is False and state.read_bytes() == original_state
+    # Explicitly convert the disposable fixture before the worker runs. Its
+    # ordinary guard must not recover authority from the Markdown projection.
+    _initialize_fixture_authority(project, runtime, provider=provider)
     logs = tmp_path / 'wake logs'
     (logs / TURN_ID).mkdir(parents=True)
     env = dict(os.environ, PYTHONPATH=str(REPO_ROOT),

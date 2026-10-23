@@ -94,6 +94,14 @@ text is not parsed into a category or copied into the receipt. The existing
 that repeats an error does not increment it. A later native continuation clears
 the terminal-error fields and may complete normally.
 
+The EdgeBench collector also reads a bounded tail of retained Codex session
+JSONL after cleanup. An allowlisted structured terminal provider failure is
+reduced to its kind and HTTP status under `provider_failure` in
+`runtime-receipt.json`. This covers ordinary official workers whose terminal
+process exit otherwise loses the provider cause. Free text, provider messages,
+session paths and unknown error variants are excluded; their absence remains
+unknown rather than a guessed success or failure classification.
+
 The EdgeBench adapter carries this outcome through artifact collection into
 `runtime-receipt.json`. If a native Goal fails after execution starts, its
 `partial_result.json` retains the complete native scoring result, with explicit

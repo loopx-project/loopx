@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import http.client
+import hashlib
 import json
 import shlex
 import threading
@@ -161,6 +162,44 @@ def test_returned_cli_proposal_commands_complete_without_app(source_app):
     assert {p["agent_id"]: p["current"] for p in app["goal_acceptance_contract"]["goal_objective"]["peer_adoption"]} == {"agent-a": True, "agent-b": False}
     assert (project / "state.md").read_bytes() == original
     assert global_cli("inspect", override=shared)[1] == decoy
+
+
+def test_postgresql_selection_explains_missing_service_without_fallback(source_app):
+    project, _, source, global_cli, request, _, shared = source_app
+    source_before = source("inspect")[1]
+    decoy = global_cli("inspect", override=shared)[1]
+    original = (project / "state.md").read_bytes()
+    runtime = project.parent / "runtime"
+    marker = runtime / "authority" / f"provider-{hashlib.sha256(GOAL.encode()).hexdigest()}.json"
+    previous = marker.read_bytes() if marker.exists() else None
+    selector = json.dumps({"schema_version": "loopx_local_authority_provider_v0",
+        "provider": "postgresql", "goal_id": GOAL, "tenant_id": "fixture-tenant",
+        "store_identity": "postgresql:" + "a" * 32}).encode()
+    marker.write_bytes(selector)
+    document = project / "service-objective.json"
+    document.write_text(json.dumps({"objective": "Maintain exports and recovery",
+        "reason": "Recorded owner direction", "source_ref": "message:owner"}))
+    try:
+        for arguments in [("inspect",), ("prepare-objective", "--agent-id", "agent-a",
+                "--document", str(document), "--operation-id", "unavailable-service", "--execute")]:
+            code, refused = global_cli(*arguments)
+            assert code == 1 and refused["error"] == "local_authority_provider_unavailable", refused
+            detail = refused.get("error_detail", "")
+            assert "PostgreSQL" in detail and "service-owned store factory" in detail, refused
+            assert "host" in detail and "File/SQLite" in detail, refused
+            assert str(runtime) not in detail and "fixture-tenant" not in detail
+        status, app = request("GET", f"/api/chat/goal-acceptance?goal_id={GOAL}")
+        assert status == 409 and app["error_code"] == "goal_acceptance_unavailable"
+        assert request("GET", f"/api/actions?goal_id={GOAL}")[1]["proposals"] == []
+        assert marker.read_bytes() == selector
+        assert (project / "state.md").read_bytes() == original
+        assert global_cli("inspect", override=shared)[1] == decoy
+    finally:
+        if previous is None:
+            marker.unlink()
+        else:
+            marker.write_bytes(previous)
+    assert source("inspect")[1] == source_before
 
 
 @pytest.mark.parametrize("failure", ["missing", "unreadable", "removed", "unpromoted", "stopped"])

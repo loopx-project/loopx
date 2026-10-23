@@ -18,6 +18,7 @@ from ..capabilities.repository_change_window import (
     repository_delivery_interaction_hook,
 )
 from ..control_plane.effect_runtime import EffectRuntimeRejected
+from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.capability_hooks import InteractionProjectionHookRegistration
 from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
@@ -98,7 +99,10 @@ from .quota_failure_report import (
     should_log_quota,
 )
 from .quota_host_poll import attach_host_poll_receipt
-from .quota_monitor_poll import record_quota_monitor_poll_for_cli
+from .quota_monitor_poll import (
+    record_quota_monitor_poll_for_cli,
+    recover_quota_monitor_poll_for_cli,
+)
 from .quota_registration import (
     register_quota_command as register_quota_command,  # noqa: PLC0414
 )
@@ -737,6 +741,11 @@ def handle_quota_command(
             payload = build_quota_plan(status_payload, mode=args.quota_command)
         if cache_metadata:
             payload["status_projection_cache"] = cache_metadata
+    except CanonicalAuthorityRequired as exc:
+        payload = recover_quota_monitor_poll_for_cli(
+            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+            error=exc, goal_ref_loader=lambda: _quota_goal_ref(args, registry_path=registry_path),
+        )
     except QuotaCommandValidationError as exc:
         # Only typed CLI validation diagnostics are public-safe by contract.
         payload = quota_validation_failure_payload(

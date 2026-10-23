@@ -938,6 +938,22 @@ path, and canary route rather than as a user-facing release baseline.
   feed were retained or restored to the qualified `v2.0.0` baseline. The immutable
   preview and failed evidence remain part of the release history.
 
+- `v2.1.1` maintenance release at commit
+  `87e5b4f88d207adf062eea57002cda6fe04fd535`:
+  the [published release](https://github.com/loopx-project/loopx/releases/tag/v2.1.1)
+  provides matching Python wheel/source distributions on GitHub and PyPI,
+  Mac/Windows desktop build assets, checksum manifests, source provenance and
+  a signed macOS updater. All eight exact-source qualification categories,
+  including the complete installed-wheel frontend, passed before publication.
+  Published packages, build attestations, macOS bundle identity and updater
+  signatures were independently checked before the Git stable and Latest
+  promotion; the mutable signed desktop feed matches the immutable release.
+  The desktop remains a preview: native Windows execution and Apple
+  notarization are not claimed. This maintenance line starts from the retained
+  `v2.1.0` preview, keeps its failed evidence and does not roll up later `main`
+  snapshots. Read the [versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.1.1/docs/product/releases/v2.1.1.md)
+  before replacing an existing installation.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 

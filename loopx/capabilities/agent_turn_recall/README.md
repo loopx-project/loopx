@@ -70,6 +70,13 @@ keeps turn admission bounded and ensures the recall query uses the same selected
 Todo and interaction state that the host is following. `-` may be used to read
 the packet from stdin when the host owns a safe pipeline.
 
+An explicit selection or requalification may return an `upgraded` committed
+receipt. Recall accepts that packet with its exact settlement identity, checking
+the Goal, Agent, Turn, selected Todo or replan obligation, and canonical effect
+identity. A missing or inconsistent binding is rejected before provider access.
+Legacy `committed` and `replayed` packets without a settlement binding remain
+valid; all existing conflict, freshness, scope and deduplication checks still apply.
+
 The result carries a private `context.guidance` list for agent reasoning. It is
 not action authority. The agent must still obey the current interaction
 contract, capability gates, write scopes, and user gates.

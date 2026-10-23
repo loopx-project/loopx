@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from canonical_authority_fixture import assert_todo_read_unchanged
+
 import json
 from pathlib import Path
 
@@ -1101,13 +1103,10 @@ def test_material_poll_user_followup_requires_explicit_class_without_writeback(
     )
     assert "todo_writeback" not in result
     assert state.read_text(encoding="utf-8") == before_state
-    assert (
-        list_goal_todos(
+    assert_todo_read_unchanged(list_goal_todos(
             registry_path=registry,
             goal_id=GOAL_ID,
-        )
-        == before_todos
-    )
+        ), before_todos)
 
 
 def test_material_poll_explicit_user_gate_blocks_bound_agent(

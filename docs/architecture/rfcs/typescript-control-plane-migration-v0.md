@@ -134,6 +134,55 @@ Original request/result/route identities, historical codecs and public readback
 remain. This implements one R3/T1–T2 return transaction cutover, not Inbox acceptance,
 source-grant migration, installed adoption or live-provider qualification.
 
+### Todo read transaction source checkpoint
+
+`todo.read` now composes canonical provider reads, full-source resume and
+succession evidence, standing decisions, both role summaries, selection and the
+public result through `todos/read_projection.ts` and `todos/read_transaction.ts`.
+Ordinary canonical queries use one request. Large result continuations retain
+one observation and result digest; changed results refuse rather than combining
+pages. Dependency and closure decisions still use the complete source.
+Python retains registry, document/material IO, independent Vision-wait consumers
+and compatibility exports. Its replaced summary, filter and result coordination
+is retired. Persisted completion spellings use shared token data and compatibility codecs
+without scalar RPCs;
+`todo.summary.project`, `todo.completion_state.normalize` and
+`todo.completion_state.require_metadata` are retired after their production
+callers exit. Existing semantic owners execute in process inside the transaction.
+
+CLI query results carry a query-scoped `projection_envelope`. A read grants no
+execution, acceptance, lease or mutation authority. The shared wire and private
+snapshot budgets are unchanged. Oversized Python facts use an owned temporary
+source, not another durable store; complete results use digest-bound pieces.
+Envelope coverage counts the complete matching source before display limits.
+Hot, limited and thin views report their final displayed count separately;
+display truncation alone does not create a source omission or alert. Exact
+detail reads count their returned Todo rather than the removed list view.
+Remaining historical/source adapters still name their actual IO and crossings.
+Python source codecs and transport now share the existing
+`todos/goal_todo_projection.py` module. The separate Python `read_projection.py`
+is removed; the independent py/ts twin budget stays at 43. Current host oracle
+observations remain with the existing acceptance owner.
+The unchanged 18-row Todo output matrix adds 783–854 JSON characters for source
+freshness and omitted-work coverage; Markdown is unchanged. Only the first
+envelope schema transition receives a 896-character allowance on the three
+measured Todo query views. Existing absolute ceilings and later growth limits
+remain in force. These are controlled-transport output measurements.
+Ordinary reads retain main's canonical-authority requirement; unmigrated Goals
+receive the existing migration cause instead of a Markdown fallback. Empty
+optional metadata bypasses exception-based normalization in the compatibility
+reader; supplied values still use the existing validators. Objective-only
+acceptance observations remain visible without configured checks.
+Canonical summaries prepare recovery history only for role groups that contain
+a resume condition. Succession still uses complete active and archived lineage.
+The output measurements above retain their original controlled-transport scope.
+Current normal-IPC, package and complete-command evidence belongs to the exact
+revision reported in [#6874](https://github.com/loopx-project/loopx/pull/6874).
+Historical performance failures remain failures; neither fewer RPCs nor codec
+CPU savings waive the full-CLI gate or establish R3/D2/D3 adoption.
+The current warm-request miss remains an owner review hold. A passing full-CLI
+comparison does not waive the 2 ms target.
+
 
 <a id="current-delivery-frontier-2026-10-02"></a>
 

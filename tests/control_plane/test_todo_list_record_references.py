@@ -47,17 +47,17 @@ def cli(registry, runtime, flags, output_format="json"):
 
 def test_projection_failure_returns_the_standard_cli_error_without_source_changes(tmp_path, monkeypatch, capsys):
     from loopx.cli import main
-    from loopx.cli_commands import todo_list as todo_command
+    from loopx.control_plane import effect_runtime
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = _write_fixture(tmp_path)
     before = state.read_bytes()
 
     def unavailable(operation, payload, **kwargs):
-        assert operation == "todo.context.page" and payload["list_payload"]["ok"]
+        assert operation == "todo.read" and payload["kind"] == "query"
         raise RuntimeError("Todo projection unavailable")
 
-    monkeypatch.setattr(todo_command, "effect_runtime_result", unavailable)
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", unavailable)
     result = main(["--registry", str(registry), "todo", "list", "--format", "json",
                    "--goal-id", GOAL_ID])
     error = json.loads(capsys.readouterr().out)
@@ -72,6 +72,13 @@ def test_real_cli_references_reconstruct_all_scoped_lanes_and_counts(tmp_path, m
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = _write_fixture(tmp_path)
     runtime = Path(json.loads(registry.read_text())["common_runtime_root"])
+    if provider == "legacy":
+        from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
+        before = state.read_bytes()
+        with pytest.raises(CanonicalAuthorityRequired):
+            list_goal_todos(registry_path=registry, goal_id=GOAL_ID, json_references=True)
+        assert state.read_bytes() == before
+        return
     if provider != "legacy":
         goal = json.loads(registry.read_text())["goals"][0]
         active, archived, _ = parse_todo_source(state.read_text(), goal=goal, state_path=state)
@@ -91,6 +98,10 @@ def test_real_cli_references_reconstruct_all_scoped_lanes_and_counts(tmp_path, m
     ]:
         native = list_goal_todos(registry_path=registry, goal_id=GOAL_ID, **options)
         wire = cli(registry, runtime, flags)
+        native_envelope = native.pop("projection_envelope")
+        wire_envelope = wire.pop("projection_envelope")
+        assert native_envelope["schema_version"] == wire_envelope["schema_version"] == "loopx_projection_envelope_v0"
+        assert native_envelope["coverage"] == wire_envelope["coverage"]
         disclosure = wire.pop("todo_list_record_references")
         assert disclosure["replaced_view_records"] > 0
         assert expand_references(wire, wire) == native
@@ -101,7 +112,9 @@ def test_real_cli_references_reconstruct_all_scoped_lanes_and_counts(tmp_path, m
         assert cli(registry, runtime, flags, "markdown") == render_todo_markdown(native) + "\n"
     thin = cli(registry, runtime, ["--thin"])
     assert "todo_list_record_references" not in thin
-    assert thin == list_goal_todos(registry_path=registry, goal_id=GOAL_ID, thin=True)
+    direct_thin = list_goal_todos(registry_path=registry, goal_id=GOAL_ID, thin=True)
+    assert thin.pop("projection_envelope")["coverage"] == direct_thin.pop("projection_envelope")["coverage"]
+    assert thin == direct_thin
     exact = cli(registry, runtime, ["--todo-id", "todo_agent_current"])
     assert "todo_list_record_references" not in exact
     assert exact["todo"]["text"] == "Execute the current agent advancement."

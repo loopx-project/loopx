@@ -84,12 +84,12 @@ def test_a_selection_cannot_restore_a_lost_full_source_proof():
 def test_long_history_stays_inside_the_runtime_request_budget(monkeypatch):
     """A whole-source batch must not outgrow the co-deployed runtime's request."""
     from loopx.control_plane import effect_runtime
-    from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
+    from loopx.control_plane.effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
     requests = []
     original = effect_runtime.effect_runtime_result
 
     def track(method, request, **kwargs):
-        if method == "todo.summary.project":
+        if method == "todo.read":
             requests.append(request)
         return original(method, request, **kwargs)
 
@@ -100,7 +100,7 @@ def test_long_history_stays_inside_the_runtime_request_budget(monkeypatch):
     assert result["done_count"] == 4096
     request = requests[0]
     encoded = json.dumps(request, separators=(",", ":")).encode()
-    assert len(encoded) < MAX_REQUEST_BYTES
+    assert len(encoded) < MAX_LOCAL_SNAPSHOT_BYTES
 
 
 def test_no_wait_skips_resume_preparation_but_keeps_archived_successor(monkeypatch):
@@ -194,7 +194,7 @@ def test_filtered_summary_fuses_validation_without_another_succession_rpc(monkey
     monkeypatch.setattr(succession_warning, "effect_runtime_result", track)
     selected = filtered_todo_summary(source, role="agent", todo_id="todo_summary_1")
     assert selected["done_count"] == 1 and not selected.get("completed_without_successor_count")
-    assert calls.count("todo.summary.project") == 1
+    assert calls.count("todo.read") == 1
     assert "todo.succession.project" not in calls
     next(item for item in source["items"] if item["todo_id"] == "todo_summary_1")["no_followup"] = True
     import pytest
@@ -237,7 +237,7 @@ def test_selected_frontier_uses_the_summary_crossing_after_python_attachment_ret
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", track)
     selected = filtered_todo_summary(source, role="agent", agent_id="agent-a", item_limit=1)
     assert selected["advancement_frontier_revision_index"]["claimed_advancement_counts"] == {"agent-a": 24}
-    assert calls == ["todo.summary.project"]
+    assert calls == ["todo.read"]
     assert not hasattr(frontier_revision, "attach_advancement_frontier_revision_index")
     assert not hasattr(frontier_revision, "build_advancement_frontier_revision_index")
 
@@ -251,9 +251,9 @@ def test_missing_batched_frontier_never_falls_back_to_another_owner_call(monkeyp
     original = effect_runtime.effect_runtime_result
 
     def drop_index(method, request, **kwargs):
-        assert method == "todo.summary.project"
+        assert method == "todo.read"
         result = original(method, request, **kwargs)
-        result["fields"].pop("advancement_frontier_revision_index")
+        result["summary"].pop("advancement_frontier_revision_index")
         return result
 
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", drop_index)

@@ -31,6 +31,32 @@ attachments also require the same `input_revision`. Use a new finding id per
 evaluated candidate, and reuse an id only to correct that finding. Missing values
 are explicit `null`; zero and negative values remain valid measurements.
 
+To reuse verified comparison conditions, save these three fields once in
+`conditions.json`:
+
+```json
+{"comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
+ "evaluation_ref":"evaluator:v1"}
+```
+
+Pass `--measurement-context-json conditions.json` alongside
+`--measurements-json observations.json`. Each observation then omits those
+three fields, for example:
+
+```json
+[{"metric":"quality","value":9,"unit":"points","higher_is_better":true,
+  "candidate_ref":"candidate:b","evidence_ref":"result:b"}]
+```
+
+Ordinary and path-delta attachments support the same optional
+`measurement_context` object alongside `measurements`. The writer expands it
+into the existing complete records; it stores no mutable context reference.
+Observation overrides, even equal ones, and incomplete or extra context fields
+reject before recording. The original complete-item format remains supported.
+Reusing a declaration does not verify comparability: select a different context
+when task, data, evaluator, model or budget changes. Keep unknown conditions
+separate. This convenience grants no evaluation, correction or execution authority.
+
 Keep comparison conditions separate from the candidate and its result:
 
 | Field | Meaning across successive findings |

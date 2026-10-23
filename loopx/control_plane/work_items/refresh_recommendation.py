@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..agents.agent_lane_recommendation import build_agent_lane_next_action
-from ..coordination.local_authority import read_canonical_todos_if_promoted, canonical_todo_summary_fields
+from ..coordination.local_authority import read_canonical_todos_if_promoted
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..todos.contract import normalize_todo_id
 from ...feedback import validate_local_control_text
@@ -48,21 +48,17 @@ def load_refresh_planning_source(
     that task snapshot. Provider failures propagate rather than using prose.
     """
     events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
-    canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
-    from ..goals.acceptance import observe_canonical_goal_acceptance
+    canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id,
+        include_summary=True, rollout_events=events)
+    from ..todos.goal_todo_projection import observe_todo_acceptance
     oracle_registry = registry_path
     if canonical.get("goal_acceptance_oracle_observation_basis") is not None and oracle_registry is not None:
         from .recommendation_source_io import load_recommendation_source_goal
         # A shared roster's checkout is display data, including on refresh
         # paths without --next-action. Observe the current source workspace.
         oracle_registry, _ = load_recommendation_source_goal(oracle_registry, goal_id)
-    acceptance = observe_canonical_goal_acceptance(canonical,
+    fields = observe_todo_acceptance(canonical["_todo_fields"], canonical,
         registry_path=oracle_registry, goal_id=goal_id)
-    fields = canonical_todo_summary_fields(
-        canonical["todos"], rollout_events=events,
-        goal_acceptance_contract=acceptance,
-        goal_acceptance_work_guards=canonical.get("goal_acceptance_work_guards"),
-    )
     try:
         text = state_path.read_text(encoding="utf-8")
     except FileNotFoundError:

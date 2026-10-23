@@ -4,8 +4,10 @@ import test from "node:test";
 
 import {
   buildTodoCompletionMetadataUpdates,
-  normalizeTodoCompletionValue,
-  requireTodoCompletionMetadataValue,
+  normalizeTodoNoFollowup,
+  normalizeTodoCompletionContinuation,
+  normalizeTodoCompletionRecovery,
+  requireTodoCompletionMetadata,
   selectTodoCompletionState,
   TODO_COMPLETION_STATE_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/todos/completion_state.ts";
@@ -35,14 +37,22 @@ const fixture = JSON.parse(
   }>;
 };
 
+function normalizeValue(request: Record<string, unknown>) {
+  const value = request.kind === "no_followup" ? normalizeTodoNoFollowup(request.value) :
+    request.kind === "continuation" ? normalizeTodoCompletionContinuation(request.value) : normalizeTodoCompletionRecovery(request.value);
+  return {schema_version: "loopx_todo_completion_state_result_v0", kind: request.kind, value};
+}
+function requireValue(request: Record<string, unknown>) {
+  return {schema_version: "loopx_todo_completion_state_result_v0", value: requireTodoCompletionMetadata(String(request.key), request.value)};
+}
 const methods = {
-  normalize: normalizeTodoCompletionValue,
-  require_metadata: requireTodoCompletionMetadataValue,
+  normalize: normalizeValue,
+  require_metadata: requireValue,
   evaluate: selectTodoCompletionState,
   metadata_updates: buildTodoCompletionMetadataUpdates,
 } as const;
 
-test("pinned Python completion-state characterization remains exact", () => {
+test("persisted completion spellings and lifecycle compatibility remain exact", () => {
   assert.equal(
     fixture.schema_version,
     "loopx_todo_completion_state_characterization_v0",
@@ -86,22 +96,12 @@ test("whole completion owner selects continuation and rejects contradictory inte
   }), /cannot record both no_followup and a successor/);
 });
 
-test("retired continuation-only RPC fails closed; live metadata decoding remains", async () => {
-  const handlers = createEffectRuntimeHandlers({
-    fingerprint: "completion-retirement-test", requestShutdown: () => undefined,
-  });
-  await assert.rejects(dispatchEffectRuntimeMethod(
-    handlers, "todo.completion_state.continuation_for_write", {
-      schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
-      no_followup: false, has_successor: false,
-    },
-  ), /unsupported Effect runtime method/);
-  assert.deepEqual(await dispatchEffectRuntimeMethod(
-    handlers, "todo.completion_state.require_metadata", {
-      schema_version: TODO_COMPLETION_STATE_REQUEST_SCHEMA,
-      key: "completion_continuation", value: "SUCCESSOR",
-    },
-  ), { schema_version: "loopx_todo_completion_state_result_v0", value: "successor" });
+test("retired scalar and summary RPCs fail closed", async () => {
+  const handlers = createEffectRuntimeHandlers({fingerprint: "completion-retirement-test", requestShutdown: () => undefined});
+  for (const method of ["todo.completion_state.continuation_for_write", "todo.completion_state.normalize",
+    "todo.completion_state.require_metadata", "todo.summary.project"]) {
+    await assert.rejects(dispatchEffectRuntimeMethod(handlers, method, {}), /unsupported Effect runtime method/);
+  }
 });
 
 test("runtime boundary rejects malformed authority input", () => {

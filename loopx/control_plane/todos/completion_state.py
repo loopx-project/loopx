@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from enum import Enum
 from functools import lru_cache
-from typing import Any, Mapping
+import json
+from pathlib import Path
+from typing import Any
 
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
 
 TODO_COMPLETION_STATE_REQUEST_SCHEMA = "loopx_todo_completion_state_request_v0"
 TODO_COMPLETION_STATE_RESULT_SCHEMA = "loopx_todo_completion_state_result_v0"
+_VALUE_CODEC = json.loads(Path(__file__).with_name("completion_value_codec.json").read_text(encoding="utf-8"))
 
 
 class TodoCompletionContinuation(str, Enum):
@@ -36,37 +38,22 @@ def _no_followup_value(value: Any) -> bool | str:
     return value if isinstance(value, bool) else _string_value(value)
 
 
-def _result(method: str, params: dict[str, Any]) -> Mapping[str, Any]:
-    try:
-        result = effect_runtime_result(method, params)
-    except EffectRuntimeRejected as exc:
-        raise ValueError(str(exc)) from None
-    if not isinstance(result, Mapping):
-        raise RuntimeError("TypeScript Todo completion state result must be an object")
-    if result.get("schema_version") != TODO_COMPLETION_STATE_RESULT_SCHEMA:
-        raise RuntimeError("TypeScript Todo completion state result shape mismatch")
-    return result
 
 
 @lru_cache(maxsize=64)
 def _normalize_cached(kind: str, value: bool | str) -> bool | str | None:
-    result = _result(
-        "todo.completion_state.normalize",
-        {
-            "schema_version": TODO_COMPLETION_STATE_REQUEST_SCHEMA,
-            "kind": kind,
-            "value": value,
-        },
-    )
-    normalized = result.get("value")
     if kind == "no_followup":
-        if normalized is not None and not isinstance(normalized, bool):
-            raise RuntimeError("TypeScript no_followup normalization shape mismatch")
-    elif normalized is not None and not isinstance(normalized, str):
-        raise RuntimeError(
-            "TypeScript completion metadata normalization shape mismatch"
-        )
-    return normalized
+        if isinstance(value, bool):
+            return value
+        candidate = value.strip(_VALUE_CODEC["ecmascript_trim"]).lower()
+        if candidate in _VALUE_CODEC["true_tokens"]:
+            return True
+        if candidate in _VALUE_CODEC["false_tokens"]:
+            return False
+        return None
+    candidate = str(value).strip(_VALUE_CODEC["ecmascript_trim"]).lower()
+    vocabulary = TodoCompletionContinuation if kind == "continuation" else TodoCompletionRecovery
+    return candidate if candidate in {item.value for item in vocabulary} else None
 
 
 def normalize_todo_no_followup(value: Any) -> bool | None:
@@ -85,15 +72,13 @@ def normalize_todo_completion_recovery(value: Any) -> str | None:
 
 
 def require_todo_completion_metadata(key: str, value: Any) -> str | None:
-    result = _result(
-        "todo.completion_state.require_metadata",
-        {
-            "schema_version": TODO_COMPLETION_STATE_REQUEST_SCHEMA,
-            "key": key,
-            "value": _string_value(value),
-        },
-    )
-    normalized = result.get("value")
-    if normalized is not None and not isinstance(normalized, str):
-        raise RuntimeError("TypeScript completion metadata result shape mismatch")
+    raw = _string_value(value)
+    if key == "completion_continuation":
+        normalized = _normalize_cached("continuation", raw)
+        if normalized is None:
+            raise ValueError("completion_continuation must be one of: active_goal, successor, no_followup")
+    else:
+        normalized = _normalize_cached("recovery", raw)
+        if normalized is None and raw != "":
+            raise ValueError("completion_recovery must be same_turn_terminal_closeout or lifecycle_reentry_terminal_closeout")
     return normalized

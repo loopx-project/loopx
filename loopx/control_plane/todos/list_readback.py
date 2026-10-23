@@ -11,41 +11,12 @@ from typing import Any, Literal
 from ...history import load_registry
 from ...paths import resolve_runtime_root
 from ...rollout_event_log import load_rollout_events, rollout_event_log_path
-from ..effect_runtime import effect_runtime_result
 from ..goals.state_resolution import resolve_goal_state
-from ..coordination.local_authority import (
-    canonical_todo_items,
-    canonical_todo_summary_fields,
-    read_canonical_todos_if_promoted,
-)
 from .contract import normalize_todo_claimed_by, normalize_todo_id, normalize_todo_status
-from .goal_todo_projection import (
-    exact_archived_todo_summaries,
-    retained_todo_summary_fields,
-    todo_summaries_from_fields,
-)
-from .list_projection import (
-    compact_agent_lane_todo_summary,
-    compact_thin_todo_list_payload,
-    todo_item_relations,
-    todo_list_projection_contract,
-)
 from .todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from .resume_condition import TodoResumeRolloutEvents
 
 
-def _restore_full_source_body(
-    detail: dict[str, Any], todo_id: str, source_items: list[dict[str, Any]],
-) -> None:
-    """Restore source text only after the shared reader has scoped the record."""
-    matches = [item for item in source_items
-        if item.get("todo_id") == todo_id
-        and item.get("role") == detail.get("role")
-        and item.get("archive_state", "active") == detail.get("archive_state", "active")]
-    if len(matches) == 1:
-        detail["text"] = str(matches[0].get("text") or "")
-    else:
-        raise ValueError("Todo detail cannot recover an unambiguous full source body")
 
 
 def list_goal_todos(
@@ -62,6 +33,7 @@ def list_goal_todos(
     limit: int | None = None,
     thin: bool = False,
     read_scope: Literal["active", "completed_history"] = "active",
+    json_references: bool = False,
 ) -> dict[str, Any]:
     if read_scope not in {"active", "completed_history"}:
         raise ValueError("Todo read_scope must be active or completed_history")
@@ -99,140 +71,31 @@ def list_goal_todos(
 
     rollout_events = TodoResumeRolloutEvents(rollout_events, runtime_root=runtime_root, goal_id=goal_id)
 
-    roles = [role] if role else ["user", "agent"]
-    canonical_read = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-    )
-    projected = todo_summaries_from_fields(
-        fields=(retained_todo_summary_fields(
-            canonical_todo_items(canonical_read["todos"]), rollout_events=rollout_events,
-        ) if read_scope == "completed_history" else canonical_todo_summary_fields(
-            canonical_read["todos"],
-            rollout_events=rollout_events,
-            goal_acceptance_contract=canonical_read.get("goal_acceptance_contract"),
-            goal_acceptance_work_guards=canonical_read.get("goal_acceptance_work_guards"),
-        )),
-        source="file_authority",
-        rollout_events=rollout_events,
-        roles=roles,
-        status=status,
-        todo_id=normalized_todo_id,
-        agent_id=normalized_agent_id,
-        limit=limit,
-    )
-    if read_scope == "active" and normalized_todo_id and not projected.todos:
-        archived_items = [
-            item for item in canonical_todo_items(canonical_read["todos"])
-            if item.get("archive_state") == "archive"
-        ]
-        archived_projection = exact_archived_todo_summaries(
-            archived_items=archived_items,
-            source=projected.source,
-            rollout_events=rollout_events,
-            roles=roles,
-            status=status,
-            todo_id=normalized_todo_id,
-            agent_id=normalized_agent_id,
-            limit=limit,
-        )
-        if archived_projection is not None:
-            projected = archived_projection
-    source = projected.source
-    summaries = projected.summaries
-    todos = projected.todos
-    # Exact cold reads restore source bytes after the shared summary owner has
-    # evaluated identity/status/guards. List and thin projections stay bounded;
-    # a hot summary is never treated as the original request.
-    if normalized_todo_id and not thin and len(todos) == 1:
-        _restore_full_source_body(todos[0], normalized_todo_id, canonical_read["todos"])
-    unfiltered_count = projected.unfiltered_count
-    uncapped_todo_count = projected.uncapped_todo_count
+    from ..coordination.local_authority import CanonicalAuthorityRequired, LocalCoordinationAuthorityUnavailable
+    from .goal_todo_projection import project_todo_read
+    from ..runtime.time import now_utc
 
-    matched_todo_count = len(todos)
-    agent_lane_hot_path = bool(
-        read_scope == "active" and normalized_agent_id and limit is None
-        and role is None
-        and status is None
-        and normalized_todo_id is None
-    )
-    if agent_lane_hot_path:
-        summaries = {
-            key: compact_agent_lane_todo_summary(
-                summary,
-                role=key.removesuffix("_todos"),
-            )
-            for key, summary in summaries.items()
-        }
-        todos = [
-            item
-            for key in ("user_todos", "agent_todos")
-            for item in summaries.get(key, {}).get("items") or []
-            if isinstance(item, dict)
-        ]
-
-    matched_todo = todos[0] if len(todos) == 1 else None
-    payload: dict[str, Any] = {
-        "ok": True,
-        "dry_run": True,
-        "read_only": True,
-        "command": "list",
-        "goal_id": goal_id,
-        "role": role or "all",
-        "status_filter": normalize_todo_status(status) if status else None,
-        "source": source,
-        "todo_count": matched_todo_count,
-        "todos": todos,
-        "state_file": str(resolved_state_file),
-        "project": str(resolved_project) if resolved_project else None,
-    }
-    payload["authority_read"] = {
-        "source_authority": canonical_read["source_authority"],
-        "provider_revision": canonical_read.get("provider_revision"),
-        "cursor": canonical_read.get("cursor"),
-        "todo_read_model": canonical_read.get("todo_read_model"),
-        "decision_read_from_provider": True,
-        "legacy_fallback_used": False,
-    }
-    if normalized_agent_id:
-        payload["agent_id_filter"] = normalized_agent_id
-        payload["unfiltered_todo_count"] = unfiltered_count
-        payload["filter_semantics"] = (
-            "agent todos include unclaimed items plus claimed_by=<agent>; "
-            "User gates use global_gate, then blocks_agent, then legacy claimed_by scope; "
-            "User actions use bound_agent, then legacy claimed_by scope; unscoped items remain visible"
-        )
-    if agent_lane_hot_path:
-        payload["returned_todo_count"] = len(todos)
-        payload["todo_list_projection"] = todo_list_projection_contract(
-            matched_todo_count=matched_todo_count,
-            returned_todo_count=len(todos),
-        )
-    if limit is not None:
-        payload["explicit_limit"] = limit
-        payload["unfiltered_todo_count"] = unfiltered_count
-        payload["returned_todo_count"] = len(todos)
-        payload["todo_list_projection"] = todo_list_projection_contract(
-            matched_todo_count=uncapped_todo_count,
-            returned_todo_count=len(todos),
-            view="explicit_limit_cold_path",
-            item_limit_per_role=limit,
-            full_detail_cold_paths=(
-                "todo list without --limit",
-                "active state",
-            ),
-        )
-    if normalized_todo_id:
-        payload["todo_id_filter"] = normalized_todo_id
-        payload["matched"] = bool(todos)
-        payload["relations"] = todo_item_relations(matched_todo) if matched_todo else {}
-        if len(todos) > 1:
-            payload["ambiguous"] = True
-        if not todos:
-            payload["not_found"] = True
-    if normalized_todo_id:
-        return effect_runtime_result(
-            "todo.context.page", {"detail_payload": payload}, large_local_snapshot=True,
-        )
-    payload.update(summaries)
-    return compact_thin_todo_list_payload(payload) if thin else payload
+    now = now_utc()
+    params = {"kind": "query",
+        "source": {"runtime_root": str(runtime_root.expanduser().resolve(strict=False)), "goal_id": goal_id},
+        "rollout_events": list(rollout_events), "rollout_event_source": rollout_events.source,
+        "observed_at": now.timestamp(), "evaluated_at": now.isoformat(),
+        "query": {"goal_id": goal_id, "role": role, "status": normalize_todo_status(status),
+            "todo_id": normalized_todo_id, "agent_id": normalized_agent_id, "limit": limit,
+            "read_scope": read_scope, "json_references": json_references, "thin": thin,
+            "state_file": str(resolved_state_file), "project": str(resolved_project) if resolved_project else None}}
+    result = project_todo_read(params)
+    if "payload" not in result:
+        failure = result["canonical"]
+        code = str(failure.get("reason_code") or "local_authority_todo_list_unavailable")
+        if code == "canonical_authority_required":
+            raise CanonicalAuthorityRequired(goal_id=goal_id, operation="todo_read", payload=failure)
+        payload = {"source_authority": "unknown_fail_closed"} if code == "local_authority_mode_read_failed" else failure
+        raise LocalCoordinationAuthorityUnavailable(str(failure.get("reason") or "canonical Todo authority is unavailable"),
+            code=code, payload=payload)
+    payload = result["payload"]
+    if "canonical_acceptance" in result:
+        from .goal_todo_projection import observe_todo_acceptance
+        payload = observe_todo_acceptance(payload, result["canonical_acceptance"],
+            registry_path=registry_path, goal_id=goal_id)
+    return payload

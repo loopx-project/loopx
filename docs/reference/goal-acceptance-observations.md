@@ -109,12 +109,27 @@ provider revision. An uncertain write still follows the original receipt and
 recovery rules. Successful operations and unmarked failures keep their existing
 behavior.
 
+For `local_authority_provider_unavailable`, Goal acceptance also returns fixed
+`error_detail` explaining that the selected PostgreSQL authority needs a
+service-owned store factory. This local CLI entrypoint supplies File/SQLite;
+a PostgreSQL host must supply the factory. The refusal does not authorize
+switching providers, creating a service or editing credentials. It leaves the
+selected authority and pending proposals unchanged. This diagnosis does not
+qualify a positive native PostgreSQL workflow or block independent work on
+other available Goals.
+
 中文：原生 `goal-acceptance` 和成果更新 `refresh-state` 拒绝保留稳定错误码。
 已知成果校验规则还会在 JSON 与 Markdown 中提供可选 `error_detail`，例如
 `source ref must be an opaque identifier`。详情只包含固定规则及校验器实测字节数，不回显被拒值或
 provider/IO 上下文。校验拒绝不写入状态；确认这一结果后，修正文档并沿用原操作和
 仍有效的 provider revision 重试。写入结果不确定时继续遵循原有回执与恢复规则。
 成功操作和未标记错误保持既有行为。
+
+`local_authority_provider_unavailable` 还会返回固定 `error_detail`，说明所选
+PostgreSQL 权威需要服务侧提供 store factory。本机 CLI 入口支持 File/SQLite；
+PostgreSQL 宿主须提供该 factory。拒绝不授予切换 provider、新建服务或修改凭证的
+权限，所选权威及待审提案保持不变。这只是诊断，不代表原生 PostgreSQL 正向流程
+已经验收，也不阻塞其他可用 Goal 中独立获授权的工作。
 
 Supporting outcomes share two independent 131072-byte compact UTF-8 JSON
 budgets across the Goal: declarations excluding current reviews, and current

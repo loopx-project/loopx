@@ -1,6 +1,8 @@
 """Real CLI and canonical FileAuthorityStore; no production registry or promotion."""
 from __future__ import annotations
 
+from canonical_authority_fixture import assert_todo_read_unchanged
+
 import json
 import shlex
 import subprocess
@@ -798,7 +800,7 @@ def test_public_cli_external_wait_uses_current_successor_source(
         display = state.read_bytes() if state.exists() else None
         rejected = update(registry, *args, ok=False)
         assert "external-wait successor must be runnable, not resume-gated" in json.dumps(rejected)
-        assert stable(list_goal_todos(registry_path=registry, goal_id="goal-a")) == stable(source)
+        assert_todo_read_unchanged(list_goal_todos(registry_path=registry, goal_id="goal-a"), source)
         assert (state.read_bytes() if state.exists() else None) == display
         return
     update(registry, *args, "--dry-run")
