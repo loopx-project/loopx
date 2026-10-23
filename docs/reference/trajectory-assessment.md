@@ -77,6 +77,21 @@ uncertainty opaque inside a placeholder. It grants no tools or source authority.
 This explicit encoding has a distinct analysis identity; prior direct and alias
 jobs remain unchanged. Context availability does not certify translation quality:
 read the resulting language and negative/uncertain claims, not only coverage.
+When those compound terms also hide numbers, the explicit
+`"source_text_aliases_with_literal_values_v1"` encoding additionally supplies
+`explanation_numbers`. The translation may restate each listed exact signed
+component once in readable prose while retaining every original placeholder.
+For example, a compact trial/check term can retain its source spelling while
+explaining the trial number and failed-check count in the interface language.
+Code, hashes and links contribute no explanation numbers. Changed signs,
+rounding, new values and excess repetitions fail the field check and retain its
+original. This is lexical integrity, not verification of units, referents or
+scientific meaning: ambiguous glued digits must remain ambiguous rather than
+being guessed into counts. The existing job, language selection, original-text
+reader, partial coverage and explicit execution boundaries are unchanged.
+This encoding has its own analysis identity. Existing direct, alias and
+literal-context artifacts keep their original preparation and remain readable;
+viewing an old result does not upgrade it or launch a new analysis.
 Translated prose is applied to decoded narrative fields; it is never serialized
 and reparsed as an Explore decision. Owner-format labels or list markers inside
 model text cannot change the original outcome, eligibility or list cardinality.

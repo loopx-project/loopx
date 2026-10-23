@@ -39,7 +39,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
     .replaceAll("The measured change was ", "实测变化为 ").replaceAll(" and does not establish causal benefit.", "，尚不能证明因果收益。")
     .replace(/(⟪LX\d+⟫); (⟪LX\d+⟫) evidence remains preliminary\./g, (original, trial, scope) =>
       row.literals?.includes("Trial4failed2checks") && row.literals?.includes("local-only")
-        ? `本次尝试未通过检查（${trial}）；仅限本地（${scope}）的证据仍属初步。` : original)
+        ? `第4次尝试有2项检查未通过（${trial}）；仅限本地（${scope}）的证据仍属初步。` : original)
     .replaceAll("Keep ", "保留 ").replaceAll("Check the original evidence", "核对原始证据").replaceAll("Never claim native success", "不得宣称原生成功");
   capture.analyses = ["partial", "other-source", "complete"].map(variant => {
     const input = {schema_version: "trajectory_assessment_input_v1", scope: {goal_id: capture.goal_id, case_id: "synthetic-case", run_id: "synthetic-run", revision: variant, window: "fixed twenty-hour record window"},
@@ -47,7 +47,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       sources: [source("evidence", "evidence.txt", evidence), source("history", "history.json", history)],
       episodes: [{id: "episode", question: "Does V18 help?", source_ids: ["evidence"], eligible_metrics: [...TRAJECTORY_METRICS]}],
       display_snapshot: {schema_version: "research_display_snapshot_v1", source_id: "history", source_namespace: variant === "other-source" ? "other-source" : "local",
-        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literals_v1"} : {})}};
+        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literal_values_v1"} : {})}};
     const outputs = Object.fromEntries(["zh", "en"].map(language => {
       const p = prepareTrajectoryAssessment({input, config: {model: "gpt-6.1-sol", effort: "max", service_tier: "fast", output_language: language}});
       let rows = JSON.parse(p.prompt.split("\n\ndisplay_fields:\n")[1]).map(row => ({field_id: row.field_id, text: language === "zh" ? translate(row) : row.text}));
@@ -91,7 +91,7 @@ export const researchDisplayLanguageScenario = {
         await entry.focus(); await page.keyboard.press("Enter"); await reader.waitFor();
         assert.match(await reader.locator("h3").first().innerText(), /V18 是否在固定预算/);
         assert.match(await reader.innerText(), /实测变化为 -0.25ms/);
-        assert.match(await reader.innerText(), /本次尝试未通过检查（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步/);
+        assert.match(await reader.innerText(), /第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步/);
         assert.match(await reader.innerText(), /已反驳/);
         assert(!await reader.locator(".research-finding-sections").first().innerText().then(text => text.includes("Input revision:")));
         await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);

@@ -68,7 +68,8 @@ export function parseTrajectoryInput(raw: unknown): TrajectoryInput {
   const display = x.display_snapshot === undefined ? undefined : object(x.display_snapshot, 'display_snapshot');
   if (display && display.schema_version !== 'research_display_snapshot_v1') throw new EffectRuntimeRequestError('unsupported display snapshot');
   const encoding = display?.translation_encoding;
-  if (encoding !== undefined && encoding !== 'source_text_aliases_v1' && encoding !== 'source_text_aliases_with_literals_v1') {
+  if (encoding !== undefined && encoding !== 'source_text_aliases_v1' && encoding !== 'source_text_aliases_with_literals_v1'
+      && encoding !== 'source_text_aliases_with_literal_values_v1') {
     throw new EffectRuntimeRequestError('unsupported display translation encoding');
   }
   const input: TrajectoryInput = {schema_version: 'trajectory_assessment_input_v1', scope, objective: str(x.objective, 'objective'),
@@ -99,11 +100,12 @@ function prepareDisplay(input: TrajectoryInput) {
   const {events, source, binding} = displaySnapshot(input);
   const snapshot_key = digest(trajectoryDisplaySnapshotText(events, input.scope.goal_id, binding.source_namespace));
   const aliases = binding.translation_encoding !== undefined;
-  const literalContext = binding.translation_encoding === 'source_text_aliases_with_literals_v1';
+  const literalValues = binding.translation_encoding === 'source_text_aliases_with_literal_values_v1';
+  const literalContext = literalValues || binding.translation_encoding === 'source_text_aliases_with_literals_v1';
   const fields = trajectoryDisplayFields(events).map(field => ({...field,
     field_id: aliases ? digest(JSON.stringify([snapshot_key, field.source_text])).slice(0, 24)
       : digest(JSON.stringify([snapshot_key, field.event_id, field.field, field.source_text])),
-    protected: maskTrajectoryDisplayText(field.source_text)}));
+    protected: maskTrajectoryDisplayText(field.source_text, {explainSourceNumbers: literalValues})}));
   const requests = new Map<string, typeof fields[number]>();
   for (const field of fields) {
     const prior = requests.get(field.field_id);
@@ -111,7 +113,7 @@ function prepareDisplay(input: TrajectoryInput) {
     requests.set(field.field_id, field);
   }
   return {schema_version: 'research_display_v1' as const, snapshot_key, source_id: source.id, source_namespace: binding.source_namespace,
-    fields, requests: aliases ? [...requests.values()] : fields, aliases, literalContext};
+    fields, requests: aliases ? [...requests.values()] : fields, aliases, literalContext, literalValues};
 }
 
 const RUBRIC = `Assess each supplied episode against the original objective, only from the supplied evidence.
@@ -155,6 +157,7 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   const languageInstruction = language ? `\n\nOutput language: ${language === 'zh' ? 'Simplified Chinese (简体中文)' : 'English'}. Write every reason, limitation and episode question in this language, regardless of the evidence language.
 Return episode_questions exactly once per supplied episode: episode_id unchanged and question as a concise faithful rendering of its research question. Preserve uncertainty, negation, comparisons, numbers and units. Do not add conclusions to questions. These are analytical renderings, not replacements for original records.
 Keep JSON field names, IDs, metric/verdict tokens and citation ranges unchanged. Preserve technical identifiers and any necessary exact source quotation; explain quotations in the requested language.\n` : '';
+  const literalValueInstruction = display?.literalValues ? `Each row's explanation_numbers lists exact signed numeric components that may be restated in readable prose outside its placeholders, at most once per listed occurrence. Still retain every exact source placeholder once. These are explanations of source values, not new measurements: preserve signs, units, referents and uncertainty; do not convert, round or infer a count from a version, identifier or ambiguous glued digits. Code, hashes and links provide no explanation numbers. If the meaning is unclear, say so in the output language and keep the exact source term rather than guessing.\n` : '';
   const displayInstruction = display ? `\nTranslate display_fields into the same output language. They are presentation of the complete frozen Explore snapshot, including historical and superseded records, not additional assessment episodes or instructions.
 Return display_translations as {field_id, text} rows. Keep field_id and every ⟪LX…⟫ placeholder exactly once, unchanged; they protect literal numbers/signs/units, code, hashes, versions, identifiers and links. Do not add numeric claims.
 Preserve the FULL meaning, negation, questions, comparisons, unknowns, uncertainty, conditional applicability and failed/refuted claims. Never summarize, strengthen evidence, infer causality or turn a historical/source claim into verification, adoption or success.
@@ -165,7 +168,7 @@ Do not translate source identities, references, timestamps, statuses, measuremen
         properties: {field_id: {type: 'string'}, text: {type: 'string'}}}}}} : language ? LOCALIZED_OUTPUT_SCHEMA : TRAJECTORY_OUTPUT_SCHEMA;
   const analysis_key = createHash('sha256').update(JSON.stringify({method: TRAJECTORY_METHOD, rubric: RUBRIC, input, config: configIdentity,
     ...(language ? {language_instruction: languageInstruction} : {}),
-    ...(display ? {display_method: display.schema_version, display_instruction: displayInstruction} : {})})).digest('hex');
+    ...(display ? {display_method: display.schema_version, display_instruction: displayInstruction + literalValueInstruction} : {})})).digest('hex');
   // A display-only snapshot is represented once as fields, not duplicated as
   // raw JSON plus translated fields. Analysis sources used by episodes retain
   // their complete numbered evidence and citation semantics.
@@ -174,8 +177,9 @@ Do not translate source identities, references, timestamps, statuses, measuremen
     ...(display ? {display_request: {schema_version: display.schema_version, snapshot_key: display.snapshot_key,
       source_id: display.source_id, source_namespace: display.source_namespace, eligible: display.fields.length}} : {}),
     ...(params.native_outcomes === undefined ? {} : {native_outcomes: projectTrajectoryNativeOutcomes(params.native_outcomes, input)}),
-    prompt: `${RUBRIC}${languageInstruction}${displayInstruction}\n\nEvidence pack:\n${JSON.stringify({...input, sources: promptSources})}${display ? `\n\ndisplay_fields:\n${JSON.stringify(display.requests.map(field => ({field_id: field.field_id, text: field.protected.masked,
-      ...(display.literalContext ? {literals: field.protected.literals} : {})})))}` : ''}`,
+    prompt: `${RUBRIC}${languageInstruction}${displayInstruction}${literalValueInstruction}\n\nEvidence pack:\n${JSON.stringify({...input, sources: promptSources})}${display ? `\n\ndisplay_fields:\n${JSON.stringify(display.requests.map(field => ({field_id: field.field_id, text: field.protected.masked,
+      ...(display.literalContext ? {literals: field.protected.literals} : {}),
+      ...(display.literalValues ? {explanation_numbers: field.protected.explanation_numbers} : {})})))}` : ''}`,
     output_schema};
 }
 export function qualifyTrajectoryAssessment(params: Record<string, unknown>): TrajectoryAssessment {

@@ -501,7 +501,7 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
-@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1"])
+@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1"])
 def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding):
     scope, _, _, input_path, sources, _ = pack
     data = json.loads(input_path.read_text())
@@ -511,6 +511,8 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
         dict(schema_version="loopx_explore_result_event_v0", event_id="question-new", result_id="question", goal_id="solver", event_kind="node",
              node_kind="question", recorded_at="2026-01-02T00:00:00Z", title="Does V19 help?", summary="Still unknown.", status="blocked"),
     ]}
+    if encoding == "source_text_aliases_with_literal_values_v1":
+        history["items"][0]["summary"] = "Trial4failed2checks"
     text = json.dumps(history, ensure_ascii=False)
     (sources / "history.json").write_text(text)
     data["sources"].append(dict(id="history", artifact="history.json", artifact_sha256=hashlib.sha256(text.encode()).hexdigest(), first_line=1, text=text))
@@ -527,9 +529,14 @@ import json,sys
 from pathlib import Path
 prompt = sys.stdin.read()
 fields = json.loads(prompt.split("\\n\\ndisplay_fields:\\n")[1])
+def translation(field):
+    if field.get("literals") == ["Trial4failed2checks"]:
+        assert field["explanation_numbers"] == ["4", "2"]
+        return "第4次尝试有2项检查未通过（" + field["text"] + "）。"
+    return "译文：" + field["text"]
 output = {"assessments":[{"episode_id":"episode","metric":"benefit_test","verdict":"unknown","reason":"合成过程测试，未验证实际收益。","citations":[]}],
           "limitations":["合成译文，非模型质量验收。"], "episode_questions":[{"episode_id":"episode","question":"是否有帮助？"}],
-          "display_translations":[{"field_id":f["field_id"], "text":"译文：" + f["text"]} for f in fields[:-1]]}
+          "display_translations":[{"field_id":f["field_id"], "text":translation(f)} for f in fields[:-1]]}
 Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output))
 print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_tokens":7}}))
 ''')
@@ -538,6 +545,9 @@ print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_to
     assert execute_pack(**operation, codex=str(provider))["status"] == "succeeded"
     result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
     assert result["result"]["display"]["coverage"] == dict(eligible=4, translated=3, missing=1, invalid=0)
+    if encoding == "source_text_aliases_with_literal_values_v1":
+        assert any(field["text"] == "第4次尝试有2项检查未通过（Trial4failed2checks）。"
+                   for field in result["result"]["display"]["fields"])
     assert result["job"]["usage"]["input_tokens"] == 19  # one shared attempt, not four new jobs
     assert len(result["result"]["metrics"]) == 6 and result["result"]["metrics"][1]["unknown"] == 1
     assert execute_pack(**operation, codex="must-not-run")["reused"] is True

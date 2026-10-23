@@ -200,6 +200,53 @@ test('literal context exposes compact prose without relaxing exact source-token 
   }
 });
 
+test('literal-value explanations keep exact source terms while making their numbers readable', () => {
+  const source = 'Trial4failed2checks; delta-0.25ms; V18; `x12`; https://example.test/r34 HTTPS://example.test/r56?part78=9 ' + '9'.repeat(64);
+  const field = maskTrajectoryDisplayText(source, {explainSourceNumbers: true});
+  const explanation = `${field.masked} 第4次尝试有2项检查未通过；变化为-0.25毫秒，版本18。`;
+  assert.equal(field.restore(explanation), source + ' 第4次尝试有2项检查未通过；变化为-0.25毫秒，版本18。');
+  assert.equal(maskTrajectoryDisplayText(source).restore(explanation), null, 'Existing encodings remain strict');
+  for (const invalid of [
+    explanation.replace('第4次', '第5次'), explanation.replace('2项', '3项'),
+    explanation.replace('-0.25毫秒', '0.25毫秒'), explanation.replace('-0.25毫秒', '-0.3毫秒'),
+    explanation + ' 4', explanation + ' 12', explanation + ' 34', explanation + ' 56', explanation + ' 78', explanation + ' 9999',
+    explanation.replace('⟪LX0⟫', ''), explanation + ' ⟪LX0⟫',
+  ]) assert.equal(field.restore(invalid), null, `Reject changed or unbound source values: ${invalid}`);
+  const units = maskTrajectoryDisplayText('Budget4ms and Budget4s', {explainSourceNumbers: true});
+  assert.equal(units.restore(`${units.masked} 数值为4和4。`), 'Budget4ms and Budget4s 数值为4和4。');
+  assert.equal(units.restore(`${units.masked} 数值为4和4和4。`), null, 'Restatement multiplicity is source-bound');
+});
+
+test('explicit literal-value encoding restores source-bound numbers without changing the assessment', () => {
+  const input = displayInput(), source = input.sources.at(-1)!, page = JSON.parse(source.text);
+  page.items[0].summary = 'Trial4failed2checks; local-only evidence remains preliminary.';
+  source.text = JSON.stringify(page);
+  source.artifact_sha256 = createHash('sha256').update(source.text).digest('hex');
+  input.display_snapshot!.translation_encoding = 'source_text_aliases_with_literals_v1';
+  const prior = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+  input.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v1';
+  const p = prepareTrajectoryAssessment({input, config: prior.config});
+  assert.notEqual(p.analysis_key, prior.analysis_key, 'New translation semantics have a separate cache identity');
+  const rows = JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
+  const row = rows.find((r: {literals: string[]}) => r.literals.includes('Trial4failed2checks'));
+  assert.deepEqual(row.literals, ['Trial4failed2checks', 'local-only']);
+  assert.deepEqual(row.explanation_numbers, ['4', '2']);
+  const output = translatedOutput(p);
+  output.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!.text =
+    '第4次尝试有2项检查未通过（⟪LX0⟫）；仅限本地（⟪LX1⟫）的证据仍属初步。';
+  const result = qualifyTrajectoryAssessment({...p, output});
+  const original = parseExploreHistoryPage(page, 'goal').items;
+  const shown = projectTrajectoryDisplay(original, result.display, result.display!.snapshot_key, 'zh');
+  assert.equal(shown.events[0]!.summary, '第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步。');
+  assert.equal(original[0]!.summary, page.items[0].summary);
+  assert.deepEqual(result.metrics, qualifyTrajectoryAssessment({...prior, output: translatedOutput(prior)}).metrics);
+  const invalid = structuredClone(output);
+  invalid.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!.text += ' 新增100%收益。';
+  const fallback = qualifyTrajectoryAssessment({...p, output: invalid});
+  assert.equal(fallback.display!.coverage.missing, 1);
+  assert.equal(projectTrajectoryDisplay(original, fallback.display, fallback.display!.snapshot_key, 'zh').events[0]!.summary, original[0]!.summary);
+});
+
 test('capture-byte and input-order changes reuse identical declared evidence, without a new scientific judgment', () => {
   const original = prepared(), next = input();
   next.scope.revision = 'capture-2'; next.sources[0]!.artifact_sha256 = 'b'.repeat(64);
