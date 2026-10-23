@@ -6,7 +6,8 @@ replace the host TUI. On every tick it asks LoopX whether the registered agent
 should run, projects a one-line public-safe status, and either:
 
   * observe-only (default): sleeps until the scheduler hint says to re-check;
-  * with --wake-cmd: runs the configured command when should_run is true.
+  * with --wake-cmd: runs when the interaction contract requires an agent attempt
+    (legacy packets without that contract use the strict should_run boolean).
 
 The generic CLI scheduler hint carries only the *initial* interval plus a
 progression ladder and an unchanged-poll limit. Unlike codex-app's stateful
@@ -112,7 +113,6 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
     action = str(hint.get("action") or "").strip()
     cadence_class = str(hint.get("cadence_class") or "").strip()
     reason = str(hint.get("reason") or payload.get("state") or "").strip()
-    should_run = payload.get("should_run")
     if _local_scheduler_directive(hint) == LOCAL_SCHEDULER_STOP_DIRECTIVE:
         # Terminal packets intentionally omit cold-path cadence detail: no
         # further wake is legal, so an interval cannot affect the decision.
@@ -132,12 +132,22 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
             reset_token=_extract_reset_token(payload),
             terminal=True,
         )
-    # Consume the Core boolean, never Python truthiness (e.g. "false" or 1).
-    # The terminal directive above wins even over a malformed admission value.
+    # The final interaction contract owns wake permission. Raw should_run is
+    # advisory: it can remain true during quiet waits or false for required
+    # repair. Consume the existing projection without reclassifying its mode.
+    # A present but malformed contract must never fall back to legacy admission.
+    # The terminal directive above still wins over malformed admission values.
     if payload.get("ok") is False:
         raise ValueError("quota decision failed; refusing model wake")
+    if "interaction_contract" in payload:
+        contract = _mapping(payload["interaction_contract"])
+        should_run = _mapping(contract.get("agent_channel")).get("must_attempt")
+        admission_field = "interaction_contract.agent_channel.must_attempt"
+    else:
+        should_run = payload.get("should_run")
+        admission_field = "quota should_run"
     if not isinstance(should_run, bool):
-        raise ValueError("quota should_run must be a boolean; refusing model wake")
+        raise ValueError(f"{admission_field} must be a boolean; refusing model wake")
     local = _extract_local_scheduler(payload)
 
     progression_values = local.get("example_progression_minutes")

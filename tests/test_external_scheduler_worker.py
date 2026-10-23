@@ -185,6 +185,85 @@ def test_failed_decision_cannot_authorize_wake(tmp_path, monkeypatch):
     assert worker.run_worker(args) == 2
 
 
+@pytest.mark.parametrize("contract", [
+    None, [], {}, {"agent_channel": None}, {"agent_channel": {}},
+    *({"agent_channel": {"must_attempt": value}} for value in ("true", "false", 1, 0)),
+])
+def test_malformed_contract_cannot_fall_back_to_legacy_wake(tmp_path, contract):
+    payload = _hint_payload(should_run=True) | {"interaction_contract": contract}
+    cli = tmp_path / "quota"
+    _write_executable(cli, f"#!{sys.executable}\nprint({json.dumps(payload)!r})\n")
+    marker = tmp_path / "model-called"
+    args = _args(fake_cli=cli, state_file=tmp_path / "state.json",
+        wake_cmd=shlex.join([sys.executable, "-c",
+            f"from pathlib import Path; Path({str(marker)!r}).touch()"]),
+        wake_timeout_seconds=5)
+    assert worker.run_worker(args) == 2
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_typed_wait_backs_off_then_fresh_attempt_wakes_once(tmp_path, repair):
+    from loopx.control_plane.scheduler.execution_context import (
+        scheduler_execution_context_for_runtime_profile,
+    )
+    from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint
+
+    def packet(mode, raw, must_attempt, delivery, quiet):
+        payload = {
+            "ok": True, "should_run": raw, "effective_action": mode,
+            "interaction_contract": {
+                "schema_version": "loopx_interaction_contract_v0", "mode": mode,
+                # A notice cannot itself authorize a wake, and DONT_NOTIFY must
+                # not suppress a required attempt (including repair-only work).
+                "user_channel": {"action_required": False,
+                                 "notify": "DONT_NOTIFY" if must_attempt else "NOTIFY"},
+                "agent_channel": {"must_attempt": must_attempt,
+                                  "delivery_allowed": delivery, "quiet_noop_allowed": quiet},
+                "cli_channel": {"next_cli_actions": [], "spend_allowed_now": False},
+            },
+        }
+        payload["scheduler_hint"] = build_native_scheduler_hint(payload,
+            scheduler_execution_context=scheduler_execution_context_for_runtime_profile("generic_cli"),
+            include_detail=True)
+        return payload
+
+    waiting = packet("mapped_noop_if_unchanged", True, False, False, True)
+    active = packet("self_repair" if repair else "bounded_delivery",
+                    not repair, True, not repair, False)
+    terminal = _hint_payload(should_run=True, local_scheduler_directive="stop")
+    # Producer stop is authoritative even when the execution field is malformed.
+    terminal["interaction_contract"] = {"agent_channel": {"must_attempt": "true"}}
+    packets = [waiting, waiting, waiting, active, terminal]
+    cli, counter, marker = (tmp_path / name for name in ("quota", "quota-count", "wake-count"))
+    _write_executable(cli, f"#!{sys.executable}\n"
+        "import json\nfrom pathlib import Path\n"
+        f"counter = Path({str(counter)!r})\n"
+        "n = int(counter.read_text()) if counter.exists() else 0\n"
+        "counter.write_text(str(n + 1))\n"
+        f"print(json.dumps({packets!r}[n]))\n")
+    wake_code = ("from pathlib import Path; "
+        f"p=Path({str(marker)!r}); "
+        "p.write_text(str(int(p.read_text()) + 1) if p.exists() else '1')")
+    args = _args(fake_cli=cli, state_file=tmp_path / "state.json",
+        wake_cmd=shlex.join([sys.executable, "-c", wake_code]),
+        quota_timeout_seconds=5, wake_timeout_seconds=5)
+    args.once = False
+    sleeps = []
+
+    def wait(seconds):
+        assert not marker.exists(), "a quiet tick launched a child before backing off"
+        sleeps.append(seconds)
+
+    assert worker.run_worker(args, sleep=wait) == 0
+    # Native generic-CLI unchanged policy: two waits, then a final fresh probe.
+    # Required work found by that probe wakes immediately; successful completion
+    # rechecks the stop packet without inserting another active-work delay.
+    assert sleeps == [3600, 7200]
+    assert counter.read_text() == "5"
+    assert marker.read_text() == "1"
+
+
 def test_explicit_stop_precedes_even_malformed_admission(tmp_path, monkeypatch):
     payload = _hint_payload(should_run=True, local_scheduler_directive="stop")
     payload["should_run"] = "false"
