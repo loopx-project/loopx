@@ -26,6 +26,7 @@ from ...state_refresh import now_local
 from ..effect_runtime import effect_runtime_result
 from ..runtime.public_safety import validate_public_safe_value
 from ..coordination.local_authority import (
+    CanonicalAuthorityRequired,
     raise_canonical_write_failure,
     read_canonical_todos_if_promoted,
     require_canonical_authority,
@@ -85,9 +86,10 @@ def team_plan_state_fingerprint(
         state_digest: str | None = hashlib.sha256(state_file.read_bytes()).hexdigest()
     except OSError:
         state_digest = None
-    canonical = read_canonical_todos_if_promoted(
-        runtime_root=effective_runtime_root(registry_path, None), goal_id=goal_id)
-    if canonical is None:
+    try:
+        canonical = read_canonical_todos_if_promoted(
+            runtime_root=effective_runtime_root(registry_path, None), goal_id=goal_id)
+    except CanonicalAuthorityRequired:
         require_canonical_authority(goal_id=goal_id, operation="team_plan")
     payload = {
         "registry": registry_digest,
@@ -199,7 +201,12 @@ def apply_team_plan(
         read_source_request()
         # Observe the selected provider under the transition/source locks:
         # provider loss never authorizes a fallback to historical source.
-        canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id)
+        try:
+            canonical = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id)
+        except CanonicalAuthorityRequired:
+            # Only native unpromoted admission may defer to the retained
+            # receipt reader. A selected-provider failure still propagates.
+            canonical = None
         try:
             source_bytes = state.read_bytes()
         except FileNotFoundError:

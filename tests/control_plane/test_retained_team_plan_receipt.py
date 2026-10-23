@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
-from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.work_items.team_plan_adapter import apply_team_plan
+from loopx.control_plane.work_items.team_plan_adapter import apply_team_plan, settle_team_plan
 from loopx.todos import add_goal_todo, list_goal_todos
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_original_1x_team_receipt_survives_canonical_later_writes(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("entrypoint", [apply_team_plan, settle_team_plan], ids=["apply", "settle"])
+def test_original_1x_team_receipt_survives_canonical_later_writes(tmp_path, monkeypatch, provider, entrypoint):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     history = json.loads((Path(__file__).parent / "fixtures/team_plan_1x.json").read_text())
     assert history["source_revision"] == "60d833b13c85135587b725013b247e827663ffb9"
@@ -26,13 +26,18 @@ def test_original_1x_team_receipt_survives_canonical_later_writes(tmp_path, monk
         "coordination": {"registered_agents": ["alpha"], "agent_model": "peer_v1"}}]}))
 
     def replay(**overrides):
-        return apply_team_plan(registry_path=registry, goal_id="goal-a",
+        return entrypoint(registry_path=registry, goal_id="goal-a",
             agent_id=None, proposal=history["plan"], expected_state_fingerprint=history["basis"], **overrides)
 
     original = state.read_bytes()
-    with pytest.raises(CanonicalAuthorityRequired):
-        replay()
+    original_registry = registry.read_bytes()
+    recovered = replay()
+    assert recovered["action"] == "reused"
+    assert recovered["created_todo_ids"] == []
+    assert recovered["lane_todo_ids"] == history["result"]["lane_todo_ids"]
     assert state.read_bytes() == original
+    assert registry.read_bytes() == original_registry
+    assert not (runtime / "authority").exists()
     rows = read_fixture_todos(state)
     initialize_canonical_authority(runtime, "goal-a",
         build_todo_runtime_shadow_projection(goal_id="goal-a", todos=rows, handoff_mode="soft_claim"),
