@@ -10,9 +10,9 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
-import { requireJsonObject } from "../runtime_decode.ts";
+import { requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { selectedWorkTodoId } from "../work_items/interaction_contract.ts";
+import { projectInteractionRequiredReads, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -43,6 +43,44 @@ export function readMonitorHeartbeatRecommendation(decision: JsonObject): JsonOb
 export function monitorHeartbeatDecisionFields(decision: JsonObject): JsonObject {
   return {heartbeat_recommendation: readMonitorHeartbeatRecommendation(decision)};
 }
+/** Keep legacy heartbeat fields at their existing quota projection boundary;
+ * the interaction owner still decides required reads and scheduler arbitration.
+ */
+export function projectInteractionReadsAndGuidance(request: JsonObject): JsonObject {
+  const result = projectInteractionRequiredReads(request);
+  return {...result, ...interactionHeartbeatRecommendation(request, requireJsonObject(result.arbitration, "arbitration"))};
+}
+
+/** Legacy Goal commands have no Task binding. Retain their original route only
+ * for admitted unscoped delivery; current selection, recovery and settlement
+ * are owned by the interaction contract, including on later same-Turn reentry.
+ * This projects guidance, never execution authority or a replacement command.
+ */
+function interactionHeartbeatRecommendation(request: JsonObject, arbitration: JsonObject): JsonObject {
+  if (request.heartbeat_recommendation === undefined) return {};
+  const recommendation = requireJsonObject(request.heartbeat_recommendation, "heartbeat_recommendation");
+  const facts = requireJsonObject(request.arbitration_facts, "scheduler arbitration facts");
+  const mode = requireNonEmptyString(facts.mode, "interaction mode");
+  const agent = requireJsonObject(facts.agent_channel, "agent channel facts");
+  const legacyDelivery = request.should_run === true && request.delivery_allowed === true
+    && request.selection_required === false && request.has_replan === false && request.settlement_only === false
+    && selectedWorkTodoId(request) === null && (mode === "bounded_delivery" || mode === "bounded_delivery_with_user_notice")
+    && Array.isArray(arbitration.errors) && arbitration.errors.length === 0;
+  const reconciled = recommendation.source === "interaction_contract";
+  if (!reconciled && (!Object.hasOwn(recommendation, "command") || legacyDelivery)) {
+    return {heartbeat_recommendation: recommendation};
+  }
+  const projected = {...recommendation};
+  delete projected.command;
+  projected.source = "interaction_contract";
+  projected.recommended_mode = mode;
+  projected.agent_must_attempt = requireBoolean(agent.must_attempt, "agent must_attempt");
+  projected.reason = request.primary_action ?? null;
+  projected.notify = requireStringLiteral(request.notify, USER_CHANNEL_NOTIFICATION_POLICIES, "heartbeat notify");
+  projected.spend_policy = request.spend_policy ?? null;
+  return {heartbeat_recommendation: projected};
+}
+
 export const ACTION_SIGNATURE_COVERAGE_V4 = "turn_envelope_action_dimensions_v4";
 export const ACTION_SIGNATURE_COVERAGE_V5 = "turn_envelope_action_dimensions_v5";
 export const ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0;

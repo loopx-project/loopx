@@ -87,7 +87,7 @@ export const INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION =
 export const INTERACTION_EXECUTION_DECISION_SCHEMA_VERSION =
   "interaction_execution_decision_v0";
 
-const USER_CHANNEL_NOTIFICATION_POLICIES = ["NOTIFY", "DONT_NOTIFY"] as const;
+export const USER_CHANNEL_NOTIFICATION_POLICIES = ["NOTIFY", "DONT_NOTIFY"] as const;
 
 // Interaction mode names the obligation; derive its existing compatibility
 // spelling from the owner-generated effective-action value.

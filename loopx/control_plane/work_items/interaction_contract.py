@@ -1118,6 +1118,19 @@ def _interaction_reads_and_arbitration(
             runtime_root=runtime_root or payload.get("runtime_root"),
             registry_path=registry_path or payload.get("registry")),
     }
+    recommendation = payload.get("heartbeat_recommendation")
+    if isinstance(recommendation, dict) and (
+        "command" in recommendation or recommendation.get("source") == "interaction_contract"
+    ):
+        # Transport configured-command compatibility guidance and its readback.
+        # The existing typed quota projection uses interaction admission; neither
+        # this bridge nor later host projections choose another action.
+        projection_params.update({
+            "heartbeat_recommendation": recommendation,
+            "primary_action": contract["agent_channel"].get("primary_action"),
+            "notify": contract["user_channel"].get("notify"),
+            "spend_policy": contract["cli_channel"].get("spend_policy"),
+        })
     # With at most three generated reads and shell-quote expansion, replies fit
     # 16B + 8 KiB for B ASCII JSON bytes; 64 KiB inputs stay below the 2 MiB frame cap.
     try:
@@ -1132,6 +1145,11 @@ def _interaction_reads_and_arbitration(
         not isinstance(item, dict) or not item.get("command") for item in projected
     ):
         raise RuntimeError("TypeScript interaction required reads are malformed")
+    if "heartbeat_recommendation" in result:
+        guidance = result["heartbeat_recommendation"]
+        if not isinstance(guidance, dict):
+            raise RuntimeError("TypeScript interaction heartbeat guidance is malformed")
+        payload["heartbeat_recommendation"] = guidance
     return projected, SchedulerArbitration.from_projection(result.get("arbitration"))
 
 

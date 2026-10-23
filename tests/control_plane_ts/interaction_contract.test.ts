@@ -1,3 +1,4 @@
+import {projectInteractionReadsAndGuidance} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -139,6 +140,61 @@ function readFacts(): JsonObject {
     has_replan: false, settlement_only: false, effective_action: "normal_run",
     selected_todo: {todo_id: "todo_selected"}};
 }
+
+test("legacy commands follow admitted current work without creating execution or owner gates", () => {
+  const recommendation = {recommended_mode: "run_agent_command", command: "loopx synthetic-command",
+    agent_must_attempt: true, notify: "DONT_NOTIFY", spend_policy: "after the old command", detail: {retained: true}};
+  const facts: JsonObject = {...readFacts(), heartbeat_recommendation: recommendation,
+    primary_action: "Inspect current work", notify: "DONT_NOTIFY", spend_policy: "after validated writeback"};
+  const before = structuredClone(facts);
+  const cases: JsonObject[] = [
+    {}, // Exact selected Todo supersedes the unbound Goal command.
+    {selected_todo: {}, selection_required: true},
+    {selected_todo: {}, should_run: false, delivery_allowed: false},
+    {selected_todo: {}, has_replan: true},
+    {selected_todo: {}, settlement_only: true},
+    {selected_todo: {}, task_orchestration_contract: {
+      schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: "todo_primary"}},
+  ];
+  for (const patch of cases) {
+    const result = projectInteractionReadsAndGuidance({...facts, ...patch});
+    const projected = result.heartbeat_recommendation as JsonObject;
+    assert.equal(Object.hasOwn(projected, "command"), false);
+    assert.equal(projected.recommended_mode, "bounded_delivery");
+    assert.equal(projected.reason, facts.primary_action);
+    assert.equal(projected.spend_policy, facts.spend_policy);
+    assert.deepEqual(projected.detail, recommendation.detail);
+  }
+  for (const mode of ["skip", "user_gate", "monitor_due", "monitor_quiet_skip", "autonomous_replan", "agent_workspace_repair",
+    "heartbeat_settled_skip", "terminal_no_followup", "governed_capability_intent"]) {
+    const arbitrationFacts = facts.arbitration_facts as JsonObject;
+    const result = projectInteractionReadsAndGuidance({...facts, selected_todo: {},
+      arbitration_facts: {...arbitrationFacts, mode,
+        agent_channel: {present: true, must_attempt: false, delivery_allowed: false, quiet_noop_allowed: true}}});
+    const projected = result.heartbeat_recommendation as JsonObject;
+    assert.equal(Object.hasOwn(projected, "command"), false);
+    assert.equal(projected.recommended_mode, mode);
+    assert.equal(projected.agent_must_attempt, false);
+  }
+  const legacy = projectInteractionReadsAndGuidance({...facts, selected_todo: {}});
+  assert.deepEqual(legacy.heartbeat_recommendation, recommendation);
+  const first = projectInteractionReadsAndGuidance(facts).heartbeat_recommendation;
+  const later = projectInteractionReadsAndGuidance({...facts, heartbeat_recommendation: first,
+    selection_required: true, primary_action: "Select current work", spend_policy: "no spend",
+    arbitration_facts: {...facts.arbitration_facts as JsonObject, mode: "skip",
+      agent_channel: {present: true, must_attempt: false, delivery_allowed: false, quiet_noop_allowed: true}}});
+  assert.equal((later.heartbeat_recommendation as JsonObject).agent_must_attempt, false);
+  assert.equal((later.heartbeat_recommendation as JsonObject).reason, "Select current work");
+  assert.equal((later.heartbeat_recommendation as JsonObject).spend_policy, "no spend");
+  const plain = projectInteractionReadsAndGuidance(readFacts());
+  assert.equal(Object.hasOwn(plain, "heartbeat_recommendation"), false);
+  assert.deepEqual(facts, before);
+});
+
+test("command-free projection preserves required-read validation precedence", () => {
+  assert.throws(() => projectInteractionReadsAndGuidance({...readFacts(),
+    required_reads: null, arbitration_facts: null}), /required_reads must be an array/);
+});
 
 test("only participating hooks add unavailable context; generic guidance has no preference recipe", () => {
   const request = {required_reads: [], source_results: []};
