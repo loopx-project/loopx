@@ -126,6 +126,8 @@ def _usage_capture(
     session_id: str,
     *,
     include_incomplete: bool = False,
+    loopx_input_json: str | None = None,
+    input_goal_id: str | None = None,
 ) -> dict:
     data = _source_path(source_root, artifact).read_bytes()
     events = []
@@ -200,12 +202,25 @@ def _usage_capture(
                 "payload": payload,
             }
         )
+    observation = None
+    input_artifacts = []
+    if loopx_input_json is not None:
+        from .trajectory_input_capture import load_codex_input_observation
+        try:
+            observation = load_codex_input_observation(source_root, loopx_input_json)
+            input_artifacts = observation.pop("artifacts")
+        except (ImportError, OSError, ValueError, KeyError, TypeError):
+            # A supplementary observation cannot erase independently valid
+            # native counters. The typed owner withholds only input attribution.
+            observation = {"error": "Input observation or tokenizer is unavailable"}
     projection = effect_runtime_result(
         "benchmark.trajectory.codex-usage",
         {
             "events": events,
             "session_id": session_id,
             "include_incomplete": include_incomplete,
+            **({"loopx_input_trace": observation, "input_goal_id": input_goal_id}
+               if loopx_input_json is not None else {}),
         },
         large_local_snapshot=True,
     )
@@ -213,6 +228,7 @@ def _usage_capture(
         "artifact": artifact,
         "artifact_sha256": hashlib.sha256(data).hexdigest(),
         "projection": projection,
+        **({"input_artifacts": input_artifacts} if input_artifacts else {}),
     }
 
 
@@ -227,6 +243,10 @@ def _captured_view(record: dict, field: str) -> dict | None:
         ).read_bytes()
         if hashlib.sha256(data).hexdigest() != captured["artifact_sha256"]:
             reason = "source_changed"
+        for artifact in captured.get("input_artifacts", []):
+            data = _source_path(Path(record["source_root"]), artifact["artifact"]).read_bytes()
+            if hashlib.sha256(data).hexdigest() != artifact["artifact_sha256"]:
+                reason = "source_changed"
     except (OSError, ValueError):
         reason = "source_unavailable"
     return {
@@ -309,6 +329,7 @@ def register_pack(
     usage_jsonl: str | None = None,
     usage_session_id: str | None = None,
     include_incomplete_usage: bool = False,
+    loopx_input_json: str | None = None,
     native_outcomes_json: str | None = None,
     base_pack_id: str | None = None,
 ) -> dict:
@@ -342,6 +363,8 @@ def register_pack(
         record["base_pack_id"] = _opaque(base_pack_id)
     if include_incomplete_usage and usage_jsonl is None:
         raise ValueError("include-incomplete-usage requires a usage capture")
+    if loopx_input_json is not None and usage_jsonl is None:
+        raise ValueError("LoopX input observation requires a usage capture")
     if (usage_jsonl is None) != (usage_session_id is None):
         raise ValueError(
             "Usage capture and expected session identity must be supplied together"
@@ -350,6 +373,8 @@ def register_pack(
         record["solver_usage"] = _usage_capture(
             source_root, usage_jsonl, usage_session_id,
             include_incomplete=include_incomplete_usage,
+            loopx_input_json=loopx_input_json,
+            input_goal_id=record["input"]["scope"]["goal_id"],
         )
     if native_outcomes_json is not None:
         data = _source_path(source_root, native_outcomes_json).read_bytes()

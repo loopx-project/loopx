@@ -74,12 +74,14 @@ export interface TrajectorySolverUsage {
   limitations: string[];
   /** Supplementary reconciliation, never a replacement for the session-counter basis. */
   request_coverage?: TrajectoryRequestCoverage;
-  /** Explicit host-supplied token attribution, never inferred from packet text or bytes. */
+  /** Optional measured attribution or a labeled recorded-packet estimate; not a counter authority. */
   loopx_input?: TrajectoryLoopXInput;
 }
 
 export type TrajectoryLoopXInput = {
-  method: 'provider_input_token_attribution_v1';
+  method: 'provider_input_token_attribution_v1' | 'tiktoken_o200k_base_input_estimate_v1';
+  estimate_basis?: {tokenizer: string; version: string; encoding: 'o200k_base';
+    scope: 'recorded_turn_packets'; models: string[]};
 } & ({status: 'complete' | 'partial'; attributed_requests: number; total_requests: number;
   attributed_input_tokens: number; total_input_tokens: number; loopx_input_tokens: number;
   loopx_cached_input_tokens: number | null;

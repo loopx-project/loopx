@@ -733,8 +733,8 @@ their exact saved projection and show **uncaptured**, not zero. Hosts capable of
 producing attribution use the existing `--usage-jsonl` registration path; no
 model call, second accounting store or new configuration is introduced.
 
-The TypeScript usage owner adds `solver_usage.projection.loopx_input` only when
-receipts are present. Every receipt must bind the original session, response,
+With provider receipts, the TypeScript usage owner adds
+`solver_usage.projection.loopx_input`. Every receipt must bind the original session, response,
 Turn/root identity and input total. Counts must fit the native input/cache
 subsets; conflicts withhold only attribution, leaving valid session and request
 counters intact. Complete coverage shows the ratio. Partial coverage retains
@@ -748,3 +748,60 @@ values with the existing warning and never borrow another pack's measurement.
 含缓存；重复处理按请求计量，重复回执不重复记账。需要宿主真实归因，现有历史计数
 不能反推 packet token；未采集、部分覆盖与真实零分开。比例是结构开销，不能单独
 当作净效率损失、可避免成本或因果贡献。普通阅读不调用模型。
+
+### Recorded Turn packet estimate
+
+The existing native `codex-cli` Turn host can record its actual injected packet
+when the invocation already has `CODEX_ROLLOUT_TRACE_ROOT` enabled. This is a
+local, opt-in Codex diagnostic feature; LoopX does not enable it globally or
+change a running experiment. The Agent prepares a private, invocation-scoped
+trace directory through the existing host environment. Native tracing contains
+sensitive prompts and outputs; keep it and `loopx-input-sources/*.json` private.
+The host records the exact injection only beside its newly observed session
+bundle. It never edits the original client rollout or changes task results,
+session authority, permissions, account selection or model execution.
+
+An Agent can prepare the optional computation provider with
+`uv sync --extra input-token-estimates` in a source checkout, or install the
+`input-token-estimates` package extra in its existing qualified runtime. This
+uses [tiktoken 0.12.0](https://pypi.org/project/tiktoken/0.12.0/) and the explicitly named `o200k_base` encoding. Its first
+encoding load can download the public encoding asset; packet text stays local.
+It does **not** establish the tokenizer of an unknown provider model.
+
+Register a frozen host source with the existing usage capture using
+`--loopx-input-json <relative-source-json>` alongside `--usage-jsonl` and
+`--usage-session-id`. The Agent prepares those artifacts within the existing
+source root; the owner need not discover ids or copy a command. Registration
+reads the native trace and tokenizes locally, without running a model. Ordinary
+Research reads use the saved projection and make no tokenizer or model call.
+
+The same TS request owner binds the recorded source digest to one unambiguous
+native input item, then follows that item and content across full requests.
+Each native response, Turn, model and all six counters must match the existing
+usage capture. Repeated consumption counts per request; duplicate responses
+do not increase totals, and copies under another item id are not classified as
+extra LoopX input. Changed source files become historical. Missing dependencies,
+invalid references and conflicting identities withhold only this observation,
+preserving valid native totals. Compressed websocket requests need verified
+replay; compaction and uncovered requests cannot supply invented attribution.
+
+Research labels this **LoopX Turn packet · estimate** with method
+`tiktoken_o200k_base_input_estimate_v1`. Its numerator covers only the explicitly
+recorded Turn packet text; it excludes other LoopX tool output, model framing
+and compacted summaries. It is not the total LoopX footprint. The denominator
+is native input, including cache, for the same captured requests. The native
+model, encoding and tokenizer version remain available in details. Unknown
+cache allocation stays unknown. Partial request coverage withholds the whole
+capture ratio; estimates provide no mathematical or confidence bounds. A token
+estimate larger than its native input is withheld, never clamped. Existing
+provider-measured receipts take precedence; the two methods are not mixed.
+
+This producer supplies a recorded-component estimate, not a scientific
+calibration of model tokenization, a retrospective reconstruction, or proof of
+net efficiency loss. Existing uninstrumented experiments remain unknown; do not
+launch or retune a frozen solver just to populate this field.
+
+中文：Agent 可在既有获准调用的私有原生 trace 中记录真实注入的 Turn packet，
+并在登记同一会话用量时以 o200k_base 做明确标注的文本估计。只统计已记录的
+Turn packet，不冒充全部 LoopX 输入或 provider 实测；原生模型分词器、缓存归属、
+压缩回放和缺失范围保持各自边界。原始记录不改，读取不调用模型，不重启既有实验。

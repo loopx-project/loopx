@@ -33,27 +33,29 @@ function LoopXInputShare({usage, zh}: {usage: TrajectorySolverUsage | undefined;
   const attribution = usage?.loopx_input;
   const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 1}).format(n);
   const measured = attribution && attribution.status !== "unavailable" ? attribution : null;
+  const estimated = attribution?.method === "tiktoken_o200k_base_input_estimate_v1";
   return <section className="research-request-coverage" aria-label={zh ? "LoopX 结构开销" : "LoopX input overhead"}>
-    <div className="research-usage-heading"><h4>{zh ? "LoopX 输入占比" : "LoopX input share"}</h4><ContextHelp label={zh ? "结构输入占比口径" : "Input share basis"}>
+    <div className="research-usage-heading"><h4>{estimated ? (zh ? "LoopX Turn packet · 估计" : "LoopX Turn packet · estimate") : (zh ? "LoopX 输入占比" : "LoopX input share")}</h4><ContextHelp label={zh ? "结构输入占比口径" : "Input share basis"}>
       <p>{zh ? "同一捕获窗口内，LoopX packet 进入各次模型请求的 token 总量 ÷ 全部请求输入 token 总量，包含缓存输入。重复消费按各次请求计算，同一响应的重复回执只计一次。" : "LoopX packet tokens processed across requests divided by all request input tokens in the same capture, including cached input. Reprocessed context counts in each request; duplicate receipts for one response count once."}</p>
-      <p>{zh ? "需要宿主提供逐请求 token 归因；包字节、字符数和命令次数不能替代。缺失归因保持未知；上下文压缩也不自动全部归为 LoopX。这个比例衡量结构开销，不能单独证明净效率损失或因果影响。" : "Requires host-supplied per-request token attribution, not packet bytes, characters or command counts. Missing attribution stays unknown; compaction is not automatically all attributed to LoopX. This measures input overhead, not net efficiency loss or causal impact."}</p>
+      <p>{estimated ? (zh ? "分子仅计宿主明确记录的 Turn packet 文本，使用 o200k_base 分词估计；分母是同请求的原生输入计数。尚未核验原生模型分词器，不含其他 LoopX 命令输出、封装或压缩摘要，缓存归属未知；这是已记录部分的估计，不是 provider 实测或净效率损失。" : "Only explicitly recorded Turn packet text is estimated with o200k_base; the denominator is native input for the same requests. The provider model's tokenizer is unverified. Other LoopX tool output, framing and compacted summaries are excluded; cache allocation is unknown. This estimates the recorded component, not provider-measured attribution or net efficiency loss.") : (zh ? "需要宿主提供逐请求 token 归因；包字节、字符数和命令次数不能替代。缺失归因保持未知；上下文压缩也不自动全部归为 LoopX。这个比例衡量结构开销，不能单独证明净效率损失或因果影响。" : "Requires host-supplied per-request token attribution, not packet bytes, characters or command counts. Missing attribution stays unknown; compaction is not automatically all attributed to LoopX. This measures input overhead, not net efficiency loss or causal impact.")}</p>
     </ContextHelp></div>
     <p className="research-input-share-value"><strong data-loopx-input-share>{measured?.input_fraction == null ? "—" : percent(measured.input_fraction)}</strong>
-      {measured ? <span>{measured.attributed_requests} / {measured.total_requests} {zh ? "次请求已归因" : "requests attributed"}</span> : null}
+      {measured ? <span>{measured.attributed_requests} / {measured.total_requests} {estimated ? (zh ? "次请求已匹配" : "requests matched") : (zh ? "次请求已归因" : "requests attributed")}</span> : null}
     </p>
     {!attribution ? <p>{zh ? "未采集 packet 的 token 归因" : "Packet token attribution was not captured"}</p>
-      : attribution.status === "unavailable" ? <p className="research-progress-warning" role="status">{zh ? "归因记录未通过核对，占比未知。" : "Attribution records could not be reconciled; share is unknown."}</p>
-      : attribution.status === "partial" ? <p>{zh ? "部分归因 · 全窗口占比未知" : "Partial attribution · whole-capture share unknown"}</p>
+      : attribution.status === "unavailable" ? <p className="research-progress-warning" role="status">{estimated ? (zh ? "输入估计暂不可用，占比未知。" : "Input estimate unavailable; share is unknown.") : (zh ? "归因记录未通过核对，占比未知。" : "Attribution records could not be reconciled; share is unknown.")}</p>
+      : attribution.status === "partial" ? <p>{estimated ? (zh ? "部分请求已匹配 · 全窗口占比未知" : "Some requests matched · whole-capture share unknown") : (zh ? "部分归因 · 全窗口占比未知" : "Partial attribution · whole-capture share unknown")}</p>
         : attribution.total_input_tokens === 0 ? <p>{zh ? "捕获输入为零，比例不适用。" : "Captured input is zero; the ratio is undefined."}</p> : null}
-    {attribution ? <details className="research-usage-detail"><summary>{zh ? "归因明细" : "Attribution details"}</summary>
+    {attribution ? <details className="research-usage-detail"><summary>{estimated ? (zh ? "估计明细" : "Estimate details") : (zh ? "归因明细" : "Attribution details")}</summary>
       {measured ? <dl className="research-usage-basis">
-        <dt>{zh ? "已归因 LoopX 输入" : "Attributed LoopX input"}</dt><dd>{measured.loopx_input_tokens.toLocaleString()} tokens</dd>
+        <dt>{estimated ? (zh ? "已记录 packet 文本估计" : "Recorded packet text estimate") : (zh ? "已归因 LoopX 输入" : "Attributed LoopX input")}</dt><dd>{measured.loopx_input_tokens.toLocaleString()} tokens</dd>
         <dt>{zh ? "全部请求输入" : "All request input"}</dt><dd>{measured.total_input_tokens.toLocaleString()} tokens</dd>
         <dt>{zh ? "已覆盖请求输入" : "Input in attributed requests"}</dt><dd>{measured.attributed_input_tokens.toLocaleString()} tokens</dd>
         <dt>{zh ? "LoopX 输入中的缓存" : "Cached subset of LoopX input"}</dt><dd>{measured.loopx_cached_input_tokens?.toLocaleString() ?? "—"} tokens</dd>
         <dt>{zh ? "占未缓存输入" : "Share of uncached input"}</dt><dd>{measured.uncached_input_fraction == null ? "—" : percent(measured.uncached_input_fraction)}</dd>
         {measured.status === "partial" && measured.input_fraction_bounds ? <><dt>{zh ? "缺失归因的可能范围" : "Possible range with missing attribution"}</dt><dd>{measured.input_fraction_bounds.map(percent).join(" – ")}<p>{zh ? "假定未归因请求全非 LoopX / 全为 LoopX；不是置信区间。" : "Unattributed requests treated as none / all LoopX; not a confidence interval."}</p></dd></> : null}
       </dl> : <p>{attribution.status === "unavailable" ? attribution.reason : null}</p>}
+      {measured?.estimate_basis ? <p>{measured.estimate_basis.tokenizer} {measured.estimate_basis.version} · {measured.estimate_basis.encoding}<br/>{measured.estimate_basis.models.join(", ")}</p> : null}
       <p><code>{attribution.method}</code></p>
     </details> : null}
   </section>;

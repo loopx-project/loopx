@@ -2,6 +2,87 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {summarizeTrajectoryCodexUsage as summarize} from '../../loopx/control_plane/capabilities/trajectory_codex_usage.ts';
 
+function nativeEstimate() {
+  const digest = 'a'.repeat(64), other = 'b'.repeat(64);
+  const first = tokens(100, 60, 5), second = tokens(300, 200, 5), total = tokens(400, 260, 10);
+  const rows = [event('session_meta', {id: 'session'}), event('event_msg', {type: 'task_started', turn_id: 'turn'})];
+  for (const [id, usage, cumulative] of [['first', first, first], ['second', second, total]] as const) {
+    rows.push(event('token_usage_record', {response_id: id, session_id: 'session', thread_id: 'session',
+      turn_id: 'turn', root_turn_id: 'turn', usage, thread_token_usage: cumulative, turn_token_usage: cumulative}),
+    event('event_msg', {type: 'token_count', info: {total_token_usage: cumulative, last_token_usage: usage}}));
+  }
+  rows.push(event('event_msg', {type: 'task_complete', turn_id: 'turn'}));
+  const trace: any = {source: {schema_version: 'loopx_codex_input_source_v1', session_id: 'session', goal_id: 'goal',
+    source_sha256: digest, text_sha256: digest}, source_artifact_sha256: digest, trace_sha256: other,
+    manifest: {schema_version: 1, root_thread_id: 'session', rollout_id: 'session'},
+    tokenizer: {name: 'tiktoken', version: '0.12.0', encoding: 'o200k_base'}, events: []};
+  for (const [id, usage] of [['first', first], ['second', second]] as const) {
+    trace.events.push({schema_version: 1, seq: trace.events.length + 1, rollout_id: 'session', thread_id: 'session',
+      codex_turn_id: 'turn', payload: {type: 'inference_started', inference_call_id: id, thread_id: 'session',
+        codex_turn_id: 'turn', model: 'native-model', request: {sha256: other, model: 'native-model',
+          previous_response_id: null, input: [{id: 'source-item', type: 'message', role: 'user',
+            content: [{type: 'input_text', sha256: digest, tokens: 20}]}]}}},
+    {schema_version: 1, seq: trace.events.length + 2, rollout_id: 'session', thread_id: 'session', codex_turn_id: 'turn',
+      payload: {type: 'inference_completed', inference_call_id: id, response_id: id, upstream_request_id: id,
+        response: {sha256: other, response_id: id, upstream_request_id: id, token_usage: usage}}});
+  }
+  return {trace, rows: rows as any[]};
+}
+const estimate = (fixture = nativeEstimate()) => summarize({events: fixture.rows.map((r, i) => ({...r, line: i + 1,
+  timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString()})), session_id: 'session',
+  input_goal_id: 'goal', loopx_input_trace: fixture.trace});
+
+test('native packet estimate sums repeated consumption against same-request totals and stays labeled', () => {
+  const result = estimate(), value = result.loopx_input!;
+  assert.equal(value.method, 'tiktoken_o200k_base_input_estimate_v1');
+  assert.equal(value.status, 'complete'); if (value.status === 'unavailable') return;
+  assert.equal(value.loopx_input_tokens, 40); assert.equal(value.input_fraction, 0.1);
+  assert.equal(value.total_input_tokens, 400); assert.equal(value.uncached_input_fraction, null);
+  assert.equal(value.loopx_cached_input_tokens, null); assert.equal(value.input_fraction_bounds, null);
+  assert.equal(value.estimate_basis?.scope, 'recorded_turn_packets');
+  assert.deepEqual(value.estimate_basis?.models, ['native-model']);
+  assert.equal(result.input_tokens, 400); assert.equal(result.cached_input_tokens, 260);
+});
+
+test('source copies do not become extra LoopX input; changed ids, text and unreplayed deltas stay partial', () => {
+  const original = nativeEstimate();
+  const copied = structuredClone(original.trace.events[2].payload.request.input[0]); copied.id = 'quoted-copy';
+  original.trace.events[2].payload.request.input.push(copied);
+  assert.equal(estimate(original).loopx_input?.status, 'complete');
+  const a = estimate(original).loopx_input!; if (a.status !== 'unavailable') assert.equal(a.loopx_input_tokens, 40);
+  for (const change of [
+    (r: any) => {r.input[0].id = 'different-item';},
+    (r: any) => {r.input[0].role = 'assistant';},
+    (r: any) => {r.input[0].content[0].sha256 = 'c'.repeat(64);},
+    (r: any) => {r.previous_response_id = 'unreplayed';},
+  ]) {
+    const f = nativeEstimate(); change(f.trace.events[2].payload.request);
+    const value = estimate(f).loopx_input!; assert.equal(value.status, 'partial');
+    if (value.status !== 'unavailable') {assert.equal(value.input_fraction, null); assert.equal(value.attributed_requests, 1);}
+  }
+});
+
+test('bad native identity, source, sequence, counter and estimator evidence withholds only attribution', () => {
+  const mutations = [
+    (t: any) => {t.source.goal_id = 'foreign';}, (t: any) => {t.source.session_id = 'foreign';},
+    (t: any) => {t.source.source_sha256 = 'f'.repeat(64);},
+    (t: any) => {t.events[0].seq = 2;}, (t: any) => {t.events[0].thread_id = 'foreign';},
+    (t: any) => {t.events[1].codex_turn_id = 'foreign';},
+    (t: any) => {t.events[1].payload.response_id = 'foreign';},
+    (t: any) => {t.events[1].payload.response.token_usage = tokens(101, 60, 5);},
+    (t: any) => {t.events[0].payload.request.model = 'foreign';},
+    (t: any) => {t.events[0].payload.request.input[0].content[0].tokens = true;},
+    (t: any) => {t.events[0].payload.request.input[0].content[0].tokens = 101;},
+    (t: any) => {t.events[0].payload.request.input.push(structuredClone(t.events[0].payload.request.input[0]));},
+    (t: any) => {t.tokenizer.encoding = 'character-count';},
+  ];
+  for (const mutate of mutations) {
+    const f = nativeEstimate(); mutate(f.trace); const result = estimate(f);
+    assert.equal(result.loopx_input?.status, 'unavailable'); assert.equal(result.input_tokens, 400);
+    assert.equal(result.request_coverage?.status, 'verified');
+  }
+});
+
 const tokens = (input: number, cached: number, output: number) => ({input_tokens: input,
   cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: output,
   reasoning_output_tokens: 0, total_tokens: input + output});
