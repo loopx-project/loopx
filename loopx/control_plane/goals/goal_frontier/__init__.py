@@ -22,6 +22,7 @@ from ...todos.contract import (
 from ...todos.todo_semantics import (
     todo_advancement_frontier_counts,
     todo_item_is_watch_only_monitor,
+    todo_scoped_runnable_advancement_count,
     todo_summary_open_task_counts,
 )
 from ...todos.succession_warning import (
@@ -1544,15 +1545,23 @@ def build_goal_frontier_projection_context_from_status(
         agent_todo_summary=agent_todo_summary,
         agent_id=agent_id,
     )
+    # Commitment floors include open work held by a receipt-owned retry. The
+    # typed selection projection, when complete for this lane, owns how much
+    # work is actually runnable; a commitment is not an execution candidate.
+    selectable_advancement_count = todo_scoped_runnable_advancement_count(
+        agent_todo_summary, agent_id=agent_id,
+    )
+    if selectable_advancement_count is None:
+        selectable_advancement_count = (
+            frontier_counts["current_agent_claimed_advancement_count"]
+            + frontier_counts["unclaimed_advancement_count"]
+        )
     vision_wait_state = build_goal_vision_wait_state(
         agent_todo_summary=agent_todo_summary,
         source_items=agent_todo_source_items,
         agent_id=agent_id,
         acceptance_gaps=source_acceptance_gaps,
-        selectable_advancement_count=(
-            frontier_counts["current_agent_claimed_advancement_count"]
-            + frontier_counts["unclaimed_advancement_count"]
-        ),
+        selectable_advancement_count=selectable_advancement_count,
     )
     acceptance_gaps = (
         [gap for gap in source_acceptance_gaps if gap.get("kind") in GOAL_ACCEPTANCE_HOLD_TRIGGERS]

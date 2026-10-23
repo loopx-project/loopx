@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ...chat_manager_details import read_manager_goal_details
-from ...chat_manager_history import read_manager_delivery_history
+from ...chat_manager_history import delivery_history_window, read_manager_delivery_history
 from ...control_plane.effect_runtime import effect_runtime_result
 
 
@@ -40,6 +41,10 @@ READ_TOOL = {
             },
             "source_id": {"type": "string", "description": "Default local. For SSH use an exact source_id from view=sources; local Goal IDs do not discover remote Goals."},
             "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Deliveries lookback; expand for latest known progress older than yesterday."},
+            "window_start": {"type": "string", "description": "Local deliveries only: exact inclusive ISO-8601 timestamp with offset. Pair with window_end instead of days, e.g. a frozen report window."},
+            "window_end": {"type": "string", "description": "Local deliveries only: exact exclusive ISO-8601 timestamp with offset. Boundaries do not move while paging."},
+            "expected_source_revision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries only: copy source.source_revision from the first page onto subsequent pages. A conflicting response requires restarting this read, not merging pages from different indexes."},
+            "delivery_ref": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries only: use an observed row's source_ref to recover its full permitted recorded_details and evidence references within the same read window/revision. Does not read referenced artifacts or prove the recorded claims."},
             "goal_id": {"type": "string"},
             "agent_id": {"type": "string", "minLength": 1,
                          "description": "Agent_route only, with goal_id: exact registered Agent to locate. Search view=agents first; does not delegate or create an execution driver."},
@@ -164,6 +169,29 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
             )
     if not isinstance(arguments.get("source_id", "local"), str):
         rejected.append("source_id:must_be_a_string")
+    exact_arguments = {"window_start", "window_end", "expected_source_revision", "delivery_ref"} & arguments.keys()
+    for name in sorted(exact_arguments):
+        if view != "deliveries":
+            rejected.append(f"{name}:only_for_view_deliveries")
+        elif arguments.get("source_id", "local") != "local":
+            rejected.append(f"{name}:only_for_source_local")
+    if {"window_start", "window_end"} & arguments.keys():
+        if "days" in arguments:
+            rejected.append("days:cannot_combine_with_exact_window")
+        try:
+            if not all(isinstance(arguments.get(name), str) for name in ("window_start", "window_end")):
+                raise ValueError("two timestamps required")
+            delivery_history_window(arguments.get("window_start"), arguments.get("window_end"))
+        except ValueError:
+            rejected.append("window_start,window_end:require_two_offset_timestamps_increasing_at_most_90_days")
+        if ((type(offset) is int and offset > 0) or "delivery_ref" in arguments) and "expected_source_revision" not in arguments:
+            rejected.append("expected_source_revision:required_for_exact_window_pagination")
+    for name in ("expected_source_revision", "delivery_ref"):
+        if name in arguments and (not isinstance(arguments[name], str)
+                or not re.fullmatch(r"sha256:[a-f0-9]{64}", arguments[name])):
+            rejected.append(f"{name}:must_be_a_sha256_revision")
+    if "delivery_ref" in arguments and offset != 0:
+        rejected.append("delivery_ref:requires_offset_0")
     return rejected
 
 
@@ -495,7 +523,9 @@ class ManagerInspection:
             matched = source.get("coverage", {}).get("active")
         else:
             source = read_manager_delivery_history(
-                self.runtime_root, goal_id, limit=limit, offset=offset, lookback_days=arguments.get("days", 1)
+                self.runtime_root, goal_id, limit=limit, offset=offset, lookback_days=arguments.get("days", 1),
+                **{name: arguments[name] for name in ("window_start", "window_end", "expected_source_revision", "delivery_ref")
+                   if name in arguments},
             )
             page = source.pop("deliveries", [])
             matched = source.get("coverage", {}).get("matched")
@@ -510,6 +540,16 @@ class ManagerInspection:
                 r["todo_id"]: r.get("title")
                 for r in details.get("todos", []) + details.get("completed_todos", [])
             }
+            # A delivery's task can be beyond the overview page. Recover only
+            # its exact canonical record; never mistake the first page's cap
+            # for an absent task, or treat a completed record as new authority.
+            for todo_id in {row.get("todo_id") for row in page} - titles.keys():
+                if not todo_id:
+                    continue
+                exact = read_manager_goal_details(self.registry_path, self.runtime_root, goal_id,
+                    owner_scope=self.owner_scope, todo_id=todo_id)
+                for row in exact.get("todos", []):
+                    titles[row["todo_id"]] = row.get("title")
             page = [{**r, "todo_title": titles.get(r.get("todo_id"))} for r in page]
         if not self.scope_valid():
             return {"ok": False, "error": "authorization_changed"}
@@ -541,6 +581,11 @@ class ManagerInspection:
             if isinstance(matched, int) and page and end < matched
             else None,
             "unknown": matched is None or portfolio_unknown
+            or ("window_start" in arguments and (
+                source.get("window_complete") is False
+                or bool(source.get("coverage", {}).get("invalid_delivery_records"))
+                or bool(source.get("coverage", {}).get("invalid_index_records"))
+                or bool(oversized)))
             or (
                 view == "handoffs"
                 and (

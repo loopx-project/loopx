@@ -1176,6 +1176,7 @@ def _resolve_quota_should_run_route(
                 agent_todo_summary=prepared.agent_todo_summary,
                 agent_lane_next_action=agent_lane_next_action,
                 work_lane_contract=prepared.work_lane_contract,
+                vision_wait_state=prepared.goal_frontier_projection.get("vision_wait_state"),
                 # A satisfied dependency is readiness, not admission. The
                 # existing scoped fallback above qualifies an independent
                 # successor under a user gate; an unqualified ready row must

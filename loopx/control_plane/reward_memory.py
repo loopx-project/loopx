@@ -23,7 +23,13 @@ def reward_memory_automation_enabled(
         return False
     experiment = recall.get("experiment")
     envelope = payload.get("turn_envelope")
-    if not isinstance(experiment, Mapping):
+    if (
+        not isinstance(experiment, Mapping)
+        or experiment.get("enabled") is not True
+        or experiment.get("available") is not True
+        or experiment.get("configured_for_agent") is not True
+        or experiment.get(operation) is not True
+    ):
         return False
     if isinstance(envelope, Mapping):
         boundary = envelope.get("boundary")
@@ -42,7 +48,11 @@ def reward_memory_automation_enabled(
             or identity.get("registered") is not True
         ):
             return False
-        boundary = payload.get("goal_boundary")
+        # Reuse the typed quota projection rather than interpreting another
+        # copy of the legacy quota boundary in this compatibility adapter.
+        from .quota.turn_envelope import quota_action_signature_document
+
+        boundary = quota_action_signature_document(payload).get("boundary")
     else:
         return False
     try:
@@ -62,14 +72,10 @@ def reward_memory_automation_enabled(
         and memory.get(operation) is True
         # Recall resolves the binding again after admission. A stale envelope
         # must not resurrect a now unavailable or disabled binding.
-        and experiment.get("enabled") is True
-        and experiment.get("available") is True
-        and experiment.get("configured_for_agent") is True
         and bool(source.get("goal_id"))
         and experiment.get("goal_id") == source.get("goal_id")
         and bool(source.get("agent_id"))
         and experiment.get("agent_id") == source.get("agent_id")
-        and experiment.get(operation) is True
     )
 
 

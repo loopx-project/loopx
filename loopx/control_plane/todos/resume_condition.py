@@ -43,7 +43,7 @@ _RESUME_PR_MERGED_PATTERN = re.compile(
 )
 _RESUME_AT_PATTERN = re.compile(
     r"^resume_at:(?P<timestamp>[1-9]\d{3}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
-    r"(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))$",
+    r"(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2}))$",
     re.IGNORECASE,
 )
 _PR_REF_NUMBER_PATTERN = re.compile(
@@ -123,11 +123,14 @@ def normalize_todo_resume_when(value: Any) -> str | None:
             return None
         if not 1000 <= utc.year <= 9999:
             return None
-        canonical = (
-            utc.isoformat(timespec="milliseconds")
-            if utc.microsecond
-            else utc.replace(microsecond=0).isoformat()
-        ).replace("+00:00", "Z")
+        if utc.microsecond % 1000:
+            canonical = utc.strftime("%Y-%m-%dT%H:%M:%S") + "." + f"{utc.microsecond:06d}".rstrip("0") + "Z"
+        else:
+            canonical = (
+                utc.isoformat(timespec="milliseconds")
+                if utc.microsecond
+                else utc.replace(microsecond=0).isoformat()
+            ).replace("+00:00", "Z")
         return f"{TODO_RESUME_KIND_RESUME_AT}:{canonical}"
     candidate = candidate.lower()
     if candidate.startswith(f"{TODO_RESUME_KIND_RESUME_AT}:"):

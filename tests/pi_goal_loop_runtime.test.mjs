@@ -35,6 +35,42 @@ test("Pi thread identity is private, stable and distinguishes colliding basename
 })
 
 
+test("LOOPX_PI_THREAD_ID override takes precedence over the session file path", () => {
+  const original = process.env.LOOPX_PI_THREAD_ID
+  try {
+    process.env.LOOPX_PI_THREAD_ID = "stable-project-identity"
+    const file = path.join(os.tmpdir(), "2026-10-22T10-43-51-124Z_uuid1.jsonl")
+    assert.equal(piThreadId(file), "stable-project-identity")
+    const file2 = path.join(os.tmpdir(), "2026-10-23T09-12-04-887Z_uuid2.jsonl")
+    assert.equal(piThreadId(file2), "stable-project-identity")
+  } finally {
+    if (original === undefined) {
+      delete process.env.LOOPX_PI_THREAD_ID
+    } else {
+      process.env.LOOPX_PI_THREAD_ID = original
+    }
+  }
+})
+
+
+test("blank LOOPX_PI_THREAD_ID falls through to session file derivation", () => {
+  const original = process.env.LOOPX_PI_THREAD_ID
+  try {
+    process.env.LOOPX_PI_THREAD_ID = "   "
+    const file = path.join(os.tmpdir(), "session.jsonl")
+    assert.equal(piThreadId(file), sessionKey(file))
+    delete process.env.LOOPX_PI_THREAD_ID
+    assert.equal(piThreadId(file), sessionKey(file))
+  } finally {
+    if (original === undefined) {
+      delete process.env.LOOPX_PI_THREAD_ID
+    } else {
+      process.env.LOOPX_PI_THREAD_ID = original
+    }
+  }
+})
+
+
 function memoryBindingStore() {
   const bindings = new Map()
   return {

@@ -34,6 +34,7 @@ from ..todos.todo_semantics import (
     todo_item_is_deferred,
     todo_item_task_class,
     todo_presentation_sort_key,
+    todo_scoped_runnable_advancement_count,
 )
 from ..todos.summary_item import compact_todo_summary_item, compact_todo_summary_items
 from ..todos.user_gate import (
@@ -1350,6 +1351,7 @@ def _agent_scope_no_candidate_frontier(
     agent_lane_next_action: dict[str, Any] | None,
     work_lane_contract: dict[str, Any] | None,
     candidate_should_run: bool,
+    vision_wait_state: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not candidate_should_run or not _agent_identity_has_scoped_lane(agent_identity):
         return None
@@ -1376,6 +1378,12 @@ def _agent_scope_no_candidate_frontier(
         agent_todo_summary,
         agent_id=agent_id,
     )
+    if vision_wait_state and todo_scoped_runnable_advancement_count(
+        agent_todo_summary, agent_id=agent_id,
+    ) == 0:
+        # A committed retry keeps its unfinished commitment while selection
+        # proves there is no runnable work. Preserve the exact wait route.
+        current_count = unclaimed_count = 0
     if current_count > 0 or unclaimed_count > 0:
         return None
     context = _AgentScopeNoCandidateContext(

@@ -400,6 +400,152 @@ def test_delivery_pages_cross_day_without_duplication(tmp_path):
     }
 
 
+def _delivery_window_fixture(root, goal_id="alpha"):
+    path = root / "goals" / goal_id / "runs" / "index.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A fixed daily report includes its start, excludes its end, and crosses
+    # midnight. Rows just outside the window catch a calendar-day substitute.
+    times = ["2026-01-01T08:59:59+08:00", "2026-01-01T09:00:00+08:00",
+             "2026-01-01T23:59:59+08:00", "2026-01-02T00:00:00+08:00",
+             "2026-01-02T08:59:59+08:00", "2026-01-02T09:00:00+08:00"]
+    rows = [{"generated_at": at, "delivery_outcome": "outcome_progress",
+             "goal_id": goal_id, "todo_id": f"todo_{i}",
+             "agent_vision": {"path_delta": {"observed_reality": "Observed result. " * 45 + "Counterexample remains open."}},
+             "progress_observation": {"evidence_ids": [f"evidence-{j}" for j in range(13)]}}
+            for i, at in enumerate(times)]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    return path
+
+
+_FIXED_WINDOW = {"window_start": "2026-01-01T09:00:00+08:00",
+                 "window_end": "2026-01-02T09:00:00+08:00"}
+
+
+def test_fixed_window_pages_and_exact_receipt_recover_substantive_evidence(tmp_path, monkeypatch):
+    _delivery_window_fixture(tmp_path)
+    monkeypatch.setattr(details, "list_goal_todos", _todo_read_fixture([]))
+    tool, _ = inspector(tmp_path)
+    arguments = {"view": "deliveries", "goal_id": "alpha", "limit": 1, **_FIXED_WINDOW}
+    first = tool.read(TOOL_NAME, arguments)
+    revision = first["source"]["source_revision"]
+    pages = [first]
+    while pages[-1]["next_offset"] is not None:
+        # A fresh reader models process/session recovery between pages.
+        resumed, _ = inspector(tmp_path)
+        pages.append(resumed.read(TOOL_NAME, {**arguments, "offset": pages[-1]["next_offset"],
+                                             "expected_source_revision": revision}))
+    assert [row["todo_id"] for page in pages for row in page["rows"]] == ["todo_4", "todo_3", "todo_2", "todo_1"]
+    assert all(page["source"]["source_revision"] == revision for page in pages)
+    assert all(page["source"]["window_start"] == "2026-01-01T01:00:00+00:00" for page in pages)
+    assert first["source"]["window_end"] == "2026-01-02T01:00:00+00:00"
+    assert first["rows"][0]["recorded_details"]["field_coverage"]["truncated"] == ["observed_reality"]
+    exact = tool.read(TOOL_NAME, {**arguments, "delivery_ref": first["rows"][0]["source_ref"],
+                                 "expected_source_revision": revision})
+    row = exact["rows"][0]
+    assert row["recorded_details"]["observed_reality"].endswith("Counterexample remains open.")
+    assert row["recorded_details"]["field_coverage"]["truncated"] == []
+    assert row["recorded_details"]["evidence_coverage"]["included"] == 13
+    assert row["recorded_details"]["artifact_read_status"] == "not_read"
+    assert row["recorded_details"]["verification"] == "recorded_claim_not_independent_verification"
+
+
+def test_revision_pinned_read_rejects_same_size_timestamp_preserving_rewrite(tmp_path):
+    import os
+    path = _delivery_window_fixture(tmp_path)
+    first = read_manager_delivery_history(tmp_path, "alpha", **_FIXED_WINDOW)
+    previous = path.stat()
+    path.write_bytes(path.read_bytes().replace(b"todo_4", b"todo_9"))
+    assert path.stat().st_size == previous.st_size
+    os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+    stale = read_manager_delivery_history(tmp_path, "alpha", offset=1, limit=1,
+        expected_source_revision=first["source_revision"], **_FIXED_WINDOW)
+    assert stale["status"] == "conflicting" and not stale["deliveries"]
+    assert stale["coverage"]["matched"] is None
+    assert stale["source_revision"] != first["source_revision"]
+
+
+@pytest.mark.parametrize("arguments", [
+    {"window_start": _FIXED_WINDOW["window_start"]},
+    {"window_start": None, "window_end": None},
+    {"window_start": "2026-01-01T09:00:00", "window_end": _FIXED_WINDOW["window_end"]},
+    {"window_start": _FIXED_WINDOW["window_end"], "window_end": _FIXED_WINDOW["window_start"]},
+    {"window_start": "2025-01-01T00:00:00Z", "window_end": "2026-01-01T00:00:00Z"},
+    {**_FIXED_WINDOW, "days": 1},
+    {**_FIXED_WINDOW, "offset": 1},
+    {**_FIXED_WINDOW, "delivery_ref": "sha256:" + "a" * 64},
+    {**_FIXED_WINDOW, "source_id": "ssh:sample"},
+    {"delivery_ref": "private/path"},
+    {**_FIXED_WINDOW, "view": "todos"},
+])
+def test_invalid_fixed_window_does_not_read_a_source(tmp_path, arguments, monkeypatch):
+    tool, records = inspector(tmp_path)
+    monkeypatch.setattr(tool, "_goal_scope", lambda: pytest.fail("invalid input reached source admission"))
+    result = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "alpha", **arguments})
+    assert result["error"] == "invalid_arguments" and result["rejected_arguments"]
+    assert not records
+
+
+def test_fixed_window_retains_scope_fence_and_oversized_record_gap(tmp_path, monkeypatch):
+    path = _delivery_window_fixture(tmp_path)
+    monkeypatch.setattr(details, "list_goal_todos", _todo_read_fixture([]))
+    tool, records = inspector(tmp_path)
+    arguments = {"view": "deliveries", "goal_id": "alpha", **_FIXED_WINDOW}
+    assert tool.read(TOOL_NAME, {**arguments, "goal_id": "other"})["error"] == "goal_outside_available_scope"
+    assert not records
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[4]["agent_vision"]["path_delta"]["observed_reality"] = "Long finding. " * 3000
+    path.write_text("\n".join(json.dumps(row) for row in rows))
+    first = tool.read(TOOL_NAME, arguments)
+    exact = tool.read(TOOL_NAME, {**arguments, "delivery_ref": first["rows"][0]["source_ref"],
+                                 "expected_source_revision": first["source"]["source_revision"]})
+    assert exact["oversized_rows"] == [0]
+    assert exact["rows"][0]["status"] == "oversized_record"
+    tool.scope_valid = lambda: False
+    assert tool.read(TOOL_NAME, arguments)["error"] == "authorization_changed"
+
+
+def test_fixed_window_does_not_claim_complete_future_or_invalid_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(details, "list_goal_todos", _todo_read_fixture([]))
+    path = _delivery_window_fixture(tmp_path)
+    tool, _ = inspector(tmp_path)
+    future = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "alpha",
+        "window_start": "2090-01-01T09:00:00Z", "window_end": "2090-01-02T09:00:00Z"})
+    assert future["unknown"] and future["source"]["window_complete"] is False
+    assert not future["rows"]
+    with path.open("a") as stream:
+        stream.write(json.dumps({"generated_at": "unknown", "delivery_outcome": "outcome_progress"}) + "\n")
+        stream.write('{"unfinished":\nnull\n')
+    result = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "alpha", **_FIXED_WINDOW})
+    assert result["unknown"] and result["source"]["coverage"]["invalid_delivery_records"] == 1
+    assert result["source"]["coverage"]["invalid_index_records"] == 2
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_fixed_window_joins_exact_canonical_task_beyond_overview(tmp_path, monkeypatch, provider):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+    from loopx.todos import add_goal_todo
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = promoted_create_fixture(tmp_path, provider=provider)
+    created = add_goal_todo(registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a",
+        role="agent", text="A concrete result outside the current overview", operation_id="report-task-fixture")
+    assert created["ok"]
+    todo_id = details.list_goal_todos(registry_path=registry, runtime_root_arg=str(runtime),
+                                    goal_id="goal-a")["todos"][0]["todo_id"]
+    path = _delivery_window_fixture(runtime, "goal-a")
+    path.write_text(path.read_text().replace("todo_4", todo_id))
+    # The real canonical owner remains behind the exact read. Only the bounded
+    # overview is empty, as when the associated task is beyond that page.
+    real = details.read_manager_goal_details
+    import loopx.capabilities.manager_context.inspection as module
+    monkeypatch.setattr(module, "read_manager_goal_details", lambda *a, **kw:
+        real(*a, **kw) if kw.get("todo_id") else {"todos": [], "completed_todos": []})
+    tool = ManagerInspection(context={"scope": "owner_global"}, registry_path=registry,
+        runtime_root=runtime, owner_scope=True, scope_valid=lambda: True, record=lambda _: None)
+    result = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "goal-a", **_FIXED_WINDOW})
+    assert result["rows"][0]["todo_title"] == "[P1] A concrete result outside the current overview"
+    assert result["source"]["coverage"]["matched"] == 4
+
+
 def test_dynamic_requests_are_not_mistaken_for_client_responses(tmp_path):
     class Process:
         stdin = io.StringIO()
@@ -457,7 +603,7 @@ def test_dynamic_requests_are_not_mistaken_for_client_responses(tmp_path):
         )
 
 
-@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "agents", "agent_route"])
+@pytest.mark.parametrize("read_view", ["todos", "todos_exact", "agents", "agent_route", "deliveries_window"])
 def test_manager_runtime_installs_tool_and_records_real_subprocess_read(
     monkeypatch, tmp_path, read_view
 ):
@@ -521,6 +667,12 @@ for line in sys.stdin:
             "'view':'todos','goal_id':'alpha'", "'view':'todos','goal_id':'alpha','todo_id':'todo_sample'").replace(
             "evidence['rows'][0]['title'] == 'Check the sample result'",
             "evidence['rows'][0]['continuation'].endswith('Keep this a draft; do not publish.')"))
+    if read_view == "deliveries_window":
+        fake.write_text(fake.read_text().replace(
+            "'view':'todos','goal_id':'alpha'",
+            "'view':'deliveries','goal_id':'alpha','window_start':'2026-01-01T09:00:00+08:00','window_end':'2026-01-02T09:00:00+08:00'").replace(
+            "evidence['rows'][0]['title'] == 'Check the sample result'",
+            "evidence['rows'][0]['todo_title'] == 'Check the sample result' and evidence['source']['window_bounds'] == '[start,end)'"))
     fake = write_python_host_fixture(fake, fake.read_text(encoding="utf-8"))
     collected = []
 
@@ -548,6 +700,11 @@ for line in sys.stdin:
     runtime = ChatRuntimeController(
         store=store, codex_bin=str(fake), registry_path=tmp_path / "registry.json"
     )
+    if read_view == "deliveries_window":
+        path = runtime.coordination_runtime_root / "goals" / "alpha" / "runs" / "index.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"generated_at": "2026-01-02T08:59:00+08:00",
+            "delivery_outcome": "outcome_progress", "todo_id": "todo_sample"}) + "\n")
     monkeypatch.setattr(
         runtime,
         "capabilities",

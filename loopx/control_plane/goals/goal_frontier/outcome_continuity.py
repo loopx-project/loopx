@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from ...agents.agent_scope import agent_scope_item_claimed_by
+from ...work_items.autonomous_replan_ack import accepted_blocked_replan_history_indexes
 from ..goal_vision_policy import (
     COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD,
 )
@@ -102,7 +103,9 @@ def _outcome_checkpoint_runs_for_goal(
             else None
         )
         return [checkpoint_run] if isinstance(checkpoint_run, dict) else []
-    return _latest_runs_for_goal(status_payload, goal_id=goal_id)
+    runs = _latest_runs_for_goal(status_payload, goal_id=goal_id)
+    administrative = accepted_blocked_replan_history_indexes(runs)
+    return [run for index, run in enumerate(runs) if index not in administrative]
 
 
 def latest_outcome_vision_checkpoint_from_status_payload(

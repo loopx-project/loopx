@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import timedelta
 
 import pytest
 
@@ -243,6 +244,89 @@ def _quota(payload: dict) -> dict:
             GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT
         ),
     )
+
+
+@pytest.mark.parametrize("policy", [None, "as_needed", "repeat_until_closed"])
+@pytest.mark.parametrize("seconds", [120, 300])
+@pytest.mark.parametrize("fault", [None, "unrelated_vision", "missing_checkpoint"])
+def test_receipt_retry_defers_linked_vision_until_its_original_due(
+    monkeypatch, policy, seconds, fault,
+) -> None:
+    from loopx.control_plane.quota.blocked_retry import overlay_active_turn_retries
+    from tests.control_plane.test_blocked_retry_wait_context import START, source
+
+    now = START + timedelta(seconds=seconds)
+    for path in (
+        "loopx.control_plane.todos.quota_selection.now_utc",
+        "loopx.control_plane.todos.quota_summary.now_utc",
+        "loopx.control_plane.scheduler.monitor_todo.now_utc",
+        "loopx.control_plane.scheduler.scheduler_hint.now_utc",
+    ):
+        monkeypatch.setattr(path, lambda: now)
+    payload = source()
+    run = payload["run_history"]["goals"][0]["latest_runs"][0]
+    run["generated_at"] = START.isoformat()
+    run["progress_observation"] = {
+        "schema_version": "typed_progress_observation_v0",
+        "result_class": "blocked",
+        "work_item_id": "todo_work",
+        "blocker_id": "external-feedback",
+        "evidence_ids": ["evidence:pending-feedback"],
+    }
+    run["agent_vision"] = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "agent_id": "agent-a",
+        "state": "vision_patch_proposed",
+        "vision_patch": {
+            "acceptance_summary": "Qualify the original work after feedback arrives.",
+            **({"advancement_policy": policy} if policy else {}),
+        },
+        "todo_delta": ["retain:todo_other" if fault == "unrelated_vision" else "retain:todo_work"],
+    }
+    if fault == "missing_checkpoint":
+        run["vision_checkpoint"] = {
+            "schema_version": "vision_checkpoint_v0", "agent_id": "agent-a",
+            "required": True, "satisfied": False, "decision": "missing_required",
+            "triggers": [{"kind": "material_delivery_outcome"}],
+        }
+    item = payload["attention_queue"]["items"][0]
+    # Build history projections after authoring the facts; cached absence of
+    # a checkpoint must not masquerade as a negative-case result.
+    payload = quota_status_payload(
+        goal_id="goal-a", status="active", recommended_action="Await qualified feedback.",
+        claim_scope_agent_id="agent-a",
+        coordination={"registered_agents": ["agent-a", "agent-b"], "agent_model": "peer_v1"},
+        agent_todo_items=item["agent_todos"]["items"],
+        user_todo_items=item["user_todos"]["items"], latest_runs=[run],
+    )
+    original = deepcopy(payload)
+    projected = overlay_active_turn_retries(
+        payload, goal_id="goal-a", agent_id="agent-a", observed_at=now.isoformat(),
+    )
+    guard = build_quota_should_run(
+        projected, goal_id="goal-a", agent_id="agent-a",
+        scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
+    )
+    assert payload == original
+    if fault == "missing_checkpoint":
+        assert "vision_checkpoint_missing" in {
+            gap["kind"] for gap in guard["goal_frontier_projection"]["acceptance_gaps"]
+        }
+    if fault == "missing_checkpoint" or fault == "unrelated_vision" and seconds < 300:
+        assert "vision_wait_state" not in guard["goal_frontier_projection"]
+        if seconds < 300:
+            assert guard["autonomous_replan_obligation"]["required"] is True
+        return
+    assert not guard.get("autonomous_replan_obligation")
+    if seconds < 300:
+        assert guard["execution_obligation"]["must_attempt_work"] is False
+        assert guard["agent_todo_summary"]["blocked_retry_wait"]["turn_instance_id"] == "turn-old"
+        assert guard["goal_frontier_projection"]["vision_wait_state"][
+            "selected_todo_id"
+        ] == "todo_work"
+    else:
+        assert guard["selected_todo"]["todo_id"] == "todo_work"
+        assert "pending_retry" not in guard["scheduler_hint"]
 
 
 def _current_agent_blocker_status_payload(

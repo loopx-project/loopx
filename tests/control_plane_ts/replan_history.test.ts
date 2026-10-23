@@ -60,6 +60,31 @@ test("periodic work counts distinct logical turns and keeps the existing public 
   assert.equal(trigger(many(19)), null);
 });
 
+test("periodic count respects the latest lane retry without erasing the earned review", () => {
+  const due = "2026-01-01T00:05:00.123456Z";
+  const retry = run(21, {todo_id: "todo_feedback", delivery_outcome: "outcome_gap",
+    progress: {...observation, result_class: "blocked"}, blocked_retry: {
+      schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
+      todo_id: "todo_feedback", observed_at: "2026-01-01T00:00:00.123456Z",
+      due_at: due, resume_when: `resume_at:${due}`,
+    }});
+  const rows = [retry, ...many(20)];
+  const before = {retry_observed_at: "2026-01-01T00:05:00.123455Z"};
+  const original = structuredClone(rows);
+  assert.equal(trigger(rows, before), null);
+  assert.equal(trigger(rows, {...before, operation: "periodic"}), null);
+  assert.equal(trigger(rows, {retry_observed_at: due})?.kind, "periodic_review_due");
+  assert.equal(trigger(rows)?.kind, "periodic_review_due", "legacy requests have no current clock proof");
+  assert.equal(trigger([{...retry, agent_id: "peer"}, ...many(20)], before)?.kind, "periodic_review_due");
+  assert.equal(trigger([run(22), ...rows], before)?.kind, "periodic_review_due", "new work supersedes the wait");
+  assert.equal(trigger([{...retry, delivery_outcome: "outcome_progress"}, ...many(20)], before)?.kind,
+    "periodic_review_due", "a bare retry field is not accepted blocked work");
+  assert.equal(trigger([retry, {...retry, turn_id: "previous"}, ...many(20)], before)?.kind,
+    "typed_progress_repeat", "a concrete repeated stall is independent evidence");
+  assert.equal(trigger([poll(22), ...rows], before), null, "quiet polls do not manufacture new evidence");
+  assert.deepEqual(rows, original);
+});
+
 test("periodic review counts material work, not quiet monitor receipts", () => {
   const quiet = many(20, n => poll(n, { mode: n > 18
     ? "due_monitor_observed_without_material_transition" : "monitor_quiet_until_material_transition" }));

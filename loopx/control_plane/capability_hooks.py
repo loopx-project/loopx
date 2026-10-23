@@ -204,9 +204,10 @@ def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
         if agent_id and scoped_agent and agent_id != scoped_agent:
             raise ValueError("context source has conflicting Agent identities")
         agent_id = agent_id or scoped_agent
-    if "heartbeat_receipt" in payload and "goal_boundary" in payload:
+    if isinstance(payload.get("heartbeat_receipt"), Mapping):
         # Keep the native source for the typed quota signature owner. Identity
-        # alone cannot invalidate context when the admitted authority changes.
+        # alone cannot invalidate context when the admitted authority changes;
+        # Python does not decode the quota boundary here.
         return {**payload, "agent_id": agent_id}
     return {"goal_id": payload.get("goal_id"), "agent_id": agent_id}
 

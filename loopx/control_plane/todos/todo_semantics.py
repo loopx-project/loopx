@@ -355,6 +355,27 @@ def agent_scoped_selectable_advancement_todo_ids(
             if (todo_id := normalize_todo_id(item.get("todo_id")))}
 
 
+def todo_scoped_runnable_advancement_count(
+    summary: dict[str, Any] | None, *, agent_id: str | None,
+) -> int | None:
+    """Decode the typed selection count; unknown sources keep legacy fences.
+
+    Commitment floors intentionally include work held by receipt-owned waits.
+    They do not override a complete same-lane runnable-work projection.
+    """
+    counts = (summary or {}).get("work_counts")
+    if (
+        isinstance(counts, dict)
+        and counts.get("schema_version") == "todo_work_counts_v0"
+        and counts.get("complete") is True
+        and counts.get("agent_id") == agent_id
+        and type(counts.get("advancement")) is int
+        and counts["advancement"] >= 0
+    ):
+        return counts["advancement"]
+    return None
+
+
 def todo_advancement_frontier_counts(
     summary: dict[str, Any] | None, *, agent_id: str | None,
 ) -> dict[str, int]:

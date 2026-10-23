@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from ..todos.contract import normalize_todo_id
-from ..todos.resume_condition import compact_todo_resume_items
+from ..todos.resume_condition import (
+    compact_todo_resume_items,
+    evaluate_todo_resume_conditions,
+    normalize_supported_todo_resume_when,
+)
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
-
-BLOCKED_RETRY_SCHEMA_VERSION = "quota_blocked_retry_v0"
-MIN_RETRY_SECONDS = 60
-MAX_RETRY_SECONDS = 30 * 60
-TURN_SETTLEMENT_RETRY_SECONDS = 5 * 60
+from ..work_items.autonomous_replan_ack import qualify_settlement_history
 
 
 def compact_settlement_wait_todos(
@@ -63,53 +62,13 @@ def require_blocked_retry_wait(
     return result
 
 
-def active_turn_retry_for_run(
-    run: dict[str, Any], *, observed_at: str
-) -> dict[str, Any] | None:
-    """Accept only the exact active, receipt-owned retry on a blocked work Run."""
-
-    todo_id = normalize_todo_id(run.get("todo_id"))
-    retry = run.get("blocked_retry")
-    progress = run.get("progress_observation")
-    if (
-        not todo_id
-        or not isinstance(retry, dict)
-        or retry.get("schema_version") != BLOCKED_RETRY_SCHEMA_VERSION
-        or retry.get("source") != "turn_settlement"
-        or retry.get("todo_id") != todo_id
-        or run.get("delivery_outcome") != "outcome_gap"
-        or not isinstance(progress, dict)
-        or progress.get("result_class") != "blocked"
-        or not run.get("turn_instance_id")
-    ):
-        return None
-    try:
-        now = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
-        observed = datetime.fromisoformat(
-            str(retry["observed_at"]).replace("Z", "+00:00")
-        )
-        due = datetime.fromisoformat(str(retry["due_at"]).replace("Z", "+00:00"))
-        delay = (due - observed).total_seconds()
-    except (KeyError, ValueError, TypeError):
-        return None
-    if (
-        now.tzinfo is None
-        or observed.tzinfo is None
-        or due.tzinfo is None
-        or not MIN_RETRY_SECONDS <= delay <= MAX_RETRY_SECONDS
-        or due <= now
-        or retry.get("resume_when") != f"resume_at:{retry['due_at']}"
-    ):
-        return None
-    return retry
-
-
 def overlay_active_turn_retries(
     status_payload: dict[str, Any],
     *,
     goal_id: str,
     agent_id: str | None,
     observed_at: str,
+    include_unclaimed: bool = True,
 ) -> dict[str, Any]:
     """Project a receipt-owned wait into selection without editing hard-lease Todos.
 
@@ -146,11 +105,11 @@ def overlay_active_turn_retries(
     )
     if not isinstance(runs, list):
         return status_payload
+    runs = [run for run in runs if isinstance(run, dict) and run.get("agent_id") == agent_id]
+    qualification = qualify_settlement_history(runs, observed_at=observed_at)
     waits: dict[str, dict[str, Any]] = {}
     seen: set[str] = set()
-    for run in runs:
-        if not isinstance(run, dict) or run.get("agent_id") != agent_id:
-            continue
+    for index, run in enumerate(runs):
         todo_id = normalize_todo_id(run.get("todo_id"))
         if not todo_id or todo_id in seen:
             continue
@@ -158,8 +117,8 @@ def overlay_active_turn_retries(
         if classification.startswith(("quota_slot_", "quota_scheduler_")):
             continue
         seen.add(todo_id)
-        retry = active_turn_retry_for_run(run, observed_at=observed_at)
-        if retry is not None:
+        if index in qualification.active_turn_retries:
+            retry = run["blocked_retry"]
             waits[todo_id] = {
                 **retry, "goal_id": goal_id, "agent_id": agent_id,
                 "turn_instance_id": run["turn_instance_id"],
@@ -170,6 +129,22 @@ def overlay_active_turn_retries(
     items = queue.get("items") if isinstance(queue, dict) else None
     if not isinstance(items, list):
         return status_payload
+    # Reuse the resume owner for complete clock proof. A bare satisfied=False
+    # suppresses selection but cannot qualify an automatic Vision/host wait.
+    retry_items = [
+        {"todo_id": todo_id, "status": "open", "role": "agent",
+         "task_class": "advancement_task", "claimed_by": agent_id,
+         "resume_when": normalized}
+        for todo_id, retry in waits.items()
+        if (normalized := normalize_supported_todo_resume_when(retry["resume_when"]))
+    ]
+    normalized_clock = normalize_supported_todo_resume_when(f"resume_at:{observed_at}")
+    resume_conditions = (
+        evaluate_todo_resume_conditions(
+            retry_items, source_items=retry_items,
+            evaluated_at=normalized_clock.removeprefix("resume_at:"),
+        ) if retry_items and normalized_clock else {}
+    )
     projected_items = []
     changed = False
 
@@ -194,7 +169,8 @@ def overlay_active_turn_retries(
                     and todo.get("status") == "open"
                     and todo.get("task_class") == "advancement_task"
                     and not todo.get("resume_when")
-                    and todo.get("claimed_by") in (None, agent_id)
+                    and (todo.get("claimed_by") == agent_id or
+                         include_unclaimed and todo.get("claimed_by") is None)
                 ):
                     resume = retry["resume_when"]
                     projected_rows.append(
@@ -207,9 +183,13 @@ def overlay_active_turn_retries(
                             "blocked_retry": retry,
                             "next_due_at": retry["due_at"],
                             "resume_condition": {
-                                "kind": "resume_at",
-                                "resume_when": resume,
-                                "satisfied": False,
+                                # Historical Python datetime spellings may not
+                                # be valid authoring syntax. Keep their original
+                                # selection fence without inventing clock proof.
+                                **resume_conditions.get(normalize_todo_id(todo["todo_id"]), {
+                                    "kind": "resume_at", "resume_when": resume,
+                                    "satisfied": False,
+                                }),
                                 "blocked_retry": retry,
                             },
                         }
@@ -262,6 +242,8 @@ def overlay_status_turn_retries(
 
     History is the uncompressed control-plane snapshot, not the display tail.
     Qualification, supersession and clocks stay with the existing retry owner.
+    An unclaimed Todo is shared across lanes: only the requesting Agent's
+    admission may overlay its own retry there, never an unscoped status read.
     No canonical Todo, receipt, scheduler or quota mutation is performed here.
     """
     payload = {"run_history": history, "attention_queue": queue}
@@ -283,6 +265,6 @@ def overlay_status_turn_retries(
         for agent_id in agents:
             payload = overlay_active_turn_retries(
                 payload, goal_id=goal["id"], agent_id=agent_id,
-                observed_at=observed_at,
+                observed_at=observed_at, include_unclaimed=False,
             )
     return payload["attention_queue"]

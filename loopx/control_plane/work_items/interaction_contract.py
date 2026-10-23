@@ -1375,6 +1375,7 @@ def _build_interaction_response_plan(
 
     if not (
         user_channel.get("action_required") is True
+        and user_channel.get("non_gating_notice") is not True
         and user_channel.get("notify") == "NOTIFY"
         and agent_channel.get("must_attempt") is False
         and agent_channel.get("delivery_allowed") is False

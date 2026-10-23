@@ -29,6 +29,25 @@ Its source-bound native host bridge supplies monitoring admission. A report
 Turn-start hook alone does not independently wake a sleeping actor, so calendar
 calculation does not enable a report.
 
+The existing calendar settings support an optional **First report date**, in
+the schedule's timezone. Before its first matching daily or weekly deadline,
+the calendar admits no report intent or generation work. The first report still
+covers the preceding full interval. Leaving the date empty retains the existing
+calendar behavior. This setting does not enable the steward's daily portfolio
+report integration by itself.
+
+The synthetic packaged settings journey below uses real preview/apply/readback
+over local HTTP. It preserves the date across frequency, time and timezone
+edits and reload. The narrow view is a 390×844 viewport emulation.
+
+| Before: recurrence only | After: optional first report date |
+| --- | --- |
+| ![Calendar before the first-date control](../assets/personal-workspace/report-calendar-start-date/before-desktop.png) | ![Calendar with a first report date](../assets/personal-workspace/report-calendar-start-date/after-desktop.png) |
+
+| Before, narrow viewport | After, narrow viewport |
+| --- | --- |
+| ![Recurrence controls in a narrow viewport](../assets/personal-workspace/report-calendar-start-date/before-narrow.png) | ![First report date in a narrow viewport](../assets/personal-workspace/report-calendar-start-date/after-narrow.png) |
+
 Chat `/goal` transport supervision and a LoopX-managed Turn are distinct. Merely
 relaxing `validate_goal_chat`, changing a Session field, adding a prompt, or
 starting a Codex native Goal does not establish the LoopX lifecycle below.
@@ -290,3 +309,32 @@ establish an enabled daily report or real model/report quality.
    policy, install it, then independently verify original-service adoption,
    actual configuration and an end-to-end report. The first natural scheduled
    report remains a separate acceptance event.
+## Reading a fixed local evidence window
+
+The existing private steward's evidence tool can read an exact report interval.
+For example, a report ending at 09:00 uses `view=deliveries`, the authorized
+`goal_id`, `window_start=2026-01-01T09:00:00+08:00` and
+`window_end=2026-01-02T09:00:00+08:00`. Both timestamps need offsets. The read
+includes the start and excludes the end; it does not move the interval to local
+midnight or to the time the report happens to run. The existing `days` lookback
+keeps its calendar-day behavior and cannot be combined with these bounds.
+
+Follow `next_offset` and pass the first page's `source.source_revision` as
+`expected_source_revision` on subsequent pages. If the index changes, the reader
+returns a conflict with no rows: restart that Goal's read rather than combining
+pages from different revisions. Complete the authorized portfolio pagination,
+including stopped Goals when requested; one Goal's page is not global coverage.
+This exact-window interface currently supports local sources. It rejects these
+arguments for SSH sources instead of silently substituting a remote lookback.
+
+Use an observed row's `source_ref` as `delivery_ref` to recover its complete
+permitted `recorded_details` and evidence references, with the same interval and
+revision. A related task outside the overview is joined through its exact
+canonical Todo read. Oversized, unavailable or changed records remain explicit
+coverage gaps. Recorded delivery time is not necessarily actual work time;
+reading a receipt does not read its referenced artifacts or independently verify
+the Agent's claims.
+
+This extends evidence reading in the existing conversation. It does not enable
+a report subscription, start a model, change a Goal, or send a report. Calendar
+admission, report generation and verified delivery retain their existing owners.

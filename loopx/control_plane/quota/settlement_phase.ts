@@ -1,7 +1,13 @@
-import type { SettlementIdentity } from "../effect_program.ts";
+import { settlementIdentity, type SettlementIdentity } from "../effect_program.ts";
 import { jsonObject } from "../runtime_decode.ts";
+import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
+import { isCanonicalTodoId } from "../todos/identity.ts";
 import { isBlockedLifecycleWait, isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
+
+function retryDelayIsBounded(seconds: number): boolean {
+  return Number.isFinite(seconds) && seconds >= 60 && seconds <= 30 * 60;
+}
 
 /** Historical entry point for blocked no-spend qualification: an advancement
  * retry/causal wait, blocked lifecycle or a Monitor unavailable attempt.
@@ -19,7 +25,7 @@ export function isBoundedBlockedRetry(value: unknown, todoId: string | null): bo
   const observed = Date.parse(retry.observed_at);
   const due = Date.parse(retry.due_at);
   const delay = (due - observed) / 1000;
-  return Number.isFinite(delay) && delay >= 60 && delay <= 30 * 60;
+  return retryDelayIsBounded(delay);
 }
 
 /** The replan owner has already qualified the blocker/path and its evidence.
@@ -52,6 +58,65 @@ export function isAcceptedBlockedReplanWriteback(
       const trigger = jsonObject(value);
       return trigger?.kind === "material_delivery_outcome" && trigger.delivery_outcome === "outcome_gap";
     });
+}
+
+/** Classify persisted Run facts for history selection, without granting a
+ * settlement, debit or execution right. Reuse the settlement owner's exact
+ * semantic qualification; a caller-supplied "administrative" flag is no proof.
+ * One batch keeps history reads independent of per-Run bridge latency. */
+export function acceptedBlockedReplanHistoryIndexes(runs: unknown[]): number[] {
+  const accepted: number[] = [];
+  runs.forEach((value, index) => {
+    const run = jsonObject(value);
+    if (!run || run.todo_id != null ||
+        ![run.goal_id, run.agent_id, run.turn_instance_id, run.replan_obligation_id]
+          .every(value => typeof value === "string" && value.trim().length > 0)) return;
+    const identity = settlementIdentity({
+      goal_id: run.goal_id as string, agent_id: run.agent_id as string,
+      turn_instance_id: run.turn_instance_id as string,
+      replan_obligation_id: run.replan_obligation_id as string,
+    });
+    const persisted = jsonObject(run.settlement_identity);
+    if (run.settlement_identity != null && (!persisted ||
+        Object.entries(identity).some(([key, value]) =>
+          (value === null ? persisted[key] ?? null : persisted[key]) !== value))) return;
+    // compact_vision_checkpoint omits the historical default boundary. Decode
+    // that existing representation here; live settlement still requires its
+    // explicit committed checkpoint and independently verified receipts.
+    const checkpoint = jsonObject(run.vision_checkpoint);
+    const decoded = checkpoint && checkpoint.delivery_boundary === undefined
+      ? {...run, vision_checkpoint: {...checkpoint, delivery_boundary: "semantic_closeout"}}
+      : run;
+    if (isAcceptedBlockedReplanWriteback(decoded, identity, run.replan_obligation_id)) accepted.push(index);
+  });
+  return accepted;
+}
+
+/** Read-only history facts. Administrative closeout and a pending retry are
+ * independent dimensions; neither is a new effect, lease or completion grant.
+ * Use the same retry bound as settlement, with the aware historical codec so
+ * expiry keeps microseconds and supported ISO offsets across runtime changes. */
+export function qualifySettlementHistory(runs: unknown[], observedAt: string | null): {
+  accepted_indexes: number[]; active_retry_indexes: number[];
+} {
+  const active: number[] = [];
+  const now = observedAt === null ? null : parseTodoTimestampMicros(observedAt, true);
+  if (now !== null) runs.forEach((value, index) => {
+    const run = jsonObject(value), retry = jsonObject(run?.blocked_retry);
+    const progress = jsonObject(run?.progress_observation);
+    const todoId = typeof run?.todo_id === "string" ? run.todo_id.trim().toLowerCase() : "";
+    if (!isCanonicalTodoId(todoId) || !retry || retry.schema_version !== "quota_blocked_retry_v0"
+      || retry.source !== "turn_settlement" || retry.todo_id !== todoId
+      || run?.delivery_outcome !== "outcome_gap" || progress?.result_class !== "blocked"
+      || typeof run?.turn_instance_id !== "string" || !run.turn_instance_id.trim()
+      || typeof retry.observed_at !== "string" || typeof retry.due_at !== "string"
+      || retry.resume_when !== `resume_at:${retry.due_at}`) return;
+    const observed = parseTodoTimestampMicros(retry.observed_at, true);
+    const due = parseTodoTimestampMicros(retry.due_at, true);
+    if (observed !== null && due !== null && due > now
+      && retryDelayIsBounded(Number(due - observed) / 1_000_000)) active.push(index);
+  });
+  return {accepted_indexes: acceptedBlockedReplanHistoryIndexes(runs), active_retry_indexes: active};
 }
 
 /** A service-qualified capability duty can retire its exact admitted Turn.

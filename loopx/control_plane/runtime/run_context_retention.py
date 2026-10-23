@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from ..quota.blocked_retry import active_turn_retry_for_run
 from ..work_items.delivery_outcome import (
     MATERIAL_DELIVERY_OUTCOMES,
     PROGRESS_DELIVERY_OUTCOMES,
@@ -12,6 +11,7 @@ from ..work_items.progress_result import PROGRESS_OBSERVATION_SCHEMA_VERSION, Pr
 from ..work_items.autonomous_replan_ack import (
     AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK,
     autonomous_replan_ack_recorded,
+    qualify_settlement_history,
 )
 from ..work_items.autonomous_replan_obligation import run_history_agent_id
 from ..work_items.replan_history_codec import REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS
@@ -142,7 +142,8 @@ def goal_semantic_history_from_runs(
     seen_retry_todos: set[tuple[str, str]] = set()
     observed_at = now_utc_iso()
 
-    for run in runs:
+    qualification = qualify_settlement_history(runs, observed_at=observed_at)
+    for index, run in enumerate(runs):
         if latest_owner_correction_run is None and isinstance(
             run.get("human_reward"), dict
         ):
@@ -157,10 +158,7 @@ def goal_semantic_history_from_runs(
             key = (agent_id, todo_id)
             if key not in seen_retry_todos:
                 seen_retry_todos.add(key)
-                if (
-                    active_turn_retry_for_run(run, observed_at=observed_at)
-                    is not None
-                ):
+                if index in qualification.active_turn_retries:
                     active_blocked_retry_runs.append(run)
         context = contexts.setdefault(agent_id, {"agent_id": agent_id})
 
@@ -183,6 +181,7 @@ def goal_semantic_history_from_runs(
 
         if (
             "latest_outcome_vision_checkpoint_run" not in context
+            and index not in qualification.accepted_blocked_replans
             and _run_has_outcome_vision_checkpoint(run)
         ):
             context["latest_outcome_vision_checkpoint_run"] = run
@@ -200,6 +199,7 @@ def goal_semantic_history_from_runs(
 
         if (
             "latest_material_milestone_run" not in context
+            and index not in qualification.accepted_blocked_replans
             and str(run.get("delivery_outcome") or "").strip()
             in MATERIAL_DELIVERY_OUTCOMES
         ):

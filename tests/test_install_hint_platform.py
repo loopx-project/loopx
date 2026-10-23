@@ -227,6 +227,59 @@ def test_windows_installed_fallback_keeps_doctor_options_and_skips_owned_skills(
     ]
 
 
+@pytest.mark.parametrize("os_name", ["posix", "nt"])
+def test_preflight_commands_follow_the_host_platform(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, os_name: str
+) -> None:
+    monkeypatch.setattr(install_contract, "_is_windows_host", lambda: os_name == "nt")
+    if os_name == "nt":
+        monkeypatch.setattr(sys, "executable", PLAIN_WINDOWS_INTERPRETER)
+    doctor = install_contract.doctor_preflight_command(cli_bin="loopx-canary")
+    codex = install_contract.codex_cli_install_preflight(
+        cli_bin="loopx-canary", doctor_agent_type="codex-cli"
+    )
+
+    if os_name == "nt":
+        for command in (doctor, codex):
+            for token in POSIX_ONLY_TOKENS:
+                assert token not in command, command
+            assert "Get-Command" in command
+            assert "pwsh" not in command
+            assert powershell_literal(PLAIN_WINDOWS_INTERPRETER) in command
+        assert doctor.splitlines()[-1] == "loopx-canary doctor | Out-Null"
+        assert "loopx-canary workflow-skills --install" in codex
+        assert (
+            f"loopx-canary doctor --agent-type {powershell_literal('codex-cli')} | Out-Null"
+            in codex
+        )
+    else:
+        assert doctor.startswith('export PATH="$HOME/.local/bin:$PATH"')
+        assert "loopx-canary doctor >/dev/null" in doctor
+        assert "python3 -m pip install --upgrade loopx" in codex
+        assert "loopx-canary doctor --agent-type codex-cli >/dev/null" in codex
+
+
+@pytest.mark.skipif(PWSH is None, reason="requires pwsh to parse the printed commands")
+def test_preflight_commands_parse_as_powershell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pwsh = PWSH
+    assert pwsh is not None
+    pretend_windows_host(monkeypatch, PLAIN_WINDOWS_INTERPRETER)
+    commands = {
+        "doctor": install_contract.doctor_preflight_command(),
+        "codex": install_contract.codex_cli_install_preflight(doctor_agent_type="codex-cli"),
+    }
+
+    for name, command in commands.items():
+        script = tmp_path / f"{name}-preflight.ps1"
+        script.write_text(command, encoding="utf-8")
+
+        errors = powershell_parse_errors(pwsh, script)
+
+        assert errors == "", (name, errors)
+
+
 @pytest.mark.skipif(PWSH is None, reason="requires pwsh to parse the printed commands")
 @pytest.mark.parametrize("layout", ["checkout", "installed"])
 @pytest.mark.parametrize("interpreter", WINDOWS_INTERPRETERS)

@@ -8,6 +8,7 @@ import {
 import { projectTodoResumePlanning } from "../todos/resume_planning.ts";
 import { monitorIsActive } from "../todos/summary_lanes.ts";
 import { authorityUnicodeCompare } from "../coordination/authority_store_codec.ts";
+import { qualifySettlementHistory } from "../quota/settlement_phase.ts";
 
 export const PROGRESS_RESULT_CLASSES = [
   "advanced", "unchanged", "blocked", "exploration_exhausted", "no_followup",
@@ -27,6 +28,7 @@ interface Monitor {
   key: string | null;
 }
 interface Run {
+  retryFacts: JsonObject;
   agent: string | null;
   publicAgent: string | null;
   monitorAgent: string | null;
@@ -53,6 +55,7 @@ interface Todos {
   resume: JsonObject | null;
 }
 interface Request {
+  retryObservedAt: string | null;
   operation: "all" | "progress" | "periodic" | "monitor_streak" | "frontier_monitor_streak";
   observedAt: number | null;
   agent: string | null;
@@ -128,6 +131,7 @@ function decode(value: unknown): Request {
   }
   return {
     operation, observedAt,
+    retryObservedAt: optionalNonEmptyString(raw.retry_observed_at, "retry_observed_at"),
     agent: optionalNonEmptyString(raw.agent_id, "agent_id"),
     monitorAgent: optionalNonEmptyString(raw.monitor_agent_id, "monitor_agent_id"),
     neutral: new Set(requireStringArray(raw.neutral_classifications, "neutral_classifications")),
@@ -139,6 +143,9 @@ function decode(value: unknown): Request {
     runs: rows(raw.runs, "runs", row => {
       const monitor = requireJsonObject(row.monitor, "monitor");
       return {
+        retryFacts: {todo_id: row.todo_id, blocked_retry: row.blocked_retry,
+          delivery_outcome: row.delivery_outcome, progress_observation: row.progress,
+          turn_instance_id: row.turn_id},
         agent: optionalNonEmptyString(row.agent_id, "run.agent_id"),
         publicAgent: optionalNonEmptyString(row.public_agent_id, "public_agent_id"),
         monitorAgent: optionalNonEmptyString(row.monitor_agent_id, "run.monitor_agent_id"),
@@ -247,6 +254,16 @@ function periodicTrigger(runs: readonly Run[], request: Request, qualified?: Rea
     if (durable.length >= request.periodic) break;
   }
   if (durable.length < request.periodic) return null;
+  // A periodic counter supplies no new evidence about the latest accepted
+  // blocked work. Respect that lane's original bounded retry until it expires;
+  // do not ACK/reset the counter. Fresh work, typed stalls and external feedback
+  // retain their own triggers, and independent Todos remain selectable.
+  const latestWork = runs.find(run => run.classification &&
+    (run.classification !== "quota_monitor_poll" || run.monitor.material === true));
+  const lane = request.agent ?? sole(runs.map(run => run.agent));
+  if (lane && latestWork?.agent === lane && qualifySettlementHistory(
+    [latestWork.retryFacts], request.retryObservedAt,
+  ).active_retry_indexes.length) return null;
   return {
     kind: "periodic_review_due", section: "run_history",
     text: `latest ${durable.length} ${qualified ? "settled work Turns" : "durable public run records"} since last autonomous replan reached periodic review threshold ${request.periodic}`,
