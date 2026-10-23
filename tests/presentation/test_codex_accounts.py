@@ -206,6 +206,38 @@ def test_unknown_quota_is_not_exhaustion(native, tmp_path):
     assert not [call for call in transport.calls if call[0] == "switch"]
 
 
+def test_more_remaining_quota_survives_busy_deferral_and_selects_once(native, tmp_path):
+    class ThreeAccounts(NativeTransport):
+        def __call__(self, adapter, operation, **parameters):
+            if operation == "observe":
+                self.calls.append((operation, parameters))
+                return {"observations": [{"slot": slot, "observed_at": self.clock(), "status": "ok", "usage": {
+                    "rateLimitsByLimitId": {"codex": {
+                        "primary": {"usedPercent": primary, "resetsAt": 8000},
+                        "secondary": {"usedPercent": secondary, "resetsAt": 9000},
+                        "credits": {"hasCredits": False},
+                    }}}} for slot, primary, secondary in [("a", 100, 20), ("b", 1, 95), ("c", 20, 45)]]}
+            value = super().__call__(adapter, operation, **parameters)
+            return value | {"slots": ["a", "b", "c"]} if operation == "status" else value
+
+    clock = Clock()
+    transport = ThreeAccounts(clock)
+    provider = native.NativeAccounts(tmp_path, transport=transport, clock=clock)
+    provider.configure(expected_revision=0, enabled=True, slots=["a", "b", "c"])
+    transport.busy = True
+    waiting = provider.tick()
+    assert waiting["action"] == "waiting_for_idle" and waiting["target"] == "c"
+    assert transport.active == "a"
+    assert json.loads(provider.path.read_text())["intent"]["target"] == "c"
+    transport.busy = False
+    clock.now += 61
+    assert provider.tick()["active_slot"] == "c"
+    clock.now += 301
+    assert provider.tick()["action"] == "ready"
+    assert [parameters["slot"] for operation, parameters in transport.calls if operation == "switch"] == ["c", "c"]
+    assert provider.path.stat().st_mode & 0o077 == 0
+
+
 def test_busy_waits_then_switches_at_safe_boundary(native, tmp_path):
     provider, transport, clock = configured(native, tmp_path)
     transport.busy = True

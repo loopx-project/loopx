@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, CheckCircle2, Circle, AlertCircle } from "lucide-react";
 import { requestJson } from "../../data/chat";
 import { useWorkspaceI18n } from "./i18n";
+import { ContextHelp } from "./context-help";
 import "./codex-account-settings.css";
 
 type AccountStatus = {
@@ -20,6 +21,7 @@ const copy = {
   "zh-CN": {
     title: "Codex 原生账号", enabled: "自动接续已启用", disabled: "自动接续已关闭",
     enable: "额度耗尽后自动切换", refresh: "检查额度", retry: "重新连接",
+    selectionHelp: "自动选择顺序", selectionDetail: "优先选择剩余额度比例最多的可用账号；短、长周期取剩余较少的一项。平手从当前账号之后按已登记顺序选择。这里比较的是额度百分比，无法获知绝对剩余 token。当前账号可用时不会主动切换。",
     effect: "仅使用下方已登记账号。额度耗尽后正常退出 GPT 专用客户端，保存登录态并切换，再重新打开原来的界面。",
     effectWait: "仅使用下方已登记账号。额度耗尽后等待客户端关闭，再保存登录态、切换账号并重新打开。",
     restart: "允许自动退出并重开 GPT 客户端", restarting: "正在退出 GPT、切换账号并重新打开",
@@ -47,6 +49,7 @@ const copy = {
   en: {
     title: "Native Codex accounts", enabled: "Automatic handoff enabled", disabled: "Automatic handoff off",
     enable: "Switch automatically when quota runs out", refresh: "Check quota", retry: "Reconnect",
+    selectionHelp: "Automatic selection order", selectionDetail: "Prefer the available account with the most remaining allowance, using the lower remaining percentage across its reported windows. Ties follow the registered order after the current account. These percentages do not establish absolute tokens left. An available current account is not preempted.",
     effect: "Use only the registered accounts below. After exhaustion, quit the dedicated GPT client normally, save the login, switch accounts, then reopen the same interface.",
     effectWait: "Use only the registered accounts below. After exhaustion, wait for clients to close, save the login, switch accounts, then reopen the same interface.",
     restart: "Allow automatic GPT client quit and restart", restarting: "Quitting GPT, switching accounts and reopening",
@@ -114,9 +117,11 @@ export function CodexAccountSettings() {
     {(problem && problem !== status?.action) || status?.available === false ? <p role="alert">{label(problem)}</p> : null}
     {status?.available && status.slots?.length ? <>
       <p className="codex-account-effect">{restartClients ? forceQuitClients ? c.effectForce : c.effect : c.effectWait}</p>
-      <label className="codex-account-enable"><input type="checkbox" checked={enabled} disabled={busy}
+      <div className="codex-account-enable"><label><input type="checkbox" checked={enabled} disabled={busy}
         onChange={event => void act("configure", { expected_revision: status.revision, enabled: event.target.checked,
           slots: status.slots })} /><span>{c.enable}</span></label>
+        <ContextHelp label={c.selectionHelp}><p>{c.selectionDetail}</p></ContextHelp>
+      </div>
       <label className="codex-account-enable"><input type="checkbox" checked={restartClients} disabled={busy}
         onChange={event => void act("configure", { expected_revision: status.revision, enabled,
           restart_clients: event.target.checked, force_quit_clients: event.target.checked && forceQuitClients,
@@ -133,7 +138,8 @@ export function CodexAccountSettings() {
         {status.slots.map(slot => {
           const row = status.accounts?.find(a => a.slot === slot);
           // Expired observations remain unknown in the UI, just as in policy.
-          const fresh = row && Date.now() / 1000 - row.observed_at <= 120;
+          const age = row ? Date.now() / 1000 - row.observed_at : null;
+          const fresh = age != null && age >= 0 && age <= 120;
           const current = status.active_slot === slot;
           const remaining = (used: number | null | undefined) => fresh && used != null ? `${100 - used}%` : "—";
           return <article className={current ? "is-current" : ""} key={slot}>
@@ -141,7 +147,7 @@ export function CodexAccountSettings() {
               <span>{current ? c.current : status.target === slot ? c.next : label(row?.availability === "auth_required" ? "auth_required" : fresh ? row?.availability : "unknown")}</span></div>
             <dl><div><dt>{c.primary}</dt><dd>{remaining(row?.primary_used)}</dd></div>
               <div><dt>{c.secondary}</dt><dd>{remaining(row?.secondary_used)}</dd></div></dl>
-            {fresh && row.credits_available ? <span>{c.credits}</span> : null}
+            {fresh && row?.credits_available ? <span>{c.credits}</span> : null}
             {!fresh ? <span>{c.unread}</span> : null}
             {!current ? <button type="button" disabled={busy || Boolean(status.recovery_required) || (!status.policy?.slots.includes(slot) && Boolean(status.policy?.slots.length))}
               onClick={() => void act("switch", { manual_slot: slot, expected_selection: status.selection_revision,

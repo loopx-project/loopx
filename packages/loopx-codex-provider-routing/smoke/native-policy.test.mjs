@@ -20,6 +20,50 @@ test("only measured exhaustion switches; default-off preserves the selected acco
   }
 });
 
+test("automatic handoff prefers more remaining allowance over the next ring slot", () => {
+  assert.equal(decide(input({ observations: [sample("a", 100), sample("b", 70), sample("c", 10)] })).target, "c");
+});
+
+test("the limiting reported window determines remaining allowance, not a short-window average", () => {
+  const windows = (slot, primary, secondary) => ({ slot, observed_at: now, status: "ok", usage: {
+    rateLimitsByLimitId: { codex: { primary: { usedPercent: primary, resetsAt: 2000 },
+      ...(secondary == null ? {} : { secondary: { usedPercent: secondary, resetsAt: 9000 } }) } },
+  } });
+  // B has 99% short-window allowance but only 5% long-window allowance.
+  // C's limiting window has 55% left, so it can sustain more subscription work.
+  assert.equal(decide(input({ observations: [sample("a", 100), windows("b", 1, 95), windows("c", 20, 45)] })).target, "c");
+  // A provider reporting only one valid window remains eligible on that window.
+  assert.equal(decide(input({ observations: [sample("a", 100), windows("b", 20, 70), windows("c", 50, null)] })).target, "c");
+});
+
+test("equal remaining allowance preserves the ring after the active account", () => {
+  const result = decide(input({ active: "b", observations: [sample("a", 20), sample("b", 100), sample("c", 20)] }));
+  assert.equal(result.target, "c", "The tie follows C then A, not observation order or alphabetic order");
+});
+
+test("unknown, stale, future and disallowed quota never outrank a measured candidate", () => {
+  for (const candidate of [
+    { ...sample("c", 0), observed_at: now - 121 },
+    { ...sample("c", 0), observed_at: now + 1 },
+    { slot: "c", observed_at: now, status: "unavailable" },
+    { slot: "c", observed_at: now, status: "ok", usage: { rate_limit: { primary_window: { used_percent: null } } } },
+  ]) assert.equal(decide(input({ observations: [sample("a", 100), sample("b", 70), candidate] })).target, "b");
+  assert.equal(decide(input({ policy: { enabled: true, slots: ["a", "b"], cooldown_seconds: 300 },
+    observations: [sample("a", 100), sample("b", 70), sample("c", 0)] })).target, "b");
+});
+
+test("credit-funded availability does not fabricate remaining subscription allowance", () => {
+  const creditFunded = sample("b", 100, { credits: { has_credits: true, balance: "20" } });
+  assert.equal(decide(input({ observations: [sample("a", 100), creditFunded, sample("c", 99)] })).target, "c");
+  assert.equal(decide(input({ observations: [sample("a", 100), creditFunded] })).target, "b",
+    "Credits retain their existing availability semantics when no fuller subscription is eligible");
+});
+
+test("quota priority neither preempts an available account nor overrides a manual choice", () => {
+  assert.equal(decide(input({ observations: [sample("a", 90), sample("b", 0), sample("c", 0)] })).action, "ready");
+  assert.equal(decide(input({ manual_slot: "b", observations: [sample("a", 100), sample("b", 95), sample("c", 0)] })).target, "b");
+});
+
 test("credits, null and multi-bucket facts retain their meaning", () => {
   assert.equal(account(sample("a", 100, { credits: { has_credits: true, balance: "12.0" } }), now).availability, "available");
   assert.equal(account({ ...sample("a"), usage: {} }, now).availability, "unknown");

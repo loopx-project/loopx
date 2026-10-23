@@ -117,8 +117,16 @@ remain unknown. Login errors, generic 429, query failure and measured exhaustion
 are distinct. The observer never buys credits or uses reset coupons.
 
 Only fresh active-account exhaustion starts automatic selection. Destinations
-must be allowlisted and freshly available. Selection follows the configured
-ring with a five-minute cooldown. An external native/manual choice wins and
+must be allowlisted and freshly available. Automatic selection prefers the
+largest remaining subscription percentage, taking the lower remaining value
+across each account's reported short and long windows. For example, 99% short
+and 5% long ranks below 80% short and 55% long. Equal values keep the configured
+ring order after the active account; a single reported window uses that window.
+These observations do not establish absolute remaining tokens or equal plan
+capacities. Positive credits retain their existing availability semantics but
+do not count as additional subscription percentage. An available current account
+is never preempted. Switching retains the five-minute cooldown.
+An external native/manual choice wins and
 starts a cooldown. Busy clients defer; refused/timed-out clients and remaining
 file owners pause further shutdowns. Changed clients and other repeated failures
 stop after three attempts until an explicit check/reconnect. Successful quota
@@ -133,6 +141,20 @@ minutes; unknown observations retry within one minute. These are bounded usage
 reads, not model probes. The managed extension's enable/disable controls its
 permissionless qualification protocol; the native host has this separate
 explicit opt-in and stop lifecycle.
+
+Version 0.12.3 changes candidate ordering for an already enabled observer; it
+does not enable handoff, client restart or force quit. The settings help explains
+the percentage comparison on hover, keyboard focus or tap. The six-account
+packaged views below use the production HTTP service, private state store and
+TypeScript policy with synthetic quota and a simulated busy native transport.
+They qualify presentation and selection readback, not a real credential swap:
+B has 99% short-window but 5% long-window allowance; C has 80% and 55%, so C is
+selected while A stays current until the existing owner admits switching.
+
+![Remaining-first account selection](docs/assets/native-accounts-quota-desktop.png)
+
+[Narrow account settings](docs/assets/native-accounts-quota-narrow.png) ·
+[Selection help on demand](docs/assets/native-accounts-quota-help.png)
 
 An intent is durable before the effect. A restart-authorized switch runs in a
 separate POSIX session and writes a private completion receipt, so quitting the
