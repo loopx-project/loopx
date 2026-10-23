@@ -1,6 +1,7 @@
 """Real canonical stores feed the public quota consumer, including retry history."""
 from copy import deepcopy
 import json
+import shlex
 
 import pytest
 
@@ -45,6 +46,40 @@ def test_complex_provider_snapshot_replan_and_quota_readback(tmp_path, monkeypat
     assert "typed_progress_repeat" in json.dumps(result)
     assert active_state_todo_fields(goal, runtime_root=paths["runtime"])["agent_todos"] == summary
     assert not paths["state_file"].exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_quota_shared_evidence_command_reads_exact_history_and_preserves_scope(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _write_fixture(tmp_path, runs=[])
+    initialize_canonical_authority(paths["runtime"], GOAL_ID, _fixture(),
+                                   state_path=paths["state_file"], provider=provider)
+    history = [{**row, "health_check": f"Observation {i}\nFull tail constraint."}
+               for i, row in enumerate(_stall_runs())]
+    index = paths["runtime"] / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    original = "".join(json.dumps(row) + "\n" for row in history)
+    index.write_text(original)
+    code, guard = run_json_cli_result("quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", "agent-a", registry_path=paths["registry"])
+    assert code == 0, guard
+    context = guard["autonomous_replan_obligation"]["replan_context"]
+    template = context["evidence_read_action_template"]
+    assert len(context["evidence"]) > 1
+    for evidence in context["evidence"]:
+        assert "read_action" not in evidence
+        args = shlex.split(template.replace("{evidence_ref}", evidence["evidence_ref"]))[1:]
+        code, result = run_json_cli_result(*args, registry_path=paths["registry"])
+        assert code == 0, result
+        assert result["evidence"]["health_check"] in [row["health_check"] for row in history]
+        assert result["evidence"]["health_check"] in evidence["summary"]
+    assert index.read_text() == original
+    wrong_agent = ["agent-b" if arg == "agent-a" else arg for arg in args]
+    code, result = run_json_cli_result(*wrong_agent, registry_path=paths["registry"])
+    assert code == 1 and "unavailable" in result["error"]
+    index.write_text("")
+    code, result = run_json_cli_result(*args, registry_path=paths["registry"])
+    assert code == 1 and "unavailable" in result["error"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -24,7 +24,7 @@ function contextSource(value: unknown): JsonObject {
   // Reuse the governing owner. Binding the original observation adds detail
   // locations/measurements without changing the authorized decision.
   return {goal_id: source.goal_id, agent_id: source.agent_id,
-    governing: "heartbeat_receipt" in source && "goal_boundary" in source
+    governing: "heartbeat_receipt" in source
       ? quotaActionSignatureDocument(source) : turnEnvelopeActionSignatureDocument(source)};
 }
 

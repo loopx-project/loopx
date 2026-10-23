@@ -40,6 +40,38 @@ test("context is bounded with explicit omitted coverage, not a completeness clai
   assert.equal(validateReplanContext(context), context);
 });
 
+test("multiple evidence rows share a lossless scoped read route, not their content", () => {
+  const rows = Array.from({length: 24}, (_, i) => ({...row(i),
+    health_check: `Observation ${i}\nPreserve its complete tail.`,
+    progress_observation: {...progress, fingerprint: `work-${i}`}}));
+  const read_prefix = "loopx --registry '/fixture with spaces/registry.json' --runtime-root /fixture/runtime";
+  const context = projectReplanContext({...request, read_prefix, rows});
+  const template = String(context.evidence_read_action_template);
+  const evidence = context.evidence as JsonObject[];
+  const expanded = evidence.map(item => ({...item,
+    read_action: template.replace("{evidence_ref}", String(item.evidence_ref))}));
+  for (let i = 0; i < evidence.length; i++) {
+    assert.equal(evidence[i].read_action, undefined);
+    assert.equal(expanded[i].read_action,
+      `${read_prefix} --format json history --goal-id goal-a --agent-id agent-a --evidence-ref ${evidence[i].evidence_ref}`);
+    assert.equal(evidence[i].summary, rows[23 - i].health_check);
+  }
+  assert.ok(JSON.stringify(expanded).length - JSON.stringify(evidence).length > template.length);
+  assert.equal(validateReplanContext(context), context);
+  const historical: JsonObject = {...context, evidence: expanded};
+  delete historical.evidence_read_action_template;
+  assert.equal(validateReplanContext(historical), historical);
+  assert.notEqual(projectReplanContext({...request, rows, read_prefix: "loopx"}).context_id, context.context_id);
+  for (const bad of [null, "", "history", template + " {evidence_ref}"]) {
+    assert.throws(() => validateReplanContext({...context, evidence_read_action_template: bad}));
+  }
+  assert.equal(projectReplanContext({...request, rows: []}).evidence_read_action_template, undefined);
+  assert.equal(projectReplanContext({...request, agent_id: null, rows}).evidence_read_action_template, undefined);
+  const literal = projectReplanContext({...request, rows, read_prefix: "loopx --runtime-root '/{evidence_ref}/state'"});
+  assert.equal(literal.evidence_read_action_template, undefined);
+  assert.match(String((literal.evidence as JsonObject[])[0].read_action), /'\/{evidence_ref}\/state'/);
+});
+
 test("older different results survive many recent attempts, while repeated records retain their span", () => {
   const old = {...row(1), progress_observation: {...progress, result_class: "advanced", fingerprint: "old-best"}};
   const repeated = Array.from({length: 100}, (_, i) => row(i + 100));
