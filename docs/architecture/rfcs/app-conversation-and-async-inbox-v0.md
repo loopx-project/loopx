@@ -809,6 +809,80 @@ This is a Core/API prerequisite: packaged
 frontend discovery, live shared-Lark adoption, project-recipient collaboration
 and original-conversation result return still require their existing acceptance.
 
+### Next implementation boundary: a project conversation as peer recipient
+
+The remaining project-recipient path is a collaboration change, not another
+local-input repair. `semantic_request.ts` currently requires a Goal/Agent pair;
+`peers.py` validates both peers in one Goal, and `source_grants.ts` resolves
+registered Goal recipients. Conversely, `conversation_bindings.py` can discover
+an original project Session, but `queued_admission.py` admits bound input only
+through its existing human/provider provenance. Discovery does not bridge these
+contracts. Neither a fabricated Goal nor `origin=web` is a legitimate adapter.
+The following is an implementation plan, not a claim of shipped acceptance.
+
+Keep one typed recipient identity across discovery, grants, request publication,
+receiver read/assessment and return. Extend the existing collaboration owner with
+an explicit original-conversation recipient alongside registered Goal/Agent
+recipients. Resolve the former from a fresh binding and canonical Session,
+retaining provider, operator, audience, project and executor identity. Keep the
+Session's null Goal and existing native thread. A Session ID or workspace path
+alone is a selector, not authority. Preserve existing Goal recipient addresses,
+request hashes and historical receipts; a versioned new recipient must not
+silently reinterpret their fields. The requester's Goal lifetime, when present,
+and the recipient's conversation identity have separate meanings.
+
+An existing workspace grant, verified discovery or `all_registered` Goal delivery
+scope does not authorize the new recipient kind. Reuse source policy for an
+explicit source-to-recipient grant, checked against original parent lineage and
+current binding state. Receiver execution retains its own workspace/tool/cost
+permissions; receiving context creates none. Configuration, discovery and refusal
+readback belong in the existing collaboration/connection journey, with the CLI
+exposing the same owner. Do not add a confirmation round to already authorized
+work; an actually missing grant holds only the dependent delivery.
+
+Deliver one vertical path through these owners:
+
+1. The requester selects the verified original recipient and submits its brief,
+   inherited source reference and stable operation identity through the existing
+   collaboration entrypoint. Host observations supply source/store identity;
+   model-authored routes never supply grants.
+2. The typed publication owner binds that operation to immutable requester,
+   recipient and source identities. Replaying the same operation recovers its
+   request; changed recipient, source or content rejects. Persist the original
+   return route before exposing executable work. Keep the existing request store
+   and receipt model rather than introducing a project-only inbox database.
+3. The owning Chat host admits that request to its existing Session FIFO with
+   explicit peer provenance. Extend both queued admission and worker-time source
+   validation; changing only the enqueue check is incomplete. Recheck revocation,
+   closure and identity before dispatch. Recover publication/enqueue response loss
+   by the same request and Turn identity; never start a second queue, Session or
+   executor. Claim/lease and busy-host behavior remain with the current owner.
+4. The receiver reads the current request and records its own adopt/defer/reject
+   decision through the shared request/result owners. A project receiver must
+   not invent a Goal/Todo merely to record that decision. Retain request revisions
+   and cancellation: the current exact-Goal control profile cannot simply accept
+   a null Goal. Context receipt, adoption and successful execution stay distinct.
+5. Return the evidence-backed conclusion through the saved requester route.
+   Running in a bound project conversation does not authorize sending its peer
+   result to that conversation's external audience. Retry a lost result receipt
+   without rerunning the model, and retain requester read/adoption separately.
+   The existing conversation UI must expose queued, unavailable, decision and
+   returned states; a successful CLI call alone does not qualify the journey.
+
+The decisive isolated test starts with one registered requester and one existing
+bound project Session with no Goal, using separate Chat and coordination roots.
+Through the production entrypoints, deliver the authorized request, interleave
+ordinary human input, restart between publication and enqueue, consume the brief,
+record an independent decision and return the exact result to the requester.
+Assert one Turn per operation and unchanged Session/thread/Goal identity. Cover
+revoked source/recipient grants, changed App/operator/audience/project, closure,
+concurrent replay, same-key/different-content, stale revision/cancellation and
+lost return receipts. Preserve the registered-recipient and ordinary bound-human
+paths as compatibility controls. Exercise the affected supported authority
+backends according to the repository's real-path policy; synthetic provider/model
+results qualify the protocol only. Packaged discovery and actual receiver use
+remain separately observable acceptance, not implied by documentation or merge.
+
 Lark's readable-answer exit also checks rendered emphasis, not only a matching
 Markdown source receipt. Following the [CommonMark delimiter rules](https://spec.commonmark.org/0.31.2/#emphasis-and-strong-emphasis),
 the shared inbox reply adapter normalizes a paired

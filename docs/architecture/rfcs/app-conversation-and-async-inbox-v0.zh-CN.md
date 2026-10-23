@@ -539,6 +539,57 @@ App 格式和其他 Lark Markdown 结构仍有各自的验收边界。
 共享 inbox 工作属于现有 coordination/collaboration owners；Lark 仍是 extension 提供的 provider。
 只有真实 provider-neutral 调用结果无法容纳于这些 owner 时，才重新考虑公开 capability。
 
+### 下一实现边界：让项目会话成为 peer 接收者
+
+剩余的项目接收者路径属于协作机制，不是再次修复本机输入。
+`semantic_request.ts` 当前要求 Goal/Agent 对，`peers.py` 在同一 Goal 内校验双方，
+`source_grants.ts` 解析已注册 Goal 接收者。另一方面，`conversation_bindings.py`
+可以发现原项目 Session，但 `queued_admission.py` 仍只通过既有人类/provider 来源
+准入绑定输入。发现会话并没有打通这两份契约；伪造 Goal 或 `origin=web` 都不是合法适配。
+以下是实现计划，不代表已交付验收。
+
+发现、授权、请求发布、接收方读取/评估和回传应使用同一个类型化接收者身份。
+在现有 collaboration owner 内，给已注册 Goal/Agent 接收者增加显式原会话接收者。
+后者从 fresh binding 和 canonical Session 解析，保留 provider、本人、受众、项目和
+执行器身份；Session 的 Goal 仍为 null，沿用原 native thread。仅有 Session ID 或
+工作区路径只是选择器，不是授权。保留现有 Goal 接收者地址、请求 hash 和历史回执；
+新接收者采用版本化表达，不能静默重解释旧字段。请求方的 Goal lifetime（若有）和
+接收方的会话身份含义不同。
+
+既有工作区授权、核实后的会话发现或 `all_registered` Goal 投递范围，都不自动授权
+新接收者类型。沿用 source policy 的显式来源→接收者授权，并核验原 parent lineage
+和当前 binding。接收方执行仍受自身工作区、工具和成本权限约束，接收上下文不新增权限。
+配置、发现及拒绝回读应进入现有协作/连接路径，CLI 暴露同一 owner。已授权工作不增加
+确认轮次；真正缺少授权时只暂停依赖该授权的投递。
+
+沿这些 owner 完成一个纵向路径：
+
+1. 请求方选择核实后的原接收者，通过既有 collaboration 入口提交 brief、继承来源引用
+   和稳定 operation 身份。来源/store 身份由宿主观测提供，模型给出的 route 不授予权限。
+2. 类型化 publication owner 将 operation 绑定到不可变的请求方、接收方和来源身份。
+   同一 operation 重试恢复原请求；接收者、来源或内容改变则拒绝。可执行工作可见前先
+   持久化原回传路径。沿用现有请求存储与回执模型，不新增项目专属 inbox 数据库。
+3. 原 Chat 宿主以明确 peer 来源将请求准入既有 Session FIFO；同时扩展队列准入和
+   worker 执行前的来源校验，只改 enqueue 检查不算完成。派发前重查撤权、关闭和身份。
+   发布/入队响应丢失时以同一请求及 Turn 身份恢复，不新建队列、Session 或执行器。
+   claim/lease 与宿主繁忙状态继续由原 owner 负责。
+4. 接收者读取当前请求，通过共享 request/result owner 独立记录 adopt/defer/reject。
+   项目接收者不应为了记录决定而虚构 Goal/Todo。保留请求修订与取消：现有 exact-Goal
+   control profile 不能直接放宽为 null Goal。接收上下文、采用和执行成功仍分别记录。
+5. 有证据的结论沿保存的 requester route 回传。在绑定项目会话中执行不等于获准把 peer
+   结果发给该会话的外部受众。结果回执丢失时重试回传，不重跑模型；请求方读取/采用仍
+   单独记录。现有会话 UI 须展示排队、不可用、决定与返回状态，CLI 调用成功不能单独
+   认证整个用户路径。
+
+决定性隔离测试从一个已注册请求方与一个已有、无 Goal 的绑定项目 Session 开始，
+Chat 与 coordination 使用不同 root。经生产入口投递获准请求，穿插普通本人输入，
+在发布与入队之间重启，读取 brief、独立决定并将精确结果回给请求方。断言每个 operation
+只有一个 Turn，Session/thread/Goal 身份未变。覆盖来源/接收者撤权，App/本人/受众/
+项目变化，关闭，并发重放，同 key 异内容，过期修订/取消及回传回执丢失。以已注册
+接收者和普通绑定本人输入作为兼容对照。受影响的支持后端遵循仓库真实路径策略；
+合成 provider/model 结果仅认证协议。打包后的发现与实际接收方使用仍是各自可观察的
+验收，文档或合并不隐含完成。
+
 ## 分阶段交付与决定性查询
 
 顺序以证据为依据，不承诺所有阶段在一个 PR 交付。每阶段完成一条有用的用户路径，
