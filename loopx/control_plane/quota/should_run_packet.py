@@ -97,6 +97,7 @@ from ..todos.contract import (
     normalize_todo_claimed_by,
     normalize_todo_id,
 )
+from ..agents.workspace_guard import observe_goal_delivery_workspace_isolation
 from ..todos.todo_semantics import (
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
 )
@@ -1673,6 +1674,13 @@ def _build_quota_should_run_payload(
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)
     apply_settled_monitor_precedence(payload)
+    selected_todo = payload.get("selected_todo")
+    if isinstance(selected_todo, dict) and selected_todo.get("todo_id"):
+        # Retain current facts across contract rebuilds for hooks and selection.
+        # This preview neither admits a workspace nor replaces refresh checks.
+        payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
+            prepared.item, selected_todo,
+        )
     _attach_automation_cadence_readback(
         payload,
         goal_id=prepared.safe_goal_id,

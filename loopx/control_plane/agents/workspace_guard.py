@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
+from ...agent_registry import registered_agent_ids_for_goal
 from ...repository_identity import (
     normalize_repository_identity,
     resolve_project_identity,
@@ -13,6 +14,7 @@ from ..todos.contract import normalize_todo_claimed_by, normalize_todo_task_repo
 from .delivery_workspace import (
     build_delivery_workspace_snapshot,
     normalize_delivery_workspace_snapshot,
+    qualify_delivery_workspace_isolation,
 )
 
 AGENT_WORKSPACE_GUARD_SCHEMA_VERSION = "agent_workspace_guard_v1"
@@ -226,6 +228,54 @@ def delivery_workspace_repository(value: Any) -> str | None:
         return normalize_todo_task_repository(snapshot.get("task_repository"))
     except (TypeError, ValueError):
         return None
+
+
+def observe_goal_delivery_workspace_isolation(
+    goal: dict[str, Any], selected_todo: dict[str, Any],
+) -> dict[str, Any]:
+    """Preview settlement's typed policy, without granting workspace admission.
+
+    Observe the registered target so a foreign caller cwd cannot turn a local
+    Goal into a Git task. Refresh still verifies the actual producing workspace.
+    """
+    from ..quota.settlement_workspace_causality import build_delivery_workspace_causality
+
+    causality = build_delivery_workspace_causality(selected_todo)
+    if (causality or {}).get("requirement") == "not_required":
+        return {}
+    repo = goal.get("repo") or goal.get("project") or goal.get("root")
+    goal_id = goal.get("goal_id") or goal.get("id")
+    workspace = None
+    if repo and goal_id:
+        root = Path(str(repo)).expanduser()
+        if root.is_absolute():
+            workspace = capture_delivery_workspace(
+                root, local_goal_id=str(goal_id), local_project_root=root,
+            )
+    policy = goal.get("workspace_guard_policy")
+    policy = policy if isinstance(policy, dict) else {}
+    workspace, required = qualify_delivery_workspace_isolation(
+        workspace, multi_agent_goal=len(registered_agent_ids_for_goal(goal)) > 1,
+        explicit_peer_worktree_requirement=policy.get("peer_independent_worktree_required"),
+        task_repository=selected_todo.get("task_repository"),
+    )
+    return {"workspace": workspace, "peer_independent_worktree_required": required}
+
+
+def delivery_workspace_refresh_hint(isolation: dict[str, Any]) -> str:
+    """Render observed policy; absent facts never certify a local Goal target."""
+    if isolation.get("peer_independent_worktree_required") is True:
+        return (
+            "independent git worktree that produced the delivery; otherwise "
+            "--delivery-workspace-path for that worktree"
+        )
+    if (isolation.get("workspace") or {}).get("identity_kind") == "local_goal":
+        return (
+            "registered local Goal target; when caller cwd differs, refresh with "
+            "--delivery-workspace-path for the actual target; spend uses the "
+            "recorded delivery workspace"
+        )
+    return "delivery_workspace; otherwise --delivery-workspace-path"
 
 
 def build_delivery_workspace_guard(

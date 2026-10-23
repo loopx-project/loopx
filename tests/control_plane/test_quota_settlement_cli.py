@@ -265,6 +265,7 @@ def _run_generated_cli(
     command: str,
     *,
     registry_path: Path,
+    cwd: Path = REPO_ROOT,
 ) -> tuple[int, dict[str, Any]]:
     argv = shlex.split(command)
     assert argv[0] == "loopx"
@@ -272,7 +273,7 @@ def _run_generated_cli(
         argv[1:1] = ["--registry", str(registry_path)]
     result = subprocess.run(
         [sys.executable, "-m", "loopx.entrypoint", *argv[1:]],
-        cwd=REPO_ROOT,
+        cwd=cwd,
         check=False,
         capture_output=True,
         text=True,
@@ -6767,12 +6768,22 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
+    if provider == "sqlite":
+        from canonical_authority_fixture import isolate_sqlite_runtime
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     _initialize_git_checkout(project)
-    subprocess.run(["git", "add", "."], cwd=project, check=True)
+    (project / ".gitignore").write_text(".loopx/\n.codex/\n")
+    (project / "README.md").write_text("Synthetic workspace fixture\n")
+    subprocess.run(["git", "add", ".gitignore", "README.md"], cwd=project, check=True)
     subprocess.run(
         [
             "git",
@@ -6827,28 +6838,28 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
         ),
         encoding="utf-8",
     )
-    subprocess.run(["git", "add", "."], cwd=project, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=LoopX Test",
-            "-c",
-            "user.email=loopx-test@example.invalid",
-            "commit",
-            "--quiet",
-            "-m",
-            "peer fixture",
-        ],
-        cwd=project,
-        check=True,
-    )
     linked_worktree = tmp_path / "linked-worktree"
     subprocess.run(
         ["git", "worktree", "add", "--quiet", "--detach", str(linked_worktree)],
         cwd=project,
         check=True,
     )
+
+    # This Todo intentionally has neither a repository nor write scopes. The
+    # registered Git Goal and its current peer policy still govern settlement.
+    replay_rc, replay = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding, cwd=project,
+    )
+    assert replay_rc == 0, {key: replay.get(key) for key in (
+        "error", "reason", "state", "health", "status", "status_health_ok",
+    )}
+    assert not replay["selected_todo"].get("task_repository")
+    hint = replay["interaction_contract"]["cli_channel"]["delivery_workspace_causality"]
+    assert "independent git worktree" in hint["refresh"]
+    assert "produced" in hint["refresh"]
+    assert "--delivery-workspace-path" in hint["refresh"]
+    assert replay["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
 
     refresh_args = (
         "refresh-state",
@@ -6860,6 +6871,8 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
         "single_surface",
         "--delivery-outcome",
         "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
         *binding,
         "--no-global-sync",
         "--suppress-external-sinks",
@@ -6884,6 +6897,13 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
     assert linked["delivery_workspace"]["workspace_kind"] == (
         "independent_git_worktree"
     )
+    assert linked["delivery_workspace"]["peer_independent_worktree_required"] is True
+    command = linked["settlement_owed"]["command"]
+    spent_rc, spent = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
+    assert spent_rc == 0 and spent["settlement_progress"]["state"] == "settled", spent
+    repeated_rc, repeated = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
+    assert repeated_rc == 0 and repeated["appended"] is False, repeated
+    assert _spend_run_count(runtime) == 1
 
 
 def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(
