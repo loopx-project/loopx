@@ -10,7 +10,7 @@ import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 
 // Presentation-only race fixture; the HTTP/process authority is tested in
 // tests/presentation/test_research_analysis_api.py. No model is dispatched here.
-function analysisReadback(selected = "a") {
+export function analysisReadback(selected = "a") {
   const scope = {goal_id: "synthetic-solver", case_id: "synthetic-case", run_id: "synthetic-run", revision: "fixed", window: "fixed synthetic sample"};
   const selection = {rule: "Synthetic purpose sample", population_episodes: null, exhaustive: false};
   const config = {model: "fixture", effort: "max", service_tier: "unknown"};

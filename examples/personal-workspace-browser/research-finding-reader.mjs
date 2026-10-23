@@ -5,7 +5,7 @@ import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {outputDir, repoRoot} from "./fixture.mjs";
-import {startHistoryOwner} from "./research-history.mjs";
+import {analysisReadback, startHistoryOwner} from "./research-history.mjs";
 
 // Public synthetic documents through the production history HTTP/SQLite owner.
 // No model, solver, scientific score or live Goal is involved.
@@ -122,6 +122,32 @@ export const researchFindingReaderScenario = {
       assert.equal(await article.count(), 1);
       assert.equal(await reader.getByRole("combobox").count(), 0, "A single finding needs no selector or disabled navigation");
       assert.match(await article.innerText(), /一条完整的原始结论/);
+      // Analysis remains scoped by its existing pack owner, not the open node.
+      // This presentation-only read fixture must expose the actual chosen scope
+      // before its action, even while whole-history metrics are collapsed.
+      let analysisWrites = 0;
+      await page.route("**/api/chat/research-analysis?*", route => {
+        if (route.request().method() !== "GET") {analysisWrites++; return route.abort();}
+        const selected = new URL(route.request().url()).searchParams.get("pack_id")?.[0] ?? "a";
+        const snapshot = analysisReadback(selected); snapshot.pack.result = null; snapshot.pack.job = null;
+        snapshot.pack.config.output_language = new URL(route.request().url()).searchParams.get("output_language");
+        return route.fulfill({json: snapshot});
+      });
+      await page.goto(url);
+      const scope = history.locator(".research-analysis-scope");
+      await scope.filter({hasText: /^Analysis scope · Synthetic analysis A$/}).waitFor();
+      assert.equal(await history.locator(".research-history-context").evaluate(element => element.open), false);
+      await history.locator(".research-history-context > summary").click();
+      await history.getByRole("combobox", {name: "Evaluation scope", exact: true}).selectOption("b".repeat(64));
+      await scope.filter({hasText: /^Analysis scope · Synthetic analysis B$/}).waitFor();
+      assert(await scope.evaluate(element => element.scrollWidth <= element.clientWidth + 1), "The chosen analysis scope remains readable in a narrow focused view");
+      await history.locator(".research-history-context > summary").click();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
+        await page.screenshot({path: resolve(outputDir, `research-finding-reader-scope-${width}.png`), animations: "disabled"});
+      }
+      assert.equal(analysisWrites, 0, "Reading and choosing the displayed scope cannot dispatch analysis");
       const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
       assert(readback.source_unchanged && readback.mutation_attempts === 0, "Reading, switching and recovery have no execution or source-write effect");
       return {coverageEntries: collectCoverage ? await page.coverage.stopJSCoverage() : [], note: "real-owner dense/small/unavailable finding selection, complete original, negative states and exact reload/Back focus"};

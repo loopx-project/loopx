@@ -166,7 +166,7 @@
 .research-history-context { border-top: 1px solid var(--pw-line); min-width: 0; }
 .research-history-context > summary { min-height: 44px; padding: 12px 24px; font-size: var(--text-body); cursor: pointer; }
 .research-history-context > .research-progress { margin: 16px 24px; }
-.research-history .research-finding-navigation { display: flex; align-items: flex-end; gap: 16px; margin-top: 24px; min-width: 0; }
+.research-history .research-finding-navigation { display: flex; align-items: flex-end; gap: 16px; margin-top: 16px; min-width: 0; }
 .research-finding-navigation label { display: grid; flex: 1; min-width: 0; gap: 8px; font-size: var(--text-body); }
 .research-finding-navigation select { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); font: inherit; }
 .research-finding-steps { display: flex; flex-shrink: 0; align-items: center; gap: 8px; font-size: var(--text-body); }
@@ -180,3 +180,7 @@
   .research-finding-steps { margin-left: auto; }
   .research-history-context > summary { padding-inline: 16px; }
 }
+.research-analysis-scoped-action { display: grid; gap: 6px; max-width: 28rem; min-width: 0; }
+.research-analysis-scope { font-size: var(--text-body); line-height: var(--leading-body); color: var(--pw-muted); overflow-wrap: anywhere; }
+.research-reader-location { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; }
+.research-history .research-reader-location .research-reader-back, .research-history-detail .research-reader-location p { margin: 0; }

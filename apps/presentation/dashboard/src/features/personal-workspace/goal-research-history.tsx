@@ -311,7 +311,9 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
           : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p></div>
       <div className="research-history-controls">
         {!readingSelection ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
-        <ResearchAnalysisButton analysis={analysis}/>
+        <div className="research-analysis-scoped-action"><ResearchAnalysisButton analysis={analysis}/>
+          {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}
+        </div>
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
@@ -325,14 +327,13 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
 
       {selected ? <div className="research-history-detail" ref={detail} role="region" aria-label={selected.latest.title} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>
         <div className="research-reader-content">
-        <button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{readerParent.current ? (zh ? "返回问题列表" : "Back to questions") : copy.all}</button>
-        <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p>
+        <div className="research-reader-location"><button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{readerParent.current ? (zh ? "返回问题列表" : "Back to questions") : copy.all}</button>
+        <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p></div>
         <h3>{selected.latest.title}</h3>
         {selected.latest.blocked_reason ? <p className="research-history-error">{selected.latest.blocked_reason}</p> : null}
         {selected.findings.length ? <>
           {selected.findings.length > 1 ? <nav className="research-finding-navigation" aria-label={zh ? "问题结论" : "Question findings"}>
-            <label><span>{zh ? "结论" : "Findings"} · {selected.findings.length}</span>
-              <select aria-label={zh ? "选择问题结论" : "Choose a question finding"} value={selectedFinding?.result_id ?? ""}
+            <label><select aria-label={zh ? "选择问题结论" : "Choose a question finding"} value={selectedFinding?.result_id ?? ""}
                 onChange={event => select({...selection, finding: event.target.value}, false)}>
                 {!selectedFinding ? <option value="" disabled>{zh ? "所选结论未找到" : "Selected finding not found"}</option> : null}
                 {selected.findings.map((finding, index) => <option key={finding.result_id} value={finding.result_id}>
