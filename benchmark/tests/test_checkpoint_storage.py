@@ -38,6 +38,22 @@ def test_storage_probe_rejects_symlink_and_relative_destinations(tmp_path):
             qualify_export_storage(path)
 
 
+def test_supervisor_rejects_existing_bank_before_native_registration(tmp_path):
+    from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
+    bank = tmp_path / "existing"
+    bank.mkdir()
+    retained = bank / "retained"
+    retained.write_bytes(b"original checkpoint")
+    controller = tmp_path / "controller.json"
+    controller.write_text(json.dumps({"url": "http://localhost:1", "admin_secret": "synthetic",
+                                      "bank_root": str(bank)}))
+    controller.chmod(0o600)
+    with pytest.raises(ValueError, match="fresh; preserve the existing bank"):
+        CheckpointSupervisor(controller, bank)
+    assert retained.read_bytes() == b"original checkpoint"
+    assert list(bank.iterdir()) == [retained]
+
+
 @pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
                     reason="Requires explicit isolated Docker writer-barrier qualification")
 def test_full_export_preserves_linux_sibling_names(controllers, writer, tmp_path):

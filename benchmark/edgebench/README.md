@@ -531,7 +531,7 @@ instead of losing a later replan checkpoint. Capture-disabled runs do not probe 
 Use `--checkpoint-export-root /data/private-checkpoints` to place full worker
 exports on a separately provisioned compatible volume. The root must already
 exist and be a physical absolute directory. Each run uses
-`ROOT/RUN_ID/TASK_ID/checkpoints`; its private runtime receipt records
+`ROOT/RUN_ID/TASK_ID/checkpoints`, which must not already exist; its private runtime receipt records
 `checkpoint_export_directory`. Without the option, the original
 `LOG_DIR/runs/RUN_ID/TASK_ID/checkpoints` location remains in use. The probe checks
 filename fidelity, not free space or retention capacity: reserve enough space for

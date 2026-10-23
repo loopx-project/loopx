@@ -34,6 +34,8 @@ def qualify_export_storage(destination: Path) -> None:
     """
     if not destination.is_absolute() or destination.resolve() != destination:
         raise ValueError("Checkpoint export destination must be normalized, physical and absolute")
+    if destination.exists():
+        raise ValueError("Checkpoint export destination must be fresh; preserve the existing bank")
     parent = destination.parent
     while not parent.exists():
         parent = parent.parent
