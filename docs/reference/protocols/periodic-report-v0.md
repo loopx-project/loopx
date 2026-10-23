@@ -41,7 +41,7 @@ In Personal Workspace, open **Settings → Capability Center**. Choose **Device
 defaults** or **One Goal** and select the target Goal, then choose **Periodic
 reports**. Enable the subscription, choose its profile and Goal
 Channel route, then turn on **Calendar reports**. Choose daily or weekly,
-the weekday for weekly reports, and a local time. The existing subscription
+the weekday for weekly reports, a local time, and an optional start date. The existing subscription
 timezone also owns the calendar timezone. Preview and apply use the same
 revision-checked configuration API as other capability settings.
 
@@ -67,6 +67,24 @@ timezone, and one weekday for weekly schedules. Unsupported recurrence fields
 and mismatched timezones are rejected before configuration is applied. A
 spring-forward time that does not exist is skipped; a repeated fall-back time
 occurs once, at its first offset.
+
+`schedule.start_date`, when present, is a real ISO `YYYY-MM-DD` date in the
+schedule's timezone. It is the earliest permitted **report due date**. Before
+the first matching occurrence, admission returns `not_due` and its next eligible
+deadline without reserving a report window or invoking generation. A weekly
+schedule starts on the first matching weekday on or after that date; nonexistent
+DST occurrences retain the skip rule above. The first report still covers the
+complete preceding calendar interval, including time before the start date.
+Omitting the field preserves the existing latest-completed-interval behavior.
+Clearing the date in the form removes only this bound; changing the frequency,
+time or timezone preserves it. Preview/apply and effective subscription revisions
+include the date.
+
+A future start-date edit does not delete an already admitted window, generation,
+unknown delivery or publication receipt. Prepared work with a changed
+subscription remains explicitly unavailable under its original identity;
+unprepared work is retained until a new window can be admitted. Clock rollback
+does not turn an already admitted window into a new report.
 
 Turning off **Calendar reports** submits `schedule: null`. The stored
 subscription then has no calendar and retains existing stage-boundary behavior.

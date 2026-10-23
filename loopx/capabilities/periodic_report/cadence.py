@@ -6,7 +6,7 @@ It calculates boundaries; it neither runs an Automation nor authorizes delivery.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -50,38 +50,72 @@ def normalize_report_cadence(raw: object) -> dict[str, str] | None:
     return {**schedule, "rrule": ";".join(canonical)}
 
 
-def report_cadence_window(raw: object, *, now: datetime) -> dict[str, Any] | None:
-    """Return the latest completed interval and next boundary in UTC.
-
-    Spring-forward nonexistent wall times are skipped; a fall-back occurrence
-    uses its first fold only. These semantics match one report per local date.
-    No cursor is advanced here; successful publication owns that state.
-    """
-    schedule = normalize_report_cadence(raw)
-    if schedule is None:
-        return None
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("cadence evaluation time must include a UTC offset")
+def _occurrences(schedule: dict[str, str], center: date) -> list[datetime]:
     zone = ZoneInfo(schedule["timezone"])
     fields = dict(item.split("=", 1) for item in schedule["rrule"].split(";"))
-    current = now.astimezone(timezone.utc)
-    local_date = current.astimezone(zone).date()
     occurrences: list[datetime] = []
     # Two previous valid weekly boundaries even across a skipped DST date,
     # and the next valid boundary. Fixed bounds avoid unbounded RRULE work.
     for offset in range(-28, 15):
-        day = local_date + timedelta(days=offset)
+        try:
+            day = center + timedelta(days=offset)
+        except OverflowError:
+            continue
         if fields["FREQ"] == "WEEKLY" and day.weekday() != _DAYS.index(fields["BYDAY"]):
             continue
         wall = datetime.combine(day, time(int(fields["BYHOUR"]), int(fields["BYMINUTE"])))
-        candidate = wall.replace(tzinfo=zone, fold=0).astimezone(timezone.utc)
-        if candidate.astimezone(zone).replace(tzinfo=None) != wall:
+        try:
+            candidate = wall.replace(tzinfo=zone, fold=0).astimezone(timezone.utc)
+            roundtrip = candidate.astimezone(zone).replace(tzinfo=None)
+        except OverflowError:
+            continue
+        if roundtrip != wall:
             continue
         occurrences.append(candidate)
+    return occurrences
+
+
+def _current(now: datetime) -> datetime:
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("cadence evaluation time must include a UTC offset")
+    return now.astimezone(timezone.utc)
+
+
+def report_cadence_next_due_at(raw: object, *, now: datetime) -> str | None:
+    """Next eligible deadline, including a future first local report date."""
+    schedule = normalize_report_cadence(raw)
+    if schedule is None:
+        return None
+    current = _current(now)
+    zone = ZoneInfo(schedule["timezone"])
+    start = date.fromisoformat(schedule.get("start_date", "0001-01-01"))
+    center = max(current.astimezone(zone).date(), start)
+    future = [value for value in _occurrences(schedule, center)
+              if value > current and value.astimezone(zone).date() >= start]
+    if not future:
+        raise ValueError("schedule has no supported next calendar deadline")
+    return future[0].isoformat().replace("+00:00", "Z")
+
+
+def report_cadence_window(raw: object, *, now: datetime) -> dict[str, Any] | None:
+    """Latest completed interval, or no interval before the first report date.
+
+    Spring-forward nonexistent wall times are skipped; a fall-back occurrence
+    uses its first fold only. The start date fences the due boundary, not the
+    beginning of its reporting interval. Publication still owns the cursor.
+    """
+    schedule = normalize_report_cadence(raw)
+    if schedule is None:
+        return None
+    current = _current(now)
+    zone = ZoneInfo(schedule["timezone"])
+    occurrences = _occurrences(schedule, current.astimezone(zone).date())
     past = [value for value in occurrences if value <= current]
     future = [value for value in occurrences if value > current]
     if len(past) < 2 or not future:
         raise ValueError("schedule has no supported bounded calendar window")
+    if schedule.get("start_date") and past[-1].astimezone(zone).date().isoformat() < schedule["start_date"]:
+        return None
     def stamp(value: datetime) -> str:
         return value.isoformat().replace("+00:00", "Z")
     return {

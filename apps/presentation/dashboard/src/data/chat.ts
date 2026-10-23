@@ -1753,6 +1753,7 @@ export const periodicReportScheduleSchema = z.object({
   schedule_id: z.string(),
   rrule: z.string(),
   timezone: z.string(),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export const periodicReportMachineConfigurationSchema = z.object({

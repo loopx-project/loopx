@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
+from ..effect_runtime import effect_runtime_result
 from ..runtime.time import parse_timestamp
 from .progress_observation import FRESH_VISION_PATH_DISPOSITIONS
 
@@ -12,6 +13,52 @@ AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW = 20
 # neutral events. The budget is per agent lane: a Goal-wide window that peer
 # lanes also fill cannot decide one lane's material-run count.
 AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK = AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW * 3
+
+
+class SettlementHistoryQualification(NamedTuple):
+    accepted_blocked_replans: frozenset[int]
+    active_turn_retries: frozenset[int]
+
+
+def qualify_settlement_history(
+    runs: list[dict[str, Any]], *, observed_at: str | None = None,
+) -> SettlementHistoryQualification:
+    """Transport a history batch to its settlement owner, preserving originals.
+
+    Candidate selection is an IO optimization, never positive qualification.
+    The TS result selects existing rows; it cannot acknowledge or settle work.
+    Missing legacy evidence remains an ordinary outcome checkpoint.
+    """
+    candidates = [index for index, run in enumerate(runs)
+                  if run.get("replan_obligation_id")
+                  or (observed_at is not None and "blocked_retry" in run)]
+    if not candidates:
+        return SettlementHistoryQualification(frozenset(), frozenset())
+    fields = (
+        "goal_id", "agent_id", "todo_id", "turn_instance_id", "replan_obligation_id",
+        "settlement_identity", "delivery_outcome", "progress_observation",
+        "autonomous_replan_ack", "vision_checkpoint", "blocked_retry",
+    )
+    result = effect_runtime_result("quota.settlement.read", {
+        "schema_version": "loopx_quota_history_qualification_request_v0",
+        "observed_at": observed_at,
+        "runs": [{key: runs[index][key] for key in fields if key in runs[index]}
+                 for index in candidates],
+    }, large_local_snapshot=True)
+    def indexes(field: str) -> frozenset[int]:
+        values = result.get(field) if isinstance(result, dict) else None
+        if not isinstance(values, list) or any(
+            type(index) is not int or not 0 <= index < len(candidates) for index in values
+        ):
+            raise RuntimeError("TypeScript settlement history result must contain valid indexes")
+        return frozenset(candidates[index] for index in values)
+
+    return SettlementHistoryQualification(indexes("accepted_indexes"), indexes("active_retry_indexes"))
+
+
+def accepted_blocked_replan_history_indexes(runs: list[dict[str, Any]]) -> frozenset[int]:
+    """Legacy outcome reader needs administrative qualification, not a clock."""
+    return qualify_settlement_history(runs).accepted_blocked_replans
 
 
 def ack_binds_trigger_checkpoints(ack: dict[str, Any] | None) -> bool:

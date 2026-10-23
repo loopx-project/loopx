@@ -769,6 +769,42 @@ def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _reference_explore_writeback_guidance(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep identical optional instructions once in this same CLI packet.
+
+    This is transport-only reference projection, after all decisions. Preserve
+    standalone Explore reads, differing text and the complete settlement owner.
+    """
+    contract = payload.get("interaction_contract", {})
+    agent = contract.get("agent_channel", {})
+    context = agent.get("work_context", {})
+    sources = context.get("sources", [])
+    steps = contract.get("cli_channel", {}).get("settlement_plan", {}).get("ordered_steps", [])
+    for step_index, step in enumerate(steps):
+        if step.get("kind") != "durable_writeback":
+            continue
+        for attachment_index, attachment in enumerate(step.get("optional_attachments", [])):
+            guidance = attachment.get("guidance")
+            if attachment.get("capability_id") != "explore" or not isinstance(guidance, str) or not guidance:
+                continue
+            ref = (f"$.interaction_contract.cli_channel.settlement_plan.ordered_steps[{step_index}]"
+                   f".optional_attachments[{attachment_index}].guidance")
+            updated = list(sources)
+            for index, source in enumerate(sources):
+                content = source.get("content", {})
+                graph = content.get("graph", {})
+                if source.get("kind") != "explore_turn_context" or graph.get("result_writeback_guidance") != guidance:
+                    continue
+                graph = dict(graph)
+                graph.pop("result_writeback_guidance")
+                graph["result_writeback_guidance_ref"] = ref
+                updated[index] = {**source, "content": {**content, "graph": graph}}
+            if updated != sources:
+                return {**payload, "interaction_contract": {**contract, "agent_channel": {
+                    **agent, "work_context": {**context, "sources": updated}}}}
+    return payload
+
+
 def compact_quota_should_run_cli_payload(
     payload: dict[str, Any],
     *,
@@ -864,6 +900,8 @@ def compact_quota_should_run_cli_payload(
         agent_lane_next_action.pop("content_revision", None)
         compact["agent_lane_next_action"] = agent_lane_next_action
     compact = _reference_inline_goal_acceptance(compact)
+    if not include_vision_detail:
+        compact = _reference_explore_writeback_guidance(compact)
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )

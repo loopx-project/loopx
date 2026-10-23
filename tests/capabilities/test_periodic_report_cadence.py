@@ -4,6 +4,7 @@ import pytest
 
 from loopx.capabilities.periodic_report.cadence import (
     normalize_report_cadence,
+    report_cadence_next_due_at,
     report_cadence_window,
 )
 
@@ -128,3 +129,104 @@ def test_configure_goal_persists_and_clears_schedule(tmp_path):
                    **_goal_capability_options("periodic_report", {**config, "schedule": None}), execute=True)
     stored = json.loads(registry.read_text())["goals"][0]
     assert "schedule" not in resolve_goal_periodic_report_subscription(stored)
+
+
+def test_first_local_date_fences_due_boundary_without_shortening_window():
+    rule = {**schedule("FREQ=DAILY;BYHOUR=6", "Pacific/Honolulu"), "start_date": "2027-02-17"}
+    assert report_cadence_window(rule, now=at("2027-02-16T23:00:00-10:00")) is None
+    assert report_cadence_window(rule, now=at("2027-02-17T05:59:59-10:00")) is None
+    assert report_cadence_next_due_at(rule, now=at("2027-02-16T23:00:00-10:00")) == "2027-02-17T16:00:00Z"
+    first = report_cadence_window(rule, now=at("2027-02-17T06:00:00-10:00"))
+    assert first["start_at"] == "2027-02-16T16:00:00Z"
+    assert first["due_at"] == "2027-02-17T16:00:00Z"
+    assert first["next_due_at"] == "2027-02-18T16:00:00Z"
+    assert first == report_cadence_window(rule, now=at("2027-02-17T16:10:00Z"))
+    assert report_cadence_next_due_at(rule, now=at("2027-02-17T16:00:00Z")) == "2027-02-18T16:00:00Z"
+
+
+def test_first_date_is_local_and_selects_first_matching_weekday():
+    rule = {**schedule(), "start_date": "2027-02-20"}  # Saturday; weekly rule is Friday.
+    assert report_cadence_window(rule, now=at("2027-02-20T00:00:00+08:00")) is None
+    assert report_cadence_next_due_at(rule, now=at("2027-02-19T16:00:00Z")) == "2027-02-26T10:00:00Z"
+    first = report_cadence_window(rule, now=at("2027-02-26T18:00:00+08:00"))
+    assert first["start_at"] == "2027-02-19T10:00:00Z"
+    assert first["due_at"] == "2027-02-26T10:00:00Z"
+
+
+def test_first_date_keeps_dst_gap_and_fold_rules_and_bounded_far_future():
+    gap = {**schedule("FREQ=DAILY;BYHOUR=2;BYMINUTE=30", "America/New_York"), "start_date": "2026-03-08"}
+    assert report_cadence_window(gap, now=at("2026-03-08T08:00:00Z")) is None
+    assert report_cadence_next_due_at(gap, now=at("2026-03-08T08:00:00Z")) == "2026-03-09T06:30:00Z"
+    fold = {**schedule("FREQ=DAILY;BYHOUR=1;BYMINUTE=30", "America/New_York"), "start_date": "2026-11-01"}
+    assert report_cadence_next_due_at(fold, now=at("2026-11-01T05:00:00Z")) == "2026-11-01T05:30:00Z"
+    assert report_cadence_next_due_at(fold, now=at("2026-11-01T05:45:00Z")) == "2026-11-02T06:30:00Z"
+    distant = {**schedule("FREQ=DAILY;BYHOUR=9"), "start_date": "2090-01-01"}
+    assert report_cadence_window(distant, now=at("2027-02-17T01:00:00Z")) is None
+    assert report_cadence_next_due_at(distant, now=at("2027-02-17T01:00:00Z")) == "2090-01-01T01:00:00Z"
+
+
+@pytest.mark.parametrize("start", ["2026-02-30", "20270217", "2027-W07-3", "27-02-17", "2027-02-17T00:00Z", ""])
+def test_start_date_rejects_invalid_and_noncanonical_dates(start):
+    with pytest.raises(ValueError, match="start_date"):
+        normalize_report_cadence({**schedule(), "start_date": start})
+
+
+def test_start_date_survives_configuration_and_profile_readback_and_changes_revision(tmp_path):
+    import json
+    from loopx.configure_goal import configure_goal
+    from loopx.capabilities.periodic_report.machine_defaults import resolve_goal_periodic_report_subscription
+    from loopx.capabilities.periodic_report.profile import _normalize_schedule
+
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [{"id": "example", "repo": str(tmp_path),
+        "state_file": "GOAL.md", "status": "active"}]}))
+    rule = {**schedule("FREQ=DAILY;BYHOUR=9"), "start_date": "2028-04-01"}
+    config = {"enabled": True, "profile_preset": "weekly-progress", "route_ref": "report-channel",
+              "timezone": "Asia/Shanghai", "schedule": rule}
+    configure_goal(registry_path=registry, goal_id="example", periodic_report_configuration=config, execute=True)
+    stored = json.loads(registry.read_text())["goals"][0]
+    bounded = resolve_goal_periodic_report_subscription(stored)
+    assert bounded["schedule"]["start_date"] == "2028-04-01"
+    assert _normalize_schedule(rule)["start_date"] == "2028-04-01"
+    config["schedule"] = schedule("FREQ=DAILY;BYHOUR=9")
+    configure_goal(registry_path=registry, goal_id="example", periodic_report_configuration=config, execute=True)
+    restored = resolve_goal_periodic_report_subscription(json.loads(registry.read_text())["goals"][0])
+    assert "start_date" not in restored["schedule"]
+    assert bounded["effective_revision"] != restored["effective_revision"]
+
+
+def test_live_turn_hook_does_no_report_work_before_first_date_and_recovers_one_due_window(tmp_path):
+    import json
+    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+    from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
+    from loopx.capabilities.periodic_report.pending_intent import pending_periodic_report_intents
+
+    registry = tmp_path / "registry.json"
+    runtime = tmp_path / "runtime"
+    (tmp_path / "GOAL.md").write_text("---\nstatus: active\n---\n# Calendar fixture\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": "example", "repo": str(tmp_path), "state_file": "GOAL.md", "status": "active",
+        "coordination": {"registered_agents": ["reporter", "peer"]},
+        "control_plane": {"periodic_report": {"enabled": True, "profile_preset": "weekly-progress",
+            "route_ref": "report-channel", "timezone": "Pacific/Honolulu",
+            "schedule": {**schedule("FREQ=DAILY;BYHOUR=6", "Pacific/Honolulu"), "start_date": "2027-02-17"}}},
+    }]}))
+    kwargs = dict(registry_path=registry, runtime_root=runtime, goal_id="example", agent_id="reporter")
+    before = extend_cadence_turn_start_dispatch({}, **kwargs, now=at("2027-02-17T15:59:59Z"))
+    assert before["failures"] == before["required_reads"] == []
+    observed = before["results"][0]
+    assert observed["status"] == "empty"
+    assert not any(observed[key] for key in ("agent_read_required", "external_reads_performed",
+                                            "external_writes_performed", "local_private_state_mutated"))
+    assert read_cadence_journal(runtime_root=runtime, goal_id="example") is None
+    assert pending_periodic_report_intents(**kwargs) == []
+    due = extend_cadence_turn_start_dispatch({}, **kwargs, now=at("2027-02-17T16:00:00Z"))
+    assert due["failures"] == []
+    assert due["results"][0]["agent_read_required"] is True
+    first = read_cadence_journal(runtime_root=runtime, goal_id="example")
+    assert first["window"]["start_at"] == "2027-02-16T16:00:00Z"
+    assert first["window"]["due_at"] == "2027-02-17T16:00:00Z"
+    assert len(pending_periodic_report_intents(**kwargs)) == 1
+    repeated = extend_cadence_turn_start_dispatch({}, **kwargs, now=at("2027-02-18T20:00:00Z"))
+    assert repeated["results"][0]["local_private_state_mutated"] is False
+    assert read_cadence_journal(runtime_root=runtime, goal_id="example") == first

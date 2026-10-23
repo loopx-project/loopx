@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any
 
 from .audience import normalize_periodic_report_audience_policy
@@ -133,7 +134,7 @@ def _normalize_schedule(raw: object) -> dict[str, str] | None:
     _reject_raw_keys(schedule, "schedule")
     _reject_unknown_fields(
         schedule,
-        allowed={"schema_version", "schedule_id", "rrule", "timezone"},
+        allowed={"schema_version", "schedule_id", "rrule", "timezone", "start_date"},
         label="schedule",
     )
     if schedule.get("schema_version", SCHEDULE_SCHEMA) != SCHEDULE_SCHEMA:
@@ -144,12 +145,21 @@ def _normalize_schedule(raw: object) -> dict[str, str] | None:
     timezone = _text(schedule.get("timezone"), "schedule.timezone", maximum=80)
     if not _TIMEZONE_RE.fullmatch(timezone):
         raise ValueError("schedule.timezone must be an IANA-like timezone name")
-    return {
+    normalized = {
         "schema_version": SCHEDULE_SCHEMA,
         "schedule_id": _token(schedule.get("schedule_id"), "schedule.schedule_id"),
         "rrule": rrule,
         "timezone": timezone,
     }
+    if "start_date" in schedule:
+        start = _text(schedule["start_date"], "schedule.start_date", maximum=10)
+        try:
+            if date.fromisoformat(start).isoformat() != start:
+                raise ValueError("noncanonical date")
+        except ValueError as exc:
+            raise ValueError("schedule.start_date must use YYYY-MM-DD") from exc
+        normalized["start_date"] = start
+    return normalized
 
 
 def normalize_periodic_report_profile(raw: Mapping[str, Any]) -> dict[str, Any]:

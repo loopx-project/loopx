@@ -89,11 +89,32 @@ def test_status_uses_retained_semantic_runs_before_display_compaction():
     assert projected["items"][0]["agent_todos"]["items"][0]["blocked_retry"]["turn_instance_id"] == "original-attempt"
 
 
+def test_status_preserves_microsecond_boundary_and_historical_clock_fence():
+    observed, due = "2030-01-01T00:00:00.123456+00:00", "2030-01-01T00:05:00.123456+00:00"
+    _, run, history, queue = fixture(observed, due)
+    projected = overlay_status_turn_retries(history, queue, observed_at="2030-01-01T00:05:00.123455Z")
+    row = projected["items"][0]["agent_todos"]["items"][0]
+    assert row["blocked_retry"]["due_at"] == due
+    assert row["resume_condition"]["scheduled_for"] == "2030-01-01T00:05:00.123456Z"
+    assert row["resume_condition"]["satisfied"] is False
+    assert overlay_status_turn_retries(history, queue, observed_at=due) is queue
+    # Python's historical receipt reader accepts a basic date-time spelling;
+    # reading it does not expand the stricter Todo authoring grammar.
+    run["blocked_retry"].update(observed_at="20300101T000000+0000", due_at="20300101T000500+0000",
+                                resume_when="resume_at:20300101T000500+0000")
+    historical = overlay_status_turn_retries(history, queue, observed_at="2030-01-01T00:02:00Z")
+    row = historical["items"][0]["agent_todos"]["items"][0]
+    assert row["resume_condition"]["satisfied"] is False
+    assert row["blocked_retry"]["due_at"] == "20300101T000500+0000"
+    assert "clock_provider" not in row["resume_condition"]
+    assert overlay_status_turn_retries(history, queue, observed_at="2030-01-01T00:05:00Z") is queue
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("channel", ["cli", "http"])
 def test_real_provider_status_projects_wait_without_writes(tmp_path: Path, monkeypatch, provider, channel):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    now = datetime.now(UTC)
+    now = datetime.now(UTC).replace(microsecond=123456)
     observed, due = now.isoformat(), (now + timedelta(minutes=5)).isoformat()
     todo, run, _, _ = fixture(observed, due)
     state = tmp_path / "ACTIVE_GOAL_STATE.md"

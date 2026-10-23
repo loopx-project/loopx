@@ -11,6 +11,7 @@ import {
   diagnoseTodoResumeCondition,
   normalizeTodoResumeWhen,
   planTodoExternalWaitTransition,
+  resumeConditionHasKnownPendingTarget,
 } from "../../loopx/control_plane/todos/resume_condition.ts";
 
 function todo(
@@ -90,6 +91,40 @@ test("resume_at emits one stable due receipt across repeated ticks and restart",
     source_items: [],
     rollout_events: [],
   }), /evaluated_at must be a timezone-aware RFC3339 timestamp/);
+});
+
+test("receipt clock precision preserves the last microsecond before due", () => {
+  for (const date of ["1969-12-31", "2030-01-01"]) {
+    const resume_when = `resume_at:${date}T08:00:00.123456+08:00`;
+    const item = todo("todo_scheduled", "open", "advancement_task", {resume_when});
+    const evaluate = (fraction: string) => {
+      const result = evaluateTodoResumeConditions({
+        schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+        items: [item], source_items: [], evaluated_at: `${date}T00:00:00.${fraction}Z`,
+      });
+      return (result.conditions as Array<{condition: Record<string, unknown>}>)[0].condition;
+    };
+    assert.equal(normalizeTodoResumeWhen({
+      schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION, resume_when,
+    }), `resume_at:${date}T00:00:00.123456Z`);
+    const before = evaluate("123455");
+    assert.equal(before.satisfied, false);
+    assert.equal(before.scheduled_for, `${date}T00:00:00.123456Z`);
+    assert.equal(before.evaluated_at, `${date}T00:00:00.123455Z`);
+    assert.equal(before.resume_receipt, null);
+    assert.equal(resumeConditionHasKnownPendingTarget(before, item), true);
+    const due = evaluate("123456");
+    assert.equal(due.satisfied, true);
+    assert.equal(resumeConditionHasKnownPendingTarget(due, item), false);
+    assert.deepEqual(due.resume_receipt, evaluate("123457").resume_receipt);
+  }
+  for (const fraction of ["123", "123000", "123450", "000001"]) {
+    const canonical = fraction === "123000" ? "123" : fraction.replace(/0+$/, "");
+    assert.equal(normalizeTodoResumeWhen({
+      schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
+      resume_when: `resume_at:2030-01-01T00:00:00.${fraction}Z`,
+    }), `resume_at:2030-01-01T00:00:00.${canonical}Z`);
+  }
 });
 
 test("live monitor completion is invalid, but historical completion remains satisfied", () => {

@@ -14,7 +14,7 @@ from typing import Any
 
 from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
 from ...registry import atomic_write_json
-from .cadence import report_cadence_window
+from .cadence import report_cadence_next_due_at, report_cadence_window
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...control_plane.digest_envelope import sha256_envelope
 
@@ -132,7 +132,6 @@ def _admit_cadence_window_locked(
     if subscription.get("enabled") is not True or subscription.get("schedule") is None:
         return {"status": "disabled", "mutated": False, "window": None}
     calculated = report_cadence_window(subscription["schedule"], now=now)
-    assert calculated is not None
     from .presets import build_periodic_report_preset_activation
     activation = build_periodic_report_preset_activation(str(subscription.get("profile_preset") or ""))
     profile = activation.get("profile")
@@ -148,9 +147,10 @@ def _admit_cadence_window_locked(
                         "profile_digest": activation["profile_digest"]},
         "trigger_policy": profile["trigger_policy"],
         **calculated,
-    }
-    proposed["window_id"] = "cadence_" + _digest(proposed).split(":")[1]
-    validate_cadence_window(proposed)
+    } if calculated is not None else None
+    if proposed is not None:
+        proposed["window_id"] = "cadence_" + _digest(proposed).split(":")[1]
+        validate_cadence_window(proposed)
     previous = read_cadence_journal(runtime_root=runtime_root, goal_id=goal_id)
     mutated = False
     supersedes = None
@@ -169,7 +169,7 @@ def _admit_cadence_window_locked(
                 atomic_write_json(path, previous)
                 mutated = True
             else:
-                if old["subscription_revision"] == proposed["subscription_revision"]:
+                if old["subscription_revision"] == subscription.get("effective_revision"):
                     return {"status": "pending", "mutated": False, "window": old}
                 from .pending_intent import _attempt_dir
                 # Admission and consumption share this lock. Once any
@@ -177,6 +177,9 @@ def _admit_cadence_window_locked(
                 # window rather than silently replacing its authority.
                 if _attempt_dir(runtime_root, goal_id, cadence_intent(old)).exists():
                     return {"status": "configuration_changed", "mutated": False, "window": old}
+                if proposed is None:
+                    return {"status": "not_due", "mutated": False, "window": None,
+                            "next_due_at": report_cadence_next_due_at(subscription["schedule"], now=now)}
                 archive = path.parent / "superseded-cadence" / (old["window_id"] + ".json")
                 if archive.exists():
                     if json.loads(archive.read_text(encoding="utf-8")) != previous:
@@ -188,8 +191,11 @@ def _admit_cadence_window_locked(
                 supersedes = old["window_id"]
         # A route/profile edit is not a second report for the same due
         # boundary. Clock rollback likewise cannot replay a delivered one.
-        if supersedes is None and old["due_at"] >= proposed["due_at"]:
+        if proposed is not None and supersedes is None and old["due_at"] >= proposed["due_at"]:
             return {"status": "already_published", "mutated": mutated, "window": old}
+    if proposed is None:
+        return {"status": "not_due", "mutated": mutated, "window": None,
+                "next_due_at": report_cadence_next_due_at(subscription["schedule"], now=now)}
     entry = {
         "schema_version": JOURNAL_SCHEMA, "goal_id": goal_id,
         "window": proposed, "admitted_at": now.astimezone(timezone.utc).isoformat(),

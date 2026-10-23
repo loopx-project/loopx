@@ -40,13 +40,16 @@ export function parseIsoTimestamp(value: string): Date | null {
 
 /** Compatibility codec for datetime.fromisoformat inputs used by Todo metadata.
  * It keeps microseconds and offset seconds, which a JS Date cannot represent.
- * Missing timezone means UTC, matching the existing Python runtime codec. */
-export function parseTodoTimestampMicros(value: string): bigint | null {
-  // The legacy wrapper replaces Z/z with +00:00 before fromisoformat, so
-  // these letters are timezone suffixes, never date/time separators.
-  const match = /^(\d{4}-\d{2}-\d{2}|\d{8}|\d{4}-W\d{2}(?:-[1-7])?|\d{4}W\d{2}[1-7]?)(?:[^Zz](.+))?$/u.exec(value);
+ * Missing timezone means UTC by default. The explicit aware-Python mode is
+ * for historical retry reads: datetime.fromisoformat(value.replace("Z", ...))
+ * requires a zone, rejects lower-case z suffixes, but accepts z as a separator.
+ * Existing Todo callers keep their original codec without this mode. */
+export function parseTodoTimestampMicros(value: string, awarePythonDatetime = false): bigint | null {
+  // The Todo wrapper replaces Z/z; the aware retry wrapper replaces only Z.
+  const match = /^(\d{4}-\d{2}-\d{2}|\d{8}|\d{4}-W\d{2}(?:-[1-7])?|\d{4}W\d{2}[1-7]?)(?:([^Z])(.+))?$/u.exec(value);
   if (!match) return null;
-  const [, date, time] = match;
+  const [, date, separator, time] = match;
+  if (separator === "z" && !awarePythonDatetime) return null;
   let calendar: Date | null;
   if (date.includes("W")) {
     const week = /^(\d{4})-?W(\d{2})(?:-?([1-7]))?$/.exec(date)!;
@@ -64,11 +67,13 @@ export function parseTodoTimestampMicros(value: string): bigint | null {
     if (!calendar || calendar.getUTCFullYear() < 1) return null;
   }
   if (time === undefined) {
+    if (awarePythonDatetime) return null;
     const result = BigInt(calendar.valueOf()) * 1000n;
     if (result < -62135596800000000n || result >= 253402300800000000n) return null;
     return result;
   }
   const parts = /^(.*?)(Z|z|[+-].*)?$/.exec(time)!;
+  if (awarePythonDatetime && (!parts[2] || parts[2] === "z")) return null;
   function clock(raw: string, offset: boolean): bigint | null {
     const parsed = /^(\d{2})(?:(:?)(\d{2})(?:\2(\d{2}))?)?(?:[.,](\d+))?$/.exec(raw);
     if (!parsed) return null;
@@ -92,8 +97,10 @@ export function parseTodoTimestampMicros(value: string): bigint | null {
     offset = parts[2][0] === "-" ? -parsed : parsed;
   }
   const result = BigInt(calendar.valueOf()) * 1000n + local - offset;
-  // Python datetime requires UTC results within 0001-01-01T00:00:00Z to 9999-12-31T23:59:59.999999Z.
+  // Todo normalization requires a representable UTC datetime. Historical
+  // aware-datetime comparisons also accept valid local dates whose offset
+  // places their instant outside that UTC range; no UTC datetime is built.
   // -62135596800000000n is 0001-01-01T00:00:00Z, 253402300800000000n is 10000-01-01T00:00:00Z.
-  if (result < -62135596800000000n || result >= 253402300800000000n) return null;
+  if (!awarePythonDatetime && (result < -62135596800000000n || result >= 253402300800000000n)) return null;
   return result;
 }

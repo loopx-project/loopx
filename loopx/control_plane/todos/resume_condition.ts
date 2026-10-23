@@ -54,7 +54,7 @@ const RESUME_PATTERN = /^[a-z][a-z\d_-]{0,31}(?::[a-z\d_.:@#/-]{1,181})?$/;
 const PR_RESUME_PATTERN =
   /^pr_merged:(?:[a-z\d_.-]{1,80}\/[a-z\d_.-]{1,100})?#[1-9]\d{0,8}$/;
 const RESUME_AT_PATTERN =
-  /^resume_at:(?<timestamp>[1-9]\d{3}-(?<month>\d{2})-(?<day>\d{2})[tT](?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})(?:\.(?<fraction>\d{1,3}))?(?<timezone>[zZ]|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))$/;
+  /^resume_at:(?<timestamp>[1-9]\d{3}-(?<month>\d{2})-(?<day>\d{2})[tT](?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})(?:\.(?<fraction>\d{1,6}))?(?<timezone>[zZ]|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))$/;
 const GITHUB_PULL_URL_PATTERN =
   /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\b|\/|#|\?)/i;
 const PR_REF_PATTERN =
@@ -74,11 +74,13 @@ interface ResumeSpec {
 
 interface ResumeTimestamp {
   iso: string;
-  milliseconds: number;
+  microseconds: bigint;
 }
 
-function normalizedTimestamp(milliseconds: number): string {
-  return new Date(milliseconds).toISOString().replace(".000Z", "Z");
+function normalizedTimestamp(milliseconds: number, remainderMicros: number): string {
+  const iso = new Date(milliseconds).toISOString();
+  if (remainderMicros === 0) return iso.replace(".000Z", "Z");
+  return iso.replace(/Z$/, `${String(remainderMicros).padStart(3, "0").replace(/0+$/, "")}Z`);
 }
 
 /** Strict RFC3339 date-time parsing for user-authored wakeups. A timezone is
@@ -92,7 +94,9 @@ function resumeTimestamp(value: unknown): ResumeTimestamp | null {
     .slice(0, 19)
     .split(/[-tT:]/)
     .map((part) => Number.parseInt(part, 10));
-  const fraction = Number.parseInt((match.groups.fraction ?? "").padEnd(3, "0") || "0", 10);
+  const fractionText = (match.groups.fraction ?? "").padEnd(6, "0");
+  const fraction = Number.parseInt(fractionText.slice(0, 3), 10);
+  const remainderMicros = Number.parseInt(fractionText.slice(3), 10);
   const local = new Date(0);
   local.setUTCFullYear(year, month - 1, day);
   local.setUTCHours(hour, minute, second, fraction);
@@ -106,7 +110,10 @@ function resumeTimestamp(value: unknown): ResumeTimestamp | null {
   if (Number.isNaN(milliseconds)) return null;
   const utcYear = new Date(milliseconds).getUTCFullYear();
   if (utcYear < 1000 || utcYear > 9999) return null;
-  return { iso: normalizedTimestamp(milliseconds), milliseconds };
+  // Date supplies the checked calendar/offset, but must not round a receipt's
+  // microsecond deadline down and release work before its original clock.
+  return { iso: normalizedTimestamp(milliseconds, remainderMicros),
+    microseconds: BigInt(milliseconds) * 1000n + BigInt(remainderMicros) };
 }
 
 function parsedResumeAt(value: string): ResumeTimestamp | null {
@@ -514,7 +521,7 @@ function conditionFor(
     if (!scheduled || !evaluatedAt) {
       return { ...condition, invalid_state: "runtime_clock_unavailable" };
     }
-    const satisfied = evaluatedAt.milliseconds >= scheduled.milliseconds;
+    const satisfied = evaluatedAt.microseconds >= scheduled.microseconds;
     const receiptId = `resume_at_${createHash("sha256")
       .update(`${item.todo_id}\n${spec.normalized}`, "utf8")
       .digest("hex")
@@ -650,7 +657,7 @@ export function resumeConditionHasKnownPendingTarget(condition: JsonObject, wait
         && condition.material_change === false
         && condition.material_change_generation === 0
         && condition.resume_receipt === null
-        && evaluated.milliseconds < scheduled.milliseconds;
+        && evaluated.microseconds < scheduled.microseconds;
     }
     default: return false;
   }

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from loopx.control_plane.effect_program import interpret_quota_should_run_packet
 from loopx.control_plane.quota.should_run import build_quota_should_run
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
@@ -63,6 +65,15 @@ def test_resume_evaluator_sends_only_matching_compact_merge_evidence(
             "code_refs": {"pr_ref": "owner/repo#42"},
         }
     ]
+
+
+@pytest.mark.parametrize("fraction", ["123", "123000", "123450", "000001", "123456"])
+def test_resume_at_python_readback_matches_typed_authoring_precision(fraction: str) -> None:
+    value = f"resume_at:2030-01-01T08:00:00.{fraction}+08:00"
+    expected = fraction[:3] if fraction[3:] == "000" else fraction.rstrip("0")
+    canonical = f"resume_at:2030-01-01T00:00:00.{expected}Z"
+    assert resume_condition.normalize_todo_resume_when(value) == canonical
+    assert resume_condition.require_supported_todo_resume_when(value) == canonical
 
 
 def test_timezone_aware_resume_at_is_stable_across_ticks_and_summary_restarts() -> None:

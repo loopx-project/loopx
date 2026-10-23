@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..quota.effective_action import EffectiveAction
 
 
@@ -219,9 +220,13 @@ def build_execution_obligation(
                 "only controls whether to interrupt the user"
             ),
         }
-    # A quiet monitor route still owns a pending retry, not a user-action gate.
+    # Quiet monitor and causal Vision routes retain the same qualified receipt
+    # wait. The typed interaction/scheduler owner still decides its disposition.
     if blocked_retry_wait and (
-        should_run or effective_action == EffectiveAction.MONITOR_QUIET_SKIP.value
+        should_run or effective_action in {
+            EffectiveAction.MONITOR_QUIET_SKIP.value,
+            AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value,
+        }
     ):
         return {
             "must_attempt_work": False,

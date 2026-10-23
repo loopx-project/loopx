@@ -129,6 +129,27 @@ visibility limits, ordinary notices, current cadence floors and unchanged
 canonical waits/monitor clocks. Installed adoption and live host readback remain
 separate from this source repair.
 
+**S3/S7 administrative closeout proposal.** [#7117](https://github.com/loopx-project/loopx/pull/7117)
+also separates an accepted blocked replan from the preceding real outcome
+checkpoint. File/SQLite CLI readback and long/compacted history regressions retain
+the previous milestone or genuine gap without creating a new outcome obligation
+from administrative closure. Source coverage now includes notice/gate overlap,
+original-deadline recovery and fresh canonical unclaim/reassignment with each
+Agent's own Vision and clock. The complete affected CLI suite passes after
+canonical-fixture integration and original-Turn accounting checks; preserve the
+earlier failures and their base/head attribution. The follow-on refactor removes
+Python retry qualification and batches administrative/retry history facts through
+the existing TypeScript settlement owner for semantic retention and legacy status.
+It preserves independent outcomes, original clocks and historical microsecond
+expiry; malformed Turn identities no longer establish a positive retry proof.
+The periodic-history caller also respects the latest same-Agent accepted retry
+until its original deadline without resetting earned review counts. File/SQLite
+real CLI tests cover the threshold, independent work, real user gates and natural
+deadline recovery. Identical Explore guidance is referenced within the same CLI
+packet, preserving all clauses and standalone reads.
+Full-repository qualification, comparable full caller cost, installed adoption
+and measured long-horizon benefit remain distinct and incomplete.
+
 **S5/S11 long-horizon progress design.** The [research measurement refinement](long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement)
 and [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)
 connect native outcomes to research episodes, evidence and actual adoption.
