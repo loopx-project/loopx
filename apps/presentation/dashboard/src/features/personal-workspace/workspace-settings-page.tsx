@@ -237,9 +237,7 @@ export function WorkspaceSettingsPage({
         ) : null}
 
         {tab === "steward" ? <MachineConfigurationSettings
-          goals={goals}
           onChanged={onChanged}
-          onOpenProviderSettings={() => navigate("machine", undefined, "provider")}
           section="steward"
         /> : null}
         {tab === "conversation" ? <MachineConfigurationSettings onChanged={onChanged} section="conversation" /> : null}

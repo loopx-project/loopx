@@ -1,6 +1,5 @@
 import { PerformanceDiagnosisPanel } from "./performance-diagnosis-panel";
 import { UsageStatisticsSettings } from "./usage-statistics-settings";
-import { DshHostReadiness } from "./dsh-host-readiness.tsx";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, Code2, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 
@@ -24,7 +23,6 @@ import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
 import { canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus, orderCapabilitiesForPresentation } from "./capability-workbench";
 import { useWorkspaceI18n } from "./i18n";
-import type { WorkspaceGoal } from "./personal-workspace-model";
 
 type CapabilityDescriptor = CapabilityConfigurationCatalog["capabilities"][number];
 type EditorMode = "guided" | "json";
@@ -112,11 +110,9 @@ function shortRevision(value: string | undefined) {
   return value.replace(/^sha256:/, "").slice(0, 12);
 }
 
-export function MachineConfigurationSettings({ section, onChanged, goals = [], onOpenProviderSettings }: {
+export function MachineConfigurationSettings({ section, onChanged }: {
   section: "steward" | "conversation" | "other";
   onChanged?: () => void;
-  goals?: WorkspaceGoal[];
-  onOpenProviderSettings?: () => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const [inspection, setInspection] = useState<MachineConfigurationInspection | null>(null);
@@ -360,9 +356,6 @@ export function MachineConfigurationSettings({ section, onChanged, goals = [], o
     <section className="personal-capability-settings" data-revision={inspection?.revision}>
       <div>
         {diagnosis}
-        {section === "steward" ? (
-          <DshHostReadiness goals={goals} onOpenProviderSettings={onOpenProviderSettings} />
-        ) : null}
         {section === "steward" ? <details className="personal-capability-scope-note">
           <summary><ShieldCheck aria-hidden size={17} />{t("machine.stewardDefaults")}</summary>
           <p>{t("machine.stewardDefaultsDescription")}</p>
