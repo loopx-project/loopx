@@ -1,4 +1,4 @@
-.research-progress { margin-block: 16px 0; padding-block: 8px 0; color: var(--pw-text); min-width: 0; overflow-wrap: anywhere; }
+.research-progress { container-type: inline-size; margin-block: 16px 0; padding-block: 8px 0; color: var(--pw-text); min-width: 0; overflow-wrap: anywhere; }
 .research-progress > header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .research-progress h3 { margin: 0; font-size: var(--text-lead); font-weight: 600; }
 .research-progress-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
@@ -106,12 +106,17 @@
 .research-source-detail { border-block-start: 1px solid var(--pw-line); margin-block-start: 16px; }
 .research-progress-basis summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .research-progress-warning { border-inline-start: 2px solid var(--pw-caution); padding-inline-start: 12px; }
-@media (max-width: 1200px) { .research-effect-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (max-width: 840px) { .research-effect-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (max-width: 440px) {
+  .research-effect-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .research-effect-metrics:lang(zh) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container (max-width: 320px) { .research-effect-metrics:lang(zh) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) {
   .research-progress > header { flex-direction: column; gap: 8px; }
   .research-progress label { flex-direction: column; align-items: stretch; width: 100%; }
   .research-progress select { max-width: 100%; }
-  .research-effect-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+  .research-effect-metrics { gap: 8px; }
   .research-assessment > summary { gap: 8px; }
   .research-native-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .research-progress-values { grid-template-columns: 1fr; gap: 16px; }

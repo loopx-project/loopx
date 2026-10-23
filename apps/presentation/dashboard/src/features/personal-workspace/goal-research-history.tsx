@@ -365,9 +365,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       {lens === "graph" ? <p>{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。未关联问题按首次记录 UTC 日期收纳。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress. Unlinked questions are collected by first-record UTC date."}</p> : null}
       <p>{zh ? "合拢仅为避免遮挡，不表示关联或因果；选择一次可读全部原始记录与依据。" : "Nearby points group to avoid overlap, without implying a relationship or causality. Select once to read every original record and source."}</p>
     </ContextHelp></div>
-      <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
-        : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-          : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p></div>
+      </div>
       <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
         <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {
           setRecordsOpen(true);
@@ -382,7 +380,12 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         </div>
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
-    {!readingSelection ? displayControl : null}
+    <div className="research-history-meta">
+      <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
+        : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
+          : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p>
+      {!readingSelection ? displayControl : null}
+    </div>
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
     {!busy && !error && read.total === 0 ? <p className="research-history-empty" role="status">{zh ? "这个 Goal 尚无已记录的研究历程。" : "This Goal has no recorded research history yet."}</p> : null}
     <ResearchAnalysisStatus analysis={analysis}/>
