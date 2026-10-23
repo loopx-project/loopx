@@ -43,7 +43,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       objective: "Improve native utility", selection: {rule: "Synthetic episode, not a whole-run rate", population_episodes: 1, exhaustive: true},
       sources: [source("evidence", "evidence.txt", evidence), source("history", "history.json", history)],
       episodes: [{id: "episode", question: "Does V18 help?", source_ids: ["evidence"], eligible_metrics: [...TRAJECTORY_METRICS]}],
-      display_snapshot: {schema_version: "research_display_snapshot_v1", source_id: "history", source_namespace: variant === "other-source" ? "other-source" : "local"}};
+      display_snapshot: {schema_version: "research_display_snapshot_v1", source_id: "history", source_namespace: variant === "other-source" ? "other-source" : "local",
+        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_v1"} : {})}};
     const outputs = Object.fromEntries(["zh", "en"].map(language => {
       const p = prepareTrajectoryAssessment({input, config: {model: "gpt-6.1-sol", effort: "max", service_tier: "fast", output_language: language}});
       let rows = JSON.parse(p.prompt.split("\n\ndisplay_fields:\n")[1]).map(row => ({field_id: row.field_id, text: language === "zh" ? translate(row.text) : row.text}));

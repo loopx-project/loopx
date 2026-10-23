@@ -59,6 +59,15 @@ Fields use content-bound opaque identities. Literal code, links, numeric tokens
 and technical identifiers are protected; missing, duplicate or corrupt rows fall
 back to the original with explicit partial/invalid coverage. This mechanical
 check does not verify linguistic quality, causal meaning or model calibration.
+For a large capture, the curator can set the optional
+`display_snapshot.translation_encoding: "source_text_aliases_v1"`. The same
+owner requests one translation per exactly equal original string using compact
+content-bound identifiers, then restores each original event/field separately.
+Different literal numbers or identifiers never share an alias merely because
+their masked text looks alike. Coverage still counts all original fields,
+including every historical revision. No text is summarized or truncated and no
+extra model call is created. The explicit encoding participates in the analysis
+identity; omission preserves already saved direct-field jobs and their failures.
 Translated prose is applied to decoded narrative fields; it is never serialized
 and reparsed as an Explore decision. Owner-format labels or list markers inside
 model text cannot change the original outcome, eligibility or list cardinality.

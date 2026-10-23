@@ -18,7 +18,8 @@ export interface TrajectoryInput {
   sources: TrajectorySource[]; episodes: TrajectoryEpisode[];
   /** Trusted curator's complete Explore history capture, already in sources.
    * Omission keeps the existing assessment contract and identity unchanged. */
-  display_snapshot?: {schema_version: 'research_display_snapshot_v1'; source_id: string; source_namespace: string};
+  display_snapshot?: {schema_version: 'research_display_snapshot_v1'; source_id: string; source_namespace: string;
+    translation_encoding?: 'source_text_aliases_v1'};
 }
 export interface AssessmentCitation {source_id: string; first_line: number; last_line: number}
 export interface EpisodeAssessment {

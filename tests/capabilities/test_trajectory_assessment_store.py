@@ -501,7 +501,8 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
-def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path):
+@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1"])
+def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding):
     scope, _, _, input_path, sources, _ = pack
     data = json.loads(input_path.read_text())
     history = {"ok": True, "goal_id": "solver", "total": 2, "next_cursor": None, "items": [
@@ -514,6 +515,8 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
     (sources / "history.json").write_text(text)
     data["sources"].append(dict(id="history", artifact="history.json", artifact_sha256=hashlib.sha256(text.encode()).hexdigest(), first_line=1, text=text))
     data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="source-a")
+    if encoding is not None:
+        data["display_snapshot"]["translation_encoding"] = encoding
     input_path.write_text(json.dumps(data))
     registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Whole history · synthetic")
     current = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")

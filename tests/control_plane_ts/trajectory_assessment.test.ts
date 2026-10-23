@@ -128,6 +128,44 @@ test('literal signs, spaced units, Unicode numerals, hashes and code are retaine
   assert.equal(field.restore(field.masked.replace('⟪LX0⟫', 'changed')), null);
 });
 
+test('exact-text aliases translate once and restore every original field, without merging numeric variants', () => {
+  const input = displayInput(), source = input.sources.at(-1)!;
+  const page = JSON.parse(source.text);
+  page.items[2].title = page.items[0].title;
+  page.items.push({...page.items[0], event_id: 'numeric-variant', result_id: 'numeric-variant',
+    title: page.items[0].title.replace('V18', 'V19')});
+  page.total++;
+  source.text = JSON.stringify(page);
+  source.artifact_sha256 = createHash('sha256').update(source.text).digest('hex');
+  const direct = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+  input.display_snapshot!.translation_encoding = 'source_text_aliases_v1';
+  const compact = prepareTrajectoryAssessment({input, config: direct.config});
+  const rows = (p: typeof compact) => JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
+  assert(rows(compact).length < rows(direct).length);
+  assert(compact.prompt.length < direct.prompt.length);
+  assert.notEqual(compact.analysis_key, direct.analysis_key);
+  const output = translatedOutput(compact), result = qualifyTrajectoryAssessment({...compact, output});
+  const original = parseExploreHistoryPage(page, 'goal').items;
+  const display = result.display!;
+  assert.equal(display.coverage.eligible, direct.display_request!.eligible);
+  assert.equal(display.coverage.translated, display.coverage.eligible);
+  assert.equal(display.coverage.missing, 0);
+  const shown = projectTrajectoryDisplay(original, display, display.snapshot_key, 'zh');
+  assert.equal(shown.events[0]!.title, shown.events[2]!.title);
+  assert.match(shown.events[0]!.title, /V18/);
+  assert.match(shown.events[3]!.title, /V19/);
+  assert.deepEqual(result.metrics, qualifyTrajectoryAssessment({...direct, output: translatedOutput(direct)}).metrics);
+  // A duplicate shared-title row invalidates both aliases, without counting
+  // either original event as translated.
+  const raw = output.display_translations;
+  const shared = raw.find((r: {text: string}) => r.text.includes('Does'))!;
+  raw.push({...shared});
+  const partial = qualifyTrajectoryAssessment({...compact, output});
+  assert.equal(partial.display!.coverage.missing, 2);
+  assert(!partial.display!.fields.some(f => f.field === 'title' && ['q-old', 'q-new'].includes(f.event_id)));
+  assert.throws(() => prepareTrajectoryAssessment({input: {...input, display_snapshot: {...input.display_snapshot, translation_encoding: 'unknown'}}, config}), /translation encoding/);
+});
+
 test('capture-byte and input-order changes reuse identical declared evidence, without a new scientific judgment', () => {
   const original = prepared(), next = input();
   next.scope.revision = 'capture-2'; next.sources[0]!.artifact_sha256 = 'b'.repeat(64);
