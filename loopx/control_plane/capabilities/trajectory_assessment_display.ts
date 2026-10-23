@@ -56,6 +56,7 @@ export function maskTrajectoryDisplayText(text: string, {explainSourceNumbers = 
     // may use each signed source component at most once, without conversion.
     // This is lexical integrity, not a claim about meaning or units.
     const rest = translated.replace(/⟪LX\d+⟫/g, '');
+    if (explainSourceNumbers && /\b(?:[a-z][a-z0-9+.-]*:\/\/|mailto:)/iu.test(rest)) return null;
     const available = [...numberCopies];
     for (const number of rest.match(numbers) ?? []) {
       const index = available.indexOf(number);

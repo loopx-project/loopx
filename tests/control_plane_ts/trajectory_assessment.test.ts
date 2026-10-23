@@ -210,6 +210,9 @@ test('literal-value explanations keep exact source terms while making their numb
     explanation.replace('第4次', '第5次'), explanation.replace('2项', '3项'),
     explanation.replace('-0.25毫秒', '0.25毫秒'), explanation.replace('-0.25毫秒', '-0.3毫秒'),
     explanation + ' 4', explanation + ' 12', explanation + ' 34', explanation + ' 56', explanation + ' 78', explanation + ' 9999',
+    explanation.replace('第4次', 'HTTPS://example.test/r4 次'),
+    explanation.replace('第4次', 'mailto:x4@example.test 次'),
+    explanation.replace('2项', 'ftp://example.test/r2 项'),
     explanation.replace('⟪LX0⟫', ''), explanation + ' ⟪LX0⟫',
   ]) assert.equal(field.restore(invalid), null, `Reject changed or unbound source values: ${invalid}`);
   const units = maskTrajectoryDisplayText('Budget4ms and Budget4s', {explainSourceNumbers: true});
