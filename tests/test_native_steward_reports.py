@@ -370,3 +370,104 @@ def test_owner_cancel_retires_known_invalid_generation_and_next_window_progresse
     assert all(json.loads(line).get("method") != "thread/start" for line in capture.read_bytes()[len(calls):].splitlines())
     assert read_periodic_report_publication_cursor(runtime_root=reports.root,
         goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == old["window"]["next_due_at"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["spend_rejected", "writeback_rejected", "spend_response_lost", "writeback_response_lost", "result_event_lost"])
+def test_original_report_resumes_remaining_native_spend_after_generation_done_without_model_replay(steward, tmp_path, monkeypatch, provider, fault):
+    from loopx.cli_commands import turn_run_once
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    install_model(steward, tmp_path, sid)
+    if fault == "writeback_rejected":
+        from datetime import timezone
+        from loopx.capabilities.native_chat import steward_reports as report_host
+        from loopx.capabilities.periodic_report import cadence_runtime
+        # Keep both synthetic due windows in the past; the independent native
+        # validator uses the real clock and must still reject future work.
+        point = datetime.now(timezone.utc) - timedelta(days=2)
+        class NextWindowClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+        monkeypatch.setattr(report_host, "datetime", NextWindowClock)
+        monkeypatch.setattr(cadence_runtime, "datetime", NextWindowClock)
+    method = "refresh_state_run" if fault.startswith("writeback") else "spend_quota_slot"
+    owner = getattr(turn_run_once, method)
+    attempts = []
+    healthy = False
+    if fault == "result_event_lost":
+        append = store.append_event
+        def lose_result(*args, **kwargs):
+            if not healthy and kwargs.get("kind") == "native_loopx.result" and kwargs["payload"].get("status") == "committed":
+                raise OSError("synthetic lost outer completion event after native commit")
+            return append(*args, **kwargs)
+        monkeypatch.setattr(store, "append_event", lose_result)
+    else:
+        def interrupted_owner(*args, **kwargs):
+            attempts.append(kwargs.get("effect_ref"))
+            if not healthy and fault.endswith("rejected"):
+                return {"ok": False, "appended": False, "reason": "synthetic known absent native effect"}
+            result = owner(*args, **kwargs)
+            if not healthy:
+                raise OSError("synthetic lost response after native effect committed")
+            return result
+        monkeypatch.setattr(turn_run_once, method, interrupted_owner)
+    original = pump_steward_monitors(runtime)[0]
+    failed = finish(runtime, original)
+    if fault != "result_event_lost":
+        # An interrupted callback can return the CLI's error envelope rather
+        # than a final journal status. Neither shape authorizes delivery.
+        assert failed["response"]["native_loopx"].get("status") != "committed"
+    historical = store.load_turn(sid, original["turn_id"])
+    todo = next(row for row in StewardMonitor(runtime).todos(actor)
+        if row["todo_id"] == original["loopx_request"]["todo_id"])
+    assert todo["status"] == "done" and todo["completion_turn_key"] == original["loopx_request"]["turn_instance_id"]
+    from loopx.control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
+    original_key = find_loopx_turn_key_by_settlement_identity(reports.root, goal_id=actor["goal_id"],
+        agent_id=actor["agent_id"], todo_id=todo["todo_id"], turn_instance_id=original["loopx_request"]["turn_instance_id"])
+    assert original_key
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    body = (folder / "report.md").read_bytes()
+    assert validate_private_generation(folder)
+    assert transport.steward_reports.reconcile() == 0
+    calls, writes = capture.read_bytes(), list(bot.writes)
+    healthy = True
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)  # Resume native effects, never a new Chat/model Turn.
+    assert capture.read_bytes() == calls and bot.writes == writes
+    assert transport.steward_reports.reconcile() == 1, json.dumps([{k: v for k, v in row["payload"].items()
+        if k in {"status", "reason", "error", "error_code", "recovery", "receipt", "result_kind", "completed_phases"}}
+        for row in store.events_after(sid, original["turn_id"], None) if row["kind"] == "native_loopx.result"])
+    cursor = read_periodic_report_publication_cursor(runtime_root=reports.root,
+        goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+    assert cursor and cursor["covered_until"] == window["due_at"]
+    assert body == (folder / "report.md").read_bytes()
+    assert store.load_turn(sid, original["turn_id"])["response"] == historical["response"]
+    recovered = [row["payload"] for row in store.events_after(sid, original["turn_id"], None)
+        if row["kind"] == "native_loopx.result" and row["payload"].get("status") == "committed"]
+    assert len(recovered) == 1 and recovered[0]["recovery"]["actual"]["host_invoked"] is False
+    if fault != "result_event_lost":
+        assert recovered[0]["resume_turn_key"] == original_key
+        assert len(attempts) == (1 if fault.endswith("response_lost") else 2)
+    sent = list(bot.writes)
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime) and transport.steward_reports.reconcile() == 0
+    assert bot.writes == sent and capture.read_bytes() == calls
+    if fault == "writeback_rejected":
+        point = datetime.fromisoformat(window["next_due_at"].replace("Z", "+00:00")) + timedelta(minutes=1)
+        runtime._steward_monitor_next_check.clear()
+        next_turn = pump_steward_monitors(runtime)[0]
+        assert next_turn["turn_id"] != original["turn_id"]
+        next_result = finish(runtime, next_turn)["response"]["native_loopx"]
+        assert next_result["status"] == "committed", {key: value for key, value in next_result.items()
+            if key in {"reason", "error", "error_code", "status", "validation", "recovery"}}
+        assert transport.steward_reports.reconcile() == 1
+        next_calls = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
+        assert sum(row.get("method") == "turn/start" for row in next_calls) == 1
+        assert all(row.get("method") != "thread/start" for row in next_calls)
+        assert body == (folder / "report.md").read_bytes()
+        assert read_periodic_report_publication_cursor(runtime_root=reports.root,
+            goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == window["next_due_at"]

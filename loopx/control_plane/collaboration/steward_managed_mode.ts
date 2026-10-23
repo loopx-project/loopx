@@ -121,6 +121,21 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
     const window = requireJsonObject(params.report_window, "original report window");
     const subscription = requireJsonObject(params.report_subscription, "current report subscription");
     const todo = requireJsonObject(params.report_todo, "original report Todo");
+    const recovery = params.report_settlement_recovery == null ? null
+      : requireJsonObject(params.report_settlement_recovery, "native original report recovery");
+    let settlementOnly = false;
+    if (recovery) {
+      const decision = requireJsonObject(recovery.recovery_decision, "native journal recovery decision");
+      settlementOnly = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
+        && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
+        && recovery.journal_consistent === true && decision.reinvoke_host === false
+        && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
+          || decision.action === "return_existing" && recovery.journal_status === "committed")
+        && todo.status === "done" && todo.completion_turn_key === request.turn_instance_id;
+      if (!settlementOnly || params.preparing_model_context === true) {
+        throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+      }
+    }
     if (request.validation_command === null || subscription.enabled !== true || subscription.profile_preset !== "portfolio-progress"
         || subscription.route_ref !== `steward-private:${current.id}:${current.source}`
         || subscription.effective_revision !== request.report_subscription_revision
@@ -128,10 +143,11 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
         || window.window_id !== request.report_window_id || window.goal_id !== current.actor.goal_id
         || window.agent_id !== current.actor.agent_id || todo.todo_id !== request.todo_id
         || todo.target_key !== window.window_id || todo.claimed_by !== AGENT_ID
-        || todo.action_kind !== "generate_periodic_report" || todo.status !== "open") {
+        || todo.action_kind !== "generate_periodic_report" || !(todo.status === "open" && !recovery || settlementOnly)) {
       throw new EffectRuntimeRequestError("report execution requires the original live subscription, window and task");
     }
-  } else if (request.report_window_id !== undefined || request.report_subscription_revision !== undefined) {
+  } else if (request.report_window_id !== undefined || request.report_subscription_revision !== undefined
+      || params.report_settlement_recovery != null) {
     throw new EffectRuntimeRequestError("report fields belong only to an original calendar report");
   }
   let refreshScope = false;

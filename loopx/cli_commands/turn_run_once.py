@@ -37,6 +37,7 @@ from ..control_plane.todos.durable_completion import (
     read_persisted_todo_record,
     read_persisted_todo_record_with_source,
 )
+from ..control_plane.todos.completion_fence import evaluate_todo_completion_fence
 from ..control_plane.turn_driver import (
     build_loopx_turn_command_validator,
     codex_cli_session_binding,
@@ -453,7 +454,27 @@ def execute_turn_run_once(
             *,
             effect_ref: str,
         ) -> dict[str, object]:
-            completion = todo_completion(result, effect_ref=effect_ref)
+            require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            prior = completion_readback()
+            if prior is None:
+                completion = todo_completion(result, effect_ref=effect_ref)
+            else:
+                # Completion may have atomically retired the execution lease
+                # before refresh failed. Read its exact canonical Turn receipt;
+                # resubmitting completion with a different/missing old fence is
+                # neither a new execution grant nor an idempotent request.
+                retained = read_heartbeat_settlement(runtime_root,
+                    goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                    todo_id=settlement_identity.todo_id, turn_instance_id=settlement_identity.turn_instance_id,
+                    replan_obligation_id=settlement_identity.replan_obligation_id,
+                    registry_path=registry_path, goal_ref=goal_ref)
+                if retained is None:
+                    raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
+                if retained.completion_event is None:
+                    append_settlement_event({"ok": True, "appended": True}, event_kind="todo_complete",
+                        status="terminal_no_followup" if prior["continuation"] == "no_followup" else "completed",
+                        details={"command": "turn recovery probe", "no_followup": prior["continuation"] == "no_followup"})
+                completion = {"ok": True, "appended": True, "completion": prior}
             if not completion.get("ok"):
                 return completion
             todo_id = str(selected_todo.get("todo_id") or "")
@@ -551,12 +572,18 @@ def execute_turn_run_once(
                     project=None,
                     state_file=None,
                 )
-                durable_todo, existing_todo_ids = read_persisted_todo_record(
+                durable_todo, existing_todo_ids, projection_source = read_persisted_todo_record_with_source(
                     state_file,
                     todo_id=todo_id,
                     registry_path=registry_path,
                     goal_id=args.goal_id,
                     runtime_root=runtime_root,
+                )
+                evaluate_todo_completion_fence(
+                    todo=durable_todo,
+                    projection_source=projection_source,
+                    completion_turn_key=settlement_identity.turn_instance_id,
+                    no_followup=False,
                 )
                 return project_durable_completion_outcome(
                     todo=durable_todo,

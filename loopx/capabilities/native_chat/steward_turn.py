@@ -33,7 +33,7 @@ class StewardTurnHost:
         self.managed = StewardManagedMode(controller, self.bindings)
 
     def _admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
-               prepare_context: bool = False) -> dict[str, Any]:
+               prepare_context: bool = False, settlement_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         if self.controller.closed.is_set():
             raise ValueError("the original Chat host is stopped")
         actor = request["actor"]
@@ -74,10 +74,64 @@ class StewardTurnHost:
             "queued_turn_count": len(self.store.queued_turns(session["session_id"])),
             "goal": self.managed._goal(actor["goal_id"]), "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
             "request": request, "turn": turn, "scope": scope, "monitor_todo": monitor,
+            **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
             **({"preparing_model_context": True} if prepare_context else {}), **report})
         if admitted["refresh_original_scope"]:
             self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
         return {**admitted, "observed_scope_id": scope["current"] if scope else None}
+
+    def recover_report_settlement(self, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]) -> None:
+        """Resume only cached, validated native effects of the original report.
+
+        Neither Todo DONE nor outer Chat completion is a native commit. The
+        journal owner must authorize a no-host continuation; its existing
+        effect readbacks reconcile ambiguous writeback/debit outcomes.
+        """
+        from ...cli import build_parser
+        from ...cli_commands.turn import handle_turn_command
+        from ...control_plane.turn_driver import inspect_loopx_turn_journal
+        from ...control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
+        from ..periodic_report.private_generation import attempt_directory, validate_private_generation
+        from .steward_reports import StewardReports
+        with self.controller.lock, exclusive_file_lock(self.bindings.path, operation="resume_original_report_settlement"):
+            original = self.store.turn_for_client(actor["session_id"],
+                native_steward_client_id(actor, "report." + window["window_id"]))
+            if not original:
+                return
+            request = original.get("loopx_request") or {}
+            if (request.get("actor") != actor or request.get("report_window_id") != window["window_id"]
+                    or request.get("todo_id") != todo["todo_id"]):
+                raise ValueError("the original report settlement identity changed")
+            if any(row["kind"] == "native_loopx.result" and row["payload"].get("status") == "committed"
+                   for row in self.store.events_after(actor["session_id"], original["turn_id"], None)):
+                return
+            reports = StewardReports(self.controller)
+            validate_private_generation(attempt_directory(reports.root, window))
+            binding_id = actor["goal_id"].removeprefix("steward-agent-")
+            if not reports.delivery_current(binding_id, window):
+                raise ValueError("the original report authorization changed before settlement recovery")
+            key = find_loopx_turn_key_by_settlement_identity(reports.root, goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], todo_id=todo["todo_id"], turn_instance_id=request["turn_instance_id"])
+            if key is None:
+                return
+            inspection = inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], turn_key=key, retry_failed=True)
+            admitted = self._admit(request, settlement_recovery=inspection)
+            def no_model(*_args):
+                raise ValueError("report settlement recovery must never invoke a model")
+            args = build_parser().parse_args(["turn", "run-once", "--goal-id", actor["goal_id"],
+                "--agent-id", actor["agent_id"], "--project", admitted["workspace_path"],
+                "--host", "generic-cli", "--resume-turn-key", key, "--retry-failed-turn", "--execute"])
+            args.host, args.session_scope = "codex-app-server", "agent"
+            result: dict[str, Any] = {}
+            handle_turn_command(args, registry_path=self.controller.registry_path,
+                runtime_root_arg=str(reports.root), output_format=lambda *_a, **_kw: "json",
+                print_payload=lambda value, *_a: result.update(value), native_host_runner=no_model,
+                native_session_binding_resolver=lambda _envelope: {"schema_version": "loopx_turn_session_binding_v0",
+                    "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]})
+            # Retain the historical outer failure. The actual native owner
+            # supplies the new event; no status or publication proof is forged.
+            self.store.append_event(actor["session_id"], original["turn_id"], kind="native_loopx.result", payload=result)
 
     def submit(self, binding_id: str, *, turn_instance_id: str, todo_id: str | None = None,
                validation_command: Sequence[str] | None = None,

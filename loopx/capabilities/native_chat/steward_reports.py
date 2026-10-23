@@ -249,6 +249,9 @@ class StewardReports:
                 "--target-key", window["window_id"], "--continuation-policy", "same_agent_non_delivery",
                 "--execute"])
             rows = [row for row in StewardMonitor(self.controller).todos(actor) if row.get("target_key") == window["window_id"]]
+        if len(rows) == 1 and rows[0]["status"] == "done":
+            StewardTurnHost(self.controller).recover_report_settlement(actor, window, rows[0])
+            return None, False
         if len(rows) != 1 or rows[0]["status"] != "open":
             return None, False
         folder = attempt_directory(self.root, window)

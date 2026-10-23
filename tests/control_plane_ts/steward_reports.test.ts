@@ -72,6 +72,23 @@ test("a model report requires the exact live calendar window and original task, 
     action_kind: "generate_periodic_report", claimed_by: "steward", status: "open"};
   const input = {...p, request, report_window: window, report_subscription: subscription, report_todo: todo};
   assert.equal(admitStewardManagedTurn(input).observation_only, false);
+  const recovery = {...input, report_todo: {...todo, status: "done", completion_turn_key: request.turn_instance_id},
+    report_settlement_recovery: {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+      goal_matches: true, owner_matches: true, turn_key_matches: true,
+      journal_consistent: true, journal_status: "failed", recovery_decision:
+      {action: "continue", reinvoke_host: false, resume_from: "quota_spend"}}};
+  assert.equal(admitStewardManagedTurn(recovery).observation_only, false);
+  for (const invalid of [
+    {...recovery, report_settlement_recovery: {...recovery.report_settlement_recovery, journal_consistent: false}},
+    {...recovery, report_todo: {...recovery.report_todo, completion_turn_key: "another-original-turn"}},
+    {...recovery, report_todo: {...todo, status: "open"}},
+    {...recovery, preparing_model_context: true},
+    ...["host_execute", "typed_result", "validation"].map(resume_from => ({...recovery,
+      report_settlement_recovery: {...recovery.report_settlement_recovery, recovery_decision:
+        {action: "continue", reinvoke_host: false, resume_from}}})),
+    {...recovery, report_settlement_recovery: {...recovery.report_settlement_recovery, recovery_decision:
+      {action: "continue", reinvoke_host: true, resume_from: "quota_spend"}}},
+  ]) assert.throws(() => admitStewardManagedTurn(invalid));
   const changed = {...input, binding: {...p.binding, goal_scope: "all_registered"},
     session: {...p.session, active_turn_id: "running", manager_authorization_scope_id: "old_scope",
       steward_context: {...p.session.steward_context, goal_scope: "all_registered"}},

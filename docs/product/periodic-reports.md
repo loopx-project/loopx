@@ -299,6 +299,16 @@ The finite postcondition is the validated generation itself: a complete valid
 editorial response closes this generation Todo even if the model labels it
 progress. This does not close the ongoing Goal or claim delivery.
 
+If generation has completed but native writeback or debit has not committed,
+the normal idle producer resumes the remaining effects of that same original
+Turn. It reads the canonical completion under the original Turn fence, without
+reopening the Todo or invoking the model again. Existing effect readbacks also
+reconcile a committed effect whose response was lost; a missing outer Chat
+result event can be recovered from the committed native journal. Historical
+failures and generated content remain intact. Delivery still requires the
+native committed result and current original authorization; unknown or
+contradictory journal identity remains blocked.
+
 The existing Lark outbound pool reads the committed native result, validates
 the frozen source/editorial/artifact lineage and returns the full Chinese body
 through the original reply owner, splitting long text into verified parts.
