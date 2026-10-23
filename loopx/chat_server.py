@@ -1676,6 +1676,7 @@ class ChatRequestHandler(
             PRIVATE_CONVERSATIONS_PATH + "/owner-notifications": self._private_conversation_owner_notifications,
             PRIVATE_CONVERSATIONS_PATH + "/managed-steward": self._private_conversation_managed_steward,
             PRIVATE_CONVERSATIONS_PATH + "/managed-steward/monitor": self._private_conversation_steward_monitor,
+            PRIVATE_CONVERSATIONS_PATH + "/managed-steward/report": self._private_conversation_steward_report,
             **self._configuration_post_routes(),
             **self._ssh_source_post_routes(),
         }

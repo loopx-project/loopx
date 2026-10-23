@@ -233,6 +233,20 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
             # it immediately; external edits are observed within a minute. Every
             # actual dispatch rechecks native state, original grant and provider.
             cache[binding["binding_id"]] = time.monotonic() + 60
+            # The existing pump also observes the optional report frontier.
+            # No second consumer/timer is installed. Closed/not-due calendars
+            # never invoke a model, and original user work wins the idle check.
+            goal = load_goal_from_registry(controller.registry_path, actor["goal_id"])
+            report_config = (goal or {}).get("control_plane", {}).get("periodic_report", {})
+            if report_config.get("enabled") is True and report_config.get("profile_preset") == "portfolio-progress":
+                from .steward_reports import StewardReports
+                try:
+                    accepted, created = StewardReports(controller).frontier(binding)
+                    if created:
+                        changed.append(accepted)
+                        continue
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                    _LOG.warning("An original steward report is unavailable; its window and other work are retained")
             todo = service.current(actor)
             if todo is None or not monitor_todo_is_due(todo):
                 if todo and todo.get("next_due_at") and todo.get("status") == "open":

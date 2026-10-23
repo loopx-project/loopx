@@ -59,6 +59,9 @@ class LarkPrivateConversations:
         self.ingress = PrivateIngressObserver(self)
         from ...capabilities.native_chat.steward_managed_mode import StewardManagedMode
         self.managed_steward = StewardManagedMode(controller, self.bindings)
+        from .steward_reports import LarkStewardReports
+        self.steward_reports = LarkStewardReports(self)
+        controller.steward_report_provider = self.steward_reports
 
     def profiles(self) -> dict[str, dict[str, str]]:
         """Discover current App configuration, never authorize a conversation.
@@ -811,8 +814,10 @@ class LarkPrivateConversations:
         _atomic_write_json(path, record)
 
     def _deliver(self, path: Path, record: dict[str, Any], phase: str, text: str, *, inbox: Callable[[], Path],
-                 edit_only: bool = False) -> bool:
+                 edit_only: bool = False, authorization_check: Callable[[], bool] | None = None) -> bool:
         if not text:
+            return False
+        if authorization_check is not None and not authorization_check():
             return False
         kind = phase.split(".", 1)[0]
         phase = presentation_phase(record, phase)
@@ -831,8 +836,10 @@ class LarkPrivateConversations:
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_inbox_ready")
         kwargs = dict(project=self.runtime_root, config_path=config,
             message_id=record["event"]["message_id"], text=text, runner=self._reply_runner,
-            finalize_reactions=not edit_only and kind not in {"admission", "progress"} and not (kind == "terminal" and record.get("commission_resources")),
-            source_authority_verifier=lambda profile, chat, message: self._source_authority(record, profile, chat, message))
+            finalize_reactions=not edit_only and kind not in {"admission", "progress", "periodic_report"} and not (kind == "terminal" and record.get("commission_resources")),
+            source_authority_verifier=lambda profile, chat, message: (
+                self._source_authority(record, profile, chat, message)
+                if authorization_check is None or authorization_check() else (None, False)))
         progress = record["deliveries"].get(presentation_phase(record, "progress")) or {}
         stream = presentation_stream(record)
         edit = phase_state.get("edit_from")

@@ -158,9 +158,10 @@ class StewardManagedMode:
             native_goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
             active = bool(native_goal and native_goal.get("status") == "active" and not goal_is_stopped(native_goal))
             cadence = monitor_cadence_delta(monitor.get("cadence")) if monitor else None
+            from .steward_reports import StewardReports
             return {"available": True, "prepared": True,
                     "scheduling_enabled": bool(active and monitor and monitor.get("status") == "open"),
-                    "goal_active": active,
+                    "goal_active": active, "report": StewardReports(self.controller).health(binding_id),
                     "monitor": ({"todo_id": monitor["todo_id"], "status": monitor["status"],
                         "cadence_minutes": int(cadence.total_seconds() / 60) if cadence else None,
                         "next_due_at": monitor.get("next_due_at"), "last_checked_at": monitor.get("last_checked_at")}

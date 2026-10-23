@@ -75,6 +75,7 @@ def execute_turn_run_once(
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
     native_host_runner: Callable[..., dict[str, Any]] | None = None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
@@ -382,6 +383,7 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
+                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {}),
             )
             if completion.get("ok") is not True:
                 return completion

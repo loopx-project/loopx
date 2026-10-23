@@ -74,6 +74,8 @@ def write_turn_validated_completion(
     expected_todo_text_sha256: str | None = None,
     completion_delivery_workspace: Mapping[str, Any] | None = None,
     completion_validation_workspace_path: Path | None = None,
+    task_lease_idempotency_key: str | None = None,
+    task_lease_expected_version: int | None = None,
 ) -> dict[str, Any]:
     """Complete one validated Todo under the effective runtime root."""
 
@@ -89,6 +91,8 @@ def write_turn_validated_completion(
             require_captured_todo_text=True,
             completion_delivery_workspace=completion_delivery_workspace,
             completion_validation_workspace_path=completion_validation_workspace_path,
+            task_lease_idempotency_key=task_lease_idempotency_key,
+            task_lease_expected_version=task_lease_expected_version,
             evidence=evidence,
             note=note,
             agent_id=agent_id,

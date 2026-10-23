@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
-  changePrivateAgentTarget, changeOwnerNotifications, prepareManagedSteward, configureStewardMonitor, fetchChatProjects, fetchChatCapabilities, fetchLarkGroupChats, type PrivateConversation,
+  changePrivateAgentTarget, changeOwnerNotifications, prepareManagedSteward, configureStewardMonitor, configureStewardReport, fetchChatProjects, fetchChatCapabilities, fetchLarkGroupChats, type PrivateConversation,
   discoverBoundChatSession, type BoundConversationTarget,
   type ChatProject, type LarkApp, type PrivateConversationStopRecovery} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
@@ -165,7 +165,8 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
       {row.context_kind === "steward" && row.audience === "owner" && row.executor_endpoint_id === "codex"
         ? <StewardManagedMode state={row.managed_steward} zh={zh} busy={busy} available={row.context_available}
             onPrepare={() => void act(() => prepareManagedSteward(row.binding_id))}
-            onMonitor={(operation, cadence) => void act(() => configureStewardMonitor(row.binding_id, operation, cadence))}/> : null}
+            onMonitor={(operation, cadence) => void act(() => configureStewardMonitor(row.binding_id, operation, cadence))}
+            onReport={(operation, schedule) => void act(() => configureStewardReport(row.binding_id, operation, schedule))}/> : null}
       {row.context_kind === "steward" && row.goal_scope !== "all_registered" ? <button disabled={busy || !row.context_available} onClick={() => void act(() => connectPrivateConversation(row.app_ref, row.project_ref, row.executor_endpoint_id, "steward"))} type="button">{zh ? "授权全部已注册工作" : "Authorize all registered work"}</button> : null}
       <button disabled={busy} onClick={() => void act(() => disconnectPrivateConversation(row.binding_id, revision))} type="button">{zh ? "解绑" : "Disconnect"}</button>
     </article>)}

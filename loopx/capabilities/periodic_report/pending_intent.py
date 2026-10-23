@@ -441,7 +441,12 @@ def periodic_report_pending_intent_interaction_hook(
             if normalized_agent_id and subscription is not None
             else []
         )
-        if not intents:
+        if not intents or subscription.get("profile_preset") == "portfolio-progress":
+            # This explicit source profile is consumed by the original Chat
+            # host's admitted native report Todo. Projecting the Goal Channel
+            # CLI action as well would preempt that controlled model Turn and
+            # substitute another source/destination. Calendar required reads
+            # remain visible; no other profile's precedence changes.
             return {
                 "schema_version": INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION,
                 "hook_id": HOOK_ID,
@@ -1080,6 +1085,12 @@ def _consume_pending_periodic_report_intent(
             "status": "subscription_disabled",
             "external_writes_performed": False,
         }
+    if subscription.get("profile_preset") == "portfolio-progress":
+        # A CLI caller cannot manufacture the original conversation's reader
+        # or private destination. Its host supplies those under the live grant.
+        return {"ok": True, "schema_version": CONSUMPTION_RECEIPT_SCHEMA,
+            "status": "original_conversation_required", "goal_id": goal_id,
+            "agent_id": agent_id, "external_writes_performed": False}
     intent = intents[0]
     trigger = evaluate_periodic_report_trigger_evaluation_intent(intent)
     payload = intent["payload"]

@@ -15,11 +15,13 @@ from .project_progress import (
 
 
 WEEKLY_PROGRESS_PRESET_ID = "weekly-progress"
-PERIODIC_REPORT_PROFILE_PRESET_IDS = (WEEKLY_PROGRESS_PRESET_ID,)
+PORTFOLIO_PROGRESS_PRESET_ID = "portfolio-progress"
+PERIODIC_REPORT_PROFILE_PRESET_IDS = (WEEKLY_PROGRESS_PRESET_ID, PORTFOLIO_PROGRESS_PRESET_ID)
 PERIODIC_REPORT_PROFILE_PRESET_ALIASES = {
     "weekly": WEEKLY_PROGRESS_PRESET_ID,
     "weekly-progress": WEEKLY_PROGRESS_PRESET_ID,
     "weekly-report": WEEKLY_PROGRESS_PRESET_ID,
+    "portfolio-progress": PORTFOLIO_PROGRESS_PRESET_ID,
 }
 
 _WEEKLY_PROGRESS_PROFILE: dict[str, Any] = {
@@ -71,13 +73,20 @@ def resolve_periodic_report_profile_preset(preset_id: str) -> dict[str, Any]:
 
     requested = str(preset_id or "").strip().lower().replace("_", "-")
     canonical = PERIODIC_REPORT_PROFILE_PRESET_ALIASES.get(requested)
-    if canonical != WEEKLY_PROGRESS_PRESET_ID:
+    if canonical not in PERIODIC_REPORT_PROFILE_PRESET_IDS:
         supported = ", ".join(PERIODIC_REPORT_PROFILE_PRESET_IDS)
         raise ValueError(
             f"unknown periodic report profile preset {preset_id!r}; "
             f"supported presets: {supported}"
         )
-    return normalize_periodic_report_profile(deepcopy(_WEEKLY_PROGRESS_PROFILE))
+    profile = deepcopy(_WEEKLY_PROGRESS_PROFILE)
+    if canonical == PORTFOLIO_PROGRESS_PRESET_ID:
+        profile["profile_id"] = "portfolio_progress"
+        profile["trigger_policy"]["enabled_kinds"] = ["cadence_due"]
+        profile["source_bindings"] = [{"source_id": "manager_portfolio",
+            "source_kind": "authorized_portfolio_evidence", "adapter_id": "manager_portfolio_v0",
+            "provider": {"kind": "builtin"}}]
+    return normalize_periodic_report_profile(profile)
 
 
 def build_periodic_report_preset_activation(preset_id: str) -> dict[str, Any]:
@@ -88,7 +97,7 @@ def build_periodic_report_preset_activation(preset_id: str) -> dict[str, Any]:
     activation = build_periodic_report_activation(profile)
     activation["profile_preset"] = {
         "requested_id": requested,
-        "resolved_id": WEEKLY_PROGRESS_PRESET_ID,
+        "resolved_id": PERIODIC_REPORT_PROFILE_PRESET_ALIASES[requested],
         "aliases": sorted(PERIODIC_REPORT_PROFILE_PRESET_ALIASES),
     }
     activation["interaction_contract"] = {
@@ -101,4 +110,9 @@ def build_periodic_report_preset_activation(preset_id: str) -> dict[str, Any]:
         "renderer_adapter_ids": ["markdown_v0", "html_artifact_v0"],
         "external_write_allowed": False,
     }
+    if profile["profile_id"] == "portfolio_progress":
+        activation["interaction_contract"].update(mode="original_steward_private_chat",
+            source_scope="original_authorized_local_portfolio",
+            original_conversation_required=True,
+            source_and_destination_from_original_binding=True)
     return activation

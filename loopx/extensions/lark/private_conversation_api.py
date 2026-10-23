@@ -192,6 +192,30 @@ class PrivateConversationRequestMixin:
             return
         self._private_conversations()
 
+    def _private_conversation_steward_report(self) -> None:
+        from ...capabilities.native_chat.steward_reports import PendingStewardReportError, StewardReports
+        try:
+            body = self._read_json()
+            if (set(body) - {"binding_id", "operation", "schedule", "plan_id", "execute"}
+                    or not isinstance(body.get("binding_id"), str)
+                    or body.get("operation") not in {"enable", "pause", "cancel"}
+                    or type(body.get("execute", False)) is not bool
+                    or "plan_id" in body and not isinstance(body["plan_id"], str)
+                    or "schedule" in body and (not isinstance(body["schedule"], dict) or body["operation"] != "enable")):
+                raise ValueError("use the original steward report setting")
+            result = StewardReports(self.server.runtime_controller).configure(body["binding_id"],
+                operation=body["operation"], schedule=body.get("schedule"),
+                expected_plan_id=body.get("plan_id"), execute=body.get("execute", False))
+        except PendingStewardReportError:
+            self._send_error("本期汇报已冻结，投递尚未核验；请先完成本期投递，再修改计划。可暂停、取消或恢复原计划，原回执继续保留。The frozen report still awaits verified delivery; finish it before changing its schedule.",
+                status=409, error_code="managed_steward_report_pending")
+            return
+        except (ValueError, KeyError, OSError, RuntimeError, TypeError):
+            self._send_error("The original report setting is unavailable. Refresh the original connection; existing windows, failed attempts and delivery receipts are retained.",
+                status=409, error_code="managed_steward_report_unavailable")
+            return
+        self._send_json(result)
+
     def _private_conversation_owner_notifications(self) -> None:
         try:
             body = self._read_json()

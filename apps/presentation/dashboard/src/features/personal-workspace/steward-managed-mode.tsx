@@ -1,11 +1,13 @@
 import type {PrivateConversation} from "../../data/chat";
 import {useEffect, useState} from "react";
+import {StewardReport} from "./steward-report";
 
 /** Identity preparation is deliberately distinct from enabling scheduled work. */
-export function StewardManagedMode({state, zh, busy, available, onPrepare, onMonitor}: {
+export function StewardManagedMode({state, zh, busy, available, onPrepare, onMonitor, onReport}: {
   state: PrivateConversation["managed_steward"]; zh: boolean; busy: boolean;
   available: boolean; onPrepare: () => void;
   onMonitor: (operation: "enable" | "pause", cadenceMinutes: number) => void;
+  onReport: (operation: "enable" | "pause" | "cancel", schedule?: Record<string, unknown>) => void;
 }) {
   const initial = state?.available ? state.monitor?.cadence_minutes : null;
   const monitorId = state?.available ? state.monitor?.todo_id : null;
@@ -20,7 +22,7 @@ export function StewardManagedMode({state, zh, busy, available, onPrepare, onMon
           ? (zh ? "授权 Goal 状态监控已启用。" : "Authorized Goal monitoring is enabled.")
           : state.monitor ? (zh ? "状态监控已暂停。" : "Goal monitoring is paused.")
           : (zh ? "管家身份已准备，状态监控尚未启用。" : "The steward identity is prepared; monitoring is not enabled.")}</p>
-        <p>{zh ? "状态检查复用原生监控，不调用模型。每日汇报尚未启用。" : "State checks use the native monitor without model calls. Daily reports are not enabled."}</p>
+        <p>{zh ? "状态检查复用原生监控，不调用模型。" : "State checks use the native monitor without model calls."}</p>
         {state.goal_active === false ? <p role="status">{zh ? "管家的工作 Goal 已停止；恢复原 Goal 后才能继续监控。" : "The steward Goal is stopped. Resume that original Goal before monitoring."}</p> : null}
         {state.monitor ? <p>{state.scheduling_enabled ? (zh ? "下次检查：" : "Next check: ") : (zh ? "保留的到期时间：" : "Retained deadline: ")}{state.monitor.next_due_at ? new Date(state.monitor.next_due_at).toLocaleString(zh ? "zh-CN" : "en-US") : (zh ? "未排期" : "Unscheduled")}
           <br/>{zh ? "上次检查：" : "Last check: "}{state.monitor.last_checked_at ? new Date(state.monitor.last_checked_at).toLocaleString() : (zh ? "尚未完成首次检查" : "No completed check yet")}</p> : null}
@@ -32,6 +34,7 @@ export function StewardManagedMode({state, zh, busy, available, onPrepare, onMon
         <div className="personal-cadence-actions"><button className="is-primary" style={{minHeight: 44}} type="button" disabled={busy || !available || state.goal_active === false || !Number.isInteger(cadence) || cadence < 30 || cadence > 1440}
           onClick={() => onMonitor("enable", cadence)}>{state.scheduling_enabled ? (zh ? "更新周期" : "Update interval") : (zh ? "启用状态监控" : "Enable monitoring")}</button>
         {state.monitor?.status === "open" ? <button style={{minHeight: 44}} type="button" disabled={busy || !available} onClick={() => onMonitor("pause", initial ?? 30)}>{zh ? "暂停状态监控" : "Pause monitoring"}</button> : null}</div>
+        <StewardReport state={state.report} zh={zh} busy={busy} available={available} goalActive={state.goal_active !== false} onChange={onReport}/>
       </>
       : <>
         <p>{zh ? "为当前管家准备一个可见的 LoopX 工作身份，保留原对话和权限。此步骤不会启动定时任务或模型。" : "Prepare one visible LoopX identity for this steward, retaining its original conversation and permissions. This step starts neither scheduled tasks nor a model."}</p>
