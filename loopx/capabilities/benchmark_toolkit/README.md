@@ -5,6 +5,30 @@ admission, permission, artifact, integrity, and reusable agent-runtime boundarie
 around benchmark experiments. It does not own benchmark-family runners, result
 ledgers, or scoring adapters.
 
+## Runner-owned capacity drain planning
+
+After adaptive concurrency lowers a target, a runner may still need to drain live
+runs. `rebalance-plan` selects one preclassified candidate group by the lowest
+numeric `reclaim_priority`, then chooses the newest active group at that priority:
+
+```bash
+loopx benchmark rebalance-plan \
+  --inventory-json .local/private-run/rebalance-inventory.json \
+  --format json
+```
+
+Each candidate groups one or more run ids that must be stopped together. The
+runner assigns priorities from its experiment design, so supplementary work can
+drain before a matched comparison group. A lower-priority group already in
+`stop_requested` blocks higher-priority reclamation until its closeout is
+observed; another active group at the same priority remains eligible.
+
+The command is read-only. It sends no signal, changes no concurrency envelope,
+and does not classify runtime liveness. The runner must build the complete live
+inventory, persist its exact process or remote-task reservation, revalidate that
+identity, request graceful stop, preserve artifacts and scoring evidence, observe
+terminal closeout, and only then release the corresponding concurrency slots.
+
 ## Runner execution boundary
 
 The former `loopx benchmark agent-phase` command and its external-agent v1
