@@ -43,7 +43,7 @@ def turn_envelope_budget_warning_lines(payload: dict[str, Any]) -> list[str]:
 
 
 def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:
-    from ...control_plane.quota.turn_envelope import reject_retired_quota_format
+    from ...control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
     action_value = payload.get("action")

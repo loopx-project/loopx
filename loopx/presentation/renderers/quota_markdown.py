@@ -348,7 +348,7 @@ def render_quota_scheduler_failure_markdown(payload: dict[str, Any]) -> str:
 
 
 def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
-    from ...control_plane.quota.turn_envelope import reject_retired_quota_format
+    from ...control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
     quota = as_dict(payload.get("quota"))

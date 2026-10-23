@@ -810,6 +810,13 @@ def effect_program_from_ordered_steps(
     )
 
 
+def reject_retired_quota_format(payload: Mapping[str, object]) -> None:
+    """Send retired carriers to the typed reader; supported rendering adds no RPC."""
+    for candidate in (payload, payload.get("contract_capsule")):
+        if isinstance(candidate, Mapping) and "protocol_action_packet" in candidate:
+            interpret_quota_should_run_packet(candidate)
+
+
 def interpret_quota_should_run_packet(
     packet: Mapping[str, Any],
     *,

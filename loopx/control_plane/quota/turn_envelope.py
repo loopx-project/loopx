@@ -41,16 +41,6 @@ def _turn_envelope_result(
     return dict(result)
 
 
-def reject_retired_quota_format(payload: Mapping[str, Any]) -> None:
-    """Route retired carriers to the typed rejection; modern rendering adds no RPC."""
-    if "protocol_action_packet" in payload:
-        quota_action_signature_document(payload)
-    else:
-        capsule = payload.get("contract_capsule")
-        if isinstance(capsule, Mapping) and "protocol_action_packet" in capsule:
-            turn_envelope_action_signature_document(payload)
-
-
 def turn_envelope_action_signature_document(
     envelope: Mapping[str, Any],
 ) -> dict[str, Any]:

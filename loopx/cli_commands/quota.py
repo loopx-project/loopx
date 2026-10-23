@@ -404,7 +404,7 @@ def _project_quota_cli_payload(
     renderer rejection keeps the typed diagnostic itself (with the skip reason)
     instead of masking it with a crash (issue #3687).
     """
-    from ..control_plane.quota.turn_envelope import reject_retired_quota_format
+    from ..control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
     if not bool(getattr(args, "turn_envelope", False)):
