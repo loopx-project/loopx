@@ -297,6 +297,16 @@ export function effectProgramFromOrderedSteps(
   };
 }
 
+/** The retired summary format is not an execution or signature input.
+ * Presence (including empty/null) is explicit unsupported input, never a cue
+ * to strip a signed dimension and reinterpret the remaining record.
+ */
+export function assertSupportedQuotaPacket(packet: JsonObject): void {
+  if (Object.hasOwn(packet, "protocol_action_packet")) {
+    throw new EffectRuntimeRequestError("unsupported format: protocol_action_packet; use a fresh typed quota decision");
+  }
+}
+
 export function interpretQuotaShouldRunPacket(
   packetValue: unknown,
   options: {
@@ -306,6 +316,7 @@ export function interpretQuotaShouldRunPacket(
   } = {},
 ): EffectTurn<JsonObject, string> {
   const packet = asObject(packetValue);
+  assertSupportedQuotaPacket(packet);
   const interaction = decodeInteractionContract(packet.interaction_contract);
   assertActionSelectionConsistency(packet, interaction);
   const lane = asObject(packet.work_lane_contract);
@@ -315,7 +326,6 @@ export function interpretQuotaShouldRunPacket(
   const failureHint = asObject(codexApp.failure_hint);
   const cliChannel = asObject(interaction.cli_channel);
   const gate = asObject(packet.capability_gate);
-  const protocol = asObject(packet.protocol_action_packet);
   const actionPortfolio = asObject(packet.action_portfolio);
   const planningHorizon = asObject(packet.planning_horizon);
   return {
@@ -344,7 +354,7 @@ export function interpretQuotaShouldRunPacket(
         Object.keys(actionPortfolio).length > 0 ? actionPortfolio : null,
       planning_horizon:
         Object.keys(planningHorizon).length > 0 ? planningHorizon : null,
-      protocol_summary: nullableTruthyString(protocol.summary),
+      protocol_summary: null,
     },
     next_effect: {
       cli_actions: stringArray(cliChannel.next_cli_actions),

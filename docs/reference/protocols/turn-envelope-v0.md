@@ -363,8 +363,9 @@ The envelope flag selects a projection of the full decision. The original v0
 contract left the default `quota should-run` output unchanged; the
 [PR-05 migration](protocol-action-packet-decision-v0.md) omits
 `protocol_action_packet` from new full decisions, including live, paused and
-recovery output, from the first release containing #4794. Historical v0 reads
-remain supported for the v0 reader lifetime. The v0 envelope keeps:
+recovery output, from the first release containing #4794. The subsequent
+reader retirement in #7161 explicitly rejects packet-bearing decisions and
+capsule witnesses. Packet-free v0 envelopes remain supported. The envelope keeps:
 
 - the selected todo, claim, and effective action;
 - the bounded action portfolio when the agent must choose among multiple
@@ -618,26 +619,21 @@ The compact envelope does not truncate those executable commands into unusable
 strings. It carries non-exhaustive `writeback.suggested_todo_ids` plus
 `selection_command_ref`; the full decision remains the authority for exact argv.
 
-Historical full decisions may carry `protocol_action_packet`. For those inputs,
-the envelope reconstructs its ordered semantic fields from `action`, `user`,
-work-lane, automation, and scheduler contracts, while carrying the explicit
-`llm_policy=no_api` invariant. Exact reconstruction retains the source summary
-hash and derivation status; a differing compact action retains field-level
-`residue`; an opaque summary follows `unverified_retain_summary`. These remain
-historical read paths and do not rewrite stored packets or envelopes.
+Packet-bearing historical decisions and `contract_capsule.protocol_action_packet`
+witnesses are unsupported under [the retirement contract](protocol-action-packet-decision-v0.md).
+Presence, even null or empty, fails before conversion, hashing, capture binding
+or Host admission. Ordered legacy reconstruction, residue and opaque-summary
+fallback are removed. No signed dimension is silently dropped and no historical
+record or signature is rewritten. Callers must acquire a fresh typed decision;
+this does not introduce a question or an additional admission workflow.
 
-Under PR-05, a new source without a packet produces no
-`contract_capsule.protocol_action_packet` witness. The ordered semantic
-projection `protocol_action_packet_fields` and historical summary renderer
-remain; packet absence does not remove typed obligations or their signature
-coverage. Source and envelope signature documents must match for that input.
-Compared with a packet-bearing source, the document may lack the capsule's
-packet witness and have a different hash. This is not a cross-version hash
-compatibility promise; existing signature checks and historical signatures
-remain intact. The v1.1.0 reader/host accepts the tested new and stored v0 examples.
-The [migration contract](protocol-action-packet-decision-v0.md) defines the
-release boundary, v0 reader lifetime, consumer set and rollback steps; unknown
-external readers and complete private archives are not implicitly qualified.
+Packet-free sources produce no packet witness. All other typed obligations and
+signature dimensions retain their existing interpretation, including frozen
+packet-free v0 records. Source and envelope canonical documents must agree;
+missing, mismatched or tampered signatures still fail. This is a deliberate
+input-format retirement, not a retirement of all Envelope v0 records. The
+contract defines the source/release boundary and recovery without promising a
+whole-store rollback or qualification of unknown external readers.
 
 Large todo summaries, frontier diagnostics, readiness history, compatibility
 fields, and warning collections stay on the referenced full-decision/status

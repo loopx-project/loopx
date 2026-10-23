@@ -629,6 +629,13 @@ JSON 仍为 3,122。既有 runner 测试仍拒绝真实 stdout 膨胀，不改�
 结果证据及可逆 transport 默认决策继续保留。执行 quota、wire 限制和冻结的
 promotion 条件不变，不声称运行成本下降。
 
+#7161 取消旧 `protocol_action_packet` reader 格式支持，删除字段选择、summary
+重建、residue／opaque fallback 及其传输输入。Effect／CLI／Envelope／Host
+在转换或使用签名前明确拒绝旧包及 capsule witness。冻结历史记录保持原样；
+不带旧包的 v0 签名与执行检查语义不变。本项有界清理替代旧兼容承诺，不关闭
+M7.4 或 benchmark／Codex App 上下文传输验收。见
+[格式边界](../../reference/protocols/protocol-action-packet-decision-v0.md)。
+
 不引入通用 executor，也不降低验收门槛来让短包通过。保留未满足要求，分别记录
 传输等价、安装态宿主采用和有效模型结果。见
 [当前 envelope 契约](../../reference/protocols/turn-envelope-v0.md#optional-memory-participation)。

@@ -1,5 +1,9 @@
 # Protocol Action Packet Codex CLI Wrapper v0
 
+> Historical synthetic experiment only. The production packet reader is retired;
+> see the [current format contract](protocol-action-packet-decision-v0.md).
+> These examples do not qualify current execution or quota-size reduction.
+
 This wrapper is the cold-path bridge between `protocol_action_packet_v0` and a
 future Codex CLI summarizer. It is intentionally outside `quota should-run` so
 the hot path keeps its interface budget.

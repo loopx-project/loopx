@@ -12,7 +12,7 @@ from tests.test_turn_envelope import _full_decision
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID,
     _configure_read_only_todo, _run_cli, _run_generated_cli,
-    _spend_run_count, _write_fixture,
+    _spend_run_count, _write_fixture, _initialize_fixture_authority,
 )
 
 
@@ -94,6 +94,7 @@ def test_absent_plan_is_not_invented_for_historical_or_unbound_packets():
 def test_generated_json_commands_settle_original_turn_once(tmp_path, profile_args):
     project, runtime, registry = _write_fixture(tmp_path / "quoted inputs")
     _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime)
     args = ("quota", "should-run", *profile_args, "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", TURN_ID, )

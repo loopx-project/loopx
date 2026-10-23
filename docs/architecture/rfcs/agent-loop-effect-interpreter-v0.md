@@ -923,6 +923,15 @@ and a reversible transport-default decision remain open. Execution quota,
 wire limits and frozen promotion criteria are unchanged; no runtime cost
 reduction is claimed.
 
+#7161 retires the old `protocol_action_packet` reader format: field selection,
+summary reconstruction, residue/opaque fallback and their transport inputs are
+removed. Effect/CLI/Envelope/Host consumers explicitly reject old packets and
+capsule witnesses before conversion or signature use. Frozen historical records
+remain unchanged; packet-free v0 signatures and execution checks retain their
+meaning. This bounded cleanup supersedes historical reader compatibility, not
+M7.4 or the benchmark/Codex App context-transport acceptance. See the
+[format boundary](../../reference/protocols/protocol-action-packet-decision-v0.md).
+
 Do not add a generic executor or lower an acceptance threshold to make a short
 packet pass. Preserve unsatisfied requirements and distinguish transport parity,
 installed host adoption and useful model outcomes. See the

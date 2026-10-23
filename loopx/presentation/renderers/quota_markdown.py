@@ -348,6 +348,9 @@ def render_quota_scheduler_failure_markdown(payload: dict[str, Any]) -> str:
 
 
 def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
+    from ...control_plane.quota.turn_envelope import reject_retired_quota_format
+
+    reject_retired_quota_format(payload)
     quota = as_dict(payload.get("quota"))
     lines = [
         "# LoopX Quota Should Run",
@@ -960,13 +963,6 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
                 f"reset_generation={reset_policy.get('reset_token')} "
                 f"identity_signature={reset_policy.get('identity_signature')}"
             )
-    protocol_action_packet = as_dict(payload.get("protocol_action_packet"))
-    if protocol_action_packet:
-        lines.append(
-            "- protocol_action_packet: "
-            f"schema={protocol_action_packet.get('schema_version')} "
-            f"{protocol_action_packet.get('summary') or ''}"
-        )
     stall_self_repair = as_dict(payload.get("stall_self_repair"))
     if stall_self_repair:
         lines.append(
