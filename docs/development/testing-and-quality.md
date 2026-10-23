@@ -439,6 +439,12 @@ exact disposable locator before requesting shutdown, including when pytest has
 already removed the fixture directory. Missing provenance remains unknown and
 cannot authorize cleanup. This observation is not a Goal or execution grant.
 
+Fixtures that model a Gitless project also need a temporary root outside any
+Git worktree. Git discovery walks parent directories, so an ignored directory
+inside a checkout still inherits that repository. Retain the local-workspace
+oracle and correct the fixture location rather than accepting the inherited
+repository identity.
+
 Process isolation still shares machine resources. Run matched timing arms
 sequentially without overlapping builds or recovery work. If interference is
 discovered, retain failures and durable-receipt evidence, mark latency samples

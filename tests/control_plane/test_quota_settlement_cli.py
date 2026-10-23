@@ -6839,7 +6839,6 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
         "--turn-instance-id",
         TURN_ID,
     )
-    _initialize_fixture_authority(project, runtime)
     _guard_rc, guard = _run_cli(
         registry_path,
         runtime,
