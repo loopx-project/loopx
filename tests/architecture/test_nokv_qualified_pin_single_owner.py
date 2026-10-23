@@ -35,7 +35,6 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 OWNER_MODULE = "loopx/control_plane/coordination/nokv_jsonl_helper.py"
-OWNER_SDK_LINE = 40
 OWNED_NAMES = ("QUALIFIED_NOKV_SDK_VERSION", "QUALIFIED_NOKV_API_VERSION")
 DECLARED_CROSS_RUNTIME_SITES: dict[str, int] = {
     "examples/nokv-authority-store/live-qualification.ts": 2,
@@ -94,14 +93,20 @@ def _any_depth_definitions() -> list[tuple[str, int, str]]:
     return hits
 
 
-def _sdk_literal_sites() -> list[str]:
-    sites: list[str] = []
+def _sdk_literal_sites(value: object) -> list[str]:
+    """Modules that spell the owner's qualified release as a literal.
+
+    Keyed on the value the owner exports, so a reviewed bump in the owner keeps
+    this green while an inline copy anywhere else cannot hide.
+    """
+
+    sites: set[str] = set()
     for path in _product_sources():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and node.value == "0.11.1":
-                sites.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
-    return sites
+            if isinstance(node, ast.Constant) and node.value == value:
+                sites.add(str(path.relative_to(REPO_ROOT)))
+    return sorted(sites)
 
 
 def _cross_runtime_counts() -> dict[str, int]:
@@ -159,10 +164,12 @@ def test_no_restatement_survives_at_any_depth() -> None:
     )
 
 
-def test_the_qualified_sdk_literal_has_one_owner_site() -> None:
-    expected = f"{OWNER_MODULE}:{OWNER_SDK_LINE}"
-    assert _sdk_literal_sites() == [expected], (
-        f"the qualified SDK release is spelled at {_sdk_literal_sites()}; expected only {expected}"
+def test_the_qualified_release_literal_is_spelled_in_one_module(helper: ModuleType) -> None:
+    value = helper.QUALIFIED_NOKV_SDK_VERSION
+    assert isinstance(value, str) and value, f"owner exports {value!r}, not a release string"
+    sites = _sdk_literal_sites(value)
+    assert sites == [OWNER_MODULE], (
+        f"the qualified release {value!r} is spelled in {sites}; only {OWNER_MODULE} may state it"
     )
 
 
