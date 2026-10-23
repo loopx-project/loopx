@@ -213,6 +213,10 @@ class NativeAccounts:
                 return self._projection(state)
             if not refresh and not manual_slot and now < (state.get("retry_at") or 0):
                 return self._projection(state)
+            if refresh or manual_slot:
+                # A deliberate check/choice starts a new retry budget; healthy
+                # quota alone does not prove that a handoff succeeded.
+                state["failure_count"] = 0
             if "adapter" not in state:
                 # An explicit check/manual choice can connect existing slots
                 # without turning automatic effects on first.
@@ -290,7 +294,7 @@ class NativeAccounts:
                                    **({"manual_slot": manual_slot} if manual_slot else {})})
                 state.update(observations=observed["observations"], accounts=decision["accounts"],
                              last_checked_at=self.clock(), action=decision["action"], target=decision["target"],
-                             retry_at=decision["retry_at"] or self.clock() + 60, code=None, failure_count=0)
+                             retry_at=decision["retry_at"] or self.clock() + 60, code=None)
                 if decision["action"] == "switch":
                     if not manual_slot and not self.switch_allowed():
                         raise HostError("observer_stopped")
