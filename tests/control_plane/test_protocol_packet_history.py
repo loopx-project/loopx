@@ -16,6 +16,7 @@ import pytest
 
 from loopx.control_plane.effect_program import interpret_quota_should_run_packet
 from loopx.control_plane.quota.turn_envelope import (
+    build_turn_envelope,
     quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
@@ -30,6 +31,25 @@ VERIFIED_SUMMARY = (
     "actor=agent user_action_required=false agent_action_required=true "
     "quiet_noop_allowed=false llm=no_api agent_action=inspect the synthetic fixture"
 )
+
+
+@pytest.mark.parametrize("packet", [None, {}, [], "legacy text"])
+def test_current_decisions_do_not_recompute_unused_legacy_guidance(monkeypatch, packet):
+    from loopx.control_plane.work_items import interaction_contract
+
+    def unexpected_legacy_read(*args, **kwargs):
+        raise AssertionError("A decision without a legacy packet needs no legacy guidance")
+
+    # This reader belongs to the legacy field reconstruction. Current typed
+    # actions must remain independently projectable when that reader is absent.
+    monkeypatch.setattr(interaction_contract, "projected_user_channel_actions", unexpected_legacy_read)
+    source = deepcopy(next(case["decision"] for case in CASES if case["id"] == "missing_packet"))
+    source["protocol_action_packet"] = packet
+    envelope = build_turn_envelope(source)
+    assert "protocol_action_packet" not in envelope["contract_capsule"]
+    assert envelope["action_signature"]["matches"] is True
+    assert quota_action_signature_document(source) == turn_envelope_action_signature_document(envelope)
+    assert envelope["action"]["primary_action"] == "quiet no-op; no material transition"
 
 
 def _canonical_hash(value: Any) -> str:

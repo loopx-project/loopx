@@ -11,7 +11,6 @@ from ..scheduler.execution_context import (
     render_scheduler_execution_args,
     resolve_scheduler_execution_context,
 )
-from ..work_items.interaction_contract import protocol_action_packet_fields
 
 TURN_ENVELOPE_SCHEMA_VERSION = "loopx_turn_envelope_v0"
 TURN_ENVELOPE_BUDGET_BYTES = 8_192
@@ -43,7 +42,15 @@ def _turn_envelope_result(
 
 
 def _protocol_action_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Prepare the separately versioned protocol-packet projection."""
+    """Reconstruct guidance only for a historical protocol packet witness."""
+
+    packet = payload.get("protocol_action_packet")
+    if not isinstance(packet, Mapping) or not packet:
+        return {}
+    # Current quota decisions already carry the typed interaction contract.
+    # Keep the retired packet's Python reader off their projection path; the
+    # TS owner still validates and preserves historical witnesses when present.
+    from ..work_items.interaction_contract import protocol_action_packet_fields
 
     return protocol_action_packet_fields(dict(payload))
 
