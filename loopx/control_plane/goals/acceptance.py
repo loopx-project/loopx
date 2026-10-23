@@ -509,7 +509,9 @@ def run_goal_acceptance_validation_effect(
     return receipt
 
 
-def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:
+def public_goal_acceptance(
+    value: dict[str, Any], *, include_contract: bool = True,
+) -> dict[str, Any]:
     """Expose projections and revision tokens, never executable declarations."""
     keys = (
         "status",
@@ -524,7 +526,10 @@ def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:
         "goal_objective_guard",
         "reason_code",
     )
-    return {"ok": True, **{key: value[key] for key in keys if key in value}}
+    return {"ok": True, **{
+        key: value[key] for key in keys
+        if key in value and (include_contract or key != "goal_acceptance_contract")
+    }}
 
 
 def verify_goal_acceptance(

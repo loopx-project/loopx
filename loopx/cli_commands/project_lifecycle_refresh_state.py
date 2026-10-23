@@ -563,7 +563,7 @@ def handle_refresh_state_command(
             from ..control_plane.goals.acceptance import refine_goal_outcome, public_goal_acceptance
             outcome_update_result = public_goal_acceptance(refine_goal_outcome(
                 registry_path=registry_path, runtime_root=args.runtime_root, goal_id=args.goal_id,
-                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update))
+                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update), include_contract=False)
         payload = refresh_state_run(
             external_delivery={"suppress": bool(args.suppress_external_sinks),
                                "resume_key": getattr(args, "resume_external_sinks", None)},
