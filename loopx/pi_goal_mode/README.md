@@ -155,6 +155,42 @@ grant authority outside the active LoopX goal binding, bypass registration,
 change quota/scheduler/todo defaults, or copy Pi transcripts, credentials, or
 session paths into LoopX state.
 
+## Stable identity across launches
+
+By default, `piThreadId()` derives the LoopX host thread id from the Pi session
+file path. Pi creates a new session file for each launch
+(`<ISO timestamp>_<uuid>.jsonl`), so the derived thread id changes every time.
+This means an already-bound agent lane requires re-binding on every fresh Pi
+session.
+
+Two supported options keep the thread id stable:
+
+**Option 1 — environment variable (recommended).**
+Set `LOOPX_PI_THREAD_ID` to any stable, project-scoped identifier before
+starting Pi. The adapter uses that value verbatim and ignores the session file
+path:
+
+```bash
+export LOOPX_PI_THREAD_ID="my-project-loopx"
+pi
+```
+
+Pick a value unique to the project, such as a slug of the project directory
+name. Once a lane is bound under this id, every subsequent Pi session in the
+same project resolves that lane without a re-bind.
+
+**Option 2 — fixed session file path.**
+Start Pi with `pi --session <fixed-path>`. The session file path stays constant
+across restarts, so the path-digested thread id is also constant:
+
+```bash
+pi --session ~/.pi/agent/sessions/my-project/loopx-session.jsonl
+```
+
+Without either option, a first-time user must bind the lane once per Pi
+session. The identity-selection packet returned by `/loopx <goal text>` still
+works; the binding just does not survive a fresh launch.
+
 ## Boundary
 
 The extension reads only LoopX public-safe state and never copies raw

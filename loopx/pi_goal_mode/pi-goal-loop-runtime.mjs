@@ -105,7 +105,14 @@ export function sessionKey(sessionFile) {
 // Reuse the private store's full-path digest for host thread identity too.
 // A basename or inherited PI_SESSION_ID can identify a different Pi session.
 // Ephemeral sessions keep the canonical explicit identity-selection flow.
+// LOOPX_PI_THREAD_ID pins identity across launches that produce a new session
+// file each time (the default Pi behaviour); set it to a stable project-scoped
+// value to avoid re-binding on every fresh Pi session.
 export function piThreadId(sessionFile) {
+  const override = process.env.LOOPX_PI_THREAD_ID
+  if (typeof override === "string" && override.trim()) {
+    return override.trim()
+  }
   return typeof sessionFile === "string" && sessionFile.trim() && !sessionFile.endsWith(path.sep)
     ? sessionKey(sessionFile)
     : null
