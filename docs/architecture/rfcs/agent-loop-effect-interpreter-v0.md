@@ -749,9 +749,9 @@ The next slice stays within the existing three convergence acceptances above:
    No approval, confirmation question, extra quota admission or quota debit is
    introduced. Existing genuine stop and unavailable-source rules still apply.
 
-**Incremental delivery design for review (not implemented).** The first complete
-implementation slice must include the shared projection, an actual ordinary-CLI
-consumer and its full fallback. A standalone diff helper is insufficient.
+**Accepted incremental delivery design (implementation pending).** Phase one
+includes the shared projection, both the benchmark solver and productized Codex
+App consumers, and their full fallback. A standalone diff helper is insufficient.
 
 | Boundary | Proposed behavior |
 |---|---|
@@ -814,14 +814,32 @@ packet reductions useful and records the concrete missing integration.
 | Source unavailable or authority changed | Preserve the existing refusal/fresh-guard rule; a stored full capture cannot manufacture current permission. |
 | Delta metadata costs more than full | Send full; do not clip values, enlarge limits or ask the owner to choose. |
 
-**Delivery order and review boundary.** Independently reviewable basic packet
-reductions feed the existing integration test first. This design does not hold
-that test waiting for a new protocol. After design review, qualify one real
-benchmark consumer and same-capture fallback, then reuse the same owner in the
-Turn transport and retire replaced projection branches. Frozen campaigns retain
-their source/treatment; qualify new delivery on replay and an explicitly admitted
-subsequent run. This is a scoped design proposal, not runtime authorization or a
-new owner-approval workflow.
+**Phase-one consumers and delivery order.** Independently reviewable basic
+packet reductions feed the existing integration test first; that test does not
+wait for the new protocol. The accepted design must then qualify both consumers
+below in phase one, using the same typed projection and fallback contract.
+Benchmark adoption may land first, but does not close the phase while the
+productized Codex App path remains unqualified.
+
+| Consumer | Phase-one acceptance |
+|---|---|
+| Benchmark solver | The existing ordinary quota path delivers full first, then smaller exact subtree changes on a confirmed warm baseline. Measure all initial/follow-up model input and detail reads, tool calls, subsequent decisions and accepted outcomes in a matched authorized test. Management packets or offline byte counts do not substitute for solver adoption. |
+| Productized Codex App | The shipped heartbeat/bootstrap and quota continuation paths use the same owner, with actual packaged and installed readback. Demonstrate a warm incremental delivery and useful subsequent action, plus first use, restart/resume, compaction/pruning, lost baseline and same-capture full recovery. Inspect the existing product entrypoint and visible error/recovery result; a CLI fixture alone does not establish App adoption. |
+
+Each host must establish the model-input ordering and continuity boundary above;
+qualify its real adapter rather than transferring proof from the other host.
+If Codex App lacks that integration, record the concrete missing host boundary,
+continue safe full delivery and keep its phase-one acceptance open. An all-full
+App pilot is a correctness fallback, not completed incremental productization.
+This is an engineering evidence gap, never a runtime owner question or an extra
+admission gate. Preserve existing notification, scheduler, cancellation, claim,
+settlement and recovery ownership; do not create a second runner or authority.
+
+Reuse the owner in Turn transport and retire replaced projection branches only
+after their callers adopt it. Frozen campaigns retain their source/treatment;
+qualify new delivery on replay and an explicitly admitted subsequent run.
+Design acceptance does not itself authorize merges, releases, installations or
+additional benchmark runs. Runtime fallback remains automatic.
 
 Qualification compares matched normal, replan and wait/recovery workloads with
 optional capability modes unchanged. Include first delivery, warm reuse, reset,
