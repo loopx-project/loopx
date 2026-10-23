@@ -25,6 +25,34 @@ from benchmark.runtime.checkpoint_handoff import controller_completion_deadline
 from .checkpoint_controller import _controller, _physical, _remaining, _phase_budget, capture
 
 
+def qualify_export_storage(destination: Path) -> None:
+    """Check filename fidelity before registration, without reserving a run.
+
+    Linux source trees can contain case-only or Unicode-normalization-only
+    siblings. A shared host volume may silently merge these during extraction
+    or sealing, even when the controller itself runs on Linux.
+    """
+    if not destination.is_absolute() or destination.resolve() != destination:
+        raise ValueError("Checkpoint export destination must be normalized, physical and absolute")
+    parent = destination.parent
+    while not parent.exists():
+        parent = parent.parent
+    _physical(parent)
+    names = ("Candidate", "candidate", "caf\u00e9", "cafe\u0301")
+    with tempfile.TemporaryDirectory(prefix=".checkpoint-storage-", dir=parent) as directory:
+        root = Path(directory)
+        try:
+            for index, name in enumerate(names):
+                with (root / name).open("xb") as stream:
+                    stream.write(bytes([index]))
+        except FileExistsError as error:
+            raise ValueError("Checkpoint export storage must preserve case and Unicode filename distinctions; "
+                             "select a compatible volume with --checkpoint-export-root") from error
+        if (set(entry.name for entry in root.iterdir()) != set(names) or
+                any((root / name).read_bytes() != bytes([index]) for index, name in enumerate(names))):
+            raise ValueError("Checkpoint export storage changed filename identities or bytes")
+
+
 def _request(path: Path) -> dict:
     value = json.loads(_physical(path).read_bytes())
     if (not isinstance(value, dict) or
@@ -226,6 +254,7 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
         raise ValueError("Worker capture requires a fresh physical destination and 32-hex identity")
     if (controller["bank_root"] / capture_id).exists():
         raise ValueError("Existing native point cannot acquire later worker files")
+    qualify_export_storage(destination)
     attempts = controller["bank_root"] / ".loopx-worker-attempts"
     attempts.mkdir(exist_ok=True, mode=0o700)
     _physical(attempts)

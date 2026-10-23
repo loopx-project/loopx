@@ -520,6 +520,26 @@ resume continuity, capability use, evaluator completion and integrity need
 runtime/post-run qualification before any score is countable. Raw trial outputs
 and credentials belong outside the public repository.
 
+## Research checkpoint storage
+
+Full controller capture requires a filesystem that preserves case-sensitive and
+Unicode-normalization-sensitive filenames. A Linux controller using a shared
+host volume may not have those properties. New controller-enabled launches probe
+the export volume before native registration; incompatible storage fails early
+instead of losing a later replan checkpoint. Capture-disabled runs do not probe it.
+
+Use `--checkpoint-export-root /data/private-checkpoints` to place full worker
+exports on a separately provisioned compatible volume. The root must already
+exist and be a physical absolute directory. Each run uses
+`ROOT/RUN_ID/TASK_ID/checkpoints`; its private runtime receipt records
+`checkpoint_export_directory`. Without the option, the original
+`LOG_DIR/runs/RUN_ID/TASK_ID/checkpoints` location remains in use. The probe checks
+filename fidelity, not free space or retention capacity: reserve enough space for
+the source export and sealed copy. Credentials and native evaluator storage keep
+their existing owners. No worker path, scoring, deadline or capture opportunity
+changes. Select this option only for a new run; it does not relocate a running
+bank or recover a missed point.
+
 ## Default research checkpoint retention
 
 **Default change:** new controller-enabled native runs automatically keep only

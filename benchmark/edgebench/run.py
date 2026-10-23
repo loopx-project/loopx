@@ -146,6 +146,8 @@ def main(argv=None):
                         help="Explicit heartbeat Goal-review strategy; omitted keeps the ordinary off treatment")
     parser.add_argument("--checkpoint-controller-file", type=Path,
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
+    parser.add_argument("--checkpoint-export-root", type=Path,
+                        help="Existing physical host volume for full worker checkpoints; must preserve Linux filenames")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
@@ -208,6 +210,13 @@ def main(argv=None):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
         parser.error("Checkpoint retention requires the explicit native controller capture path")
+    if args.checkpoint_export_root is not None:
+        if not handoff:
+            parser.error("Checkpoint export storage requires full controller capture")
+        from benchmark.edgebench.checkpoint_controller import _physical
+        _physical(args.checkpoint_export_root)
+        if not args.checkpoint_export_root.is_dir():
+            parser.error("Checkpoint export root must be an existing directory")
     restore_values = (args.restore_sha256, args.restore_config, args.restore_goal,
                       args.restore_agent, args.restore_source_todo)
     if bool(args.restore_checkpoint) != all(restore_values) or (not args.restore_checkpoint and any(restore_values)):
@@ -339,7 +348,9 @@ def main(argv=None):
     checkpoint = None
     if args.checkpoint_controller_file is not None:
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
-        checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, trial / "checkpoints",
+        destination = (args.checkpoint_export_root / args.run_id / args.task / "checkpoints"
+                       if args.checkpoint_export_root is not None else trial / "checkpoints")
+        checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, destination,
                                           retention_policy=args.checkpoint_retention_policy,
                                           retention_enabled=not args.no_checkpoint_retention)
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
@@ -398,6 +409,7 @@ def main(argv=None):
            if args.stride_strategy is not None else {}),
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
            if checkpoint_request is not None else {}),
+        **({"checkpoint_export_directory": str(checkpoint.destination)} if checkpoint is not None else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))
