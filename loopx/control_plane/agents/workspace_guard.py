@@ -246,7 +246,7 @@ def observe_goal_delivery_workspace_isolation(
     repo = goal.get("repo") or goal.get("project") or goal.get("root")
     goal_id = goal.get("goal_id") or goal.get("id")
     workspace = None
-    if repo and goal_id:
+    if repo and goal_id and not selected_todo.get("task_repository"):
         root = Path(str(repo)).expanduser()
         if root.is_absolute():
             workspace = capture_delivery_workspace(
@@ -259,7 +259,11 @@ def observe_goal_delivery_workspace_isolation(
         explicit_peer_worktree_requirement=policy.get("peer_independent_worktree_required"),
         task_repository=selected_todo.get("task_repository"),
     )
-    return {"workspace": workspace, "peer_independent_worktree_required": required}
+    # The preview needs policy and kind, not a second producing-workspace receipt.
+    return {
+        "identity_kind": (workspace or {}).get("identity_kind"),
+        "peer_independent_worktree_required": required,
+    }
 
 
 def delivery_workspace_refresh_hint(isolation: dict[str, Any]) -> str:
@@ -269,7 +273,7 @@ def delivery_workspace_refresh_hint(isolation: dict[str, Any]) -> str:
             "independent git worktree that produced the delivery; otherwise "
             "--delivery-workspace-path for that worktree"
         )
-    if (isolation.get("workspace") or {}).get("identity_kind") == "local_goal":
+    if isolation.get("identity_kind") == "local_goal":
         return (
             "registered local Goal target; when caller cwd differs, refresh with "
             "--delivery-workspace-path for the actual target; spend uses the "
