@@ -775,9 +775,7 @@ def build_live_quota_should_run_decision(
             monitor_phase=(receipt_bound_monitor_phase.value if receipt_bound_monitor_phase else None),
             settlement_progress=settlement_readback.progress if settlement_readback else None,
             replay_phase=receipt_bound_replay_phase,
-            receipt_bound_successor_replan=(
-                receipt_bound_guard_fields["receipt_bound_successor_replan"]
-            ),
+            heartbeat_receipt=settlement_readback.heartbeat_receipt if settlement_readback else None,
         )
     if hook_dispatch["failures"]:
         payload["capability_hook_dispatch"] = {

@@ -5,6 +5,7 @@ from canonical_authority_fixture import assert_todo_read_unchanged
 
 import json
 import shlex
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -330,6 +331,143 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
         assert fresh["replan_action_packet"]["obligation_id"]
     assert fresh["effective_action"] != "unsettled_host_turn_recovery"
     assert cli._spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("qualified", [False, True])
+def test_workspace_repair_wait_requires_original_business_admission(tmp_path, provider, qualified):
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    state = cli._configure_repository_write_todo(project)
+    state.write_text(state.read_text().replace("action_kind=validate", "action_kind=implement"))
+    registered = json.loads(registry.read_text())
+    registered["goals"][0]["coordination"]["registered_agents"].append("fixture-peer")
+    registry.write_text(json.dumps(registered))
+    cli._initialize_git_checkout(project)
+    subprocess.run([
+        "git", "-c", "user.name=LoopX Test", "-c", "user.email=loopx-test@example.invalid",
+        "commit", "--quiet", "--allow-empty", "-m", "fixture",
+    ], cwd=project, check=True)
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+    turn_id = "turn-workspace-repair-wait"
+    code, initial = _guard(project, runtime, registry, turn_id=turn_id)
+    assert code == 0, initial
+    assert initial["interaction_contract"]["mode"] == "agent_workspace_repair", initial
+    assert initial["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    original = initial["heartbeat_receipt"]["settlement_identity"]
+    workspace = project
+    if qualified:
+        workspace = tmp_path / "independent-worktree"
+        subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(workspace)],
+                       cwd=project, check=True)
+        code, admitted = cli._run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+            "--turn-instance-id", turn_id, "--todo-id", cli.TODO_ID, cwd=workspace,
+        )
+        assert code == 0, admitted
+        assert admitted["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+        assert admitted["heartbeat_receipt"]["settlement_identity"] == original
+    code, updated = cli._run_cli(
+        registry, runtime, "todo", "update", "--goal-id", cli.GOAL_ID,
+        "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
+        "--resume-when", "resume_at:2099-01-01T00:00:00Z", cwd=workspace,
+    )
+    assert code == 0, updated
+    for explicit in (False, True):
+        code, replay = cli._run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+            "--turn-instance-id", turn_id,
+            *(["--todo-id", cli.TODO_ID] if explicit else []), cwd=workspace,
+        )
+        assert code == 0, replay
+        assert replay["heartbeat_receipt"]["settlement_identity"] == original
+        recovery = replay.get("unsettled_host_turn_recovery") or {}
+        plan = replay["interaction_contract"]["cli_channel"].get("settlement_plan")
+        if qualified:
+            assert replay["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+            assert recovery.get("repair") == "durable_writeback", replay
+            assert plan["identity"] == original
+        else:
+            assert recovery.get("repair") != "durable_writeback", replay
+            # Replanning may still be admitted as planning. It cannot be
+            # replaced by a closeout for an unperformed business result.
+            if plan:
+                assert replay.get("replan_action_packet"), replay
+                assert replay["replan_action_packet"].get("settlement_only") is not True
+    assert cli._classification_count(runtime, "validated_progress") == 0
+    assert cli._spend_run_count(runtime) == 0
+    readback = read_heartbeat_settlement(
+        runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID, turn_instance_id=turn_id,
+    )
+    assert readback is not None
+    assert readback.native_child_admission["report_permission"] == (
+        "new_operation" if qualified else "not_admitted"
+    )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_initial_due_wait_preserves_original_replan_on_reentry(
+    tmp_path, provider,
+):
+    """Planning admission has no completed business result to recover."""
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    cli._configure_selected_todo_replan_fixture(project, registry)
+    state = project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace(
+        f"todo_id={cli.SELECTED_REPLAN_TODO_ID} status=open",
+        f"todo_id={cli.SELECTED_REPLAN_TODO_ID} status=open "
+        "resume_when=resume_at%3A2001-01-01T00%3A00%3A00Z",
+    ))
+    cli._initialize_git_checkout(project)
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+    turn_id = "turn-original-due-wait-replan"
+    code, pending = cli._run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--turn-instance-id", turn_id, cwd=project,
+    )
+    assert code == 0, pending
+    code, admitted = cli._run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--turn-instance-id", turn_id, "--todo-id", cli.SELECTED_REPLAN_TODO_ID,
+        cwd=project,
+    )
+    assert code == 0, json.dumps(admitted, ensure_ascii=False)
+    assert admitted["decision"] == "autonomous_replan_required", admitted
+    original = admitted["heartbeat_receipt"]["settlement_identity"]
+    obligation = admitted["replan_action_packet"]["obligation_id"]
+    admission_receipts = cli._heartbeat_receipt_count(runtime, turn_id)
+    before = list_goal_todos(
+        registry_path=registry, goal_id=cli.GOAL_ID,
+        runtime_root_arg=str(runtime), todo_id=cli.SELECTED_REPLAN_TODO_ID,
+    )
+    assert before["todo"]["status"] == "open"
+    assert before["todo"]["resume_ready"] is True
+    for explicit in (False, True):
+        code, replay = cli._run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+            "--turn-instance-id", turn_id,
+            *(["--todo-id", cli.SELECTED_REPLAN_TODO_ID] if explicit else []),
+            cwd=project,
+        )
+        assert code == 0 and replay["decision"] == "autonomous_replan_required", replay
+        assert replay["heartbeat_receipt"]["settlement_identity"] == original
+        assert replay["replan_action_packet"]["obligation_id"] == obligation
+        assert replay["replan_action_packet"].get("settlement_only") is not True
+        assert not replay.get("unsettled_host_turn_recovery")
+        assert not replay["interaction_contract"]["cli_channel"]["spend_allowed_now"]
+    after = list_goal_todos(
+        registry_path=registry, goal_id=cli.GOAL_ID,
+        runtime_root_arg=str(runtime), todo_id=cli.SELECTED_REPLAN_TODO_ID,
+    )
+    assert_todo_read_unchanged(before, after)
+    assert cli._heartbeat_receipt_count(runtime, turn_id) == admission_receipts
+    assert cli._spend_run_count(runtime) == 0
+    assert cli._classification_count(runtime, "validated_progress") == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

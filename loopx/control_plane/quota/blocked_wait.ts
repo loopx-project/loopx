@@ -1,6 +1,8 @@
-import type { JsonObject } from "../effect_program.ts";
+import {settlementIdentity, type JsonObject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
+import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
+import {heartbeatReceiptBinding, heartbeatReceiptDetails, heartbeatReceiptFactFromEvent} from "./heartbeat_receipt_identity.ts";
 import {
   evaluateTodoResumeConditions,
   normalizeTodoResumeWhen,
@@ -208,6 +210,27 @@ export function prepareBlockedWait(value: unknown): JsonObject {
 
 export const RECEIPT_BOUND_WAIT_REQUEST_SCHEMA = "loopx_quota_receipt_bound_wait_request_v0";
 
+/** Reuse committed work admission; a bound repair/planning Turn has no business
+ * result merely because it has an identity and a missing writeback. */
+function admittedBusinessResult(request: JsonObject): boolean {
+  const receipt = jsonObject(request.heartbeat_receipt);
+  if (typeof request.goal_id !== "string" || !request.goal_id ||
+      !receipt || receipt.goal_id !== request.goal_id || receipt.agent_id !== request.agent_id ||
+      (receipt.todo_id != null && receipt.todo_id !== request.todo_id) ||
+      receipt.run_id !== request.turn_instance_id) return false;
+  const identity = settlementIdentity({goal_id: String(request.goal_id), agent_id: String(request.agent_id),
+    todo_id: String(request.todo_id), turn_instance_id: String(request.turn_instance_id)});
+  const binding = heartbeatReceiptBinding(identity.goal_id, identity.agent_id, heartbeatReceiptFactFromEvent(receipt));
+  if (binding?.binding_kind !== "todo" || binding.binding_id !== identity.todo_id ||
+      binding.settlement_effect_id !== identity.effect_id) return false;
+  const facts = heartbeatReceiptDetails(receipt);
+  // An original semantic replan still owes that decision, even when the host
+  // permits planning tools. Neither a timer nor this projection discharges it.
+  if (facts.semantic_replan_obligation_id != null && facts.semantic_replan_obligation_id !== "") return false;
+  return nativeChildReportAdmission(facts, receipt.status, identity.effect_id, "open", false)
+    .report_permission === "new_operation";
+}
+
 /** A pending dependency changes executable work, never the Turn's receipts.
  * settlement_progress is the existing settlement owner's exact-Turn readback,
  * transported by the live guard, not an author-declared progress observation.
@@ -216,9 +239,7 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   const request = requireJsonObject(value, "receipt-bound wait request");
   if (request.schema_version !== RECEIPT_BOUND_WAIT_REQUEST_SCHEMA ||
       typeof request.turn_instance_id !== "string" || !request.turn_instance_id ||
-      typeof request.agent_id !== "string" || !request.agent_id || !Array.isArray(request.todos) ||
-      (request.receipt_bound_successor_replan !== undefined &&
-       typeof request.receipt_bound_successor_replan !== "boolean")) {
+      typeof request.agent_id !== "string" || !request.agent_id || !Array.isArray(request.todos)) {
     reject("requires a bound Turn and current Todo facts");
   }
   const todos = request.todos.map(row => requireJsonObject(row, "receipt-bound Todo"));
@@ -274,7 +295,7 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   if (["open", "deferred"].includes(String(todo.status)) &&
       todo.task_class === "advancement_task" &&
       writebackRequired && request.replay_phase === "open" &&
-      request.receipt_bound_successor_replan !== true && externalWait) {
+      admittedBusinessResult(request) && externalWait) {
     const reason = "The original admitted Turn still owes durable writeback. Its later external wait cannot discard that identity. Inspect existing effects and record only the validated original result, then settle once under the original identity. Keep the wait unchanged; do not repeat business work, select a successor, or invent a retry clock.";
     return boundRecovery(request, "durable_writeback", reason);
   }

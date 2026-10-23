@@ -201,6 +201,10 @@ export function heartbeatWorkRequalification(
     throw receiptIdentityConflict("work requalification must preserve the original settlement binding");
   }
   if (phase !== "open" || closeoutStarted) return replay;
+  // The retained settlement binding is not today's executable selection.
+  // A waiting Todo can leave broad compatibility flags set with no selected
+  // work; those flags cannot requalify a repair-only original receipt.
+  if (identity.todo_id !== null && currentDetails.selected_todo_id !== identity.todo_id) return replay;
   // No legacy/status-label compatibility for new qualifications: all modern
   // work facts must be explicit. This reuses the report-admission predicate.
   if (nativeChildReportAdmission(currentDetails, null, identity.effect_id, phase, false)

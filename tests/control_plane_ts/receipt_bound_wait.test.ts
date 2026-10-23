@@ -74,7 +74,15 @@ function externalWaitRequest(resume_when = "pr_merged:example/project#1") {
     available_capabilities: [],
   });
   const condition = (evaluated.conditions as {condition: Record<string, unknown>}[])[0]!.condition;
-  return {...input, replay_phase: "open", todos: [
+  return {...input, goal_id: "fixture", replay_phase: "open", heartbeat_receipt: {
+    goal_id: "fixture", agent_id: input.agent_id, todo_id: input.todo_id,
+    run_id: input.turn_instance_id, status: "normal_run", details: {
+      ok: true, should_run: true, must_attempt_work: true, delivery_allowed: true,
+      quiet_noop_allowed: false, todo_id: input.todo_id,
+      settlement_effect_id: `fixture:${input.agent_id}:${input.todo_id}:${input.turn_instance_id}`,
+      semantic_replan_obligation_id: "",
+    },
+  }, todos: [
     {...waiting, resume_condition: condition, resume_ready: false},
   ], settlement_progress: {schema_version: "quota_settlement_progress_v0",
     state: "writeback_required", next_step: "durable_writeback"}};
@@ -97,6 +105,13 @@ for (const resume_when of ["resume_at:2026-01-01T00:10:00Z", "resume_at:2026-01-
   }
 }
 
+test("ordinary receipts resolve their Todo from canonical details without a top-level mirror", () => {
+  const input = externalWaitRequest();
+  const {todo_id: _mirror, ...receipt} = input.heartbeat_receipt;
+  const result = projectReceiptBoundWait({...input, heartbeat_receipt: receipt});
+  assert.equal((result.recovery as Record<string, unknown>).repair, "durable_writeback");
+});
+
 for (const resume_when of ["resume_at:2026-01-01T00:10:00Z",
   "pr_merged:example/project#1", "capacity_available:git_push"]) {
   test(`an already satisfied ${resume_when} still owes the original writeback`, () => {
@@ -116,16 +131,39 @@ for (const status of ["open", "deferred"]) {
     input.todos[0]!.status = status;
     input.todos[0]!.resume_ready = true;
     Object.assign(input.todos[0]!.resume_condition as Record<string, unknown>, {satisfied: true});
-    assert.deepEqual(projectReceiptBoundWait({...input, receipt_bound_successor_replan: true}),
+    input.heartbeat_receipt.details.semantic_replan_obligation_id = "replan-0000000000000001";
+    assert.deepEqual(projectReceiptBoundWait(input),
       {status: "none"});
   });
 }
 
-test("the receipt-bound successor replan fact must be an exact boolean", () => {
-  assert.throws(
-    () => projectReceiptBoundWait({...externalWaitRequest(), receipt_bound_successor_replan: "true"}),
-    /requires a bound Turn and current Todo facts/,
-  );
+for (const facts of [{ok: false}, {should_run: false}, {must_attempt_work: false},
+  {delivery_allowed: false}, {quiet_noop_allowed: true}, {delivery_allowed: "true"}]) {
+  test(`an original repair or denied guard cannot invent result closeout: ${JSON.stringify(facts)}`, () => {
+    const input = externalWaitRequest();
+    Object.assign(input.heartbeat_receipt.details, facts);
+    assert.deepEqual(projectReceiptBoundWait(input), {status: "none"});
+  });
+}
+
+for (const field of ["goal_id", "agent_id", "todo_id", "run_id"] as const) {
+  test(`another receipt ${field} cannot supply work admission`, () => {
+    const input = externalWaitRequest();
+    input.heartbeat_receipt[field] = "other-identity";
+    assert.deepEqual(projectReceiptBoundWait(input), {status: "none"});
+  });
+}
+
+for (const receipt of [null, {goal_id: "fixture"}]) {
+  test("missing original work admission cannot be inferred from an open binding", () => {
+    assert.deepEqual(projectReceiptBoundWait({...externalWaitRequest(), heartbeat_receipt: receipt}), {status: "none"});
+  });
+}
+
+test("another effect cannot lend its positive admission", () => {
+  const input = externalWaitRequest();
+  input.heartbeat_receipt.details.settlement_effect_id = "other-effect";
+  assert.deepEqual(projectReceiptBoundWait(input), {status: "none"});
 });
 
 for (const patch of [{replay_phase: "settled"}, {replay_phase: null},

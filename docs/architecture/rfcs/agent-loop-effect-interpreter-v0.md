@@ -470,9 +470,13 @@ When an admitted Todo later waits on a timer, PR or capability, the typed
 receipt owner preserves its original writeback and settlement route. Reentry
 projects only that closeout, including for deferred work and after the wait
 becomes due; it cannot resume business work, select a successor or invent a
-retry clock. A Turn whose original admission required successor replanning
-keeps that planning action instead of being mistaken for an existing business
-result. Real File/SQLite CLI coverage exercises generated commands, refused
+retry clock. Recovery reuses the committed receipt's positive work admission
+and exact settlement binding. Workspace repair alone has no business result;
+the same Turn must first requalify freshly selected work on that exact Todo
+through the normal guard. Broad compatibility flags without that selection
+cannot turn a retained binding into work admission. A Turn with
+an original semantic replan keeps that decision instead of being mistaken for
+an existing business result. Real File/SQLite CLI coverage exercises generated commands, refused
 rebinding, one writeback/debit, preserved initial replan and settled replay.
 This source-path repair does not qualify installed host adoption or
 complete-cost acceptance.

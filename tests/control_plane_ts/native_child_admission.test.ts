@@ -75,6 +75,7 @@ async function fixture(replan = false) {
   const event = {schema_version: "loopx_rollout_event_v0", event_id: "event-original",
     event_kind: "quota_should_run", goal_id: goalId, agent_id: agentId, run_id: turnId,
     status: "autonomous_replan_required", details: {...proof, todo_id: identity.todo_id,
+      selected_todo_id: identity.todo_id,
       replan_obligation_id: identity.replan_obligation_id, settlement_effect_id: identity.effect_id}};
   const log = join(goalRoot, "rollout-event-log.jsonl");
   await writeFile(log, JSON.stringify(event) + "\n");
@@ -200,6 +201,19 @@ test("partial, denied or truthy current facts cannot requalify a negative guard"
     }
     assert.equal(heartbeatWorkRequalification(original, event.details, identity, "open", true).append, false);
     assert.equal(heartbeatWorkRequalification(event, event.details, identity, "open", false).append, false);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("a retained binding cannot replace fresh same-Todo executable selection", async () => {
+  const {root, identity, event} = await fixture();
+  try {
+    const original = {...event, details: {...event.details, delivery_allowed: false}};
+    for (const selected of [undefined, null, "todo_other_validation", true]) {
+      const current = {...event.details, selected_todo_id: selected};
+      assert.deepEqual(heartbeatWorkRequalification(original, current, identity, "open", false),
+        {append: false, details: null});
+    }
+    assert.equal(heartbeatWorkRequalification(original, event.details, identity, "open", false).append, true);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 

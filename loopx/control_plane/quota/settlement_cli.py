@@ -374,6 +374,7 @@ def quota_rollout_details(
         "slots": payload.get("slots") or "",
         "source": payload.get("source") or "",
         "todo_id": todo_id or "",
+        "selected_todo_id": normalize_todo_id(selected_todo.get("todo_id")) if selected_todo else None,
         "replan_obligation_id": replan_obligation_id or "",
         "semantic_replan_obligation_id": semantic_replan_obligation_id or "",
         "target_key": payload.get("target_key") or "",

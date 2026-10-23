@@ -159,7 +159,7 @@ def test_concurrent_identityless_receipt_upgrades_append_one_correction(
 def test_concurrent_work_requalification_appends_one_same_binding_receipt(tmp_path: Path) -> None:
     proof = {"ok": True, "should_run": True, "must_attempt_work": True,
              "delivery_allowed": True, "quiet_noop_allowed": False,
-             "todo_id": TODO_ID, "settlement_effect_id": EFFECT_ID}
+             "todo_id": TODO_ID, "selected_todo_id": TODO_ID, "settlement_effect_id": EFFECT_ID}
     original = build_rollout_event(goal_id=GOAL_ID, event_kind="quota_should_run",
         agent_id=AGENT_ID, todo_id=TODO_ID, run_id=TURN_ID,
         status="successor_replan_required", summary="delivery denied",
