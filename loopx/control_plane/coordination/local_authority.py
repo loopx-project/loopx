@@ -7,8 +7,6 @@ closed instead of consulting the legacy Markdown projection.
 
 from __future__ import annotations
 
-from ..goals.acceptance_readback import configured_checks
-
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -247,6 +245,7 @@ def claim_canonical_todo_if_promoted(
 def read_canonical_todos_if_promoted(
     *, runtime_root: Path, goal_id: str, include_leases: bool = False,
     projection_readback: Mapping[str, Any] | None = None,
+    include_summary: bool = False, rollout_events=None, available_capabilities=None,
 ) -> dict[str, Any]:
     """Read canonical Todos or fail with the native migration/recovery cause.
 
@@ -254,13 +253,28 @@ def read_canonical_todos_if_promoted(
     Explicit migration captures use the dedicated source inspection owner.
     """
 
-    result = read_canonical_snapshot(
-        rpc=effect_runtime_result,
-        runtime_root=str(runtime_root.expanduser().resolve(strict=False)),
-        goal_id=goal_id, include_leases=include_leases,
-        projection_readback=projection_readback,
-        timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
-    )
+    projected = None
+    if include_summary:
+        from ..todos.goal_todo_projection import project_todo_read
+        from ..runtime.time import now_utc
+
+        now = now_utc()
+        projected = project_todo_read({"kind": "canonical_fields",
+            "source": {"runtime_root": str(runtime_root.expanduser().resolve(strict=False)), "goal_id": goal_id,
+                "include_leases": include_leases, "projection_readback": dict(projection_readback) if projection_readback is not None else None},
+            "rollout_events": list(rollout_events or []),
+            "rollout_event_source": getattr(rollout_events, "source", None),
+            "available_capabilities": sorted({str(value).strip().lower() for value in available_capabilities if str(value).strip()}) if available_capabilities is not None else None,
+            "observed_at": now.timestamp(), "evaluated_at": now.isoformat()})
+        result = projected["canonical"]
+    else:
+        result = read_canonical_snapshot(
+            rpc=effect_runtime_result,
+            runtime_root=str(runtime_root.expanduser().resolve(strict=False)),
+            goal_id=goal_id, include_leases=include_leases,
+            projection_readback=projection_readback,
+            timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
+        )
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(
             "local coordination authority returned an invalid Todo list",
@@ -318,6 +332,9 @@ def read_canonical_todos_if_promoted(
                 "canonical projection confirmation is missing or invalid",
                 code="local_authority_projection_confirmation_invalid", payload=payload,
             )
+    if projected is not None and "fields" in projected:
+        from ..todos.goal_todo_projection import restore_todo_field_evaluations
+        payload["_todo_fields"] = restore_todo_field_evaluations(projected)
     return payload
 
 
@@ -340,8 +357,10 @@ class CanonicalTodoSnapshot:
         key = (runtime_root.expanduser().resolve(strict=False), goal_id)
         if key not in self._reads:
             try:
+                from ..todos.resume_condition import TodoResumeRolloutEvents
                 self._reads[key] = read_canonical_todos_if_promoted(
-                    runtime_root=key[0], goal_id=goal_id,
+                    runtime_root=key[0], goal_id=goal_id, include_summary=True,
+                    rollout_events=TodoResumeRolloutEvents([], runtime_root=key[0], goal_id=goal_id),
                 )
             except LocalCoordinationAuthorityUnavailable as error:
                 # A failed first read cannot become a successful attention view
@@ -369,12 +388,10 @@ def read_canonical_todo_fields_if_promoted(
     read neither repairs Markdown nor grants mutation/promotion authority.
     Callers pass the same fields to all decisions in one planning operation.
     """
-    canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
-    return (
-        canonical_todo_summary_fields(canonical["todos"], rollout_events=rollout_events,
-            goal_acceptance_contract=canonical.get("goal_acceptance_contract"),
-            goal_acceptance_work_guards=canonical.get("goal_acceptance_work_guards"))
-    )
+    canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id,
+        include_summary=True, rollout_events=rollout_events)
+    return canonical["_todo_fields"]
+
 
 
 def canonical_todo_summary_fields(
@@ -385,69 +402,12 @@ def canonical_todo_summary_fields(
     goal_acceptance_contract: dict[str, Any] | None = None,
     goal_acceptance_work_guards: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Adapt canonical records into the existing Todo summary read model."""
+    from ..todos.goal_todo_projection import canonical_todo_fields
 
-    from ..todos.active_state_editing import TODO_SECTION_HEADINGS
-    from ..todos.standing_decision import build_standing_decision_authority
-    from ..todos.todo_summary import compact_todo_group, count_advancement_todos
-
-    # Read standing decisions before assigning presentation-only indexes, and
-    # include retained history so archiving a revocation cannot revive approval.
-    standing_authority = build_standing_decision_authority(
-        [item for item in todos if item.get("role") == "user"], canonical_records=True,
-    )
-    archived_ids = {
-        item["todo_id"]
-        for item in todos
-        if item.get("archive_state") == "archive"
-    }
-    todos = canonical_todo_items(todos)
-    # These are native authority decisions, not persisted Todo fields. Keep the
-    # records visible while every summary/selection uses the same work guard.
-    if goal_acceptance_contract and configured_checks(goal_acceptance_contract) is not None:
-        guards = goal_acceptance_work_guards or {}
-        todos = [{**item, "goal_acceptance_guard": guards[item["todo_id"]]}
-            if item.get("todo_id") in guards else item for item in todos]
-    fields: dict[str, Any] = {}
-    for role in ("user", "agent"):
-        items = [
-            item
-            for item in todos
-            if ("user" if item.get("role") == "user" else "agent") == role
-            and item.get("todo_id") not in archived_ids
-        ]
-        summary = compact_todo_group(
-            items,
-            source_section=TODO_SECTION_HEADINGS[role],
-            role=role,
-            include_empty_source=True,
-            resume_source_items=todos,
-            rollout_events=rollout_events,
-            available_capabilities=available_capabilities,
-            item_limit=None,
-        )
-        if summary:
-            if role == "agent":
-                if goal_acceptance_contract and (configured_checks(goal_acceptance_contract) is not None or goal_acceptance_contract.get("outcome_requirements") or goal_acceptance_contract.get("goal_objective")):
-                    summary["goal_acceptance_contract"] = goal_acceptance_contract
-                archived_done = count_advancement_todos(
-                    [
-                        item
-                        for item in todos
-                        if item.get("todo_id") in archived_ids
-                        and item.get("done") is True
-                    ]
-                )
-                if archived_done:
-                    summary["archived_advancement_done_count"] = archived_done
-                    summary["advancement_done_count"] = (
-                        int(summary.get("advancement_done_count") or 0) + archived_done
-                    )
-            fields[f"{role}_todos"] = summary
-        if role == "user":
-            if standing_authority:
-                fields["standing_decision_authority"] = standing_authority
-    return fields
+    return canonical_todo_fields(todos, rollout_events=rollout_events,
+        available_capabilities=available_capabilities,
+        goal_acceptance_contract=goal_acceptance_contract,
+        goal_acceptance_work_guards=goal_acceptance_work_guards)
 
 
 def canonical_todo_items(todos: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -29,6 +29,11 @@ export function verdictLabel(metric: TrajectoryMetric, verdict: AssessmentVerdic
   return verdict === "yes" ? (zh ? "有依据" : "Supported") : (zh ? "未建立" : "Not established");
 }
 
+// The assessment owner supplies localized questions. Both readers use that
+// copy without inventing short titles or translating the original evidence.
+export const episodeQuestion = (result: TrajectoryAssessment, id: string, episode?: TrajectoryEpisode) =>
+  result.episode_questions?.find(question => question.episode_id === id)?.question ?? episode?.question ?? id;
+
 // Format the native owner's existing projection, without deriving a gain,
 // deciding adoption, or borrowing values from another pack.
 function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<ResearchProgressPack["native_outcomes"]>; zh: boolean; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
@@ -131,16 +136,13 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
                   {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
                   {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
                 </ContextHelp></div>
-                {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episode.question}</li>)}</ul></div> : null}
+                {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episodeQuestion(result, episode.id, episode)}</li>)}</ul></div> : null}
                 <div className="research-assessments">{assessments.map(assessment => {
                   const episode = p.episodes?.find(item => item.id === assessment.episode_id);
-                  // Use the declared identity, not a guessed title extracted
-                  // from the question. The complete source wording stays below.
                   return <details className="research-assessment" key={assessment.episode_id}>
-                    <summary><span className="research-assessment-name">{assessment.episode_id}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
+                    <summary><span className="research-assessment-name">{episodeQuestion(result, assessment.episode_id, episode)}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
                     <div className="research-assessment-body">
-                      {episode ? <><p className="research-assessment-question">{result.episode_questions?.find(q => q.episode_id === episode.id)?.question ?? episode.question}</p>
-                        {result.episode_questions ? <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><p>{episode.question}</p></details> : null}</> : null}
+                      <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><code>{assessment.episode_id}</code>{episode ? <p>{episode.question}</p> : null}</details>
                       <p>{assessment.reason}</p>
                       <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
                     </div>

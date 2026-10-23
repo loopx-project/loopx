@@ -37,8 +37,11 @@ impl LocalWorkspace {
             goal_id: selection_id(goal)?,
             // Existing local presentation vocabulary, owned by dashboard's
             // router.tsx. Unknown/retired views use the frontend's default.
-            view: matches!(view, "conversation" | "overview" | "tasks" | "files")
-                .then(|| view.to_owned()),
+            view: matches!(
+                view,
+                "conversation" | "overview" | "tasks" | "research" | "files"
+            )
+            .then(|| view.to_owned()),
             work_agent: selection_id(agent),
             todo: selection_id(todo),
         })
@@ -211,27 +214,29 @@ mod tests {
     #[test]
     fn ordinary_reopen_keeps_selection_across_ports_without_replaying_other_inputs() {
         let old = origin(49123);
-        let mut page = old.clone();
-        page.query_pairs_mut().extend_pairs([
-            ("goalId", "example"),
-            ("view", "conversation"),
-            ("workAgent", "worker"),
-            ("todo", "todo_123"),
-            ("statusUrl", "/status.json"),
-            ("token", "secret"),
-            ("prompt", "run"),
-            ("reportSessionId", "report"),
-        ]);
-        page.set_fragment(Some("secret"));
-        let selection = LocalWorkspace::capture(&page, &old).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("app/workspace-location.json");
-        write(&path, &selection).unwrap();
-        let reopened = read(&path).unwrap().destination(&origin(59234));
-        assert_eq!(reopened.as_str(), "http://127.0.0.1:59234/chat/?goalId=example&statusUrl=%2Fstatus.json&view=conversation&workAgent=worker&todo=todo_123");
-        let stored = fs::read_to_string(&path).unwrap();
-        for excluded in ["secret", "49123", "prompt", "report", "token", "http"] {
-            assert!(!stored.contains(excluded), "{excluded}");
+        for view in ["conversation", "overview", "tasks", "research", "files"] {
+            let mut page = old.clone();
+            page.query_pairs_mut().extend_pairs([
+                ("goalId", "example"),
+                ("view", view),
+                ("workAgent", "worker"),
+                ("todo", "todo_123"),
+                ("statusUrl", "/status.json"),
+                ("token", "secret"),
+                ("prompt", "run"),
+                ("reportSessionId", "report"),
+            ]);
+            page.set_fragment(Some("secret"));
+            let selection = LocalWorkspace::capture(&page, &old).unwrap();
+            write(&path, &selection).unwrap();
+            let reopened = read(&path).unwrap().destination(&origin(59234));
+            assert_eq!(reopened.as_str(), format!("http://127.0.0.1:59234/chat/?goalId=example&statusUrl=%2Fstatus.json&view={view}&workAgent=worker&todo=todo_123"));
+            let stored = fs::read_to_string(&path).unwrap();
+            for excluded in ["secret", "49123", "prompt", "report", "token", "http"] {
+                assert!(!stored.contains(excluded), "{view}: {excluded}");
+            }
         }
     }
 

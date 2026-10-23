@@ -13,6 +13,7 @@ const CONTEXT_FIELDS = ["action_kind", "task_repository", "continuation_policy",
   "completed_at", "updated_at", "required_write_scopes", "required_capabilities", "target_capabilities",
   "explore_result_node_refs", "decision_scope", "required_decision_scopes", "unblocks_todo_id",
   "resume_when", "blocks_agent", "excluded_agents", "global_gate"] as const;
+export {CONTEXT_FIELDS as SUCCESSION_CONTEXT_FIELDS};
 const EVALUATION_SCHEMA = "todo_succession_evaluation_v0";
 interface Row {
   facts: JsonObject; id: string | null; status: "open" | "blocked" | "done" | "deferred";
@@ -92,7 +93,7 @@ export function indexInferredSuccessors(rows: readonly Pick<Row, "id" | "advance
 }
 
 /** Index inferred edges once; both completion and handoff use the same resolver. */
-export function evaluateTodoSuccession(values: readonly unknown[]): JsonObject[] {
+export function evaluateTodoSuccession(values: readonly unknown[], resultStart = 0): JsonObject[] {
   const rows = values.map(decode), byId = new Map<string, Row>();
   const generations = new Set<string>();
   for (const row of rows) {
@@ -105,7 +106,7 @@ export function evaluateTodoSuccession(values: readonly unknown[]): JsonObject[]
     if (row.active || !byId.has(row.id)) byId.set(row.id, row);
   }
   const inferred = indexInferredSuccessors([...byId.values()]);
-  return rows.map(row => {
+  return rows.slice(resultStart).map(row => {
     const declared = [...new Set([...row.successors, ...(row.supersededBy ? [row.supersededBy] : [])])];
     // A retained archived target is still evidence. A missing/self target is not.
     const resolved = declared.filter(target => target !== row.id && byId.has(target));

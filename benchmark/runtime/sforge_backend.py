@@ -11,6 +11,7 @@ from sforge.harness.backend.docker_backend import DockerBackend
 from sforge.harness.network_isolation import AllowedEndpoint, resolve_hostname
 
 from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
+from .provider_failure import observe_terminal_provider_failure
 
 
 class RecordingDockerBackend(DockerBackend):
@@ -25,6 +26,7 @@ class RecordingDockerBackend(DockerBackend):
         self.execution_start_marker = None
         self.execution_receipt = None
         self.native_goal_receipt = None
+        self.provider_failure_receipt = None
         self.auth_ips = [] if oauth_proxy else resolve_hostname("auth.openai.com", logger)
         if not oauth_proxy and not self.auth_ips:
             raise RuntimeError("Cannot resolve Codex OAuth endpoint")
@@ -100,54 +102,70 @@ class RecordingDockerBackend(DockerBackend):
         self.feedback.start(self, handle)
 
     def cleanup_container(self, handle, logger=None):
-        if self.checkpoint is not None:
-            self.checkpoint.close()
-        if self.feedback is not None:
-            self.feedback.close()
-        if handle is not None:
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            observations = []
-            # Never copy the whole Codex home: auth.json must stay private in
-            # the source home and disposable trial, outside collected artifacts.
-            for remote, name in [("/logs/agent", "runtime"),
-                                 ("/home/agent/.codex/sessions", "native-sessions"),
-                                 (f"{_CODEX_HOME}/sessions", "worker-sessions"),
-                                 (_CONTROL, "worker-control"),
-                                 (_LOOPX_RUNTIME, "loopx-state")]:
+        try:
+            if self.checkpoint is not None:
+                self.checkpoint.close()
+            if self.feedback is not None:
+                self.feedback.close()
+            if handle is not None:
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                observations = []
+                # Never copy the whole Codex home: auth.json must stay private in
+                # the source home and disposable trial, outside collected artifacts.
+                for remote, name in [("/logs/agent", "runtime"),
+                                     ("/home/agent/.codex/sessions", "native-sessions"),
+                                     (f"{_CODEX_HOME}/sessions", "worker-sessions"),
+                                     (_CONTROL, "worker-control"),
+                                     (_LOOPX_RUNTIME, "loopx-state")]:
+                    try:
+                        data = self.copy_from_container(handle, PurePosixPath(remote))
+                        target = self.log_dir / name
+                        target.mkdir(exist_ok=True)
+                        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                            archive.extractall(target, filter="data")
+                        observations.append({"artifact": name, "collected": True})
+                    except Exception as error:
+                        observations.append({"artifact": name, "collected": False,
+                                             "error_kind": type(error).__name__})
                 try:
-                    data = self.copy_from_container(handle, PurePosixPath(remote))
-                    target = self.log_dir / name
-                    target.mkdir(exist_ok=True)
-                    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-                        archive.extractall(target, filter="data")
-                    observations.append({"artifact": name, "collected": True})
+                    self.provider_failure_receipt = observe_terminal_provider_failure(
+                        self.log_dir / "native-sessions" / "sessions",
+                        self.log_dir / "worker-sessions" / "sessions",
+                    )
                 except Exception as error:
-                    observations.append({"artifact": name, "collected": False,
+                    # This receipt is optional diagnosis. A malformed future
+                    # event must not change the run result or resource cleanup.
+                    self.provider_failure_receipt = None
+                    observations.append({"artifact": "provider-failure-observation",
+                                         "collected": False,
                                          "error_kind": type(error).__name__})
-            (self.log_dir / "artifact-collection.json").write_text(json.dumps(observations))
-            # A native-Goal worker owns exactly one wake (including opt-in
-            # continuation Goals). Read its retained receipt after collection;
-            # don't infer completion from a shell exit or solver output prose.
-            wakes = self.log_dir / "runtime" / "agent" / "wakes"
-            native = []
-            for path in wakes.glob("*/receipt.json"):
-                try:
-                    receipt = json.loads(path.read_text())
-                    if isinstance(receipt, dict) and receipt.get("mode") in {"native-goal", "loopx-goal"}:
-                        native.append(receipt)
-                except (OSError, ValueError):
-                    continue  # Collection gaps retain the transport failure.
-            if len(native) == 1:
-                self.native_goal_receipt = {key: native[0][key] for key in
-                    ("native_goal_outcome", "native_goal_rounds", "native_goal") if key in native[0]}
-            elif native:
-                self.native_goal_receipt = {"native_goal_outcome": "unknown"}
-        super().cleanup_container(handle, logger)
-        if self.feedback is not None:
-            # Native cleanup logs some failures instead of raising. Verify the
-            # solver is absent before returning its capacity to another trial.
-            name = handle.name if handle is not None else (
-                f"sforge.run.{self.feedback.task_id}.{self.feedback.run_id}")
-            if self.container_exists(name):
-                raise RuntimeError("Worker remains present; online capacity was not released")
-            self.feedback.release_registration()
+                (self.log_dir / "artifact-collection.json").write_text(json.dumps(observations))
+                # A native-Goal worker owns exactly one wake (including opt-in
+                # continuation Goals). Read its retained receipt after collection;
+                # don't infer completion from a shell exit or solver output prose.
+                wakes = self.log_dir / "runtime" / "agent" / "wakes"
+                native = []
+                for path in wakes.glob("*/receipt.json"):
+                    try:
+                        receipt = json.loads(path.read_text())
+                        if isinstance(receipt, dict) and receipt.get("mode") in {"native-goal", "loopx-goal"}:
+                            native.append(receipt)
+                    except (OSError, ValueError):
+                        continue  # Collection gaps retain the transport failure.
+                if len(native) == 1:
+                    self.native_goal_receipt = {key: native[0][key] for key in
+                        ("native_goal_outcome", "native_goal_rounds", "native_goal") if key in native[0]}
+                elif native:
+                    self.native_goal_receipt = {"native_goal_outcome": "unknown"}
+        finally:
+            try:
+                super().cleanup_container(handle, logger)
+            finally:
+                if self.feedback is not None:
+                    # Native cleanup logs some failures instead of raising. Verify the
+                    # solver is absent before returning its capacity to another trial.
+                    name = handle.name if handle is not None else (
+                        f"sforge.run.{self.feedback.task_id}.{self.feedback.run_id}")
+                    if self.container_exists(name):
+                        raise RuntimeError("Worker remains present; online capacity was not released")
+                    self.feedback.release_registration()

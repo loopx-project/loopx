@@ -136,10 +136,20 @@ def write_monitor_poll_todo_state(
     # A selected provider must be readable before any historical fallback.
     # An unmigrated source may still replay its exact business receipt; that
     # typed readback does not admit a fresh Monitor write or drain old captures.
-    authority = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-    )
+    from ..coordination.local_authority import CanonicalAuthorityRequired
+
+    try:
+        authority = read_canonical_todos_if_promoted(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+        )
+    except CanonicalAuthorityRequired:
+        if not execute or not monitor_effect_id or lease_proof is not None:
+            raise
+        # This explicit original-operation read can only return an immutable
+        # business receipt. Its existing typed owner validates exact intent;
+        # no receipt still refuses below, without reopening the retired writer.
+        authority = None
     source_error: OSError | ValueError | None = None
     if monitor_effect_id and lease_proof is None:
         # Legacy receipts are historical facts even after authority promotion.

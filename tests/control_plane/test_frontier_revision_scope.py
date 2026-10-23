@@ -27,8 +27,8 @@ def test_summary_adapter_rejects_non_object_batched_frontier(monkeypatch, index)
 
     def invalid_frontier(method, request, **kwargs):
         result = original(method, request, **kwargs)
-        if method == "todo.summary.project":
-            result["fields"]["advancement_frontier_revision_index"] = index
+        if method == "todo.read":
+            result["summary"]["advancement_frontier_revision_index"] = index
         return result
 
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", invalid_frontier)

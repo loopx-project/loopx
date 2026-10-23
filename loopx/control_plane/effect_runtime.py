@@ -42,6 +42,7 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
+    "todo.read",
     "collaboration.inbox.read",
     "collaboration.delegation.inventory_page",
     "benchmark.trajectory.codex-usage",
@@ -336,9 +337,9 @@ def _runtime_fingerprint_for_snapshot(
     digest.update(os.fsencode(os.path.normcase(root)))
     digest.update(b"\0")
     paths = (source_root / relative for relative, *_metadata in snapshot)
-    # Reads may finish out of order; hash the same relative names and original
-    # bytes in snapshot order. No disk cache or skipped freshness check.
-    with closing(iter_binary_file_reads(paths)) as reads:
+    # A fresh CLI hashes these small package files; starting a pool costs more
+    # than sequential local reads. Keep every byte and the freshness recheck.
+    with closing(iter_binary_file_reads(paths, max_workers=1)) as reads:
         for (relative, *_metadata), read in zip(snapshot, reads, strict=True):
             if read.error is not None:
                 raise read.error

@@ -50,8 +50,8 @@ app.run()
 ''')
     subprocess.run(["swiftc", str(source), "-framework", "Cocoa", "-o", str(executable)],
                    check=True, capture_output=True, timeout=30)
-    host_type = importlib.import_module("loopx_codex_provider_routing.native_host").NativeHost
-    host = object.__new__(host_type)
+    host_module = importlib.import_module("loopx_codex_provider_routing.native_host")
+    host = object.__new__(host_module.NativeHost)
     host.home, host.spec = tmp_path, {}
     host.not_after = None
     host.revision = lambda: "fixture-selection"
@@ -79,6 +79,15 @@ app.run()
             while not (tmp_path / "app.pid").exists() and time.monotonic() < deadline:
                 time.sleep(.05)
             assert (tmp_path / "app.pid").exists()
+            # Challenge the real JXA instance fences before the authorized quit.
+            # Both graceful and forced paths must reject a different launch;
+            # force quit must also reject the wrong executable for this PID.
+            for script, path in [(host_module.QUIT, executable), (host_module.FORCE_QUIT, executable),
+                                 (host_module.FORCE_QUIT, executable.with_name("OtherFixture"))]:
+                with pytest.raises(subprocess.CalledProcessError):
+                    subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(running()), str(path), "1"],
+                                   input=script, text=True, check=True, capture_output=True, timeout=10)
+                assert running() is not None
         assert host.close_client("fixture-selection", timeout=0.5 if force else 10, force=force) is True
         if force:
             assert running() is None
@@ -307,6 +316,44 @@ def test_paused_unchanged_selection_does_not_repeat_usage_or_shutdown(native, tm
     assert provider._load()["failure_count"] == 3
 
 
+@pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("code", ["client_changed", "native_unavailable"])
+def test_failed_handoffs_exhaust_a_durable_retry_budget(native, tmp_path, force, code):
+    provider, transport, clock = configured(native, tmp_path)
+    provider.configure(expected_revision=1, enabled=True, slots=["a", "b"],
+                       restart_clients=True, force_quit_clients=force)
+    attempts = []
+    failure = code
+
+    def failing(adapter, operation, **parameters):
+        if operation == "switch":
+            attempts.append(parameters)
+            if failure:
+                raise native.HostError(failure)
+        return transport(adapter, operation, **parameters)
+
+    counts = []
+    for _ in range(4):
+        # Restart between due observations; the budget belongs to durable state.
+        provider = native.NativeAccounts(tmp_path, transport=failing, clock=clock)
+        provider.tick()
+        counts.append(provider._load()["failure_count"])
+        clock.now += 1000
+    assert counts == [1, 2, 3, 3]
+    assert len(attempts) == 3 and transport.active == "a"
+    assert all(attempt["force_quit_clients"] is force for attempt in attempts)
+    assert provider.tick(refresh=True)["active_slot"] == "a"
+    assert len(attempts) == 4 and provider._load()["failure_count"] == 1
+    failure = None
+    clock.now += 1000
+    assert provider.tick()["action"] == "selected"
+    assert provider._load()["failure_count"] == 0
+    provider.configure(expected_revision=2, enabled=False, slots=["a", "b"])
+    before = len(transport.calls), len(attempts)
+    assert provider.tick()["action"] == "disabled"
+    assert (len(transport.calls), len(attempts)) == before
+
+
 def test_lost_reply_recovers_readback_without_replaying_switch(native, tmp_path):
     provider, transport, clock = configured(native, tmp_path)
     transport.committed_without_reply = True
@@ -522,9 +569,11 @@ def test_unresolved_worker_never_replays_or_reconfigures_an_enabled_handoff(nati
     assert result["policy"]["enabled"] is False and provider._load()["intent"] is None
 
 
-def test_refused_client_is_not_repeatedly_closed_in_the_background(native, tmp_path):
+@pytest.mark.parametrize("force", [False, True])
+def test_refused_client_is_not_repeatedly_closed_in_the_background(native, tmp_path, force):
     provider, transport, clock = configured(native, tmp_path)
-    provider.configure(expected_revision=1, enabled=True, slots=["a", "b"], restart_clients=True)
+    provider.configure(expected_revision=1, enabled=True, slots=["a", "b"],
+                       restart_clients=True, force_quit_clients=force)
     calls = []
 
     def refused(adapter, operation, **parameters):
@@ -606,25 +655,30 @@ def client_host(native, monkeypatch):
     return adapter, state, module
 
 
-@pytest.mark.parametrize("fault", [None, "selection", "new-process", "stale-quota", "unreadable-launch"])
-def test_force_quit_requires_the_same_observed_launch_and_selection(native, monkeypatch, fault):
+@pytest.mark.parametrize("fault,phase", [(None, "quit"), ("unreadable-launch", "probe"),
+                                        *[(fault, phase) for fault in ("selection", "new-process", "stale-quota")
+                                          for phase in ("probe", "quit")]])
+def test_force_quit_requires_the_same_observed_launch_and_selection(native, monkeypatch, fault, phase):
     adapter, state, module = client_host(native, monkeypatch)
     adapter.not_after = None
     forced = []
 
     def stalled(command, **parameters):
-        if parameters["input"] == module.QUIT:
+        if parameters["input"] == (module.PROBE if phase == "probe" else module.QUIT):
             if fault == "selection":
                 state["revision"] = "manual-choice"
             if fault == "new-process":
                 state["pid"] = 33
             if fault == "stale-quota":
                 adapter.not_after = time.time() - 1
+        if parameters["input"] == module.PROBE:
             return SimpleNamespace(stdout="{}" if fault == "unreadable-launch" else
-                json.dumps({"launch_time": 1000, "accepted": True}))
+                                   json.dumps({"launch_time": 1000}))
+        if parameters["input"] == module.QUIT:
+            return SimpleNamespace(stdout=json.dumps({"launch_time": 1000, "accepted": True}))
         forced.append(command)
         assert parameters["input"] == module.FORCE_QUIT
-        assert 'launchDate.timeIntervalSince1970) !== Number(argv[2])' in parameters["input"]
+        assert 'started !== Number(argv[2])' in parameters["input"]
         assert command[-3:] == ["11", "/synthetic/GPT.app/Contents/MacOS/GPT", "1000"]
         state["pid"] = None
 
@@ -637,6 +691,53 @@ def test_force_quit_requires_the_same_observed_launch_and_selection(native, monk
             adapter.close_client("initial", timeout=0, force=True)
         assert not forced
     assert state["active"] == "a" and state["switch"] == 0
+
+
+@pytest.mark.parametrize("receipt", ["{}", "[]", "null", "not-json", '{"launch_time":true}',
+                                    '{"launch_time":"1000"}', '{"launch_time":0}',
+                                    '{"launch_time":-1}', '{"launch_time":NaN}',
+                                    '{"launch_time":Infinity}', '{"launch_time":-Infinity}'])
+def test_incomplete_or_invalid_probe_cannot_authorize_any_quit(native, monkeypatch, receipt):
+    adapter, state, module = client_host(native, monkeypatch)
+    calls = []
+
+    def probe(command, **parameters):
+        calls.append(parameters["input"])
+        assert parameters["input"] == module.PROBE
+        return SimpleNamespace(stdout=receipt)
+
+    monkeypatch.setattr(module.subprocess, "run", probe)
+    with pytest.raises(module.HostError, match="client_quit_refused"):
+        adapter.close_client("initial", timeout=0, force=True)
+    assert calls == [module.PROBE]
+    assert state["pid"] == 11 and state["active"] == "a" and state["switch"] == 0
+
+
+@pytest.mark.parametrize("launch_time", [None, 1000.0])
+@pytest.mark.parametrize("outcome", ["graceful", "refused", "timeout"])
+def test_force_permission_only_escalates_a_failed_normal_quit(native, monkeypatch, launch_time, outcome):
+    adapter, state, module = client_host(native, monkeypatch)
+    adapter.not_after = None
+    calls = []
+
+    def quit(command, **parameters):
+        script = parameters["input"]
+        calls.append(script)
+        if script == module.PROBE:
+            return SimpleNamespace(stdout=json.dumps({"launch_time": launch_time}))
+        assert command[-1] == ("unknown" if launch_time is None else str(launch_time))
+        if script == module.QUIT:
+            if outcome == "graceful":
+                state["pid"] = None
+            return SimpleNamespace(stdout=json.dumps({"accepted": outcome != "refused"}))
+        assert script == module.FORCE_QUIT and outcome != "graceful"
+        state["pid"] = None
+
+    monkeypatch.setattr(module.subprocess, "run", quit)
+    assert adapter.close_client("initial", timeout=0 if outcome == "timeout" else 1, force=True)
+    expected = [module.PROBE, module.QUIT]
+    assert calls == (expected if outcome == "graceful" else [*expected, module.FORCE_QUIT])
+    assert state["switch"] == 0 and state["active"] == "a"
 
 
 def test_force_permission_is_independent_and_survives_reconfiguration(native, tmp_path):

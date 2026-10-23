@@ -330,7 +330,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "role/status filters, full per-role sections without --limit, and "
             "direct todo-id lifecycle commands"
         ),
-        semantic_json_keys=("todos", "agent_todos", "filter_semantics"),
+        semantic_json_keys=("todos", "agent_todos", "filter_semantics", "projection_envelope"),
         markdown_anchor="# LoopX Todo List",
         max_chars={
             "small": {"json": 7_500, "markdown": 1_000},
@@ -577,6 +577,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "agent_todos",
             "explicit_limit",
             "todo_list_projection",
+            "projection_envelope",
         ),
         markdown_anchor="# LoopX Todo List",
         max_chars={"json": 40_000, "markdown": 1_200},
@@ -595,6 +596,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "returned_todo_count",
             "omitted_todo_count",
             "todo_list_field_projection",
+            "projection_envelope",
         ),
         markdown_anchor="# LoopX Todo List",
         max_chars={"json": 20_000, "markdown": 6_000},

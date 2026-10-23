@@ -687,6 +687,11 @@ _QUOTA_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
     json={"chars": 3_000, "utf8_bytes": 3_000, "lines": 110, "compact_payload_chars": 2_800},
     markdown={"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0},
 )
+# The unchanged 18-row Todo matrix adds 783–854 JSON chars and no lines.
+# Source freshness and omitted-work coverage are useful; Markdown is unchanged.
+_TODO_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE: dict[Metric, int] = {
+    "chars": 896, "utf8_bytes": 896, "lines": 0, "compact_payload_chars": 896,
+}
 
 
 def _projection_envelope_migration(
@@ -698,6 +703,13 @@ def _projection_envelope_migration(
     if before == after:
         return {}, [], []
     surface_id = str(base.get("surface_id") or "")
+    row_surface = str(base.get("row_id") or "").partition("/")[2].partition("/")[0]
+    if (surface_id == "todo_list" and row_surface in {
+            "todo_list", "todo_list_limited", "todo_list_thin"}
+            and output_format == "json" and before == ()
+            and after == ("loopx_projection_envelope_v0",)):
+        return _TODO_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE, [], [
+            "Todo projection envelope schema migrated: none -> loopx_projection_envelope_v0"]
     if (surface_id in {"status", "quota_should_run"}
             and before == () and after == ("loopx_projection_envelope_v0",)):
         migration_allowance = (

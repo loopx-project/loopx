@@ -1,6 +1,6 @@
 schema_version = "loopx_extension_manifest_v0"
 id = "loopx-codex-provider-routing"
-version = "0.12.1"
+version = "0.12.2"
 requires_loopx_api = ">=1,<2"
 permissions = []
 

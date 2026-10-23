@@ -12,6 +12,7 @@ from typing import Any
 
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction, agent_scope_frontier_action as _agent_scope_frontier_action
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
+from ..agents.workspace_guard import delivery_workspace_refresh_hint
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
@@ -1596,10 +1597,8 @@ def _build_interaction_cli_channel(
     if spend_after_selection and selected_todo.get("todo_id"):
         channel["delivery_workspace_causality"] = {
             "schema_version": "delivery_workspace_causality_v0",
-            "refresh": (
-                "delivery_workspace; otherwise --delivery-workspace-path"
-                if selected_todo.get("task_repository")
-                else "registered local Goal target; when caller cwd differs, refresh with --delivery-workspace-path for the actual target; spend uses the recorded delivery workspace"
+            "refresh": delivery_workspace_refresh_hint(
+                payload.get("delivery_workspace_isolation") or {}
             ),
             "spend": "recorded_delivery_workspace",
             "mismatch": "fail_closed",

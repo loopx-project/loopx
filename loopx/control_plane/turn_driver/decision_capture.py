@@ -21,7 +21,7 @@ def write_decision_capture(
     descriptor, temporary = tempfile.mkstemp(prefix=".decision-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(dict(payload), stream, ensure_ascii=False, indent=2, allow_nan=False)
+            json.dump(dict(payload), stream, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())

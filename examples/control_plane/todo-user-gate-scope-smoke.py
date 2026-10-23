@@ -179,39 +179,16 @@ def read_todo(registry: Path, todo_id: str) -> dict:
     return view["todo"]
 
 
-def assert_legacy_scope_diagnostics() -> None:
-    # Historical source validation remains readable before import. It cannot
-    # serve as a normal writer or alter an already canonical authority.
-    with tempfile.TemporaryDirectory(prefix="loopx-legacy-gate-diagnostics-") as tmp:
+def assert_unpromoted_source_is_not_contract_authority() -> None:
+    # Detailed metadata diagnostics use canonical rows; the File/SQLite cases
+    # in test_canonical_status_todos cover them without a display file.
+    with tempfile.TemporaryDirectory(prefix="loopx-unpromoted-gate-diagnostics-") as tmp:
         root = Path(tmp)
         repo, state, registry = write_fixture(root, import_authority=False)
         insert_before_agent_section(
             state,
             "- [ ] Approve an intentionally unscoped gate.\n"
-            "  <!-- loopx:todo todo_id=todo_unscoped_gate status=open task_class=user_gate -->\n"
-            "- [ ] Track an unbound non-blocking user action.\n"
-            "  <!-- loopx:todo todo_id=todo_unbound_action status=open task_class=user_action -->\n"
-            "- [ ] Resolve a mismatched gate binding.\n"
-            f"  <!-- loopx:todo todo_id=todo_mismatched_gate_binding status=open "
-            f"task_class=user_gate blocks_agent={SIDE_AGENT} bound_agent={PRIMARY_AGENT} -->\n"
-            "- [ ] Track an intentionally untyped user todo.\n"
-            "  <!-- loopx:todo todo_id=todo_untyped_user status=open -->\n"
-            "- [ ] Approve a gate with an unregistered blocked agent.\n"
-            "  <!-- loopx:todo todo_id=todo_bad_agent status=open task_class=user_gate blocks_agent=codex-unknown -->\n"
-            "- [ ] Approve a gate with conflicting scope.\n"
-            f"  <!-- loopx:todo todo_id=todo_both_scopes status=open task_class=user_gate blocks_agent={SIDE_AGENT} global_gate=true -->",
-        )
-        state.write_text(
-            state.read_text(encoding="utf-8")
-            + "\n- [ ] Repair a removed continuation value.\n"
-            + "  <!-- loopx:todo todo_id=todo_removed_continuation status=open task_class=advancement_task action_kind=review continuation_policy=review_handoff -->\n"
-            + "- [ ] Repair removed agent gate routing.\n"
-            + f"  <!-- loopx:todo todo_id=todo_removed_agent_gate status=open task_class=advancement_task blocks_agent={SIDE_AGENT} -->\n"
-            + "- [ ] Repair an unknown executor exclusion.\n"
-            + "  <!-- loopx:todo todo_id=todo_unknown_exclusion status=open task_class=advancement_task excluded_agents=codex-unknown -->\n"
-            + "- [ ] Repair malformed executor exclusion metadata.\n"
-            + "  <!-- loopx:todo todo_id=todo_malformed_exclusion status=open task_class=advancement_task excluded_agents=%%% -->\n",
-            encoding="utf-8",
+            "  <!-- loopx:todo todo_id=todo_unscoped_gate status=open task_class=user_gate -->",
         )
         original = state.read_bytes()
         check = check_contract(
@@ -219,19 +196,8 @@ def assert_legacy_scope_diagnostics() -> None:
             scan_roots=[repo], limit=1,
         )
         assert check["ok"] is False, check
-        for todo_id, diagnostic in (
-            ("todo_unscoped_gate", "requires bound_agent"),
-            ("todo_unbound_action", "requires bound_agent"),
-            ("todo_mismatched_gate_binding", "must bind to blocks_agent"),
-            ("todo_untyped_user", "requires task_class"),
-            ("todo_bad_agent", "not registered"),
-            ("todo_both_scopes", "cannot set both"),
-            ("todo_removed_continuation", "removed continuation_policy"),
-            ("todo_removed_agent_gate", "removed blocks_agent routing"),
-            ("todo_unknown_exclusion", "unregistered agents"),
-            ("todo_malformed_exclusion", "malformed excluded_agents"),
-        ):
-            assert any(todo_id in error and diagnostic in error for error in check["errors"]), check
+        assert any(row["code"] == "canonical_authority_required"
+                   and row.get("goal_id") == GOAL_ID for row in check["error_diagnostics"]), check
         assert state.read_bytes() == original
 
 
@@ -673,7 +639,7 @@ def main() -> int:
         assert state.read_bytes() != original
         state.write_bytes(original)
 
-    assert_legacy_scope_diagnostics()
+    assert_unpromoted_source_is_not_contract_authority()
     assert_imported_scope_repairs()
 
     print("todo-user-gate-scope-smoke ok")

@@ -187,12 +187,36 @@ Saved findings lead with readable observations, interpretations and decisions.
 Put references, applicability, revisions and full original text behind one
 expansion. Clamp repeated titles only in the selection list, never the selected
 finding's full content. Do not invent short titles or infer findings from prose.
+A selected question is a focused document, not another full history stacked below
+the chart. Show one finding at a time with its declared status and full text;
+keep all findings selectable and failed or tentative counts visible. Preserve
+the exact finding on reload and Back. Offer the whole recorded history in place
+and through the existing return action, without letting it bury the chosen text.
+
+Route captions distinguish start and end and wrap as readable entries. If a
+long title is clamped in that list, one activation opens its complete original
+in the existing reader; keyboard return restores the exact entry. Keep view,
+analysis, help and refresh on a shared primary control row. Model, usage and
+scope details occupy separate rows, so their presence or wrapping does not
+shift the controls. Reflow the composition on narrow screens without hiding
+action consequences or relying on fixed alignment offsets.
+
+选中问题后聚焦阅读一条结论，完整正文与记录状态保留；全部结论可直接切换，反驳和
+待检查计数仍可见。刷新与返回保留所选结论，全景可原位展开或通过原入口返回，
+不再把整张图和全部折叠标题堆在所选正文之前。
+路线标题区分起点与末端并自然换行；列表收起长标题时，一次操作进入现有阅读器查看
+完整原文，键盘返回准确入口。视图、分析、帮助和刷新共用主控件行，模型、用量与
+范围另行显示；说明出现或换行不挤偏控件，窄屏重排保留操作后果，不使用固定偏移。
+
+Reading a citation opens only the requested original, preserving the explicit
+open or closed state of the full analysis and returning to the exact citation.
 
 刷新和前进后退保留视图、时间分组与证据焦点；标签之间保留阅读位置。选择状态按
 Goal 和来源隔离。研究中从侧栏切换 Goal 仍停留在研究页，读取新 Goal 自身证据；
 返回恢复原 Goal 的选择。首页及任务、会话、成果的明确链接保留各自目的地。
 结论正文以正常字号呈现观察、解读与决策；来源、适用范围、版本
 和完整原文按需展开。仅列表中的重复长标题可收起，选中后的正文须完整可读。
+读取引用只打开所选原文，保留完整分析原先的展开或关闭状态，关闭后回到同一引用。
 
 ### Explanations On Demand
 
@@ -282,6 +306,12 @@ labels, invented completion or a new frontend score.
   per-cell footnotes. On wide screens, use a compact value band so the related
   graph or result remains nearby; reflow on narrower screens. Merge optional
   source, method and cost material into the existing disclosure where practical.
+  In recorded measurement groups, align values and units, keep direction and
+  zero/unknown differences visible, and share one source disclosure across the
+  group. Requested provenance uses readable label/value rows with complete
+  identities; it must not become a smaller-font wall of hashes and paragraphs.
+  已记录的测量按组对齐数值与单位，保留方向、零和未测量的区别，共用一个来源入口；
+  展开来源后使用正常字号的标签/值排版，完整身份可读，不堆小字哈希与段落。
 - In an expanded assessment, make items comparable before asking the owner to
   read their evidence: one compact row per declared item, with its identity and
   actual judgment. Show the shared interpretation once on demand. Expand an

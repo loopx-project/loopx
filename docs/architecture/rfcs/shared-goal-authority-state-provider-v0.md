@@ -1455,6 +1455,13 @@ evidence at 1,000 commits/64 KiB now reports 16 checkpoints, a 63-commit replay
 budget, one checkpoint history read and 1,048,576 retained projection bytes plus
 126,714 delta bytes against 65,536,000 bytes for one copy per commit.
 
+The [cursor covering index](../../reference/sqlite-authority-store.md#cursor-covering-index)
+is a bounded physical optimization for newly constructed V2 databases and the
+existing explicit V1 migration. It keeps the exact continuity count and retained
+proofs, leaves existing V2 schemas untouched on ordinary open, and changes no
+provider default. Matched read/write, page/WAL, CLI and recovery evidence must
+qualify this boundary; it neither rewrites frozen failures nor completes D2.
+
 This is still not completion of lane L. The current comparison uses File's
 checkpoint/delta journal and bounded verified read views, as described in the
 [matched provider comparison](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment).

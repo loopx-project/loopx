@@ -688,6 +688,14 @@ This closes the producer-to-detail transport gap only. Live models, packaged
 App/Lark, later authority checks and the remaining convergence matrix retain
 their independent acceptance; no Python projection is retired by this slice.
 
+New quota and native Turn captures now share compact JSON encoding, removing
+layout whitespace from stored detail without omitting decision values or string
+content. The original atomic publication, source signature and retry owners are
+unchanged. File/SQLite native Host qualification covers both new compact and
+historical indented observations, including source changes, missing/corrupt
+detail and exactly-once recovery. This is a lossless transport cost reduction,
+not evidence of model quality, complete Turn cost or a new convergence default.
+
 The shared Host result adapter now retains supplied text for the existing Turn
 validator instead of truncating it into a passing candidate. Over-limit next
 actions could lose a trailing approval constraint while still being accepted.

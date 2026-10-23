@@ -40,7 +40,7 @@ EXPECTED_RESULT_SCHEMA_BY_QUALIFICATION = {
     "mypy": "mypy_summary_v0",
     "risk_canary": "loopx_premerge_validation_gate_v0",
     "full_public": "smoke_fleet_health_v0",
-    "install_upgrade_host": "release_install_upgrade_host_summary_v0",
+    "install_upgrade_host": "release_install_upgrade_host_summary_v1",
     "public_boundary": "loopx_public_boundary_check_v0",
     "doubao_actual_default": "actual_default_model_behavior_portfolio_v0",
 }
@@ -242,11 +242,11 @@ def _validate_install_upgrade_host(value: Any) -> tuple[dict[str, Any], list[str
     summary = _summary(
         value,
         qualification_id="install_upgrade_host",
-        allowed={"install_passed", "upgrade_passed", "host_passed"},
+        allowed={"install_passed", "upgrade_passed", "host_passed", "packaged_frontend_passed"},
     )
     normalized = {
         field: _boolean(summary.get(field), field=f"install_upgrade_host.{field}")
-        for field in ("install_passed", "upgrade_passed", "host_passed")
+        for field in ("install_passed", "upgrade_passed", "host_passed", "packaged_frontend_passed")
     }
     issues = [] if all(normalized.values()) else ["install_upgrade_host_failed"]
     return normalized, issues

@@ -1,4 +1,5 @@
 import type { JsonObject } from "../effect_program.ts";
+import valueCodec from "./completion_value_codec.json" with {type: "json"};
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   requireBoolean as requiredBoolean,
@@ -64,10 +65,10 @@ export function normalizeTodoNoFollowup(value: unknown): boolean | null {
     throw new EffectRuntimeRequestError("no_followup must be a boolean, string, or null");
   }
   const candidate = value.trim().toLowerCase();
-  if (["1", "true", "yes", "y", "no_followup", "no-followup"].includes(candidate)) {
+  if (valueCodec.true_tokens.includes(candidate)) {
     return true;
   }
-  if (["0", "false", "no", "n"].includes(candidate)) return false;
+  if (valueCodec.false_tokens.includes(candidate)) return false;
   return null;
 }
 
@@ -134,35 +135,6 @@ export function completionContinuationForWrite(
   if (noFollowup) return "no_followup";
   if (hasSuccessor) return "successor";
   return "active_goal";
-}
-
-export function normalizeTodoCompletionValue(value: unknown): JsonObject {
-  const request = requestObject(value, "normalize");
-  const kind = request.kind;
-  if (kind !== "no_followup" && kind !== "continuation" && kind !== "recovery") {
-    throw new EffectRuntimeRequestError("completion normalization kind is unsupported");
-  }
-  const raw = request.value;
-  const normalized = kind === "no_followup"
-    ? normalizeTodoNoFollowup(raw)
-    : kind === "continuation"
-    ? normalizeTodoCompletionContinuation(raw)
-    : normalizeTodoCompletionRecovery(raw);
-  return {
-    schema_version: TODO_COMPLETION_STATE_RESULT_SCHEMA,
-    kind,
-    value: normalized,
-  };
-}
-
-export function requireTodoCompletionMetadataValue(value: unknown): JsonObject {
-  const request = requestObject(value, "require_metadata");
-  const key = optionalString(request.key, "key");
-  if (key === null) throw new EffectRuntimeRequestError("key must be a string");
-  return {
-    schema_version: TODO_COMPLETION_STATE_RESULT_SCHEMA,
-    value: requireTodoCompletionMetadata(key, request.value),
-  };
 }
 
 export function selectTodoCompletionState(value: unknown): TodoCompletionStateResult {

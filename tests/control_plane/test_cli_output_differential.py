@@ -1465,6 +1465,23 @@ def test_projection_envelope_migration_is_bounded_and_one_time(
         assert not compare_cli_output_receipts(_receipt(outside_base), _receipt(outside))["ok"]
 
 
+@pytest.mark.parametrize("row_prefix", [
+    "surface/todo_list", "variant/todo_list_limited", "variant/todo_list_thin",
+])
+def test_todo_envelope_migration_retains_a_bounded_one_time_allowance(row_prefix):
+    base = _row(row_id=f"{row_prefix}/small/json", surface_id="todo_list")
+    candidate = {**base,
+        "projection_envelope_schema_versions": ["loopx_projection_envelope_v0"],
+        **{metric: base[metric] + 896 for metric in ("chars", "utf8_bytes", "compact_payload_chars")}}
+    assert compare_cli_output_receipts(_receipt(base), _receipt(candidate))["ok"]
+    excessive = {**candidate, "chars": candidate["chars"] + 1}
+    assert not compare_cli_output_receipts(_receipt(base), _receipt(excessive))["ok"]
+    repeated = {**candidate, "chars": candidate["chars"] + 896}
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(repeated))["ok"]
+    unsupported = {**candidate, "projection_envelope_schema_versions": ["loopx_projection_envelope_v1"]}
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(unsupported))["ok"]
+
+
 def test_both_command_routes_are_counted_in_either_order() -> None:
     text = (
         "loopx --registry '/tmp/registry path' --runtime-root /tmp/root refresh-state\n"

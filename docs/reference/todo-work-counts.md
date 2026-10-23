@@ -18,6 +18,11 @@ new provider setting: legacy inputs and promoted File/SQLite inputs share the
 same typed summary owner. PostgreSQL uses the same provider-neutral records;
 service deployment and whole-Goal promotion remain separately qualified.
 
+The list's `projection_envelope` also separates source coverage from display.
+Its `included_count` covers all query matches; `shown_count` counts the final
+ordinary, hot, limited, thin or exact view. Display truncation alone does not
+raise `incomplete_coverage`; see the [envelope contract](contracts/projection-envelope-contract.md).
+
 | Field | Meaning |
 | --- | --- |
 | `open` | Nonterminal source rows, including blocked work; it is not executable work |
@@ -51,8 +56,9 @@ are lower bounds while `complete=false`. Current capability re-evaluation
 replaces prior readiness for observed rows and cannot certify unseen rows.
 
 The TypeScript `todos/summary_lanes.ts` owner returns indexes into the one input
-array instead of repeating full Todo bodies for each lane. The Python adapter
-normalizes legacy fields/timestamps and validates the returned ordinal bounds.
+array instead of repeating full Todo bodies for each lane. The native read owner
+normalizes canonical fields/timestamps and materializes the selected records.
+Python retains the legacy source codecs.
 One observation time governs Monitor due and expiry classification within the
 batch. Source order, completed/deferred conventions and claimant visibility
 remain compatible; `done_count` still includes deferred rows as required by its
@@ -92,11 +98,14 @@ read and continue to show the whole Goal; no new configuration editor is needed.
 Resume and succession are evaluated on the complete source before selection.
 The typed batch filters rows without renumbering their original source indexes,
 then builds lanes/counts, and only then applies display limits. Status/identity
-filters do not recompute dependencies from their smaller view. One internal `todo.summary.project` batch now composes selection, counts,
-visibility allocation and closure. Its transient request replaces the separate
-lane and closure RPC calls; it does not change persisted Todo or public summary
-schemas. Python decodes legacy input, validates source ordinals and materializes
-public fields, with no independent summary count, cap or claimant-allocation rule.
+filters do not recompute dependencies from their smaller view. The `todo.read` transaction composes source evaluation, selection, counts,
+frontier identity, handoff context and result construction through the existing
+TypeScript owners. Canonical provider IO runs in that transaction; Markdown
+source codecs and material IO remain explicit Python adapters. Filtering reuses
+validated full-source evidence, never dependencies inferred from a small view.
+The old `todo.summary.project` transport and Python ordinal materializer are
+retired. Large source/result transport preserves complete decisions and refuses
+changed continuations; display limits still disclose shown and available counts.
 
 Route-continuation visibility also uses the existing typed quota planning batch.
 It shares the normal claim/exclusion rule; eligibility, first-identity deduplication,

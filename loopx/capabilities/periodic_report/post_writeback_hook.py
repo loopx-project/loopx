@@ -16,10 +16,6 @@ from ...control_plane.goals.goal_frontier import (
     build_goal_frontier_projection_from_summaries,
 )
 from .todo_source import read_report_source_history, read_report_todo_source
-from ...control_plane.effect_runtime import (
-    CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS,
-    effect_runtime_result,
-)
 from ...control_plane.todos.quota_summary import summarize_user_todos_for_quota
 from ...control_plane.todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from ...history import collect_history, load_index_snapshot, load_registry
@@ -202,18 +198,18 @@ def build_periodic_report_post_writeback_projection(
     if available_capabilities is None and isinstance(payload.get("turn"), Mapping):
         available_capabilities = payload["turn"].get("available_capabilities")
     if source_todos is None and "todo_source" in payload:
-        source_todos = effect_runtime_result(
-            "coordination.local_authority.todo_source",
-            {
-                "schema_version": "loopx_local_coordination_todo_source_request_v0",
-                "runtime_root": str(runtime_root), "goal_id": goal_id,
-                "source": payload["todo_source"],
-            },
-            timeout=CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS,
-            large_local_snapshot=True,
-        )
+        from ...control_plane.todos.goal_todo_projection import project_todo_read, restore_todo_field_evaluations
+        from ...control_plane.runtime.time import now_utc
+
+        now = now_utc()
+        readback = project_todo_read({"kind": "historical_fields",
+            "source": {"runtime_root": str(runtime_root), "goal_id": goal_id, "original_source": payload["todo_source"]},
+            "rollout_events": [], "available_capabilities": available_capabilities,
+            "observed_at": now.timestamp(), "evaluated_at": now.isoformat()})
+        source_todos = readback["canonical"]
         if source_todos.get("status") != "loaded":
             raise ValueError("original canonical Todo source is unavailable")
+        source_todos["_todo_fields"] = restore_todo_field_evaluations(readback)
         source_runs = read_report_source_history(
             runtime_root=runtime_root, goal_id=goal_id, run=payload,
         )
@@ -228,7 +224,7 @@ def build_periodic_report_post_writeback_projection(
         state.get("path") if isinstance(state, Mapping) else None
     ) or payload.get("state_file")
     if source_todos is not None:
-        fields = canonical_todo_summary_fields(
+        fields = source_todos.get("_todo_fields") or canonical_todo_summary_fields(
             source_todos["todos"],
             rollout_events=events,
             available_capabilities=available_capabilities,

@@ -1,5 +1,5 @@
 import {projectTodoHandoffContext} from "./handoff_projection.ts";
-/** Whole-source summary decisions. Python materializes these ordinals as public
+/** Whole-source summary decisions. The native read owner materializes public
  * display records; counts and closure never depend on a presentation budget. */
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";

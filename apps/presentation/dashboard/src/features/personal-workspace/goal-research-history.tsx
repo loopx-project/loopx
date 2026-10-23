@@ -1,7 +1,7 @@
-import {useEffect, useId, useMemo, useRef, useState} from "react";
+import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
-import {ArrowLeft, Circle, FlaskConical, GitBranch, RefreshCw} from "lucide-react";
-import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
+import {ArrowLeft, ArrowRight, Circle, FlaskConical, GitBranch, RefreshCw} from "lucide-react";
+import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
@@ -11,7 +11,7 @@ import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistory
 import "./goal-research-history.css";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 
-type Selection = {nodes: string[]; day: string | null};
+type Selection = {nodes: string[]; day: string | null; finding?: string};
 type Lens = "timeline" | "graph";
 type Read = {events: ExploreHistoryEvent[]; total: number | null; complete: boolean};
 const selectedFromUrl = (goal: string): Selection => {
@@ -23,7 +23,7 @@ const selectedFromUrl = (goal: string): Selection => {
   const search = defaultParseSearch(window.location.search);
   const decoded = "research_node" in search ? search.research_node : undefined;
   const nodes = Array.isArray(decoded) && decoded.every(id => typeof id === "string") ? decoded : query.getAll("research_node");
-  return {nodes: day === null ? [...new Set(nodes.filter(Boolean))] : [], day};
+  return {nodes: day === null ? [...new Set(nodes.filter(Boolean))] : [], day, finding: query.get("research_finding") || undefined};
 };
 
 const viewFromUrl = (goal: string) => {
@@ -53,6 +53,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const presentationId = useId().replace(/:/g, "");
   const detail = useRef<HTMLDivElement>(null);
   const graph = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const readerParent = useRef<{selection: Selection; nodeId: string; opener: HTMLElement | null} | null>(null);
+  const focusPending = useRef(Boolean(selection.nodes.length || selection.day !== null));
+  const focusReturn = useRef<{nodeId?: string; element: HTMLElement | null} | null>(null);
   const copy = zh ? {
     title: "研究历程", loading: "正在读取完整记录", reading: "读取中", refresh: "刷新记录",
     all: "回到全图", scope: "Explore 已记录历史", coverage: "其他来源覆盖、尝试发生时序尚未核验",
@@ -92,10 +96,8 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       <dt>{sectionCopy.observation}</dt><dd>{sections.observation}</dd>
       {decision ? <>
         <dt>{zh ? "决策" : "Decision"}</dt><dd><b className={`research-outcome is-${decision.outcome}`}>{outcomeCopy[decision.outcome] ?? decision.outcome}</b></dd>
-        {(["changed", "stopped", "retained"] as const).map(key => decision[key].length ? <><dt key={`${key}-t`}>{sectionCopy[key]}</dt><dd key={key}><ul>{decision[key].map(item => <li key={item}>{item}</li>)}</ul></dd></> : null)}
+        {(["changed", "stopped", "retained"] as const).map(key => decision[key].length ? <Fragment key={key}><dt>{sectionCopy[key]}</dt><dd key={key}><ul>{decision[key].map(item => <li key={item}>{item}</li>)}</ul></dd></Fragment> : null)}
       </> : <><dt>{sectionCopy.interpretation}</dt><dd>{sections.interpretation}</dd></>}
-      <dt>{sectionCopy.applicability}</dt><dd className="is-muted">{sections.applicability}</dd>
-      <dt>{sectionCopy.inputRevision}</dt><dd><code>{sections.inputRevision}</code></dd>
     </dl> : <p>{finding.summary}</p>}{execution ? <details><summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</summary>
       <dl className="research-finding-sections">
         <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
@@ -108,11 +110,24 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       </dl><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p>
     </details> : null}</>;
   };
-  const findingElement = (finding: ExploreHistoryEvent) => <div className="research-recorded-finding" key={finding.event_id}><strong>{finding.title}</strong><small>{timeLabel(finding.recorded_at)} · {zh ? "来源标记" : "Source label"} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>{findingBody(finding)}{finding.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}</div>;
+  const findingMeta = (finding: ExploreHistoryEvent) => <small>{timeLabel(finding.recorded_at)} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>;
+  const findingElement = (finding: ExploreHistoryEvent, title: string) => {
+    const sections = parseExploreFindingSections(finding.summary);
+    const content = <>{findingBody(finding)}{sections || finding.evidence_refs.length ? <details className="research-finding-sources"><summary>{zh ? "来源与适用范围" : "Sources and applicability"}{finding.evidence_refs.length ? ` · ${finding.evidence_refs.length}` : ""}</summary>
+      {sections ? <dl className="research-finding-sections"><dt>{sectionCopy.applicability}</dt><dd>{sections.applicability}</dd><dt>{sectionCopy.inputRevision}</dt><dd><code>{sections.inputRevision}</code></dd></dl> : null}
+      {finding.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
+      {sections ? <details><summary>{zh ? "完整原文" : "Full original text"}</summary><p>{finding.summary}</p></details> : null}</details> : null}</>;
+    return <article className="research-recorded-finding" key={finding.event_id}>
+      {finding.title !== title ? <h4>{finding.title}</h4> : null}{findingMeta(finding)}{content}
+    </article>;
+  };
   const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{stateLabel(event.status)} · {event.title}{event.summary ? ` — ${event.summary}` : ""}</span>{event.measurements ? <ExploreMeasurements measurements={event.measurements} zh={zh}/> : null}{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
 
   useEffect(() => {
     const pop = () => {
+      readerParent.current = null;
+      focusReturn.current = null;
+      focusPending.current = true;
       setSelection(selectedFromUrl(goalId));
       const view = viewFromUrl(goalId); setLens(view.lens); setPhase(view.phase);
     };
@@ -186,49 +201,71 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const selected = value?.nodes.find(node => node.id === selectedId);
   const selectedGroup = selection.day !== null ? grouped.groups.find(group => group.day === selection.day) : undefined;
   const selectedMembers = selectedGroup?.nodes ?? (selection.nodes.length > 1 ? value?.nodes.filter(node => selection.nodes.includes(node.id)) : undefined);
+  useLayoutEffect(() => {
+    if (!active) return;
+    if (focusReturn.current) {
+      const {nodeId, element} = focusReturn.current;
+      // The full-history view moves while reading. Resolve its remounted
+      // control by the local return key rather than losing keyboard position.
+      const returnKey = element?.dataset.researchReturn;
+      const target = nodeId ? detail.current?.querySelector<HTMLButtonElement>(`[data-research-node="${CSS.escape(nodeId)}"] button`)
+        : element?.isConnected ? element : returnKey ? graph.current?.querySelector<HTMLButtonElement>(`[data-research-return="${CSS.escape(returnKey)}"]`) : null;
+      focusReturn.current = null;
+      if (target?.isConnected) {target.focus({preventScroll: true}); target.scrollIntoView({block: "nearest"});}
+      else graph.current?.focus();
+      return;
+    }
+    if (focusPending.current && detail.current) {
+      focusPending.current = false;
+      detail.current.focus({preventScroll: true});
+      detail.current.scrollIntoView({block: "nearest"});
+    }
+  }, [active, selected, selectedMembers]);
   const clusterY = layout.length ? Math.max(...layout.map(item => item.y + 124)) + 24 : 24;
   const width = Math.max(600, grouped.groups.length ? 944 : 0, ...layout.map(item => item.x + 230));
   const height = Math.max(230, ...layout.map(item => item.y + 124), grouped.groups.length ? clusterY + Math.ceil(grouped.groups.length / 4) * 124 : 0);
   const select = (next: Selection, focus = true) => {
+    if (focus && (next.nodes.length || next.day !== null)) {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      focusPending.current = true;
+    }
     setSelection(next);
     const url = new URL(window.location.href);
-    url.searchParams.delete("research_node"); url.searchParams.delete("research_group");
+    url.searchParams.delete("research_node"); url.searchParams.delete("research_group"); url.searchParams.delete("research_finding");
     if (next.nodes.length || next.day !== null) {
       if (next.day !== null) url.searchParams.set("research_group", next.day);
       else url.searchParams.set("research_node", next.nodes.length === 1 ? next.nodes[0]! : JSON.stringify(next.nodes));
+      if (next.finding) url.searchParams.set("research_finding", next.finding);
       url.searchParams.set("research_goal", goalId);
     }
     else url.searchParams.set("research_goal", goalId);
-    if (selection.day !== next.day || selection.nodes.length !== next.nodes.length || selection.nodes.some((id, index) => id !== next.nodes[index])) window.history.pushState(null, "", url);
-    if (focus && (next.nodes.length || next.day !== null)) window.requestAnimationFrame(() => {
-      const panel = detail.current;
-      if (panel) {panel.scrollTop = 0; panel.focus({preventScroll: true}); panel.scrollIntoView({block: "nearest"});}
-    });
+    if (selection.finding !== next.finding || selection.day !== next.day || selection.nodes.length !== next.nodes.length || selection.nodes.some((id, index) => id !== next.nodes[index])) window.history.pushState(null, "", url);
   };
-  const choose = (id: string, focus = true) => select({nodes: id ? [id] : [], day: null}, focus);
-  return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
-    <header className="research-history-heading"><div><div className="research-history-title"><h2>{copy.title}</h2><ContextHelp label={zh ? "历史范围与读图说明" : "History scope and reading guide"}>
-      <p>{copy.scope} · {copy.time}{zh ? "。" : ". "}{copy.coverage}{zh ? "。" : "."}</p><p>{copy.interpretation}{zh ? "。" : "."}</p>
-      {lens === "graph" ? <p>{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。未关联问题按首次记录 UTC 日期收纳。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress. Unlinked questions are collected by first-record UTC date."}</p> : null}
-      <p>{zh ? "合拢仅为避免遮挡，不表示关联或因果；选择一次可读全部原始记录与依据。" : "Nearby points group to avoid overlap, without implying a relationship or causality. Select once to read every original record and source."}</p>
-    </ContextHelp></div>
-      <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
-        : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-          : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p></div>
-      <div className="research-history-controls">
-        {selection.nodes.length || selection.day !== null ? <button type="button" onClick={() => {choose("", false); graph.current?.focus();}}><ArrowLeft size={14} aria-hidden/>{copy.all}</button> : null}
-        <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div>
-        <ResearchAnalysisButton analysis={analysis}/>
-        <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
-      </div></header>
-    {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
-    {!busy && !error && read.total === 0 ? <p className="research-history-empty" role="status">{zh ? "这个 Goal 尚无已记录的研究历程。" : "This Goal has no recorded research history yet."}</p> : null}
-    <ResearchAnalysisStatus analysis={analysis}/>
-    <ResearchProgressSummary analysis={analysis}/>
-    <ResearchAnalysisPanel analysis={analysis}/>
-    {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
-    {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
-      {lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
+  const choose = (id: string, focus = true) => {readerParent.current = null; select({nodes: id ? [id] : [], day: null}, focus);};
+  const closeReader = () => {
+    const parent = readerParent.current;
+    readerParent.current = null;
+    focusPending.current = false;
+    focusReturn.current = {nodeId: parent?.nodeId, element: opener.current};
+    if (parent) opener.current = parent.opener;
+    select(parent?.selection ?? {nodes: [], day: null}, false);
+  };
+  const readingSelection = Boolean(selected || selectedMembers?.length);
+  const selectedFinding = selected?.findings.find(finding => finding.result_id === selection.finding)
+    ?? (!selection.finding ? selected?.findings.at(-1) : undefined);
+  const findingExceptions = selected ? [...new Set(selected.findings.map(finding => finding.status))]
+    .filter(status => status !== "confirmed").map(status => `${stateLabel(status)} ${selected.findings.filter(finding => finding.status === status).length}`).join(" · ") : "";
+  // Pin the first displayed finding to its stable identity. New source records
+  // must not move a reader, and reload/Back must restore that same evidence.
+  useEffect(() => {
+    if (!active || selection.finding || !selectedFinding || !selected) return;
+    const finding = selectedFinding.result_id;
+    setSelection(previous => ({...previous, finding}));
+    const url = new URL(window.location.href);
+    url.searchParams.set("research_finding", finding);
+    window.history.replaceState(null, "", url);
+  }, [active, selection.finding, selectedFinding, selected]);
+  const historyView = !value ? null : lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
         <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={id => choose(id)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
         <div className="research-history-stage" style={{width, height}}>
@@ -266,27 +303,88 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
             <strong>{group.day ? `${group.day} UTC` : copy.unknown}</strong><span className="research-node-count">{group.nodes.length} {zh ? "个问题 · 展开全部" : "questions · read all"}</span>
           </button>)}
         </div>
-      </div>}
-      {selected ? <div className="research-history-detail" ref={detail} role="region" aria-label={selected.latest.title} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); choose("", false); graph.current?.focus();}}}>
-        <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p>
-        <h3>{selected.latest.title}</h3><p>{selected.latest.summary || (zh ? "此节点尚无详细说明。" : "No detail was recorded for this node.")}</p>
+      </div>;
+  return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
+    <header className="research-history-heading"><div><div className="research-history-title"><h2>{copy.title}</h2><ContextHelp label={zh ? "历史范围与读图说明" : "History scope and reading guide"}>
+      <p>{copy.scope} · {copy.time}{zh ? "。" : ". "}{copy.coverage}{zh ? "。" : "."}</p><p>{copy.interpretation}{zh ? "。" : "."}</p>
+      {lens === "graph" ? <p>{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。未关联问题按首次记录 UTC 日期收纳。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress. Unlinked questions are collected by first-record UTC date."}</p> : null}
+      <p>{zh ? "合拢仅为避免遮挡，不表示关联或因果；选择一次可读全部原始记录与依据。" : "Nearby points group to avoid overlap, without implying a relationship or causality. Select once to read every original record and source."}</p>
+    </ContextHelp></div>
+      <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
+        : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
+          : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p></div>
+      <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
+        {!readingSelection ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
+        <div className="research-analysis-scoped-action"><ResearchAnalysisButton analysis={analysis}/>
+          {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}
+        </div>
+        <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
+      </div></header>
+    {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
+    {!busy && !error && read.total === 0 ? <p className="research-history-empty" role="status">{zh ? "这个 Goal 尚无已记录的研究历程。" : "This Goal has no recorded research history yet."}</p> : null}
+    <ResearchAnalysisStatus analysis={analysis}/>
+    {!readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}
+    <ResearchAnalysisPanel analysis={analysis}/>
+    <ResearchCitationPanel analysis={analysis}/>
+    {busy && !read.events.length ? <div className="research-history-loading" role="status">{copy.loading}…</div> : null}
+    {value?.nodes.length ? <div className={`research-history-layout${selected || selectedMembers?.length ? " has-selection" : ""}`}>
+
+      {selected ? <div className="research-history-detail" ref={detail} role="region" aria-label={selected.latest.title} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>
+        <div className="research-reader-content">
+        <div className="research-reader-location"><button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{readerParent.current ? (zh ? "返回问题列表" : "Back to questions") : copy.all}</button>
+        <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p></div>
+        <h3>{selected.latest.title}</h3>
         {selected.latest.blocked_reason ? <p className="research-history-error">{selected.latest.blocked_reason}</p> : null}
+        {selected.findings.length ? <>
+          {selected.findings.length > 1 ? <nav className="research-finding-navigation" aria-label={zh ? "问题结论" : "Question findings"}>
+            <label><select aria-label={zh ? "选择问题结论" : "Choose a question finding"} value={selectedFinding?.result_id ?? ""}
+                onChange={event => select({...selection, finding: event.target.value}, false)}>
+                {!selectedFinding ? <option value="" disabled>{zh ? "所选结论未找到" : "Selected finding not found"}</option> : null}
+                {selected.findings.map((finding, index) => <option key={finding.result_id} value={finding.result_id}>
+                  {index + 1}. {finding.title} · {stateLabel(finding.status)} · {timeLabel(finding.recorded_at)}
+                </option>)}
+              </select>
+            </label>
+            <div className="research-finding-steps">
+              <span>{selectedFinding ? selected.findings.indexOf(selectedFinding) + 1 : "—"} / {selected.findings.length}</span>
+              {([-1, 1] as const).map(step => {
+                const next = selectedFinding ? selected.findings[selected.findings.indexOf(selectedFinding) + step] : undefined;
+                return <button key={step} type="button" disabled={!next} aria-label={step < 0 ? (zh ? "上一条结论" : "Previous finding") : (zh ? "下一条结论" : "Next finding")}
+                  onClick={() => {if (next) select({...selection, finding: next.result_id}, false);}}>
+                  {step < 0 ? <ArrowLeft size={16} aria-hidden/> : <ArrowRight size={16} aria-hidden/>}
+                </button>;
+              })}
+            </div>
+          </nav> : null}
+          {selected.findings.length > 1 && findingExceptions ? <p className="research-finding-exceptions">{findingExceptions}</p> : null}
+          {selectedFinding ? findingElement(selectedFinding, selected.latest.title) : <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p>}
+        </> : <>{selected.latest.summary ? <p>{selected.latest.summary}</p> : null}<p className="research-history-note">{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p></>}
+        <details className="research-node-provenance" key={selected.id}><summary>{zh ? "来源与历史" : "Sources and history"}</summary>
+        {selected.findings.length && selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
         {measurementSummary(selected.id)}
-        <h4>{copy.evidence}</h4>
-        {selected.findings.length ? selected.findings.map(findingElement) : <p>{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p>}
         <h4>{copy.versions}</h4>{selected.latest.evidence_refs.length ? selected.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>) : <p>{zh ? "产物版本与来源引用未记录。" : "Artifact version and source references were not recorded."}</p>}
         <h4>{copy.links}</h4><ul>{value.edges.filter(edge => edge.from_node === selected.id || edge.to_node === selected.id).map(edge => <li key={edge.event_id}>{positions.get(edge.from_node)?.node.latest.title ?? (zh ? "来源节点未记录" : "Source node not recorded")} → {relationLabel(edge.edge_type)} → {positions.get(edge.to_node)?.node.latest.title ?? (zh ? "目标节点未记录" : "Target node not recorded")}{edge.summary ? ` — ${edge.summary}` : ""}</li>)}</ul>
         {selected.latest.parent_id ? <p>{copy.group} · {positions.get(selected.latest.parent_id)?.node.latest.title ?? "—"}</p> : null}
         <h4>{copy.updates}</h4>{updateRecords(selected.revisions)}
+        </details>
+        </div>
       </div> : null}
-      {selectedMembers?.length ? <div className="research-history-detail" ref={detail} role="region" aria-label={selectedGroup ? (zh ? "按日期收纳的未关联问题" : "Unlinked questions by date") : (zh ? "相邻研究项的全部记录" : "All records for nearby research items")} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); choose("", false); graph.current?.focus();}}}>
+      {selectedMembers?.length ? <div className="research-history-detail" ref={detail} role="region" aria-label={selectedGroup ? (zh ? "按日期收纳的未关联问题" : "Unlinked questions by date") : (zh ? "相邻研究项的全部记录" : "All records for nearby research items")} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>
+        <div className="research-reader-content">
+        <button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{copy.all}</button>
         <h3>{selectedGroup ? `${selectedGroup.day || copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
-        {selectedMembers.map(node => <article className="research-history-group-member" key={node.id} data-research-node={node.id}><h4>{node.latest.title}</h4><p>{stateLabel(node.latest.status)} · {node.latest.summary}</p>{node.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
-          {measurementSummary(node.id)}
-          {node.findings.map(findingElement)}
-          {updateRecords(node.revisions)}
-        </article>)}
+        <ol className="research-question-index">{selectedMembers.map(node => <li key={node.id} data-research-node={node.id}>
+          <button type="button" onClick={() => {readerParent.current = {selection, nodeId: node.id, opener: opener.current}; select({nodes: [node.id], day: null});}}>
+            <strong>{node.latest.title}</strong><span>{stateLabel(node.findings.at(-1)?.status ?? node.latest.status)}{node.latest.status === "blocked" && node.findings.length ? ` · ${stateLabel(node.latest.status)}` : ""}{node.findings.length ? ` · ${node.findings.length} ${copy.findings}` : ""}</span>
+            {node.latest.blocked_reason ? <span className="research-history-error">{node.latest.blocked_reason}</span> : null}
+          </button>
+        </li>)}</ol>
+        </div>
       </div> : null}
+      {readingSelection ? <details className="research-history-context" key={selected?.id ?? JSON.stringify(selection.nodes) + selection.day}>
+        <summary>{zh ? "研究全景" : "Research overview"}</summary>
+        <ResearchProgressSummary analysis={analysis}/>{historyView}
+      </details> : historyView}
     </div> : null}
     {(selection.nodes.some(id => !value?.nodes.some(node => node.id === id)) || (selection.day !== null && !selectedGroup)) && read.complete && !busy && !error && !history.error ? <p role="status">{copy.lost}</p> : null}
     {value?.events.length && !value.nodes.length ? <p className="research-history-note">{zh ? "尚未记录节点结构；可展开下面的已读记录。" : "Node structure has not been recorded; loaded records remain available below."}</p> : null}
