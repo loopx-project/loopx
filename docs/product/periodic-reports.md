@@ -174,7 +174,3 @@ windows, rather than starting an unbounded series of model calls.
    actual configuration and an end-to-end report. The first natural scheduled
    report remains a separate acceptance event.
 
-The earlier conversation-specific subscription/executor prototype is preserved
-as unmerged evidence. It is not the selected product path, an enabled schedule,
-or proof of the native actor integration. Its local tests do not qualify this
-design's installation or delivery requirements.
