@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { deflateSync } from "node:zlib";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -161,6 +161,27 @@ function runCli(args: string[]) {
   );
   assert.equal(child.error, undefined, child.error?.message);
   return child;
+}
+
+test("native scheduler CLI preserves receipt ownership with an explicit executable route", async (t) => {
+  const runtime = await tempRuntime(t);
+  await writeReceipt(runtime);
+  const child = runCli(["--cli-bin", "candidate's cli", ...argv(runtime)]);
+  assert.equal(child.status, 0, child.stdout + child.stderr);
+  const result = JSON.parse(child.stdout);
+  assert.equal(result.ok, true);
+  assert.equal(result.goal_id, goalId);
+  assert.equal(result.agent_id, agentId);
+});
+
+for (const program of ["", " ", "-invalid", "two\nlines"]) {
+  test(`native scheduler CLI rejects an invalid route ${JSON.stringify(program)} before effects`, async (t) => {
+    const runtime = await tempRuntime(t);
+    const child = runCli(["--cli-bin", program, ...argv(runtime)]);
+    assert.notEqual(child.status, 0);
+    assert.equal(JSON.parse(child.stdout).error.code, "invalid_scheduler_followup_argv");
+    assert.deepEqual(await readdir(runtime), []);
+  });
 }
 
 function invalidFactsArgv(parts: string[]): string[] {

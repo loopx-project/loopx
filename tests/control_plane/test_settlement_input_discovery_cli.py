@@ -236,13 +236,12 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
             selection = guard["interaction_contract"]["cli_channel"]["selection_command"]
             command = selection["route_prefix"] + " " + selection["command_args_template"].format(todo_id=TODO_ID)
             rc, guard = _run_generated_cli(command, registry_path=registry)
-        assert rc == 0 and guard["interaction_contract"]["agent_channel"]["delivery_allowed"], (
-            stage, guard.get("error"), guard.get("reason"))
-        args = ["refresh-state", *binding, "--classification", "validated_progress",
-                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-                "--no-global-sync", "--suppress-external-sinks"]
+        assert rc == 0, (stage, guard.get("error"), guard.get("reason"))
         if stage == "review":
-            authoring = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["vision_authoring"]
+            channel = guard["interaction_contract"]["agent_channel"]
+            assert channel["must_attempt"] and not channel["delivery_allowed"]
+            steps = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+            authoring = next(step["vision_authoring"] for step in steps if step["kind"] == "durable_writeback")
             example = re.search(r"retain:todo_<id>", authoring["authoring_hint"])
             assert example, "The authoring contract must offer an executable retention example."
             vision = deepcopy(authoring["minimal_example"])
@@ -252,10 +251,17 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
                 retained=["Original requirements"], evidence_refs=["validation:work-link"])
             path = tmp_path / "linked-vision.json"
             path.write_text(json.dumps(vision))
-            args += ["--agent-vision-json", str(path), "--autonomous-replan-recorded",
-                     "--repair-delta-kind", "goal_vision_patch"]
+            # Consume the replan-only binding, rather than inventing a Todo
+            # delivery admission for a periodic review.
+            args = shlex.split(guard["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
+            args = args[args.index("refresh-state"):]
+            args[args.index("--agent-vision-json") + 1] = str(path)
         else:
-            args += ["--delivery-boundary", "in_flight_continuation"]
+            assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
+            args = ["refresh-state", *binding, "--classification", "validated_progress",
+                    "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                    "--delivery-boundary", "in_flight_continuation"]
+        args += ["--no-global-sync", "--suppress-external-sinks"]
         rc, written = run(*args)
         assert rc == 0, written
         rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)

@@ -214,6 +214,7 @@ from .cli_runtime import (
     LoopXArgumentParser,
     add_subcommand_format,
     build_cli_parser,
+    cli_invocation_route,
     dispatch_common_command,
     enforce_native_controller_guard,
     output_format,
@@ -390,6 +391,12 @@ def build_parser() -> LoopXArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = sys.argv[1:] if argv is None else list(argv)
+    with cli_invocation_route(raw_argv):
+        return _main(argv)
+
+
+def _main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     if top_level_help_requested(raw_argv):
         print(render_concise_help(sys.argv[0] if argv is None else "loopx"), end="")

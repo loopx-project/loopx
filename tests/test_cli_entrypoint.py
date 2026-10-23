@@ -677,7 +677,13 @@ assert json.loads(output.getvalue()) == {{"ok": {healthy!r}, "scope": "installat
 
 
 def test_selected_todo_execution_matches_full_cli(tmp_path: Path) -> None:
+	from tests.control_plane.canonical_authority_fixture import (
+		assert_todo_read_unchanged, initialize_canonical_source_fixture,
+	)
+
 	registry, runtime_root = write_command_fixture(tmp_path)
+	initialize_canonical_source_fixture(runtime_root, "perf-goal",
+		state_path=registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md")
 	argv = [
 		"--registry",
 		str(registry),
@@ -701,7 +707,7 @@ def test_selected_todo_execution_matches_full_cli(tmp_path: Path) -> None:
 	full = run_cli_main("loopx.cli", argv)
 
 	assert selected.returncode == full.returncode == 0
-	assert selected.stdout == full.stdout
+	assert_todo_read_unchanged(json.loads(selected.stdout), json.loads(full.stdout))
 	assert selected.stderr == full.stderr == ""
 
 

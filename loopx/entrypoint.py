@@ -68,7 +68,7 @@ def _native_scheduler_followup_argv(raw_argv: list[str]) -> list[str] | None:
     if os.environ.get("LOOPX_KUNLUNCODE_OUTER_CONTROLLER") == "1":
         return None
 
-    value_options = {"--format", "--registry", "--runtime-root"}
+    value_options = {"--format", "--registry", "--runtime-root", "--cli-bin"}
     positionals: list[str] = []
     skip_value = False
     for value in raw_argv:

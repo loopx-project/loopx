@@ -1,9 +1,38 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 import shutil
-from typing import Mapping, Sequence
+from typing import Iterator, Mapping, Sequence
+
+
+_loopx_cli_bin: ContextVar[str] = ContextVar("loopx_cli_bin", default="loopx")
+
+
+def validate_cli_bin(value: str) -> str:
+    """Accept one executable name/path, never a shell command or empty route."""
+    if not value.strip() or value.startswith("-") or any(ord(c) < 32 for c in value):
+        raise ValueError("--cli-bin requires one non-empty executable name or path")
+    return value
+
+
+@contextmanager
+def loopx_cli_route(cli_bin: str | None) -> Iterator[None]:
+    """Bind only this invocation's command rendering; retain no host policy."""
+    token = _loopx_cli_bin.set(cli_bin if cli_bin is not None else "loopx")
+    try:
+        yield
+    finally:
+        _loopx_cli_bin.reset(token)
+
+
+def loopx_cli_argv(cli_bin: str | None = None) -> list[str]:
+    program = validate_cli_bin(cli_bin if cli_bin is not None else _loopx_cli_bin.get())
+    # The executable selects this process; the option preserves that selection
+    # when its returned commands start another process. Neither grants authority.
+    return [program] if program == "loopx" else [program, "--cli-bin", program]
 
 
 def resolve_command_path(

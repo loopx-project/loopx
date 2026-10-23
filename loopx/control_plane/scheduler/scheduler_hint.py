@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
 
+from ...command_invocation import loopx_cli_argv
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..quota.decision_summary import compact_quota_decision
 from ..runtime.time import now_utc, utc_isoformat, parse_timestamp
@@ -125,8 +126,12 @@ def _encode_followup_args(
             native_args.extend(encoded)
         else:
             raise RuntimeError("TypeScript scheduler CLI argument shape mismatch")
+    route = loopx_cli_argv()
+    if len(route) > 1:
+        args = [*route[1:], *args]
     return {
         **packet,
+        **({"cli_bin": route[0]} if len(route) > 1 else {}),
         "cli_args": _bounded_scheduler_followup_cli_args(args, native_args=native_args),
     }
 

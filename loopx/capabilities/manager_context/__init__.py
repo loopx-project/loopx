@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shlex
 
+from ...command_invocation import loopx_cli_argv
 from ...file_lock import exclusive_file_lock
 from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.source_grant_observation import (
@@ -281,7 +282,7 @@ def turn_start_hook(
 
     command = shlex.join(
         [
-            "loopx",
+            *loopx_cli_argv(),
             "--registry",
             str(registry_path),
             "--runtime-root",

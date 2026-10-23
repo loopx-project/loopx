@@ -58,8 +58,10 @@ def _quota(
     registry_path: Path,
     runtime_root: Path,
     project: Path,
+    *, cli_bin: str | None = None,
 ) -> dict:
     _returncode, payload = run_json_cli_result(
+        *(["--cli-bin", cli_bin] if cli_bin else []),
         "quota",
         "should-run",
         "--goal-id",
@@ -221,9 +223,11 @@ def test_trae_app_followup_rejects_codex_rrule_alias() -> None:
         validate_quota_command_context_request(args)
 
 
+@pytest.mark.parametrize("cli_bin", [None, "loopx-candidate"])
 def test_scheduler_ack_current_replays_host_binding_after_update(
     tmp_path: Path,
     monkeypatch,
+    cli_bin,
 ) -> None:
     registry_path, runtime_root, project = write_cli_fixture(
         tmp_path / "fixture",
@@ -234,10 +238,20 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     monkeypatch.setenv("CODEX_THREAD_ID", "fixture-thread")
     _write_heartbeat_rrule(codex_home, "FREQ=MINUTELY;INTERVAL=3")
 
-    first = _quota(registry_path, runtime_root, project)
+    first = _quota(registry_path, runtime_root, project, cli_bin=cli_bin)
     app = first["scheduler_hint"]["codex_app"]
     target_rrule = app["recommended_rrule"]
     ack_hint = app["ack_hint"]
+    compact_app = build_turn_envelope(first)["scheduler"]["app_automation"]
+    if cli_bin:
+        assert ack_hint["cli_bin"] == cli_bin
+        assert compact_app["cli_bin"] == cli_bin
+        route_index = ack_hint["cli_args"].index("--cli-bin")
+        assert ack_hint["cli_args"][route_index + 1] == cli_bin
+        assert route_index < ack_hint["cli_args"].index("quota")
+    else:
+        assert "cli_bin" not in ack_hint and "--cli-bin" not in ack_hint["cli_args"]
+        assert "cli_bin" not in compact_app
     assert app["stateful_backoff"]["apply_needed"] is True
     assert ack_hint["after"] == "automation_update_rrule_success"
     assert ack_hint["args"]["host_match_observed"] is True
@@ -253,7 +267,7 @@ def test_scheduler_ack_current_replays_host_binding_after_update(
     assert ack["scheduler_state_mutated"] is True
     assert ack["already_applied"] is False
 
-    settled = _quota(registry_path, runtime_root, project)
+    settled = _quota(registry_path, runtime_root, project, cli_bin=cli_bin)
     settled_app = settled["scheduler_hint"]["codex_app"]
     assert settled_app["stateful_backoff"]["apply_needed"] is False
     assert settled_app["stateful_backoff"]["ack_needed"] is False

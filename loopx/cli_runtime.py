@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import __version__
@@ -15,7 +16,7 @@ from .paths import default_registry_path, global_registry_path, select_default_r
 HOST_GLOBAL_REGISTRY_SELECTOR = "@host-global"
 
 
-GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format"})
+GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format", "--cli-bin"})
 GLOBAL_OPTIONS_WITH_EQUALS = tuple(
 	f"{option}=" for option in sorted(GLOBAL_OPTIONS_WITH_VALUE)
 )
@@ -144,6 +145,11 @@ def build_cli_parser(
 	)
 	parser.add_argument("--runtime-root", help="Override registry common_runtime_root.")
 	parser.add_argument("--format", choices=["markdown", "json"])
+	from .command_invocation import validate_cli_bin
+	parser.add_argument(
+		"--cli-bin", dest="control_cli_bin", type=validate_cli_bin,
+		help="Preserve this executable name/path in generated control commands; does not execute it or change permissions.",
+	)
 	return parser, parser.add_subparsers(dest="command", required=True)
 
 
@@ -256,6 +262,29 @@ def _top_level_command(argv: list[str]) -> str | None:
 			return None
 		return value
 	return None
+
+
+@contextmanager
+def cli_invocation_route(argv: list[str]):
+	"""Read the global route only; the canonical parser still validates argv."""
+	from .command_invocation import loopx_cli_route
+	program = None
+	index = 0
+	while index < len(argv):
+		value = argv[index]
+		option = value.split("=", 1)[0]
+		if option not in GLOBAL_OPTIONS_WITH_VALUE:
+			break
+		if "=" in value:
+			argument = value.split("=", 1)[1]
+		else:
+			index += 1
+			argument = argv[index] if index < len(argv) else None
+		if option == "--cli-bin":
+			program = argument
+		index += 1
+	with loopx_cli_route(program):
+		yield
 
 
 def _build_selected_parser(command: str) -> LoopXArgumentParser:
@@ -580,7 +609,8 @@ def main(argv: list[str] | None = None) -> int:
 	code = 1
 	error = None
 	try:
-		code = _run_command(command, raw_argv)
+		with cli_invocation_route(raw_argv):
+			code = _run_command(command, raw_argv)
 		return code
 	except BaseException as exc:
 		error = exc

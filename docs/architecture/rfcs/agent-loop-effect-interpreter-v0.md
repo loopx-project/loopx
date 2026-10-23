@@ -480,6 +480,11 @@ an existing business result. Real File/SQLite CLI coverage exercises generated c
 rebinding, one writeback/debit, preserved initial replan and settled replay.
 This source-path repair does not qualify installed host adoption or
 complete-cost acceptance.
+An explicitly selected CLI executable now remains in generated selection,
+required-read, scheduler and settlement/recovery routes through the shared
+invocation transport. The default route is unchanged; choosing an executable
+adds no admission or execution authority. Candidate installation and actual
+receiver adoption remain separate from this command-route qualification.
 Neither today's large quota packet nor the smaller TurnEnvelope is a target
 shape merely because of its size. Optional memory participation now has one
 compact, signed envelope projection; the Codex CLI adapter preserves default-off

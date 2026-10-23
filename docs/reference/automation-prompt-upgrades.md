@@ -25,9 +25,22 @@ unavailable contract still forbids delivery and spending. This is not permission
 to bypass a gate, retry indefinitely, or disable a healthy automation.
 
 For a one-agent trial, pass `--cli-bin loopx-canary` to preview and apply. The
-bootstrap and the thin prompt's generated commands both use that executable;
-other automations continue to use their existing runtime. Do not promote the
-canary as the global default merely to test one task.
+bootstrap, guard, work selection, required reads and settlement/receipt-recovery commands
+retain that executable. Generated commands carry the global `--cli-bin PROGRAM`
+option so the next process preserves the route too. For a direct guard, use
+`loopx-canary --cli-bin loopx-canary --format json quota should-run ...`.
+`PROGRAM` is one executable name or path, not a shell command. The option only
+selects generated command routing; it executes nothing and changes no authority,
+host configuration or permissions. Without an explicit route, commands retain
+the existing `loopx` default. The route is scoped to the current invocation and
+does not leak into a later CLI call.
+
+Native scheduler follow-up hints expose `cli_bin` for a custom route; invoke
+that executable with its `cli_args`. Keep the same executable through an admitted
+Turn's writeback and spend, including receipt recovery. Other automations retain
+their runtime. Do not promote the canary as the global default merely to test one
+task. Installed identity, receiver adoption and subsequent useful work remain
+separate acceptance evidence.
 
 The owner is the existing heartbeat/upgrade boundary; there is no new optional
 capability or extension provider. SQLite/TOML handling is a local host adapter,

@@ -59,6 +59,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     "--format",
     "--registry",
     "--runtime-root",
+    "--cli-bin", // Invocation routing only; never a scheduler authority fact.
     "--goal-id",
     "--agent-id",
     "--surface",
@@ -94,6 +95,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       index = next;
       if (!value && option !== "--app-automation-current-rrule") {
         throw new EffectRuntimeRequestError(`${option} must not be empty`, "invalid_scheduler_followup_argv");
+      }
+      if (option === "--cli-bin" && (!value.trim() || value.startsWith("-") || /[\x00-\x1f]/.test(value))) {
+        throw new EffectRuntimeRequestError(
+          "--cli-bin requires one non-empty executable name or path", "invalid_scheduler_followup_argv",
+        );
       }
       if (option === FACTS_FLAG) chunks.push(value);
       else if (option !== "--available-capability" && option !== "--registry") {

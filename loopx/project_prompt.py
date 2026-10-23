@@ -6,6 +6,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from .command_invocation import loopx_cli_argv
 from .control_plane.projects.identity import default_goal_id
 from .control_plane.projects.registry_codec import load_registry
 from .paths import (
@@ -67,7 +68,8 @@ def render_cli_command_prefix(
     runtime_root: str | Path | None = None,
     registry_path: str | Path | None = None,
 ) -> str:
-    prefix = shell_arg_for_host(cli_bin)
+    prefix = " ".join(shell_arg_for_host(arg) for arg in loopx_cli_argv(
+        None if cli_bin == "loopx" else cli_bin))
     if runtime_root is not None:
         prefix += f" --runtime-root {shell_arg_for_host(str(runtime_root))}"
     if registry_path is not None:

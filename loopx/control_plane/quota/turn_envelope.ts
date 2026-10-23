@@ -431,6 +431,8 @@ function scheduler(payload: JsonObject, turn: ReturnType<typeof interpretQuotaSh
     app.stateful_backoff = compactState;
   }
   const ack = object(sourceApp.ack_hint);
+  const cliBin = ack.cli_bin ?? object(sourceApp.failure_hint).cli_bin;
+  if (typeof cliBin === "string") app.cli_bin = cliBin;
   const cliArgs = executableCliArgs(ack.cli_args);
   if (cliArgs.length > 0) {
     app.ack_cli_args = cliArgs;

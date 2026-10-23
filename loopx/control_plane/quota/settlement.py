@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 from typing import Any
 
+from ...command_invocation import loopx_cli_argv
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
@@ -186,7 +187,7 @@ def attach_settlement_progress(
     identity = readback.identity.value
     if payload.get("ok") is not True or progress.get("next_step") != "quota_spend" or identity is None:
         return
-    prefix = "loopx"
+    prefix = shlex.join(loopx_cli_argv())
     if registry_path is not None:
         prefix += f" --registry {shlex.quote(str(registry_path))}"
     if runtime_root is not None:

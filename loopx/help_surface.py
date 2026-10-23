@@ -510,7 +510,7 @@ def render_concise_help(program: str = "loopx") -> str:
             "  KunlunCode     run loopx-kunluncode connect, then loopx-kunluncode run.",
             "  Other agents   need a CLI/task/automation/loop hook, or run LoopX manually.",
             "",
-            "Global options: --registry PATH   --runtime-root PATH   --format markdown|json",
+            "Global options: --registry PATH   --runtime-root PATH   --format markdown|json   --cli-bin PROGRAM",
             "More:",
             "  loopx commands                 Show grouped command reference.",
             "  loopx <command> --help         Show flags for one command.",

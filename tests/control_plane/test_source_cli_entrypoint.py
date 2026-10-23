@@ -258,6 +258,8 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
         "---\nstatus: active\n---\n\n# Future independent Goal\n\n## Agent Todo\n")
     registered["goals"].append(future)
     registry.write_text(json.dumps(registered))
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    initialize_canonical_source_fixture(runtime, future["id"], state_path=future_state)
     for goal in ("full-speed", "future-independent"):
         accepted = run_entry(entry, selected_ack(goal), env=env)
         assert accepted.returncode == 0, accepted.stdout + accepted.stderr
@@ -355,7 +357,8 @@ def test_source_read_uses_canonical_authority_not_missing_markdown(
     module = run_entry("module", argv, assertions='assert "loopx.cli" not in sys.modules')
     console = run_entry("console", argv)
     assert module.returncode == console.returncode == 0, module.stderr + console.stderr
-    assert json.loads(module.stdout) == json.loads(console.stdout)
+    from canonical_authority_fixture import assert_todo_read_unchanged
+    assert_todo_read_unchanged(json.loads(module.stdout), json.loads(console.stdout))
     result = json.loads(module.stdout)
     assert result["authority_read"]["source_authority"] == f"{provider}_v0"
     assert result["authority_read"]["legacy_fallback_used"] is False
