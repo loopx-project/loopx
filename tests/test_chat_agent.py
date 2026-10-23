@@ -511,8 +511,9 @@ def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp
 
 @pytest.mark.parametrize("compact", [False, True])
 @pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("diagnostic", ["timed out", "failed"])
 @pytest.mark.parametrize("fault", [None, "tool", "answer", "unknown", "correction", "older", "changed", "duplicate"])
-def test_routing_failure_readback_allows_only_native_compaction_before_execution(tmp_path, monkeypatch, compact, reverse, fault):
+def test_routing_failure_readback_allows_only_native_compaction_before_execution(tmp_path, monkeypatch, compact, reverse, diagnostic, fault):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="routing-thread", work_dir=tmp_path, response_timeout_sec=.2)
     reads = 0
@@ -521,7 +522,7 @@ def test_routing_failure_readback_allows_only_native_compaction_before_execution
         nonlocal reads
         if packet["method"] == "thread/turns/list":
             reads += 1
-            message = ("Error running remote compact task: " if compact else "") + "workspace routing discovery timed out"
+            message = ("Error running remote compact task: " if compact else "") + f"workspace routing discovery {diagnostic}"
             if fault == "changed" and reads > 1:
                 message = "different private error"
             rows = [{"id": "failed", "status": "failed", "error": {"codexErrorInfo": "other", "message": message}}]
@@ -546,18 +547,19 @@ def test_routing_failure_readback_allows_only_native_compaction_before_execution
 
     monkeypatch.setattr(session, "_write", write)
     proof = failed_request_readback(session, "failed")
-    if fault is None:
+    if fault is None or (fault == "older" and not compact):
         assert proof == {"thread_id": "routing-thread", "turn_id": "failed",
             "only_original_user_item": not compact, "only_pre_execution_items": True,
             "codex_error_info": "other", "pre_execution_routing_timeout": True}
         error = chat_agent._terminal_turn_error({"codexErrorInfo": "other", "message":
-            ("Error running remote compact task: " if compact else "") + "workspace routing discovery timed out"}, "fallback")
+            ("Error running remote compact task: " if compact else "") + f"workspace routing discovery {diagnostic}"}, "fallback")
         assert error.error_code == "upstream_transport_failure" and error.native_routing_timeout
     else:
         assert proof is None
 
 
-@pytest.mark.parametrize("message", [None, {}, [], "workspace routing discovery timed out: extra", "unknown"])
+@pytest.mark.parametrize("message", [None, {}, [], "workspace routing discovery timed out: extra",
+    "workspace routing discovery failed: extra", "Please retry: workspace routing discovery failed", "unknown"])
 def test_routing_diagnostic_is_an_exact_provider_diagnostic(message):
     error = {"codexErrorInfo": "other", "message": message}
     assert not chat_agent._routing_discovery_timeout(error)

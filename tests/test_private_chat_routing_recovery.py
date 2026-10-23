@@ -113,3 +113,102 @@ def test_original_scanner_recovers_across_another_failure_and_restart(steward, m
     starts = [json.loads(line) for line in capture.read_text().splitlines()
         if json.loads(line).get("method") == "turn/start"]
     assert len(starts) == 3 and len(store.list_sessions()) == 1
+
+
+@pytest.mark.parametrize("profile", ["notes-app", "steward-app"])
+@pytest.mark.parametrize("fault", [None, "tool", "compaction", "active", "changed-source", "delta", "policy"])
+def test_original_worker_recovers_historical_user_only_routing_failure(steward, monkeypatch, tmp_path, profile, fault):  # noqa: F811
+    """Read the persisted native inventory over stdio, then use the original queue.
+
+    A later successful request cannot prove an earlier untouched request ran.
+    Tools, compaction on that older Turn, changed sources and unknown local
+    effects still prevent recovery. No test substitutes a recovery proof.
+    """
+    store, runtime, provider, transport, _, capture, _ = steward
+    fake = Path(runtime.codex_bin)
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "other"')
+    source = source.replace('"private-fixture-upstream-detail"',
+        '"Error running remote compact task: workspace routing discovery failed"')
+    source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    fake.write_text(source)
+    binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == profile)
+    event = provider.event(profile, "unstarted-request", "typed terminal failure")
+    transport.admit(profile, event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    original = transport.core.read_request(ref)
+    failed = finish(runtime, original)
+    assert failed["status"] == "failed" and failed["delta_count"] == 0
+    assert failed["error_code"] == "upstream_transport_failure"
+    transport.reconcile()
+    failed_path = store._turn_path(original["session_id"], original["turn_id"])
+    if fault == "delta":
+        store.update_turn(original["session_id"], original["turn_id"], delta_count=1)
+    original_bytes = failed_path.read_bytes()
+    transport_path = transport.root / f"{ref}.json"
+    old_notice = json.loads(transport_path.read_text())["deliveries"]["terminal"]
+    later_event = provider.event(profile, "separate-request", "Complete this independent request.")
+    transport.admit(profile, later_event)
+    later = transport.core.read_request(identity_ref(binding["provider_ref"], later_event["message_id"]))
+    assert later["session_id"] == original["session_id"] and finish(runtime, later)["status"] == "completed"
+    transport.reconcile()
+    runtime.adapters.pop(original["session_id"]).close_session()
+    Path(store.load_session(original["session_id"])["codex_home"]).mkdir(parents=True, exist_ok=True)
+
+    # A fresh native stdio process reads a durable provider snapshot. The model
+    # fixture now succeeds; only the existing transport worker may admit it.
+    failed_native = failed["upstream_turn_id"]
+    later_native = store.load_turn(later["session_id"], later["turn_id"])["upstream_turn_id"]
+    inventory = tmp_path / "native-inventory.json"
+    error = {"codexErrorInfo": "cyberPolicy" if fault == "policy" else "other",
+        "message": "Error running remote compact task: workspace routing discovery failed"}
+    entries = [{"turnId": failed_native, "item": {"type": "userMessage", "id": "original-user"}}]
+    if fault in {"tool", "compaction"}:
+        entries.append({"turnId": failed_native, "item": {"type":
+            "commandExecution" if fault == "tool" else "contextCompaction", "id": "additional-item"}})
+    inventory.write_text(json.dumps({"turns": [{"id": later_native,
+        "status": "inProgress" if fault == "active" else "completed"},
+        {"id": failed_native, "status": "failed", "error": error}], "items": entries}))
+    begin = source.index('    elif method == "thread/turns/list":')
+    end = source.index('    else:\n        result = {}', begin)
+    reader = f'''    elif method in {{"thread/turns/list", "thread/items/list"}}:
+        with open({str(inventory)!r}) as observed:
+            snapshot = json.load(observed)
+        result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
+    elif method == "thread/backgroundTerminals/list":
+        result = {{"data": []}}
+'''
+    source = source[:begin] + reader + source[end:]
+    fake.write_text(source.replace('if "typed terminal failure" in json.dumps(request.get("params") or {}):', 'if False:'))
+    if fault == "changed-source":
+        provider.messages[event["message_id"]]["content"] = "Changed requirement"
+    clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+    class AfterBackoff(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock
+    monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+    worker = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+        runner=provider, cli_bin="lark-cli")
+    worker.reconcile()
+    recovered = worker.core.read_request(ref)
+    if fault is not None:
+        assert recovered["turn_id"] == original["turn_id"] and not recovered.get("context_recovery")
+        assert failed_path.read_bytes() == original_bytes
+        return
+    assert recovered["turn_id"] != original["turn_id"]
+    assert recovered["session_id"] == original["session_id"]
+    assert recovered["context_recovery"]["routing_attempt"] == 1
+    assert finish(runtime, recovered)["status"] == "completed"
+    worker.reconcile()
+    delivered = json.loads(transport_path.read_text())
+    assert delivered["deliveries"]["terminal"] == old_notice
+    assert delivered["deliveries"][presentation_phase(recovered, "terminal")]["verified"]
+    assert failed_path.read_bytes() == original_bytes
+    before = list(provider.writes)
+    LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+        runner=provider, cli_bin="lark-cli").reconcile()
+    assert provider.writes == before
+    requests = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(item.get("method") == "turn/start" for item in requests) == 3
+    assert any(item.get("method") == "thread/items/list" for item in requests)
+    assert len(store.list_sessions()) == 1

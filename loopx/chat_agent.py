@@ -208,6 +208,8 @@ def _routing_discovery_timeout(error: Any) -> bool:
             and error.get("message") in (
                 "workspace routing discovery timed out",
                 "Error running remote compact task: workspace routing discovery timed out",
+                "workspace routing discovery failed",
+                "Error running remote compact task: workspace routing discovery failed",
             ))
 
 

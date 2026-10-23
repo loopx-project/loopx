@@ -26,9 +26,10 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
     """Observe a historical pre-execution failure without resuming it.
 
     Unlike a same-worker retry, a migration may inspect an older failure.
-    Every native Turn must be terminal. Routing recovery additionally
-    requires the latest Turn and permits only user input plus native
-    compaction bookkeeping: no answer, tool, correction or unknown item.
+    Every native Turn must be terminal. A historical routing failure must
+    contain only the original user input. Native compaction bookkeeping is
+    allowed only on the latest Turn: no answer, tool, correction or unknown
+    item qualifies. Core still rechecks the original source and grant.
     The Core still owns any new continuation admission.
     """
     deadline = time.monotonic() + session.response_timeout_sec
@@ -46,12 +47,11 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         if not selected or selected.get("status") != "failed":
             return None
         if _routing_discovery_timeout(selected.get("error")):
-            # A later request may supersede this one. Compaction is native
-            # bookkeeping, but only the exact latest routing failure can
-            # use that exception to the historical user-only inventory.
-            if ids[0] != turn_id:
-                return None
-            return {"codex_error_info": "other", "pre_execution_routing_timeout": True}
+            # Later work must not strand an untouched accepted request. Keep
+            # the historical user-only rule; only the exact latest failure
+            # can use the compaction exception to that inventory.
+            return {"codex_error_info": "other", "pre_execution_routing_timeout": True,
+                    "latest_routing_failure": ids[0] == turn_id}
         info = _retry_error_details(selected.get("error")).get("retry", {}).get("codex_error_info")
         # `other` is evidence of a failed native request, not permission to
         # retry it. The typed admission owner separately decides whether
@@ -73,7 +73,8 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             return None
         items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
         routing = proof.get("pre_execution_routing_timeout") is True
-        allowed = {"userMessage", "contextCompaction"} if routing else {"userMessage"}
+        allowed = ({"userMessage", "contextCompaction"}
+            if routing and proof["latest_routing_failure"] else {"userMessage"})
         ids: set[str] = set()
         users = 0
         for entry in items:
@@ -86,6 +87,7 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             users += item["type"] == "userMessage"
         if users != 1 or (not routing and len(items) != 1) or terminal() != proof:
             return None
+        proof.pop("latest_routing_failure", None)
         return {"thread_id": session.thread_id, "turn_id": turn_id,
                 "only_original_user_item": len(items) == 1,
                 **({"only_pre_execution_items": True} if routing else {}), **proof}
