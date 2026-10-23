@@ -10,11 +10,16 @@ from loopx_jev import drift
 from loopx_jev.store import atomic_json
 from drift_fixtures import DRIFT_NOULS, response
 from test_drift import git
-from tests.control_plane.test_quota_settlement_cli import GOAL_ID, _write_fixture
+from tests.control_plane.test_quota_settlement_cli import (
+    GOAL_ID,
+    _initialize_fixture_authority,
+    _write_fixture,
+)
 
 
 def test_actual_refresh_process_capture_and_default_off(tmp_path):
     project, runtime, registry = _write_fixture(tmp_path / "fixture")
+    _initialize_fixture_authority(project, runtime)
     work = tmp_path / "delivery"
     work.mkdir()
     git(work, "init", "-q")

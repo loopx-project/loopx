@@ -71,17 +71,19 @@ export const blockedNoticeSettingsScenario = {
         throw new Error("Blocked notice settings overflow the narrow viewport");
       }
       await page.reload({ waitUntil: "networkidle" });
-      if (!await toggle.isVisible()) {
-        if (!await page.locator(".personal-settings-page").isVisible()) {
-          await page.getByRole("button", { name: "打开 Goal 导航", exact: true }).click();
-          await page.getByRole("button", { name: "设置", exact: true }).click();
-        }
-        await page.locator(".personal-settings-mobile-category select").selectOption("capabilities");
-        await page.getByRole("radio", { name: "Goal 设置", exact: true }).check();
-        await page.getByRole("combobox", { name: "目标 Goal", exact: true }).selectOption("product-release");
-        await page.getByRole("navigation", { name: "Goal 能力目录" })
-          .getByRole("button", { name: /飞书事件收件箱/ }).click();
+      // Reload restores the settings route, whose lazy editor can mount after
+      // network idle. Wait for that route; opening the hidden Goal drawer can
+      // strand this check, and manual navigation would mask lost route state.
+      await page.locator(".personal-settings-page").waitFor();
+      const restoredGoal = page.getByRole("combobox", { name: "目标 Goal", exact: true });
+      await restoredGoal.locator('option[value="product-release"]:checked').waitFor({ state: "attached" });
+      if (await page.locator(".personal-settings-mobile-category select").inputValue() !== "capabilities"
+        || await restoredGoal.inputValue() !== "product-release"
+        || !await page.getByRole("radio", { name: "Goal 设置", exact: true }).isChecked()) {
+        throw new Error("Reload lost the blocked-notice settings route or Goal scope");
       }
+      await page.getByRole("navigation", { name: "Goal 能力目录" })
+        .getByRole("button", { name: /飞书事件收件箱/ }).click();
       await toggle.waitFor();
       if (!await toggle.isChecked()) throw new Error("Reload lost the verified blocked-notice setting");
       notificationProjection.goals[0].blocked_notice_delivery = { delivered_count: 8, unverified_count: 1, resolved_count: 1 };

@@ -19,10 +19,13 @@ windows, waiting cause and recovery. Tokens and identity claims stay private.
 restart permission, the provider requests a normal AppKit quit of only the
 inspected GPT instance, waits for exit and native idle, saves/switches the login,
 then reopens that same route. It never addresses a shared bundle id or quits a
-different route. A refused quit, timeout, new process owner or remaining CLI/file
-owner leaves credentials unchanged and pauses automatic retries until a check.
+different route. With the separate force permission below, a refused or timed-out
+normal quit can escalate against that same inspected instance. Otherwise those
+failures, or remaining CLI/file owners, leave credentials unchanged and pause
+automatic shutdowns until a check. Changed process ownership leaves credentials
+unchanged and consumes the bounded retry budget.
 Without this additional permission it continues to wait for closed clients.
-It does not implement hot login replacement, force termination, job replay or
+It does not implement hot login replacement, job replay or
 resumption of an interrupted turn. If every
 account is unavailable, it waits for the observed reset and checks again.
 
@@ -52,7 +55,11 @@ and reopen the GPT instance. Neither permission is enabled by installation.
 When enabled, normal refusal or timeout automatically force-quits only the
 observed GPT launch, then continues switching and reopening without another
 confirmation. The PID, executable, launch date, selection and quota freshness
-must still match. Other CLI/file owners remain holds. Force quit can interrupt
+must still match. The launch probe must explicitly contain `launch_time`: a
+positive finite timestamp retains the launch-date fence; explicit `null` from
+Launch Services uses the inspected PID and executable instead. Missing fields,
+invalid types and non-finite timestamps cannot authorize force quit. A successful
+normal quit never escalates. Other CLI/file owners remain holds. Force quit can interrupt
 work in that instance; it does not authorize replay of submitted jobs.
 An operator-owned service independent of the App can run the same observer:
 
@@ -112,9 +119,12 @@ are distinct. The observer never buys credits or uses reset coupons.
 Only fresh active-account exhaustion starts automatic selection. Destinations
 must be allowlisted and freshly available. Selection follows the configured
 ring with a five-minute cooldown. An external native/manual choice wins and
-starts a cooldown. Busy clients defer; refused/changed clients and remaining
-file owners pause further shutdowns. Other repeated failures stop after three
-attempts until an explicit check/reconnect. Resets require new observations.
+starts a cooldown. Busy clients defer; refused/timed-out clients and remaining
+file owners pause further shutdowns. Changed clients and other repeated failures
+stop after three attempts until an explicit check/reconnect. Successful quota
+reads do not reset that budget, which survives observer restart. A completed
+switch, explicit check/reconfiguration or later native choice can reset it.
+Quota resets require new observations.
 A paused observer still reads native selection metadata: a later native/manual
 choice invalidates the old account observations and failure pause, then starts
 the usual cooldown without another shutdown attempt.

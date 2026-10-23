@@ -697,6 +697,11 @@ for (const key of ["suggestions.openDecisions", "suggestions.explainBlocked", "s
 const router = source("../../router.tsx");
 assert.match(page, /const WorkspaceSettingsPage = lazy\(\(\) => import\("\.\/workspace-settings-page"\)/, "Settings load on demand");
 assert.doesNotMatch(page, /^import \{ WorkspaceSettingsPage \}/m, "No eager import undoes the boundary");
+const machineConfigurationSettings = source("./machine-configuration-settings.tsx");
+assert.doesNotMatch(machineConfigurationSettings, /DshHostReadiness|dsh-host-readiness/,
+  "Steward settings do not expose DSH or managed-host topology");
+assert.doesNotMatch(machineConfigurationSettings, /goals = \[\]|onOpenProviderSettings/,
+  "Steward settings consume only machine configuration capabilities");
 assert.match(page, /^import \{ GoalTeamResults \} from "\.\/goal-team-results";/m, "Team results load eagerly so their single list request keeps its timing");
 for (const route of ["./views/frontstage-developer-page", "./views/benchmark-study-page", "./features/personal-workspace/answer-report-page"]) {
   assert.match(router, new RegExp(`lazy\\(\\(\\) => import\\("${route.replace(/[./]/g, (ch) => `\\${ch}`)}"\\)`), `${route} loads on demand`);

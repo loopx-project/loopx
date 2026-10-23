@@ -568,6 +568,9 @@ def test_todo_succession_gap_interaction_contract_is_model_actionable() -> None:
 
     assert contract["mode"] == "autonomous_replan"
     assert "todo_111111111111" in contract["agent_channel"]["primary_action"]
+    assert contract["agent_channel"]["must_attempt"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is True
+    assert contract["agent_channel"]["quiet_noop_allowed"] is False
     assert "produce one typed outcome" not in contract["agent_channel"][
         "primary_action"
     ]

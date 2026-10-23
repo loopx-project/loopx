@@ -13,13 +13,19 @@ from loopx.capabilities.progress_review.receipt import write_progress_review_rec
 from loopx.configure_goal import configure_goal
 from loopx.status import autonomous_replan_obligation_from_runs, external_progress_review_context
 from tests.control_plane.test_external_progress_review import receipt, run
-from tests.control_plane.test_quota_settlement_cli import AGENT_ID, GOAL_ID, _write_fixture
+from tests.control_plane.test_quota_settlement_cli import (
+    AGENT_ID,
+    GOAL_ID,
+    _initialize_fixture_authority,
+    _write_fixture,
+)
 from test_closed_loop import SOURCE, _find, _goal, _newest_first_runs, _refresh
 
 
 @pytest.mark.parametrize("unbound_field", ["agent_id", "todo_id", "ack_agent_id"])
 def test_unattributed_newer_result_cannot_hide_existing_obligation(tmp_path, unbound_field):
     project, runtime, registry = _write_fixture(tmp_path / "fixture")
+    _initialize_fixture_authority(project, runtime)
     rows = [dict(run(n, turn=f"t{n}", agent=AGENT_ID), todo_id="todo-a") for n in (1, 2, 3)]
     for n, row in enumerate(rows, 1):
         row["progress_observation"]["evidence_ids"] = [f"evidence-{n}"]

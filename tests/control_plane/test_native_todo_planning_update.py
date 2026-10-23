@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.contract import format_todo_metadata_line
@@ -44,7 +44,7 @@ def source_fixture(tmp_path: Path) -> tuple[Path, Path]:
 
 def fixture(tmp_path: Path, provider: str = "file") -> tuple[Path, Path]:
     registry, state = source_fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    todos = read_fixture_todos(state)
     projection = build_todo_runtime_shadow_projection(
         goal_id="goal-a", todos=todos, handoff_mode="soft_claim",
     )
@@ -77,7 +77,7 @@ def test_cli_imported_completion_repairs_only_metadata(tmp_path, monkeypatch, pr
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = source_fixture(tmp_path)
-    rows = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    rows = read_fixture_todos(state)
     imported = next(row for row in rows if row["todo_id"] == "todo_target")
     imported.update(status="done", done=True, evidence="Original evidence", reason="Original reason",
                     completed_at="2026-01-02T00:00:00Z", updated_at="2026-01-02T01:00:00Z",
@@ -414,7 +414,7 @@ def deferred_hard_lease_fixture(
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = source_fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    todos = read_fixture_todos(state)
     target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
     target.update(status="deferred", done=True, resume_when="resume_at:2020-01-01T00:00:00Z")
     projection = build_todo_runtime_shadow_projection(
@@ -433,7 +433,7 @@ def test_dependency_replan_uses_existing_inactive_lifecycle_then_fresh_lease(
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = source_fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    todos = read_fixture_todos(state)
     target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
     target.update(resume_when="todo_done:todo_other", successor_todo_ids=["todo_other"])
     projection = build_todo_runtime_shadow_projection(
@@ -517,7 +517,7 @@ def test_bound_user_action_metadata_through_real_cli(
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = source_fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    todos = read_fixture_todos(state)
     target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
     target.pop("claimed_by")
     target.update(role="user", task_class="user_action", source_section="User Todo",
@@ -587,7 +587,7 @@ def test_bound_user_action_releases_retained_execution_before_administrative_cop
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = source_fixture(tmp_path)
-    todos = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+    todos = read_fixture_todos(state)
     target = next(todo for todo in todos if todo["todo_id"] == "todo_target")
     target.pop("claimed_by")
     target.update(role="user", task_class="user_action", source_section="User Todo",
@@ -765,7 +765,7 @@ def test_public_cli_external_wait_uses_current_successor_source(
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, state = source_fixture(tmp_path)
-    items = list(records(registry).values())
+    items = read_fixture_todos(state)
     successor = next(item for item in items if item["todo_id"] == "todo_other")
     successor.update(claimed_by="agent-a", resume_when=f"{condition_kind}:todo_evidence",
                      resume_monitor_generation=1 if condition_kind == "monitor_changed" else None)

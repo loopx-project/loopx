@@ -183,6 +183,9 @@ test("query display limits preserve complete source coverage and report the fina
     {name: "thin", query: {thin: true}, available: 30, shown: 4},
     {name: "references", query: {json_references: true, limit: 1}, available: 30, shown: 2},
     {name: "exact", query: {todo_id: items[0].todo_id}, available: 1, shown: 1},
+    {name: "exact agent scope", query: {todo_id: items[0].todo_id, agent_id: "agent-a"}, available: 1, shown: 1, unfiltered: 30},
+    {name: "exact limit", query: {todo_id: items[0].todo_id, limit: 1}, available: 1, shown: 1, unfiltered: 30},
+    {name: "exact other role", query: {todo_id: items[0].todo_id, role: "agent"}, available: 0, shown: 0},
     {name: "missing", query: {todo_id: "todo_missing"}, available: 0, shown: 0},
   ];
   for (const scenario of cases) await t.test(scenario.name, async () => {
@@ -201,5 +204,14 @@ test("query display limits preserve complete source coverage and report the fina
     assert.equal(coverage.shown_count, scenario.shown);
     assert.equal(coverage.available_count, scenario.available);
     assert.equal(coverage.truncated, scenario.shown < scenario.available);
+    if ("unfiltered" in scenario) assert.equal(payload.unfiltered_todo_count, scenario.unfiltered);
   });
+  const invalidItems = items.map((item, index) => index === 1 ? {...item, updated_at: 123} : item);
+  const invalid = {...projection, todos: invalidItems,
+    todo_read_model: coordinationTodoReadModel(invalidItems, TODO_CANONICAL_READ_RECORD_SCHEMA)};
+  assert.equal((await store.commitAuthority({expected_provider_revision: committed.provider_revision,
+    operation_id: "invalid-unselected-coordinate", events: [], next_projection: invalid, receipts: []})).status, "applied");
+  await assert.rejects(() => readTodo({schema_version: TODO_READ_REQUEST, kind: "query",
+    source: {runtime_root: root, goal_id: goal}, observed_at: Date.parse(now) / 1000, evaluated_at: now,
+    query: {goal_id: goal, todo_id: items[0].todo_id, read_scope: "active", state_file: state}}), /invalid summary completion coordinates/);
 });

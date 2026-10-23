@@ -17,7 +17,7 @@ async function startConfigurationOwner() {
   const root = await mkdtemp(resolve(tmpdir(), "loopx-explore-composition-"));
   const env = { ...process.env, TMPDIR: root, TEMP: root, TMP: root, LOOPX_USAGE_PING: "0" };
   const child = spawn(resolveTestPython(), ["-u", "-c", `
-import json, signal, subprocess, sys
+import json, runpy, signal, subprocess, sys
 from pathlib import Path
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.effect_runtime import restart_effect_runtime
@@ -36,6 +36,11 @@ registry.write_text(json.dumps({"schema_version": "0.1", "common_runtime_root": 
     "quota": {"compute": 1.0, "window_hours": 24, "allowed_slots": 20},
     "coordination": {"agent_model": "peer_v1", "registered_agents": [agent]},
     "spawn_policy": {"explore_harness": {"enabled": False}}}]}))
+# Finish authoring this disposable source before ordinary status/configuration
+# reads. Markdown alone deliberately cannot supply canonical work authority.
+fixtures = runpy.run_path('tests/control_plane/canonical_authority_fixture.py')
+fixtures['initialize_canonical_source_fixture'](
+    runtime, goal, state_path=repo / 'ACTIVE_GOAL_STATE.md', provider='file')
 base = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry), "--runtime-root", str(runtime)]
 def cli(*args):
     result = subprocess.run(base + list(args), capture_output=True, text=True)

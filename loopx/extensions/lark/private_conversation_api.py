@@ -57,6 +57,10 @@ class PrivateConversationRequestMixin:
                 and hasattr(self.server.lark_private_conversations, "ingress") else {}),
              **({"owner_attention": self.server.lark_private_conversations.owner_attention.health(row["binding_id"])}
                 if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner" else {}),
+             **({"managed_steward": self.server.lark_private_conversations.managed_steward.health(row["binding_id"])}
+                if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner"
+                and row["executor_endpoint_id"] == "codex"
+                and hasattr(self.server.lark_private_conversations, "managed_steward") else {}),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
             for row in current["bindings"]],
             "stop_recoveries": [{**row,
@@ -136,6 +140,23 @@ class PrivateConversationRequestMixin:
             self._send_error(str(exc), status=400)
             return
         self._private_conversations()
+
+    def _private_conversation_managed_steward(self) -> None:
+        try:
+            body = self._read_json()
+            if (set(body) - {"binding_id", "session_id", "plan_id", "execute"}
+                    or not isinstance(body.get("binding_id"), str)
+                    or not isinstance(body.get("execute", False), bool)
+                    or ("session_id" in body and not isinstance(body["session_id"], str))
+                    or ("plan_id" in body and not isinstance(body["plan_id"], str))):
+                raise ValueError("use the original steward's current preparation preview")
+            result = self.server.lark_private_conversations.managed_steward.prepare(
+                body["binding_id"], session_id=body.get("session_id"),
+                expected_plan_id=body.get("plan_id"), execute=body.get("execute", False))
+        except (ValueError, KeyError, OSError) as exc:
+            self._send_error(str(exc), status=409, error_code="managed_steward_preparation_unavailable")
+            return
+        self._send_json(result)
 
     def _private_conversation_agent_target(self) -> None:
         try:

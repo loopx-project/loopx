@@ -4,12 +4,11 @@ import json
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority
+from canonical_authority_fixture import initialize_canonical_authority, read_fixture_todos
 from loopx.capabilities.explore.result_log import explore_result_log_path
 from loopx.capabilities.explore.result_writeback import prepare_result_attachment, deliver_result_attachment
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.work_items.task_lease import acquire_task_lease
-from loopx.todos import list_goal_todos
 from tests.control_plane.test_explore_result_writeback import ATTACHMENT
 from tests.control_plane.test_quota_settlement_cli import (
     _run_cli, _write_fixture, AGENT_ID, GOAL_ID, TODO_ID, TURN_ID,
@@ -25,7 +24,7 @@ def test_ninth_capture_keeps_history_and_survives_real_cli_replay(tmp_path, prov
     registry.write_text(json.dumps(config))
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID)
-    rows = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
+    rows = read_fixture_todos(project / config["goals"][0]["state_file"])
     next(row for row in rows if row["todo_id"] == TODO_ID)["claimed_by"] = AGENT_ID
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=rows, handoff_mode="hard_lease"),

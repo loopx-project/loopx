@@ -32,6 +32,7 @@ export const stewardModelSettingsScenario = {
       const savedAgent = await page.evaluate(() => JSON.parse(localStorage.getItem("loopx.personal-agent-selection.v1") ?? "{}").manager);
       if (savedAgent) throw new Error("Legacy browser executor preference survived machine-owned settings");
       await page.screenshot({ path: resolve(outputDir, "steward-model-entry.png"), animations: "disabled" });
+      const capabilityReadsBeforeSteward = capabilityReads;
       await modelControl.focus();
       await page.keyboard.press("Enter");
       const settingsTabs = page.locator(".personal-settings-tabs");
@@ -46,6 +47,16 @@ export const stewardModelSettingsScenario = {
         if (!scopeText.includes(meaning)) throw new Error(`Steward settings lost their scope or adoption boundary: ${scopeText}`);
       }
       await scopeNote.getByText("本机管家设置", { exact: true }).click();
+      if (await page.getByTestId("dsh-host-readiness").count()) {
+        throw new Error("Steward settings still expose the removed DSH readiness panel");
+      }
+      const stewardSurface = await page.locator(".personal-settings-body").innerText();
+      for (const removed of ["DeepSeek Harness", "后台 Turn", "DSH 内交互", "执行配置"]) {
+        if (stewardSurface.includes(removed)) throw new Error(`Steward settings still expose DSH topology: ${removed}`);
+      }
+      if (capabilityReads !== capabilityReadsBeforeSteward) {
+        throw new Error("Opening Steward settings performed an unnecessary DSH capability read");
+      }
       const capabilityList = page.locator(".personal-capability-list");
       await capabilityList.getByRole("button", { name: "运行环境" }).waitFor();
       if (await capabilityList.getByRole("button").count() !== 2) {
@@ -62,6 +73,22 @@ export const stewardModelSettingsScenario = {
       const detail = page.locator(".personal-capability-detail");
       await detail.getByText("管家模型与思考深度").waitFor();
       await page.screenshot({ path: resolve(outputDir, "steward-model-settings.png"), fullPage: false, animations: "disabled" });
+      await settingsTabs.getByRole("button", { name: "语言", exact: true }).click();
+      await page.getByRole("radio", { name: "English", exact: true }).click();
+      await settingsTabs.getByRole("button", { name: "Steward", exact: true }).click();
+      await detail.getByText("Steward model and reasoning", { exact: true }).waitFor();
+      const englishSurface = await page.locator(".personal-settings-body").innerText();
+      if (!englishSurface.includes("Steward model and reasoning")) {
+        throw new Error("English Steward settings lost the focused configuration heading");
+      }
+      for (const removed of ["DeepSeek Harness", "Background Turns", "Interactive in DSH", "Profile "]) {
+        if (englishSurface.includes(removed)) throw new Error(`English Steward settings expose DSH topology: ${removed}`);
+      }
+      await page.screenshot({ path: resolve(outputDir, "steward-model-settings-en.png"), fullPage: false, animations: "disabled" });
+      await settingsTabs.getByRole("button", { name: "Language", exact: true }).click();
+      await page.getByRole("radio", { name: "Simplified Chinese", exact: true }).click();
+      await settingsTabs.getByRole("button", { name: "管家", exact: true }).click();
+      await detail.getByText("管家模型与思考深度").waitFor();
       await detail.getByLabel("模型").fill("gpt-6.1-sol");
       await detail.getByLabel("推理档位").selectOption("high");
       const readsBeforeApply = capabilityReads;
@@ -105,7 +132,7 @@ export const stewardModelSettingsScenario = {
       await page.screenshot({ path: resolve(outputDir, "steward-model-entry-mobile.png"), animations: "disabled" });
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("Model control overflows the narrow viewport");
       if (context.errors.length) throw new Error(context.errors.join(" | "));
-      return { coverageEntries: await context.close(), note: "Model badge opens Steward settings; Sol 6.1/high saves and reads back, current binding remains truthful, narrow keyboard return works" };
+      return { coverageEntries: await context.close(), note: "Steward settings stay limited to steward configuration; the removed DSH topology is absent in Chinese and English, causes no capability read, and Sol 6.1/high saves and reads back in desktop and narrow layouts" };
     } catch (error) {
       await context.close();
       throw error;

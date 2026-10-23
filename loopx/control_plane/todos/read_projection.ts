@@ -206,6 +206,8 @@ export async function projectCanonicalTodoFields(input: JsonObject): Promise<Jso
   const checksConfigured = configuredGoalChecks(acceptance) !== null;
   const lineage = Array.isArray(input.lineage) ? input.lineage.map(value => requireJsonObject(value, "Todo lineage")) : all;
   const lineageFacts = input.lineage_facts ?? lineage.map(successionFacts);
+  const query = input.kind === "query" && input.selection == null ? object(input.query) : {};
+  const detailId = query.agent_id == null && query.limit == null ? query.todo_id : null;
   const fields: JsonObject = {}, evaluations: JsonObject = {};
   for (const role of ["user", "agent"]) {
     const section = role === "agent" ? "Agent Todo" : "User Todo / Owner Review Reading Queue";
@@ -214,6 +216,7 @@ export async function projectCanonicalTodoFields(input: JsonObject): Promise<Jso
         ...(input.retained !== true && checksConfigured && guards[text(row.todo_id)] ? {goal_acceptance_guard: guards[text(row.todo_id)]} : {})}, role, section,
         input.retained === true ? null : 500, input.retained !== true));
     const grouped = await projectTodoReadGroup({...input, items, lineage, lineage_facts: lineageFacts, evaluated: false, role, source_section: section,
+      selection: typeof detailId === "string" && detailId ? {role, todo_id: detailId, status: null, agent_id: null} : input.selection ?? null,
       item_limit: null, full_selection: true, resume_lineage: items.some(row => readResume(row.resume_when))
         ? all.map(row => structureCanonicalTodo(row, row.role ?? null, row.source_section ?? section)) : []});
     if (grouped.rejection) return grouped;

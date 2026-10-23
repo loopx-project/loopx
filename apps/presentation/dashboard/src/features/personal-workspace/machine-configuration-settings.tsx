@@ -110,7 +110,10 @@ function shortRevision(value: string | undefined) {
   return value.replace(/^sha256:/, "").slice(0, 12);
 }
 
-export function MachineConfigurationSettings({ section, onChanged }: { section: "steward" | "conversation" | "other"; onChanged?: () => void }) {
+export function MachineConfigurationSettings({ section, onChanged }: {
+  section: "steward" | "conversation" | "other";
+  onChanged?: () => void;
+}) {
   const { locale, t } = useWorkspaceI18n();
   const [inspection, setInspection] = useState<MachineConfigurationInspection | null>(null);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState("");

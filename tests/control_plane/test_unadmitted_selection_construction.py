@@ -243,7 +243,7 @@ def test_null_legacy_permission_does_not_grant_work_or_delivery(field):
 def test_malformed_legacy_boolean_cannot_become_canonical_permission(field, value):
     source = _source("qualified")
     source["execution_obligation"][field] = value
-    with pytest.raises(ValueError, match="must be a boolean"):
+    with pytest.raises(EffectRuntimeRejected, match="must be a boolean"):
         interaction_contract.build_interaction_contract(source)
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import selectors
@@ -45,12 +46,20 @@ function run(argv) {
   if (!app || !app.executableURL || !app.isFinishedLaunching) throw Error("Client startup is still incomplete");
   if (ObjC.unwrap(app.executableURL.path) !== argv[1]) throw Error("Client executable changed");
   var started = Number(app.launchDate.timeIntervalSince1970);
+  if (argv.length > 2 && argv[2] !== "unknown" && started !== Number(argv[2])) throw Error("Client launch changed");
   return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});
 }'''
 
 FORCE_QUIT = QUIT.replace(
-    'var started = Number(app.launchDate.timeIntervalSince1970);\n  return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});',
-    'if (Number(app.launchDate.timeIntervalSince1970) !== Number(argv[2])) throw Error("Client launch changed");\n  if (!app.forceTerminate) throw Error("Client force quit failed");',
+    'return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});',
+    'if (!app.forceTerminate) throw Error("Client force quit failed");',
+)
+
+# Freeze launch identity before graceful quit so a refused/timed-out quit can
+# escalate only against that same instance, without another confirmation.
+PROBE = QUIT.replace(
+    'return JSON.stringify({launch_time: started, accepted: Boolean(app.terminate)});',
+    'return JSON.stringify({launch_time: started});',
 )
 
 
@@ -129,48 +138,57 @@ class NativeHost:
             raise HostError("selection_changed")
         if pid is None:
             return False
-        # Recheck exact ownership immediately before requesting a normal quit.
+        # Recheck exact ownership immediately before requesting a quit.
         if self.apps.running(exe, self.spec) != pid:
             raise HostError("client_changed")
-        try:
-            result = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)],
-                                    input=QUIT, text=True, check=True, capture_output=True, timeout=10)
-        except (OSError, subprocess.SubprocessError):
-            raise HostError("client_quit_refused") from None
-        launch_time = None
-        accepted = True
-        if force or getattr(result, "stdout", ""):
+        if force:
             try:
+                result = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)],
+                                        input=PROBE, text=True, check=True, capture_output=True, timeout=10)
                 receipt = json.loads(result.stdout)
-                launch_time, accepted = receipt["launch_time"], receipt["accepted"]
-                if (type(accepted) is not bool or force
-                        and (type(launch_time) not in (int, float) or launch_time <= 0)):
+                launch_time = receipt["launch_time"]
+                # Launch Services can report a nil launchDate for an App started
+                # outside the normal Finder/open registration path. Fall back to
+                # the inspected PID + executable identity instead of stalling.
+                if launch_time is not None and (type(launch_time) not in (int, float)
+                                               or not math.isfinite(launch_time) or launch_time <= 0):
                     raise ValueError()
-            except (AttributeError, KeyError, TypeError, ValueError):
-                raise HostError("client_changed") from None
-        if not accepted and not force:
-            raise HostError("client_quit_refused")
-        deadline = time.monotonic() + timeout
-        while accepted and time.monotonic() < deadline:
+            except (OSError, subprocess.SubprocessError, AttributeError, KeyError, TypeError, ValueError, OverflowError):
+                if self.apps.running(exe, self.spec) is None:
+                    return True
+                raise HostError("client_quit_refused") from None
+            if self.revision() != expected:
+                raise HostError("selection_changed")
             current = self.apps.running(exe, self.spec)
             if current is None:
                 return True
             if current != pid:
                 raise HostError("client_changed")
-            time.sleep(0.1)
-        if force:
-            # Force only this observed launch, under the same selection and
-            # fresh-quota fence. A recycled PID or a later manual choice wins.
+            if self.not_after is not None and time.time() >= self.not_after:
+                raise HostError("quota_stale")
+            identity = str(launch_time) if launch_time is not None else "unknown"
+            try:
+                return self._graceful_quit(pid, exe, timeout, identity=identity)
+            except HostError as error:
+                if error.code not in ("client_quit_refused", "client_quit_timeout"):
+                    raise
+            # Opt-in covers fallback only; a quit dialog must not bypass a
+            # later selection/process/quota change before force termination.
             if self.revision() != expected:
                 raise HostError("selection_changed")
-            if self.apps.running(exe, self.spec) != pid:
+            current = self.apps.running(exe, self.spec)
+            if current is None:
+                return True
+            if current != pid:
                 raise HostError("client_changed")
             if self.not_after is not None and time.time() >= self.not_after:
                 raise HostError("quota_stale")
             try:
-                subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe), str(launch_time)],
+                subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe), identity],
                                input=FORCE_QUIT, text=True, check=True, capture_output=True, timeout=10)
             except (OSError, subprocess.SubprocessError):
+                if self.apps.running(exe, self.spec) is None:
+                    return True
                 raise HostError("client_quit_refused") from None
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
@@ -180,6 +198,37 @@ class NativeHost:
                 if current != pid:
                     raise HostError("client_changed")
                 time.sleep(0.1)
+            raise HostError("client_quit_timeout")
+        return self._graceful_quit(pid, exe, timeout)
+
+    def _graceful_quit(self, pid: int, exe: Path, timeout: float, *, identity: str | None = None) -> bool:
+        command = ["/usr/bin/osascript", "-l", "JavaScript", "-", str(pid), str(exe)]
+        if identity is not None:
+            command.append(identity)
+        try:
+            result = subprocess.run(command,
+                                    input=QUIT, text=True, check=True, capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            raise HostError("client_quit_refused") from None
+        accepted = True
+        if getattr(result, "stdout", ""):
+            try:
+                receipt = json.loads(result.stdout)
+                accepted = receipt["accepted"]
+                if type(accepted) is not bool:
+                    raise ValueError()
+            except (AttributeError, KeyError, TypeError, ValueError):
+                raise HostError("client_changed") from None
+        if not accepted:
+            raise HostError("client_quit_refused")
+        deadline = time.monotonic() + timeout
+        while accepted and time.monotonic() < deadline:
+            current = self.apps.running(exe, self.spec)
+            if current is None:
+                return True
+            if current != pid:
+                raise HostError("client_changed")
+            time.sleep(0.1)
         raise HostError("client_quit_timeout")
 
     def reopen(self, expected: str) -> dict:
@@ -220,11 +269,11 @@ class NativeHost:
                             raise HostError("other_clients_busy") from None
                         time.sleep(0.2)
             result = self.manager.switch(slot)
-        except Exception as error:
+        except Exception:
             # A refused/failed transaction must not unnecessarily leave a
             # normally closed source App down. Native preflight blocks opening
             # an incomplete credential journal; a later manual choice wins.
-            if restart_clients and before.get("client_running") and getattr(error, "code", None) != "client_changed":
+            if restart_clients and before.get("client_running"):
                 try:
                     if self.status().get("client_running") is False:
                         self.reopen(expected)

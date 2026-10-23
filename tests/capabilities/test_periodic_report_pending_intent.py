@@ -465,12 +465,8 @@ def _fixture(
     finished_updated_at: str = "2026-08-30T09:00:00Z",
     provider: str = "file",
 ) -> tuple[Path, Path]:
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_todo_runtime_shadow_projection,
-    )
-    from loopx.todos import list_goal_todos
     from tests.control_plane.canonical_authority_fixture import (
-        initialize_canonical_authority,
+        initialize_canonical_source_fixture,
     )
 
     project = tmp_path / "project"
@@ -521,16 +517,7 @@ status: active
         ),
         encoding="utf-8",
     )
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL_ID)["todos"]
-    initialize_canonical_authority(
-        runtime,
-        GOAL_ID,
-        build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"
-        ),
-        state_path=state,
-        provider=provider,
-    )
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
     sidecar_dir = runtime / "goals" / GOAL_ID / "post_writeback_hooks"
     sidecar_dir.mkdir(parents=True)
     sidecar = sidecar_dir / ("pwh_" + "a" * 64 + ".json")

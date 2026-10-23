@@ -166,6 +166,13 @@ def main() -> int:
         (project / "PUBLIC.md").write_text("# Public scan surface\n", encoding="utf-8")
         registry_path = write_registry(project, runtime)
         write_run_history(runtime)
+        from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+
+        # Goal B deliberately stays malformed/unmigrated to test scoped reads.
+        initialize_canonical_source_fixture(
+            runtime, GOAL_A,
+            state_path=project / f".codex/goals/{GOAL_A}/ACTIVE_GOAL_STATE.md",
+        )
 
         json_result = run_goal_command(
             registry_path,

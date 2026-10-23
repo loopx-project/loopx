@@ -57,6 +57,8 @@ class LarkPrivateConversations:
         self.owner_attention = LarkOwnerAttention(self)
         from .private_ingress import PrivateIngressObserver
         self.ingress = PrivateIngressObserver(self)
+        from ...capabilities.native_chat.steward_managed_mode import StewardManagedMode
+        self.managed_steward = StewardManagedMode(controller, self.bindings)
 
     def profiles(self) -> dict[str, dict[str, str]]:
         """Discover current App configuration, never authorize a conversation.

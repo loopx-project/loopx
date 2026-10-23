@@ -236,7 +236,10 @@ export function WorkspaceSettingsPage({
           </div>
         ) : null}
 
-        {tab === "steward" ? <MachineConfigurationSettings onChanged={onChanged} section="steward" /> : null}
+        {tab === "steward" ? <MachineConfigurationSettings
+          onChanged={onChanged}
+          section="steward"
+        /> : null}
         {tab === "conversation" ? <MachineConfigurationSettings onChanged={onChanged} section="conversation" /> : null}
         {tab === "capabilities" && scope === "machine" ? <MachineConfigurationSettings onChanged={onChanged} section="other" /> : null}
         {tab === "capabilities" && editableGoal ? (

@@ -181,6 +181,9 @@ before materializing requested evaluations. Source fingerprinting still reads
 every admitted byte and rechecks freshness; sequential reads avoid starting a
 thread pool in each process. Healthy read commands use canonical registry/path
 owners and defer mutation error imports until needed.
+Exact detail queries push selection into the existing source projection after
+complete source validation. Queries that report unfiltered counts retain the
+complete first projection.
 The output measurements above retain their original controlled-transport scope.
 [#6874](https://github.com/loopx-project/loopx/pull/6874) records the original
 normal-IPC, package and complete-command evidence. Follow-up measurements apply

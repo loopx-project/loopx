@@ -26,6 +26,7 @@ from loopx.control_plane.capability_hooks import (
     dispatch_post_writeback_hooks,
 )
 from loopx.file_lock import exclusive_file_lock
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 from loopx.capabilities.periodic_report.incremental import (
     build_periodic_report_publication_candidate,
     commit_periodic_report_publication_cursor,
@@ -50,11 +51,16 @@ def _projection_goal_fixture(
     registry_path.write_text(
         json.dumps(
             {
+                "common_runtime_root": str(tmp_path / "runtime"),
                 "goals": [
                     {
                         "id": "goal-1",
                         "repo": str(tmp_path),
                         "state_file": "goal.md",
+                        "coordination": {
+                            "agent_model": "peer_v1",
+                            "registered_agents": ["agent-1", "agent-a", "agent-b"],
+                        },
                     }
                 ]
             }
@@ -64,6 +70,7 @@ def _projection_goal_fixture(
     runs_dir = tmp_path / "runtime" / "goals" / "goal-1" / "runs"
     runs_dir.mkdir(parents=True)
     _write_projection_runs(tmp_path / "runtime", runs)
+    initialize_canonical_source_fixture(tmp_path / "runtime", "goal-1", state_path=state_path)
     return tmp_path / "runtime", registry_path
 
 
@@ -1389,23 +1396,7 @@ def test_todo_complete_survives_unreadable_periodic_report_machine_store(
         ),
         encoding="utf-8",
     )
-    from canonical_authority_fixture import initialize_canonical_authority
-    from loopx.control_plane.coordination.runtime_shadow import (
-        build_todo_runtime_shadow_projection,
-    )
-    from loopx.todos import list_goal_todos
-
-    todos = list_goal_todos(registry_path=registry_path, goal_id="goal-1")["todos"]
-    initialize_canonical_authority(
-        runtime_root,
-        "goal-1",
-        build_todo_runtime_shadow_projection(
-            goal_id="goal-1",
-            todos=todos,
-            handoff_mode="soft_claim",
-        ),
-        state_path=state,
-    )
+    initialize_canonical_source_fixture(runtime_root, "goal-1", state_path=state)
     _write_unreadable_periodic_report_machine_store(runtime_root)
 
     with pytest.warns(UserWarning, match="periodic_report.enabled must be a boolean"):
@@ -1621,7 +1612,7 @@ def _published_report_goal_fixtures(
     *,
     runs,
 ) -> tuple[Path, Path, Path]:
-    """Materialize the state file, registry, and runs index for goal-1.
+    """Materialize canonical Goal work, registry, and runs index for goal-1.
 
     The projection-under-test only needs one open advancement todo on the
     active state; the runs rows below drive the stage-completion receipt.
@@ -1648,6 +1639,7 @@ def _published_report_goal_fixtures(
     )
     runtime_root = tmp_path / "runtime"
     (runtime_root / "goals" / "goal-1" / "runs").mkdir(parents=True)
+    initialize_canonical_source_fixture(runtime_root, "goal-1", state_path=state_path)
     return runtime_root, registry_path, state_path
 
 
@@ -2347,17 +2339,16 @@ def test_periodic_report_projection_isolates_other_agent_ack_and_claimed_todos(
         for row in (runs_dir / "index.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     _write_projection_runs(runtime_root, [agent_a_ack, *reversed(prior_runs)])
-    state_path.write_text(
-        """# Goal
+    from loopx.todos import list_goal_todos, update_goal_todo
 
-## User Todo
-
-## Agent Todo
-
-- [ ] Analyze the next bounded family.
-  <!-- loopx:todo todo_id=todo-unclaimed status=open task_class=advancement_task -->
-""",
-        encoding="utf-8",
+    prior_owner_todo = next(
+        todo for todo in list_goal_todos(
+            registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id="goal-1",
+        )["todos"] if todo.get("claimed_by") == "agent-b"
+    )
+    update_goal_todo(
+        registry_path=registry_path, runtime_root_arg=str(runtime_root),
+        goal_id="goal-1", todo_id=prior_owner_todo["todo_id"], agent_id="agent-b", clear_claim=True,
     )
 
     projection_a_unclaimed = build_periodic_report_post_writeback_projection(

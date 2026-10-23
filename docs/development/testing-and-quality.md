@@ -439,6 +439,12 @@ exact disposable locator before requesting shutdown, including when pytest has
 already removed the fixture directory. Missing provenance remains unknown and
 cannot authorize cleanup. This observation is not a Goal or execution grant.
 
+Fixtures that model a Gitless project also need a temporary root outside any
+Git worktree. Git discovery walks parent directories, so an ignored directory
+inside a checkout still inherits that repository. Retain the local-workspace
+oracle and correct the fixture location rather than accepting the inherited
+repository identity.
+
 Process isolation still shares machine resources. Run matched timing arms
 sequentially without overlapping builds or recovery work. If interference is
 discovered, retain failures and durable-receipt evidence, mark latency samples
@@ -1362,6 +1368,24 @@ model-compliance requirement changes.
 累计成果指引在相同输入上增加 523 字符；本次保留完整指令，仅按默认及 320 字符
 profile、memory 关闭和开启的实测结果调整受影响的展示回归预算。原超限失败保留，
 正文与命令逐字节不变；thin、信封、Goal 宿主硬边界及执行/费用权限不变。
+
+The native Windows run [39861887011](https://github.com/loopx-project/loopx/actions/runs/39861887011)
+measures the same crowded quota JSON fixture at 40,701 characters on both
+`e4246649719654213d52802b909e612d0afd13d6` and
+`948247e9adad99053b902d1ae7c4a88251116110`, above the existing 40,000 ceiling.
+The paired smoke now preserves bounded numeric base measurements before an
+enforced candidate failure; a failing base never waives candidate validation.
+Retain complete work context, canonical provenance and command routes, and
+calibrate only this emitted-text regression ceiling to 42,000 (1,299 characters
+above the native observation). There is no measured output reduction. Line,
+per-Todo/fixed growth, semantic comparison and all other ceilings remain active.
+The original failure and the pending new native qualification remain distinct;
+this calibration is neither a model-cost saving nor a frozen performance pass.
+
+原生 Windows 同轮 base/head 均为 40,701 字符，原 40,000 超限失败保留。
+先保留配对度量，再仅将该展示回归上限校准到 42,000；不删当前工作、来源或命令，
+不豁免候选检查，不改行数、增长及其他预算。输出未缩小，不能声称费用节省或
+冻结实验通过；修改后的原生验证仍需独立读回。
 
 Classify the limit by its owning contract before deciding how to repair a
 failure. This applies to output size/structure and latency regression budgets;

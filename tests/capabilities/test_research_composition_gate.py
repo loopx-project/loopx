@@ -12,11 +12,9 @@ from loopx.capabilities.explore.research_evidence import append_research_observa
 from loopx.capabilities.explore.result_log import (
     append_explore_result_event, build_explore_edge_event, build_explore_node_event, explore_result_log_path,
 )
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.todos.list_readback import list_goal_todos
 from loopx.control_plane.work_items.semantic_replan_writeback import qualify_replan_writeback
 from loopx.capabilities.explore.research_frontier import prepare_research_replan_evidence
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
 GOAL = "research-gate-fixture"
 AGENT = "fixture-agent"
@@ -59,17 +57,7 @@ def fixture(tmp_path: Path):
     append_research_observation(log, goal_id=GOAL, observation=observation("a", "b"))
     for name in ["a", "b"]:
         append_explore_result_event(log, build_explore_edge_event(goal_id=GOAL, from_node="joint", to_node=name, edge_type="depends_on"))
-    todos = list_goal_todos(registry_path=registry, goal_id=GOAL)["todos"]
-    initialize_canonical_authority(
-        runtime,
-        GOAL,
-        build_todo_runtime_shadow_projection(
-            goal_id=GOAL,
-            todos=todos,
-            handoff_mode="soft_claim",
-        ),
-        state_path=state,
-    )
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state)
 
     def cli(*args: str, success: bool = True) -> dict:
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),

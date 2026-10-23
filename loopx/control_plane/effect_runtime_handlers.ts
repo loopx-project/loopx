@@ -626,6 +626,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.steward.session_identity", lazyHandler(() => import("./collaboration/conversation_scope.ts"), ({stewardConversationIdentity}) => stewardConversationIdentity)],
     ["collaboration.steward.command", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({stewardCommand}) => stewardCommand)],
     ["collaboration.steward.authorize_creation", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({authorizeStewardCreation}) => authorizeStewardCreation)],
+    ["collaboration.steward.managed_mode.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardManagedMode}) => planStewardManagedMode)],
     ["collaboration.conversation.binding", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({planConversationBinding}) => planConversationBinding)],
     ["collaboration.conversation.bound_context", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({resolveBoundConversation}) => resolveBoundConversation)],
     ["collaboration.conversation.local_sessions", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({listLocalBoundSessions}) => listLocalBoundSessions)],
@@ -803,6 +804,7 @@ export function createEffectRuntimeHandlers(
 
     ["turn.settlement.reduce", lazyHandler(() => import("./turn_driver/settlement.ts"), ({reduceTurnSettlementTransaction}) => reduceTurnSettlementTransaction)],
     ["turn.host_todo_completion.evaluate", lazyHandler(() => import("./turn_driver/host_todo_completion.ts"), ({evaluateHostTodoCompletion}) => evaluateHostTodoCompletion)],
+    ["work_item.interaction_execution.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectInteractionExecution}) => projectInteractionExecution)],
     ["work_item.interaction_reads.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectInteractionRequiredReads}) => projectInteractionRequiredReads)],
     ["work_item.blocked_wait_observation.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectBlockedSuccessorWaitObservation}) => projectBlockedSuccessorWaitObservation)],
     ["work_item.context.plan", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({planInteractionWorkContext}) => planInteractionWorkContext)],
