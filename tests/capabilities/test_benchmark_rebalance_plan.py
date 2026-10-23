@@ -8,7 +8,6 @@ import pytest
 
 from loopx.capabilities.benchmark_toolkit import build_benchmark_rebalance_plan
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -87,6 +86,31 @@ def test_another_active_candidate_at_same_priority_can_be_selected() -> None:
 
     assert plan["action"] == "stop_candidate"
     assert plan["selected_candidate"]["candidate_id"] == "supplementary-active"
+
+
+def test_released_solver_capacity_does_not_block_primary_reclaim() -> None:
+    plan = build_benchmark_rebalance_plan(
+        [
+            _candidate("supplementary-grading", ["external"], priority=0,
+                       state="capacity_released"),
+            _candidate("primary-pair", ["native-goal", "codex"], priority=20),
+        ]
+    )
+
+    assert plan["action"] == "stop_candidate"
+    assert plan["selected_candidate"]["candidate_id"] == "primary-pair"
+    assert plan["candidate_count"] == 2
+
+
+def test_only_released_solver_capacity_holds_without_closeout_wait() -> None:
+    plan = build_benchmark_rebalance_plan(
+        [_candidate("supplementary-grading", ["external"], priority=0,
+                    state="capacity_released")]
+    )
+
+    assert plan["action"] == "hold"
+    assert plan["reason_codes"] == ["no_reclaim_candidates"]
+    assert plan["blocking_candidate_ids"] == []
 
 
 def test_candidate_run_membership_must_not_overlap() -> None:

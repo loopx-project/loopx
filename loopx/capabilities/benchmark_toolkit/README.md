@@ -22,12 +22,20 @@ runner assigns priorities from its experiment design, so supplementary work can
 drain before a matched comparison group. A lower-priority group already in
 `stop_requested` blocks higher-priority reclamation until its closeout is
 observed; another active group at the same priority remains eligible.
+Once the runner has durably proved that the solver and its token-producing
+session stopped, it may mark the group `capacity_released`. That group no longer
+blocks another reclaim decision even when an accepted evaluator or scorer still
+drains in the background. The runner must preserve that scoring process and its
+artifacts; process liveness alone neither proves live solver capacity nor proves
+capacity release.
 
 The command is read-only. It sends no signal, changes no concurrency envelope,
 and does not classify runtime liveness. The runner must build the complete live
 inventory, persist its exact process or remote-task reservation, revalidate that
 identity, request graceful stop, preserve artifacts and scoring evidence, observe
-terminal closeout, and only then release the corresponding concurrency slots.
+solver-capacity release separately from scorer closeout, and only then release
+the corresponding solver concurrency slots. Scoring slots and terminal
+qualification remain runner-owned until their own closeout.
 
 ## Runner execution boundary
 

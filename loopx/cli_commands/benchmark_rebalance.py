@@ -12,7 +12,6 @@ from ..capabilities.benchmark_toolkit import (
     render_benchmark_rebalance_plan_markdown,
 )
 
-
 BENCHMARK_REBALANCE_COMMANDS = {"rebalance-plan"}
 PrintPayload = Callable[..., None]
 OutputFormat = Callable[..., str]

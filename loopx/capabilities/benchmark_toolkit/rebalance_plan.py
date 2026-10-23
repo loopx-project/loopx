@@ -5,9 +5,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from .experiment_identity import experiment_token_text as _token
 from .concurrency_envelope import _reject_unknown_fields, _timestamp
-
+from .experiment_identity import experiment_token_text as _token
 
 BENCHMARK_REBALANCE_INVENTORY_SCHEMA_VERSION = "benchmark_rebalance_inventory_v0"
 BENCHMARK_REBALANCE_PLAN_SCHEMA_VERSION = "benchmark_rebalance_plan_v0"
@@ -31,6 +30,7 @@ class BenchmarkRebalanceAction(str, Enum):
 class BenchmarkRebalanceCandidateState(str, Enum):
     ACTIVE = "active"
     STOP_REQUESTED = "stop_requested"
+    CAPACITY_RELEASED = "capacity_released"
 
 
 _CANDIDATE_STATES = {item.value for item in BenchmarkRebalanceCandidateState}
@@ -104,6 +104,11 @@ def build_benchmark_rebalance_plan(
         }
     )
     normalized = inventory["candidates"]
+    contenders = [
+        item
+        for item in normalized
+        if item["state"] != BenchmarkRebalanceCandidateState.CAPACITY_RELEASED.value
+    ]
     base: dict[str, Any] = {
         "ok": True,
         "schema_version": BENCHMARK_REBALANCE_PLAN_SCHEMA_VERSION,
@@ -113,7 +118,7 @@ def build_benchmark_rebalance_plan(
         "selected_candidate": None,
         "blocking_candidate_ids": [],
     }
-    if not normalized:
+    if not contenders:
         return {
             **base,
             "action": BenchmarkRebalanceAction.HOLD.value,
@@ -121,8 +126,8 @@ def build_benchmark_rebalance_plan(
             "lowest_reclaim_priority": None,
             "runner_action_required": False,
         }
-    lowest_priority = min(item["reclaim_priority"] for item in normalized)
-    tier = [item for item in normalized if item["reclaim_priority"] == lowest_priority]
+    lowest_priority = min(item["reclaim_priority"] for item in contenders)
+    tier = [item for item in contenders if item["reclaim_priority"] == lowest_priority]
     active = [
         item
         for item in tier
