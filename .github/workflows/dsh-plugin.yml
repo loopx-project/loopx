@@ -76,7 +76,7 @@ jobs:
       - name: Install frozen plugin dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Validate typed host and client contracts
-        run: pnpm typecheck && pnpm smoke:peer-range
+        run: pnpm typecheck && pnpm smoke:peer-range && pnpm smoke:mcp-transport
       - name: Validate unit and real LoopX admission contracts
         if: runner.os == 'Linux'
         run: PATH="$GITHUB_WORKSPACE/.venv/bin:$PATH" pnpm test

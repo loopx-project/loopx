@@ -1161,7 +1161,10 @@ export function apply(ctx) {
       response.setHeader('content-type', 'application/json')
       response.end(JSON.stringify({
         bootstrapRemoved: ctx.get('loopxBootstrap') === undefined,
-        webAlive: ctx.get('webServer') !== undefined && ctx.get('webRuntime') !== undefined,
+        // DSH 0.2.1 renamed the Web runtime service from webRuntime to webApp.
+        // The listener plus either owning runtime service proves Web stayed up.
+        webAlive: ctx.get('webServer') !== undefined
+          && (ctx.get('webApp') !== undefined || ctx.get('webRuntime') !== undefined),
       }))
     },
   }))

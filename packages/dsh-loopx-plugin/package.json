@@ -56,6 +56,7 @@
     "prepack": "node scripts/build.mjs",
     "smoke:artifact": "node smoke/dsh-client-artifact-smoke.mjs",
     "smoke:peer-range": "node smoke/dsh-peer-range-smoke.mjs",
+    "smoke:mcp-transport": "node smoke/dsh-mcp-transport-smoke.mjs",
     "smoke:install": "node smoke/dsh-installer-smoke.mjs",
     "smoke:registry": "node smoke/dsh-registry-smoke.mjs",
     "verify:distribution": "node scripts/verify-distribution.mjs",
@@ -79,13 +80,13 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
-    "@deepseek-ai/dsh-client-connection": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
-    "@deepseek-ai/dsh-client-locale": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
-    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
-    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
-    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0",
+    "@deepseek-ai/dsh": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.2.1",
+    "@deepseek-ai/dsh-client-connection": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.2.1",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.2.1",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.2.1",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.2.1",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.2.1",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.5-rc.1 <0.2.0-0 || >=0.1.7-rc.2 <0.1.7 || >=0.2.0-rc.2 <0.2.1-0 || >=0.2.1-rc.1 <0.2.1",
     "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
@@ -100,18 +101,18 @@
     "react": { "optional": true }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-connection": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-commands": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-commands": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.2",
     "@types/node": "^22.19.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.1",
@@ -122,11 +123,15 @@
     "semver": "7.8.5",
     "tsdown": "0.22.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.12"
   },
   "pnpm": {
     "overrides": {
-      "@deepseek-ai/libreoffice-kit>fflate": "0.8.3"
+      "@deepseek-ai/libreoffice-kit>fflate": "0.8.3",
+      "@modelcontextprotocol/client@<2.3.0": "2.3.0",
+      "@modelcontextprotocol/sdk@<1.32.0": "1.32.0",
+      "fast-uri@>=3.0.0 <3.1.8": "3.1.8",
+      "vite@>=8.2.0 <=8.2.3": "8.2.4"
     }
   },
   "repository": {

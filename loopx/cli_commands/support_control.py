@@ -50,6 +50,7 @@ from .support_control_chat import chat_server_options, register_chat_and_dashboa
 from .support_control_chat_endpoint import (
     handle_chat_endpoint_command,
 )
+from .dsh_launch import handle_dsh_launch_command, register_dsh_launch_command
 from .support_control_heartbeat_registration import (
     register_heartbeat_control_commands,
 )
@@ -87,6 +88,7 @@ SUPPORT_CONTROL_COMMANDS = {
     "chat",
     "chat-endpoint",
     "dashboard",
+    "dsh-launch",
     "heartbeat-prequota",
     "heartbeat-prompt",
     "promotion-gate",
@@ -119,6 +121,7 @@ def register_support_control_commands(
     register_promotion_control_commands(subparsers, add_subcommand_format)
 
     register_update_command(subparsers, add_subcommand_format)
+    register_dsh_launch_command(subparsers, add_subcommand_format)
 
     subparsers.add_parser(
         "registry", help="Inspect registry goals and adapter declarations."
@@ -241,6 +244,9 @@ def handle_support_control_command(
             registry_path=registry_path,
             print_payload=print_payload,
         )
+
+    if args.command == "dsh-launch":
+        return handle_dsh_launch_command(args)
 
     if args.command == "configuration-backup":
         from .configuration_backup import handle_configuration_backup

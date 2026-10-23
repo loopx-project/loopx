@@ -5,6 +5,11 @@ packages:
 # The frozen-version matrix keeps both consistent with the existing lock.
 overrides:
   '@deepseek-ai/libreoffice-kit>fflate': 0.8.3
+  # GHSA-6prh-2h8m-c8cw: qualify the actual host transport with patched SDKs.
+  '@modelcontextprotocol/client@<2.3.0': 2.3.0
+  '@modelcontextprotocol/sdk@<1.32.0': 1.32.0
+  'fast-uri@>=3.0.0 <3.1.8': 3.1.8
+  'vite@>=8.2.0 <=8.2.3': 8.2.4
 
 allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': false

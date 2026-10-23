@@ -73,6 +73,12 @@ qualified frozen 0.1.5 and 0.1.7-rc.2 compatibility ranges. The exported legacy
 RPC registration remains available to explicit callers, but plugin startup
 always uses the shared API.
 
+The source candidate additionally qualifies DSH 0.2.1-rc.2. Its frozen source
+host uses MCP client 2.3.0 and SDK 1.32.0 to address
+[GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw).
+These dependency overrides do not patch an independently installed DSH binary;
+that host's owner must update its affected MCP dependencies separately.
+
 For a compatible DSH source build, use:
 
 ```bash
@@ -115,10 +121,48 @@ Driver to evaluate only when that exact live Session already contains typed
 `Pause` stops the Goal and retires only future queued/scheduled continuation;
 it does not abort a claimed or running turn.
 
+To start DSH from a terminal with this machine's stored LoopX provider
+credential without placing the value in argv, shell history, or output:
+
+```bash
+loopx dsh-launch web
+```
+
+The launcher uses `DSH_HOME` when set, otherwise
+`~/.local/state/loopx/dsh-home`. Ordinary DSH installation defaults to `~/.dsh`;
+launching the isolated home does not reuse that home's installed plugins. To
+reuse an ordinary installation, select its actual home explicitly:
+
+```bash
+loopx dsh-launch --dsh-home "${DSH_HOME:-$HOME/.dsh}" web
+```
+
+For a new isolated source installation, use the same home and package-local
+host for installation, readback, launch, and removal:
+
+```bash
+cd packages/dsh-loopx-plugin
+export DSH_HOME="$HOME/.local/state/loopx/dsh-home"
+./install.sh
+export DSH_BIN="$PWD/node_modules/.bin/dsh"
+"$DSH_BIN" --profile web --dump-config
+loopx dsh-launch --dsh-bin "$DSH_BIN" web
+# When removing this installation:
+"$DSH_BIN" plugin --profile web remove dsh-loopx-plugin
+```
+
+Use `--dsh-home <path>` to select profile and Session state,
+`--dsh-agents-home <path>` to isolate installed skills, and `--dsh-bin <path>`
+when `dsh` is not on `PATH`. Arguments after `--` are passed to DSH unchanged.
+The launcher resolves the same write-only machine credential used by the
+managed executor, then replaces itself with DSH so the credential exists only
+in the child process environment.
+
 Maintainers can validate the built and packed surfaces with:
 
 ```bash
 pnpm build
+pnpm smoke:mcp-transport
 pnpm smoke:artifact
 pnpm smoke:profile
 pnpm smoke:runtime
@@ -499,9 +543,9 @@ source and never satisfy a Driver reservation.
 
 Check `dsh --version` before choosing an artifact. The current source accepts
 DSH 0.1.5 release candidates from rc.1, stable 0.1.x from 0.1.5, and the explicitly
-qualified 0.1.7-rc.2 and 0.2.0-rc.2 candidates. It excludes earlier 0.2 candidates,
-0.2.1 alpha builds and other, unqualified prerelease tuples. A stable-version
-range alone does not admit every prerelease.
+qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1 and 0.2.1-rc.2 candidates. It
+excludes earlier 0.2 candidates, stable 0.2.1, and other unqualified prerelease
+tuples. A stable-version range alone does not admit every prerelease.
 The immutable beta.6 download above is the published package. Building this
 checkout also produces version beta.6, but the local artifact is not the
 published release asset.
