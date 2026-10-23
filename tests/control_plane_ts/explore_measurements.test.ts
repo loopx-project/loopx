@@ -11,6 +11,50 @@ const metric = {metric: "quality", value: 8, unit: "points", higher_is_better: t
 const finding = (id: string, value: number | null, extra = {}) => ({finding_id: id, node_id: "question-a",
   measurements: [{...metric, value, candidate_ref: `candidate:${id}`, evidence_ref: `result:${id}`, ...extra}]});
 
+test("explicit comparison context is reused while each result retains its own candidate and receipt", () => {
+  const {comparison_scope, input_revision, evaluation_ref, ...observation} = metric;
+  const context = {comparison_scope, input_revision, evaluation_ref};
+  const before = JSON.stringify({context, observation});
+  const rows = [8, 9, 6, null].map((value, index) => ({finding_id: `result-${index}`,
+    node_id: "question-a", recorded_order: index,
+    measurements: normalizeExploreMeasurements([{...observation, value,
+      candidate_ref: `candidate:${index}`, evidence_ref: `result:${index}`}], context)}));
+  const [feedback] = projectExploreMeasurementFeedback(rows);
+  assert.equal(feedback.measured_count, 3);
+  assert.equal(feedback.best?.candidate_ref, "candidate:1");
+  assert.equal(feedback.latest.measurement.value, null);
+  assert.equal(feedback.unknown_count, 1);
+  assert.equal(projectExploreMeasurementFeedback(rows.slice(0, 3))[0].improvement, -3);
+  assert.deepEqual(rows[0].measurements, [metricWithIdentity(0, 8)]);
+  assert.equal(JSON.stringify({context, observation}), before);
+  function metricWithIdentity(index: number, value: number) {
+    return {...metric, value, candidate_ref: `candidate:${index}`, evidence_ref: `result:${index}`};
+  }
+  const changed = {...rows[3], measurements: normalizeExploreMeasurements([
+    {...observation, value: 99, evidence_ref: "result:changed"},
+  ], {...context, evaluation_ref: "evaluator:changed"})};
+  assert.equal(projectExploreMeasurementFeedback([...rows.slice(0, 3), changed]).length, 2);
+});
+
+test("comparison context cannot silently override result fields or accept incomplete conditions", () => {
+  const {comparison_scope, input_revision, evaluation_ref, ...observation} = metric;
+  const context = {comparison_scope, input_revision, evaluation_ref};
+  for (const key of ["comparison_scope", "input_revision", "evaluation_ref"] as const) {
+    assert.throws(() => normalizeExploreMeasurements([{...observation, [key]: context[key]}], context), /override/);
+    const missing = {...context}; delete (missing as Partial<typeof context>)[key];
+    assert.throws(() => normalizeExploreMeasurements([observation], missing));
+  }
+  for (const invalid of [null, [], {...context, candidate_ref: "candidate:a"},
+    {...context, unregistered: true}, {...context, comparison_scope: ""}]) {
+    assert.throws(() => normalizeExploreMeasurements([observation], invalid));
+  }
+  assert.throws(() => normalizeExploreMeasurements([{...observation, value: "9"}], context));
+  // Existing complete observations have identical normalization without opt-in.
+  for (const value of [0, -3, null]) {
+    assert.deepEqual(normalizeExploreMeasurements([{...metric, value}]), [{...metric, value}]);
+  }
+});
+
 test("quantitative evidence keeps zero, negatives and unknown distinct and rejects fabricated shapes", () => {
   for (const value of [0, -3, null]) assert.equal(normalizeExploreMeasurements([{...metric, value}])[0].value, value);
   for (const mutation of [{value: NaN}, {value: Infinity}, {value: "8"}, {value: false},
@@ -70,6 +114,34 @@ test("ordinary result capture binds measurements to its actual input and source,
     prior_assumption: "Quality is not yet measured.", observed_reality: attachment.observation, outcome: "continue", retained: ["Use the same validation protocol"],
     evidence_refs: [metric.evidence_ref]}}});
   assert.deepEqual(result.measurements, [metric]);
+});
+
+test("ordinary and path writeback expand authoring context before immutable result identity", () => {
+  const {comparison_scope, input_revision, evaluation_ref, ...observation} = metric;
+  const context = {comparison_scope, input_revision, evaluation_ref};
+  const attachment = {schema_version: "explore_result_attachment_v0", question: "Which candidate improves quality?",
+    applicability: "Fixed task, evaluator and budget", input_revision, observation: "Measured 8 points.",
+    interpretation: "Keep the exact candidate and receipt.", status: "tentative", evidence_refs: [metric.evidence_ref]};
+  const complete = normalizeExploreResultAttachment({attachment: {...attachment, measurements: [metric]}});
+  const expanded = normalizeExploreResultAttachment({attachment: {...attachment,
+    measurement_context: context, measurements: [observation]}});
+  assert.deepEqual(expanded, complete, "equivalent authoring must have the same canonical identity");
+  assert.equal(Object.hasOwn(expanded, "measurement_context"), false);
+  const path = {schema_version: "explore_result_from_path_delta_v0", question: attachment.question,
+    applicability: attachment.applicability, input_revision, status: "tentative",
+    measurement_context: context, measurements: [observation]};
+  const request = {attachment: path, vision_packet: {path_delta: {outcome: "continue",
+    prior_assumption: "Unmeasured", observed_reality: "Measured", retained: ["Fixed conditions"],
+    evidence_refs: [metric.evidence_ref]}}};
+  assert.deepEqual(normalizeExploreResultAttachment(request).measurements, [metric]);
+  for (const invalid of [
+    {...attachment, measurement_context: context},
+    {...attachment, input_revision: "different-input", measurement_context: context, measurements: [observation]},
+    {...attachment, evidence_refs: ["result:other"], measurement_context: context, measurements: [observation]},
+  ]) assert.throws(() => normalizeExploreResultAttachment({attachment: invalid}));
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment,
+    measurements: [metric]}, other_attachment: {...attachment, measurements: [observation],
+    measurement_context: context}}), complete, "equivalent inline/file authoring must coalesce");
 });
 
 test("next-turn budgets retain a selected route's older best and permit a scoped read of omitted nodes", () => {

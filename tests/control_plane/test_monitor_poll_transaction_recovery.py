@@ -1,4 +1,4 @@
-"""Original Monitor receipts recover without admitting fresh source writes."""
+"""Monitor recovery preserves original receipts without admitting new work."""
 
 from __future__ import annotations
 
@@ -209,7 +209,7 @@ def test_original_receipt_replays_before_fresh_admission_without_effects(
     provider_before = read_canonical_todos_if_promoted(
         runtime_root=runtime,
         goal_id=GOAL,
-    )
+    ) if provider != "unpromoted" else None
 
     replayed = _replay(registry, runtime)
 
@@ -220,11 +220,12 @@ def test_original_receipt_replays_before_fresh_admission_without_effects(
     ]
     assert state.read_bytes() == state_before
     assert outbox.read_bytes() == outbox_before
-    assert read_canonical_todos_if_promoted(
-        runtime_root=runtime,
-        goal_id=GOAL,
-    ) == provider_before
-    if provider == "unpromoted":
+    if provider_before is not None:
+        assert read_canonical_todos_if_promoted(
+            runtime_root=runtime,
+            goal_id=GOAL,
+        ) == provider_before
+    else:
         assert not (runtime / "authority").exists()
 
 
@@ -245,16 +246,19 @@ def test_historical_receipt_rejects_changed_identity(tmp_path: Path, promoted, c
     provider_before = read_canonical_todos_if_promoted(
         runtime_root=runtime,
         goal_id=GOAL,
-    )
+    ) if promoted else None
 
     with pytest.raises(ValueError, match="request mismatch"):
         _replay(registry, runtime, **change)
 
     assert state.read_bytes() == state_before
-    assert read_canonical_todos_if_promoted(
-        runtime_root=runtime,
-        goal_id=GOAL,
-    ) == provider_before
+    if promoted:
+        assert read_canonical_todos_if_promoted(
+            runtime_root=runtime,
+            goal_id=GOAL,
+        ) == provider_before
+    else:
+        assert not (runtime / "authority").exists()
 
 
 @pytest.mark.parametrize("promoted", [False, True])
@@ -336,9 +340,15 @@ def _restore_1x_poll(tmp_path: Path):
     return registry, runtime, state, pending, history["poll"], marker
 
 
-def test_original_1x_cli_poll_settles_once_then_replays_without_new_business_work(tmp_path):
+@pytest.mark.parametrize("provider", ["unpromoted", "file", "sqlite"])
+def test_original_1x_cli_poll_settles_once_without_repeating_business(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, state, pending, poll, _marker = _restore_1x_poll(tmp_path)
     display, reservation = state.read_bytes(), pending.read_bytes()
+    if provider != "unpromoted":
+        _promote(runtime, state, provider)
+    provider_before = (read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)
+                       if provider != "unpromoted" else None)
     changed = list(poll)
     changed[changed.index("--result-hash") + 1] = "changed-original-observation"
     rc, rejected = _cli(registry, runtime, *changed)
@@ -350,7 +360,10 @@ def test_original_1x_cli_poll_settles_once_then_replays_without_new_business_wor
     assert rc == 0 and recovered["appended"] is True, recovered
     # The index is the commit proof; current quota may retain a prepared WAL.
     assert state.read_bytes() == display
-    assert not (runtime / "authority").exists()
+    if provider_before is not None:
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL) == provider_before
+    else:
+        assert not (runtime / "authority").exists()
     events = _poll_events(runtime)
     assert len(events) == 1
     assert events[0]["todo_id"] == "todo_7f667db6fd16"
@@ -360,7 +373,16 @@ def test_original_1x_cli_poll_settles_once_then_replays_without_new_business_wor
     assert rc == 0 and replay["replayed"] is True, replay
     assert state.read_bytes() == display and pending.read_bytes() == committed
     assert _poll_events(runtime) == events
+    if provider_before is not None:
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL) == provider_before
+    else:
+        assert not (runtime / "authority").exists()
     assert not any(row.get("classification") == "quota_slot_spent" for row in read_run_index(runtime, GOAL))
+    if provider == "unpromoted":
+        rc, ordinary = _cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
+        assert rc != 0 and ordinary["error_code"] == "canonical_authority_required", ordinary
+        assert state.read_bytes() == display and pending.read_bytes() == committed
+        assert _poll_events(runtime) == events and not (runtime / "authority").exists()
 
 
 @pytest.mark.parametrize("execute", [False, True])
@@ -378,7 +400,36 @@ def test_fresh_unpromoted_monitor_preview_and_execute_refuse_without_effects(tmp
     assert not (runtime / "authority").exists()
 
 
-@pytest.mark.parametrize("damage", ["missing_quota", "missing_business", "duplicate_business", "corrupt_generation", "corrupt_quota"])
+@pytest.mark.parametrize(("option", "value"), [
+    ("--goal-id", "another-goal"),
+    ("--agent-id", "another-agent"),
+    ("--todo-id", "todo_another_monitor"),
+    ("--turn-instance-id", "another-turn"),
+    ("--target-key", "another-target"),
+    ("--result-hash", "another-observation"),
+    ("--next-agent-todo", "Unrelated new work"),
+])
+def test_original_1x_cli_rejects_changed_identity_or_intent(tmp_path, option, value):
+    registry, runtime, state, pending, poll, _marker = _restore_1x_poll(tmp_path)
+    changed = list(poll)
+    if option in changed:
+        changed[changed.index(option) + 1] = value
+    else:
+        changed.extend([option, value])
+    display, reservation = state.read_bytes(), pending.read_bytes()
+
+    rc, rejected = _cli(registry, runtime, *changed)
+
+    assert rc != 0 and rejected["ok"] is False, rejected
+    assert state.read_bytes() == display and pending.read_bytes() == reservation
+    assert read_run_index(runtime, GOAL) == []
+    assert not (runtime / "authority").exists()
+
+
+@pytest.mark.parametrize("damage", [
+    "missing_quota", "missing_business", "duplicate_business", "corrupt_generation", "corrupt_quota",
+    "wrong_business_goal", "wrong_business_effect", "wrong_business_result", "ambiguous_prepared",
+])
 def test_original_1x_cli_refuses_incomplete_or_corrupt_history_without_fresh_work(tmp_path, damage):
     registry, runtime, state, pending, poll, marker = _restore_1x_poll(tmp_path)
     if damage == "missing_quota":
@@ -387,11 +438,22 @@ def test_original_1x_cli_refuses_incomplete_or_corrupt_history_without_fresh_wor
         state.write_text(state.read_text().replace(marker, ""))
     elif damage == "duplicate_business":
         state.write_text(state.read_text() + marker)
-    elif damage == "corrupt_generation":
+    elif damage in {"corrupt_generation", "wrong_business_goal", "wrong_business_effect", "wrong_business_result"}:
         encoded = marker.split(" ")[2]
         receipt = json.loads(base64.b64decode(encoded))
-        receipt["writeback"]["material_change_generation"] = True
+        if damage == "corrupt_generation":
+            receipt["writeback"]["material_change_generation"] = True
+        elif damage == "wrong_business_goal":
+            receipt["goal_id"] = "another-goal"
+        elif damage == "wrong_business_effect":
+            receipt["operation_id"] = "another-effect"
+        else:
+            receipt["writeback"]["result_hash"] = "another-result"
         state.write_text(state.read_text().replace(encoded, base64.b64encode(json.dumps(receipt).encode()).decode()))
+    elif damage == "ambiguous_prepared":
+        receipt = json.loads(pending.read_text())
+        receipt["status"] = "prepared"
+        pending.write_text(json.dumps(receipt))
     else:
         pending.write_text("{invalid receipt")
     display = state.read_bytes()

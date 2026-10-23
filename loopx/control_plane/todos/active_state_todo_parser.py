@@ -9,14 +9,10 @@ from .contract import (
     normalize_todo_id,
     TODO_TASK_PATTERN,
 )
-from .standing_decision import build_standing_decision_authority
 from .machine_region import find_todo_source_regions, visible_markdown_lines
 from .todo_block_codec import decode_todo_blocks
 from .todo_summary import (
     MAX_STATUS_TODOS_PER_ROLE,
-    compact_todo_group,
-    count_advancement_todos,
-    normalize_todo_text,
 )
 from ..runtime.time import now_utc_iso
 
@@ -113,61 +109,20 @@ def parse_active_state_todos(
         and int(orchestration.get("max_children") or 0) > 0
     )
     items, archive_items, source_sections = parse_todo_source(state_text, goal=goal, state_path=state_path)
-    result: dict[str, Any] = {}
-    archived_resume_source_items = [
-        item for item in archive_items if normalize_todo_id(item.get("todo_id"))
-    ]
-    resume_source_items = [*items["user"], *items["agent"], *archived_resume_source_items]
-    user = compact_todo_group(
-        items["user"],
-        source_section=source_sections["user"],
-        role="user",
-        include_empty_source=source_sections["user"] is not None,
-        preferred_todo_ids=preferred_todo_ids,
-        resume_source_items=resume_source_items,
-        rollout_events=rollout_events,
-        available_capabilities=available_capabilities,
-        item_limit=item_limit,
-        include_task_orchestration_authority=include_task_orchestration_authority,
-        evaluated_at=resume_evaluated_at,
-    )
-    agent = compact_todo_group(
-        items["agent"],
-        source_section=source_sections["agent"],
-        role="agent",
-        include_empty_source=source_sections["agent"] is not None,
-        preferred_todo_ids=preferred_todo_ids,
-        resume_source_items=resume_source_items,
-        rollout_events=rollout_events,
-        available_capabilities=available_capabilities,
-        item_limit=item_limit,
-        include_task_orchestration_authority=include_task_orchestration_authority,
-        vision_runs=(goal or {}).get("latest_runs"),
-        evaluated_at=resume_evaluated_at,
-    )
-    archived_advancement_done_count = count_advancement_todos(
-        # Lossless source text must not widen legacy attention classification.
-        [
-            {**item, "text": normalize_todo_text(str(item.get("text") or ""))}
-            for item in archive_items if item.get("done") is True
-        ]
-    )
-    if agent and archived_advancement_done_count:
-        agent["archived_advancement_done_count"] = archived_advancement_done_count
-        agent["advancement_done_count"] = (
-            int(agent.get("advancement_done_count") or 0)
-            + archived_advancement_done_count
-        )
-    if user:
-        result["user_todos"] = user
-    if agent:
-        result["agent_todos"] = agent
+    from .goal_todo_projection import source_todo_fields
+    from .standing_decision import standing_decision_source_items
+
+    lineage = [*items["user"], *items["agent"],
+        *[item for item in archive_items if normalize_todo_id(item.get("todo_id"))]]
     archived_decisions = [item for item in archive_items if item.get("role") == "user"]
-    standing_authority = build_standing_decision_authority(
-        [*items["user"], *archived_decisions],
-        # Separate sections are not a single chronological append log.
+    result = source_todo_fields([
+        {"role": role, "source_section": source_sections[role], "items": items[role],
+         "include_empty_source": source_sections[role] is not None} for role in ("user", "agent")],
+        lineage=lineage, rollout_events=rollout_events, available_capabilities=available_capabilities,
+        preferred_todo_ids=preferred_todo_ids, item_limit=item_limit, evaluated_at=resume_evaluated_at,
+        archived_items=archive_items,
+        standing_items=standing_decision_source_items([*items["user"], *archived_decisions]),
         legacy_source_order=not archived_decisions,
-    )
-    if standing_authority:
-        result["standing_decision_authority"] = standing_authority
+        include_task_orchestration_authority=include_task_orchestration_authority,
+        vision_runs=(goal or {}).get("latest_runs"))
     return result

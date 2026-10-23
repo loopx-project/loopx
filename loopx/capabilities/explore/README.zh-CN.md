@@ -26,6 +26,27 @@
 每个受评测候选使用新 finding id，仅纠正同一结论时复用 id。未测量显式记为 `null`，
 零分和负分仍为有效测量。
 
+若要复用已核实的比较条件，将三个字段一次保存到 `conditions.json`：
+
+```json
+{"comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
+ "evaluation_ref":"evaluator:v1"}
+```
+
+同时传入 `--measurement-context-json conditions.json` 与
+`--measurements-json observations.json`。此时每项观测省略这三个字段，例如：
+
+```json
+[{"metric":"quality","value":9,"unit":"points","higher_is_better":true,
+  "candidate_ref":"candidate:b","evidence_ref":"result:b"}]
+```
+
+普通附件及 path-delta 附件也支持在 `measurements` 旁提供可选
+`measurement_context` 对象。写入前会展开成原有完整记录，不保存可变上下文引用。
+观测重复填写比较字段（即使值相同）、上下文字段缺失或多余都会在记录前拒绝。
+原有完整条目格式继续可用。复用声明不认证可比性；任务、数据、评测器、模型或预算
+改变时另选上下文，条件未知时保持分开。此便捷输入不授予评测、纠正或执行权限。
+
 比较条件与候选、单次结果分别记录：
 
 | 字段 | 连续 finding 中的含义 |

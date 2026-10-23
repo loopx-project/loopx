@@ -13,6 +13,21 @@ import subprocess
 import tempfile
 
 
+def assert_todo_read_unchanged(current, previous):
+    """Compare complete readback except validated evaluator/observation clocks."""
+    def stable(payload):
+        payload = without_resume_observation_time(payload)
+        envelope = payload["projection_envelope"]
+        assert envelope["schema_version"] == "loopx_projection_envelope_v0"
+        for key in ("observed_at", "served_at"):
+            assert datetime.fromisoformat(envelope.pop(key).replace("Z", "+00:00")).tzinfo is not None
+        for source in envelope["sources"]:
+            assert datetime.fromisoformat(source.pop("last_read_at").replace("Z", "+00:00")).tzinfo is not None
+        return payload
+
+    assert stable(current) == stable(previous)
+
+
 def empty_todo_display(state_path: Path) -> None:
     """Remove display work without deleting Goal intent, acceptance or stops.
 

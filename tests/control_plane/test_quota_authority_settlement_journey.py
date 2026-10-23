@@ -1,6 +1,8 @@
 """Select current work and execute its returned settlement, using real stores/CLI."""
 from __future__ import annotations
 
+from canonical_authority_fixture import assert_todo_read_unchanged
+
 import json
 import shlex
 from datetime import datetime, timedelta, timezone
@@ -109,8 +111,8 @@ def test_canonical_todos_cannot_replace_missing_goal_intent(tmp_path, provider):
     path.unlink()
     # A read-only canonical Todo lookup still works; it cannot authorize a
     # delivery whose Goal objective and constraints are unavailable.
-    assert list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
-                           runtime_root_arg=str(runtime), todo_id=cli.TODO_ID) == before
+    assert_todo_read_unchanged(list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                           runtime_root_arg=str(runtime), todo_id=cli.TODO_ID), before)
     code, guard = _guard(project, runtime, registry)
     assert code == 1
     assert guard["should_run"] is False
@@ -118,8 +120,8 @@ def test_canonical_todos_cannot_replace_missing_goal_intent(tmp_path, provider):
     assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 0
     assert cli._spend_run_count(runtime) == 0
     assert not path.exists()
-    assert list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
-                           runtime_root_arg=str(runtime), todo_id=cli.TODO_ID) == before
+    assert_todo_read_unchanged(list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                           runtime_root_arg=str(runtime), todo_id=cli.TODO_ID), before)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

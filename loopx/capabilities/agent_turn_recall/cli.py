@@ -10,6 +10,10 @@ from typing import Any
 
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
+from ...control_plane.quota.effect_program import SettlementIdentity
+from ...control_plane.work_items.autonomous_replan_obligation import (
+    replan_obligation_id_from_packet,
+)
 from ..reward_memory.experiment import resolve_reward_memory_experiment
 from .core import (
     AGENT_TURN_RECALL_SCHEMA_VERSION,
@@ -49,6 +53,22 @@ def _render(payload: dict[str, object]) -> str:
     if isinstance(guidance, list):
         lines.append(f"- guidance_count: `{len(guidance)}`")
     return "\n".join(lines) + "\n"
+
+
+def _runtime_unavailable_payload(goal_id: str, agent_id: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "schema_version": AGENT_TURN_RECALL_SCHEMA_VERSION,
+        "status": "runtime_unavailable",
+        "reason_code": "automatic_recall_runtime_failed",
+        "goal_id": goal_id,
+        "agent_id": agent_id,
+        "provider_call_count": 0,
+        "grants_new_action_authority": False,
+        "quota_spend_performed": False,
+        "external_writes_performed": False,
+        "suppress_external_sinks": True,
+    }
 
 
 def register_agent_turn_recall_commands(
@@ -132,8 +152,37 @@ def _validate_quota_identity(
         raise ValueError(
             "quota decision turn_instance_id does not match --turn-instance-id"
         )
-    if receipt.get("status") not in {"committed", "replayed"}:
+    if receipt.get("status") not in {"committed", "replayed", "upgraded"}:
         raise ValueError("quota decision heartbeat receipt is not committed")
+    binding = receipt.get("settlement_identity")
+    if binding is None and receipt.get("status") != "upgraded":
+        return
+    try:
+        identity = SettlementIdentity.from_runtime_payload(binding)
+    except RuntimeError:
+        raise ValueError("quota decision settlement identity is invalid") from None
+    if (
+        identity.goal_id != goal_id
+        or identity.agent_id != agent_id
+        or identity.turn_instance_id != turn_instance_id
+    ):
+        raise ValueError("quota decision settlement identity does not match this turn")
+    if identity.todo_id:
+        if identity.todo_id != _mapping(quota_decision.get("selected_todo")).get("todo_id"):
+            raise ValueError("quota decision settlement identity does not match selected Todo")
+    elif identity.replan_obligation_id != replan_obligation_id_from_packet(
+        quota_decision.get("autonomous_replan_obligation")
+    ):
+        raise ValueError("quota decision settlement identity does not match replan obligation")
+    expected = SettlementIdentity(
+        goal_id=goal_id,
+        agent_id=agent_id,
+        todo_id=identity.todo_id,
+        turn_instance_id=turn_instance_id,
+        replan_obligation_id=identity.replan_obligation_id,
+    )
+    if identity.effect_id != expected.effect_id:
+        raise ValueError("quota decision settlement effect identity is invalid")
 
 
 def _load_receipt(path: Path) -> dict[str, Any] | None:
@@ -207,12 +256,17 @@ def handle_agent_turn_recall_command(
         else:
             identity = _identity_scope(config)
             quota_decision = _quota_decision(args.quota_decision_json)
-            _validate_quota_identity(
-                quota_decision,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                turn_instance_id=args.turn_instance_id,
-            )
+            try:
+                _validate_quota_identity(
+                    quota_decision,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    turn_instance_id=args.turn_instance_id,
+                )
+            except RuntimeError:
+                payload = _runtime_unavailable_payload(args.goal_id, args.agent_id)
+                print_payload(payload, output_format(args), _render)
+                return 2
             situation = build_agent_turn_situation(
                 quota_decision,
                 goal_id=args.goal_id,
@@ -250,19 +304,7 @@ def handle_agent_turn_recall_command(
                 except RuntimeError:
                     # This failure precedes the provider; do not fabricate a
                     # zero-call receipt for errors after recall has begun.
-                    payload = {
-                        "ok": False,
-                        "schema_version": AGENT_TURN_RECALL_SCHEMA_VERSION,
-                        "status": "runtime_unavailable",
-                        "reason_code": "automatic_recall_runtime_failed",
-                        "goal_id": args.goal_id,
-                        "agent_id": args.agent_id,
-                        "provider_call_count": 0,
-                        "grants_new_action_authority": False,
-                        "quota_spend_performed": False,
-                        "external_writes_performed": False,
-                        "suppress_external_sinks": True,
-                    }
+                    payload = _runtime_unavailable_payload(args.goal_id, args.agent_id)
                     print_payload(payload, output_format(args), _render)
                     return 2
                 payload = run_agent_turn_recall(

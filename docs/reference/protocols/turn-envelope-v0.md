@@ -28,6 +28,9 @@ symlinks, and atomically publishes `decision.json` (0600 on POSIX) before printi
 the result. The file contains the unprojected decision and its original receipt;
 it excludes display-only host poll metadata. It can contain private Goal context:
 keep it out of public artifacts. No capture is created without a capture option.
+New captures use compact UTF-8 JSON with a final newline, retaining every value,
+including whitespace inside strings. Readers accept existing indented captures;
+recovery preserves their original bytes rather than rewriting their layout.
 
 If a tool truncates the displayed JSON, read this file instead of rerunning the
 guard merely to recover the observation. The file is **not fresh authority**:

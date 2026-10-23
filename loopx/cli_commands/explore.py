@@ -136,6 +136,7 @@ def register_explore_commands(
     finding.add_argument("--summary", help="Optional compact public-safe detail.")
     finding.add_argument("--confidence", type=float, help="0..1 confidence.")
     finding.add_argument("--measurements-json", help="JSON file containing one to eight sourced measurements for this node.")
+    finding.add_argument("--measurement-context-json", help="Reuse explicit comparison_scope, input_revision and evaluation_ref from this JSON file; --measurements-json then supplies only metric/result fields.")
     _add_common_record_args(finding)
 
     summary = sub.add_parser(
@@ -568,6 +569,15 @@ def handle_explore_command(
             )
             payload = _append_event_payload(event, runtime_root=runtime_root, goal_id=args.goal_id)
         elif args.explore_command == "finding":
+            measurements = (json.loads(Path(args.measurements_json).read_text(encoding="utf-8"))
+                            if args.measurements_json else None)
+            if args.measurement_context_json:
+                if measurements is None:
+                    raise ValueError("--measurement-context-json requires --measurements-json")
+                from ..capabilities.explore.measurements import normalize_measurements
+
+                measurements = normalize_measurements(measurements, measurement_context=json.loads(
+                    Path(args.measurement_context_json).read_text(encoding="utf-8")))
             event = build_explore_finding_event(
                 goal_id=args.goal_id,
                 title=args.title,
@@ -581,8 +591,7 @@ def handle_explore_command(
                 evidence_refs=args.evidence_ref,
                 tags=args.tag,
                 supersedes=args.supersedes,
-                measurements=(json.loads(Path(args.measurements_json).read_text(encoding="utf-8"))
-                              if args.measurements_json else None),
+                measurements=measurements,
             )
             payload = _append_event_payload(event, runtime_root=runtime_root, goal_id=args.goal_id)
         elif args.explore_command == "observe":

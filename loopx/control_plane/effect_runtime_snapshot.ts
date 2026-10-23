@@ -60,6 +60,12 @@ export async function readPrivateJsonSnapshot(value: unknown): Promise<unknown> 
   }
 }
 
+/** A domain-owned source can exceed a wire frame; it still uses the same
+ * private-file admission. The domain verifies its full source identity. */
+export async function openPrivateSnapshotSource(path: unknown): Promise<FileHandle> {
+  return privateFile(requireNonEmptyString(path, "source snapshot path"), constants.O_RDONLY);
+}
+
 export async function openPrivateResponseSink(path: unknown): Promise<FileHandle> {
   try {
     return await privateFile(requireNonEmptyString(path, "response sink"), constants.O_WRONLY);

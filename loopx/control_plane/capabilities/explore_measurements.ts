@@ -21,9 +21,25 @@ export interface ExploreMeasurementFeedback {
   improvement: number | null; measured_count: number; unknown_count: number;
 }
 
-export function normalizeExploreMeasurements(value: unknown): ExploreMeasurement[] {
+export function normalizeExploreMeasurements(value: unknown, context?: unknown): ExploreMeasurement[] {
   if (!Array.isArray(value) || !value.length || value.length > 8) {
     throw new EffectRuntimeRequestError("measurements requires one to eight explicit measurements");
+  }
+  if (context !== undefined) {
+    const shared = requireJsonObject(context, "measurement_context");
+    const keys = ["comparison_scope", "input_revision", "evaluation_ref"];
+    if (keys.some(key => !Object.hasOwn(shared, key)) || Object.keys(shared).some(key => !keys.includes(key))) {
+      throw new EffectRuntimeRequestError("measurement_context requires only comparison_scope, input_revision and evaluation_ref");
+    }
+    return normalizeExploreMeasurements(value.map(item => {
+      const observation = requireJsonObject(item, "measurement");
+      if (keys.some(key => Object.hasOwn(observation, key))) {
+        throw new EffectRuntimeRequestError("measurement cannot override its explicit comparison context");
+      }
+      // Authoring only: persist the existing complete measurement, never a
+      // mutable context reference or inferred comparison membership.
+      return {...shared, ...observation};
+    }));
   }
   const seen = new Set<string>();
   return value.map(item => {
@@ -107,5 +123,5 @@ export function projectExploreMeasurementFeedback(findings: readonly JsonObject[
 }
 
 export function normalizeExploreMeasurementsRequest(params: JsonObject): JsonObject {
-  return {measurements: normalizeExploreMeasurements(params.measurements)};
+  return {measurements: normalizeExploreMeasurements(params.measurements, params.measurement_context)};
 }

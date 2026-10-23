@@ -90,11 +90,7 @@ def current_monitor_lease_proof(
         runtime_root=runtime_root, goal_id=goal_id, effect_id=effect_id
     )
     if has_prior:
-        if prior is not None and snapshot is None:
-            raise QuotaCommandValidationError(
-                "prior monitor-poll lease receipt cannot replay without promoted canonical authority"
-            )
-        if prior is None and snapshot is not None and (
+        if prior is None and (
             snapshot.get("handoff_mode") == "hard_lease"
             or any(lease.get("todo_id") == todo_id for lease in snapshot["leases"])
         ):
@@ -102,8 +98,6 @@ def current_monitor_lease_proof(
                 "prior monitor-poll transaction receipt has no lease proof for current canonical authority"
             )
         return prior if prior is not None else (None, None)
-    if snapshot is None:
-        return None, None
     leases = [lease for lease in snapshot["leases"] if lease.get("todo_id") == todo_id]
     if snapshot.get("handoff_mode") != "hard_lease" and not leases:
         return None, None

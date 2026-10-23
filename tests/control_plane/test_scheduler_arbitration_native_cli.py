@@ -99,6 +99,16 @@ def scheduler_authority_snapshot(fixture: dict) -> dict:
     return result
 
 
+def _write_host_rrule(automation: Path, minutes: int) -> None:
+    automation.parent.mkdir(parents=True, exist_ok=True)
+    automation.write_text(
+        'version = 1\nid = "fixture"\nkind = "heartbeat"\nstatus = "ACTIVE"\n'
+        f'name = "Synthetic scheduler"\nprompt = "Advance `{GOAL}` from active state. Agent: `{AGENT}`."\n'
+        f'rrule = "FREQ=MINUTELY;INTERVAL={minutes}"\n'
+        'target_thread_id = "synthetic-thread"\n',
+    )
+
+
 def _assert_no_private_arbitration(value: object) -> None:
     if isinstance(value, dict):
         assert not {"arbitration", "scheduler_arbitration", "_scheduler_arbitration"}.intersection(value)
@@ -210,15 +220,9 @@ def test_deadline_clamp_generated_ack_commits_and_replays(
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_THREAD_ID", "synthetic-thread")
     automation = codex_home / "automations" / "fixture" / "automation.toml"
-    automation.parent.mkdir(parents=True)
 
     def host_rrule(minutes: int) -> None:
-        automation.write_text(
-            'version = 1\nid = "fixture"\nkind = "heartbeat"\nstatus = "ACTIVE"\n'
-            f'name = "Synthetic scheduler"\nprompt = "Advance `{GOAL}` from active state. Agent: `{AGENT}`."\n'
-            f'rrule = "FREQ=MINUTELY;INTERVAL={minutes}"\n'
-            'target_thread_id = "synthetic-thread"\n',
-        )
+        _write_host_rrule(automation, minutes)
 
     try:
         host_rrule(30)
@@ -291,5 +295,100 @@ def test_deadline_clamp_generated_ack_commits_and_replays(
         assert not {"refresh_state", "quota_spend"}.intersection(
             event["event_kind"] for event in events
         )
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_elapsed_quiet_backoff_reads_host_and_resets_for_native_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from loopx.control_plane.quota.scheduler_ack import record_quota_scheduler_ack_for_decision
+    from loopx.control_plane.scheduler import scheduler_hint as hint_module
+    from loopx.control_plane.scheduler.execution_context import (
+        scheduler_execution_context_for_runtime_profile,
+    )
+    from tests.control_plane.scheduler_arbitration_fixture import build_native_scheduler_hint
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_scheduler_fixture(tmp_path, provider, "monitor")
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CODEX_THREAD_ID", "synthetic-thread")
+    automation = codex_home / "automations" / "fixture" / "automation.toml"
+    _write_host_rrule(automation, 30)
+    try:
+        # The reset profile includes full monitor facts; a compact display is
+        # deliberately insufficient to seed the same historical decision.
+        packet = call_scheduler_cli(fixture, *fixture["guard"], "--include-detail", "agent-todos")
+        authority = scheduler_authority_snapshot(fixture)
+        # Seed only this disposable history through the real commit owner.
+        # All subsequent CLI processes use their real clock and host reader.
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        state = None
+        with monkeypatch.context() as clock:
+            for offset, minutes in [(-90, 15), (-60, 30)]:
+                at = now + timedelta(minutes=offset)
+                clock.setattr(hint_module, "now_utc", lambda: at)
+                hint = build_native_scheduler_hint(
+                    packet, codex_app_scheduler_state=state,
+                    codex_app_current_rrule=f"FREQ=MINUTELY;INTERVAL={minutes}",
+                    scheduler_execution_context=scheduler_execution_context_for_runtime_profile(
+                        "codex_app_heartbeat"
+                    ),
+                )
+                assert hint["reset_policy"]["reset_token"] == (
+                    packet["scheduler_hint"]["reset_policy"]["reset_token"]
+                )
+                seeded = record_quota_scheduler_ack_for_decision(
+                    {"goal_id": GOAL, "scheduler_hint": hint},
+                    runtime_root=fixture["runtime"], goal_id=GOAL, agent_id=AGENT,
+                    execute=True, applied_rrule=f"FREQ=MINUTELY;INTERVAL={minutes}",
+                    generated_at=at.isoformat(),
+                )
+                assert seeded["ok"] is True, seeded
+                state = seeded["scheduler_commit"]["state"]
+        assert state["progression_index"] == 1
+
+        guard = [*fixture["guard"], "--turn-instance-id", TURN + "-elapsed"]
+        elapsed = call_scheduler_cli(fixture, *guard)
+        assert elapsed["interaction_contract"]["user_channel"]["notify"] == "DONT_NOTIFY"
+        assert elapsed["interaction_contract"]["agent_channel"]["must_attempt"] is False
+        app = elapsed["scheduler_hint"]["app_automation"]
+        assert app["recommended_interval_minutes"] == 60
+        assert app["stateful_backoff"]["host_observation"]["current_rrule"] == (
+            "FREQ=MINUTELY;INTERVAL=30"
+        )
+        _write_host_rrule(automation, 60)
+        ack_args = app["ack_hint"]["cli_args"]
+        ack = call_scheduler_cli(fixture, *ack_args)
+        assert ack["ok"] is True, ack
+        assert ack["scheduler_commit"]["state"]["progression_index"] == 2
+        restart_effect_runtime(wait_for_exit=True)
+        replay = call_scheduler_cli(fixture, *ack_args)
+        assert replay["scheduler_commit"]["replayed"] is True
+        assert replay["scheduler_commit"]["written"] is False
+        held = call_scheduler_cli(
+            fixture, *fixture["guard"], "--turn-instance-id", TURN + "-early",
+        )
+        assert held["scheduler_hint"]["app_automation"]["apply"] == "none_already_applied"
+        assert scheduler_authority_snapshot(fixture) == authority
+        events = load_rollout_events(rollout_event_log_path(fixture["runtime"], GOAL))
+        assert not {"refresh_state", "quota_spend"}.intersection(
+            event["event_kind"] for event in events
+        )
+
+        added = call_scheduler_cli(
+            fixture, "todo", "add", "--goal-id", GOAL, "--role", "agent",
+            "--claimed-by", AGENT, "--text", "Validate the newly available source.",
+            "--task-class", "advancement_task", "--action-kind", "validate",
+            "--operation-id", "source-became-actionable",
+        )
+        fresh = call_scheduler_cli(
+            fixture, *fixture["guard"], "--turn-instance-id", TURN + "-work",
+        )
+        assert fresh["selected_todo"]["todo_id"] == added["todo_id"]
+        assert fresh["scheduler_hint"]["action"] == "run_now"
+        assert fresh["scheduler_hint"]["app_automation"]["recommended_interval_minutes"] == 3
     finally:
         restart_effect_runtime(wait_for_exit=True)

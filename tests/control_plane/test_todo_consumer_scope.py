@@ -89,51 +89,28 @@ def test_real_cli_scope_survives_missing_display_and_limits(tmp_path: Path, prov
     assert (state.read_bytes() if state.exists() else None) == before
 
 
-def test_filter_composes_with_existing_lane_call_and_rejects_downgraded_response(monkeypatch):
+def test_filter_uses_one_read_transaction_and_rejects_a_downgraded_response(monkeypatch):
     from loopx.control_plane import effect_runtime
     source = compact_todo_group([{"todo_id": "todo_one", "text": "Review result", "role": "user",
         "status": "open", "task_class": "user_action", "bound_agent": "agent-a"}],
         role="user", source_section="User Todo", item_limit=None)
     original = effect_runtime.effect_runtime_result
     requests = []
+
     def track(method, request, **kwargs):
-        if method == "todo.summary.project":
-            requests.append(request)
+        requests.append((method, request))
         return original(method, request, **kwargs)
+
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", track)
     assert filtered_todo_summary(source, role="user", agent_id="agent-a")["total_count"] == 1
-    assert len(requests) == 1
-    assert requests[0]["schema_version"] == "todo_summary_projection_request_v3"
-    # One whole-source batch stays columnar, so adding fields cannot silently
-    # push a long-history request past the runtime request budget.
-    assert requests[0]["columns"][:3] == ["status", "done", "task_class"]
-    assert all(len(cells) == len(requests[0]["columns"]) for cells in requests[0]["rows"])
+    assert len(requests) == 1 and requests[0][0] == "todo.read"
+    assert requests[0][1]["schema_version"] == "todo_read_request_v0"
+
     def downgrade(method, request, **kwargs):
         result = original(method, request, **kwargs)
-        if method == "todo.summary.project":
-            result.pop("source_indices", None)
+        result.pop("schema_version", None)
         return result
+
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", downgrade)
-    with pytest.raises(ValueError, match="selection ordinals"):
-        filtered_todo_summary(source, role="user", agent_id="agent-a")
-
-
-@pytest.mark.parametrize("corruption", ["duplicate", "boolean", "outside_selection"])
-def test_typed_lane_response_cannot_alias_or_escape_selected_source(monkeypatch, corruption):
-    from loopx.control_plane import effect_runtime
-    source = compact_todo_group([
-        {"todo_id": "todo_owned", "text": "Review result", "role": "user", "status": "open",
-            "task_class": "user_action", "bound_agent": "agent-a"},
-        {"todo_id": "todo_other", "text": "Review peer result", "role": "user", "status": "open",
-            "task_class": "user_action", "bound_agent": "agent-b"}],
-        role="user", source_section="User Todo", item_limit=None)
-    outside = next(index for index, item in enumerate(source["items"]) if item["todo_id"] == "todo_other")
-    original = effect_runtime.effect_runtime_result
-    def corrupt(method, request, **kwargs):
-        result = original(method, request, **kwargs)
-        if method == "todo.summary.project":
-            result["lanes"]["first_open_items"]["indices"] = {"duplicate": [0, 0], "boolean": [False], "outside_selection": [outside]}[corruption]
-        return result
-    monkeypatch.setattr(effect_runtime, "effect_runtime_result", corrupt)
-    with pytest.raises(ValueError, match="source ordinal|escaped the selected source"):
+    with pytest.raises(ValueError, match="invalid typed Todo read result"):
         filtered_todo_summary(source, role="user", agent_id="agent-a")

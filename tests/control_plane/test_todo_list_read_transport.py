@@ -3,22 +3,26 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+from canonical_authority_fixture import (
+    initialize_canonical_authority,
+    isolate_sqlite_runtime,
+)
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-
+from loopx.control_plane.coordination.runtime_shadow import (
+    build_todo_runtime_shadow_projection,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 GOAL = "read-transport"
 OWN = "todo_owned"
 
 
-@pytest.fixture(params=["legacy", "file", "sqlite"])
+@pytest.fixture(params=["file", "sqlite"])
 def read_cli(tmp_path, monkeypatch, request):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
@@ -39,7 +43,7 @@ def read_cli(tmp_path, monkeypatch, request):
         "id": GOAL, "repo": str(project), "state_file": state.name,
         "coordination": {"registered_agents": ["agent-a", "agent-b"]},
     }]}))
-    if request.param != "legacy":
+    if request.param != "unmigrated":
         todos = [{**row, "schema_version": "todo_item_v0", "role": "agent", "status": "open",
                   "done": False, "task_class": "advancement_task", "archive_state": "active",
                   "source_section": "Agent Todo", "index": i} for i, row in enumerate(rows, 1)]
@@ -68,10 +72,22 @@ def read_cli(tmp_path, monkeypatch, request):
 
     yield request.param, run, prefix, state
     subprocess.run(
-        [sys.executable, "-c", "from loopx.control_plane.effect_runtime import effect_runtime_result;"
-         "effect_runtime_result('runtime.shutdown', {}, retry_safe=False)"],
+        [sys.executable, "-c", ("from loopx.control_plane.effect_runtime import effect_runtime_result;"
+         "effect_runtime_result('runtime.shutdown', {}, retry_safe=False)")],
         cwd=REPO, capture_output=True, text=True, timeout=30, check=True,
     )
+
+
+@pytest.mark.parametrize("read_cli", ["unmigrated"], indirect=True)
+def test_unmigrated_query_variants_refuse_without_changing_source(read_cli):
+    _, run, _, state = read_cli
+    before = state.read_bytes()
+    for options in [(), ("--todo-id", OWN), ("--limit", "1"), ("--thin",)]:
+        result = run(*options, expected_exit=1)
+        assert result["error_code"] == "canonical_authority_required"
+        assert result["legacy_fallback_used"] is False
+        assert result["write_admitted"] is False
+    assert state.read_bytes() == before
 
 
 def test_read_filters_errors_and_fresh_provider(read_cli):
@@ -79,6 +95,7 @@ def test_read_filters_errors_and_fresh_provider(read_cli):
     state_before = state.read_bytes()
     full = run()
     assert full["ok"] and full["read_only"] and full["dry_run"]
+    assert full["authority_read"]["source_authority"] == f"{provider}_v0"
     assert {item["todo_id"] for item in full["todos"]} == {OWN, "todo_unclaimed", "todo_foreign"}
     lane = run("--agent-id", "agent-a")
     assert {item["todo_id"] for item in lane["todos"]} == {OWN, "todo_unclaimed"}
@@ -101,26 +118,34 @@ def test_read_filters_errors_and_fresh_provider(read_cli):
     after = run()
     assert after["todos"] == full["todos"]
     assert after.get("authority_read") == full.get("authority_read")
-    if provider == "legacy":
-        state.write_text(state_before.decode().replace("## Completed Work Archive", "- [ ] Fresh legacy requirement\n\n## Completed Work Archive"))
-    else:
-        added = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", *prefix, "--format", "json", "todo", "add",
-             "--goal-id", GOAL, "--role", "agent", "--text", "Fresh canonical requirement",
-             "--claimed-by", "agent-a"], cwd=REPO, capture_output=True, text=True, timeout=45,
-        )
-        assert added.returncode == 0, added.stdout + added.stderr
+    added = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", *prefix, "--format", "json", "todo", "add",
+         "--goal-id", GOAL, "--role", "agent", "--text", "Fresh canonical requirement",
+         "--claimed-by", "agent-a"], cwd=REPO, capture_output=True, text=True, timeout=45, check=False,
+    )
+    assert added.returncode == 0, added.stdout + added.stderr
     fresh = run()
     assert fresh["todo_count"] == 4
-    if provider == "legacy":
-        assert any(item["text"] == "Fresh legacy requirement" for item in fresh["todos"])
-    else:
-        current = next(item for item in fresh["todos"] if item["todo_id"] == json.loads(added.stdout)["todo_id"])
-        assert (current["text"], current["priority"]) == ("[P1] Fresh canonical requirement", "P1")
-    if provider != "legacy":
-        assert fresh["authority_read"]["provider_revision"] != full["authority_read"]["provider_revision"]
-        assert fresh["authority_read"]["decision_read_from_provider"]
-        assert fresh["authority_read"]["legacy_fallback_used"] is False
+    current = next(item for item in fresh["todos"] if item["todo_id"] == json.loads(added.stdout)["todo_id"])
+    assert (current["text"], current["priority"]) == ("[P1] Fresh canonical requirement", "P1")
+    assert fresh["authority_read"]["provider_revision"] != full["authority_read"]["provider_revision"]
+    assert fresh["authority_read"]["decision_read_from_provider"]
+    assert fresh["authority_read"]["legacy_fallback_used"] is False
+
+
+def test_display_limits_report_complete_sources_and_actual_shown_items(read_cli):
+    _, run, _, _ = read_cli
+    for options, available in [((), 3), (("--agent-id", "agent-a"), 2),
+                               (("--limit", "1"), 3), (("--thin",), 3)]:
+        payload = run(*options)
+        envelope = payload["projection_envelope"]
+        coverage = envelope["coverage"]
+        assert envelope["alert"] is False
+        assert coverage["complete"] is True and coverage["omitted"] == []
+        assert coverage["expected_count"] == coverage["included_count"] == available
+        assert coverage["available_count"] == available
+        assert coverage["shown_count"] == len(payload["todos"])
+        assert coverage["truncated"] == (len(payload["todos"]) < available)
 
 
 def test_read_entrypoint_does_not_load_mutation_owners(read_cli):
@@ -136,26 +161,19 @@ def test_read_source_failure_and_recovery_do_not_reuse_a_snapshot(read_cli):
     provider, run, prefix, state = read_cli
     before = run()
     state_bytes = state.read_bytes()
-    if provider == "legacy":
-        state.unlink()
-    else:
-        runtime = Path(prefix[prefix.index("--runtime-root") + 1])
-        authority = runtime / "authority" / f"{provider}-v0"
-        unavailable = runtime / "unavailable-provider"
-        authority.rename(unavailable)
+    runtime = Path(prefix[prefix.index("--runtime-root") + 1])
+    authority = runtime / "authority" / f"{provider}-v0"
+    unavailable = runtime / "unavailable-provider"
+    authority.rename(unavailable)
     try:
         failed = run(expected_exit=1)
         assert failed["ok"] is False and failed["error"]
-        if provider != "legacy":
-            assert failed["error_code"]
-            assert failed["source_authority"] == f"{provider}_v0"
-            assert failed["legacy_fallback_used"] is False
-            assert state.read_bytes() == state_bytes
+        assert failed["error_code"]
+        assert failed["source_authority"] == f"{provider}_v0"
+        assert failed["legacy_fallback_used"] is False
+        assert state.read_bytes() == state_bytes
     finally:
-        if provider == "legacy":
-            state.write_bytes(state_bytes)
-        else:
-            unavailable.rename(authority)
+        unavailable.rename(authority)
     recovered = run()
     assert recovered["todos"] == before["todos"]
     assert recovered.get("authority_read") == before.get("authority_read")
@@ -170,5 +188,5 @@ def test_todo_help_does_not_load_mutation_owners():
         "\nassert 'loopx.state_refresh' not in sys.modules"
     )
     result = subprocess.run([sys.executable, "-c", script], cwd=REPO,
-                            capture_output=True, text=True, timeout=45)
+                            capture_output=True, text=True, timeout=45, check=False)
     assert result.returncode == 0, result.stdout + result.stderr

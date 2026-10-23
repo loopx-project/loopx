@@ -958,13 +958,20 @@ pub(crate) fn node_environment() -> (bool, Option<String>) {
     let version = executable.and_then(|node| {
         let mut probe = Command::new(node);
         probe.arg("--version");
-        timed_output(probe).filter(|output| output.status.success()).and_then(|output| {
-            let text = std::str::from_utf8(&output.stdout).ok()?.trim().strip_prefix('v')?;
-            let fields: Vec<_> = text.split('.').collect();
-            (fields.len() == 3 && fields.iter().all(|field|
-                !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit())))
+        timed_output(probe)
+            .filter(|output| output.status.success())
+            .and_then(|output| {
+                let text = std::str::from_utf8(&output.stdout)
+                    .ok()?
+                    .trim()
+                    .strip_prefix('v')?;
+                let fields: Vec<_> = text.split('.').collect();
+                (fields.len() == 3
+                    && fields.iter().all(|field| {
+                        !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit())
+                    }))
                 .then(|| text.to_owned())
-        })
+            })
     });
     (found, version)
 }

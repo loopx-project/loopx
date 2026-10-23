@@ -303,6 +303,14 @@ against the local source. Vite development navigation is unchanged. Explicit
 runtime repair retains its existing root handoff; WebContent crash recovery
 continues to retain the current in-process route.
 
+Research uses this same saved-view path. The macOS capture below is a packaged
+QA build with the real backend and a disposable synthetic Goal, reopened
+directly in Research after a normal quit and a loopback-port change. Window
+close/reopen, an explicit return to Manager and a corrupt preference were also
+checked. It does not demonstrate model execution or an official App upgrade.
+
+![Packaged QA reopening the same synthetic Goal in Research](docs/assets/research-reopen-qa.jpg)
+
 For native qualification, use a separately identified packaged App with the
 real backend: select a local Goal and Agent page, quit normally, reopen, and
 check the same selection on the new port. Also check window-close, an explicit

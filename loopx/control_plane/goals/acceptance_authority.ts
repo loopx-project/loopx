@@ -623,10 +623,17 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify" | 
     const taskReason = kind === "inspect" && error instanceof AuthorityStoreProtocolError
       && ["goal_acceptance_unbound", "goal_acceptance_stale"].includes(error.message)
       ? error.message : null;
+    const providerFailure = localAuthorityOpenFailure(error);
     const result = {...failure(taskReason ?? (error instanceof AuthorityStoreProtocolError ? "goal_acceptance_invalid_request" : "goal_acceptance_effect_failed"),
       error instanceof Error ? error.message : "acceptance effect failed"),
       ...(error instanceof GoalOutcomeValidationError ? {error_detail: error.message} : {}),
-      decision_read_from_provider: false, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
+      // Fixed, typed guidance survives the public CLI's exception redaction;
+      // never forward arbitrary provider/IO exception messages as error_detail.
+      ...(providerFailure.reason_code === "local_authority_provider_unavailable" ? {
+        error_detail: "PostgreSQL authority requires a service-owned store factory, which this local Goal acceptance entrypoint does not supply. " +
+          "Use a host supplying that factory; this local entrypoint supports File/SQLite. This refusal does not authorize switching providers.",
+      } : {}),
+      decision_read_from_provider: false, legacy_fallback_used: false, ...providerFailure};
     return store ? {...result, source_authority: authorityStoreSourceAuthority(store)} : result;
   }
 }

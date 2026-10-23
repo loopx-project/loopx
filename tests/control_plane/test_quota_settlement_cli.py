@@ -265,6 +265,7 @@ def _run_generated_cli(
     command: str,
     *,
     registry_path: Path,
+    cwd: Path = REPO_ROOT,
 ) -> tuple[int, dict[str, Any]]:
     argv = shlex.split(command)
     assert argv[0] == "loopx"
@@ -272,7 +273,7 @@ def _run_generated_cli(
         argv[1:1] = ["--registry", str(registry_path)]
     result = subprocess.run(
         [sys.executable, "-m", "loopx.entrypoint", *argv[1:]],
-        cwd=REPO_ROOT,
+        cwd=cwd,
         check=False,
         capture_output=True,
         text=True,
@@ -1949,15 +1950,15 @@ def test_blocked_wait_transports_complete_lifecycle_facts_without_prose(
                        cadence="5m", expires_at="2026-01-02T00:00:00Z", watch_only=True)
     source = {"agent_todos": {"items": [waiting, target]}, "user_todos": {"items": []}}
     before = json.dumps(source, sort_keys=True)
-    invoke = effect_runtime._request_with_info
+    invoke = effect_runtime.effect_runtime_request
     requests = []
 
-    def observe_request(info, **kwargs):
-        if kwargs["method"] == "quota.settlement.read":
-            requests.append(kwargs["params"])
-        return invoke(info, **kwargs)
+    def observe_request(method, params, **kwargs):
+        if method == "quota.settlement.read":
+            requests.append(params)
+        return invoke(method, params, **kwargs)
 
-    monkeypatch.setattr(effect_runtime, "_request_with_info", observe_request)
+    monkeypatch.setattr(effect_runtime, "effect_runtime_request", observe_request)
     result = require_blocked_retry_wait(source, todo_id=TODO_ID, observed_at=observed,
                                        allow_turn_settlement_retry=kind == "implicit")
     assert len(requests) == 1
@@ -2112,6 +2113,109 @@ def test_compact_blocked_wait_keeps_authority_rejections(invalid: str) -> None:
     with pytest.raises(ValueError, match=error):
         require_blocked_retry_wait({"agent_todos": {"items": rows}}, todo_id=TODO_ID,
                                    observed_at="2026-01-01T00:00:00Z")
+
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("writeback_kind", ["in_flight", "semantic", "replan"])
+@pytest.mark.parametrize("host", ["codex_app", "generic_cli"])
+def test_same_todo_writeback_reentry_only_settles_original_turn(
+    tmp_path: Path, provider: str, writeback_kind: str, host: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sealed writeback cannot admit more work just because its Todo stays open."""
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    todo_id = TODO_ID
+    if writeback_kind == "replan":
+        _configure_selected_todo_replan_fixture(project, registry)
+        _initialize_git_checkout(project)
+        todo_id = SELECTED_REPLAN_TODO_ID
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn_id = "turn-same-todo-writeback"
+    host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
+    guard_args = (
+        "quota", "should-run", *host_args, "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn_id,
+        "--todo-id", todo_id,
+    )
+    rc, initial = _run_cli(registry, runtime, *guard_args[:-2])
+    assert rc == 0, initial
+    rc, guard = _run_cli(registry, runtime, *guard_args)
+    if rc != 0:
+        assert guard["action_selection_qualification"]["state"] == "deferred", guard
+        [command] = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        rc, guard = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0, guard
+    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == todo_id
+    if writeback_kind == "replan":
+        assert guard["decision"] == "autonomous_replan_required", guard
+    else:
+        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    identity = ("--agent-id", AGENT_ID, "--todo-id", todo_id, "--turn-instance-id", turn_id)
+    vision = project / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
+        "todo_delta": [f"retain:{todo_id}"],
+        "path_delta": {
+            "outcome": "replan" if writeback_kind == "replan" else "continue",
+            "prior_assumption": "Fixture work needs a verified next route.",
+            "observed_reality": "A fixture check supports continuing the existing work.",
+            "retained": ["Original requirements and the existing Todo."],
+            "evidence_refs": ["evidence:fixture-check"],
+        },
+    }), encoding="utf-8")
+    refresh_args = (
+        "refresh-state", "--goal-id", GOAL_ID, *identity,
+        "--classification", "verified_fixture_work", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--delivery-workspace-path", str(project),
+        "--delivery-boundary", "in_flight_continuation" if writeback_kind == "in_flight" else "semantic_closeout",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    if writeback_kind != "in_flight":
+        refresh_args += ("--agent-vision-json", str(vision))
+    if writeback_kind == "replan":
+        refresh_args += ("--autonomous-replan-recorded", "--repair-delta-kind", "goal_vision_patch")
+    rc, refreshed = _run_cli(registry, runtime, *refresh_args)
+    assert rc == 0 and refreshed["appended"] is True, refreshed
+    assert refreshed["vision_checkpoint"]["satisfied"] is True
+    if writeback_kind == "replan":
+        assert refreshed["autonomous_replan_ack"]["recorded"] is True
+    writeback_bytes = Path(refreshed["json_path"]).read_bytes()
+
+    rc, recovery = _run_cli(registry, runtime, *guard_args)
+    assert rc == 0, recovery
+    assert recovery["normal_delivery_allowed"] is False
+    assert recovery["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert recovery["unsettled_host_turn_recovery"]["scope"] == "current_turn"
+    assert recovery["unsettled_host_turn_recovery"]["binding_id"] == todo_id
+    assert recovery["unsettled_host_turn_recovery"]["repair"] == "quota_spend"
+    assert recovery["settlement_progress"]["state"] == "spend_required"
+    cli = recovery["interaction_contract"]["cli_channel"]
+    assert cli["spend_allowed_now"] is True
+    [spend_command] = cli["next_cli_actions"]
+    assert "spend-slot" in spend_command and turn_id in spend_command
+    assert _spend_run_count(runtime) == 0
+    assert Path(refreshed["json_path"]).read_bytes() == writeback_bytes
+    spend_args = _projected_cli_args(spend_command, turn_instance_id=turn_id)
+    rc, spent = _run_cli(registry, runtime, *spend_args, cwd=project)
+    assert rc == 0 and spent.get("settlement_progress", {}).get("state") == "settled", {
+        key: spent.get(key) for key in ("error", "reason", "settlement_result", "before")
+    }
+    rc, spent_again = _run_cli(registry, runtime, *spend_args, cwd=project)
+    assert rc == 0 and spent_again["appended"] is False, spent_again
+    assert _spend_run_count(runtime) == 1
+    rc, settled = _run_cli(registry, runtime, *guard_args)
+    assert rc == 0 and settled["should_run"] is False, settled
+    assert settled["normal_delivery_allowed"] is False
+    rc, todos = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", todo_id)
+    assert rc == 0 and todos["todo"]["status"] == "open", todos
+    assert Path(refreshed["json_path"]).read_bytes() == writeback_bytes
 
 
 def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
@@ -6767,12 +6871,22 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 1
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
+    if provider == "sqlite":
+        from canonical_authority_fixture import isolate_sqlite_runtime
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     _initialize_git_checkout(project)
-    subprocess.run(["git", "add", "."], cwd=project, check=True)
+    (project / ".gitignore").write_text(".loopx/\n.codex/\n")
+    (project / "README.md").write_text("Synthetic workspace fixture\n")
+    subprocess.run(["git", "add", ".gitignore", "README.md"], cwd=project, check=True)
     subprocess.run(
         [
             "git",
@@ -6827,28 +6941,28 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
         ),
         encoding="utf-8",
     )
-    subprocess.run(["git", "add", "."], cwd=project, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=LoopX Test",
-            "-c",
-            "user.email=loopx-test@example.invalid",
-            "commit",
-            "--quiet",
-            "-m",
-            "peer fixture",
-        ],
-        cwd=project,
-        check=True,
-    )
     linked_worktree = tmp_path / "linked-worktree"
     subprocess.run(
         ["git", "worktree", "add", "--quiet", "--detach", str(linked_worktree)],
         cwd=project,
         check=True,
     )
+
+    # This Todo intentionally has neither a repository nor write scopes. The
+    # registered Git Goal and its current peer policy still govern settlement.
+    replay_rc, replay = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, *binding, cwd=project,
+    )
+    assert replay_rc == 0, {key: replay.get(key) for key in (
+        "error", "reason", "state", "health", "status", "status_health_ok",
+    )}
+    assert not replay["selected_todo"].get("task_repository")
+    hint = replay["interaction_contract"]["cli_channel"]["delivery_workspace_causality"]
+    assert "independent git worktree" in hint["refresh"]
+    assert "produced" in hint["refresh"]
+    assert "--delivery-workspace-path" in hint["refresh"]
+    assert replay["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
 
     refresh_args = (
         "refresh-state",
@@ -6860,6 +6974,8 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
         "single_surface",
         "--delivery-outcome",
         "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
         *binding,
         "--no-global-sync",
         "--suppress-external-sinks",
@@ -6884,6 +7000,13 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
     assert linked["delivery_workspace"]["workspace_kind"] == (
         "independent_git_worktree"
     )
+    assert linked["delivery_workspace"]["peer_independent_worktree_required"] is True
+    command = linked["settlement_owed"]["command"]
+    spent_rc, spent = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
+    assert spent_rc == 0 and spent["settlement_progress"]["state"] == "settled", spent
+    repeated_rc, repeated = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
+    assert repeated_rc == 0 and repeated["appended"] is False, repeated
+    assert _spend_run_count(runtime) == 1
 
 
 def test_same_turn_receipt_replay_defers_newly_due_higher_priority_monitor(

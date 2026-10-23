@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from pathlib import Path
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -27,6 +29,8 @@ from .resume_condition import (
     require_supported_todo_resume_when as require_supported_todo_resume_when,
 )
 
+
+_READ_LEGACY_CODEC = json.loads(Path(__file__).with_name("read_legacy_codec.json").read_text(encoding="utf-8"))
 
 TODO_TASK_PATTERN = re.compile(r"^\s*[-*]\s+\[([ xX-])\]\s+(.+?)\s*$")
 TODO_METADATA_PATTERN = re.compile(r"^\s*<!--\s*loopx:(?:todo\s+)?(?P<body>.*?)\s*-->\s*$")
@@ -138,32 +142,8 @@ TODO_STATUS_VALUES = {
 TODO_TERMINAL_STATUS_VALUES = {TODO_STATUS_DONE, TODO_STATUS_DEFERRED}
 TODO_LEGACY_TERMINAL_STATUS_VALUES = {"completed", "closed", "archived"}
 
-TODO_ACTION_KIND_ADVANCEMENT_VALUES = {
-    "advance",
-    "analyze",
-    "benchmark_run",
-    "codex_run",
-    "compact_blocker_writeback",
-    "compare",
-    "execute",
-    "fix",
-    "implement",
-    "rebuild",
-    "rebuild_score",
-    "repair",
-    "run",
-    "run_eval",
-    "test",
-    "validate",
-    "writeback",
-}
-TODO_ACTION_KIND_MONITOR_VALUES = {
-    "external_evidence",
-    "monitor",
-    "observe",
-    "poll",
-    "watch",
-}
+TODO_ACTION_KIND_ADVANCEMENT_VALUES = set(_READ_LEGACY_CODEC["advancement_actions"])
+TODO_ACTION_KIND_MONITOR_VALUES = set(_READ_LEGACY_CODEC["monitor_actions"])
 
 
 class TodoContinuationPolicy(str, Enum):
@@ -180,44 +160,12 @@ TODO_REMOVED_REVIEW_CONTINUATION_POLICY_VALUES = {
 }
 
 
-TODO_HARD_MONITOR_PATTERNS = (
-    re.compile(r"(?i)\bdo not\b.*\b(?:launch|run|execute|start)\b.*\buntil\b"),
-    re.compile(r"(?i)\b(?:only|just)\b.*\b(?:after|when|once)\b.*\b(?:owner|user|credential|approval|prerequisite|evidence)\b"),
-    re.compile(r"(?i)\b(?:credential|gcp|gcs|gcp_project|gcp_sa_key|gs://)\b.*\b(?:missing|required|provide|proof|prerequisite|gate|gated)\b"),
-    re.compile(r"(?i)\b(?:readiness|proof)\b.*\bbefore any formal\b.*\brun\b"),
-    re.compile(r"(?i)\bremaining formal\b.*\bpath\b"),
-    re.compile(r"(?i)\b(?:route|input)\b.*\babsent\b"),
-    re.compile(r"(?i)\b0\b.*\b(?:candidate|candidates)\b"),
-)
+TODO_HARD_MONITOR_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_HARD_MONITOR_PATTERNS"])
 
-TODO_ADVANCEMENT_OVERRIDE_PATTERNS = (
-    re.compile(
-        r"(?i)(?:^|[:：]\s*)(?:implement|add|make|fix|build|wire|define|compare|run|"
-        r"execute|test|validate|rebuild|repair|archive|publish|merge|write|attribute|"
-        r"collect|aggregate|generate|produce|materialize|rerun|repeat|eval|evaluate|score)\b"
-    ),
-    re.compile(
-        r"(?i)\b(?:implementation slice|validation-backed patch|smoke fixture|"
-        r"regression suite|readiness scan|source preflight|setup-readiness scan)\b"
-    ),
-)
-TODO_BLOCKED_MONITOR_PATTERNS = (
-    *TODO_HARD_MONITOR_PATTERNS,
-    re.compile(r"(?i)\b(?:blocked|gated|waiting)\b.*\b(?:owner|user|credential|substrate|proof|prerequisite|evidence)\b"),
-)
-TODO_MONITOR_PATTERNS = (
-    re.compile(r"(?i)\bdependency monitor\b"),
-    re.compile(r"(?i)\bobservation lane\b"),
-    re.compile(r"(?i)(?:^|[:：]\s*)observe\b"),
-    re.compile(r"(?i)(?:^|[:：]\s*)poll\b"),
-    re.compile(r"(?i)(?:^|[:：]\s*)watch\b"),
-    re.compile(r"(?i)\bmonitor-only\b"),
-    *TODO_BLOCKED_MONITOR_PATTERNS,
-)
-TODO_ADVANCEMENT_PATTERNS = (
-    *TODO_ADVANCEMENT_OVERRIDE_PATTERNS,
-    re.compile(r"(?i)\b(?:task|validation hypothesis|validation step|bounded step|learning run)\b"),
-)
+TODO_ADVANCEMENT_OVERRIDE_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_ADVANCEMENT_OVERRIDE_PATTERNS"])
+TODO_BLOCKED_MONITOR_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_BLOCKED_MONITOR_PATTERNS"])
+TODO_MONITOR_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_MONITOR_PATTERNS"])
+TODO_ADVANCEMENT_PATTERNS = tuple(re.compile(pattern) for pattern in _READ_LEGACY_CODEC["TODO_ADVANCEMENT_PATTERNS"])
 
 NEXT_ACTION_HARD_MONITOR_PATTERNS = (
     re.compile(r"(?i)\bdo not\b.*\b(?:launch|run|execute|start)\b.*\buntil\b"),

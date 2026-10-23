@@ -1,3 +1,5 @@
+
+from canonical_authority_fixture import assert_todo_read_unchanged
 from copy import deepcopy
 import json
 
@@ -992,7 +994,7 @@ def test_corrupt_graph_cannot_report_success_on_replay_and_recovers_after_repair
     assert not result["ok"], "A partial log must not become a successful delivery receipt"
     assert result["primary_committed"] and result["retryable"]
     assert log.read_bytes() == corrupt
-    assert list_goal_todos(registry_path=args["registry_path"], goal_id=args["goal_id"]) == before
+    assert_todo_read_unchanged(list_goal_todos(registry_path=args["registry_path"], goal_id=args["goal_id"]), before)
     log.write_bytes(valid)
     assert deliver_result_attachment(payload=payload(), **args)["idempotent_replay"]
     assert log.read_bytes() == valid

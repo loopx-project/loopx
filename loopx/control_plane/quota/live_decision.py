@@ -754,8 +754,14 @@ def build_live_quota_should_run_decision(
         receipt_bound_todo_id and agent_id and turn_instance_id
         and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
         and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
-        and _receipt_bound_recovery_required(payload, receipt_bound_todo_id)
+        and (
+            receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
+            or _receipt_bound_recovery_required(payload, receipt_bound_todo_id)
+        )
     ):
+        # A verified writeback seals this Turn even while its Todo stays open
+        # and selected. Let the existing typed owner project only the remaining
+        # settlement; another delivery cannot replace the immutable writeback.
         if settlement_readback is not None:
             attach_settlement_progress(
                 payload, settlement_readback,

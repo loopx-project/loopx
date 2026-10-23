@@ -26,6 +26,26 @@ def build_standing_decision_authority(
     Canonical IDs obey their provider contract, not the Markdown token codec.
     Both sources use the same typed eligibility and chronology owner.
     """
+    items = standing_decision_source_items(user_items, canonical_records=canonical_records)
+    if not items:
+        return None
+    result = effect_runtime_result(
+        "todo.standing_decision.project",
+        {
+            "schema_version": "standing_decision_projection_request_v0",
+            "items": items,
+            "legacy_source_order": legacy_source_order and not canonical_records,
+        },
+    )
+    if result is not None and (
+        not isinstance(result, dict)
+        or result.get("schema_version") != "standing_decision_authority_v0"
+    ):
+        raise ValueError("invalid typed standing decision projection")
+    return result
+
+
+def standing_decision_source_items(user_items, *, canonical_records=False):
     items = []
     for item in user_items or []:
         if not isinstance(item, dict):
@@ -85,19 +105,4 @@ def build_standing_decision_authority(
                 "unblocks_todo_id": item.get("unblocks_todo_id"),
             }
         )
-    if not items:
-        return None
-    result = effect_runtime_result(
-        "todo.standing_decision.project",
-        {
-            "schema_version": "standing_decision_projection_request_v0",
-            "items": items,
-            "legacy_source_order": legacy_source_order and not canonical_records,
-        },
-    )
-    if result is not None and (
-        not isinstance(result, dict)
-        or result.get("schema_version") != "standing_decision_authority_v0"
-    ):
-        raise ValueError("invalid typed standing decision projection")
-    return result
+    return items

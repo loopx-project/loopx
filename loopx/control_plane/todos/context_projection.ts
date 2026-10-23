@@ -3,6 +3,7 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireBoolean, requireInteger, requireJsonObject } from "../runtime_decode.ts";
 import { canonicalAuthorityJson } from "../coordination/authority_store_codec.ts";
+import {compactThinTodoRead, compactTodoReadSummary, compactThinTodoReadSummary} from "./read_presentation.ts";
 
 // A read lens over canonical records, shared by global and Goal conversations.
 // These are existing Todo facts, not dependency evaluation or execution grants.
@@ -15,6 +16,21 @@ const CONTEXT_FIELDS = [
 
 /** Select before redaction; never convert nested scopes or booleans to prose. */
 export function projectTodoContextPage(input: JsonObject): JsonObject {
+  if (input.thin_summary_payload !== undefined) {
+    const details = requireJsonObject(input.details, "thin summary details");
+    return compactThinTodoReadSummary(requireJsonObject(input.thin_summary_payload, "thin Todo summary"), {
+      role: details.role, items_matched: requireInteger(details.items_matched, "items matched"),
+      items_returned: requireInteger(details.items_returned, "items returned"),
+      item_limit_per_role: requireInteger(details.item_limit_per_role, "item limit per role")});
+  }
+  if (input.thin_payload !== undefined) {
+    if (Object.keys(input).some(key => key !== "thin_payload")) throw new EffectRuntimeRequestError("thin Todo presentation cannot be combined with other views");
+    return compactThinTodoRead(requireJsonObject(input.thin_payload, "thin Todo payload"));
+  }
+  if (input.summary_payload !== undefined) {
+    if (Object.keys(input).some(key => !["summary_payload", "role", "limit"].includes(key))) throw new EffectRuntimeRequestError("Todo summary presentation cannot be combined with other views");
+    return compactTodoReadSummary(requireJsonObject(input.summary_payload, "Todo summary payload"), String(input.role), input.limit == null ? null : Number(input.limit));
+  }
   if (input.handoff_sources !== undefined) {
     if (Object.keys(input).some(key => key !== "handoff_sources" && key !== "handoff_followups")) {
       throw new EffectRuntimeRequestError("handoff context cannot be combined with list/detail/page inputs");
