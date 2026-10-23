@@ -64,7 +64,6 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       };
       let reader = await open("comparison");
       const finding = reader.locator(".research-recorded-finding").last();
-      await finding.locator(":scope > summary").click();
       const measurements = finding.locator(".explore-measurements");
       assert.deepEqual(await measurements.locator(".explore-measurement-reading strong").allTextContents(), ["7", "10", "0", "未测量"]);
       assert.equal(await measurements.locator(":scope > details").count(), 1, "Related measurements share one source disclosure");
@@ -74,7 +73,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       await help.focus();
       await measurements.getByRole("tooltip").waitFor({state: "visible"});
       await page.keyboard.press("Escape");
-      assert.equal(await finding.evaluate(node => node.open), true, "Help dismissal preserves the selected finding");
+      assert.equal(await reader.getByRole("combobox", {name: "选择问题结论", exact: true}).inputValue(), "finding-1", "Help dismissal preserves the selected finding");
       await page.screenshot({path: resolve(outputDir, "research-measurements-desktop.png"), animations: "disabled"});
 
       for (const width of [1440, 390]) {
@@ -95,7 +94,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       await measurements.getByRole("tooltip").waitFor({state: "visible"});
       await source.locator(":scope > summary").tap();
       await measurements.getByRole("tooltip").waitFor({state: "hidden"});
-      assert.equal(await finding.evaluate(node => node.open), true, "Touch help dismissal preserves the reading context");
+      assert.equal(await reader.getByRole("combobox", {name: "选择问题结论", exact: true}).inputValue(), "finding-1", "Touch help dismissal preserves the reading context");
       assert.equal(await source.evaluate(node => node.open), true, "The outside source action still runs");
       await source.locator(":scope > summary").tap();
       await page.screenshot({path: resolve(outputDir, "research-measurements-phone.png"), animations: "disabled"});

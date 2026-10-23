@@ -187,6 +187,16 @@ Saved findings lead with readable observations, interpretations and decisions.
 Put references, applicability, revisions and full original text behind one
 expansion. Clamp repeated titles only in the selection list, never the selected
 finding's full content. Do not invent short titles or infer findings from prose.
+A selected question is a focused document, not another full history stacked below
+the chart. Show one finding at a time with its declared status and full text;
+keep all findings selectable and failed or tentative counts visible. Preserve
+the exact finding on reload and Back. Offer the whole recorded history in place
+and through the existing return action, without letting it bury the chosen text.
+
+选中问题后聚焦阅读一条结论，完整正文与记录状态保留；全部结论可直接切换，反驳和
+待检查计数仍可见。刷新与返回保留所选结论，全景可原位展开或通过原入口返回，
+不再把整张图和全部折叠标题堆在所选正文之前。
+
 Reading a citation opens only the requested original, preserving the explicit
 open or closed state of the full analysis and returning to the exact citation.
 

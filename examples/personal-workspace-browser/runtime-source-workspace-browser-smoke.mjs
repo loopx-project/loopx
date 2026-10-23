@@ -112,10 +112,15 @@ try {
     assert.equal(await page.locator(".research-history-edges > g > path").count(),2);
     await page.locator(".research-history-node").filter({hasText:"Retained route 0"}).click();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0");
+    // Even an unavailable finding in a bookmarked URL belongs to this source.
+    const findingLink = new URL(page.url()); findingLink.searchParams.set("research_finding", "source-local-finding");
+    await page.goto(findingLink.href);
+    await page.locator(".research-history-detail").waitFor();
     await page.getByLabel("选择控制面来源", {exact:true}).click();
     await page.getByRole("option", {name:"Fresh",exact:true}).click();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),null,"a source switch must not rebind the same node id in another physical source");
+    assert.equal(new URL(page.url()).searchParams.get("research_finding"),null,"a source switch clears finding focus alongside node focus");
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     await page.getByLabel("研究历程", {exact:true}).getByRole("button", {name:"关系图",exact:true}).click();
     await page.locator(".research-history-node").filter({hasText:"Fresh route 0"}).waitFor();
@@ -125,6 +130,7 @@ try {
     await page.goBack();
     await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0","Back restores the original source-local selection");
+    assert.equal(new URL(page.url()).searchParams.get("research_finding"),"source-local-finding");
     await page.goForward();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     await page.reload();

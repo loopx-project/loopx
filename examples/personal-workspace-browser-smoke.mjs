@@ -71,6 +71,7 @@ import { managedGoalResultsScenario } from "./personal-workspace-browser/managed
 import { researchResultsScenario } from "./personal-workspace-browser/research-results.mjs";
 import { researchModeScenario } from "./personal-workspace-browser/research-mode.mjs";
 import { researchHistoryScenario } from "./personal-workspace-browser/research-history.mjs";
+import { researchFindingReaderScenario } from "./personal-workspace-browser/research-finding-reader.mjs";
 import { researchMeasurementsScenario } from "./personal-workspace-browser/research-measurements.mjs";
 import { loopxModeScenario } from "./personal-workspace-browser/loopx-mode.mjs";
 import { progressiveLoadingScenario } from "./personal-workspace-browser/progressive-loading.mjs";
@@ -125,6 +126,7 @@ scenarioCatalog.push(attentionUserActionScenario);
 scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(researchHistoryScenario);
 scenarioCatalog.push(researchMeasurementsScenario);
+scenarioCatalog.push(researchFindingReaderScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);

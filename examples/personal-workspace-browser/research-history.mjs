@@ -508,8 +508,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
         await page.screenshot({path:resolve(outputDir, `research-question-index-${viewport.width}.png`), animations:'disabled'});
         await detail.locator('[data-research-node="hit-6"] button').click();
         assert.equal(await history.locator('.research-history-canvas').evaluate(e=>e.getBoundingClientRect().width),widthBefore,'Reading never squeezes the whole-history graph');
-        assert.equal(await detail.locator('details.research-recorded-finding[open]').count(),0);
-        await detail.locator('details.research-recorded-finding').filter({hasText:'Synthetic negative'}).locator('summary').first().click();
+        assert.equal(await detail.locator('.research-recorded-finding').count(),1,'A question reads one complete finding at a time');
+        await detail.getByRole('combobox',{name:'选择问题结论',exact:true}).selectOption('negative');
         await detail.getByText('实际执行与资源观测', {exact:true}).click();
         assert(await detail.getByText('scheduler → mask-selection', {exact:true}).isVisible());
         assert(await detail.getByText('未测量', {exact:true}).isVisible(), 'Unknown iterations must not become zero');

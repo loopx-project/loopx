@@ -3427,7 +3427,7 @@ export function DashboardPage() {
             workAgent: "statusUrl" in current && (!current.statusUrl || current.statusUrl === url) ? current.workAgent : undefined,
             // Node/pack ids are source-local even when the Goal ids coincide.
             // Back restores the original source's URL and its own selection.
-            ...(runtimeSourceChanged ? {research_lens: undefined, research_phase: undefined, research_goal: undefined, research_node: undefined,
+            ...(runtimeSourceChanged ? {research_lens: undefined, research_phase: undefined, research_goal: undefined, research_node: undefined, research_finding: undefined,
               research_group: undefined, research_analysis: undefined,
               research_analysis_goal: undefined, research_pack: undefined} : {}),
           };
