@@ -70,7 +70,7 @@ def _input_text(request):
                      for part in item.get("content", []) if isinstance(part, dict))
 
 
-def _app_server(binary, env, workspace, home, trusted):
+def _app_server(binary, env, workspace, home, trusted, additional_context=None):
     with (home / "stderr.txt").open("w") as stderr, StdioNativeGoalTransport.spawn(
         [binary, "app-server", "--listen", "stdio://"], cwd=str(workspace), env=env,
         stderr=stderr, response_timeout_sec=20,
@@ -90,8 +90,11 @@ def _app_server(binary, env, workspace, home, trusted):
             params["config"] = {"hooks.state": {
                 h["key"]: {"trusted_hash": h["currentHash"]} for h in handlers}}
         source = native.request("thread/start", params)["thread"]["id"]
-        turn = native.request("turn/start", {"threadId": source,
-            "input": [{"type": "text", "text": "Synthetic context-delivery fixture."}]})["turn"]["id"]
+        turn_params = {"threadId": source,
+            "input": [{"type": "text", "text": "Synthetic context-delivery fixture."}]}
+        if additional_context is not None:
+            turn_params["additionalContext"] = additional_context
+        turn = native.request("turn/start", turn_params)["turn"]["id"]
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             event = native.next_event(timeout_sec=1)
@@ -102,14 +105,32 @@ def _app_server(binary, env, workspace, home, trusted):
         raise AssertionError("Native context fixture did not finish")
 
 
-@pytest.mark.parametrize("host", ["exec", "app_server"])
-@pytest.mark.parametrize("case", ["intact", "spill", "untrusted", "failed_recovery"])
-def test_native_hook_context_boundary(tmp_path, host, case):
-    """Full -> warm change -> automatic compaction -> same-source full recovery."""
+def _native_fixture(tmp_path):
     binary = os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"]
     home, workspace = tmp_path / "home", tmp_path / "workspace"
     home.mkdir()
     workspace.mkdir()
+    env = {k: v for k, v in os.environ.items() if k in {
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT"}}
+    env["CODEX_HOME"] = str(home)
+    return binary, env, workspace, home
+
+
+def _configure_provider(home, url):
+    (home / "config.toml").write_text(
+        'model="fixture"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
+        'model_auto_compact_token_limit=20000\nmodel_context_window=100000\n'
+        '[features]\ngoals=false\nplugins=false\nremote_plugin=false\nplugin_sharing=false\n'
+        'responses_websockets_v2=false\n'
+        f'[model_providers.fixture]\nname="Synthetic local"\nbase_url="{url}"\n'
+        'wire_api="responses"\nrequires_openai_auth=false\n')
+
+
+@pytest.mark.parametrize("host", ["exec", "app_server"])
+@pytest.mark.parametrize("case", ["intact", "spill", "untrusted", "failed_recovery"])
+def test_native_hook_context_boundary(tmp_path, host, case):
+    """Full -> warm change -> automatic compaction -> same-source full recovery."""
+    binary, env, workspace, home = _native_fixture(tmp_path)
     for name, body in (("base", BASE), ("target", TARGET), ("delta", DELTA)):
         (home / f"{name}.json").write_text(body)
     hook = home / "hook.py"
@@ -123,17 +144,8 @@ def test_native_hook_context_boundary(tmp_path, host, case):
         handler["additionalContextLimit"] = 0
     (home / "hooks.json").write_text(json.dumps({"hooks": {
         name: [{"hooks": [handler]}] for name in ("SessionStart", "PostToolUse")}}))
-    env = {k: v for k, v in os.environ.items() if k in {
-        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT"}}
-    env["CODEX_HOME"] = str(home)
     with local_inference_provider(_response, _usage) as (url, calls, requests):
-        (home / "config.toml").write_text(
-            'model="fixture"\nmodel_provider="fixture"\napproval_policy="never"\nsandbox_mode="read-only"\n'
-            'model_auto_compact_token_limit=20000\nmodel_context_window=100000\n'
-            '[features]\ngoals=false\nplugins=false\nremote_plugin=false\nplugin_sharing=false\n'
-            'responses_websockets_v2=false\n'
-            f'[model_providers.fixture]\nname="Synthetic local"\nbase_url="{url}"\n'
-            'wire_api="responses"\nrequires_openai_auth=false\n')
+        _configure_provider(home, url)
         if host == "exec":
             flags = [] if case == "untrusted" else ["--dangerously-bypass-hook-trust"]
             result = subprocess.run([binary, "exec", *flags, "--skip-git-repo-check", "--json",
@@ -165,3 +177,30 @@ def test_native_hook_context_boundary(tmp_path, host, case):
     # The two immutable source captures survive; no fresh admission/Goal write.
     assert (home / "base.json").read_text() == BASE
     assert (home / "target.json").read_text() == TARGET
+
+
+@pytest.mark.parametrize("kind", ["untrusted", "application"])
+@pytest.mark.parametrize("body", ["Complete synthetic source; stop before publishing.", BASE],
+                         ids=["small", "large"])
+def test_native_additional_context_boundary(tmp_path, kind, body):
+    """A keyed context fragment must not be mistaken for retained source state.
+
+    Test the native alternative to command hooks, with no recovery hook present.
+    Keep failed completeness/retention qualification visible rather than asserting
+    a particular preview size or freezing the current host's lossy behavior.
+    """
+    binary, env, workspace, home = _native_fixture(tmp_path)
+    with local_inference_provider(_response, _usage) as (url, calls, requests):
+        _configure_provider(home, url)
+        _app_server(binary, env, workspace, home, False,
+                    {"synthetic_source": {"kind": kind, "value": body}})
+    assert len(calls) == 4
+    first, warm, _, recovered = map(_input_text, requests)
+    if body not in first:
+        pytest.xfail("Native additionalContext is incomplete before first model input; "
+                     "it cannot establish an intact baseline")
+    assert first.count(body) == 1 and warm.count(body) == 1
+    if body not in recovered:
+        pytest.xfail("Native additionalContext is lost on automatic compaction; "
+                     "a stable source key does not prove retained context")
+    assert recovered.count(body) == 1

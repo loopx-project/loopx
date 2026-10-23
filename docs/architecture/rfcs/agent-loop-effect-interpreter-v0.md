@@ -863,6 +863,16 @@ The paired negative cases expose why this hook is not yet a sufficient adapter:
   still issue the next model request without the complete required source. The
   qualification records this as an expected failure, not a passing recovery.
 
+The app-server's keyed `turn/start.additionalContext` is also tested without
+hooks, for both `untrusted` and `application` fragments. A small complete source
+reaches the initial and warm requests but is absent after automatic compaction.
+A large source is already incomplete in the initial request. An opaque source
+key therefore supplies neither an intact-delivery receipt nor a resident source
+that survives compaction. These cases remain expected qualification failures;
+they do not qualify a fallback or justify promoting source data to instructions.
+No current adapter may infer continuity from that field or repeatedly retry
+these unsupported routes as if a host boundary had become available.
+
 The [native hook contract](https://learn.chatgpt.com/docs/hooks) provides useful
 ordering and an explicit intact-output option, but a successful hook callback
 alone cannot establish the fail-safe input boundary. Keep production delivery
