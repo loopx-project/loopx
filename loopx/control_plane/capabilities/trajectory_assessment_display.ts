@@ -33,19 +33,37 @@ export const trajectoryDisplaySnapshotText = (events: readonly ExploreHistoryEve
 
 /** Protect literal code, links, numeric expressions and technical identifiers.
  * This checks exact-token integrity, not translation quality or entailment. */
-export function maskTrajectoryDisplayText(text: string) {
+export function maskTrajectoryDisplayText(text: string, {explainSourceNumbers = false}: {explainSourceNumbers?: boolean} = {}) {
   const protectedText: string[] = [];
-  const masked = text.replace(/⟪LX\d+⟫|`[^`]*`|https?:\/\/[^\s<>]+|\b[a-fA-F0-9]{40,64}\b|[\w./:#%+−-]*\d[\w./:#%+−-]*(?:\s+(?:ms|μs|ns|s|sec|min|h|KiB|MiB|GiB|KB|MB|GB|TB|tokens|USD|CNY)\b)?|\p{Number}+|\b[A-Za-z]+(?:[_-][A-Za-z]+)+\b|\b[a-z]+[A-Z]\w*\b|[+−=<>≤≥-]/gu, literal => {
+  const numberCopies: string[] = [];
+  const numbers = /[+−-]?\p{Number}+(?:[.,]\p{Number}+)*(?:%|‰)?/gu;
+  const links = explainSourceNumbers ? [...text.matchAll(/\b(?:[a-z][a-z0-9+.-]*:\/\/|mailto:)[^\s<>]+/giu)]
+    .map(match => ({start: match.index, end: match.index + match[0].length})) : [];
+  const masked = text.replace(/(⟪LX\d+⟫|`[^`]*`|https?:\/\/[^\s<>]+|\b[a-fA-F0-9]{40,64}\b)|([\w./:#%+−-]*\d[\w./:#%+−-]*(?:\s+(?:ms|μs|ns|s|sec|min|h|KiB|MiB|GiB|KB|MB|GB|TB|tokens|USD|CNY)\b)?)|\p{Number}+|\b[A-Za-z]+(?:[_-][A-Za-z]+)+\b|\b[a-z]+[A-Z]\w*\b|[+−=<>≤≥-]/gu, (literal, _verbatim: string | undefined, numeric: string | undefined, offset: number) => {
+    // Only the explicit encoding can explain numbers hidden in compound source
+    // terms. Code, links and hashes never donate numbers to narrative claims.
+    if (explainSourceNumbers && numeric && /[A-Za-z_]/u.test(numeric)
+        && !links.some(({start, end}) => offset < end && start < offset + literal.length)) {
+      numberCopies.push(...numeric.match(numbers) ?? []);
+    }
     protectedText.push(literal); return `⟪LX${protectedText.length - 1}⟫`;
   });
-  return {masked, literals: protectedText, restore(translated: unknown): string | null {
+  return {masked, literals: protectedText, explanation_numbers: numberCopies, restore(translated: unknown): string | null {
     if (typeof translated !== 'string' || !translated.trim() || translated.includes('\0')) return null;
     const tokens = translated.match(/⟪LX\d+⟫/g) ?? [];
     if (tokens.length !== protectedText.length || protectedText.some((_, i) => tokens.filter(t => t === `⟪LX${i}⟫`).length !== 1)) return null;
-    // New numeric/code/link tokens outside the protected spans are not a
-    // faithful presentation of this field; retain its original instead.
+    // The original term still restores exactly once. A numeric restatement
+    // may use each signed source component at most once, without conversion.
+    // This is lexical integrity, not a claim about meaning or units.
     const rest = translated.replace(/⟪LX\d+⟫/g, '');
-    if (/\p{Number}|`|https?:\/\/|[+−=<>≤≥-]/u.test(rest)) return null;
+    if (explainSourceNumbers && /\b(?:[a-z][a-z0-9+.-]*:\/\/|mailto:)/iu.test(rest)) return null;
+    const available = [...numberCopies];
+    for (const number of rest.match(numbers) ?? []) {
+      const index = available.indexOf(number);
+      if (index < 0) return null;
+      available.splice(index, 1);
+    }
+    if (/\p{Number}|`|https?:\/\/|[+−=<>≤≥-]/u.test(rest.replace(numbers, ''))) return null;
     return translated.replace(/⟪LX(\d+)⟫/g, (_, i: string) => protectedText[Number(i)]!);
   }};
 }
