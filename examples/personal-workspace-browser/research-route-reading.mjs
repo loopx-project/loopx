@@ -96,6 +96,7 @@ export const researchRouteReadingScenario = {
         const titleLayout = await caption.first().locator("strong").first().evaluate(element => ({height: element.clientHeight, lineHeight: parseFloat(getComputedStyle(element).lineHeight), fontSize: parseFloat(getComputedStyle(element).fontSize)}));
         assert(titleLayout.height >= titleLayout.lineHeight * 1.9 && titleLayout.fontSize >= 16, "Long captions wrap into readable list entries");
         if (language === "zh-CN" && width !== 768) {
+          await page.getByRole("button", {name: "开启研究模式", exact: true}).waitFor();
           await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
           await page.screenshot({path: resolve(outputDir, `research-route-reading-first-${width}.png`), animations: "disabled"});
         }
@@ -112,6 +113,19 @@ export const researchRouteReadingScenario = {
           await page.keyboard.press("Escape");
           assert.equal(await reader.count(), 0);
           await page.waitForFunction(key => document.activeElement?.getAttribute("data-research-return") === key, returnKey);
+        }
+        // Native WebKit button activation need not focus the opener. The
+        // reader must still return to the exact route caption after a click.
+        const activated = caption.last().locator("button").last();
+        const activatedKey = await activated.getAttribute("data-research-return");
+        await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+        await activated.evaluate(element => element.click());
+        await reader.waitFor();
+        await reader.locator(".research-reader-back").click();
+        await page.waitForFunction(key => document.activeElement?.getAttribute("data-research-return") === key, activatedKey, {timeout: 2000});
+        if (language === "zh-CN" && width !== 768) {
+          await activated.scrollIntoViewIfNeeded();
+          await page.screenshot({path: resolve(outputDir, `research-route-reading-return-${width}.png`), animations: "disabled"});
         }
         if (language === "zh-CN" && width !== 768) {
           await caption.first().evaluate(element => element.scrollIntoView({block: "center"}));

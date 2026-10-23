@@ -144,7 +144,12 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
             <div className="research-route-caption">
               {[first, ...(members.length > 1 ? [last] : [])].map((item, index) => <button key={item.node.id} type="button"
                 data-research-return={`${route.id}:${index}`} aria-pressed={selectedIds.includes(item.node.id)}
-                onClick={() => onSelect(item.node.id)}>
+                onClick={event => {
+                  // WebKit pointer/AX activation may leave focus on the canvas.
+                  // Give the reader the actual opener before it unmounts.
+                  event.currentTarget.focus({preventScroll: true});
+                  onSelect(item.node.id);
+                }}>
                 <span>{index ? copy.end : copy.start}</span><strong className={index ? tone(item.label) : undefined}>{item.node.latest.title}</strong>
               </button>)}
             </div>
