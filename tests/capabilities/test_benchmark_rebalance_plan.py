@@ -49,7 +49,8 @@ def test_lower_priority_number_is_reclaimed_before_protected_cohort() -> None:
                 priority=0,
                 admitted_at="2026-10-24T00:01:00Z",
             ),
-        ]
+        ],
+        solver_reclaim_required=True,
     )
 
     assert plan["action"] == "stop_candidate"
@@ -64,7 +65,8 @@ def test_pending_lower_priority_closeout_blocks_higher_priority_reclaim() -> Non
             _candidate("supplementary-stopping", ["external"], priority=0,
                        state="stop_requested"),
             _candidate("primary-pair", ["native-goal", "codex"], priority=20),
-        ]
+        ],
+        solver_reclaim_required=True,
     )
 
     assert plan["action"] == "await_candidate_closeout"
@@ -81,20 +83,22 @@ def test_another_active_candidate_at_same_priority_can_be_selected() -> None:
             _candidate("supplementary-active", ["external-b"], priority=0,
                        admitted_at="2026-10-24T00:01:00Z"),
             _candidate("primary-pair", ["native-goal", "codex"], priority=20),
-        ]
+        ],
+        solver_reclaim_required=True,
     )
 
     assert plan["action"] == "stop_candidate"
     assert plan["selected_candidate"]["candidate_id"] == "supplementary-active"
 
 
-def test_released_solver_capacity_does_not_block_primary_reclaim() -> None:
+def test_released_solver_capacity_does_not_block_required_primary_reclaim() -> None:
     plan = build_benchmark_rebalance_plan(
         [
             _candidate("supplementary-grading", ["external"], priority=0,
-                       state="capacity_released"),
+                       state="solver_capacity_released"),
             _candidate("primary-pair", ["native-goal", "codex"], priority=20),
-        ]
+        ],
+        solver_reclaim_required=True,
     )
 
     assert plan["action"] == "stop_candidate"
@@ -105,7 +109,8 @@ def test_released_solver_capacity_does_not_block_primary_reclaim() -> None:
 def test_only_released_solver_capacity_holds_without_closeout_wait() -> None:
     plan = build_benchmark_rebalance_plan(
         [_candidate("supplementary-grading", ["external"], priority=0,
-                    state="capacity_released")]
+                    state="solver_capacity_released")],
+        solver_reclaim_required=True,
     )
 
     assert plan["action"] == "hold"
@@ -119,14 +124,32 @@ def test_candidate_run_membership_must_not_overlap() -> None:
             [
                 _candidate("first", ["same-run"], priority=0),
                 _candidate("second", ["same-run"], priority=10),
-            ]
+            ],
+            solver_reclaim_required=True,
         )
+
+
+def test_pending_scorer_does_not_reclaim_case_at_solver_target() -> None:
+    plan = build_benchmark_rebalance_plan(
+        [
+            _candidate("supplementary-grading", ["external"], priority=0,
+                       state="solver_capacity_released"),
+            _candidate("primary-pair", ["native-goal", "codex"], priority=20),
+        ],
+        solver_reclaim_required=False,
+    )
+
+    assert plan["action"] == "hold"
+    assert plan["reason_codes"] == ["solver_capacity_at_or_below_target"]
+    assert plan["selected_candidate"] is None
+    assert plan["solver_reclaim_required"] is False
 
 
 def test_cli_returns_public_safe_plan_without_mutating_inventory(tmp_path: Path) -> None:
     inventory = tmp_path / "inventory.json"
     payload = {
         "schema_version": "benchmark_rebalance_inventory_v0",
+        "solver_reclaim_required": True,
         "candidates": [
             _candidate("supplementary", ["external"], priority=0),
             _candidate("primary", ["native", "codex"], priority=20),

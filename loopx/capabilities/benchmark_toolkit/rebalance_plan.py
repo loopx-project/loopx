@@ -11,7 +11,7 @@ from .experiment_identity import experiment_token_text as _token
 BENCHMARK_REBALANCE_INVENTORY_SCHEMA_VERSION = "benchmark_rebalance_inventory_v0"
 BENCHMARK_REBALANCE_PLAN_SCHEMA_VERSION = "benchmark_rebalance_plan_v0"
 
-_INVENTORY_FIELDS = {"schema_version", "candidates"}
+_INVENTORY_FIELDS = {"schema_version", "solver_reclaim_required", "candidates"}
 _CANDIDATE_FIELDS = {
     "candidate_id",
     "run_ids",
@@ -30,7 +30,7 @@ class BenchmarkRebalanceAction(str, Enum):
 class BenchmarkRebalanceCandidateState(str, Enum):
     ACTIVE = "active"
     STOP_REQUESTED = "stop_requested"
-    CAPACITY_RELEASED = "capacity_released"
+    SOLVER_CAPACITY_RELEASED = "solver_capacity_released"
 
 
 _CANDIDATE_STATES = {item.value for item in BenchmarkRebalanceCandidateState}
@@ -39,6 +39,12 @@ _CANDIDATE_STATES = {item.value for item in BenchmarkRebalanceCandidateState}
 def _priority(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1024:
         raise ValueError("reclaim_priority must be an integer from 0 through 1024")
+    return value
+
+
+def _required_bool(value: Any, *, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{field} must be a boolean")
     return value
 
 
@@ -88,18 +94,24 @@ def normalize_benchmark_rebalance_inventory(
         seen.update(candidate["run_ids"])
     return {
         "schema_version": BENCHMARK_REBALANCE_INVENTORY_SCHEMA_VERSION,
+        "solver_reclaim_required": _required_bool(
+            value.get("solver_reclaim_required"), field="solver_reclaim_required"
+        ),
         "candidates": sorted(candidates, key=lambda item: item["candidate_id"]),
     }
 
 
 def build_benchmark_rebalance_plan(
     candidates: Sequence[Mapping[str, Any]],
+    *,
+    solver_reclaim_required: bool,
 ) -> dict[str, Any]:
     """Select one runner-owned stop group without performing any mutation."""
 
     inventory = normalize_benchmark_rebalance_inventory(
         {
             "schema_version": BENCHMARK_REBALANCE_INVENTORY_SCHEMA_VERSION,
+            "solver_reclaim_required": solver_reclaim_required,
             "candidates": list(candidates),
         }
     )
@@ -107,7 +119,8 @@ def build_benchmark_rebalance_plan(
     contenders = [
         item
         for item in normalized
-        if item["state"] != BenchmarkRebalanceCandidateState.CAPACITY_RELEASED.value
+        if item["state"]
+        != BenchmarkRebalanceCandidateState.SOLVER_CAPACITY_RELEASED.value
     ]
     base: dict[str, Any] = {
         "ok": True,
@@ -115,9 +128,18 @@ def build_benchmark_rebalance_plan(
         "write_performed": False,
         "process_signal_sent": False,
         "candidate_count": len(normalized),
+        "solver_reclaim_required": inventory["solver_reclaim_required"],
         "selected_candidate": None,
         "blocking_candidate_ids": [],
     }
+    if not inventory["solver_reclaim_required"]:
+        return {
+            **base,
+            "action": BenchmarkRebalanceAction.HOLD.value,
+            "reason_codes": ["solver_capacity_at_or_below_target"],
+            "lowest_reclaim_priority": None,
+            "runner_action_required": False,
+        }
     if not contenders:
         return {
             **base,
@@ -163,7 +185,10 @@ def build_benchmark_rebalance_plan_from_inventory(
     inventory: Mapping[str, Any],
 ) -> dict[str, Any]:
     normalized = normalize_benchmark_rebalance_inventory(inventory)
-    return build_benchmark_rebalance_plan(normalized["candidates"])
+    return build_benchmark_rebalance_plan(
+        normalized["candidates"],
+        solver_reclaim_required=normalized["solver_reclaim_required"],
+    )
 
 
 def render_benchmark_rebalance_plan_markdown(payload: Mapping[str, Any]) -> str:
