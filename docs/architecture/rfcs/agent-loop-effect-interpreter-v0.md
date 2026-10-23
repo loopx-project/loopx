@@ -708,48 +708,127 @@ occupies context. Historical incomplete inputs are not an efficiency baseline.
 
 The next slice stays within the existing three convergence acceptances above:
 
-1. **Reduce ordinary quota input first.** The first delivery target is the
-   existing `quota should-run` packets actually consumed by solvers inside
-   benchmark cases. Operator/control-plane and personal maintenance packets are
-   secondary; do not use their size as evidence of solver input. Solvers should
-   benefit without opting into TurnEnvelope or a new host protocol. Start
-   with measured, lossless repetition in the emitted packet, then qualify the
-   structured required-context projection. Demonstrate the reduction on the same
-   captured decisions and actual caller read path, counting necessary follow-up
-   reads. A smaller stored capture, an import cleanup or a different transport
-   name does not establish lower model input.
-2. **Converge along that delivery path.** Reuse the interaction/work-context and
-   TurnEnvelope TypeScript owners while reducing ordinary quota costs. Preserve
-   existing invocation, selection/guard, settlement and detail routes; qualify
-   compatibility for any compact representation. This slice requires no new CLI
-   read route or host baseline protocol. Characterize real callers before
-   retiring duplicate Python projections; retain Python source IO, required
-   reads, original capture identity and host effect ownership. Compare complete
-   execution facts and signatures against the same captured inputs, including
-   historical compatibility. Measure transport and local computation: moving a
-   small helper across runtimes can add more cost than it removes.
-3. **Cold-start requirements.** Treat mixed Todo history and acceptance
-   explanations at their structured owner before deciding what can become
-   optional detail. Do not infer obsolete requirements from age, owner, status,
-   headings or length. Keep earlier commitments, global constraints, source
-   provenance and late stop/correction clauses. Changing which information is
-   mandatory requires explicit clause and negative-case qualification; moving
-   a mandatory body behind a reference and reading it all back is not a saving.
-   Replacing accumulated notes with a shorter latest note is a state change,
-   not packet compression; preserve historical requirements during writeback.
-4. **Proven retained-context reuse.** Separately evaluate exact reuse of unchanged
-   required context when the host can establish that the same session still
-   retains the previously consumed baseline. This research is not a prerequisite
-   for ordinary quota reductions. File existence, a prior hash or an old delivery
-   receipt alone cannot establish retention. Compaction, restart, missing/corrupt
-   evidence or unknown retention falls back to complete current requirements.
-   Always project current action, admission, scope, cancellation, claim/lease and
-   settlement conditions; prior context grants no fresh authority. Exact
-   reconstruction is necessary but does not prove model adoption.
+1. **Make full-first, subtree-delta delivery the convergence target.** Prioritize
+   ordinary `quota should-run` input actually consumed by benchmark case solvers;
+   operator/control-plane and personal maintenance packets are secondary. The
+   shared projection delivers complete context on first use and exact changed
+   subtrees on supported warm turns. Solvers need not switch to TurnEnvelope.
+   In-packet deduplication and cold-start reduction complement this work; a
+   succession of small cleanups must not substitute for qualifying the repeated
+   input path. A smaller stored capture or import cleanup proves no model saving.
+2. **One projection owner, two transport consumers.** Extend the existing typed
+   interaction/work-context owner for full and delta context; quota and
+   TurnEnvelope consume it. Preserve original capture, required-source checks,
+   invocation, selection, settlement and detail routes. Python retains source IO;
+   hosts retain their effects and context-continuity observation. No independent
+   admission service, diff daemon or Python context-decision owner is needed.
+   Characterize callers and remove replaced projections after adoption. A host
+   transport acknowledgement before output is released proves neither complete
+   model delivery nor retained context. Existing capture/handoff is an integration
+   seam, not an already implemented continuity contract.
+3. **Retain full current authority and cold-start requirements.** Every response
+   supplies fresh identity, action, admission, scope/approval/stop conditions,
+   cancellation, selection, claim/lease, unresolved reads and settlement/scheduler
+   obligations. Only allowlisted source payloads are eligible for reuse;
+   current control results remain full even when their bytes are unchanged.
+   Reused requirement text remains binding, including its textual stop clauses;
+   it is neither a summary nor optional background. Preserve complete original
+   requirements in the reconstructed context. Treat
+   mixed Todo history and acceptance explanations at their structured owner
+   before changing mandatory reads. Age, owner, status, headings or length cannot
+   establish obsolescence. Moving mandatory text behind a reference and reading
+   it all back is not a saving; replacing accumulated notes changes state rather
+   than compressing delivery.
+4. **Automatic full fallback, with no new human gate.** The host supplies an
+   explicit context-continuity basis for the previously completely delivered
+   projection. Bind it to Goal/Agent, consumer session and context epoch,
+   projection version, source capture and projection digest. A file, matching
+   hash or past receipt alone is insufficient. Compaction, reset, restart without
+   proven continuity, delivery truncation, corruption, identity/version mismatch
+   or unknown retention selects the complete current projection automatically.
+   No approval, confirmation question, extra quota admission or quota debit is
+   introduced. Existing genuine stop and unavailable-source rules still apply.
+
+**Incremental delivery design for review (not implemented).** The first complete
+implementation slice must include the shared projection, an actual ordinary-CLI
+consumer and its full fallback. A standalone diff helper is insufficient.
+
+| Boundary | Proposed behavior |
+|---|---|
+| Baseline owner | The host tracks complete model-input delivery and context continuity. The typed projection validates the supplied binding and computes the delta; it cannot infer retention from storage. Unsupported hosts continue full delivery. No model self-attestation is required. |
+| Full capture | Retain the immutable complete current decision for audit, signatures and same-capture recovery. A delta is a presentation, never a new authority store or mutation patch against Goal state. |
+| Delta unit | Initially compare JSON object subtrees exactly, preserving scalar types, missing versus null, empty values and full strings. Replace changed arrays atomically; do not infer element identity or equivalence from prose. State removals explicitly. Give base/target identities and digests once, with readable paths and changed values; avoid nested reference chains and instructions that require the model to reconstruct the entire JSON mechanically. |
+| Consumer recovery | Missing or mismatched baseline, skipped/out-of-order delta or truncated delivery returns the full current projection from the original capture, without rerunning admission. A lost delta is never acknowledged as the next baseline. Reset the baseline after full delivery; bound incremental ancestry with a full refresh rather than an ever-growing patch chain. Source freshness and authority are still checked before execution; presentation recovery cannot revive a stale or cancelled decision. |
+| CLI adoption | Keep the ordinary quota entrypoint and existing capture/detail route. A host that can observe the active model context passes the optional baseline binding at that transport boundary. A bare CLI with no continuity observer returns full context; it must not silently trust a previous output file. Exact argument/wire shape follows caller characterization, not a new command family. |
+| Turn adoption | Consume the same full/delta context owner while retaining Turn signatures and outer-executor effects. Host-only settlement execution remains distinct from a manual CLI agent's executable settlement obligations. |
+| Choice of representation | Emit a delta only when it is smaller after binding/removal metadata. Otherwise emit full context. Do not truncate values or change source selection to meet a byte target. |
+
+**Source and change boundaries.** Start with registered complete Goal narrative,
+canonical acceptance requirement bodies and selected Todo text/notes, retaining
+their exact strings and source identity. Eligibility comes from the existing
+source adapter and typed field contract, never a classifier of sentence meaning.
+Keep current source revision, completeness, failures, status/claim, user gates,
+adoption and other execution-control fields in the fresh portion. An unknown or
+mixed source without a qualified split stays full. Give each known source slot
+a stable key derived from its existing source kind and canonical entity identity;
+ambiguous or duplicate identities fall back to full. Do not compare the whole
+`sources` array as one unit: a changing authority revision must not resend an
+unchanged requirement body. Inside a source payload, arrays remain atomic in
+the first version. A changed field is replaced completely, including any late
+constraint; deleted fields have explicit removal paths. The owner reconstructs
+and compares against the complete target before releasing a delta.
+
+**First real consumer and the compaction race.** The current native Codex CLI
+session adapter observes session identity; its capture/handoff release occurs
+before stdout delivery. Neither supplies the required model-input continuity
+proof. Reading saved native history or observing compaction after the model
+request is also too late. The proposed first consumer therefore needs an
+adapter at the existing host's model-input assembly boundary, with these
+properties before incremental delivery is enabled:
+
+1. Invalidate the context epoch on compaction, pruning, restore, fork or unknown
+   continuity, and observe complete output delivery rather than file creation.
+2. Bind the candidate presentation to the original capture and expected baseline.
+   Immediately before submitting model input, recheck that epoch and baseline
+   under the same ordering boundary. If either moved, substitute the full
+   projection from that capture. A CLI-output callback alone is insufficient.
+3. Advance the baseline only after that exact presentation has entered the
+   active model input intact. Failure or uncertain acknowledgement leaves the
+   previous baseline unconfirmed; the next request sends full context. This
+   transport acknowledgement proves delivery, never model understanding.
+
+This is a host-adapter qualification, not an Agent or owner question. Until the
+actual host exposes that boundary, its ordinary CLI stays full automatically;
+do not claim that an all-full pilot validates incremental savings. Do not disable
+native compaction to manufacture continuity or add a second model runner merely
+for this optimization. Use a paired host-boundary prototype to establish whether
+the existing transport can support the adapter; a negative result keeps basic
+packet reductions useful and records the concrete missing integration.
+
+| Situation | Automatic representation and effect behavior |
+|---|---|
+| First call or unsupported host | Full current control and complete context; establish no trusted warm baseline from an output file alone. |
+| Same epoch, confirmed baseline, smaller delta | Fresh control plus changed source subtrees and removals; unchanged requirements retain their original force. |
+| Reset/compaction between guard and model dispatch | Invalidate and replace the candidate delta with the same-capture full projection before dispatch; no new admission or spend. |
+| Missing, corrupt, truncated or out-of-order delivery | Invalidate the affected baseline and recover full from the original capture. If the host cannot deliver that body intact, use the existing complete-read path and do not acknowledge a warm baseline. |
+| Source unavailable or authority changed | Preserve the existing refusal/fresh-guard rule; a stored full capture cannot manufacture current permission. |
+| Delta metadata costs more than full | Send full; do not clip values, enlarge limits or ask the owner to choose. |
+
+**Delivery order and review boundary.** Independently reviewable basic packet
+reductions feed the existing integration test first. This design does not hold
+that test waiting for a new protocol. After design review, qualify one real
+benchmark consumer and same-capture fallback, then reuse the same owner in the
+Turn transport and retire replaced projection branches. Frozen campaigns retain
+their source/treatment; qualify new delivery on replay and an explicitly admitted
+subsequent run. This is a scoped design proposal, not runtime authorization or a
+new owner-approval workflow.
 
 Qualification compares matched normal, replan and wait/recovery workloads with
 optional capability modes unchanged. Include first delivery, warm reuse, reset,
-source/identity mismatch and late requirement changes. Measure initial plus
+deletion, array reordering, lost/duplicated/out-of-order deltas, partial output,
+source/identity mismatch and late requirement changes. Reconstruction must equal
+the complete current projection, and fresh control facts must never be omitted.
+Measure initial plus
 follow-up model input, context occupancy, cache/non-cache and complete cost,
 read count, latency and IO, then verify the subsequent action and accepted
 outcome. Keep exactly-once effects and required-source refusal as hard constraints.
