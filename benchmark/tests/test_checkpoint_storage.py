@@ -50,7 +50,9 @@ def test_full_export_preserves_linux_sibling_names(controllers, writer, tmp_path
                f"[(Path('/data') / name).write_text(value) for name,value in {names!r}.items()]")
     assert container.exec_run(["python", "-c", command]).exit_code == 0
     destination = tmp_path / "sealed"
-    result = capture_worker(files[0], token=register(source, url), capture_id="a" * 32,
+    capture_id = "a" * 32
+    native_token = register(source, url)
+    result = capture_worker(files[0], token=native_token, capture_id=capture_id,
                             destination=destination, request_file=request, timeout=30)
     for name, value in names.items():
         assert (destination / "components/native_capsule" / name).read_text() == value
