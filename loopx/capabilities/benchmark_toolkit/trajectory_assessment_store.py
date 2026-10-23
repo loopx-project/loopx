@@ -142,6 +142,21 @@ def _usage_capture(
             payload = {k: payload[k] for k in ("id", "forked_from_id") if k in payload}
         elif event.get("type") == "token_usage_record":
             payload = _request_usage_record(payload)
+        elif event.get("type") == "loopx_input_token_attribution":
+            # Optional host measurement, not a tokenizer or prose classifier.
+            # Preserve only binding/counts; raw prompts and packet text stay private.
+            payload = {
+                key: payload[key] if isinstance(payload[key], str) else None
+                for key in (
+                    "method", "thread_id", "session_id", "turn_id",
+                    "root_turn_id", "response_id",
+                ) if key in payload
+            } | {
+                key: payload[key] if type(payload[key]) is int else None
+                for key in (
+                    "input_tokens", "loopx_input_tokens", "loopx_cached_input_tokens",
+                ) if key in payload
+            }
         elif event.get("type") == "compacted":
             payload = {
                 "compaction_response_id": payload.get("compaction_response_id")

@@ -1116,3 +1116,65 @@ def test_observed_usage_real_cli_without_model_dispatch(pack):
     assert view['solver_usage']['projection']['incomplete_turn']['usage']['input_tokens'] == 40
     assert inspect_pack(**scope, pack_id=record['pack_id'])['job'] is None
     assert not list(scope['runtime_root'].rglob('receipt.json'))
+
+
+@pytest.mark.parametrize("coverage", ["complete", "partial", "conflicting", "invalid_cache"])
+def test_loopx_input_attribution_real_transport_and_privacy(pack, monkeypatch, coverage):
+    import loopx.capabilities.benchmark_toolkit.trajectory_assessment_store as store
+
+    scope, _, old, input_path, sources, _ = pack
+    rows = [json.loads(line) for line in _request_usage_fixture().splitlines()]
+    annotations = []
+    for response, turn, total, loopx, cached in [
+        ("one", "a", 100, 20, 12), ("compact", "a", 20, 5, 4),
+        ("two", "b", 40, 15, 10),
+    ]:
+        annotations.append(dict(type="loopx_input_token_attribution", payload=dict(
+            method="provider_input_token_attribution_v1", response_id=response,
+            session_id="solver-session", thread_id="solver-session", turn_id=turn,
+            root_turn_id=turn, input_tokens=total, loopx_input_tokens=loopx,
+            loopx_cached_input_tokens=cached,
+            raw_packet="SYNTHETIC-PRIVATE-PACKET-DO-NOT-TRANSPORT")))
+    if coverage == "partial":
+        annotations = annotations[:1]
+    if coverage == "conflicting":
+        conflict = json.loads(json.dumps(annotations[0]))
+        conflict["payload"]["loopx_input_tokens"] = 21
+        annotations.append(conflict)
+    if coverage == "invalid_cache":
+        annotations[0]["payload"]["loopx_cached_input_tokens"] = True
+    path = sources / "usage.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in [*rows, *annotations]) + "\n")
+    original = path.read_bytes()
+    actual = store.effect_runtime_result
+    transported = []
+
+    def observe(command, params, **kwargs):
+        if command == "benchmark.trajectory.codex-usage":
+            transported.append(params)
+        return actual(command, params, **kwargs)
+
+    monkeypatch.setattr(store, "effect_runtime_result", observe)
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Synthetic attributed input", usage_jsonl="usage.jsonl", usage_session_id="solver-session")
+    assert registered["analysis_key"] == old["analysis_key"]
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    usage = view["solver_usage"]["projection"]
+    assert usage["input_tokens"] == 140
+    assert usage["request_coverage"]["status"] == "verified"
+    attribution = usage["loopx_input"]
+    assert attribution["status"] == ("unavailable" if coverage in {"conflicting", "invalid_cache"} else coverage)
+    if coverage == "complete":
+        assert attribution["loopx_input_tokens"] == 40
+        assert attribution["total_input_tokens"] == 160
+        assert attribution["input_fraction"] == 0.25
+        assert attribution["uncached_input_fraction"] == 0.2
+    elif coverage == "partial":
+        assert attribution["input_fraction"] is None
+        assert attribution["input_fraction_bounds"] == [0.125, 0.5]
+    else:
+        assert "input_fraction" not in attribution
+    assert transported and "SYNTHETIC-PRIVATE-PACKET" not in json.dumps(transported)
+    assert path.read_bytes() == original
+    assert view["job"] is None and view["result"] is None
+    assert "loopx_input" not in inspect_pack(**scope, pack_id=old["pack_id"]).get("solver_usage", {}).get("projection", {})

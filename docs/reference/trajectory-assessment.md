@@ -686,3 +686,65 @@ existing TypeScript owner; replacement history and response text are excluded.
 Registration retains the source hash, and changed or missing sources mark the
 saved capture historical. Re-registering a source with this additional
 projection can create a new pack identity; old packs are never rewritten.
+
+### LoopX packet share of model input
+
+Research → Sources and usage also exposes **LoopX input share**. For the same
+reconciled requests and capture window, the metric is:
+
+`sum(LoopX packet input tokens) / sum(all request input tokens)`
+
+Both include cached input. Reprocessed packet context counts in each request;
+duplicate receipts and compaction mirrors count once. A compaction request is
+not automatically all LoopX input. The separate uncached share requires an
+explicit cache attribution, rather than charging every LoopX token as uncached.
+This is a measured resource share, not a percentage loss of task effectiveness,
+avoidable time, monetary cost or LoopX's causal impact. Compare native outcomes
+and complete costs separately; a lower packet share alone is not an improvement.
+
+The existing frozen usage JSONL import accepts an optional **host-produced
+attribution receipt**, bound to a native `token_usage_record` in the same
+capture. For example, a synthetic receipt for a request with 100 input tokens:
+
+```json
+{"type":"loopx_input_token_attribution","payload":{
+  "method":"provider_input_token_attribution_v1",
+  "session_id":"synthetic-session","thread_id":"synthetic-session",
+  "turn_id":"synthetic-turn","root_turn_id":"synthetic-turn",
+  "response_id":"synthetic-response",
+  "input_tokens":100,"loopx_input_tokens":20,"loopx_cached_input_tokens":12
+}}
+```
+
+The host is responsible for classifying the actual delivered packet spans and
+counting them on the **same provider token basis** as that request's input.
+Count each span once even when several LoopX components describe it. References
+or packets emitted but not consumed are not processed input. Do not classify
+arbitrary prose or commands as LoopX usage by substring matching, divide byte or
+character counts into estimated tokens, or append invented receipts to original
+client logs. A recorder may export an immutable annotated capture; preserve the
+original log separately. The import validates identities and arithmetic, not
+the truth of a host's attribution or its billing completeness. Raw prompts,
+packet text and account metadata never cross the counter transport.
+
+This reader does **not** add instrumentation to Codex or reconstruct attribution
+from historical counters. Existing Codex captures without these receipts retain
+their exact saved projection and show **uncaptured**, not zero. Hosts capable of
+producing attribution use the existing `--usage-jsonl` registration path; no
+model call, second accounting store or new configuration is introduced.
+
+The TypeScript usage owner adds `solver_usage.projection.loopx_input` only when
+receipts are present. Every receipt must bind the original session, response,
+Turn/root identity and input total. Counts must fit the native input/cache
+subsets; conflicts withhold only attribution, leaving valid session and request
+counters intact. Complete coverage shows the ratio. Partial coverage retains
+the attributed request/input denominators and withholds the whole-window ratio;
+its optional bounds allocate missing request input as none/all LoopX, **not a
+confidence interval**. Zero input has an undefined ratio. Missing cache
+attribution keeps the uncached ratio unknown. Source changes retain historical
+values with the existing warning and never borrow another pack's measurement.
+
+中文：同一请求窗口内，LoopX packet 的实际输入 token 总量除以全部输入 token 总量，
+含缓存；重复处理按请求计量，重复回执不重复记账。需要宿主真实归因，现有历史计数
+不能反推 packet token；未采集、部分覆盖与真实零分开。比例是结构开销，不能单独
+当作净效率损失、可避免成本或因果贡献。普通阅读不调用模型。

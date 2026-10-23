@@ -74,7 +74,20 @@ export interface TrajectorySolverUsage {
   limitations: string[];
   /** Supplementary reconciliation, never a replacement for the session-counter basis. */
   request_coverage?: TrajectoryRequestCoverage;
+  /** Explicit host-supplied token attribution, never inferred from packet text or bytes. */
+  loopx_input?: TrajectoryLoopXInput;
 }
+
+export type TrajectoryLoopXInput = {
+  method: 'provider_input_token_attribution_v1';
+} & ({status: 'complete' | 'partial'; attributed_requests: number; total_requests: number;
+  attributed_input_tokens: number; total_input_tokens: number; loopx_input_tokens: number;
+  loopx_cached_input_tokens: number | null;
+  /** Whole-capture shares remain unknown until every request has attribution. */
+  input_fraction: number | null; uncached_input_fraction: number | null;
+  /** Possible allocation of missing requests, not a statistical confidence interval. */
+  input_fraction_bounds: [number, number] | null;
+} | {status: 'unavailable'; reason: string});
 
 export interface TrajectoryRequestTokens {
   input_tokens: number; cached_input_tokens: number; cache_write_input_tokens: number;

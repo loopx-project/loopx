@@ -92,6 +92,9 @@
 .research-usage-tail { border-inline-start: 2px solid var(--pw-caution); padding-inline-start: 16px; margin-block: 20px; }
 .research-usage-tail strong { font-weight: 500; color: var(--pw-text); }
 .research-request-coverage { border-block-start: 1px solid var(--pw-line); padding-block-start: 16px; margin-block: 20px; }
+.research-input-share-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; }
+.research-input-share-value strong { font-size: var(--text-title); font-variant-numeric: tabular-nums; }
+.research-input-share-value > span { color: var(--pw-muted); }
 .research-request-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; margin-block: 12px; }
 .research-request-values > div { min-width: 0; }
 .research-request-values dt { font-size: var(--text-body); color: var(--pw-muted); }
