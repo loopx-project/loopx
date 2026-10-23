@@ -519,6 +519,81 @@ function renderProtocolActionPacketSummary(fields: JsonObject): string {
   }).join(" ");
 }
 
+/** One ordered field renderer for the original reader and compact reconstruction.
+ * Text has already crossed its own codec: Python codepoints/coercion for stored
+ * v0 input, existing compact text rules for the derived witness. Do not substitute
+ * one source for the other; their differences are signed as residue.
+ */
+function orderedProtocolActionFields(
+  actor: string, userRequired: boolean, agentRequired: boolean, quiet: boolean,
+  metadata: JsonObject, hasUserActions: boolean, userAction: unknown, actionValue: unknown,
+): JsonObject {
+  const fields: JsonObject = {
+    actor, user_action_required: userRequired,
+    agent_action_required: agentRequired, quiet_noop_allowed: quiet,
+  };
+  for (const key of ["lane", "automation", "scheduler", "pause_allowed"]) {
+    if (Object.hasOwn(metadata, key)) fields[key] = metadata[key];
+  }
+  fields.llm = PROTOCOL_ACTION_PACKET_LLM_POLICY;
+  const actionKey = agentRequired || !userRequired ? "agent_action" : "user_action";
+  if (hasUserActions && actionKey !== "user_action") {
+    fields.user_action_pending = true;
+    if (userAction) fields.user_action = userAction;
+  }
+  if (actionValue) fields[actionKey] = actionValue;
+  return fields;
+}
+
+function originalProtocolActionPacketFields(value: unknown): JsonObject {
+  const inputs = requireJsonObject(value, "turn envelope protocol_action_inputs");
+  const agent = object(inputs.agent_channel);
+  const hasFlags = ["must_attempt", "delivery_allowed", "quiet_noop_allowed"]
+    .every((key) => typeof agent[key] === "boolean");
+  const userRequired = inputs.user_required === true;
+  const blockedWait = inputs.blocked_wait === true;
+  const scopedFallback = inputs.scoped_user_gate_fallback === true;
+  const mustAttempt = hasFlags ? agent.must_attempt === true : inputs.must_attempt_work === true || blockedWait;
+  const delivery = hasFlags ? agent.delivery_allowed === true : inputs.delivery_allowed === true;
+  const quiet = hasFlags ? agent.quiet_noop_allowed === true : !userRequired && !mustAttempt && !scopedFallback;
+  let actor = "agent";
+  let agentRequired = true;
+  let action: unknown;
+  if (userRequired && (scopedFallback || mustAttempt && delivery)) {
+    actor = "agent_with_user_gate";
+    action = inputs.candidate_action || (scopedFallback
+      ? "surface the scoped user gate, then advance one non-gated fallback"
+      : "advance scope-bounded work with validation");
+  } else if (userRequired) {
+    actor = "user";
+    agentRequired = false;
+    action = inputs.has_owner_action === true ? inputs.owner_action
+      : "wait for user/owner action after surfacing the blocker or gate";
+  } else if (blockedWait) {
+    action = "record one no-spend blocked-successor wait observation, then rerun quota";
+  } else if (mustAttempt && inputs.monitor_only === true) {
+    action = inputs.work_lane_action || "attempt the due monitor and write back only a material transition";
+  } else if (mustAttempt) {
+    action = inputs.outcome_floor_recovery === true
+      ? text("produce the required outcome-floor evidence artifact or write the concrete blocker", 80)
+      : inputs.candidate_action || "advance scope-bounded work with validation";
+  } else {
+    agentRequired = false;
+    action = inputs.monitor_action || "quiet no-op; no material transition";
+  }
+  if (!agentRequired && userRequired && inputs.has_user_actions === true) action = inputs.user_action;
+  return orderedProtocolActionFields(actor, userRequired, agentRequired, quiet,
+    object(inputs.metadata), inputs.has_user_actions === true, inputs.user_action, action);
+}
+
+function requestedProtocolActionFields(request: JsonObject): JsonObject {
+  // Older in-process TS callers already supply the original fields. Keep that
+  // boundary, while Python joins reconstruction to the same coarse transaction.
+  return Object.hasOwn(request, "protocol_action_inputs")
+    ? originalProtocolActionPacketFields(request.protocol_action_inputs)
+    : requireJsonObject(request.protocol_action_fields, "turn envelope protocol_action_fields");
+}
+
 function derivedProtocolActionPacketFields(
   action: JsonObject,
   user: JsonObject,
@@ -534,24 +609,12 @@ function derivedProtocolActionPacketFields(
   const actor = userRequired && ["scoped_user_gate_fallback", "bounded_delivery_with_user_notice"].includes(mode)
     ? "agent_with_user_gate"
     : userRequired ? "user" : "agent";
-  const fields: JsonObject = {
-    actor,
-    user_action_required: userRequired,
-    agent_action_required: agentRequired,
-    quiet_noop_allowed: Boolean(action.quiet_noop_allowed),
-  };
-  if (workLane.lane) fields.lane = workLane.lane;
-  if (automation.automation_action) fields.automation = automation.automation_action;
-  if (schedulerValue.action) fields.scheduler = schedulerValue.action;
-  if (automation.pause_allowed === false) fields.pause_allowed = false;
-  fields.llm = PROTOCOL_ACTION_PACKET_LLM_POLICY;
+  const metadata: JsonObject = {};
+  if (workLane.lane) metadata.lane = workLane.lane;
+  if (automation.automation_action) metadata.automation = automation.automation_action;
+  if (schedulerValue.action) metadata.scheduler = schedulerValue.action;
+  if (automation.pause_allowed === false) metadata.pause_allowed = false;
   const userActions = Array.isArray(user.actions) ? user.actions : [];
-  const actionKey = agentRequired || !userRequired ? "agent_action" : "user_action";
-  if (userActions.length > 0 && (!userRequired || actionKey !== "user_action")) {
-    fields.user_action_pending = true;
-    const userAction = text(userActions[0], 80);
-    if (userAction) fields.user_action = userAction;
-  }
   const actionValue = agentRequired
     ? action.primary_action
     : userRequired && userActions.length > 0
@@ -559,9 +622,9 @@ function derivedProtocolActionPacketFields(
     : workLane.obligation === "quiet_until_material_monitor_transition"
     ? "quiet until a material monitor transition, regression, or concrete blocker appears"
     : action.primary_action || "quiet no-op; no material transition";
-  const rendered = text(actionValue, 80);
-  if (rendered) fields[actionKey] = rendered;
-  return fields;
+  return orderedProtocolActionFields(actor, userRequired, agentRequired,
+    Boolean(action.quiet_noop_allowed), metadata, userActions.length > 0,
+    text(userActions[0], 80), text(actionValue, 80));
 }
 
 function contractCapsule(
@@ -1005,10 +1068,7 @@ function coldPath(
 export function buildTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const payload = requireJsonObject(request.payload, "turn envelope payload");
-  const protocolActionFields = requireJsonObject(
-    request.protocol_action_fields,
-    "turn envelope protocol_action_fields",
-  );
+  const protocolActionFields = requestedProtocolActionFields(request);
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError(
       "turn envelope scheduler_execution_args must be a string",
@@ -1093,6 +1153,7 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (operation === "protocol_fields") return originalProtocolActionPacketFields(request.protocol_action_inputs);
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "replan_settlement_identity") return {identity: turnEnvelopeReplanSettlementIdentity(
@@ -1104,10 +1165,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "quota_signature") {
     return quotaActionSignatureDocument(
       request.payload,
-      requireJsonObject(
-        request.protocol_action_fields,
-        "turn envelope protocol_action_fields",
-      ),
+      requestedProtocolActionFields(request),
     );
   }
   throw new EffectRuntimeRequestError("turn envelope operation is unsupported");

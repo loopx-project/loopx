@@ -41,18 +41,15 @@ def _turn_envelope_result(
     return dict(result)
 
 
-def _protocol_action_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _protocol_action_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Reconstruct guidance only for a historical protocol packet witness."""
 
     packet = payload.get("protocol_action_packet")
     if not isinstance(packet, Mapping) or not packet:
-        return {}
-    # Current quota decisions already carry the typed interaction contract.
-    # Keep the retired packet's Python reader off their projection path; the
-    # TS owner still validates and preserves historical witnesses when present.
-    from ..work_items.interaction_contract import protocol_action_packet_fields
+        return {"protocol_action_fields": {}}
+    from ..work_items.interaction_contract import protocol_action_packet_inputs
 
-    return protocol_action_packet_fields(dict(payload))
+    return {"protocol_action_inputs": protocol_action_packet_inputs(dict(payload))}
 
 
 def turn_envelope_action_signature_document(
@@ -68,7 +65,7 @@ def quota_action_signature_document(payload: Mapping[str, Any]) -> dict[str, Any
     return _turn_envelope_result(
         "quota_signature",
         payload=dict(payload),
-        protocol_action_fields=_protocol_action_fields(payload),
+        **_protocol_action_projection(payload),
     )
 
 
@@ -104,7 +101,7 @@ def build_turn_envelope(
     return _turn_envelope_result(
         "build",
         payload=dict(payload),
-        protocol_action_fields=_protocol_action_fields(payload),
+        **_protocol_action_projection(payload),
         scheduler_execution_args=scheduler_execution_args,
         **({"captured_decision_path": captured_decision_path}
            if captured_decision_path is not None else {}),

@@ -53,6 +53,16 @@ with today's action text. Missing/mismatched signatures and changed signed
 fields still fail host admission. Successful historical readback does not
 re-authorize a stale task or bypass fresh receipt, lease or capability checks.
 
+The original field selection and ordered assembly are owned by the TypeScript
+Turn reader. Python retains the compatibility API and shared user/primary-action
+providers, including its original scalar, whitespace and codepoint conversion.
+The ordinary builder carries those inputs in its existing coarse transaction;
+packet-free inputs do not load or run the historical providers. Original fields
+and compact-derived fields still remain distinct inputs to residue verification.
+The Python API preserves original metadata values and insertion order; crossing
+JSON must not turn a rendered `1.0` into `1`. Its standalone compatibility call
+uses the same reader operation, not a second field-selection implementation.
+
 ## Qualification and Rollback
 
 The committed historical fixture is produced by actual v1.1.0 source

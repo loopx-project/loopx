@@ -62,7 +62,6 @@ from .user_action_frontier import user_action_owns_empty_agent_lane
 
 INTERACTION_CONTRACT_SCHEMA_VERSION = "loopx_interaction_contract_v0"
 INTERACTION_RESPONSE_PLAN_SCHEMA_VERSION = "interaction_response_plan_v0"
-PROTOCOL_ACTION_PACKET_LLM_POLICY = "no_api"
 AUXILIARY_MONITOR_POLL_CLI_SCHEMA_VERSION = "auxiliary_monitor_poll_cli_v0"
 AUXILIARY_MONITOR_OBSERVATION_INPUT_SCHEMA_VERSION = (
     "auxiliary_monitor_observation_input_v0"
@@ -301,163 +300,70 @@ def attach_user_action_compat_fields(payload: dict[str, Any]) -> None:
     payload["open_count"] = open_todo_count(payload.get("user_todo_summary"))
 
 
-def protocol_action_packet_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the ordered semantic fields rendered by protocol_action_packet_v0."""
+def protocol_action_packet_inputs(payload: dict[str, Any]) -> dict[str, object]:
+    """Read shared providers and preserve Python's v0 coercion at the boundary.
 
-    execution_obligation = (
-        payload.get("execution_obligation")
-        if isinstance(payload.get("execution_obligation"), dict)
-        else {}
-    )
-    work_lane = (
-        payload.get("work_lane_contract")
-        if isinstance(payload.get("work_lane_contract"), dict)
-        else {}
-    )
-    automation_liveness = (
-        payload.get("automation_liveness")
-        if isinstance(payload.get("automation_liveness"), dict)
-        else {}
-    )
-    scheduler_hint = (
-        payload.get("scheduler_hint")
-        if isinstance(payload.get("scheduler_hint"), dict)
-        else {}
-    )
-    requires_user_action = user_channel_action_required(payload)
-    blocked_successor_wait_observation = (
-        _blocked_successor_wait_observation_required(payload)
-    )
+    These are historical reconstruction inputs, never current action authority.
+    The Turn owner selects fields/actor; shared user/primary-action providers stay
+    shared with modern callers. No per-field runtime calls are introduced here.
+    """
+    def source(key: str) -> dict[str, object]:
+        value = payload.get(key)
+        return value if isinstance(value, dict) else {}
+
+    obligation = source("execution_obligation")
+    lane = source("work_lane_contract")
+    automation = source("automation_liveness")
     contract = payload.get("interaction_contract")
-    contract_agent = (
-        contract.get("agent_channel")
-        if isinstance(contract, Mapping)
-        and isinstance(contract.get("agent_channel"), Mapping)
-        else {}
-    )
-    if all(
-        type(contract_agent.get(field)) is bool
-        for field in ("must_attempt", "delivery_allowed", "quiet_noop_allowed")
-    ):
-        must_attempt_work = contract_agent["must_attempt"]
-        delivery_allowed = contract_agent["delivery_allowed"]
-        quiet_noop_allowed = contract_agent["quiet_noop_allowed"]
-    else:
-        must_attempt_work = bool(execution_obligation.get("must_attempt_work")) or (
-            blocked_successor_wait_observation
-        )
-        delivery_allowed = bool(
-            execution_obligation.get(
-                "delivery_allowed",
-                payload.get("normal_delivery_allowed")
-                or payload.get("recovery_delivery_allowed")
-                or payload.get("self_repair_allowed"),
-            )
-        )
-        quiet_noop_allowed = (
-            not requires_user_action
-            and not must_attempt_work
-            and not isinstance(payload.get("scoped_user_gate_fallback"), dict)
-        )
-    scoped_user_gate_fallback = isinstance(payload.get("scoped_user_gate_fallback"), dict)
-    bounded_delivery_with_user_notice = (
-        requires_user_action
-        and not scoped_user_gate_fallback
-        and must_attempt_work
-        and delivery_allowed
-    )
-
+    agent = contract.get("agent_channel") if isinstance(contract, Mapping) else None
+    user_required = user_channel_action_required(payload)
+    blocked_wait = _blocked_successor_wait_observation_required(payload)
     user_actions = projected_user_channel_actions(payload)
-
-    if requires_user_action and scoped_user_gate_fallback:
-        primary_actor = "agent_with_user_gate"
-        agent_action_required = True
-        agent_action = _protocol_first_candidate_action(payload) or (
-            "surface the scoped user gate, then advance one non-gated fallback"
-        )
-    elif bounded_delivery_with_user_notice:
-        primary_actor = "agent_with_user_gate"
-        agent_action_required = True
-        agent_action = _protocol_first_candidate_action(payload) or "advance scope-bounded work with validation"
-    elif requires_user_action:
-        primary_actor = "user"
-        agent_action_required = False
-        capability_gate = (
-            payload.get("capability_gate")
-            if isinstance(payload.get("capability_gate"), dict)
-            else {}
-        )
-        agent_action = (
-            capability_gate.get("owner_action")
-            if capability_gate.get("action") == "ask_owner"
-            and capability_gate.get("owner_action")
-            else "wait for user/owner action after surfacing the blocker or gate"
-        )
-    elif blocked_successor_wait_observation:
-        primary_actor = "agent"
-        agent_action_required = True
-        agent_action = (
-            "record one no-spend blocked-successor wait observation, then rerun quota"
-        )
-    elif must_attempt_work and payload.get("agent_work_mode") == "monitor_only":
-        primary_actor = "agent"
-        agent_action_required = True
-        agent_action = (
-            protocol_action_text(work_lane.get("action"), limit=220)
-            or "attempt the due monitor and write back only a material transition"
-        )
-    elif must_attempt_work:
-        primary_actor = "agent"
-        agent_action_required = True
-        if str(execution_obligation.get("kind") or "") == "outcome_floor_recovery":
-            agent_action = (
-                "produce the required outcome-floor evidence artifact or write "
-                "the concrete blocker"
-            )
-        else:
-            agent_action = _protocol_first_candidate_action(payload) or "advance scope-bounded work with validation"
-    else:
-        primary_actor = "agent"
-        agent_action_required = False
-        agent_action = _protocol_monitor_action(payload) or "quiet no-op; no material transition"
-
-    action_key = (
-        "agent_action"
-        if agent_action_required
-        else "user_action"
-        if requires_user_action
-        else "agent_action"
-    )
-    action_value = (
-        agent_action
-        if agent_action_required
-        else user_actions[0]
-        if requires_user_action and user_actions
-        else agent_action
-    )
-    fields: dict[str, Any] = {
-        "actor": primary_actor,
-        "user_action_required": requires_user_action,
-        "agent_action_required": agent_action_required,
-        "quiet_noop_allowed": quiet_noop_allowed,
+    metadata = {key: value for key, value in (
+        ("lane", lane.get("lane")),
+        ("automation", automation.get("automation_action")),
+        ("scheduler", source("scheduler_hint").get("action")),
+    ) if value}
+    if automation.get("pause_allowed") is False:
+        metadata["pause_allowed"] = False
+    gate = source("capability_gate")
+    return {
+        "agent_channel": {key: agent[key] if type(agent[key]) is bool else None for key in
+            ("must_attempt", "delivery_allowed", "quiet_noop_allowed") if key in agent}
+            if isinstance(agent, Mapping) else {},
+        "user_required": user_required,
+        "blocked_wait": blocked_wait,
+        "must_attempt_work": bool(obligation.get("must_attempt_work")),
+        "delivery_allowed": bool(obligation.get("delivery_allowed",
+            payload.get("normal_delivery_allowed") or payload.get("recovery_delivery_allowed")
+            or payload.get("self_repair_allowed"))),
+        "scoped_user_gate_fallback": isinstance(payload.get("scoped_user_gate_fallback"), dict),
+        "monitor_only": payload.get("agent_work_mode") == "monitor_only",
+        "outcome_floor_recovery": str(obligation.get("kind") or "") == "outcome_floor_recovery",
+        "metadata": metadata,
+        "has_user_actions": bool(user_actions),
+        "user_action": protocol_action_text(user_actions[0], limit=80) if user_actions else None,
+        "candidate_action": protocol_action_text(_protocol_first_candidate_action(payload), limit=80),
+        "monitor_action": protocol_action_text(_protocol_monitor_action(payload), limit=80),
+        "work_lane_action": protocol_action_text(lane.get("action"), limit=80),
+        "has_owner_action": gate.get("action") == "ask_owner" and bool(gate.get("owner_action")),
+        "owner_action": protocol_action_text(gate.get("owner_action"), limit=80)
+            if gate.get("action") == "ask_owner" and gate.get("owner_action") else None,
     }
-    if work_lane.get("lane"):
-        fields["lane"] = work_lane.get("lane")
-    if automation_liveness.get("automation_action"):
-        fields["automation"] = automation_liveness.get("automation_action")
-    if scheduler_hint.get("action"):
-        fields["scheduler"] = scheduler_hint.get("action")
-    if automation_liveness.get("pause_allowed") is False:
-        fields["pause_allowed"] = False
-    fields["llm"] = PROTOCOL_ACTION_PACKET_LLM_POLICY
-    if user_actions and (not requires_user_action or action_key != "user_action"):
-        fields["user_action_pending"] = True
-        text = protocol_action_text(user_actions[0], limit=80)
-        if text:
-            fields["user_action"] = text
-    text = protocol_action_text(action_value, limit=80)
-    if text:
-        fields[action_key] = text
+
+
+def protocol_action_packet_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility API for the ordered v0 fields, owned by the Turn reader."""
+    inputs = protocol_action_packet_inputs(payload)
+    fields = effect_runtime_result("quota.turn_envelope.evaluate", {
+        "operation": "protocol_fields",
+        "protocol_action_inputs": inputs,
+    })
+    # The Python read API keeps original scalar types (e.g. 1.0 rather than 1)
+    # and values. JSON transport alone cannot preserve those rendering details.
+    metadata = inputs["metadata"]
+    assert isinstance(metadata, dict)
+    fields.update(metadata)
     return fields
 
 
