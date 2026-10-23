@@ -38,7 +38,7 @@ export function maskTrajectoryDisplayText(text: string) {
   const masked = text.replace(/⟪LX\d+⟫|`[^`]*`|https?:\/\/[^\s<>]+|\b[a-fA-F0-9]{40,64}\b|[\w./:#%+−-]*\d[\w./:#%+−-]*(?:\s+(?:ms|μs|ns|s|sec|min|h|KiB|MiB|GiB|KB|MB|GB|TB|tokens|USD|CNY)\b)?|\p{Number}+|\b[A-Za-z]+(?:[_-][A-Za-z]+)+\b|\b[a-z]+[A-Z]\w*\b|[+−=<>≤≥-]/gu, literal => {
     protectedText.push(literal); return `⟪LX${protectedText.length - 1}⟫`;
   });
-  return {masked, restore(translated: unknown): string | null {
+  return {masked, literals: protectedText, restore(translated: unknown): string | null {
     if (typeof translated !== 'string' || !translated.trim() || translated.includes('\0')) return null;
     const tokens = translated.match(/⟪LX\d+⟫/g) ?? [];
     if (tokens.length !== protectedText.length || protectedText.some((_, i) => tokens.filter(t => t === `⟪LX${i}⟫`).length !== 1)) return null;

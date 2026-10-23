@@ -68,6 +68,15 @@ their masked text looks alike. Coverage still counts all original fields,
 including every historical revision. No text is summarized or truncated and no
 extra model call is created. The explicit encoding participates in the analysis
 identity; omission preserves already saved direct-field jobs and their failures.
+For captures with compact prose inside protected spans, use
+`"source_text_aliases_with_literals_v1"`. It retains the same alias mapping and
+exact-token checks, and supplies each row's protected original literals as
+read-only model context. The prompt asks for their meaning in the output
+language, with exact source terms retained, rather than leaving failure, loss or
+uncertainty opaque inside a placeholder. It grants no tools or source authority.
+This explicit encoding has a distinct analysis identity; prior direct and alias
+jobs remain unchanged. Context availability does not certify translation quality:
+read the resulting language and negative/uncertain claims, not only coverage.
 Translated prose is applied to decoded narrative fields; it is never serialized
 and reparsed as an Explore decision. Owner-format labels or list markers inside
 model text cannot change the original outcome, eligibility or list cardinality.

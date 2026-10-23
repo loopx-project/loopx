@@ -501,7 +501,7 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
-@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1"])
+@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1"])
 def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding):
     scope, _, _, input_path, sources, _ = pack
     data = json.loads(input_path.read_text())
