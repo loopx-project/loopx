@@ -1,9 +1,10 @@
 import {useEffect, useRef, useState} from "react";
 import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
-  changePrivateAgentTarget, changeOwnerNotifications, fetchChatProjects, fetchChatCapabilities, fetchLarkGroupChats, type PrivateConversation,
+  changePrivateAgentTarget, changeOwnerNotifications, prepareManagedSteward, fetchChatProjects, fetchChatCapabilities, fetchLarkGroupChats, type PrivateConversation,
   discoverBoundChatSession, type BoundConversationTarget,
   type ChatProject, type LarkApp, type PrivateConversationStopRecovery} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
+import {StewardManagedMode} from "./steward-managed-mode";
 import "./private-conversation.css";
 
 export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[]; onOpenOriginal?: (target: BoundConversationTarget) => void}) {
@@ -156,6 +157,9 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
       {row.recovery_count > 0 ? <p role="status">{zh ? "存在尚未确认的发送回执。服务会读取原回执恢复；不要重新发送同一任务。检查 App 登录、权限和原会话后刷新状态。" : "A send receipt is unconfirmed. The service reads the original receipt to recover; avoid resending the same task. Check this App login, permissions and original Session, then refresh status."}</p> : null}
       {!row.context_available ? <p role="alert">{zh ? "工作区授权已失效；请恢复原工作区或重新选择。旧会话不会移到其它工作区。" : "The workspace grant is unavailable. Restore the original workspace or select a new one; the old Session will not move."}</p> : null}
       {row.context_kind === "project" && row.audience !== "group" ? <PrivateAgentTargets row={row} revision={revision} zh={zh} busy={busy} act={act}/> : null}
+      {row.context_kind === "steward" && row.audience === "owner" && row.executor_endpoint_id === "codex"
+        ? <StewardManagedMode state={row.managed_steward} zh={zh} busy={busy} available={row.context_available}
+            onPrepare={() => void act(() => prepareManagedSteward(row.binding_id))}/> : null}
       {row.context_kind === "steward" && row.goal_scope !== "all_registered" ? <button disabled={busy || !row.context_available} onClick={() => void act(() => connectPrivateConversation(row.app_ref, row.project_ref, row.executor_endpoint_id, "steward"))} type="button">{zh ? "授权全部已注册工作" : "Authorize all registered work"}</button> : null}
       <button disabled={busy} onClick={() => void act(() => disconnectPrivateConversation(row.binding_id, revision))} type="button">{zh ? "解绑" : "Disconnect"}</button>
     </article>)}

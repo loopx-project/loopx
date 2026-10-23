@@ -3,6 +3,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
 import {normalizeProjectContext, normalizeStewardContext, normalizeStewardGoalScope} from "./conversation_scope.ts";
+import {bindStewardManagedActor, normalizeStewardManagedActor} from "./steward_managed_mode.ts";
 
 /** Core owns the context and audience grant. A provider supplies verified,
  * opaque identity observations; neither a message nor a model selects them.
@@ -154,6 +155,9 @@ function binding(value: unknown): JsonObject {
       throw new EffectRuntimeRequestError("ambiguous Agent target grant");
     }
   }
+  if (row.managed_actor !== undefined && (row.context_kind !== "steward" || group || row.executor_endpoint_id !== "codex")) {
+    throw new EffectRuntimeRequestError("managed identity requires a private native steward");
+  }
   return {
     schema_version: BINDING_SCHEMA, binding_id: ref(row.binding_id, "binding identity"),
     transport_ref: token(row.transport_ref, "transport reference"),
@@ -166,6 +170,7 @@ function binding(value: unknown): JsonObject {
     ...(row.context_kind === "steward" ? {goal_ids: normalizeStewardGoalScope(row.goal_ids),
       ...(row.goal_scope !== undefined ? {goal_scope: row.goal_scope} : {})} : {}),
     ...(agents.length ? {agent_targets: agents} : {}),
+    ...(row.managed_actor !== undefined ? {managed_actor: normalizeStewardManagedActor(row.managed_actor)} : {}),
   };
 }
 
@@ -270,6 +275,14 @@ export function planConversationBinding(params: JsonObject): JsonObject {
     const goals = normalizeStewardGoalScope([...(previous.goal_ids as string[]), goal.goal_id]);
     if (JSON.stringify(goals) === JSON.stringify(previous.goal_ids)) return {changed: false, state: current};
     rows = current.bindings.map(row => row.binding_id === id ? {...row, goal_ids: goals} : row);
+  } else if (params.operation === "bind_managed_actor") {
+    const id = ref(params.binding_id, "binding identity");
+    const previous = current.bindings.find(row => row.binding_id === id);
+    if (!previous) throw new EffectRuntimeRequestError("the original steward binding is unavailable");
+    const actor = bindStewardManagedActor({...params, binding: previous});
+    if (JSON.stringify(actor) === JSON.stringify(previous.managed_actor)) return {changed: false, state: current};
+    if (previous.managed_actor !== undefined) throw new EffectRuntimeRequestError("retain the original managed steward identity");
+    rows = current.bindings.map(row => row.binding_id === id ? {...row, managed_actor: actor} : row);
   } else if (params.operation === "disconnect") {
     const id = ref(params.binding_id, "binding identity");
     rows = current.bindings.filter(row => row.binding_id !== id);

@@ -104,6 +104,8 @@ class ChatConversationBindings:
                     if "goal_scope" in previous:
                         candidate["goal_scope"] = previous["goal_scope"]
                 candidate["binding_id"] = previous["binding_id"]
+                if previous.get("managed_actor") is not None:
+                    candidate["managed_actor"] = previous["managed_actor"]
             result = self._core("collaboration.conversation.binding", {
                 "current": current, "expected_revision": current.get("revision"), "operation": "configure",
                 "binding": candidate, "observation": observation, "available_projects": self.projects.available(),

@@ -2622,6 +2622,11 @@ const privateConversationSchema = z.object({
       pending_count: z.number().int(), unconfirmed_count: z.number().int(), failed_count: z.number().int()}),
     z.object({available: z.literal(false), error_code: z.string()}),
   ]).optional(),
+  managed_steward: z.discriminatedUnion("available", [
+    z.object({available: z.literal(true), prepared: z.boolean(), scheduling_enabled: z.literal(false),
+      goal_id: z.string().optional(), agent_id: z.string().optional(), session_id: z.string().optional()}),
+    z.object({available: z.literal(false), error_code: z.string()}),
+  ]).optional(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
 const privateConversationStopRecoverySchema = z.object({binding_id: z.string(), project_ref: z.string(),
@@ -2645,6 +2650,23 @@ export async function disconnectPrivateConversation(bindingId: string, revision:
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations", {
     method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision}),
   }));
+}
+
+const stewardPreparationSchema = z.object({ok: z.literal(true), applied: z.boolean(), plan: z.object({
+  schema_version: z.literal("loopx_steward_managed_mode_plan_v0"), plan_id: z.string().regex(/^[a-f0-9]{64}$/),
+  session_id: z.string(), goal_id: z.string(), already_prepared: z.boolean(),
+  scheduling_enabled: z.literal(false), model_invoked: z.literal(false),
+})});
+export async function prepareManagedSteward(bindingId: string) {
+  const path = "/api/chat/lark/private-conversations/managed-steward";
+  const send = (body: unknown) => requestJson<unknown>(path, {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const preview = stewardPreparationSchema.parse(await send({binding_id: bindingId, execute: false}));
+  if (preview.plan.already_prepared) return preview;
+  const applied = stewardPreparationSchema.parse(await send({binding_id: bindingId, execute: true,
+    session_id: preview.plan.session_id, plan_id: preview.plan.plan_id}));
+  if (!applied.applied) throw new Error("The original steward identity has not been prepared.");
+  return applied;
 }
 
 export async function changePrivateAgentTarget(bindingId: string, revision: number, target: {session_id: string} | {target_ref: string}) {
