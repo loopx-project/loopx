@@ -122,9 +122,6 @@ def _write_fixture(root: Path, *, turn_count: int) -> tuple[Path, Path, Path, Pa
         + "\n",
         encoding="utf-8",
     )
-    initialize_canonical_source_fixture(
-        runtime, GOAL_ID, state_path=state, provider="sqlite",
-    )
     return project, runtime, workspace, registry
 
 
@@ -365,6 +362,12 @@ def main() -> int:
         project, runtime, workspace, registry = _write_fixture(
             root,
             turn_count=args.turn_count,
+        )
+        initialize_canonical_source_fixture(
+            runtime,
+            GOAL_ID,
+            state_path=project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md",
+            provider="sqlite",
         )
         if args.real_codex_cli:
             candidate = args.codex_bin or (
