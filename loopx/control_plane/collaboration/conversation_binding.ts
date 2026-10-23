@@ -1,4 +1,5 @@
 import type {JsonObject} from "../effect_program.ts";
+import {isDeepStrictEqual} from "node:util";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
@@ -341,10 +342,12 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
     const saved = requireJsonObject(params.session_context, "bound Session context");
     // New commissions may extend the same owner's scope. Workspace, role and
     // audience remain frozen; all evidence reads use the fresh binding scope.
+    // JSON object member order is not identity. Preserve every value and field
+    // check while accepting equivalent contexts from another JSON writer.
     const matches = row.context_kind === "steward"
-      ? JSON.stringify({...saved, goal_ids: []}) === JSON.stringify({...context, goal_ids: []})
+      ? isDeepStrictEqual({...saved, goal_ids: []}, {...context, goal_ids: []})
         && (row.goal_scope === "all_registered" || normalizeStewardGoalScope(saved.goal_ids).every(g => (row.goal_ids as string[]).includes(g)))
-      : JSON.stringify(saved) === JSON.stringify(context);
+      : isDeepStrictEqual(saved, context);
     if (!matches) throw new EffectRuntimeRequestError("bound Session context changed");
   }
   const channel = row.context_kind === "steward"
@@ -358,7 +361,7 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
         || session.agent_id !== row.executor_endpoint_id || session.executor_endpoint_id !== row.executor_endpoint_id
         || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null
         || params.session_context === undefined
-        || JSON.stringify(steward ? session.steward_context : session.project_context) !== JSON.stringify(params.session_context)) {
+        || !isDeepStrictEqual(steward ? session.steward_context : session.project_context, params.session_context)) {
       throw new EffectRuntimeRequestError("canonical bound Session identity changed");
     }
   }
