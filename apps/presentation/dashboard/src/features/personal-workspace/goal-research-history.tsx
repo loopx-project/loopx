@@ -205,7 +205,11 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     if (!active) return;
     if (focusReturn.current) {
       const {nodeId, element} = focusReturn.current;
-      const target = nodeId ? detail.current?.querySelector<HTMLButtonElement>(`[data-research-node="${CSS.escape(nodeId)}"] button`) : element;
+      // The full-history view moves while reading. Resolve its remounted
+      // control by the local return key rather than losing keyboard position.
+      const returnKey = element?.dataset.researchReturn;
+      const target = nodeId ? detail.current?.querySelector<HTMLButtonElement>(`[data-research-node="${CSS.escape(nodeId)}"] button`)
+        : element?.isConnected ? element : returnKey ? graph.current?.querySelector<HTMLButtonElement>(`[data-research-return="${CSS.escape(returnKey)}"]`) : null;
       focusReturn.current = null;
       if (target?.isConnected) {target.focus({preventScroll: true}); target.scrollIntoView({block: "nearest"});}
       else graph.current?.focus();
@@ -309,7 +313,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
         : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
           : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p></div>
-      <div className="research-history-controls">
+      <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
         {!readingSelection ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
         <div className="research-analysis-scoped-action"><ResearchAnalysisButton analysis={analysis}/>
           {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}

@@ -193,9 +193,20 @@ keep all findings selectable and failed or tentative counts visible. Preserve
 the exact finding on reload and Back. Offer the whole recorded history in place
 and through the existing return action, without letting it bury the chosen text.
 
+Route captions distinguish start and end and wrap as readable entries. If a
+long title is clamped in that list, one activation opens its complete original
+in the existing reader; keyboard return restores the exact entry. Keep view,
+analysis, help and refresh on a shared primary control row. Model, usage and
+scope details occupy separate rows, so their presence or wrapping does not
+shift the controls. Reflow the composition on narrow screens without hiding
+action consequences or relying on fixed alignment offsets.
+
 选中问题后聚焦阅读一条结论，完整正文与记录状态保留；全部结论可直接切换，反驳和
 待检查计数仍可见。刷新与返回保留所选结论，全景可原位展开或通过原入口返回，
 不再把整张图和全部折叠标题堆在所选正文之前。
+路线标题区分起点与末端并自然换行；列表收起长标题时，一次操作进入现有阅读器查看
+完整原文，键盘返回准确入口。视图、分析、帮助和刷新共用主控件行，模型、用量与
+范围另行显示；说明出现或换行不挤偏控件，窄屏重排保留操作后果，不使用固定偏移。
 
 Reading a citation opens only the requested original, preserving the explicit
 open or closed state of the full analysis and returning to the exact citation.

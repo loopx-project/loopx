@@ -38,7 +38,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     density: "记录密度", densityHint: "柱高为事件数；浅红为无记录空档", ticks: "转向 / 继续",
     routes: "研究路线", routeHint: "仅由显式关联或父子分组相连", singles: "未关联研究项",
     trail: "决策轨迹", more: "显示更多决策", all: "全部时段",
-    span: "记录跨度", start: "起", end: "止", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
+    span: "记录跨度", start: "起点", end: "末端", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
     confirmed: "来源记为确认", refuted: "已反驳", tentative: "待检查", unlabeled: "无结论", phaseNote: "按记录时间三等分，仅为阅读分组，不是预声明的评估窗口。",
     noTime: "没有可用的记录时间，无法放上时间轴；下方记录仍可完整阅读。",
   } : {
@@ -48,7 +48,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     density: "Recording density", densityHint: "Bar height is events; pale red is a recording gap", ticks: "Replan / continue",
     routes: "Research routes", routeHint: "Connected only by recorded relationships or parent grouping", singles: "Unlinked research items",
     trail: "Decision history", more: "Show more decisions", all: "Whole history",
-    span: "Recorded span", start: "From", end: "To", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
+    span: "Recorded span", start: "Start", end: "End", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
     confirmed: "Recorded confirmation", refuted: "Refuted", tentative: "Tentative", unlabeled: "No finding", phaseNote: "Equal thirds of record time, for reading only; not a pre-declared evaluation window.",
     noTime: "No usable record time; the history cannot be placed on a time axis. All records remain readable below.",
   };
@@ -141,7 +141,13 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
             <small>{dayLabel(route.first!)} – {dayLabel(route.last!)} · {copy.span} {hours(route.first!, route.last!)}</small>
             <small>{tally.map(([key, value]) => `${label(key)} ${value}`).join(" · ") || copy.unlabeled}</small></div>
           <div className="research-row-plot">
-            <p className="research-route-caption"><span>{copy.start}</span>{first.node.latest.title}{members.length > 1 ? <><span>{copy.end}</span><b className={tone(last.label)}>{last.node.latest.title}</b></> : null}</p>
+            <div className="research-route-caption">
+              {[first, ...(members.length > 1 ? [last] : [])].map((item, index) => <button key={item.node.id} type="button"
+                data-research-return={`${route.id}:${index}`} aria-pressed={selectedIds.includes(item.node.id)}
+                onClick={() => onSelect(item.node.id)}>
+                <span>{index ? copy.end : copy.start}</span><strong className={index ? tone(item.label) : undefined}>{item.node.latest.title}</strong>
+              </button>)}
+            </div>
             <div className="research-route-track">
               <svg viewBox="0 0 1000 44" preserveAspectRatio="none" aria-hidden="true" className="research-history-edges">
                 <line x1={x(first.node.id)} x2={x(last.node.id)} y1="32" y2="32" className="research-route-line"/>
