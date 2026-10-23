@@ -1156,6 +1156,11 @@ rehearsal 证据（1000 次提交／64 KiB）现为 16 个 checkpoint、63 次 r
 单次历史读取最多重建一个 64 次提交窗口，保留 1,048,576 字节 projection 与
 126,714 字节 delta，而“每提交一份完整拷贝”为 65,536,000 字节。
 
+[游标覆盖索引](../../reference/sqlite-authority-store.md#cursor-covering-index)只是针对新建 V2
+数据库与既有显式 V1 迁移的有界物理优化。精确连续性计数与保留证明保持不变，普通打开
+不改已有 V2 的 schema，也不改变 provider 默认。该边界仍需同负载读写、页／WAL、CLI
+与恢复证据；它不改写冻结失败，也不代表 D2 完成。
+
 这仍不代表 lane L 完成。当前比较采用 File 的 checkpoint/delta journal 与有界的
 已验证读取视图，见[同负载 provider 比较](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment)。
 File 在复用已解码视图前仍会重读并哈希完整 envelope、检查 store identity；避免重复

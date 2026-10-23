@@ -49,7 +49,9 @@ const COMMIT_COLUMNS = `CAST(cursor AS TEXT) AS sequence, operation_id, commit_d
  * window from the covering checkpoint, and `verifyAuthorityHistory` proves the
  * complete chain when a caller needs the whole archive.
  *
- * Exported so the reviewed V1 to V2 migration builds identical tables.
+ * The cursor covering index narrows the exact continuity count's physical
+ * scan. It is optional for existing V2 stores: ordinary opens never backfill it.
+ * Exported so the reviewed V1 to V2 migration builds identical tables/indexes.
  */
 export function sqliteAuthorityStoreSchemaDdl(tables: {
   commits: string;
@@ -65,6 +67,7 @@ CREATE TABLE ${tables.commits} (
   parent_state_digest TEXT CHECK(parent_state_digest IS NULL OR length(parent_state_digest) = 64),
   delta TEXT NOT NULL, events TEXT NOT NULL, receipts TEXT NOT NULL
 );
+CREATE INDEX ${tables.commits}_cursor ON ${tables.commits}(cursor);
 CREATE TABLE ${tables.checkpoints} (
   cursor INTEGER PRIMARY KEY CHECK(cursor > 0),
   projection TEXT NOT NULL,
