@@ -122,17 +122,19 @@ def execute(
                         ),
                     },
                 )
-                _write(directory / "assessment.json", verified)
-                prior.update(_result_proof(directory, prepared))
-                _write(directory / "receipt.json", prior)
-                return {**prior, "reused": True}
+                if not (retry and verified.get("display", {}).get("coverage", {}).get("missing", 0)):
+                    _write(directory / "assessment.json", verified)
+                    prior.update(_result_proof(directory, prepared))
+                    _write(directory / "receipt.json", prior)
+                    return {**prior, "reused": True}
             if not retry or prior["status"] == "running":
                 return {
                     **prior,
                     "ok": False,
                     "reason": "Explicit retry is required for a terminal failed/cancelled attempt.",
                 }
-            # Keep the previous failure evidence when explicitly retrying.
+            # Keep failures and partially translated successful artifacts when
+            # explicitly retrying the same complete analysis job.
             archive = directory / f"attempt-{prior['attempt']}"
             archive.mkdir(exist_ok=False)
             for name in (
@@ -140,6 +142,7 @@ def execute(
                 "events.jsonl",
                 "stderr.txt",
                 "model-output.json",
+                "assessment.json",
             ):
                 path = directory / name
                 if path.exists():
@@ -217,7 +220,7 @@ def execute(
             # Requalify against the new exact manifest; never splice labels or
             # add old metric totals to new ones. This path launches no child.
             output = {key: reuse_from["output"][key] for key in
-                      ("assessments", "limitations", "episode_questions")
+                      ("assessments", "limitations", "episode_questions", "display_translations")
                       if key in reuse_from["output"]}
             result = effect_runtime_result(
                 "benchmark.trajectory.qualify", {**prepared, "output": output}

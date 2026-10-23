@@ -2,7 +2,7 @@ import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} 
 import {defaultParseSearch} from "@tanstack/react-router";
 import {ArrowLeft, ArrowRight, Circle, FlaskConical, GitBranch, RefreshCw} from "lucide-react";
 import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
-import {buildExploreTimeline, parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
+import {buildExploreTimeline, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
@@ -10,6 +10,7 @@ import {ContextHelp} from "./context-help";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
+import {projectTrajectoryDisplay, trajectoryDisplaySnapshotText} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_display.js";
 
 type Selection = {nodes: string[]; day: string | null; finding?: string};
 type Lens = "timeline" | "graph";
@@ -41,6 +42,32 @@ const viewFromUrl = (goal: string) => {
 export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, readSourceUrl}: {goalId: string; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string}) {
   const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
   const [read, setRead] = useState<Read>({events: [], total: null, complete: false});
+  const [originalDisplay, setOriginalDisplay] = useState(false);
+  const [displayIdentity, setDisplayIdentity] = useState<{events: ExploreHistoryEvent[]; namespace: string; key: string} | null>(null);
+  const displayNamespace = readSourceUrl ? new URL(readSourceUrl, window.location.href).searchParams.get("source_namespace") ?? "local" : "local";
+  const display = analysis.pack?.result?.display;
+  const displayHashSupported = Boolean(globalThis.crypto?.subtle);
+  useEffect(() => {
+    if (!read.complete || !display || !displayHashSupported) return;
+    let current = true;
+    const bytes = new TextEncoder().encode(trajectoryDisplaySnapshotText(read.events, goalId, displayNamespace));
+    void crypto.subtle.digest("SHA-256", bytes).then(hash => {
+      if (current) setDisplayIdentity({events: read.events, namespace: displayNamespace,
+        key: Array.from(new Uint8Array(hash), value => value.toString(16).padStart(2, "0")).join("")});
+    }).catch(() => {if (current) setDisplayIdentity({events: read.events, namespace: displayNamespace, key: ""});});
+    return () => {current = false;};
+  }, [read, goalId, displayNamespace, display?.snapshot_key, displayHashSupported]);
+  const displayKey = displayIdentity?.events === read.events && displayIdentity.namespace === displayNamespace ? displayIdentity.key : "";
+  const displayCheckFailed = !displayHashSupported || (displayIdentity?.events === read.events && displayIdentity.namespace === displayNamespace && !displayIdentity.key);
+  const currentDisplay = analysis.pack?.applicability === "current" && analysis.pack.scope.goal_id === goalId
+    && analysis.pack.result?.analysis_key === analysis.pack.analysis_key && analysis.pack.result.method_version === analysis.pack.method_version
+    && JSON.stringify(analysis.pack.result.scope) === JSON.stringify(analysis.pack.scope)
+    && display?.snapshot_key === displayKey && display.source_namespace === displayNamespace && display.language === (zh ? "zh" : "en") ? display : undefined;
+  const originals = useMemo(() => new Map(read.events.map(event => [event.event_id, event])), [read.events]);
+  const displayProjection = useMemo(() => projectTrajectoryDisplay(read.events, originalDisplay ? undefined : currentDisplay, displayKey, zh ? "zh" : "en"),
+    [read.events, currentDisplay, displayKey, originalDisplay, zh]);
+  const findingSections = (event: ExploreHistoryEvent) => currentDisplay && !originalDisplay
+    ? displayProjection.sections.get(event.event_id) ?? null : parseExploreFindingSections(event.summary);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(0);
@@ -88,7 +115,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     : {inputRevision: "Input revision", applicability: "Applicability", observation: "Observation", interpretation: "Interpretation", changed: "Changed", stopped: "Stopped", retained: "Retained"};
   const outcomeCopy: Record<string, string> = zh ? {replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定"} : {replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human"};
   const findingBody = (finding: ExploreHistoryEvent) => {
-    const sections = parseExploreFindingSections(finding.summary);
+    const sections = findingSections(finding);
     const decision = sections?.decision;
     const execution = finding.execution_observation;
     const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
@@ -112,16 +139,16 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   };
   const findingMeta = (finding: ExploreHistoryEvent) => <small>{timeLabel(finding.recorded_at)} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>;
   const findingElement = (finding: ExploreHistoryEvent, title: string) => {
-    const sections = parseExploreFindingSections(finding.summary);
+    const sections = findingSections(finding);
     const content = <>{findingBody(finding)}{sections || finding.evidence_refs.length ? <details className="research-finding-sources"><summary>{zh ? "来源与适用范围" : "Sources and applicability"}{finding.evidence_refs.length ? ` · ${finding.evidence_refs.length}` : ""}</summary>
       {sections ? <dl className="research-finding-sections"><dt>{sectionCopy.applicability}</dt><dd>{sections.applicability}</dd><dt>{sectionCopy.inputRevision}</dt><dd><code>{sections.inputRevision}</code></dd></dl> : null}
       {finding.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
-      {sections ? <details><summary>{zh ? "完整原文" : "Full original text"}</summary><p>{finding.summary}</p></details> : null}</details> : null}</>;
+      <details><summary>{zh ? "完整原文" : "Full original text"}</summary><h4>{originals.get(finding.event_id)?.title ?? finding.title}</h4><p>{originals.get(finding.event_id)?.summary ?? finding.summary}</p></details></details> : null}</>;
     return <article className="research-recorded-finding" key={finding.event_id}>
       {finding.title !== title ? <h4>{finding.title}</h4> : null}{findingMeta(finding)}{content}
     </article>;
   };
-  const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{stateLabel(event.status)} · {event.title}{event.summary ? ` — ${event.summary}` : ""}</span>{event.measurements ? <ExploreMeasurements measurements={event.measurements} zh={zh}/> : null}{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
+  const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><div><p>{stateLabel(event.status)} · {event.title}</p>{event.summary ? findingBody(event) : null}</div>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
 
   useEffect(() => {
     const pop = () => {
@@ -171,9 +198,12 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     return () => {current = false; controller.abort();};
   }, [goalId, active, revision, refreshRevision, readSourceUrl]);
   const history = useMemo(() => {
-    try {return {value: projectExploreHistory(read.events, goalId), error: ""};}
-    catch (failure) {return {value: null, error: String(failure)};}
-  }, [read.events, goalId]);
+    try {
+      const canonical = projectExploreHistory(read.events, goalId);
+      return {canonical, value: displayProjection.events === read.events ? canonical : projectExploreHistory(displayProjection.events, goalId), error: ""};
+    }
+    catch (failure) {return {canonical: null, value: null, error: String(failure)};}
+  }, [read.events, displayProjection, goalId]);
   const value = history.value;
   const measurementFeedback = value?.measurementFeedback ?? [];
   const measurementSummary = (nodeId: string) => {
@@ -183,7 +213,18 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   };
   const grouped = useMemo(() => groupUnlinkedHistoryQuestions(value?.nodes ?? [], value?.edges ?? []), [value]);
   const layout = useMemo(() => layoutExploreHistory(grouped.nodes, value?.edges ?? []), [grouped, value]);
-  const timeline = useMemo(() => value ? buildExploreTimeline(value.nodes, value.edges, value.events) : null, [value]);
+  const timeline = useMemo(() => {
+    if (!history.canonical || !value) return null;
+    const original = buildExploreTimeline(history.canonical.nodes, history.canonical.edges, history.canonical.events);
+    if (!currentDisplay || originalDisplay) return original;
+    const events = new Map(value.events.map(event => [event.event_id, event]));
+    const nodes = new Map(value.nodes.map(node => [node.id, node]));
+    const finding = (item: TimelineFinding): TimelineFinding => ({...item, event: events.get(item.event.event_id)!,
+      sections: displayProjection.sections.get(item.event.event_id) ?? null});
+    return {...original, nodes: new Map([...original.nodes].map(([id, item]) => [id, {...item, node: nodes.get(id)!}])),
+      findings: original.findings.map(finding), decisions: original.decisions.map(finding),
+      phases: original.phases.map(phase => ({...phase, lastDecision: phase.lastDecision ? finding(phase.lastDecision) : null}))};
+  }, [history.canonical, value, displayProjection, currentDisplay, originalDisplay]);
   const chooseView = (next: Lens, nextPhase: number | null) => {
     setLens(next); setPhase(nextPhase);
     const url = new URL(window.location.href);
@@ -265,6 +306,19 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     url.searchParams.set("research_finding", finding);
     window.history.replaceState(null, "", url);
   }, [active, selection.finding, selectedFinding, selected]);
+  const displayControl = display ? <div className="research-display-language">
+      <button type="button" disabled={!currentDisplay} aria-pressed={originalDisplay} onClick={() => setOriginalDisplay(value => !value)}>
+        {originalDisplay ? (zh ? "查看译文" : "Show translation") : (zh ? "查看原文" : "Show originals")}
+      </button>
+      {!currentDisplay ? <span role="status">{displayCheckFailed ? (zh ? "无法核对译文，显示原文" : "Translation cannot be checked; showing originals") : !displayKey ? (zh ? "正在核对译文版本" : "Checking translation version") : (zh ? "译文版本不适用，显示原文" : "Translation is out of scope; showing originals")}</span>
+        : currentDisplay.coverage.missing ? <span role="status">{zh ? "译文" : "Translated"} {currentDisplay.coverage.translated} / {currentDisplay.coverage.eligible}</span> : null}
+      <ContextHelp label={zh ? "译文覆盖与来源" : "Translation coverage and source"}>
+        <p>{zh ? "机器译文，未经独立校对。原始状态、数值、引用与证据保持不变，缺失或校验未通过的字段显示原文。" : "Model translation, not independently checked. Original statuses, numbers, references and evidence are preserved; missing or invalid fields retain their original text."}</p>
+        <p>{zh ? "已译 / 快照字段" : "Translated / snapshot fields"} · {display.coverage.translated} / {display.coverage.eligible}
+          {display.coverage.invalid ? ` · ${zh ? "校验未通过" : "Invalid"} ${display.coverage.invalid}` : ""}</p>
+        <p>{zh ? "查看原文、切换语言和刷新只读；新快照须通过已有分析入口明确执行，使用同一分析任务与用量。" : "Original viewing, language switching and refresh only read. A new snapshot requires explicit execution through the existing analysis action, with the same job and usage."}</p>
+      </ContextHelp>
+    </div> : null;
   const historyView = !value ? null : lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
         <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={id => choose(id)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
@@ -320,6 +374,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         </div>
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
+    {!readingSelection ? displayControl : null}
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
     {!busy && !error && read.total === 0 ? <p className="research-history-empty" role="status">{zh ? "这个 Goal 尚无已记录的研究历程。" : "This Goal has no recorded research history yet."}</p> : null}
     <ResearchAnalysisStatus analysis={analysis}/>
@@ -333,7 +388,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <div className="research-reader-content">
         <div className="research-reader-location"><button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{readerParent.current ? (zh ? "返回问题列表" : "Back to questions") : copy.all}</button>
         <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p></div>
-        <h3>{selected.latest.title}</h3>
+        <h3>{selected.latest.title}</h3>{displayControl}
         {selected.latest.blocked_reason ? <p className="research-history-error">{selected.latest.blocked_reason}</p> : null}
         {selected.findings.length ? <>
           {selected.findings.length > 1 ? <nav className="research-finding-navigation" aria-label={zh ? "问题结论" : "Question findings"}>
@@ -373,6 +428,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <div className="research-reader-content">
         <button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{copy.all}</button>
         <h3>{selectedGroup ? `${selectedGroup.day || copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
+        {displayControl}
         <ol className="research-question-index">{selectedMembers.map(node => <li key={node.id} data-research-node={node.id}>
           <button type="button" onClick={() => {readerParent.current = {selection, nodeId: node.id, opener: opener.current}; select({nodes: [node.id], day: null});}}>
             <strong>{node.latest.title}</strong><span>{stateLabel(node.findings.at(-1)?.status ?? node.latest.status)}{node.latest.status === "blocked" && node.findings.length ? ` · ${stateLabel(node.latest.status)}` : ""}{node.findings.length ? ` · ${node.findings.length} ${copy.findings}` : ""}</span>
@@ -392,7 +448,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     {value?.unknownTimeCount ? <p className="research-history-note">{copy.unknown} · {value.unknownTimeCount}</p> : null}
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
     {value?.events.length ? <details className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
-      {recordsOpen ? <><ol className="research-history-records">{value.events.slice(0, recordLimit).map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><span>{event.title} · {stateLabel(event.status)}{event.summary ? ` — ${event.summary}` : ""}</span>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>
+      {recordsOpen ? <>{updateRecords(value.events.slice(0, recordLimit))}
         {recordLimit < value.events.length ? <button type="button" onClick={() => setRecordLimit(n => n + 50)}>{zh ? "继续展开记录" : "Show more records"} · {Math.min(recordLimit, value.events.length)} / {value.events.length}</button> : null}</> : null}
     </details> : null}
   </section>;

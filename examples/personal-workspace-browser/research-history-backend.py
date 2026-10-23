@@ -24,6 +24,7 @@ from loopx.chat_server import (
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import register_pack, inspect_pack, execute_pack
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "control_plane"))
 from canonical_authority_fixture import initialize_canonical_authority
@@ -76,6 +77,28 @@ def main():
         registry = root / "registry.json"
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": goals}))
         original[registry] = registry.read_bytes()
+        # Optional synthetic analysis uses the real pack verifier, process/job
+        # owner and HTTP reader. It never enables model dispatch from the page.
+        for capture in captures:
+            for index, analysis in enumerate(capture.get("analyses", [])):
+                source_root = root / f"analysis-{capture['goal_id']}-{index}"
+                source_root.mkdir()
+                for name, text in analysis["artifacts"].items():
+                    path = source_root / name
+                    assert path.parent == source_root, "Fixture artifacts must be flat"
+                    path.write_text(text, encoding="utf-8")
+                input_path = source_root / "input.json"
+                input_path.write_text(json.dumps(analysis["input"], ensure_ascii=False))
+                scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
+                registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"])
+                for language, output in analysis["outputs"].items():
+                    provider = root / f"analysis-provider-{index}-{language}"
+                    provider.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+                        f"sys.stdin.read()\nPath(sys.argv[sys.argv.index('-o')+1]).write_bytes({json.dumps(output, ensure_ascii=False).encode()!r})\n"
+                        "print('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}')\n")
+                    provider.chmod(0o700)
+                    selected = inspect_pack(**scope, pack_id=registered["pack_id"], output_language=language)
+                    execute_pack(**scope, pack_id=registered["pack_id"], analysis_key=selected["analysis_key"], output_language=language, codex=str(provider))
         metrics = {"history_reads": 0, "mutation_attempts": 0}
 
         class Handler(ChatRequestHandler):

@@ -10,7 +10,8 @@ const episodeContent = (e: TrajectoryInput['episodes'][number]) => ({...e,
 const sourceContent = ({artifact_sha256: _hash, ...source}: TrajectoryInput['sources'][number]) => source;
 const evidenceContent = (input: TrajectoryInput) => ({scope: {...input.scope, revision: undefined},
   objective: input.objective, selection: input.selection,
-  sources: ordered(input.sources).map(sourceContent), episodes: ordered(input.episodes).map(episodeContent)});
+  sources: ordered(input.sources).map(sourceContent), episodes: ordered(input.episodes).map(episodeContent),
+  ...(input.display_snapshot ? {display_snapshot: input.display_snapshot} : {})});
 function differences<T extends {id: string}>(before: T[], after: T[], content: (item: T) => unknown) {
   const old = new Map(before.map(item => [item.id, item]));
   const current = new Map(after.map(item => [item.id, item]));

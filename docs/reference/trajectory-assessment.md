@@ -21,6 +21,71 @@ the frontend does not present an unspecified or other-language result as a new
 analysis in the selected language. Output-language metadata records the request,
 not independent verification of a model's translation or judgments.
 
+### Whole-history presentation language
+
+A trusted curator can include the complete authorized Explore history read as
+another verified source, then set the optional input binding:
+
+```json
+"display_snapshot": {
+  "schema_version": "research_display_snapshot_v1",
+  "source_id": "history-capture",
+  "source_namespace": "local"
+}
+```
+
+That source is the complete JSON history page (`ok`, `goal_id`, `items`, `total`,
+`next_cursor: null`), consolidated from the same server snapshot without dropping
+pages or duplicate/conflicting identities. Use the actual physical source namespace
+for linked Goals; `local` denotes the ordinary local Goal. The existing trusted
+pack-registration path still verifies full-file bytes and literal text. The
+renderer cannot register a source or submit free-form strings for translation.
+This binding creates no Goal, worker, Explore record or new capability.
+
+An explicit language-specific analysis translates narrative fields from every
+captured event, including historical revisions: node/route questions, finding
+titles, plain summaries, observations, interpretations, applicability, declared
+changed/stopped/retained lists and recorded change reasons. Structured labels,
+statuses, identities, versions, measurements, timestamps and references retain
+their original owners. A history capture does not make every event an assessment
+episode or change the six metrics' declared sample and denominator.
+
+The existing analysis job owns execution, timeout, cancel, explicit retry, cache
+and observed usage. There are no per-card calls or translation scheduler. A
+display-only capture is supplied once as fields rather than duplicated in the
+prompt; evidence actually used by episodes retains its numbered citation text.
+The same analysis key binds the whole input, output language and display method.
+Fields use content-bound opaque identities. Literal code, links, numeric tokens
+and technical identifiers are protected; missing, duplicate or corrupt rows fall
+back to the original with explicit partial/invalid coverage. This mechanical
+check does not verify linguistic quality, causal meaning or model calibration.
+Translated prose is applied to decoded narrative fields; it is never serialized
+and reparsed as an Explore decision. Owner-format labels or list markers inside
+model text cannot change the original outcome, eligibility or list cardinality.
+
+The qualified `research_display_v1` sidecar records source identity, language,
+snapshot key, exact source text per translated field and coverage. The reader
+hashes its normalized complete history before applying it. A different Goal,
+source, language or corrected/deleted/added event cannot borrow the translation.
+Changed/unreadable source bytes keep the result historical. The whole-page
+original switch and individual original findings preserve direct readback;
+ordinary browsing, expansion, reload, source refresh and language switching never
+start a model. A pack without this optional binding keeps its prior identity,
+output contract and episode-only localization; it does not claim whole-page
+translation. An absent or failed new job leaves the original history readable.
+For a partial result, **Reanalyze to complete translation** explicitly retries
+the whole existing job with new analysis usage. Prior results and receipts are
+archived before that attempt. A running, failed or cancelled retry keeps the
+last successful result readable, labelled as previous; its own usage stays bound
+to that saved attempt while the current job's state remains distinct. A complete
+successful result continues to reuse its cache, even if retry is requested.
+
+整体正文译文沿同一次深度分析生成，覆盖固定快照中的问题、决策、结论及历史版本。
+它只属于展示产物，不改原始记录、状态、指标、引用和执行权限。缺失或校验未通过的
+字段回退原文并显示覆盖；内容、来源或语言不匹配时不套用旧译文。浏览、展开、刷新和
+切换原文不调用模型，失败和取消沿既有分析任务恢复。机械完整性校验不等于译文已经
+独立校对，也不等于实际收益或因果结论已获验证。
+
 The Codex observer reuses native Chat's shared authenticated HTTP transport.
 Credentials and refresh remain with Codex's existing signed-in account; the
 observer neither copies tokens nor imports user tool/rule configuration. Its

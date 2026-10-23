@@ -57,7 +57,7 @@
 .research-question-index button .research-history-error { color: var(--pw-red); }
 .research-question-index button:hover strong { text-decoration: underline; text-underline-offset: 3px; }
 .research-history-detail code { display: block; font-family: var(--font-mono); font-size: var(--text-body); overflow-wrap: anywhere; }
-.research-history-records { padding-left: 18px; }
+.research-history-records { padding-left: 18px; font-size: var(--text-lead); line-height: var(--leading-prose); }
 .research-history-records li { padding: 6px 0; }
 .research-history-records time { display: block; font-size: var(--text-caption); color: var(--pw-muted); }
 .research-history-loading { min-height: 140px; padding: 24px; color: var(--pw-muted); font-size: var(--text-body); }
@@ -199,3 +199,6 @@
 .research-analysis-scope { font-size: var(--text-body); line-height: var(--leading-body); color: var(--pw-muted); overflow-wrap: anywhere; }
 .research-reader-location { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; }
 .research-history .research-reader-location .research-reader-back, .research-history-detail .research-reader-location p { margin: 0; }
+.research-display-language {display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-block: 8px; font-size: var(--text-body);}
+.research-display-language > span {color: var(--pw-muted);}
+.research-display-language > button {min-height: 44px; color: var(--pw-blue-ink); border: 0; padding: 0; background: none; font: inherit; cursor: pointer;}

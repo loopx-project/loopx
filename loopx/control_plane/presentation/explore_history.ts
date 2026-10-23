@@ -53,7 +53,7 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
     }
     if (fields.some(key => raw[key] !== undefined && typeof raw[key] !== "string")
         || (raw.evidence_refs !== undefined && (!Array.isArray(raw.evidence_refs) || raw.evidence_refs.some(ref => typeof ref !== "string")))
-        || (raw.confidence !== undefined && (typeof raw.confidence !== "number" || !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1))) {
+        || (raw.confidence !== undefined && raw.confidence !== null && (typeof raw.confidence !== "number" || !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1))) {
       throw new Error("Invalid Explore history evidence");
     }
     // Normalize key order too, so replay equality is independent of JSON key order.

@@ -73,6 +73,7 @@ import { researchModeScenario } from "./personal-workspace-browser/research-mode
 import { researchHistoryScenario } from "./personal-workspace-browser/research-history.mjs";
 import { researchFindingReaderScenario } from "./personal-workspace-browser/research-finding-reader.mjs";
 import { researchRouteReadingScenario } from "./personal-workspace-browser/research-route-reading.mjs";
+import { researchDisplayLanguageScenario } from "./personal-workspace-browser/research-display-language.mjs";
 import { researchMeasurementsScenario } from "./personal-workspace-browser/research-measurements.mjs";
 import { loopxModeScenario } from "./personal-workspace-browser/loopx-mode.mjs";
 import { progressiveLoadingScenario } from "./personal-workspace-browser/progressive-loading.mjs";
@@ -129,6 +130,7 @@ scenarioCatalog.push(researchHistoryScenario);
 scenarioCatalog.push(researchMeasurementsScenario);
 scenarioCatalog.push(researchFindingReaderScenario);
 scenarioCatalog.push(researchRouteReadingScenario);
+scenarioCatalog.push(researchDisplayLanguageScenario);
 scenarioCatalog.push(prReviewAgentOrderScenario);
 scenarioCatalog.push(taskInspectorReturnScenario);
 scenarioCatalog.push(replanCadenceScenario);

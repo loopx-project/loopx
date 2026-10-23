@@ -211,12 +211,22 @@ action consequences or relying on fixed alignment offsets.
 Reading a citation opens only the requested original, preserving the explicit
 open or closed state of the full analysis and returning to the exact citation.
 
+When an explicit analysis supplies a whole-history translation, use it throughout
+the matching research snapshot, including routes, decisions and expanded history.
+Offer one in-place original/translation switch; keep coverage and source/version
+detail in contextual help, with incomplete or inapplicable coverage visible.
+Keep original evidence directly readable. A language switch only reads; missing
+or failed translations retain original text and never silently launch a model.
+
 刷新和前进后退保留视图、时间分组与证据焦点；标签之间保留阅读位置。选择状态按
 Goal 和来源隔离。研究中从侧栏切换 Goal 仍停留在研究页，读取新 Goal 自身证据；
 返回恢复原 Goal 的选择。首页及任务、会话、成果的明确链接保留各自目的地。
 结论正文以正常字号呈现观察、解读与决策；来源、适用范围、版本
 和完整原文按需展开。仅列表中的重复长标题可收起，选中后的正文须完整可读。
 读取引用只打开所选原文，保留完整分析原先的展开或关闭状态，关闭后回到同一引用。
+明确分析生成整页译文后，同一快照中的路线、决策和展开历史统一消费；原位切换原文，
+来源、版本与完整覆盖按需查看，部分或不适用状态保持可见。原文始终可读，语言切换只
+读取，缺失或失败回退原文，不静默调用模型。
 
 ### Explanations On Demand
 

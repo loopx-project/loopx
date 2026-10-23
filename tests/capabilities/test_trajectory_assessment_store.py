@@ -501,6 +501,68 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
+def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path):
+    scope, _, _, input_path, sources, _ = pack
+    data = json.loads(input_path.read_text())
+    history = {"ok": True, "goal_id": "solver", "total": 2, "next_cursor": None, "items": [
+        dict(schema_version="loopx_explore_result_event_v0", event_id="question-old", result_id="question", goal_id="solver", event_kind="node",
+             node_kind="question", recorded_at="2026-01-01T00:00:00Z", title="Does V18 help?", summary="Not established.", status="open"),
+        dict(schema_version="loopx_explore_result_event_v0", event_id="question-new", result_id="question", goal_id="solver", event_kind="node",
+             node_kind="question", recorded_at="2026-01-02T00:00:00Z", title="Does V19 help?", summary="Still unknown.", status="blocked"),
+    ]}
+    text = json.dumps(history, ensure_ascii=False)
+    (sources / "history.json").write_text(text)
+    data["sources"].append(dict(id="history", artifact="history.json", artifact_sha256=hashlib.sha256(text.encode()).hexdigest(), first_line=1, text=text))
+    data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="source-a")
+    input_path.write_text(json.dumps(data))
+    registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Whole history · synthetic")
+    current = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert current["display_request"]["eligible"] == 4 and current["job"] is None
+    provider = tmp_path / "display-provider"
+    provider.write_text(f"#!{sys.executable}\n" + '''
+import json,sys
+from pathlib import Path
+prompt = sys.stdin.read()
+fields = json.loads(prompt.split("\\n\\ndisplay_fields:\\n")[1])
+output = {"assessments":[{"episode_id":"episode","metric":"benefit_test","verdict":"unknown","reason":"合成过程测试，未验证实际收益。","citations":[]}],
+          "limitations":["合成译文，非模型质量验收。"], "episode_questions":[{"episode_id":"episode","question":"是否有帮助？"}],
+          "display_translations":[{"field_id":f["field_id"], "text":"译文：" + f["text"]} for f in fields[:-1]]}
+Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output))
+print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_tokens":7}}))
+''')
+    provider.chmod(0o700)
+    operation = dict(**scope, pack_id=registered["pack_id"], analysis_key=current["analysis_key"], output_language="zh")
+    assert execute_pack(**operation, codex=str(provider))["status"] == "succeeded"
+    result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert result["result"]["display"]["coverage"] == dict(eligible=4, translated=3, missing=1, invalid=0)
+    assert result["job"]["usage"]["input_tokens"] == 19  # one shared attempt, not four new jobs
+    assert len(result["result"]["metrics"]) == 6 and result["result"]["metrics"][1]["unknown"] == 1
+    assert execute_pack(**operation, codex="must-not-run")["reused"] is True
+    assert inspect_pack(**scope, pack_id=registered["pack_id"], output_language="en")["result"] is None
+    with pytest.raises(PackUnavailable, match="analysis_key"):
+        execute_pack(**{**operation, "output_language": "en"}, codex="must-not-run")
+    successful_provider = provider.read_text().replace("for f in fields[:-1]", "for f in fields")
+    provider.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(9)\n")
+    with pytest.raises(ValueError, match="Codex exited 9"):
+        execute_pack(**operation, codex=str(provider), retry=True)
+    prior = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert prior["job"]["status"] == "failed" and prior["job"]["attempt"] == 2
+    assert prior["result_attempt"] == 1 and prior["result_job"]["usage"]["input_tokens"] == 19
+    assert prior["result"] == result["result"]
+    provider.write_text(successful_provider)
+    assert execute_pack(**operation, codex=str(provider), retry=True)["status"] == "succeeded"
+    result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert result["result"]["display"]["coverage"]["missing"] == 0 and result["result_attempt"] == 3
+    assert execute_pack(**operation, codex="must-not-run", retry=True)["reused"] is True
+    old = result["result"]["display"]
+    (sources / "history.json").write_text(text + " ")
+    changed = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
+    assert changed["applicability"] == "historical" and changed["result"]["display"] == old
+    with pytest.raises(PackUnavailable, match="source_changed"):
+        execute_pack(**operation, codex="must-not-run")
+    assert json.loads(input_path.read_text()) == data
+
+
 def test_method_upgrade_reads_verified_old_result_without_rejudging(pack, monkeypatch):
     from loopx.capabilities.benchmark_toolkit import (
         trajectory_assessment_store as store,

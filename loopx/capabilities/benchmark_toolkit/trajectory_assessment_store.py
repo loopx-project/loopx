@@ -439,6 +439,16 @@ def inspect_pack(
     identity = prepared if output_language is not None else record
     directory = _job(owner, identity, identity["analysis_key"])
     job = read_job(directory) if (directory / "receipt.json").exists() else None
+    result_job, result_directory = job, directory
+    if job and job["status"] != "succeeded" and prepared.get("display_request"):
+        # An explicit translation retry does not erase its saved partial
+        # result. Read only an exact-key, successful prior attempt; current job
+        # state and cost remain separate and visible to the reader.
+        for archived in sorted(directory.glob("attempt-*/receipt.json"), key=lambda path: int(path.parent.name.split("-")[1]), reverse=True):
+            prior = read_job(archived.parent)
+            if prior["status"] == "succeeded":
+                result_job, result_directory = prior, archived.parent
+                break
     result = None
     if job is not None:
         if (
@@ -447,14 +457,17 @@ def inspect_pack(
             or job["config"] != prepared["config"]
         ):
             raise PackUnavailable("receipt_mismatch")
-        if job["status"] == "succeeded":
+        if result_job and result_job["status"] == "succeeded":
+            if (result_job["analysis_key"] != identity["analysis_key"] or result_job["scope"] != record["input"]["scope"]
+                    or result_job["config"] != prepared["config"]):
+                raise PackUnavailable("receipt_mismatch")
             if reason == "method_changed":
                 # Read a previously qualified artifact without applying today's
                 # rubric. The old receipt must bind its frozen input and bytes.
-                payload = (directory / "assessment.json").read_bytes()
+                payload = (result_directory / "assessment.json").read_bytes()
                 if (
-                    job.get("input_sha256") != _digest(record["input"])
-                    or job.get("assessment_sha256")
+                    result_job.get("input_sha256") != _digest(record["input"])
+                    or result_job.get("assessment_sha256")
                     != hashlib.sha256(payload).hexdigest()
                 ):
                     raise PackUnavailable("historical_result_unverified")
@@ -464,7 +477,7 @@ def inspect_pack(
                     or result.get("analysis_key") != identity["analysis_key"]
                     or result.get("scope") != record["input"]["scope"]
                     or result.get("method_version") != record["method_version"]
-                    or job.get("method_version") != record["method_version"]
+                    or result_job.get("method_version") != record["method_version"]
                 ):
                     raise PackUnavailable("historical_result_unverified")
             else:
@@ -473,7 +486,7 @@ def inspect_pack(
                     {
                         **prepared,
                         "output": json.loads(
-                            (directory / "model-output.json").read_text(
+                            (result_directory / "model-output.json").read_text(
                                 encoding="utf-8"
                             )
                         ),
@@ -486,6 +499,9 @@ def inspect_pack(
         "episodes": record["input"]["episodes"],
         "job": _public_job(job) if job else None,
         "result": result,
+        **({"display_request": prepared["display_request"]} if "display_request" in prepared else {}),
+        **({"result_attempt": result_job["attempt"]} if prepared.get("display_request") and result is not None else {}),
+        **({"result_job": _public_job(result_job)} if result is not None and result_job is not job else {}),
         "applicability": "historical" if reason else "current",
     }
     if include_continuation and record.get("base_pack_id"):
@@ -554,6 +570,8 @@ def execute_pack(
     if reason:
         raise PackUnavailable(reason)
     _, reuse = _continuation(runtime_root, owner_goal_id, record, prepared, None, output_language)
+    if retry and prepared.get("display_request"):
+        reuse = None  # Explicitly completing a partial translation needs a new attempt.
     return _public_job(
         execute(
             prepared,
