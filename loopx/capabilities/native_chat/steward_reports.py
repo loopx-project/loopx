@@ -227,6 +227,7 @@ class StewardReports:
             work_kind="report", report_window=window, validation_command=validator)
 
     def prepare(self, request: dict[str, Any], adapter: Any, *, authorization_scope_id: str) -> str:
+        from ..manager_context.inspection import TOOL_NAME
         _, window = self.current_window(request["actor"]["goal_id"].removeprefix("steward-agent-"))
         if not window or window["window_id"] != request["report_window_id"]:
             raise ValueError("the admitted original report window is unavailable")
@@ -238,7 +239,7 @@ class StewardReports:
         if rules.is_symlink():
             raise ValueError("the original reporting criteria changed source")
         reporting = rules.read_text(encoding="utf-8") if rules.exists() else "Use the existing overview-to-depth report contract and preserve all coverage gaps."
-        frozen = prepare_private_report(root=self.root, window=window, read=reader,
+        frozen = prepare_private_report(root=self.root, window=window, read=lambda query: reader(TOOL_NAME, query),
             authorization_scope_id=authorization_scope_id, reporting=reporting)
         return report_prompt(frozen, attempt_directory(self.root, window))
 

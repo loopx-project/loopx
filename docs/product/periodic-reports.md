@@ -336,8 +336,14 @@ existing Chat worker and Codex app-server connection. It uses the explicit
 `codex_app_server` outer-controller profile, not Codex CLI execution or a
 desktop App heartbeat. Fresh native work selection, independent validation,
 writeback, quota and scheduler handoff remain with the existing Turn command.
-It preserves the original conversation thread, provider and portfolio grant;
-busy/queued user work wins admission, and revoked or stopped sources cannot
+It retains the original visible conversation, provider and portfolio grant.
+With unchanged authorization it reuses the upstream model thread. For an
+all-registered report whose authorized inventory or Goal lifetime changed before
+execution, the existing context owner discards old model history and prepares a
+fresh upstream context, records the transition, then re-enters strict native
+execution admission. No new user message is required to repair this context.
+Selected-scope changes, revocation and changes during a model call still fail
+closed. Busy/queued user work wins admission, and revoked or stopped sources cannot
 commit a late model result. Same-request readback does not restart failed or
 unknown work.
 

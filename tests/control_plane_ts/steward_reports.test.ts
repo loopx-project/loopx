@@ -64,6 +64,19 @@ test("a model report requires the exact live calendar window and original task, 
     action_kind: "generate_periodic_report", claimed_by: "steward", status: "open"};
   const input = {...p, request, report_window: window, report_subscription: subscription, report_todo: todo};
   assert.equal(admitStewardManagedTurn(input).observation_only, false);
+  const changed = {...input, binding: {...p.binding, goal_scope: "all_registered"},
+    session: {...p.session, active_turn_id: "running", manager_authorization_scope_id: "old_scope",
+      steward_context: {...p.session.steward_context, goal_scope: "all_registered"}},
+    scope: {current: "new_scope", without_actor: "other_scope"},
+    turn: {session_id: p.session.session_id, turn_id: "running", status: "running", origin: "native_loopx",
+      loopx_execution: true, loopx_request: request}};
+  assert.throws(() => admitStewardManagedTurn(changed));
+  const preparation = admitStewardManagedTurn({...changed, preparing_model_context: true});
+  assert.equal(preparation.context_rebind_required, true);
+  assert.equal(preparation.refresh_original_scope, false); // Only the existing context owner may change it.
+  assert.throws(() => admitStewardManagedTurn({...changed, preparing_model_context: true,
+    binding: {...changed.binding, goal_scope: "selected"}}));
+  assert.throws(() => admitStewardManagedTurn({...changed, preparing_model_context: "true"}));
   for (const invalid of [
     {...input, request: {...request, validation_command: null}},
     {...input, report_subscription: {...subscription, enabled: false}},

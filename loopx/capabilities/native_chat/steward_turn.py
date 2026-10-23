@@ -32,7 +32,8 @@ class StewardTurnHost:
             raise ValueError("the original steward binding is unavailable")
         self.managed = StewardManagedMode(controller, self.bindings)
 
-    def _admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
+               prepare_context: bool = False) -> dict[str, Any]:
         if self.controller.closed.is_set():
             raise ValueError("the original Chat host is stopped")
         actor = request["actor"]
@@ -72,7 +73,8 @@ class StewardTurnHost:
             "workspace_path": str(self.managed._workspace(session)),
             "queued_turn_count": len(self.store.queued_turns(session["session_id"])),
             "goal": self.managed._goal(actor["goal_id"]), "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
-            "request": request, "turn": turn, "scope": scope, "monitor_todo": monitor, **report})
+            "request": request, "turn": turn, "scope": scope, "monitor_todo": monitor,
+            **({"preparing_model_context": True} if prepare_context else {}), **report})
         if admitted["refresh_original_scope"]:
             self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
         return {**admitted, "observed_scope_id": scope["current"] if scope else None}

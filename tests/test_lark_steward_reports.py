@@ -136,6 +136,9 @@ def test_original_production_wake_and_outbound_loops_complete_the_report_without
                 goal_id=actor["goal_id"], agent_id=actor["agent_id"]) is None:
             assert time.monotonic() < deadline, "production wake/outbound hooks never completed the due report"
             time.sleep(.05)
+        window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+        source = json.loads((attempt_directory(reports.root, window) / "source.json").read_text())
+        assert source["coverage"]["goals_in_inventory"] == 1
         assert reports.health(transport.bindings.read()["bindings"][-1]["binding_id"])["available"]
     finally:
         wake.close()

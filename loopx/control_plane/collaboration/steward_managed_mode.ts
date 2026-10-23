@@ -135,6 +135,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("report fields belong only to an original calendar report");
   }
   let refreshScope = false;
+  let rebindContext = false;
   if (turn) {
     const scope = requireJsonObject(params.scope, "original steward scope observation");
     if (typeof scope.current !== "string" || !scope.current) {
@@ -147,7 +148,12 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       // external-conversation isolation boundary.
       const knownSelfRegistration = current.binding.goal_scope === "all_registered"
         && scope.without_actor && current.session.manager_authorization_scope_id === scope.without_actor;
-      if (!knownSelfRegistration && !observationOnly) {
+      // A due report may enter only the existing context-preparation owner.
+      // It must discard old model context before strict execution admission;
+      // this phase never updates the saved scope hash or permits a model call.
+      rebindContext = !knownSelfRegistration && current.binding.goal_scope === "all_registered"
+        && request.work_kind === "report" && params.preparing_model_context === true;
+      if (!knownSelfRegistration && !observationOnly && !rebindContext) {
         throw new EffectRuntimeRequestError("the original portfolio changed beyond the prepared steward creation");
       }
       // A pure native watch uses only the fresh scoped reader and cannot
@@ -157,7 +163,8 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
     }
   }
   return {actor: current.actor, workspace_path: current.workspace, host: "codex-app-server",
-    refresh_original_scope: refreshScope, observation_only: observationOnly};
+    refresh_original_scope: refreshScope, observation_only: observationOnly,
+    ...(rebindContext ? {context_rebind_required: true} : {})};
 }
 
 export const STEWARD_MONITOR_TARGET = "steward-portfolio-watch";

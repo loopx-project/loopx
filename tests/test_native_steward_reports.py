@@ -107,6 +107,8 @@ def test_original_due_report_freezes_once_and_returns_full_body_after_native_set
     window = journal["window"]
     assert datetime.fromisoformat(window["due_at"].replace("Z", "+00:00")) - datetime.fromisoformat(window["start_at"].replace("Z", "+00:00")) == timedelta(hours=24)
     folder = attempt_directory(reports.root, window)
+    snapshot = json.loads((folder / "source.json").read_text())
+    assert snapshot["coverage"]["goals_in_inventory"] == 1 and snapshot["goal_ids"] == [actor["goal_id"]]
     generation = validate_private_generation(folder)
     assert journal["publication"] is None and read_periodic_report_publication_cursor(
         runtime_root=reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"]) is None
@@ -271,3 +273,38 @@ def test_distinct_due_daily_windows_keep_normal_native_replan_and_quota_rules(st
     assert all(row["status"] == "done" for row in StewardMonitor(runtime).todos(actor)
         if row.get("action_kind") == "generate_periodic_report")
     assert store.load_session(sid)["upstream_thread_id"] == "durable-thread"
+
+
+def test_due_report_rebinds_model_context_after_a_new_authorized_goal_without_a_user_message(steward, tmp_path, monkeypatch):
+    from loopx.capabilities.native_chat.steward_managed_mode import StewardManagedMode
+    store, runtime, provider, transport, binding, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch)
+    original_history = store.messages(sid)
+    other = transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", context_kind="steward")
+    transport.admit("notes-app", provider.event("notes-app", "independent-steward", "Keep this other steward independent."))
+    accepted = next(row for row in transport.core.pending() if row["message"] == "Keep this other steward independent.")
+    assert finish(runtime, accepted)["status"] == "completed"
+    managed = StewardManagedMode(runtime, transport.bindings)
+    preview = managed.prepare(other["binding_id"], session_id=accepted["session_id"])["plan"]
+    managed.prepare(other["binding_id"], session_id=accepted["session_id"], execute=True,
+        expected_plan_id=preview["plan_id"])
+    install_model(steward, tmp_path, sid)
+    before = capture.read_bytes()
+    turns = pump_steward_monitors(runtime)
+    assert len(turns) == 1 and turns[0]["session_id"] == sid
+    done = finish(runtime, turns[0])
+    assert done["status"] == "completed" and done["response"]["native_loopx"]["status"] == "committed", done
+    assert transport.steward_reports.reconcile() == 1
+    assert store.messages(sid)[:len(original_history)] == original_history
+    assert next(row for row in transport.bindings.read()["bindings"]
+        if row["binding_id"] == binding["binding_id"])["managed_actor"] == actor
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert sum(row.get("method") == "thread/start" for row in calls) == 1
+    assert sum(row.get("method") == "turn/start" for row in calls) == 1
+    journal = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])
+    source = json.loads((attempt_directory(reports.root, journal["window"]) / "source.json").read_text())
+    assert source["coverage"]["goals_in_inventory"] == 2
+    events = store.events_after(sid, turns[0]["turn_id"], None)
+    rebound = next(row["payload"] for row in events if row["kind"] == "native_loopx.report_context_rebound")
+    assert rebound["previous_scope_id"] != rebound["authorization_scope_id"]
