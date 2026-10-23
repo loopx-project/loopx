@@ -280,6 +280,7 @@ def test_due_report_rebinds_model_context_after_a_new_authorized_goal_without_a_
     store, runtime, provider, transport, binding, capture, _ = steward
     sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch)
     original_history = store.messages(sid)
+    original_scope = store.load_session(sid)["manager_authorization_scope_id"]
     other = transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
         executor_endpoint_id="codex", context_kind="steward")
     transport.admit("notes-app", provider.event("notes-app", "independent-steward", "Keep this other steward independent."))
@@ -306,5 +307,66 @@ def test_due_report_rebinds_model_context_after_a_new_authorized_goal_without_a_
     source = json.loads((attempt_directory(reports.root, journal["window"]) / "source.json").read_text())
     assert source["coverage"]["goals_in_inventory"] == 2
     events = store.events_after(sid, turns[0]["turn_id"], None)
-    rebound = next(row["payload"] for row in events if row["kind"] == "native_loopx.report_context_rebound")
-    assert rebound["previous_scope_id"] != rebound["authorization_scope_id"]
+    context = next(row["payload"] for row in events if row["kind"] == "manager.context")
+    assert context["authorization_scope_id"] == store.load_session(sid)["manager_authorization_scope_id"]
+    assert context["authorization_scope_id"] != original_scope
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_owner_cancel_retires_known_invalid_generation_and_next_window_progresses(steward, tmp_path, monkeypatch, provider):
+    from datetime import timezone
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    import loopx.capabilities.native_chat.steward_reports as report_host
+    from loopx.capabilities.periodic_report import cadence_runtime
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, actor, reports, schedule = configured(steward, tmp_path, monkeypatch, provider)
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    install_model(steward, tmp_path, sid)
+    helper = tmp_path / "report_model.py"
+    valid_model = helper.read_text()
+    helper.write_text(valid_model.replace('"request_digest": request["request_digest"]', '"request_digest": "known-invalid"'))
+    turn = pump_steward_monitors(runtime)[0]
+    failed = finish(runtime, turn)
+    assert failed["response"]["native_loopx"]["status"] == "failed"
+    old = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])
+    folder = attempt_directory(reports.root, old["window"])
+    before = {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()}
+    calls, writes = capture.read_bytes(), list(bot.writes)
+    assert reports.health(binding["binding_id"])["delivery_status"] == "generation_failed"
+    cancel = reports.configure(binding["binding_id"], operation="cancel")["plan"]
+    assert cancel["retires_failed_window"]
+    reports.configure(binding["binding_id"], operation="cancel", execute=True, expected_plan_id=cancel["plan_id"])
+    retired = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])
+    assert retired["retirement"]["source_receipt_id"] == turn["turn_id"] and retired["publication"] is None
+    task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == turn["loopx_request"]["todo_id"])
+    assert task["status"] == "blocked" and not task.get("done")
+    future = {**schedule, "start_date": "2099-05-01"}
+    replacement = reports.configure(binding["binding_id"], operation="enable", schedule=future)["plan"]
+    reports.configure(binding["binding_id"], operation="enable", schedule=future, execute=True,
+        expected_plan_id=replacement["plan_id"])
+    assert reports.health(binding["binding_id"])["schedule"] == future
+    # Same-plan restoration does not replay this failed attempt. The next
+    # calendar window remains useful, under the ordinary native admission.
+    resume = reports.configure(binding["binding_id"], operation="enable", schedule=schedule)["plan"]
+    reports.configure(binding["binding_id"], operation="enable", schedule=schedule, execute=True, expected_plan_id=resume["plan_id"])
+    assert not pump_steward_monitors(runtime)
+    assert calls == capture.read_bytes() and writes == bot.writes
+    helper.write_text(valid_model)
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    next_turn = pump_steward_monitors(runtime)[0]
+    assert next_turn["turn_id"] != turn["turn_id"]
+    completed = finish(runtime, next_turn)
+    assert completed["response"]["native_loopx"]["status"] == "committed", completed
+    assert transport.steward_reports.reconcile() == 1
+    assert store.load_turn(sid, turn["turn_id"])["response"]["native_loopx"]["status"] == "failed"
+    assert before == {name: (folder / name).read_bytes() for name in before}
+    assert all(json.loads(line).get("method") != "thread/start" for line in capture.read_bytes()[len(calls):].splitlines())
+    assert read_periodic_report_publication_cursor(runtime_root=reports.root,
+        goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == old["window"]["next_due_at"]

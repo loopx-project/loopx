@@ -20,6 +20,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--baseline-assets-dir", type=Path)
+    parser.add_argument("--invalid-editorial", action="store_true", help="Return a known invalid synthetic report to inspect owner cancellation and retained failure.")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(repo), str(repo / "tests")]
@@ -47,6 +48,9 @@ def main() -> None:
             expected_plan_id=plan["plan_id"])["actor"]
         transport.reconcile()
         install_model(data, root, sid)
+        if args.invalid_editorial:
+            helper = root / "report_model.py"
+            helper.write_text(helper.read_text().replace('"request_digest": request["request_digest"]', '"request_digest": "known-invalid"'))
         before_calls, before_messages = capture.read_bytes(), store.messages(sid)
         server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
         server.chat_store, server.runtime_controller = store, runtime
@@ -67,7 +71,7 @@ def main() -> None:
         server.lark_runner, server.lark_private_conversations = provider, transport
         server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {
             "steward-app": {"status": "listening"}, "notes-app": {"status": "stopped"}}, close=lambda: None)
-        server.lark_app_setup_manager = SimpleNamespace(session=None)
+        server.lark_app_setup_manager = SimpleNamespace(session=None, close=lambda: None)
         stop = threading.Event()
         signal.signal(signal.SIGTERM, lambda *_: stop.set())
         signal.signal(signal.SIGINT, lambda *_: stop.set())

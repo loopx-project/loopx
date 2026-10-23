@@ -35,6 +35,8 @@ export function StewardReport({state, zh, busy, available, goalActive, onChange}
       {state.configured ? <p>{zh ? "下次计划：" : "Next deadline: "}{stamp(state.next_due_at)}<br/>
         {zh ? "最近窗口：" : "Latest window: "}{stamp(state.retained_window_due_at)} · {state.delivery_status === "delivered"
           ? (zh ? "原私聊全文已核验送达" : "Full private reply verified")
+          : state.delivery_status === "generation_failed" ? (zh ? "本期生成失败，证据保留；取消失败窗口后，后续到期可继续" : "Generation failed; evidence retained. Cancel this failed window to continue at a later deadline.")
+          : state.delivery_status === "generation_cancelled" ? (zh ? "失败窗口已取消，未完成或送达；原证据保留" : "Failed window cancelled, not completed or delivered; evidence retained")
           : state.delivery_status === "unconfirmed" ? (zh ? "发送结果待确认，不重复发送" : "Send unconfirmed; no blind resend")
           : state.generation_id ? (zh ? "已生成，投递待核验" : "Generated; delivery pending") : (zh ? "尚未生成" : "Not generated")}</p> : null}
       <div className="personal-capability-fields"><label>{zh ? "汇报时区" : "Report timezone"}<input value={zone} aria-invalid={!validZone} disabled={disabled} onChange={event => {
@@ -48,7 +50,7 @@ export function StewardReport({state, zh, busy, available, goalActive, onChange}
       <div className="personal-cadence-actions"><button className="is-primary" type="button" disabled={disabled || !goalActive || !schedule || !zone.trim() || !validZone}
         onClick={() => schedule && onChange("enable", schedule)}>{state.enabled ? (zh ? "更新汇报计划" : "Update report schedule") : (zh ? "启用详细汇报" : "Enable detailed reports")}</button>
         {state.enabled ? <button type="button" disabled={disabled} onClick={() => onChange("pause")}>{zh ? "暂停汇报" : "Pause reports"}</button> : null}
-        {state.configured ? <button type="button" disabled={disabled} onClick={() => onChange("cancel")}>{zh ? "取消汇报" : "Cancel reports"}</button> : null}
+        {state.configured ? <button type="button" disabled={disabled} onClick={() => onChange("cancel")}>{state.delivery_status === "generation_failed" ? (zh ? "取消失败窗口" : "Cancel failed window") : (zh ? "取消汇报" : "Cancel reports")}</button> : null}
       </div>
     </>}
   </section>;

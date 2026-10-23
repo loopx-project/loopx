@@ -40,6 +40,14 @@ test("report consent fixes the original actor, source and private audience witho
   assert.equal(planStewardReport({...retained, proposed_subscription_revision: "original"}).gate, null);
   assert.equal(planStewardReport({...retained, pending_report: {...retained.pending_report,
     verified_publication: true}}).gate, null);
+  assert.equal(planStewardReport({...retained, pending_report: {...retained.pending_report,
+    retired: true}}).gate, null);
+  const cancel = {...retained, operation: "cancel", proposed: {...proposed, enabled: false}};
+  assert.equal(planStewardReport(cancel).retires_failed_window, false);
+  assert.equal(planStewardReport({...cancel, pending_report: {...retained.pending_report,
+    failure_ref: "known-terminal-failure"}}).retires_failed_window, true);
+  assert.equal(planStewardReport({...cancel, pending_report: {...retained.pending_report,
+    failure_ref: "known-terminal-failure", retired: true}}).retires_failed_window, false);
   assert.notEqual(first.plan_id, planStewardReport({...input, proposed: {...proposed, timezone: "UTC"}}).plan_id);
   for (const invalid of [
     {...input, binding: {...p.binding, audience: "group"}},

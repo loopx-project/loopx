@@ -30,9 +30,11 @@ export function planStewardReport(params: JsonObject): JsonObject {
     current.actor, current.binding, params.operation, before, configuration, routeProof, params.pending_report ?? null,
   ])).digest("hex");
   const pending = params.pending_report == null ? null : requireJsonObject(params.pending_report, "pending report window");
-  const gate = params.operation === "enable" && pending?.prepared === true && pending.verified_publication !== true
+  const gate = params.operation === "enable" && pending?.prepared === true && pending.retired !== true && pending.verified_publication !== true
     && pending.subscription_revision !== params.proposed_subscription_revision ? "report_window_pending" : null;
   return {schema_version: "loopx_steward_report_plan_v0", plan_id: planId,
     actor: current.actor, operation: params.operation, configuration,
+    retires_failed_window: params.operation === "cancel" && pending?.retired !== true
+      && typeof pending?.failure_ref === "string" && Boolean(pending.failure_ref),
     gate, model_invoked: false, external_writes_performed: false};
 }

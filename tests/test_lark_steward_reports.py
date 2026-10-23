@@ -113,6 +113,12 @@ def test_unknown_send_without_locator_is_retained_without_second_create_or_model
     assert json.loads((folder / "private-delivery.json").read_text())["delivery_status"] == "unconfirmed"
     assert read_periodic_report_publication_cursor(runtime_root=reports.root,
         goal_id=actor["goal_id"], agent_id=actor["agent_id"]) is None
+    binding = reports.selected(actor["goal_id"].removeprefix("steward-agent-"))["binding"]
+    plan = reports.configure(binding["binding_id"], operation="cancel")["plan"]
+    assert not plan["retires_failed_window"]
+    reports.configure(binding["binding_id"], operation="cancel", execute=True, expected_plan_id=plan["plan_id"])
+    assert not read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"]).get("retirement")
+    assert provider.writes == sent and capture.read_bytes() == calls
 
 
 def test_original_production_wake_and_outbound_loops_complete_the_report_without_manual_submit(steward, tmp_path, monkeypatch):

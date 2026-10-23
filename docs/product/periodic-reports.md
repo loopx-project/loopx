@@ -319,6 +319,21 @@ pending-window explanation. Pause and restoration of the same plan remain
 available; schedule edits can proceed after verified publication. This keeps an
 unfinished original window from being stranded by a different subscription.
 
+A terminal native attempt with a retained invalid editorial response, no
+generation and no delivery attempt is shown as generation failed. The owner's
+existing cancel action can explicitly retire that failed window: its Todo is
+paused as blocked, the native failure, cost and artifacts remain, and the cadence journal
+records retirement separately from publication. Restoring the same plan does
+not replay the failed attempt; a later due window can progress. A changed future
+plan is also allowed after retirement. Unknown model outcomes and partial or
+unknown sends cannot take this exit; they keep the original recovery boundary.
+
+| Cancelled failure on the original settings page | Narrow retained-failure state |
+| --- | --- |
+| ![Cancelled generation is not completed or delivered](../assets/personal-workspace/steward-reports/failed-window-cancelled.png) | ![Retained cancelled window in a narrow viewport](../assets/personal-workspace/steward-reports/cancelled-window-narrow.png) |
+
+![Default narrow settings viewport before opening monitoring](../assets/personal-workspace/steward-reports/default-narrow.png)
+
 The packaged browser fixture uses actual HTTP/Core/calendar storage with a
 synthetic original provider/model. Screenshots below are that isolated journey,
 not production-message or real-phone proof.
@@ -340,7 +355,7 @@ It retains the original visible conversation, provider and portfolio grant.
 With unchanged authorization it reuses the upstream model thread. For an
 all-registered report whose authorized inventory or Goal lifetime changed before
 execution, the existing context owner discards old model history and prepares a
-fresh upstream context, records the transition, then re-enters strict native
+fresh upstream context, records it through the existing context owner, then re-enters strict native
 execution admission. No new user message is required to repair this context.
 Selected-scope changes, revocation and changes during a model call still fail
 closed. Busy/queued user work wins admission, and revoked or stopped sources cannot

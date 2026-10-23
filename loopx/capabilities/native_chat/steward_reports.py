@@ -71,6 +71,21 @@ class StewardReports:
         trigger = evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window))
         return bool(cursor and trigger["selected_trigger_id"] in cursor["covered_trigger_ids"])
 
+    def _known_generation_failure(self, actor: dict[str, Any], window: dict[str, Any]) -> dict[str, str] | None:
+        from .steward_turn import native_steward_client_id
+        folder = attempt_directory(self.root, window)
+        if (not (folder / "editorial-response.json").is_file()
+                or (folder / "private-generation.json").exists() or (folder / "private-delivery.json").exists()):
+            return None
+        turn = self.controller.store.turn_for_client(actor["session_id"],
+            native_steward_client_id(actor, "report." + window["window_id"]))
+        request = (turn or {}).get("loopx_request") or {}
+        native = ((turn or {}).get("response") or {}).get("native_loopx") or {}
+        if (turn and turn.get("status") == "completed" and native.get("status") == "failed"
+                and request.get("actor") == actor and request.get("report_window_id") == window["window_id"]):
+            return {"turn_id": turn["turn_id"], "todo_id": request["todo_id"]}
+        return None
+
     def configure(self, binding_id: str, *, operation: str, schedule: dict[str, Any] | None = None,
                   expected_plan_id: str | None = None, execute: bool = False) -> dict[str, Any]:
         from ...configure_goal import configure_goal
@@ -97,10 +112,14 @@ class StewardReports:
                 {**goal, "control_plane": {"periodic_report": {**proposed, "enabled": True}}})
             journal = read_cadence_journal(runtime_root=self.root, goal_id=actor["goal_id"])
             pending = None
+            failure = None
             if journal:
+                failure = self._known_generation_failure(actor, journal["window"])
                 pending = {"subscription_revision": journal["window"]["subscription_revision"],
                     "prepared": (attempt_directory(self.root, journal["window"]) / "editorial-request.json").exists(),
-                    "verified_publication": self._published_window(journal["window"])}
+                    "verified_publication": self._published_window(journal["window"]),
+                    "retired": bool(journal.get("retirement")),
+                    "failure_ref": failure["turn_id"] if failure else None}
             plan = self.bindings._core("collaboration.steward.report.plan", {
                 **current, "workspace_path": str(self.managed._workspace(session)),
                 "goal": self.managed._goal(actor["goal_id"]),
@@ -119,6 +138,15 @@ class StewardReports:
                 raise ValueError("native report configuration was not committed")
             if configuration_summary(load_goal_from_registry(self.controller.registry_path, actor["goal_id"])) != proposed:
                 raise ValueError("native report configuration readback changed")
+            if plan["retires_failed_window"]:
+                from ..periodic_report.cadence_journal import retire_failed_cadence_window
+                key = "cancel.report." + journal["window"]["window_id"]
+                native_command(self.controller, ["todo", "update", "--goal-id", actor["goal_id"],
+                    "--todo-id", failure["todo_id"], "--agent-id", actor["agent_id"],
+                    "--update-operation-id", key, "--status", "blocked", "--clear-resume-when", "--reason",
+                    "Owner cancelled a known failed report window; retain the failed task, costs and evidence, not completed or delivered.", "--execute"])
+                retire_failed_cadence_window(runtime_root=self.root, goal_id=actor["goal_id"],
+                    expected_window_id=journal["window"]["window_id"], source_receipt_id=failure["turn_id"])
             getattr(self.controller, "_steward_monitor_next_check", {}).pop(binding_id, None)
             receipt = {"ok": True, "applied": True, "plan": plan, "report": self.health(binding_id),
                 "model_invoked": False, "external_writes_performed": False}
@@ -172,6 +200,10 @@ class StewardReports:
                             generation = value["generation_id"]
                         else:
                             delivery = value.get("delivery_status", "pending")
+                if journal.get("retirement"):
+                    delivery = "generation_cancelled"
+                elif self._known_generation_failure(actor, journal["window"]):
+                    delivery = "generation_failed"
             active = resolve_active_goal_periodic_report_subscription(goal)
             return {"available": True, "configured": True, "enabled": bool(active),
                 "schedule": config.get("schedule"), "next_due_at": report_cadence_next_due_at(
@@ -212,7 +244,7 @@ class StewardReports:
         if not rows:
             native_command(self.controller, ["todo", "add", "--goal-id", actor["goal_id"],
                 "--role", "agent", "--operation-id", window["window_id"],
-                "--text", "[P1] Author the due authorized portfolio report; retain counterevidence and coverage gaps. Generation is separate from verified private delivery.",
+                "--text", f"[P1] Author the authorized portfolio report ending {window['due_at']}; retain counterevidence and coverage gaps. Generation is separate from verified private delivery.",
                 "--claimed-by", actor["agent_id"], "--action-kind", "generate_periodic_report",
                 "--target-key", window["window_id"], "--continuation-policy", "same_agent_non_delivery",
                 "--execute"])
