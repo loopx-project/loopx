@@ -156,6 +156,7 @@ nav:
   - Product:
       - product/README.md
       - Vision: product/vision.md
+      - Steward Monitoring: product/periodic-reports.md
       - Release Readiness: product/release-readiness.md
       - Surfaces: product/surfaces/README.md
       - Runtimes: product/runtimes/README.md

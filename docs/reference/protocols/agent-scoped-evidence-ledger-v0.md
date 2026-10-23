@@ -96,14 +96,19 @@ scoped history observations, including omitted blockers and prior claims. A
 truncated coverage projection alone cannot establish novelty. Reading context
 or changing an evidence label never creates permission or semantic progress.
 
-Each evidence row includes a content-bound `evidence_ref` and an exact
-`read_action` using the existing history entry:
+Each evidence row includes a content-bound `evidence_ref`. A single-row view
+includes its exact `read_action`; a multi-row view carries one
+`evidence_read_action_template` at the context root. Replace `{evidence_ref}`
+with the chosen row's exact `evidence_ref` to use the existing history entry:
 
 ```bash
 loopx --format json history --goal-id <goal-id> --agent-id <agent-id> --evidence-ref <projected-ref>
 ```
 
-Execute the supplied action only when more detail is needed. It resolves one
+Execute the supplied action only when more detail is needed. Sharing this
+command route changes no evidence text, ordering, coverage, scope or read
+obligation and requires no extra tool call or cross-turn baseline. Historical
+contexts with per-row actions remain readable. It resolves one
 scoped compact-index record in the same Goal and Agent; a changed or unavailable reference fails explicitly and asks the caller to refresh context.
 It never falls back to another Agent or the latest unrelated record. It reads no
 raw transcript and creates no read receipt. Ordinary `history` remains the

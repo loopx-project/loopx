@@ -2619,6 +2619,8 @@ const privateConversationSchema = z.object({
   owner_attention: z.discriminatedUnion("available", [
     z.object({available: z.literal(true), enabled: z.boolean(), revision: z.number().int(),
       last_checked_at: z.number().nullable(), error_code: z.string().nullable(),
+      source_coverage: z.object({goal_count: z.number().int().nonnegative(),
+        read_goal_count: z.number().int().nonnegative(), unavailable_goal_count: z.number().int().nonnegative()}).nullable().optional(),
       pending_count: z.number().int(), unconfirmed_count: z.number().int(), failed_count: z.number().int()}),
     z.object({available: z.literal(false), error_code: z.string()}),
   ]).optional(),

@@ -5,7 +5,7 @@
 .research-history-title { display: flex; align-items: center; gap: 4px; }
 .research-history-title h2 { margin: 0; }
 .research-history-heading p, .research-history-coverage, .research-history-note { color: var(--pw-muted); font-size: var(--text-caption); line-height: 1.6; margin: 4px 0; }
-.research-history-controls { --research-control-height: 36px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; max-width: 100%; min-width: 0; gap: 4px 8px; }
+.research-history-controls { --research-control-height: 36px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: start; max-width: 100%; min-width: 0; gap: 4px 8px; }
 .research-history-controls button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--research-control-height); padding: 6px 10px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); font: inherit; font-size: var(--text-caption); }
 .research-history-controls .research-analysis-scoped-action, .research-history-controls .research-analysis-entry { display: contents; }
 .research-history-controls .research-lens { grid-area: 1 / 1; align-self: stretch; }
@@ -13,13 +13,15 @@
 .research-history-controls .research-analysis-entry-actions > button { min-width: 0; }
 .research-history-controls .context-help { align-items: stretch; }
 .research-history-controls .context-help-trigger { height: auto; min-height: var(--research-control-height); }
-.research-history-controls > button { grid-area: 1 / 3; align-self: stretch; }
+.research-history-controls > button { grid-area: 1 / 4; align-self: stretch; }
 .research-history-controls .research-analysis-entry > small { grid-area: 2 / 2; overflow-wrap: anywhere; }
 .research-history-controls .research-analysis-scope { grid-column: 1 / -1; }
-.research-history-controls.is-reading { grid-template-columns: minmax(0, 1fr) auto; }
+.research-history-controls > .research-history-search { grid-column: 3; }
+.research-history-controls.is-reading { grid-template-columns: minmax(0, 1fr) auto auto; }
 .research-history-controls.is-reading .research-analysis-entry-actions { grid-column: 1; }
 .research-history-controls.is-reading .research-analysis-entry > small { grid-column: 1; }
-.research-history-controls.is-reading > button { grid-column: 2; }
+.research-history-controls.is-reading > button { grid-column: 3; }
+.research-history-controls.is-reading > .research-history-search { grid-column: 2; }
 .research-history-controls button:disabled { color: var(--pw-muted); opacity: .6; cursor: not-allowed; }
 .research-history-layout { display: grid; min-width: 0; margin-top: 16px; border: 1px solid var(--pw-line); border-radius: 12px; overflow: hidden; }
 .research-history-layout.has-selection { grid-template-columns: minmax(0, 1fr); }
@@ -71,6 +73,21 @@
 .research-history-all-records { margin-top: 12px; font-size: var(--text-caption); color: var(--pw-muted); }
 .research-history-all-records summary { cursor: pointer; padding-block: 6px; }
 .research-history-all-records > .research-history-records { max-height: 400px; overflow: auto; }
+.research-record-search { color: var(--pw-text); font-size: var(--text-body); }
+.research-record-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
+.research-record-filters input { flex: 1 1 220px; min-width: 0; }
+.research-record-filters input, .research-record-filters select, .research-record-search button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; color: var(--pw-text); background: var(--pw-bg); font: inherit; }
+.research-record-search > p { color: var(--pw-muted); }
+.research-record-search .research-history-records { list-style: none; padding: 0; }
+.research-record-search li { border-bottom: 1px solid var(--pw-line); }
+.research-record-search summary { min-height: 44px; overflow-wrap: anywhere; }
+.research-record-search summary span { display: block; color: var(--pw-muted); font-size: var(--text-caption); }
+.research-record-search p { white-space: pre-wrap; line-height: var(--leading-prose); overflow-wrap: anywhere; }
+.research-record-search code { display: block; overflow-wrap: anywhere; font-size: var(--text-body); }
+.research-record-search dd { margin: 0 0 8px; }
+.research-record-search dt { color: var(--pw-muted); font-size: var(--text-caption); }
+.research-history-all-records { scroll-margin-top: 16px; }
+.research-record-search :is(input, select, summary):focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .research-node-count { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Lens switch and timeline reading (record time only; position never encodes progress). */

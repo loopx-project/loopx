@@ -1,5 +1,5 @@
 /** Notification discovery owns no Todo lifecycle or execution authority.
- * Complete native snapshots select subjects; provider journals prove delivery. */
+ * Complete per-Goal snapshots select subjects; provider journals prove delivery. */
 import type {JsonObject} from "../effect_program.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256 as digest} from "../coordination/authority_store_codec.ts";
@@ -9,6 +9,38 @@ const records = (value: unknown, name: string): JsonObject[] => {
   if (!Array.isArray(value)) throw new TypeError(`${name} must be a complete array`);
   return value.map(row => requireJsonObject(row, name));
 };
+const identities = (value: unknown, name: string): Set<string> => {
+  if (!Array.isArray(value)) throw new TypeError(`${name} must be a complete array`);
+  const result = new Set(value.map(item => requireNonEmptyString(item, name)));
+  if (result.size !== value.length) throw new Error(`duplicate ${name}`);
+  return result;
+};
+
+/** The provider enumerates the whole current grant, even when a Goal cannot be read. */
+function sourceCoverage(input: JsonObject, goals: JsonObject[]) {
+  const read = identities(goals.map(goal => goal.goal_id), "read Goal ids");
+  if (input.scope_goal_ids === undefined && input.unavailable_goal_ids === undefined) {
+    if (input.source_complete !== true) throw new Error("owner attention source is incomplete");
+    return {read, scope: read, unavailable: new Set<string>()};
+  }
+  const scope = identities(input.scope_goal_ids, "scope_goal_ids");
+  const unavailable = identities(input.unavailable_goal_ids, "unavailable_goal_ids");
+  if ([...read].some(id => !scope.has(id) || unavailable.has(id))
+      || [...unavailable].some(id => !scope.has(id)) || read.size + unavailable.size !== scope.size
+      || input.source_complete !== (unavailable.size === 0))
+    throw new Error("owner attention coverage does not partition the current scope");
+  return {read, scope, unavailable};
+}
+
+function readCoverage(raw: unknown): JsonObject | null {
+  if (raw == null) return null;
+  const coverage = requireJsonObject(raw, "source_coverage");
+  const counts = ["goal_count", "read_goal_count", "unavailable_goal_count"]
+    .map(key => requireInteger(coverage[key], key));
+  if (counts.some(count => count < 0) || counts[0] !== counts[1] + counts[2])
+    throw new Error("invalid owner attention coverage");
+  return coverage;
+}
 function active(row: JsonObject, goalId: string): boolean {
   if (row.goal_id != null && row.goal_id !== goalId) throw new Error("foreign owner Todo");
   // Reuse the existing attention owner, one source at a time. Its presentation
@@ -30,6 +62,9 @@ function readState(raw: unknown): JsonObject {
       || typeof state.initialized !== "boolean" || requireInteger(state.revision, "revision") < 0)
     throw new Error("owner notification state is unavailable");
   records(state.subjects, "subjects");
+  if (state.baseline_pending_goal_ids !== undefined)
+    identities(state.baseline_pending_goal_ids, "baseline_pending_goal_ids");
+  readCoverage(state.source_coverage);
   for (const row of records(state.outbox, "outbox")) {
     if (!["pending", "sending", "unconfirmed", "delivered", "failed", "superseded"].includes(String(row.status)))
       throw new Error("unknown notification receipt state");
@@ -42,6 +77,7 @@ export function ownerAttentionHealth(input: JsonObject): JsonObject {
   const rows = records(state.outbox, "outbox");
   return {available: true, enabled: state.enabled, revision: state.revision,
     last_checked_at: state.last_checked_at ?? null, error_code: state.error_code ?? null,
+    source_coverage: readCoverage(state.source_coverage),
     pending_count: rows.filter(row => row.status === "pending").length,
     unconfirmed_count: rows.filter(row => row.status === "sending" || row.status === "unconfirmed").length,
     failed_count: rows.filter(row => row.status === "failed").length};
@@ -49,11 +85,14 @@ export function ownerAttentionHealth(input: JsonObject): JsonObject {
 
 export function planOwnerAttention(input: JsonObject): JsonObject {
   const state = readState(input.state);
-  if (input.source_complete !== true) throw new Error("owner attention source is incomplete");
+  const goals = records(input.goals, "goals");
+  const coverage = sourceCoverage(input, goals);
+  const baselinePending = identities(state.baseline_pending_goal_ids ?? [], "baseline_pending_goal_ids");
+  if (state.initialized !== true) for (const id of coverage.unavailable) baselinePending.add(id);
   const previous = records(state.subjects, "subjects");
   const outbox = records(state.outbox, "outbox").map(row => ({...row}));
   const current = new Map<string, JsonObject>();
-  for (const goal of records(input.goals, "goals")) {
+  for (const goal of goals) {
     const goalId = requireNonEmptyString(goal.goal_id, "goal_id");
     for (const todo of records(goal.todos, "todos")) {
       if (!active(todo, goalId)) continue;
@@ -73,7 +112,7 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
     const old = previous.find(item => item.key === row.key);
     const changed = !old || old.active !== true || old.digest !== row.digest;
     const generation = Number(old?.generation ?? 0) + Number(changed);
-    if (state.initialized === true && changed) {
+    if (state.initialized === true && changed && !baselinePending.has(String(row.goal_id))) {
       const id = digest([row.key, generation, row.digest]);
       const terms = row.terms as JsonObject;
       // Structured scopes remain identity/authority inputs, not operator copy.
@@ -91,7 +130,8 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
     return {...subject, generation};
   });
   for (const row of previous) {
-    if (!current.has(String(row.key))) subjects.push({...row, active: false});
+    if (!current.has(String(row.key))) subjects.push(coverage.unavailable.has(String(row.goal_id))
+      ? {...row} : {...row, active: false});
   }
   for (const row of outbox) {
     const subject = subjects.find(item => item.key === row.key);
@@ -99,9 +139,13 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
     // A crash after starting a write is ambiguous even without a locator.
     if (row.status === "sending") {row.status = "unconfirmed"; row.error_code = "send_outcome_unknown";}
     if (obsolete && ["pending", "failed"].includes(String(row.status))) row.status = "superseded";
-    row.source_current = !obsolete;
+    row.source_current = !obsolete && coverage.read.has(String(row.goal_id));
   }
-  return {...state, initialized: true, subjects, outbox};
+  return {...state, initialized: true, subjects, outbox,
+    error_code: coverage.unavailable.size ? "source_incomplete" : null,
+    baseline_pending_goal_ids: [...baselinePending].filter(id => coverage.unavailable.has(id)).sort(),
+    source_coverage: {goal_count: coverage.scope.size, read_goal_count: coverage.read.size,
+      unavailable_goal_count: coverage.unavailable.size}};
 }
 
 /** Fold provider observations, preserving frozen intent and ambiguous writes. */

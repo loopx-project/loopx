@@ -219,7 +219,8 @@ def test_old_evidence_survives_display_limit_and_core_goal_uses_registered_state
     assert len(context["evidence"]) == 2
     assert context["core_goal"]["objective"] == "Deliver the accepted outcome across the whole workload."
     assert context["core_goal"]["acceptance_contract"]["scope"]["kind"] == "selected_work"
-    command = context["evidence"][-1]["read_action"]
+    command = context["evidence_read_action_template"].replace(
+        "{evidence_ref}", context["evidence"][-1]["evidence_ref"])
     result = subprocess.run([sys.executable, "-m", "loopx.cli", *shlex.split(command)[1:]], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["evidence"]["progress_observation"]["evidence_ids"] == ["old-best"]

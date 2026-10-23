@@ -192,16 +192,23 @@ class PostWritebackHookRegistration:
         }
 
 
-def _turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Use the host envelope or the native quota identity, without new authority."""
     envelope = payload.get("turn_envelope")
-    return (
-        envelope
-        if isinstance(envelope, Mapping)
-        else {
-            "goal_id": payload.get("goal_id"),
-            "agent_id": payload.get("agent_id"),
-        }
-    )
+    if isinstance(envelope, Mapping):
+        return envelope
+    agent_id = payload.get("agent_id")
+    identity = payload.get("agent_identity")
+    if isinstance(identity, Mapping):
+        scoped_agent = identity.get("agent_id")
+        if agent_id and scoped_agent and agent_id != scoped_agent:
+            raise ValueError("context source has conflicting Agent identities")
+        agent_id = agent_id or scoped_agent
+    if "heartbeat_receipt" in payload and "goal_boundary" in payload:
+        # Keep the native source for the typed quota signature owner. Identity
+        # alone cannot invalidate context when the admitted authority changes.
+        return {**payload, "agent_id": agent_id}
+    return {"goal_id": payload.get("goal_id"), "agent_id": agent_id}
 
 
 def dispatch_turn_context_hooks(
@@ -234,7 +241,7 @@ def dispatch_turn_context_hooks(
                 {
                     "registration": registration.contract(),
                     "result": result,
-                    "source": _turn_context_source(payload),
+                    "source": turn_context_source(payload),
                 },
             )
             readback = contribution.pop("readback")
@@ -269,7 +276,7 @@ def project_turn_context(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "capability_hook.turn_context.project",
                 {
                     "contribution": item,
-                    "source": _turn_context_source(payload),
+                    "source": turn_context_source(payload),
                     "readback": {key: payload.get(key) for key in slots},
                 },
             )

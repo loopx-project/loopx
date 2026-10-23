@@ -359,7 +359,9 @@ def test_native_recovery_distinguishes_existing_result_from_new_submission():
                    "does not restart the cooldown", "If the ID was not received",
                    "inspect `--list` first", "do not guess an ID or blindly resubmit",
                    "token-visible history", "missing session or result",
-                   "unresolved feedback"]:
+                   "unresolved feedback", "cooldown limits new submissions, not independent task work",
+                   "does not depend on that feedback", "Defer only work that requires the missing result",
+                   "if no useful independent work remains", "no extra evaluations or budget"]:
         assert clause in policy
 
 

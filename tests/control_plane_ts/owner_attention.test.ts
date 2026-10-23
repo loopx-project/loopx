@@ -113,3 +113,84 @@ test("readable rendering preserves legacy pending, unknown and delivered notices
     assert.deepEqual(restored, persisted, "unchanged source cannot re-notify or rewrite an old intent");
   }
 });
+
+const snapshot = (state: JsonObject, goals: JsonObject[], unavailable: string[], scope = ["alpha", "beta"]) =>
+  planOwnerAttention({state, goals, scope_goal_ids: scope, unavailable_goal_ids: unavailable,
+    source_complete: unavailable.length === 0});
+const goal = (goal_id: string, todos: JsonObject[]) => ({goal_id, todos});
+
+test("one unreadable Goal holds its own notices while healthy sources continue and recover once", () => {
+  const base = snapshot(empty(), [goal("alpha", []), goal("beta", [])], []);
+  const pending = snapshot(base, [goal("alpha", [task]), goal("beta", [])], []);
+  const missing = snapshot(pending, [goal("beta", [task])], ["alpha"]);
+  assert.equal(missing.error_code, "source_incomplete");
+  assert.deepEqual(ownerAttentionHealth({state: missing}).source_coverage,
+    {goal_count: 2, read_goal_count: 1, unavailable_goal_count: 1});
+  const held = rows(missing).find(row => row.goal_id === "alpha")!;
+  assert.equal(held.id, rows(pending)[0].id);
+  assert.equal(held.status, "pending", "unavailable is not withdrawn");
+  assert.equal(held.source_current, false);
+  assert.equal(rows(missing).find(row => row.goal_id === "beta")!.source_current, true);
+  assert.throws(() => observeOwnerAttention({state: missing, id: held.id,
+    event: "write_started", now: 100, intent: {}}));
+  const restored = snapshot(JSON.parse(JSON.stringify(missing)), [goal("alpha", [task]), goal("beta", [task])], []);
+  assert.equal(restored.error_code, null);
+  assert.equal(rows(restored).length, 2);
+  assert.equal(rows(restored)[0].id, held.id, "recovery preserves the original notice identity");
+  assert.equal(rows(restored)[0].source_current, true);
+  assert.equal(rows(snapshot(missing, [goal("beta", [task])], [], ["beta"]))[0].status, "superseded",
+    "a confirmed scope removal still withdraws an unsent notice");
+  const changed = snapshot(missing, [goal("alpha", [{...task, note: "Updated decision"}]), goal("beta", [task])], []);
+  assert.equal(rows(changed)[0].status, "superseded");
+  assert.equal(rows(changed).length, 3);
+});
+
+test("first-enable missing Goals baseline on recovery without suppressing later changes or new Goals", () => {
+  const first = snapshot(empty(), [goal("alpha", [task])], ["beta"]);
+  assert.deepEqual(first.baseline_pending_goal_ids, ["beta"]);
+  const restarted = snapshot(JSON.parse(JSON.stringify(first)), [goal("alpha", [task])], ["beta"]);
+  const recovered = snapshot(restarted, [goal("alpha", [task]), goal("beta", [task])], []);
+  assert.equal(rows(recovered).length, 0, "unknown initial history must not become a recovery burst");
+  assert.deepEqual(recovered.baseline_pending_goal_ids, []);
+  const changed = snapshot(recovered, [goal("alpha", [task]), goal("beta", [{...task, note: "New terms"}])], []);
+  assert.equal(rows(changed).length, 1);
+  const added = snapshot(recovered, [goal("alpha", [task]), goal("beta", [task]), goal("gamma", [task])], [],
+    ["alpha", "beta", "gamma"]);
+  assert.equal(rows(added).length, 1, "newly registered Goals after enable retain discovery semantics");
+});
+
+test("missing sources preserve frozen unknown sends and recovered locators without reopening creates", () => {
+  const pending = snapshot(snapshot(empty(), [goal("alpha", []), goal("beta", [])], []),
+    [goal("alpha", [task]), goal("beta", [])], []);
+  const id = rows(pending)[0].id;
+  const started = observeOwnerAttention({state: pending, id, event: "write_started", now: 100,
+    intent: {text: rows(pending)[0].body, route: {source: "original"}}});
+  for (const state of [started, observeOwnerAttention({state: started, id,
+    event: "write_observed", now: 100, message_id: "om_original"})]) {
+    const missing = snapshot(state, [goal("beta", [task])], ["alpha"]);
+    const held = rows(missing)[0];
+    assert.equal(held.status, "unconfirmed");
+    assert.deepEqual(held.intent, rows(started)[0].intent);
+    const recovered = snapshot(missing, [goal("alpha", [task]), goal("beta", [task])], []);
+    assert.equal(rows(recovered).length, 2);
+    assert.equal(rows(recovered)[0].status, "unconfirmed");
+    assert.equal(rows(recovered)[0].message_id, rows(state)[0].message_id);
+    assert.throws(() => observeOwnerAttention({state: recovered, id, event: "write_started", now: 100, intent: {}}));
+  }
+});
+
+test("partial coverage must exhaustively partition a complete authorized scope", () => {
+  const state = empty();
+  const valid = {state, goals: [goal("alpha", [])], scope_goal_ids: ["alpha", "beta"],
+    unavailable_goal_ids: ["beta"], source_complete: false};
+  assert.doesNotThrow(() => planOwnerAttention(valid));
+  for (const extra of [
+    {scope_goal_ids: ["alpha", "beta", "omitted"]},
+    {scope_goal_ids: ["alpha", "alpha", "beta"]},
+    {unavailable_goal_ids: ["alpha", "beta"]},
+    {unavailable_goal_ids: ["foreign"]}, {source_complete: true},
+    {goals: [goal("alpha", []), goal("alpha", [])]}, {unavailable_goal_ids: undefined},
+  ]) assert.throws(() => planOwnerAttention({...valid, ...extra}));
+  assert.throws(() => ownerAttentionHealth({state: {...state,
+    source_coverage: {goal_count: 2, read_goal_count: 2, unavailable_goal_count: 1}}}));
+});

@@ -1,7 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
-import {turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
+import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
 // Capability providers own enablement. These rules only bound their contributions.
@@ -24,7 +24,8 @@ function contextSource(value: unknown): JsonObject {
   // Reuse the governing owner. Binding the original observation adds detail
   // locations/measurements without changing the authorized decision.
   return {goal_id: source.goal_id, agent_id: source.agent_id,
-    governing: turnEnvelopeActionSignatureDocument(source)};
+    governing: "heartbeat_receipt" in source && "goal_boundary" in source
+      ? quotaActionSignatureDocument(source) : turnEnvelopeActionSignatureDocument(source)};
 }
 
 function fields(value: unknown, label: string): JsonObject {

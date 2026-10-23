@@ -99,6 +99,50 @@ def prepared(steward, tmp_path, monkeypatch, provider="sqlite"):
     return sid, actor, monitor
 
 
+@pytest.mark.parametrize("unreadable", ["session", "queued_turn"])
+@pytest.mark.parametrize("storage_provider", ["file", "sqlite"])
+def test_unreadable_conversation_does_not_starve_another_native_monitor(steward, tmp_path, monkeypatch, unreadable, storage_provider):
+    store, runtime, provider, transport, binding, capture, _ = steward
+    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, storage_provider)
+    retained = monitor.current(actor)
+    other = transport.bindings.configure(transport_ref="notes-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="codex", context_kind="steward")
+    message = "Keep this independent steward available."
+    transport.admit("notes-app", provider.event("notes-app", "independent-steward", message))
+    accepted = next(row for row in transport.core.pending() if row["message"] == message)
+    assert finish(runtime, accepted)["status"] == "completed"
+    preview = transport.managed_steward.prepare(other["binding_id"], session_id=accepted["session_id"])["plan"]
+    other_actor = transport.managed_steward.prepare(other["binding_id"], session_id=accepted["session_id"],
+        expected_plan_id=preview["plan_id"], execute=True)["actor"]
+    plan = monitor.configure(other["binding_id"], operation="enable")["plan"]
+    monitor.configure(other["binding_id"], operation="enable", execute=True, expected_plan_id=plan["plan_id"])
+    assert [row["managed_actor"]["session_id"] for row in transport.bindings.read()["bindings"]] == [sid, accepted["session_id"]]
+    if unreadable == "queued_turn":
+        queued, _ = store.create_queued_turn(sid, client_turn_id="retained-request", message="Keep this request", origin="web")
+        path = store._turn_path(sid, queued["turn_id"])
+    else:
+        path = store._session_path(sid)
+    original_bytes, calls = path.read_bytes(), capture.read_bytes()
+    path.write_bytes(b"\xff")
+    try:
+        turns = pump_steward_monitors(runtime)
+        assert len(turns) == 1 and turns[0]["session_id"] == accepted["session_id"]
+        completed = finish(runtime, turns[0])
+        assert completed["status"] == "completed", completed
+        assert completed["response"]["native_loopx"]["monitor"]["result_hash"] == monitor.current(other_actor)["result_hash"]
+        assert monitor.current(actor) == retained and path.read_bytes() == b"\xff"
+        assert capture.read_bytes() == calls
+    finally:
+        path.write_bytes(original_bytes)
+    recovered = pump_steward_monitors(runtime)
+    if unreadable == "session":
+        assert len(recovered) == 1 and recovered[0]["session_id"] == sid
+        assert finish(runtime, recovered[0])["status"] == "completed"
+    else:
+        assert not recovered and store.queued_turns(sid)[0]["turn_id"] == queued["turn_id"]
+    assert capture.read_bytes() == calls
+
+
 def due_window(monitor, actor, deadline="2001-01-01T00:00:00Z"):
     """Advance a synthetic window through the real native Todo/lease owners.
 

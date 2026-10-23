@@ -438,6 +438,19 @@ encoded it as `supports` with `materialized_from=node_parent_id`; it is not
 scientific supporting evidence. Explicit source relationships retain their basis,
 without being promoted to independent verification.
 
+The history reader's recorded-evidence search filters the complete loaded
+snapshot before display pagination, including historical revisions, original
+text, source references and run/result identifiers. Literal terms and recorded
+status narrow the list without turning an older observation into the latest
+finding. Validated translations may be displayed, while matching still uses original
+text and each result retains full original text and provenance. Display-language
+toggles preserve the query. An
+interrupted load identifies partial coverage; failed refresh retains the previous
+snapshot with a stale-read warning and retry. This is a read-only S5/S11 discovery
+slice, not evidence of subsequent Agent adoption or scientific benefit. Packaged
+browser qualification uses the native paged history owner with synthetic records;
+installed native WebView and Lark search remain unqualified.
+
 **Layer 2 — requested Agent analysis.** This is the product consumer of the
 benchmark research owner's deep trajectory evaluation, not a second judge
 built into the frontend. Reuse its analysis method and versioned result

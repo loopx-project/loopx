@@ -166,6 +166,46 @@ function eligible(node: JsonObject | undefined): boolean {
   const observation = observationFor(node);
   return !!observation && !observation.composition_resolution && TERMINAL.has(String((observation.progress as JsonObject).result_class));
 }
+
+/** Current use follows only declared observation inputs. Historical envelopes,
+ * node statuses and completed tasks are never rewritten by this projection. */
+function currentResearchInputs(nodes: Map<string, JsonObject>, dependencies: Map<string, Set<string>>): Set<string> {
+  const observations = new Map([...nodes].map(([id, node]) => [id, observationFor(node)]));
+  const current = new Set<string>(), ready: string[] = [];
+  const remaining = new Map<string, number>(), consumers = new Map<string, string[]>();
+  for (const [id, node] of nodes) {
+    if (!eligible(node)) continue;
+    const lineage = observations.get(id)!.input_observations as JsonObject[] ?? [];
+    const inputs = [...(dependencies.get(id) ?? [])].sort();
+    if (!lineage.length) {
+      // Adding composition edges cannot turn an unbound observation into an
+      // independently verified input. Ordinary relations do not imply lineage.
+      if (node.node_kind === "experiment" && inputs.length >= 2) continue;
+      current.add(id); ready.push(id);
+      continue;
+    }
+    if (node.node_kind !== "experiment" || inputs.length !== 2
+      || JSON.stringify(lineage.map(input => input.node_id)) !== JSON.stringify(inputs)
+      || lineage.some(input => observations.get(String(input.node_id))?.fingerprint !== input.fingerprint)) continue;
+    remaining.set(id, inputs.length);
+    for (const input of inputs) {
+      const children = consumers.get(input) ?? [];
+      children.push(id); consumers.set(input, children);
+    }
+  }
+  // Resolve each valid edge once from eligible leaves. Shared ancestors are
+  // reusable; cycles and descendants of unavailable inputs never become ready.
+  // This avoids a recursion/depth limit that would reject a valid long chain.
+  for (let index = 0; index < ready.length; index++) {
+    for (const consumer of consumers.get(ready[index]) ?? []) {
+      const count = remaining.get(consumer)! - 1;
+      remaining.set(consumer, count);
+      if (count === 0) { current.add(consumer); ready.push(consumer); }
+    }
+  }
+  return current;
+}
+
 function evidenceFor(node: JsonObject): Set<string> {
   const observation = observationFor(node);
   return new Set([...(Array.isArray(node.evidence_refs) ? node.evidence_refs as string[] : []),
@@ -227,6 +267,7 @@ export function researchCompositionGaps(params: JsonObject): JsonObject[] {
     const inputs = dependencies.get(key) ?? new Set<string>();
     inputs.add(String(edge.to_node)); dependencies.set(key, inputs);
   }
+  const currentInputs = currentResearchInputs(nodes, dependencies);
   const experimentsByInputs = new Map<string, JsonObject[]>();
   for (const node of nodeRows) {
     if (node.node_kind !== "experiment") continue;
@@ -239,7 +280,7 @@ export function researchCompositionGaps(params: JsonObject): JsonObject[] {
   const gaps: JsonObject[] = [];
   for (const [identity, candidate] of [...candidates].sort(([a], [b]) => compare(a, b))) {
     const inputs = candidate.inputs.map(input => nodes.get(input));
-    const allEligible = inputs.every(eligible);
+    const allEligible = candidate.inputs.every(input => currentInputs.has(input));
     const attributable = candidate.claims.some(claim => {
       if (inputs.some(node => !node)) return false;
       const sets = inputs.map(node => evidenceFor(node!));
@@ -263,7 +304,7 @@ export function researchCompositionGaps(params: JsonObject): JsonObject[] {
       input_observations: inputs.filter((node): node is JsonObject => !!node).map(node => ({node_id: node.node_id,
         fingerprint: observationFor(node)?.fingerprint ?? null})),
       state: !allEligible || !attributable ? "ineligible" : observed ? "observed" : dismissed ? "dismissed" : "pending",
-      reason: !allEligible ? "terminal_input_observation_required" : !attributable ? "input_evidence_invalidated"
+      reason: !inputs.every(eligible) ? "terminal_input_observation_required" : !allEligible || !attributable ? "input_evidence_invalidated"
         : observed ? "typed_experiment_outcome" : dismissed ? "typed_candidate_dismissal" : "joint_experiment_result_required",
       interaction_kinds: [...new Set(candidate.claims.map(claim => String(claim.interaction_kind)))].sort(),
       experiment_node_ids: experiments.map(node => String(node.node_id)).sort(),

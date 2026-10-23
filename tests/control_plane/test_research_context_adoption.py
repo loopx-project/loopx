@@ -13,7 +13,7 @@ import pytest
 from loopx.cli import main
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.hosts.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
-from canonical_authority_fixture import isolate_sqlite_runtime
+from canonical_authority_fixture import assert_todo_read_unchanged, isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
 
@@ -227,7 +227,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     assert 'source-revision:'+source_context['snapshot']['provider_revision'] in inspected['evidence_refs']
     assert 'Candidate 3 failed' in Path(result['artifact']).read_text()
     assert 'Candidate 999' not in Path(result['artifact']).read_text()
-    assert source_run('todo','list','--goal-id','source','--todo-id',source_todo)==source_before
+    assert_todo_read_unchanged(source_run('todo','list','--goal-id','source','--todo-id',source_todo),source_before)
     assert run('task-lease','inspect','--goal-id','branch','--todo-id',destination_todo)['lease']==lease['lease']
     if with_knowledge and lost_response is None:
         _ordinary_review_and_work(run, workspace, tmp_path, destination_todo, digest, monkeypatch)
@@ -238,7 +238,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     if with_knowledge:
         assert replay['explore_knowledge']['appended_event_count'] == 0
         assert log.read_bytes() == imported_bytes
-    assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==after
+    assert_todo_read_unchanged(run('todo','list','--goal-id','branch','--todo-id',destination_todo),after)
     with pytest.raises(ValueError,match='execution authority changed'):
         adopt_todo_context(env,unit,digest,**{**args,'lease_version':999})
     with pytest.raises(ValueError,match='already has context'):
@@ -258,7 +258,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
     moved=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
     with pytest.raises(ValueError,match='continuation rejected'):
         adopt_todo_context(env,unit,digest,**args)
-    assert run('todo','list','--goal-id','branch','--todo-id',destination_todo)==moved
+    assert_todo_read_unchanged(run('todo','list','--goal-id','branch','--todo-id',destination_todo),moved)
 
 
 def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatch, work=None):

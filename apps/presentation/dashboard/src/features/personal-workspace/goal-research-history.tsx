@@ -1,6 +1,7 @@
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
-import {ArrowLeft, ArrowRight, Circle, FlaskConical, GitBranch, RefreshCw} from "lucide-react";
+import {ArrowLeft, ArrowRight, Circle, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
+import {ResearchRecordSearch} from "./research-record-browser";
 import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
@@ -74,7 +75,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const [revision, setRevision] = useState(0);
   const [selection, setSelection] = useState(() => selectedFromUrl(goalId));
   const [recordsOpen, setRecordsOpen] = useState(false);
-  const [recordLimit, setRecordLimit] = useState(50);
+  const records = useRef<HTMLDetailsElement>(null);
   const [lens, setLens] = useState<Lens>(() => viewFromUrl(goalId).lens);
   const [phase, setPhase] = useState<number | null>(() => viewFromUrl(goalId).phase);
   const presentationId = useId().replace(/:/g, "");
@@ -368,6 +369,13 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
           : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p></div>
       <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
+        <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {
+          setRecordsOpen(true);
+          window.requestAnimationFrame(() => {
+            records.current?.querySelector<HTMLInputElement>("input")?.focus({preventScroll: true});
+            records.current?.scrollIntoView({block: "start"});
+          });
+        }}><Search size={15} aria-hidden/></button>
         {!readingSelection ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
         <div className="research-analysis-scoped-action"><ResearchAnalysisButton analysis={analysis}/>
           {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}
@@ -447,9 +455,11 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     {value?.missingLinks.length ? <p className="research-history-note">{copy.missing} · {value.missingLinks.length}</p> : null}
     {value?.unknownTimeCount ? <p className="research-history-note">{copy.unknown} · {value.unknownTimeCount}</p> : null}
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
-    {value?.events.length ? <details className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
-      {recordsOpen ? <>{updateRecords(value.events.slice(0, recordLimit))}
-        {recordLimit < value.events.length ? <button type="button" onClick={() => setRecordLimit(n => n + 50)}>{zh ? "继续展开记录" : "Show more records"} · {Math.min(recordLimit, value.events.length)} / {value.events.length}</button> : null}</> : null}
+    {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
+      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} events={history.canonical?.events ?? []}
+        displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
+        renderBody={currentDisplay && !originalDisplay ? findingBody : undefined}
+        complete={read.complete} stale={Boolean(error || history.error)} busy={busy} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/> : null}
     </details> : null}
   </section>;
 }

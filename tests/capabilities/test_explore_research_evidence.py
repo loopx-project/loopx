@@ -9,7 +9,7 @@ import pytest
 
 from loopx.capabilities.explore.research_evidence import append_research_observation
 from loopx.capabilities.explore.result_log import (
-    append_explore_result_event, append_explore_result_events, build_explore_edge_event, build_explore_node_event,
+    append_explore_result_event, append_explore_result_events, build_explore_edge_event, build_explore_finding_event, build_explore_node_event,
     build_explore_result_projection, explore_result_log_path, load_explore_result_events_strict,
 )
 from loopx.extensions.lark.presentation.explore_results import _node_record_values
@@ -100,6 +100,67 @@ def test_result_requires_current_exact_input_lineage_and_survives_invalidation(t
     revised["closure_basis"]["evidence_ids"] = ["ev-a-new"]
     append_research_observation(path, goal_id=GOAL, observation=revised)
     assert projection(path)["research_frontier"]["observed_count"] == 0
+
+
+def test_nested_result_history_and_explicit_revalidation(tmp_path: Path) -> None:
+    path = explore_result_log_path(tmp_path, GOAL)
+    for name in ["a", "b", "c"]:
+        node(path, name)
+    for name in ["b", "c", "a"]:
+        append_research_observation(path, goal_id=GOAL, observation=observation(name, target="b" if name == "a" else None))
+
+    def current_inputs(*names):
+        by_id = {row["node_id"]: row for row in projection(path)["nodes"]}
+        return [{"node_id": name, "fingerprint": by_id[name]["research_observation"]["fingerprint"]} for name in names]
+
+    results = {}
+    for name, inputs in [("joint", ["a", "b"]), ("outer", ["joint", "c"])]:
+        node(path, name, kind="experiment")
+        for upstream in inputs:
+            append_explore_result_event(path, build_explore_edge_event(
+                goal_id=GOAL, from_node=name, to_node=upstream, edge_type="depends_on"))
+        result = observation(name)
+        result["input_observations"] = current_inputs(*inputs)
+        if name == "joint":
+            result["composition_candidates"] = [{"target_node_id": "c", "basis": "explicit",
+                "interaction_kind": "producer_consumer", "evidence_ids": ["ev-joint", "ev-c"]}]
+        append_research_observation(path, goal_id=GOAL, observation=result)
+        results[name] = result
+    assert projection(path)["research_frontier"]["observed_count"] == 2
+    append_explore_result_event(path, build_explore_finding_event(
+        goal_id=GOAL, node_id="a", title="An additional research note"))
+    assert projection(path)["research_frontier"]["observed_count"] == 2
+    recorded = path.read_bytes()
+    node(path, "a", status="open")
+    assert path.read_bytes().startswith(recorded)
+    view = projection(path)
+    assert view["research_frontier"]["ineligible_count"] == 2
+    joint = next(row for row in view["nodes"] if row["node_id"] == "joint")
+    assert "ineligible" in _node_record_values(joint, goal_id=GOAL, source_id="fixture")["Summary"]
+    for raw in [observation("a", target="b"), results["joint"], results["outer"]]:
+        before = path.read_bytes()
+        assert append_research_observation(path, goal_id=GOAL, observation=raw)["replayed"]
+        assert path.read_bytes() == before
+    assert "research_observation" not in next(row for row in projection(path)["nodes"] if row["node_id"] == "a")
+    # Intermediate diagnostic evidence remains recordable without certifying closure.
+    progress = observation("a")
+    progress["progress"].update(result_class="advanced", coverage_complete=False)
+    assert append_research_observation(path, goal_id=GOAL, observation=progress)["written"]
+    assert projection(path)["research_frontier"]["ineligible_count"] == 2
+    # Revalidate each changed link through ordinary writes; replay alone cannot
+    # refresh old evidence. No automatic re-execution or deletion is involved.
+    node(path, "a")
+    revised = observation("a", target="b")
+    revised["progress"]["evidence_ids"].append("ev-a-revalidated")
+    append_research_observation(path, goal_id=GOAL, observation=revised)
+    assert projection(path)["research_frontier"]["ineligible_count"] == 1
+    results["joint"]["input_observations"] = current_inputs("a", "b")
+    append_research_observation(path, goal_id=GOAL, observation=results["joint"])
+    assert projection(path)["research_frontier"]["pending_count"] == 1
+    results["outer"]["input_observations"] = current_inputs("joint", "c")
+    append_research_observation(path, goal_id=GOAL, observation=results["outer"])
+    assert projection(path)["research_frontier"]["observed_count"] == 2
+    assert path.read_bytes().startswith(recorded)
 
 
 @pytest.mark.parametrize("patch", [

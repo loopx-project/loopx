@@ -1609,7 +1609,12 @@ def _assert_collection_growth_and_bootstrap_duplication(
             assert len(context["coverage_ledger"]) <= 24
             assert context["from_full_index"] is True
             assert len(context["evidence"]) == SCENARIOS[1].run_count
-            assert all("--evidence-ref" in row["read_action"] for row in context["evidence"])
+            template = context["evidence_read_action_template"]
+            assert template.count("{evidence_ref}") == 1
+            for row in context["evidence"]:
+                assert "read_action" not in row
+                command = shlex.split(template.replace("{evidence_ref}", row["evidence_ref"]))
+                assert command[-2:] == ["--evidence-ref", row["evidence_ref"]]
         elif fixed_semantic_growth and spec.surface_id == "diagnose":
             context = crowded[spec.surface_id]["json"]["payload"]["selected"]["projection_warnings"]["autonomous_replan_obligation"]["replan_context"]
             assert 0 < len(context["evidence"]) <= 24

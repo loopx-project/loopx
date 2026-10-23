@@ -125,6 +125,11 @@ An in-memory wake hint expires within a minute and holds no scheduling
 authority; configuration invalidates it immediately. No extra scheduler,
 message consumer or binding-side scheduling toggle is created.
 
+An unreadable Session or queued Turn file affects only its own binding. Other
+stewards continue their due checks. The unreadable data and original monitor
+deadline remain intact; once the file is repaired, queued user work still takes
+priority over monitoring.
+
 The packaged browser journey below uses synthetic private connections over
 real HTTP, Core and native File storage. Desktop views are 1440×1000; narrow
 views are 390×844 viewport emulations, not physical-phone acceptance. The
@@ -143,6 +148,51 @@ monitor polls leave execution-quota slots and original business replies alone.
 | ![Enabled monitor in a narrow viewport](../assets/personal-workspace/steward-monitor/enabled-phone.png) | ![Paused native monitor retaining its deadline](../assets/personal-workspace/steward-monitor/paused-phone.png) |
 
 ## Native scheduling and execution
+
+### Owner Todo notifications during a source outage
+
+The existing **Automatically notify new owner tasks** setting uses the original
+private steward's background outbound worker. It does not enable a native
+monitor, report, model Turn or second message consumer.
+
+Discovery enumerates the complete current authorized Goal scope. Each Goal must
+provide a complete native Todo read and exact current decision terms. If one
+Goal is unreadable or unmigrated, its previous subjects, pending notices and
+unknown sends remain retained; an unavailable source is never treated as an
+empty or withdrawn Todo list. Notices from other readable Goals continue. An
+unsent notice becomes eligible only after its own source is read again, with
+the original generation and provider intent preserved. Real withdrawals or
+scope removal still cancel unsent notices. A known provider locator continues
+independent readback of the frozen original effect, even if the Todo changes
+or its source is unavailable; current App, owner and original-route verification
+remain required. This read cannot create another notification.
+
+First enable baselines readable history and remembers unreadable initial Goals.
+Their first successful read also baselines history, avoiding a delayed recovery
+burst. Later changes and newly registered Goals retain ordinary discovery.
+Failure to enumerate scope or verify the original owner, App, grant or route
+still pauses delivery. The panel distinguishes a fresh partial-source check
+from a stale worker or a delivery error; unknown receipts remain visible.
+
+The packaged fixture
+`apps/presentation/dashboard/smoke/owner-attention-source-fixture.py` uses real
+HTTP, native File authority and the existing outbound worker, with synthetic
+provider/model transport and no paid call. Its unmigrated Goal reproduces the
+outage; initializing that disposable source verifies recovery. File/SQLite
+regressions separately cover source errors, incomplete reads, changing exact
+reads, retained queue identities and independent provider readback. The baseline
+image shows the prior UI bundle over the same partial-source backend state;
+the baseline adapter also fails the healthy-source regression independently.
+These captures establish packaged browser behavior, not phone-device or live
+account acceptance.
+
+| Before: generic incomplete notice | After: explicit partial coverage |
+| --- | --- |
+| ![Previous notification status](../assets/personal-workspace/owner-attention-source/before-desktop.png) | ![Healthy Goals continue during a source outage](../assets/personal-workspace/owner-attention-source/partial-desktop.png) |
+
+| Partial coverage, narrow viewport | Recovered worker, narrow viewport |
+| --- | --- |
+| ![Partial notification coverage in a narrow viewport](../assets/personal-workspace/owner-attention-source/partial-phone.png) | ![Recovered notification worker in a narrow viewport](../assets/personal-workspace/owner-attention-source/recovered-phone.png) |
 
 The intended flow is:
 

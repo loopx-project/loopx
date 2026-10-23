@@ -23,9 +23,34 @@ def reward_memory_automation_enabled(
         return False
     experiment = recall.get("experiment")
     envelope = payload.get("turn_envelope")
-    if not isinstance(experiment, Mapping) or not isinstance(envelope, Mapping):
+    if not isinstance(experiment, Mapping):
         return False
-    boundary = envelope.get("boundary")
+    if isinstance(envelope, Mapping):
+        boundary = envelope.get("boundary")
+    elif "turn_envelope" not in payload:
+        # App guards carry the same verified capability projection directly;
+        # they are not host requests and do not contain a TurnEnvelope.
+        receipt = payload.get("heartbeat_receipt")
+        identity = payload.get("agent_identity")
+        if (
+            payload.get("ok") is not True
+            or payload.get("should_run") is not True
+            or not isinstance(receipt, Mapping)
+            or receipt.get("status") not in {"committed", "replayed"}
+            or not receipt.get("turn_instance_id")
+            or not isinstance(identity, Mapping)
+            or identity.get("registered") is not True
+        ):
+            return False
+        boundary = payload.get("goal_boundary")
+    else:
+        return False
+    try:
+        from .capability_hooks import turn_context_source
+
+        source = turn_context_source(payload)
+    except ValueError:
+        return False
     capabilities = (
         boundary.get("capabilities") if isinstance(boundary, Mapping) else None
     )
@@ -40,10 +65,10 @@ def reward_memory_automation_enabled(
         and experiment.get("enabled") is True
         and experiment.get("available") is True
         and experiment.get("configured_for_agent") is True
-        and bool(envelope.get("goal_id"))
-        and experiment.get("goal_id") == envelope.get("goal_id")
-        and bool(envelope.get("agent_id"))
-        and experiment.get("agent_id") == envelope.get("agent_id")
+        and bool(source.get("goal_id"))
+        and experiment.get("goal_id") == source.get("goal_id")
+        and bool(source.get("agent_id"))
+        and experiment.get("agent_id") == source.get("agent_id")
         and experiment.get(operation) is True
     )
 

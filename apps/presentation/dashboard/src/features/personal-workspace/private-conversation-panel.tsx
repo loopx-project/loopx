@@ -146,7 +146,12 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
               changeOwnerNotifications(row.binding_id, revision, setting.revision, event.target.checked));}}/>
             {zh ? "自动通知新的用户待办" : "Automatically notify new owner tasks"}</label>
           <p>{zh ? "开启后，管家服务自动通知授权范围内新增或实质变更的用户待办，发到原本人私聊。首次开启保留现有待办，不补发历史通知。关闭后暂停发送，保留原回执。" : "The steward service sends new or materially changed owner tasks within its scope to the original owner private Chat. First enable keeps existing tasks without a historical burst. Disabling pauses delivery and retains receipts."}</p>
-          {row.owner_attention.enabled ? <p role="status">{row.owner_attention.error_code || row.owner_attention.failed_count > 0
+          {row.owner_attention.enabled ? <p role="status">{row.owner_attention.error_code === "source_incomplete"
+            && row.owner_attention.source_coverage && row.owner_attention.failed_count === 0
+            && row.owner_attention.last_checked_at !== null && Date.now() / 1000 - row.owner_attention.last_checked_at <= 120
+            ? (zh ? `${row.owner_attention.source_coverage.unavailable_goal_count} 个 Goal 暂时不可读；其余 ${row.owner_attention.source_coverage.read_goal_count} 个继续自动检查。`
+              : `${row.owner_attention.source_coverage.unavailable_goal_count} Goals are unavailable; the other ${row.owner_attention.source_coverage.read_goal_count} are still checked automatically.`)
+            : row.owner_attention.error_code || row.owner_attention.failed_count > 0
             ? (zh ? "通知暂未完成。请检查此 App 登录、授权工作与原私聊；原待办和回执仍保留，发送结果不明的通知不会重发。" : "Notifications need attention. Check this App login, authorized work and original Chat. Tasks and receipts are retained; ambiguous sends are not repeated.")
             : row.owner_attention.last_checked_at === null ? (zh ? "等待首次后台检查" : "Waiting for the first background check")
             : Date.now() / 1000 - row.owner_attention.last_checked_at > 120 ? (zh ? "后台检查尚未恢复，请确认管家服务正在运行。" : "Background checks have not resumed. Check that the steward service is running.")

@@ -695,6 +695,70 @@ Continue in this order using the existing owners and checkpoints:
 | Adopt one typed projection in real host renderers | Heartbeat full/thin and Turn host consume the same execution facts and per-Turn capture/detail route. Keep host-specific notification and scheduler transport explicit. Real File/SQLite CLI plus packaged Codex App tests cover reentry, source loss, refusal before required reads, late results, backoff and exactly-once settlement; no second admission from a detail read. Retire the replaced projection only after its last caller moves. |
 | Qualify the context shape and migration default | Compare the same normal, replan, wait/recovery and optional-capability workloads against both current full and compact paths. Measure payload/model tokens, detail IO, latency, resource growth, omissions and decision/outcome quality. Keep data loss, duplicate effects, identity and settlement errors as hard constraints. Preserve supported saved prompts/receipts and reversible rollout; change budgets or defaults only with that evidence. |
 
+**Context cost and projection convergence: next implementation slice**
+
+The current full-source delivery closes requirement omissions, but sharing
+`work_context` alone does not make either transport compact. Measure the same
+captured decision through both production projections before changing a default.
+Separate packet bytes from model input and distinguish operator/control-plane
+trajectories from solver trajectories. A large operator observation is not
+evidence that a solver consumed that observation. Count the initial response,
+truncation recovery and necessary detail reads together; cached input still
+occupies context. Historical incomplete inputs are not an efficiency baseline.
+
+The next slice stays within the existing three convergence acceptances above:
+
+1. **Reduce ordinary quota input first.** The first delivery target is the
+   existing `quota should-run` packets actually consumed by solvers inside
+   benchmark cases. Operator/control-plane and personal maintenance packets are
+   secondary; do not use their size as evidence of solver input. Solvers should
+   benefit without opting into TurnEnvelope or a new host protocol. Start
+   with measured, lossless repetition in the emitted packet, then qualify the
+   structured required-context projection. Demonstrate the reduction on the same
+   captured decisions and actual caller read path, counting necessary follow-up
+   reads. A smaller stored capture, an import cleanup or a different transport
+   name does not establish lower model input.
+2. **Converge along that delivery path.** Reuse the interaction/work-context and
+   TurnEnvelope TypeScript owners while reducing ordinary quota costs. Preserve
+   existing invocation, selection/guard, settlement and detail routes; qualify
+   compatibility for any compact representation. This slice requires no new CLI
+   read route or host baseline protocol. Characterize real callers before
+   retiring duplicate Python projections; retain Python source IO, required
+   reads, original capture identity and host effect ownership. Compare complete
+   execution facts and signatures against the same captured inputs, including
+   historical compatibility. Measure transport and local computation: moving a
+   small helper across runtimes can add more cost than it removes.
+3. **Cold-start requirements.** Treat mixed Todo history and acceptance
+   explanations at their structured owner before deciding what can become
+   optional detail. Do not infer obsolete requirements from age, owner, status,
+   headings or length. Keep earlier commitments, global constraints, source
+   provenance and late stop/correction clauses. Changing which information is
+   mandatory requires explicit clause and negative-case qualification; moving
+   a mandatory body behind a reference and reading it all back is not a saving.
+   Replacing accumulated notes with a shorter latest note is a state change,
+   not packet compression; preserve historical requirements during writeback.
+4. **Proven retained-context reuse.** Separately evaluate exact reuse of unchanged
+   required context when the host can establish that the same session still
+   retains the previously consumed baseline. This research is not a prerequisite
+   for ordinary quota reductions. File existence, a prior hash or an old delivery
+   receipt alone cannot establish retention. Compaction, restart, missing/corrupt
+   evidence or unknown retention falls back to complete current requirements.
+   Always project current action, admission, scope, cancellation, claim/lease and
+   settlement conditions; prior context grants no fresh authority. Exact
+   reconstruction is necessary but does not prove model adoption.
+
+Qualification compares matched normal, replan and wait/recovery workloads with
+optional capability modes unchanged. Include first delivery, warm reuse, reset,
+source/identity mismatch and late requirement changes. Measure initial plus
+follow-up model input, context occupancy, cache/non-cache and complete cost,
+read count, latency and IO, then verify the subsequent action and accepted
+outcome. Keep exactly-once effects and required-source refusal as hard constraints.
+A serializer roundtrip or offline delta establishes representational feasibility
+only; it cannot settle installed adoption or the complete-cost acceptance.
+SQLite remains the default local performance qualification; preserve affected
+supported-backend correctness/recovery checks. This checkpoint changes no
+runtime default, budget, required-read rule, authorization or active experiment.
+
 Native Turn detail adoption now persists the real `run-once` producer's full
 observation and binds the Host request to it through the existing TS envelope
 owner. Real File/SQLite CLI tests inspect actual subprocess input, change the

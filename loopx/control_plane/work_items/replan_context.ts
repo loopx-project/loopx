@@ -441,6 +441,13 @@ export function validateReplanContext(value: unknown): JsonObject {
     identifier(row.evidence_ref, "evidence.evidence_ref");
     requireNonEmptyString(row.generated_at, "evidence.generated_at");
   }
+  if (context.evidence_read_action_template !== undefined) {
+    const template = requireNonEmptyString(context.evidence_read_action_template, "evidence_read_action_template");
+    if (!context.agent_id || template.split("{evidence_ref}").length !== 2 ||
+        !template.endsWith(" --evidence-ref {evidence_ref}")) {
+      throw new EffectRuntimeRequestError("evidence read template requires one scoped evidence_ref placeholder");
+    }
+  }
   const frontier = requireJsonObject(context.uncovered_frontier, "replan_context.uncovered_frontier");
   if (!Array.isArray(frontier.required_any_of)) {
     throw new EffectRuntimeRequestError("replan_context uncovered_frontier requires required_any_of");
@@ -632,11 +639,19 @@ export function projectReplanContext(value: unknown): JsonObject {
   const selectedCoverage = new Set(chosen.flatMap(({row}) => row.progress_observation
     ? [String((row.progress_observation as JsonObject).fingerprint)] : []));
   const ledger = [...coverage].filter(([key]) => selectedCoverage.has(key)).map(([, value]) => value);
+  // Keep a directly executable action for a single row. Multiple rows share
+  // only their command route; evidence text, identity and ordering stay intact.
+  // This is same-response factoring, with no retained-context prerequisite.
+  const evidenceReadTemplate = agent && shown.length > 1 && !prefix.includes("{evidence_ref}")
+    ? `${prefix} --format json history --goal-id ${goal} --agent-id ${agent} --evidence-ref {evidence_ref}`
+    : null;
+  if (evidenceReadTemplate) for (const row of shown) delete row.read_action;
   const core = projectCoreGoal(request.goal_facts);
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
   const followthrough = agent && strideStrategy !== "off"
     ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
+    ...(evidenceReadTemplate ? {evidence_read_action_template: evidenceReadTemplate} : {}),
     ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
     ...(followthrough ? {decision_followthrough: followthrough} : {}),
     ...(exploreBasis ? {explore_basis: exploreBasis} : {})});
@@ -646,6 +661,7 @@ export function projectReplanContext(value: unknown): JsonObject {
     from_full_index: request.from_full_index === true,
     core_goal: core,
     evidence: shown, evidence_count: evidence.length, distinct_observation_count: candidates.length,
+    ...(evidenceReadTemplate ? {evidence_read_action_template: evidenceReadTemplate} : {}),
     evidence_truncated: omitted.length > 0,
     coverage_ledger: ledger, coverage_count: coverage.size, coverage_truncated: coverage.size > ledger.length,
     uncovered_frontier: frontier,

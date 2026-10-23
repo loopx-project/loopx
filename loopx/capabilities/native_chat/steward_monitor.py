@@ -223,16 +223,16 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
         actor = binding.get("managed_actor")
         if binding.get("enabled") is not True or not actor:
             continue
-        session = controller.store.load_session(actor["session_id"])
-        if not session or session.get("active_turn_id") or controller.store.queued_turns(actor["session_id"]):
-            continue
-        if cache.get(binding["binding_id"], 0) > time.monotonic():
-            continue
-        # An ephemeral wake hint only, never authority. Configuration clears
-        # it immediately; external edits are observed within a minute. Every
-        # actual dispatch rechecks native state, original grant and provider.
-        cache[binding["binding_id"]] = time.monotonic() + 60
         try:
+            session = controller.store.load_session(actor["session_id"])
+            if not session or session.get("active_turn_id") or controller.store.queued_turns(actor["session_id"]):
+                continue
+            if cache.get(binding["binding_id"], 0) > time.monotonic():
+                continue
+            # An ephemeral wake hint only, never authority. Configuration clears
+            # it immediately; external edits are observed within a minute. Every
+            # actual dispatch rechecks native state, original grant and provider.
+            cache[binding["binding_id"]] = time.monotonic() + 60
             todo = service.current(actor)
             if todo is None or not monitor_todo_is_due(todo):
                 if todo and todo.get("next_due_at") and todo.get("status") == "open":
@@ -246,7 +246,7 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
             if created:
                 changed.append(accepted)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-            # One unavailable original provider must not starve other native
-            # monitors or delegation returns; retain its deadline for recovery.
+            # One unreadable conversation or unavailable provider must not starve
+            # other native monitors; retain its original data and deadline.
             _LOG.warning("A native steward monitor is unavailable; original work retained")
     return changed

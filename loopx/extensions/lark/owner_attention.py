@@ -122,34 +122,42 @@ class LarkOwnerAttention:
                     "event": {key: event[key] for key in ("message_id", "chat_id", "chat_type", "sender_type", "sender_id")}}
         raise ValueError("send a message to this private steward before enabling notifications")
 
-    def _snapshot(self, binding: dict[str, Any]) -> list[dict[str, Any]]:
+    def _snapshot(self, binding: dict[str, Any]) -> dict[str, Any]:
         controller = self.transport.core.controller
         if controller.registry_path is None:
             raise ValueError("the steward registry is unavailable")
-        goals = []
-        for goal_id in self.transport.bindings.goal_scope_ids(binding):
-            args = dict(registry_path=controller.registry_path, goal_id=goal_id,
-                        runtime_root_arg=str(controller.coordination_runtime_root), role="user")
-            listing = list_goal_todos(**args)
-            if listing.get("ok") is not True or listing.get("todo_count") != len(listing.get("todos", [])):
-                raise ValueError("the native Todo source is incomplete")
-            todos = []
-            # The same typed owner selects the complete active population.
-            # Terminal history needs no full-body read on every service scan;
-            # bounded summaries never supply the actual notification terms.
-            refs = effect_runtime_result("presentation.owner_attention.references", {"goal_id": goal_id, "todos": listing["todos"]})
-            for todo_id in refs["todo_ids"]:
-                detail = list_goal_todos(**args, todo_id=todo_id)
-                if detail.get("ok") is not True or not detail.get("matched") or not isinstance(detail.get("todo"), dict):
-                    raise ValueError("a native Todo changed while reading")
-                todos.append(detail["todo"])
-            goals.append({"goal_id": goal_id, "todos": todos})
-        return goals
+        # Scope enumeration remains all-or-nothing. A failed authority read
+        # inside that grant is a missing Goal, never an empty Todo list.
+        scope = self.transport.bindings.goal_scope_ids(binding)
+        goals, unavailable = [], []
+        for goal_id in scope:
+            try:
+                goals.append({"goal_id": goal_id, "todos": self._goal_todos(goal_id)})
+            except (ValueError, OSError, KeyError, TypeError, RuntimeError):
+                unavailable.append(goal_id)
+        return {"goals": goals, "scope_goal_ids": scope, "unavailable_goal_ids": unavailable,
+                "source_complete": not unavailable}
+
+    def _goal_todos(self, goal_id: str) -> list[dict[str, Any]]:
+        controller = self.transport.core.controller
+        args = dict(registry_path=controller.registry_path, goal_id=goal_id,
+                    runtime_root_arg=str(controller.coordination_runtime_root), role="user")
+        listing = list_goal_todos(**args)
+        if listing.get("ok") is not True or listing.get("todo_count") != len(listing.get("todos", [])):
+            raise ValueError("the native Todo source is incomplete")
+        todos = []
+        refs = effect_runtime_result("presentation.owner_attention.references", {"goal_id": goal_id, "todos": listing["todos"]})
+        for todo_id in refs["todo_ids"]:
+            detail = list_goal_todos(**args, todo_id=todo_id)
+            if detail.get("ok") is not True or not detail.get("matched") or not isinstance(detail.get("todo"), dict):
+                raise ValueError("a native Todo changed while reading")
+            todos.append(detail["todo"])
+        return todos
 
     @staticmethod
-    def _plan(state: dict[str, Any], goals: list[dict[str, Any]]) -> dict[str, Any]:
+    def _plan(state: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
         return dict(effect_runtime_result("presentation.owner_attention.plan",
-                    {"state": state, "goals": goals, "source_complete": True}))
+                    {"state": state, **snapshot}))
 
     @staticmethod
     def _observe(state: dict[str, Any], row: dict[str, Any], event: str, **facts: Any) -> dict[str, Any]:
@@ -170,7 +178,6 @@ class LarkOwnerAttention:
                 # historical burst. Re-enable retains pending/unknown receipts.
                 state["route"] = self._route(binding, state.get("route"))
                 state = self._plan(state, self._snapshot(binding))
-                state["error_code"] = None
             state.update(enabled=enabled, revision=revision + 1)
             self._write(path, state)
 
@@ -208,9 +215,10 @@ class LarkOwnerAttention:
                 try:
                     binding = self._binding(path.stem)
                     state = self._plan(state, self._snapshot(binding))
-                    state.update(last_checked_at=time.time(), error_code=None)
+                    state["last_checked_at"] = time.time()
                     self._write(path, state)
                     ready = [row["id"] for row in state["outbox"] if row["status"] in {"pending", "unconfirmed"}
+                             and (row["status"] != "pending" or row.get("source_current") is True)
                              and float(row.get("next_attempt_at", 0)) <= time.time()
                              and (row["status"] == "pending" or row.get("message_id"))][:2]
                     for notice_id in ready:
@@ -220,8 +228,12 @@ class LarkOwnerAttention:
                         state = self._plan(state, self._snapshot(binding))
                         self._write(path, state)
                         row = next((row for row in state["outbox"] if row["id"] == notice_id), None)
-                        if row is None or row["status"] not in {"pending", "unconfirmed"}:
+                        if (row is None or row["status"] not in {"pending", "unconfirmed"}
+                                or (row["status"] == "pending" and row.get("source_current") is not True)):
                             continue
+                        # New writes need current Todo terms. Readback only
+                        # verifies the already-frozen effect on its original
+                        # authorized route, even if that Todo was withdrawn.
                         route = self._route(binding, state["route"])
                         if row["status"] == "pending":
                             text = present_lark_conversation_text(row["body"])

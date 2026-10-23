@@ -132,17 +132,23 @@ Paired diffs do not certify translation accuracy.
 
 - [Complete State Recovery and Controlled Reactivation v0](complete-state-recovery-v0.md)
   ([中文版](complete-state-recovery-v0.zh-CN.md))
-  - **Delivery on `main`:** Design only; backup creation and configuration-only
-    isolated recovery exist, but complete-state verification and reactivation do not.
-  - **Current boundary:** M1 is read-only archive verification, safe extraction
-    into a new inert workspace and an isolated audit with
-    `execution_authority_granted=false`; no activation or live-state mutation.
+  - **Delivery on `main`:** Bounded M1 archive verification and inert File/SQLite
+    inspection are implemented through `backup-state verify`, loopback HTTP and
+    the packaged Settings journey.
+  - **Current boundary:** Existing owners inspect a new inert copy; every v0
+    audit remains held for incomplete capture/owner metadata, with
+    `execution_authority_granted=false`. M2 capture consistency and M3 controlled
+    reactivation remain open; verification grants no activation or live-state mutation.
 
 - [Composable State Machines and Recovery Verification v0](composable-state-machines-recovery-verification-v0.md)
   ([中文版](composable-state-machines-recovery-verification-v0.zh-CN.md))
-  - **Delivery on `main`:** Design only; existing local conformance is not full composition qualification.
-  - **Current boundary:** Legal internal types, bounded recovery sequences and
-    conditional progress through existing owners and real entrypoints; no new runtime or state writer.
+  - **Delivery on `main`:** Bounded Turn/provider/File-journal recovery is
+    implemented and exercised through the production Turn entrypoint with a
+    synthetic provider ledger; full M2 composition qualification remains open.
+  - **Current boundary:** Typed provider admission, exact retry and readback
+    retain prepared intent and prevent duplicate effects in that slice. Lease
+    transfer, stale-owner races, PostgreSQL authority, successor scheduling and
+    App/Lark delivery need separate qualification; no new runtime or state writer.
 
 - [Monorepo Distribution Split v0](monorepo-distribution-split-v0.md)
   ([中文版](monorepo-distribution-split-v0.zh-CN.md))
@@ -155,9 +161,14 @@ Paired diffs do not certify translation accuracy.
 
 - [Automatic Execution Admission v0](automatic-execution-admission-v0.md)
   ([中文版](automatic-execution-admission-v0.zh-CN.md))
-  - **Delivery on `main`:** Proposal; local implementation candidate under review.
-  - **Current boundary:** S7 quota-owned minimum interval, S2 atomic local admission,
-    S4 App recommendation floor first; managed Turn admission, App hook coverage and settings remain unqualified.
+  - **Delivery on `main`:** M1 policy, managed Turn admission and M3
+    settings/readback companions are implemented; host promotion remains unqualified.
+  - **Current boundary:** The quota owner retains scoped interval policy and
+    durable start reservations; managed dispatch confirms starts through its
+    existing journal, while settlement replay skips admission. Settings, CLI,
+    Dashboard and selected-Agent Lark status consume owner-produced eligibility.
+    App timer-to-hook coverage and non-Turn launchers remain unqualified;
+    interval eligibility grants neither execution permission nor budget.
 
 - [Human-confirmed domain operations v0](human-confirmed-domain-operations-v0.md)
   ([中文版](human-confirmed-domain-operations-v0.zh-CN.md))
@@ -188,16 +199,18 @@ Paired diffs do not certify translation accuracy.
     differential gates.
 - [Semantic Vocabulary Convergence and Commit-Time Drift Checks v0](semantic-vocabulary-convergence-v0.md)
   ([中文版](semantic-vocabulary-convergence-v0.zh-CN.md))
-  - **Delivery on `main`:** M0 registry, generated inventory, and drift smoke
-    shipped with the RFC.
-  - **Current boundary:** Repository-wide. A curated registry names 26 kernel
+  - **Delivery on `main`:** M0/M0.5 checks, M1 typed action bindings and M2 Turn
+    contract generation are implemented; M3/M4 retirement remains incomplete.
+  - **Current boundary:** Repository-wide. A curated registry names kernel
     and cross-runtime vocabularies with `module::Symbol` owners, relations,
     the route-to-disposition projection, the Turn Envelope schema owner, and
     ratchets for legacy should-run fields, py/ts twins, and constant forks; a
     generated inventory maps every other closed-set carrier under `loopx/`; a
     public smoke fails closed on drift in either runtime and on any narrowing
-    of the registry itself. No enum merge, slot split, field removal, or code
-    generation is approved yet.
+    of the registry itself. Existing generators derive action bindings and Turn
+    vocabularies, route projections and controller rules from their declared
+    owners; they do not migrate every cross-runtime vocabulary or move value
+    authority. No enum merge, slot split or field removal is approved.
 - [Shared-goal Online Authority and Pluggable Coordination Provider v0](shared-goal-authority-state-provider-v0.md)
   ([中文版](shared-goal-authority-state-provider-v0.zh-CN.md),
   [validation boundary](shared-goal-authority-state-provider-v0-evidence.zh-CN.md))
@@ -229,11 +242,13 @@ Paired diffs do not certify translation accuracy.
     benefit remain unqualified; declarations do not grant execution authority.
 - [Goal Direction Baseline v0](goal-direction-baseline-v0.md)
   ([中文版](goal-direction-baseline-v0.zh-CN.md))
-  - **Delivery on `main`:** Proposal only.
-  - **Current boundary:** A provider-neutral, Agent-scoped read model and
-    synthetic drift fixture plan are proposed. No direction declaration,
-    reducer, runtime consumer, Vision writer, scheduler effect, or provider
-    integration has shipped.
+  - **Delivery on `main`:** M1's provider-neutral, Agent-scoped read model and
+    explicit local M2 candidates exist; general activation and live model
+    consumption remain unqualified.
+  - **Current boundary:** The candidate path includes source-backed read offers,
+    same-Agent revision acknowledgement and cold readback. M1 capacity/receipt
+    decisions and M2 consumer/recovery UX approval remain pending. Observations
+    do not create work, rewrite Vision, change Goal routes or grant authority.
 - [Goal Continuity Across Restart and Replacement](goal-immutability-coherence-defense-v0.md)
   ([中文版](goal-immutability-coherence-defense-v0.zh-CN.md))
   - **Delivery on `main`:** Non-normative follow-up design record.
@@ -248,12 +263,13 @@ Paired diffs do not certify translation accuracy.
     shipped.
 - [Goal Instance Identity and Orphan Recovery v0](goal-instance-identity-and-orphan-recovery-v0.md)
   ([中文版](goal-instance-identity-and-orphan-recovery-v0.zh-CN.md))
-  - **Delivery on `main`:** Identity/recovery proposal; the guided orphan fence
-    and M0 registry codec shipped separately in #4808 and #4917.
-  - **Current boundary:** Defines R5 lifetime fencing for R2/R3 consumers,
-    incompatible activation beyond codec-only v1, typed commit/recovery ownership,
-    exact legacy cleanup and product readback. Instance minting, activation and
-    resolution remain unshipped; R6 and D1–D3 keep their own qualification gates.
+  - **Delivery on `main`:** The guided orphan fence and M0 codec are joined by
+    partial source-session lifetime and binding-owner implementation;
+    source-session quota settlement is qualified in #5389.
+  - **Current boundary:** Reuse those R5 owners for R2/R3. Complete the remaining
+    binding/effect fences and old-writer compatibility before activation;
+    orphan resolution and product acceptance remain held. A codec or partial
+    owner inventory grants no activation, and R6 and D1–D3 retain their own gates.
 
 ## Planning, Research, And Adaptive Intelligence
 

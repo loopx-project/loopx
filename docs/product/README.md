@@ -11,6 +11,8 @@ contracts.
   management, evidence, and open-source direction.
 - [Core control-plane graphs](core-control-plane/README.md): the product and
   runtime map for state, interactions, and bounded contexts.
+- [Steward monitoring](periodic-reports.md): native identity preparation,
+  opt-in status checks, and the remaining work for scheduled portfolio reports.
 - [Release readiness](release-readiness.md): the currently supported v0.x
   install and compatibility boundary.
 - [Release note template](release-note-template.md): the copy-ready release

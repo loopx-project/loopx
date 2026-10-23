@@ -30,6 +30,7 @@ ROOT_DOCS = {
 PRODUCT_ROOT_DOCS = {
     "README.md",
     "domain-capability-packs.md",
+    "periodic-reports.md",
     "public-adoption-loop.md",
     "release-note-template.md",
     "release-readiness.md",
@@ -1178,6 +1179,17 @@ def main() -> int:
         path.name for path in (DOCS / "product").glob("*.md")
     }
     assert product_root_markdown == PRODUCT_ROOT_DOCS, sorted(product_root_markdown)
+    product_entrypoints = {
+        resolve_docs_relative_target("product/README.md", target)
+        for target in iter_relative_md_targets(read("docs/product/README.md"))
+    }
+    missing_product_entries = {
+        name for name in product_root_markdown - {"README.md"}
+        if (DOCS / "product" / name).resolve() not in product_entrypoints
+    }
+    assert not missing_product_entries, (
+        "product docs missing from docs/product/README.md", sorted(missing_product_entries)
+    )
 
     assert not (DOCS / "outreach").exists(), (
         "retired marketing and launch drafts must stay out of the active docs tree"

@@ -35,8 +35,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
 async function assertPrimaryRow(history, minimumHeight) {
   const controls = history.locator(".research-history-controls");
   const boxes = await controls.locator(".research-lens, .research-analysis-entry-actions > button, .research-analysis-entry-actions .context-help-trigger, :scope > button").evaluateAll(elements =>
-    elements.map(element => {const r = element.getBoundingClientRect(); return {name: element.textContent || element.getAttribute("aria-label"), top: r.top, bottom: r.bottom, height: r.height};}));
-  assert.equal(boxes.length, 4);
+    elements.map(element => {const r = element.getBoundingClientRect(); return {name: element.textContent || element.getAttribute("aria-label"), top: r.top, bottom: r.bottom, height: r.height, left: r.left, right: r.right};}));
+  assert.equal(boxes.length, 5, "View, analysis, help, evidence search and refresh share the primary row");
+  const horizontal = [...boxes].sort((a, b) => a.left - b.left);
+  assert(horizontal.slice(1).every((box, index) => box.left >= horizontal[index].right - 1), "Primary controls do not overlap");
   assert(Math.max(...boxes.map(b => b.top)) - Math.min(...boxes.map(b => b.top)) <= 1, JSON.stringify(boxes));
   assert(Math.max(...boxes.map(b => b.bottom)) - Math.min(...boxes.map(b => b.bottom)) <= 1, JSON.stringify(boxes));
   assert(boxes.every(b => b.height >= minimumHeight - .1), `All primary controls retain their usable target height: ${JSON.stringify(boxes)}`);

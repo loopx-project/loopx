@@ -123,6 +123,56 @@ test("Todo closeout needs this task's current terminal experiment result", () =>
   assert.equal(qualifyResearchCompletion({frontier: {enabled: false}, todo: params.todo}).required, false);
 });
 
+test("ancestor invalidation fences new execution, completion and writeback while retaining historical completion", () => {
+  const params = liveFixture(), nodes = params.nodes as JsonObject[], input = nodes[0];
+  const source = input.research_observation as JsonObject;
+  const ancestors = ["left", "right"].map(node_id => ({node_id, node_kind: "hypothesis", status: "resolved",
+    research_observation: normalizeResearchObservation({observation: {...source,
+      explore_node_id: node_id, composition_candidates: []}})}));
+  input.node_kind = "experiment";
+  input.research_observation = normalizeResearchObservation({observation: {...source,
+    input_observations: ancestors.map(row => ({node_id: row.node_id, fingerprint: row.research_observation.fingerprint}))}});
+  params.nodes = [...nodes, ...ancestors];
+  params.edges = [...params.edges as JsonObject[], ...ancestors.map(row => ({
+    from_node: "a", to_node: row.node_id, edge_type: "depends_on"}))];
+  const raw: JsonObject = {...params.observation as JsonObject,
+    input_observations: nodes.slice(0, 2).map(row => ({node_id: row.node_id,
+      fingerprint: (row.research_observation as JsonObject).fingerprint}))};
+  params.observation = raw;
+  params.todos = [params.todo];
+  assert.doesNotThrow(() => validateResearchExecution({...params, frontier: projectResearchComposition(params)}));
+  nodes[2].status = "resolved";
+  nodes[2].research_observation = normalizeResearchObservation({observation: raw});
+  const before = projectResearchComposition(params), gap = (before.lineage_gaps as JsonObject[])[0];
+  const guard = {schema_version: "semantic_replan_capability_guard_v0", capability_id: "explore",
+    gap_id: gap.gap_id, frontier_revision: gap.frontier_revision};
+  const completion = (frontier: JsonObject, todo = params.todo) => qualifyResearchCompletion({
+    frontier, todo, goal_id: params.goal_id, actor_agent_id: params.agent_id});
+  assert.equal(completion(before).allowed, true);
+  const retained = structuredClone(nodes[2]);
+  ancestors[0].status = "open";
+  const stale = projectResearchComposition(params), current = (stale.lineage_gaps as JsonObject[])[0];
+  assert.equal(current.status, "ineligible");
+  assert.equal(current.frontier_revision, gap.frontier_revision, "validity does not mint new task identities");
+  assert.equal(completion(stale).allowed, false);
+  assert.deepEqual(completion(stale, {...params.todo as JsonObject, status: "done", archive_state: "archive"}),
+    {required: false, allowed: true, evidence: null});
+  assert.throws(() => validateResearchExecution({...params, frontier: stale}), /pending gap/);
+  const delta = qualifyResearchCompositionWriteback({frontier: stale, capability_guard: guard,
+    obligation_id: gap.obligation_id, progress_observation: raw.progress});
+  assert.equal(delta.accepted, false);
+  assert.equal((delta.retirement_contract as JsonObject).reason_code, "source_ineligible");
+  assert.equal((delta.retirement_contract as JsonObject).blocking_todo_count, 1);
+  const paused = projectResearchComposition({...params, todos: [{...params.todo as JsonObject, status: "blocked"}]});
+  const retirement = qualifyResearchCompositionWriteback({frontier: paused, capability_guard: guard,
+    obligation_id: gap.obligation_id, progress_observation: raw.progress}).retirement_contract as JsonObject;
+  assert.equal(qualifyResearchCompositionWriteback({frontier: paused, capability_guard: guard,
+    obligation_id: gap.obligation_id, progress_observation: {...retirement.progress_observation as JsonObject,
+      fingerprint: "retirement-progress"}}).capability_outcome, "composition_duty_invalidated");
+  assert.deepEqual(nodes[2], retained);
+  assert.equal(projectResearchComposition({...params, harness: {enabled: true}}).state, "disabled");
+});
+
 test("execution evidence binds Goal, gap, obligation, Todo, actor, experiment and current inputs", () => {
   const params = fixture();
   const canonical = validateResearchExecution(params);
