@@ -33,6 +33,7 @@ from .capabilities.pr_review_queue.github_source import (
 from .capabilities.pr_review_queue.check_attempts import latest_check_attempts
 from .capabilities.pr_review_queue.scheduling import is_owner_authored
 from .capabilities.pr_review_queue.review_body import (
+    author_owned_review_title_matches,
     check_review_body,
     english_review_verdict as _english_review_verdict,
 )
@@ -54,12 +55,6 @@ SOURCE_SURFACES = [
     "GitHub pull request status check rollup",
 ]
 
-AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE = (
-    "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)"
-)
-AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE = (
-    "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)"
-)
 REVIEW_CONCLUSION_SCHEMA_VERSION = "pull_request_review_conclusion_v0"
 RUNTIME_OR_CLI_PREFIXES = (
     "src/",
@@ -833,11 +828,7 @@ def _review_conclusion(
             reasons.append("review_body_missing_standalone_bilingual_format")
             reasons.extend(f"review_body:{reason}" for reason in body_check["invalid_reasons"])
         if author_owned_fallback:
-            expected_title = {
-                "APPROVE": AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
-                "REQUEST_CHANGES": AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
-            }.get(english_verdict or "")
-            if state != "COMMENTED" or not expected_title or expected_title not in body:
+            if state != "COMMENTED" or not author_owned_review_title_matches(body, english_verdict):
                 reasons.append("author_owned_review_missing_titled_commented_fallback")
         elif state not in {"APPROVED", "CHANGES_REQUESTED"}:
             reasons.append("formal_review_state_required")

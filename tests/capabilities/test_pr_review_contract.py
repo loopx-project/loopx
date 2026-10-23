@@ -502,6 +502,9 @@ def test_public_cli_delivers_state_review_without_claiming_it_was_performed(caps
         assert obligation in budget_rule
     assert packet["pull_requests"]
     instruction_rule = requirements["observable_semantics"]["decision_text_assessment"]
+    assert instruction_rule["fields_by_verdict"] == {
+        "intentional_change_validated": ["authorization_basis"],
+    }
     assert "decision_text_assessment" in requirements["observable_semantics"]["fields"]
     assert instruction_rule["blocking_verdicts"] == ["unintended_drift", "not_yet_proven"]
     for obligation in ("temporal ordering", "evidence provenance", "scope qualifiers",
