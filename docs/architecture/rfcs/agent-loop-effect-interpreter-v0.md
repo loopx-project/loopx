@@ -841,6 +841,40 @@ qualify new delivery on replay and an explicitly admitted subsequent run.
 Design acceptance does not itself authorize merges, releases, installations or
 additional benchmark runs. Runtime fallback remains automatic.
 
+**Native input-boundary characterization (partial, not enabled).** The opt-in
+`tests/control_plane/test_codex_context_boundary.py` exercises the existing
+Codex `exec` and `app-server` binaries against a deterministic loopback Responses
+provider. On `0.163.0-alpha.11.1`, both paths retain a complete first source plus
+a literal warm change, then deliver the complete target source in the first
+model request after automatic compaction through `SessionStart(compact)`.
+The oracle inspects actual outgoing model input, not the hook log or stdout.
+This qualifies a transport primitive only: the fixture does not implement the
+shared subtree owner, run a solver, or establish packaged/installed App adoption.
+
+The paired negative cases expose why this hook is not yet a sufficient adapter:
+
+- Default hook output spills to a short preview. Seeing both the first and last
+  requirement is insufficient proof that the middle reached the model.
+- Untrusted handlers do not run. Configuring a hook, or passing the CLI trust
+  bypass to an app-server launcher, is not delivery evidence. Tests trust only
+  their own isolated synthetic handlers; product installation must preserve the
+  host's existing trust policy.
+- When the compact recovery handler exits unsuccessfully, both tested hosts
+  still issue the next model request without the complete required source. The
+  qualification records this as an expected failure, not a passing recovery.
+
+The [native hook contract](https://learn.chatgpt.com/docs/hooks) provides useful
+ordering and an explicit intact-output option, but a successful hook callback
+alone cannot establish the fail-safe input boundary. Keep production delivery
+full until the host-owned integration can verify the candidate after hook/output
+processing and automatically substitute the same-capture full source on failure,
+loss or epoch change. Hook trust, timeout, truncation and process failure must be
+covered by that fallback; do not compensate with a new Agent/owner question or
+by disabling compaction. The next integration proof belongs at the existing
+host's final input assembly boundary for each consumer, with the shared typed
+projection following that qualified seam. This checkpoint keeps phase one open
+and does not reinterpret synthetic usage counters as token or outcome savings.
+
 Qualification compares matched normal, replan and wait/recovery workloads with
 optional capability modes unchanged. Include first delivery, warm reuse, reset,
 deletion, array reordering, lost/duplicated/out-of-order deltas, partial output,
