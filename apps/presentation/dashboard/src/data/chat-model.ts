@@ -79,25 +79,6 @@ export type ChatCapabilities = {
     streaming: boolean;
     resume: boolean;
     interrupt: boolean;
-    execution_profile?: string | null;
-    execution_profile_details?: {
-      provider: string;
-      provider_source: string;
-      provider_env_var: string;
-      model: string;
-      model_source: string;
-      model_env_var: string;
-      reasoning_effort: string;
-      reasoning_effort_source: string;
-      reasoning_effort_env_var: string;
-      reasoning_effort_supported: boolean;
-    } | null;
-    credential_env?: string | null;
-    endpoint_env?: string | null;
-    unavailable_remediation?: string[];
-    unavailable_reason?: string | null;
-    executable?: string | null;
-    environment_variable?: string | null;
   }>;
 };
 

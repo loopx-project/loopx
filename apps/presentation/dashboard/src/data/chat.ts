@@ -211,24 +211,6 @@ export const chatCapabilitiesSchema = z.object({
     unavailable_reason: z.string().nullable().optional(),
     executable: z.string().nullable().optional(),
     environment_variable: z.string().nullable().optional(),
-    // Managed DSH resolves the exact profile a background Turn would run.
-    // This is product routing metadata, never a credential or secret.
-    execution_profile: z.string().nullable().optional(),
-    execution_profile_details: z.object({
-      provider: z.string(),
-      provider_source: z.string(),
-      provider_env_var: z.string(),
-      model: z.string(),
-      model_source: z.string(),
-      model_env_var: z.string(),
-      reasoning_effort: z.string(),
-      reasoning_effort_source: z.string(),
-      reasoning_effort_env_var: z.string(),
-      reasoning_effort_supported: z.boolean(),
-    }).nullable().optional(),
-    credential_env: z.string().nullable().optional(),
-    endpoint_env: z.string().nullable().optional(),
-    unavailable_remediation: z.array(z.string()).optional(),
   })).optional(),
   lark_cli: z.object({
     available: z.boolean(),
