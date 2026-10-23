@@ -173,4 +173,3 @@ windows, rather than starting an unbounded series of model calls.
    policy, install it, then independently verify original-service adoption,
    actual configuration and an end-to-end report. The first natural scheduled
    report remains a separate acceptance event.
-
