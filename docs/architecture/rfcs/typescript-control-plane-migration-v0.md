@@ -175,9 +175,16 @@ reader; supplied values still use the existing validators. Objective-only
 acceptance observations remain visible without configured checks.
 Canonical summaries prepare recovery history only for role groups that contain
 a resume condition. Succession still uses complete active and archived lineage.
+Role summaries reuse request-local lineage facts and the succession owner's
+existing context fields. That owner validates and indexes the complete graph
+before materializing requested evaluations. Source fingerprinting still reads
+every admitted byte and rechecks freshness; sequential reads avoid starting a
+thread pool in each process. Healthy read commands use canonical registry/path
+owners and defer mutation error imports until needed.
 The output measurements above retain their original controlled-transport scope.
-Current normal-IPC, package and complete-command evidence belongs to the exact
-revision reported in [#6874](https://github.com/loopx-project/loopx/pull/6874).
+[#6874](https://github.com/loopx-project/loopx/pull/6874) records the original
+normal-IPC, package and complete-command evidence. Follow-up measurements apply
+only to their reported revisions.
 Historical performance failures remain failures; neither fewer RPCs nor codec
 CPU savings waive the full-CLI gate or establish R3/D2/D3 adoption.
 The current warm-request miss remains an owner review hold. A passing full-CLI

@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from ...history import load_registry
+from ..projects.registry_codec import load_registry
 from ...paths import resolve_runtime_root
 from ...rollout_event_log import load_rollout_events, rollout_event_log_path
 from ..goals.state_resolution import resolve_goal_state

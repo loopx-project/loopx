@@ -9,7 +9,7 @@ import {schedulerTimestampMilliseconds} from "../scheduler/state_store.ts";
 import {evaluateTodoResumeConditionsFromSource} from "./resume_condition.ts";
 import {readTodoPriority, todoPriorityRank} from "./priority.ts";
 import {evaluateTodoSuccession, validateTodoSuccession, SUCCESSION_FACT_COLUMNS,
-  SUCCESSION_EVALUATION_COLUMNS} from "./succession.ts";
+  SUCCESSION_EVALUATION_COLUMNS, SUCCESSION_CONTEXT_FIELDS} from "./succession.ts";
 import {projectTodoSummary, TODO_SUMMARY_PROJECTION_COLUMNS} from "./summary_projection.ts";
 import {projectTodoHandoffContext} from "./handoff_projection.ts";
 import {projectStandingDecisions} from "./standing_decision.ts";
@@ -32,7 +32,7 @@ function successionFacts(item: JsonObject): JsonObject {
     route_flag: typeof item.route_continuation_replan_required === "boolean" ? item.route_continuation_replan_required : null,
     legacy_route_label: handoff && typeof item.route_continuation_replan_required !== "boolean"
       ? [item.action_kind, item.title, item.text].filter(v => text(v).trim()).map(text).join(" ") : "",
-    context_fields: Object.keys(withoutNull(item)).filter(key => key !== "succession_evaluation").sort(authorityUnicodeCompare)};
+    context_fields: SUCCESSION_CONTEXT_FIELDS.filter(key => Object.prototype.propertyIsEnumerable.call(item, key) && item[key] != null)};
 }
 function compactRecord(item: JsonObject): JsonObject {
   const result: JsonObject = {index: item.index ?? null, done: Boolean(item.done), text: item.text ?? null};
@@ -150,7 +150,7 @@ export async function projectTodoReadGroup(input: JsonObject): Promise<JsonObjec
       else selected.set(key(row), count - 1);
     });
     try {
-      decisions = evaluateTodoSuccession([...source, ...facts]).slice(source.length);
+      decisions = evaluateTodoSuccession([...source, ...facts], source.length);
     } catch (error) {
       if (!(error instanceof EffectRuntimeRequestError)) throw error;
       return {schema_version: TODO_READ_RESULT, rejection: {phase: "succession", message: error.message}};
@@ -204,6 +204,8 @@ export async function projectCanonicalTodoFields(input: JsonObject): Promise<Jso
   const archived = new Set(all.filter(row => row.archive_state === "archive").map(row => row.todo_id));
   const acceptance = object(input.goal_acceptance_contract), guards = object(input.goal_acceptance_work_guards);
   const checksConfigured = configuredGoalChecks(acceptance) !== null;
+  const lineage = Array.isArray(input.lineage) ? input.lineage.map(value => requireJsonObject(value, "Todo lineage")) : all;
+  const lineageFacts = input.lineage_facts ?? lineage.map(successionFacts);
   const fields: JsonObject = {}, evaluations: JsonObject = {};
   for (const role of ["user", "agent"]) {
     const section = role === "agent" ? "Agent Todo" : "User Todo / Owner Review Reading Queue";
@@ -211,8 +213,7 @@ export async function projectCanonicalTodoFields(input: JsonObject): Promise<Jso
       .map(row => structureCanonicalTodo({...row,
         ...(input.retained !== true && checksConfigured && guards[text(row.todo_id)] ? {goal_acceptance_guard: guards[text(row.todo_id)]} : {})}, role, section,
         input.retained === true ? null : 500, input.retained !== true));
-    const lineage = Array.isArray(input.lineage) ? input.lineage.map(value => requireJsonObject(value, "Todo lineage")) : all;
-    const grouped = await projectTodoReadGroup({...input, items, lineage, evaluated: false, role, source_section: section,
+    const grouped = await projectTodoReadGroup({...input, items, lineage, lineage_facts: lineageFacts, evaluated: false, role, source_section: section,
       item_limit: null, full_selection: true, resume_lineage: items.some(row => readResume(row.resume_when))
         ? all.map(row => structureCanonicalTodo(row, row.role ?? null, row.source_section ?? section)) : []});
     if (grouped.rejection) return grouped;

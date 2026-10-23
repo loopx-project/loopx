@@ -252,7 +252,7 @@ def rollout_event_log_path(runtime_root: Path, goal_id: str) -> Path:
     # Goal ids are used as directory names throughout the control plane. Keep
     # this shared path helper fail-closed so every reader and writer inherits
     # the same single-segment boundary.
-    from .history import validate_goal_id_path_segment
+    from .paths import validate_goal_id_path_segment
 
     safe_goal_id = validate_goal_id_path_segment(goal_id)
     return (

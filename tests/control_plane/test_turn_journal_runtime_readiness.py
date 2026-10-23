@@ -123,25 +123,25 @@ def test_runtime_fingerprint_rescans_when_a_snapshotted_file_disappears_while_re
     later.write_text("export const later = true;\n", encoding="utf-8")
     original_read_bytes = Path.read_bytes
     reads: list[str] = []
-    later_prefetched = Event()
+    first_read = Event()
 
-    def remove_later_after_prefetch(path: Path) -> bytes:
+    def remove_first_after_reading_last(path: Path) -> bytes:
         content = original_read_bytes(path)
-        if path == later:
+        if path == first:
             reads.append(path.name)
-            later_prefetched.set()
+            first_read.set()
         else:
-            if later.exists():
-                assert later_prefetched.wait(timeout=5)
-                later.unlink()
+            if first.exists():
+                assert first_read.wait(timeout=5)
+                first.unlink()
             reads.append(path.name)
         return content
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
-    monkeypatch.setattr(Path, "read_bytes", remove_later_after_prefetch)
+    monkeypatch.setattr(Path, "read_bytes", remove_first_after_reading_last)
 
     assert len(effect_runtime._runtime_fingerprint()) == 64
-    assert reads == ["later.ts", "first.ts", "first.ts"]
+    assert reads == ["first.ts", "later.ts", "later.ts"]
 
 
 def _install_persistent_stat_read_churn(
@@ -155,31 +155,31 @@ def _install_persistent_stat_read_churn(
     original_scan = effect_runtime._scan_runtime_source_files
     original_read_bytes = Path.read_bytes
     scans: list[tuple[str, ...]] = []
-    later_prefetched = Event()
-    first_reads = 0
+    first_read = Event()
+    later_reads = 0
 
     def record_scan(root: Path) -> tuple[str, ...]:
         files = original_scan(root)
         scans.append(files)
         return files
 
-    def churn_after_each_first_read(path: Path) -> bytes:
-        nonlocal first_reads
+    def churn_after_each_later_read(path: Path) -> bytes:
+        nonlocal later_reads
         content = original_read_bytes(path)
-        if path == later:
-            later_prefetched.set()
-        else:
-            first_reads += 1
-        if first_reads == 1 and path == first:
-            assert later_prefetched.wait(timeout=5)
-            later.unlink()
-        elif first_reads == 2 and path == first:
-            later.write_text("export const later = true;\n", encoding="utf-8")
+        if path == first:
+            first_read.set()
+        elif path == later:
+            later_reads += 1
+            if later_reads == 1:
+                assert first_read.wait(timeout=5)
+                first.unlink()
+            elif later_reads == 2:
+                first.write_text("export const first = true;\n", encoding="utf-8")
         return content
 
     monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
     monkeypatch.setattr(effect_runtime, "_scan_runtime_source_files", record_scan)
-    monkeypatch.setattr(Path, "read_bytes", churn_after_each_first_read)
+    monkeypatch.setattr(Path, "read_bytes", churn_after_each_later_read)
     return scans
 
 
@@ -204,7 +204,7 @@ def test_runtime_source_churn_has_a_stable_readiness_diagnostic(
     )
     assert scans == [
         ("first.ts", "later.ts"),
-        ("first.ts",),
+        ("later.ts",),
         ("first.ts", "later.ts"),
     ]
 
@@ -221,7 +221,7 @@ def test_runtime_request_source_churn_raises_a_stable_startup_diagnostic(
     assert error.value.diagnostic_code == "packaged_runtime_source_unstable"
     assert scans == [
         ("first.ts", "later.ts"),
-        ("first.ts",),
+        ("later.ts",),
         ("first.ts", "later.ts"),
     ]
 

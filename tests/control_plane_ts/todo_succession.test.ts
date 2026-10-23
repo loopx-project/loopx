@@ -81,6 +81,22 @@ test("filtering preserves full-source evidence; editing relevant facts invalidat
   assert.throws(() => evaluateTodoSuccession([source, source]), /duplicate succession identity/);
 });
 
+test("selected evaluations retain omitted dependencies and validate the complete source", () => {
+  const rows = [row("todo_archive", {active: false}), row("todo_inferred", {resumes: "todo_source"}),
+    row("todo_source", {successors: ["todo_archive"]})];
+  const complete = evaluateTodoSuccession(rows);
+  for (const start of [0, 2, rows.length]) {
+    assert.deepEqual(evaluateTodoSuccession(rows, start), complete.slice(start));
+  }
+  const [selected] = evaluateTodoSuccession(rows, 2);
+  assert.deepEqual(selected.successor_todo_ids, ["todo_archive", "todo_inferred"]);
+  assert.equal(selected.successor_gap, false);
+  for (const start of [2, rows.length]) {
+    assert.throws(() => evaluateTodoSuccession([{...rows[0], no_followup: "invalid"}, ...rows.slice(1)], start), /no_followup/);
+    assert.throws(() => evaluateTodoSuccession([rows[0], rows[0], rows[2]], start), /duplicate succession identity/);
+  }
+});
+
 const closed = {status: "done", watch_only: false, no_followup: true, successor_gap: false, replan: false, handoff_state: null};
 const closure = (rows: unknown[], full_selection = true) => projectTodoClosure({schema_version: "todo_closure_request_v0",
   role: "agent", source_section: "Agent Todo", full_selection, rows});

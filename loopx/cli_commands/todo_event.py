@@ -4,19 +4,8 @@ import argparse
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from ..control_plane.coordination.local_authority import (
-    LocalCoordinationAuthorityRejection,
-)
-from ..control_plane.todos.external_wait_contract import TodoExternalWaitAuthoringError
-from ..control_plane.todos.handoff_mode import HandoffModeError
 from ..control_plane.todos.contract import decision_scope_metadata_value
-from ..control_plane.work_items.task_lease import TaskLeaseError
 from ..file_lock import lock_timeout_error_fields
-from ..control_plane.coordination.legacy_writer_fence import LegacyCoordinationWriterFenced
-from ..control_plane.coordination.shadow_management import ShadowManagementError
-from ..control_plane.coordination.legacy_writer_fence import ActiveStateAuthorityMutationError
-from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
-from .todo_argument_validation import TodoClaimArgumentError
 
 
 RolloutEventAppender = Callable[..., dict[str, object]]
@@ -35,6 +24,18 @@ def todo_error_payload(
     args: argparse.Namespace, exc: Exception, *, registry_path: Path,
     runtime_root_arg: str | None,
 ) -> dict[str, object]:
+    from ..control_plane.coordination.local_authority import (
+        LocalCoordinationAuthorityRejection, LocalCoordinationAuthorityUnavailable,
+    )
+    from ..control_plane.coordination.legacy_writer_fence import (
+        ActiveStateAuthorityMutationError, LegacyCoordinationWriterFenced,
+    )
+    from ..control_plane.coordination.shadow_management import ShadowManagementError
+    from ..control_plane.todos.external_wait_contract import TodoExternalWaitAuthoringError
+    from ..control_plane.todos.handoff_mode import HandoffModeError
+    from ..control_plane.work_items.task_lease import TaskLeaseError
+    from .todo_argument_validation import TodoClaimArgumentError
+
     payload: dict[str, object] = {
         "ok": False,
         "dry_run": not bool(args.execute)

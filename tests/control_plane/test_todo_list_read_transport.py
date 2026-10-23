@@ -58,6 +58,7 @@ def read_cli(tmp_path, monkeypatch, request):
                 "import sys;from loopx.entrypoint import main;code=main(sys.argv[1:]);"
                 "assert code==0;"
                 "assert 'loopx.control_plane.todos.mutation_api' not in sys.modules;"
+                "assert 'loopx.history' not in sys.modules;"
                 "assert 'loopx.state_refresh' not in sys.modules;"
                 "assert 'loopx.cli_commands.todo' not in sys.modules;"
                 "assert 'loopx.capabilities.periodic_report.post_writeback_hook' not in sys.modules"
