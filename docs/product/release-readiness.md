@@ -150,6 +150,13 @@ expected public tag is `vX.Y.Z` for that version.
 
 Before moving `stable`, maintainers should:
 
+- run the complete packaged Personal Workspace journey against the exact
+  candidate before publishing a release, including every catalog scenario and
+  the companion flows in `npm run smoke:personal-workspace-packaged`;
+  installation, upgrade and Host checks alone do not qualify the page. The
+  `install_upgrade_host` result uses `release_install_upgrade_host_summary_v1`
+  and requires `packaged_frontend_passed=true` as well as the three existing
+  checks. Missing, failed or skipped page validation holds release readiness;
 - bump `loopx.__version__` and `pyproject.toml` together when user-visible
   release behavior changes;
 - before freezing the candidate, align the existing canonical help catalog,
@@ -229,7 +236,9 @@ For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
 `tag` set to that existing release and `browser_fixture_commit` set to a full,
 merged commit SHA. Only the personal-workspace fixture, typed-actions,
-goal-work-map and goal-workspace-m2 scenario files are extracted from that commit;
+goal-work-map, goal-workspace-m2, lark-cli-missing, pr-review-agent-order and
+workspace-locale browser-smoke files are
+extracted from that commit;
 its other changes are not applied to the product checkout. All candidate files
 must remain regular source files before any correction is copied; deletion or a
 symlink fails closed without partially applying the fixture correction.
@@ -920,6 +929,30 @@ path, and canary route rather than as a user-facing release baseline.
   Read the [2.0 migration guide](releases/v2.0.0.md) before continuing existing
   work. Asset availability is separate from native Windows execution or a new
   full-tree qualification of later source changes.
+
+- `v2.1.0` preview at commit `a65c71f789459c12b68d6feeec233fbb99f65c91`:
+  the [original release](https://github.com/loopx-project/loopx/releases/tag/v2.1.0)
+  remains a prerelease. Python publication stopped at the packaged-page checks;
+  its desktop artifacts and earlier source-only checks do not establish complete
+  package readiness. During that hold, the stable source and signed desktop
+  feed were retained or restored to the qualified `v2.0.0` baseline. The immutable
+  preview and failed evidence remain part of the release history.
+
+- `v2.1.1` maintenance release at commit
+  `87e5b4f88d207adf062eea57002cda6fe04fd535`:
+  the [published release](https://github.com/loopx-project/loopx/releases/tag/v2.1.1)
+  provides matching Python wheel/source distributions on GitHub and PyPI,
+  Mac/Windows desktop build assets, checksum manifests, source provenance and
+  a signed macOS updater. All eight exact-source qualification categories,
+  including the complete installed-wheel frontend, passed before publication.
+  Published packages, build attestations, macOS bundle identity and updater
+  signatures were independently checked before the Git stable and Latest
+  promotion; the mutable signed desktop feed matches the immutable release.
+  The desktop remains a preview: native Windows execution and Apple
+  notarization are not claimed. This maintenance line starts from the retained
+  `v2.1.0` preview, keeps its failed evidence and does not roll up later `main`
+  snapshots. Read the [versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.1.1/docs/product/releases/v2.1.1.md)
+  before replacing an existing installation.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.

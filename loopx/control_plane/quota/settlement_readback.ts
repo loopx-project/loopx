@@ -1083,20 +1083,34 @@ function owedPriorTurnFromSnapshot(
     turnInstanceId,
   );
   for (const selected of candidates) {
-    const missingReceipts = missingCloseoutReceipts(readQuotaSettlementFromRequest(
-      {
-        ...request,
+    // A committed monitor poll is its own exact no-spend closeout. This is the
+    // same acceptance rule the next-Turn preflight applies; using only the
+    // advancement writeback/spend chain here incorrectly made every later
+    // Turn wait forever on a monitor that had already settled.
+    const monitorPoll = selected.binding_kind === "todo"
+      ? committedMonitorPollFromSnapshot(snapshot, {
+        goal_id: request.goal_id,
         agent_id: agentId,
-        ...candidateReadbackBinding(selected),
-        infer_turn_instance_id: false,
-        allow_unbound_binding: false,
-        resolve_original_binding: false,
-        refresh_retry: null,
-        heartbeat_reentry_guard: null,
-      },
-      snapshot,
-      false,
-    ));
+        turn_instance_id: selected.prior_turn_instance_id,
+        todo_id: selected.binding_id,
+      }, request.owner)
+      : null;
+    const missingReceipts = monitorPoll === null
+      ? missingCloseoutReceipts(readQuotaSettlementFromRequest(
+        {
+          ...request,
+          agent_id: agentId,
+          ...candidateReadbackBinding(selected),
+          infer_turn_instance_id: false,
+          allow_unbound_binding: false,
+          resolve_original_binding: false,
+          refresh_retry: null,
+          heartbeat_reentry_guard: null,
+        },
+        snapshot,
+        false,
+      ))
+      : null;
     if (missingReceipts !== null) {
       return { ...selected, missing_receipts: missingReceipts };
     }

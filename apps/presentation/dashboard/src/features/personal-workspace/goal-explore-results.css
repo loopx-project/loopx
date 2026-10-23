@@ -2,6 +2,7 @@
 .research-saved-evidence { margin: 24px 0; border-top: 1px solid var(--pw-line); }
 .research-saved-evidence > summary { padding: 16px 0; min-height: 44px; cursor: pointer; }
 .goal-explore-results { width: 100%; padding: 24px 0; border: 0; border-radius: 0; }
+.goal-explore-results > p { font-size: var(--text-lead); line-height: var(--leading-prose); }
 .explore-reader-heading { display: flex; align-items: center; gap: 8px; }
 .goal-explore-results .goal-team-results-layout { grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); }
 .explore-finding-navigation { min-width: 0; align-self: start; }
@@ -17,7 +18,7 @@
 .goal-explore-results .goal-team-result-reader > h4 { font-size: var(--text-lead); line-height: var(--leading-lead); font-weight: 600; margin: 0 0 12px; }
 .explore-reader-status { color: var(--pw-muted); font-size: var(--text-caption); }
 .goal-explore-results .goal-team-result-reader p, .goal-explore-results .goal-team-result-reader li { font-size: var(--text-lead); line-height: var(--leading-prose); color: var(--pw-text); }
-.explore-finding-prose { max-width: 72ch; }
+.explore-finding-prose, .explore-finding-raw { max-width: 72ch; }
 .explore-finding-prose section { margin: 24px 0; }
 .explore-finding-prose h5, .explore-finding-prose h6 { font: inherit; font-weight: 600; margin: 0 0 8px; }
 .explore-finding-prose p, .explore-finding-raw { white-space: pre-wrap; }
@@ -29,8 +30,14 @@
 .explore-reader-details dd { margin-bottom: 12px; }
 .goal-explore-results .explore-linked-tasks { padding: 0; list-style: none; }
 .explore-linked-tasks > li { border-bottom: 1px solid var(--pw-line); }
-.explore-linked-tasks summary > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.goal-explore-results .explore-linked-tasks summary { display: flex; align-items: flex-start; gap: 8px; font-size: var(--text-body); line-height: var(--leading-body); }
+.explore-linked-tasks summary::-webkit-details-marker { display: none; }
+.explore-linked-tasks summary > svg { flex-shrink: 0; margin-top: 2px; }
+.explore-linked-tasks details[open] > summary > svg { transform: rotate(90deg); }
+.explore-linked-tasks summary > span { min-width: 0; }
+.explore-linked-tasks summary strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 500; }
 .explore-linked-tasks summary small { display: block; margin-top: 8px; color: var(--pw-muted); }
+.explore-linked-tasks button { min-height: 44px; padding: 8px; }
 @media (max-width: 640px) {
   .goal-explore-results .goal-team-results-layout { grid-template-columns: minmax(0, 1fr); }
   .goal-explore-results .goal-team-result-list { display: none; }

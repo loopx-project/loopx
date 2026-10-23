@@ -95,7 +95,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
       <span className="research-phase-bar" aria-label={LABELS.map(key => `${label(key)} ${item.labels[key] ?? 0}`).join(" · ")}>
         {LABELS.map(key => item.labels[key] ? <span key={key} className={tone(key)} style={{flexGrow: item.labels[key]}}>{item.labels[key]}</span> : null)}
       </span>
-      <span className="research-phase-decisions">{counts.length ? `${copy.decisions} · ${counts.map(([key, value]) => `${label(key)} ${value}`).join(" · ")}` : (timeline.structuredCount ? copy.none : copy.unstructured)}</span>
+      {timeline.decisions.length ? <span className="research-phase-decisions">{counts.length ? `${copy.decisions} · ${counts.map(([key, value]) => `${label(key)} ${value}`).join(" · ")}` : (timeline.structuredCount ? copy.none : copy.unstructured)}</span> : null}
     </button>;
   };
   return <div className="research-timeline">

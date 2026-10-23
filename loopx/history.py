@@ -68,7 +68,6 @@ from .presentation.markdown import (
     markdown_table_row,
     markdown_table_separator,
 )
-from .quota import goal_quota_with_spend_ledger
 from .registry import registry_goals
 
 STATUS_NEUTRAL_CLASSIFICATIONS = {
@@ -407,6 +406,7 @@ def collect_history(
         project_goal_with_builtin_machine_configuration,
     )
     from .capabilities.machine_configuration.store import read_machine_configuration
+    from .quota import goal_quota_with_spend_ledger
 
     if registry is None:
         registry = load_registry(registry_path)

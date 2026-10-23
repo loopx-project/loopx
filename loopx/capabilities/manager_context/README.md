@@ -658,10 +658,20 @@ read-only verification. A matching message advances the original delivery to
 message, or verified mismatch becomes `explicit_unverified`. CLI, Manager read,
 and Chat expose the same public-safe state and reason without returning the
 provider locator. The Lark adapter keeps locator interpretation and provider
-readback; `manager-context` remains the sole result/delivery writer. The typed
-`control_plane/collaboration/return_delivery.ts` boundary owns provider-neutral
-attempt validation and verification classification; Python retains file-lock,
-persistence and adapter orchestration only.
+readback. The existing `control_plane/collaboration/return_delivery.ts` owner now
+performs delivery admission, state transitions, backoff and atomic delivery-receipt
+writes for exact-instance and legacy routes. It reuses the request, result and
+Goal-lifetime owners. Python observes original Chat/authority facts, holds the
+existing Host fences and invokes the actual transcript/provider adapters.
+
+The obsolete Python exact/legacy delivery coordinators and attempt-normalization
+RPC are removed. The shared transaction accepts bounded scan hints, rechecks each
+selected receipt under its mutation lock, and uses source/revision and exact
+admission-token fences before persistence. Attempt-aware providers persist their
+acceptance checkpoint before verification continues; it is not deferred to a final callback.
+The same stored request/result/route identities and public delivery readback remain.
+This retires this delivery orchestration family, not Inbox acceptance, source grants,
+all Python IO or installed/live-provider qualification.
 
 Unclassified readback exceptions retain the saved attempt and retry with backoff;
 their wording never establishes revoked authority or a missing route. Adapters

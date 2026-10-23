@@ -118,15 +118,16 @@ Agent identity follows the same fail-closed rule. `agent-onboard` keeps its
 fresh-registration path, while Codex App `start-goal --guided` consumes the
 ambient `CODEX_THREAD_ID` when `--thread-id` is omitted and must reuse a
 matching stable opaque thread binding when available. A stable thread ID with
-no binding is no longer treated as fresh onboarding when registered lanes
-exist: `start-goal` returns an identity gate that requires selecting one
-existing lane, and fresh registration is the default only for a goal with no
-registered lanes or explicit `--new-peer`. Existing identities are takeover
-choices, never an implicit automatic selection; selecting one requires
-explicit user intent for that exact agent. A missing thread ID follows the
-same gate when registered lanes exist and remains fail-closed otherwise,
-requiring explicit `--agent-id`, lane selection, or new-session intent with
-`--new-peer`. LoopX persists `(host_surface, goal_id, thread_id) -> agent_id` with
+no binding defaults to a fresh-Agent registration preview even when registered
+lanes exist; an existing lane remains an explicit takeover choice and requires
+user intent for that exact agent. A missing thread ID when registered lanes
+exist returns an identity gate and remains fail-closed, requiring an explicit
+registered `--agent-id`, lane selection, or `--new-peer`. Explicit
+`--new-peer` means the user requested a new identity; it never means takeover.
+The command's own generated guidance may pass `--new-peer` separately before
+`--slash-command-arguments`, and the parser must accept that combination while
+rejecting a second copy of the switch. LoopX persists
+`(host_surface, goal_id, thread_id) -> agent_id` with
 `bind-agent-thread --execute`; later `/loopx` calls reuse that bound identity
 across `start-goal`, heartbeat, quota, refresh-state, and Todo commands. The
 preview is advisory; todo writeback requires verified registration and binding
@@ -207,14 +208,17 @@ caller must explicitly pass `--capability-route issue-fix` to `start-goal` (or
 use the equivalent explicit host switch). Issue/PR wording, a public URL, or the
 literal string `issue-fix` remain objective text only and grant no route.
 
-Conversational hosts must not ask the model to split that switch from the goal
-text and then rebuild separate CLI arguments. Their generated `/loopx` entry
-passes the complete visible argument string once through
-`start-goal --slash-command-arguments`; the CLI consumes only a leading typed
-route switch and treats the remainder as goal text. Direct integrations may
-continue to use structured `--capability-route` plus `--goal-text`. These two
-input forms are mutually exclusive, and malformed or unsupported leading route
-switches fail closed before the guided transaction is built.
+Conversational hosts must not ask the model to split the capability-route
+switch from the goal text and then rebuild separate CLI arguments. Their
+generated `/loopx` entry passes the complete visible argument string once
+through `start-goal --slash-command-arguments`; the CLI consumes a leading
+typed route switch and treats the remainder as goal text. Direct integrations
+may continue to use structured `--capability-route` plus `--goal-text`. These
+two capability-route forms are mutually exclusive, and malformed or
+unsupported leading route switches fail closed before the guided transaction is
+built. Explicit boolean switches such as `--new-peer` may be supplied either
+inside the raw argument string or as a separate structured argument; supplying
+both is a duplicate-switch error.
 
 Only the leading `--capability-route` switch is parsed. A later occurrence of
 the same text in the raw argument string is ordinary goal text and is not an

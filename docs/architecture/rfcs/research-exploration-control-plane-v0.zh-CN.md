@@ -126,7 +126,7 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 | Research evidence 与 cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.zh-CN.md) 组合 generic progress、typed closure 和 explicit binary candidate。CLI summary 与 Lark node summary 共用只读投影，精确 experiment input fingerprint 防止过期结果继续有效。 |
 | 显式 M3 组合门禁 | [PR #5280](https://github.com/loopx-project/loopx/pull/5280) 已于 2026-10-12 作为 `1e6cae19f` 合入。可选启用的 Goal-frontier、Todo、experiment 和 input lineage 在 File/SQLite 中共用 typed write-time qualification；陈旧或无关证据不能解除当前义务。仍由既有 Goal 能力编辑器和 CLI 负责启用。规则已集成，不等于科学结果获接受或自然宿主已验收。 |
 | Explore planning | 可选 branch planner 保持只读，并把执行交还 quota、Todo、claim 和 lease。 |
-| Turn context 中的证据 | Planning 模式的 turn-start 读取保留有界的显式 Todo/节点证据诊断与既有 exploring 前沿节点。关联证据先分类再裁剪详情：输入投影中的全部 finding 和相关边参与诊断计数与风险判断，逐行详情仍保持有界。Turn context 同时报告被省略的详情数。这交付决策输入，不代表 §11.5 adoption gate 或模型行为已经验证。 |
+| Turn context 中的证据 | Planning 模式的 turn-start 读取保留有界的显式 Todo/节点证据诊断与既有 exploring 前沿节点。关联证据先分类再裁剪详情：输入投影中的全部 finding 和相关边参与诊断计数与风险判断，逐行详情仍保持有界。显式选择的任务先保留来源新近排序及预留反证，再处理无关 planner 关联；版本化测量和重放使用同一范围。[#7053](https://github.com/loopx-project/loopx/pull/7053)、[#7077](https://github.com/loopx-project/loopx/pull/7077)。Turn context 报告省略详情数。这交付决策输入，不代表 §11.5 adoption gate 或模型行为已经验证。 |
 | Model behavior qualification | 真实 function-tool 对话可以验证模型是否读取真实 packet 并选择真实 semantic writeback。 |
 
 ### 5.2 还缺什么
@@ -134,7 +134,7 @@ hypothesis”或“新 probe family”。它无法持久表达：A 和 B 都已�
 | 缺口 | 后果 |
 |---|---|
 | 已集成的 M3 行为尚缺完整远端资格验证 | PR #5280 有精确 head 的批准评审，以及本地 File/SQLite、默认关闭和打包配置旅程证据。最终 head 的 CI 未全绿：合入时多项任务被取消，Stage2c 汇总因矩阵结果为 `cancelled` 而失败。这不证明 Stage2c 测试本身失败，也不构成远端浏览器验收。独立的浏览器 CI 源码安装和输入框焦点 PR #6287/#6282 均关闭且未合入；其未完成的检查与 M3 本地证据分开。 |
-| 尚无 experiment-result adoption gate | 负证据可被记录，但不能证明下一绑定决策使用了其 scope、validity 与 uncertainty。§11.5 提议 single-experiment 集成；已合入的 PR #5280 仍未强制执行结果采用。 |
+| 实际 experiment-result adoption 仍未验收 | 已有捕获、当前任务证据交付和可恢复阅读，但不能证明下一绑定决策使用了结果的 scope、validity 与 uncertainty。先按 §11.5 验证影子采用，再考虑增加强制；已合入的 PR #5280 未强制该决策义务。 |
 | 执行 attribution 不是 effect 权限 | 精确 Todo/experiment/input receipt 不授予 task lease、effect 权限或已接受的 Goal closure。 |
 | Live qualification 不完整 | Deterministic 与真实 CLI/file-log 测试证明状态语义，不证明 model selection 质量或科学结论；projection 测试不构成 live Lark sync 资格。 |
 | inferred combination 没有 promotion evidence | 共享 constraint 的精度还不足以直接触发 obligation。 |
@@ -562,6 +562,21 @@ Host 应投影：
 决定何时关注结果，本节定义研究决策应保留什么。最近的 capability owner 是
 Explore；原生测量、统计解释和 job/artifact 处理留在 domain/benchmark provider。
 Generic kernel 不解释分数，也不从 Todo 更新推断研究真相。
+
+#### 已集成输入与下一资格验证
+
+在 main `5550e91bab`（2026-10-23），有范围的证据排序与比较版本身份已集成，
+Research 阅读入口也能通过 [#7084](https://github.com/loopx-project/loopx/pull/7084)
+恢复分页结论并读取完整关联任务。开始该试点不需要重建捕获、排序或另一证据收件箱。
+这些修复验证的是交付／回读边界；页面可读或引用 finding 都不能证明实际决策采用。
+
+选择一项既有、获授权的待决问题，保留确切 incumbent、candidate/input/result
+revision、适用反证与剩余预算。观察正常准入的下一动作是否使用这些证据，再检查
+实际产物和 provider 结果。在相同条件下对照仅交付证据的情况，分别报告合理接续、
+改变方法、前置无效及结果不确定。依照[测量／重规划研究](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#82-evidence空转检测与-semantic-replan)
+把晚期已验证提升保留为支持接续的积极证据。下一次复核评估结果质量及含控制、验证
+在内的完整边际成本。引用、新标识或强制换路都不是验收 oracle。这是既有路径的
+下一影子资格验证，不代表实验已启动、默认行为改变或 M3/M4 完成。
 
 #### 绑定问题与证据适用范围
 

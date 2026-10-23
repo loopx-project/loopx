@@ -410,6 +410,26 @@ goal-mode baseline。benchmark-reference scaffold reproduction 是额外 fidelit
 - 到首个 material delta 和各 score threshold 的时间与成本；
 - honest success、exhaustion、blocker 或 no-follow-up 后未使用的 budget。
 
+#### 先核覆盖，再比较成本
+
+复用既有 usage/trajectory owner，每项比较保留来源 revision、单位、范围、观测窗口
+和完整性。CLI packet 序列化字节衡量传输量，不能衡量实际消费的上下文、provider
+token、缓存处理、金额或验收价值。[#7050](https://github.com/loopx-project/loopx/pull/7050)
+的同响应验收共享验证了传输变化，不代表研究总成本按同一百分比下降。
+
+| 观测 | 必须保留的解释 |
+| --- | --- |
+| Packet 字节与交付上下文 | 分别测序列化、来源读取及实际消费者输入。引用仍须能解析完整适用指令；省略义务得到的小输出不是效率收益。 |
+| 模型用量 | 将真实 request 身份及保留的 counter 归属到覆盖的 session/Turn 窗口。核对压缩、重试、镜像记录与累计快照，避免重复计数，区分缓存／未缓存输入。请求或尾段覆盖缺失保持未知。 |
+| 完整边际成本 | 纳入已测任务工作、控制、评估、恢复及人工注意力，也报告采集／验证开销。未知项阻止完整金额主张；保留取消和失败尝试，不只用成功工作作分母。 |
+| 有效成果 | 分别报告保留的最佳有效 native 产物／结果、终态完成与新增已验证提升。原生排名仍由任务拥有；部分分数、Todo 完成或最终文件单独不代表整题成功。 |
+
+[#7054](https://github.com/loopx-project/loopx/pull/7054) 已集成显式观测的未完成 Turn
+counter；严格完整会话行为仍是默认。在 main `5550e91bab` 检查点，请求／压缩对账
+[#7087](https://github.com/loopx-project/loopx/pull/7087) 仍是提案。两者都不能证明
+provider 计费完整或匹配研究收益。通过既有 Research 阅读入口呈现这些边界，不另建
+成本账本，也不把字节变化换算成已测节省。
+
 ### 6.3 长程控制质量
 
 - 物质等价 work-slice 的重复次数；
@@ -692,6 +712,12 @@ ALE 验证它能否迁移到异构专业工作流。
 除原生结果和成本外，判断实际执行的 next action 是否遵循 scoped result。
 Citation/schema compliance 单独不够；压制有用实验的强制 pivot 算失败。
 这些是拟议 study，不是当前 C2/C4 evidence，也不授予 job launch 权限。
+
+晚期已验证提升是既有路线在观测条件下仍有有效收益空间的积极信号。单独一段较长
+平台期不能证明穷尽，也不足以终止运行。从同一已资格化 checkpoint 出发，在相同
+剩余预算、反馈机会和有效性规则下，比较继续当前路线、改变机制及有理由的复验；
+无提升和失败接续也纳入分母。这验证的是接续决策；一次晚期突破不能证明由 LoopX
+导致，也不授权延长冻结实验。
 
 ### 8.3 研究探索与组合
 

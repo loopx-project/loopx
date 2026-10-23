@@ -15,6 +15,7 @@ from ..coordination.local_authority import read_canonical_todos_if_promoted
 from ..goals.acceptance import inspect_goal_acceptance
 from ..goals.state_resolution import resolve_goal_state
 from ..todos.list_readback import list_goal_todos
+from ..todos.machine_region import find_todo_regions
 from ..todos.summary_item import todo_text_content_revision
 
 
@@ -25,11 +26,27 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id):
             registry=load_registry(registry_path), goal_id=goal_id,
             project_override=None, state_file_override=None)
         source_bytes = state_file.read_bytes()
-        # Validate the entire source, including its tail. The typed owner keeps
-        # Goal consumption as a pending read and does not consume this body.
-        source_bytes.decode("utf-8")
-        return {"state_file": str(state_file),
+        text = source_bytes.decode("utf-8")
+        content = {"state_file": str(state_file),
             "revision": "sha256:" + sha256(source_bytes).hexdigest()}
+        # Only the writer's explicitly marked regions have generated ownership.
+        # Retain every other byte, including frontmatter, arbitrary headings,
+        # comments and historical narrative. Legacy/unmarked input stays a full
+        # progressive read; malformed ownership fails rather than hiding text.
+        lines = text.splitlines(keepends=True)
+        regions = find_todo_regions(lines)
+        if regions and all(region.marked for region in regions):
+            parts, excluded, start = [], [], 0
+            for region in regions:
+                parts.extend(lines[start:region.start])
+                excluded.append({"role": region.role,
+                    "start_line": region.start + 1, "end_line": region.end,
+                    "revision": "sha256:" + sha256(
+                        "".join(lines[region.start:region.end]).encode("utf-8")).hexdigest()})
+                start = region.end
+            parts.extend(lines[start:])
+            content.update(text="".join(parts), excluded_todo_regions=excluded)
+        return content
     if source == "goal_acceptance":
         # The typed acceptance owner scopes task-binding observations while
         # retaining the complete Goal contract and cumulative outcomes. The

@@ -495,6 +495,31 @@ native task score or used to turn a failed task into a success.
 - time and cost to the first material delta and to score thresholds;
 - unused budget after honest success, exhaustion, blocker, or no-follow-up.
 
+#### Coverage before cost comparison
+
+Use the existing usage/trajectory owners and retain the source revision, unit,
+scope, observation window and completeness of every comparison. Serialized CLI
+packet bytes measure transport volume; they do not measure context actually
+consumed, provider tokens, cached processing, monetary cost or accepted value.
+The same-response acceptance sharing in
+[#7050](https://github.com/loopx-project/loopx/pull/7050) qualifies a transport
+change, not a corresponding percentage reduction in total research cost.
+
+| Observation | Required interpretation |
+| --- | --- |
+| Packet bytes and delivered context | Measure serialization, source reading and actual consumer input separately. References must still resolve to complete applicable instructions; smaller output obtained by omitting obligations is not an efficiency gain. |
+| Model usage | Attribute actual request identities and retained counters to their covered session/Turn window. Reconcile compaction, retries, mirrored records and cumulative snapshots without double counting; distinguish cached from uncached input. Missing request or tail coverage remains unknown. |
+| Complete marginal cost | Include task work, control, evaluation, recovery and human attention where measured. Report collection/validation overhead too; unknown components prevent a claim about full monetary cost. Preserve cancelled and failed attempts rather than dividing only by successful work. |
+| Useful result | Report the best valid retained native artifact/result, terminal completion and new verified improvements separately. Task-native ranking remains authoritative; a partial score, completed Todo or final file alone is not whole-task success. |
+
+[#7054](https://github.com/loopx-project/loopx/pull/7054) integrates explicitly
+observed unfinished-turn counters; strict complete-session behavior remains the
+default. At the main `5550e91bab` checkpoint, request/compaction reconciliation
+[#7087](https://github.com/loopx-project/loopx/pull/7087) is still a proposal.
+Neither scope establishes provider billing completeness or matched-study gain.
+Keep these boundaries visible in the existing Research reader rather than
+adding a parallel cost ledger or converting bytes into estimated savings.
+
 ### 6.3 Long-horizon control quality
 
 - materially equivalent work-slice repetitions;
@@ -854,6 +879,15 @@ Assess whether the executed next action follows the scoped result, alongside
 native outcome and cost. Citation/schema compliance alone is insufficient;
 forced pivots that suppress useful experiments count as failures. These are
 proposed studies, not current C2/C4 evidence or permission to launch jobs.
+
+Late verified improvements are a positive signal that the retained route still
+had useful headroom under the observed conditions. A long flat interval does
+not alone establish exhaustion or justify terminating a run. Compare continued
+work, a mechanism change and justified replication from the same qualified
+checkpoint with the same remaining budget, feedback opportunities and validity
+rules. Include no-gain and failed continuations in the denominator. This tests
+the continuation decision; one late breakthrough does not prove LoopX caused
+it or authorize extending a frozen experiment.
 
 ### 8.3 Research exploration and composition
 

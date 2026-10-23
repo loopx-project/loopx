@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import logging
 import threading
-from contextlib import ExitStack
-from datetime import datetime, timezone, timedelta
-from uuid import uuid4
+from itertools import islice
+from contextlib import contextmanager, ExitStack
+from datetime import datetime, timezone
 
 from . import _root, _read, _write, _hash, authority, target_authority
 from .tracking import _entry, _now
@@ -30,13 +30,11 @@ from ...control_plane.projects.registry_codec import (
     load_project_registry,
 )
 from ...presentation.public_safety import scan_public_boundary_text
-from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_request_scope, effect_runtime_result
 
 from ...control_plane.collaboration.inbox import (
     _request_lock,
     iter_result_paths,
-    inspect_result_identity,
-    prior_result_delivered,
     DELIVERY_STATUSES as DELIVERY_STATUSES,
     DELIVERY_ERRORS as DELIVERY_ERRORS,
     reply_status as reply_status,
@@ -44,8 +42,6 @@ from ...control_plane.collaboration.inbox import (
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
 from ...chat import ChatMessagePayloadConflictError
-
-EXACT_DELIVERY_ADMISSION_SECONDS = 60
 
 class ReturnResolutionBlocked(ValueError, RuntimeError):
     """A return cannot be resolved; ``reason`` is the provider-neutral code.
@@ -64,47 +60,12 @@ class ReturnResolutionBlocked(ValueError, RuntimeError):
         super().__init__(message)
 
 
-def _delivery_attempt(value):
-    return dict(
-        effect_runtime_result(
-            "manager.return_delivery.normalize_attempt", {"attempt": value}
-        )
-    )
-
-
-def _attempt_locator(value):
-    """The provider locator a recorded attempt can be verified against.
-
-    ``None`` covers both a record no normalization can read and the typed state
-    where the provider accepted the write without reporting a message id. The
-    attempt still proves a write happened; it just cannot name a readback
-    target, and that is what stops the pump from treating the return as unsent.
-    """
-
-    if value is None:
-        return None
-    try:
-        message_ref = _delivery_attempt(value).get("message_ref")
-    except (ValueError, EffectRuntimeRejected):
-        return None
-    return message_ref if isinstance(message_ref, str) and message_ref.strip() else None
-
-
 def _verification_decision(outcome):
     return dict(
         effect_runtime_result(
             "manager.return_delivery.classify_verification", {"outcome": outcome}
         )
     )
-
-
-def _verification_exception_error(exc):
-    decision = _verification_decision({
-        "verification_performed": False,
-        "reply_verified": False,
-        "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None,
-    })
-    return decision["error"] if decision["status"] == "explicit_unverified" else None
 
 
 def _register_unlocked(root, row, session, turn, *, source_store=None):
@@ -334,13 +295,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry):
 
 
 
-def _exact_return_scope(registry, reply):
-    return collaboration_goal_scope(
-        registry,
-        goal_id=reply["goal_id"],
-        agents=(reply["agent_id"],),
-        caller_goal_ref=reply["goal_ref"],
-    )
+RETURN_DELIVERY_TRANSACTION = "manager_return_delivery_transaction_v0"
 
 
 def _hold_return_source_fence(root, route, effects):
@@ -350,259 +305,140 @@ def _hold_return_source_fence(root, route, effects):
         effects.enter_context(source_policy_fence(_root(root) / "policy.json"))
 
 
-def _exact_return_context(root, registry, store, path, state_path, now, effects):
-    reply = _read(path)
-    if not isinstance(reply.get("goal_ref"), dict):
-        raise ValueError("exact return reply is missing goal_ref")
-    # Observe the frozen route only to select the fence, before Goal/request
-    # locks. Validate it against the exact request again under those locks.
-    frozen_route = _read(_root(root) / "roundtrips" / (path.parent.name + ".json"))
-    _hold_return_source_fence(root, frozen_route, effects)
-    with _exact_return_scope(registry, reply) as scope:
-        row = _entry(
-            root,
-            reply["goal_id"],
-            reply["agent_id"],
-            reply["request_id"],
-            scope=scope,
-        )
-        inspected = inspect_result_identity(reply, row, path)
-        if (
-            path.parent.name != row["request_id"]
-            or inspected is None
-            or any(
-                reply.get(key) != row.get(key)
-                for key in ("source_id", "goal_ref")
-            )
-        ):
-            raise ValueError("return_reply_identity_mismatch")
-        route = _route(root, row, scope=scope)
-        if route != frozen_route:
-            raise ValueError("context return route changed during admission")
-        if route.get("kind") == "peer":
-            return None
-        session = store.load_session(route["session_id"])
-        turn = store.turn_for_client(route["session_id"], route["client_turn_id"])
-        if (
-            not session
-            or session.get("status") == "closed"
-            or session.get("channel_id") != route["channel_id"]
-            or not turn
-        ):
-            raise ValueError("original_conversation_unavailable")
-        target = {key: row[key] for key in ("goal_id", "agent_id")}
-        grant = target_authority(
-            root,
-            session=session,
-            turn=turn,
-            target=target,
-        )
-        if (
-            target not in grant["targets"]
-            or grant.get("source_id") != row["source_id"]
-        ):
-            raise ValueError("return_authorization_unavailable")
-        decide_collaboration_lifecycle(
-            scope,
-            operation="original_return_admit",
-            record=row,
-            route=route,
-            initial_delivery=original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
-        )
-        with _request_lock(
-            root,
-            row["request_id"],
-            scope,
-            path.with_suffix(".lock"),
-        ):
-            if not prior_result_delivered(path, reply):
-                return None
-            state = _read(state_path) if state_path.exists() else {}
-            if state.get("status") in {
-                "delivered",
-                "superseded",
-                "explicit_unverified",
-            }:
-                return None
-            admission = state.get("admission")
-            if (
-                isinstance(admission, dict)
-                and isinstance(admission.get("expires_at"), str)
-                and now.isoformat() < admission["expires_at"]
-            ):
-                return None
-            if (
-                state.get("status") == "admitted"
-                and state.get("attempt") is None
-                and not conversation_scope(session)["private_conversation"]
-            ):
-                _write(
-                    state_path,
-                    {
-                        "status": "explicit_unverified",
-                        "error": "provider_delivery_unverified",
-                        "goal_ref": row["goal_ref"],
-                    },
-                )
-                return None
-            if (
-                state.get("retry_at")
-                and state.get("status") != "admitted"
-                and now.isoformat() < state["retry_at"]
-            ):
-                return None
-            if inspected["interim_superseded"]:
-                _write(
-                    state_path,
-                    {
-                        "status": "superseded",
-                        "reason": "conclusion_ready",
-                        "goal_ref": row["goal_ref"],
-                    },
-                )
-                return None
-            token = uuid4().hex
-            prior_status = (
-                admission.get("prior_status")
-                if isinstance(admission, dict)
-                else state.get("status", "queued")
-            )
-            admitted = {
-                **state,
-                "status": "admitted",
-                "goal_ref": row["goal_ref"],
-                "admission": {
-                    "token": token,
-                    "prior_status": prior_status,
-                    "admitted_at": now.isoformat(),
-                    "expires_at": (
-                        now + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS)
-                    ).isoformat(),
-                },
+@contextmanager
+def _return_source(host, path, frozen_route, original_grant=None):
+    """Observe original Chat/provider sources under their existing lifetime fence."""
+    root, registry, store, exact = (host[key] for key in ("root", "registry", "store", "exact"))
+    with ExitStack() as guards:
+        try:
+            reply = _read(path)
+            scope = guards.enter_context(collaboration_goal_scope(
+                registry, goal_id=reply["goal_id"],
+                agents=(reply["agent_id"],) if exact else (),
+                caller_goal_ref=reply.get("goal_ref") if exact else None,
+            ))
+            if exact:
+                guards.enter_context(_request_lock(root, reply["request_id"], scope, path.with_suffix(".lock")))
+            row = _entry(root, reply["goal_id"], reply["agent_id"], reply["request_id"], scope=scope)
+            route = _route(root, row, scope=scope)
+            if route != frozen_route:
+                raise ValueError("context return route changed during admission")
+            session = store.load_session(route["session_id"])
+            turn = store.turn_for_client(route["session_id"], route["client_turn_id"])
+            grant = original_grant
+            if grant is None and session and turn:
+                grant = (target_authority(root, session=session, turn=turn,
+                    target={key: row[key] for key in ("goal_id", "agent_id")})
+                    if exact else authority(root, registry, session, turn))
+            target = scope.target(reply["agent_id"])
+            facts = {
+                "entry": row,
+                "entry_path": str(_root(root) / "entries" / _hash(target) / (reply["request_id"] + ".json")),
+                "route": route, "session": session, "turn": turn,
+                "grant": grant or {"targets": []},
+                "scope": {"profile_id": scope.profile_id,
+                    "caller_goal_ref": scope.caller_goal_ref,
+                    "current_goal_ref": scope.current_goal_ref},
+                "initial_delivery": original_delivery_facts(row, route, turn,
+                    source_id=(grant or {}).get("source_id")) if turn else None,
             }
-            admitted.pop("retry_at", None)
-            _write(state_path, admitted)
-        return {
-            "reply": reply,
-            "row": row,
-            "route": route,
-            "session": session,
-            "turn": turn,
-            "store": store,
-            "state_path": state_path,
-            "state": admitted,
-            "token": token,
-            "source_id": grant["source_id"],
-        }
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            facts = {"error": exc.reason if isinstance(exc, ReturnResolutionBlocked) else "return_source_unavailable"}
+        yield facts
 
 
-def _write_exact_return_state(
-    root,
-    registry,
-    context,
-    value,
-    *,
-    preserve_admission=False,
-):
-    reply = context["reply"]
-    with _exact_return_scope(registry, reply) as scope:
-        row = _entry(
-            root,
-            reply["goal_id"],
-            reply["agent_id"],
-            reply["request_id"],
-            scope=scope,
-        )
-        route = _route(root, row, scope=scope)
-        turn = context["store"].turn_for_client(
-            route["session_id"],
-            route["client_turn_id"],
-        )
-        decide_collaboration_lifecycle(
-            scope,
-            operation="original_return_settle",
-            record=row,
-            route=route,
-            initial_delivery=(
-                original_delivery_facts(row, route, turn, source_id=context["source_id"])
-                if isinstance(turn, dict) else None
-            ),
-        )
-        with _request_lock(
-            root,
-            row["request_id"],
-            scope,
-            context["state_path"].with_suffix(".lock"),
-        ):
-            current = _read(context["state_path"])
-            admission = current.get("admission")
-            if (
-                not isinstance(admission, dict)
-                or admission.get("token") != context["token"]
-            ):
-                raise ValueError("exact return delivery admission changed")
-            result = {**value, "goal_ref": row["goal_ref"],
-                      **({"result_key": reply["result_key"]} if "result_key" in reply else {})}
-            # A refusal does not erase evidence that the provider already wrote.
-            # Terminal state remains terminal; preserving its locator is no retry.
-            if result.get("status") == "explicit_unverified" and current.get("attempt") is not None:
-                result["attempt"] = current["attempt"]
-            if preserve_admission:
-                result["admission"] = admission
-            else:
-                result.pop("admission", None)
-            _write(context["state_path"], result)
-            if (result.get("status") == "delivered" and result.get("reply_verified") is True
-                    and current.get("status") != "delivered"):
-                from ...usage_ping import observe_verified_return
-                observe_verified_return()
-
-
-def _retry_state(state, now, *, error):
-    attempts = int(state.get("attempts", 0)) + 1
-    result = {
-        key: value
-        for key, value in state.items()
-        if key not in {"admission", "delivered_at", "message_id", "verification"}
-    }
-    result.update(
-        status="retry_pending",
-        attempts=attempts,
-        error=error,
-        retry_at=(
-            now + timedelta(seconds=min(300, 5 * 2 ** min(attempts, 6)))
-        ).isoformat(),
-    )
+def _return_transaction(host, path, phase, request):
+    root, now, exact = (host[key] for key in ("root", "now", "exact"))
+    payload = {key: value for key, value in request.items() if key != "facts"}
+    observed = dict(request["facts"])
+    for field, keys in {
+        "session": ("session_id", "goal_id", "channel_id", "status", "project_context", "steward_context"),
+        "turn": ("turn_id", "client_turn_id", "status"),
+        "grant": ("source_id", "targets"),
+    }.items():
+        if isinstance(observed.get(field), dict):
+            observed[field] = {key: observed[field][key] for key in keys if key in observed[field]}
+    result = effect_runtime_result("manager.return_delivery.transact", {
+        "schema_version": RETURN_DELIVERY_TRANSACTION,
+        "runtime_root": str(root.resolve()), "request_id": path.parent.name,
+        "result_key": path.stem, "phase": phase, "now": now.isoformat(),
+        "exact": exact, "facts": observed, **payload,
+    }, retry_safe=False)
+    if (not isinstance(result, dict) or result.get("schema_version") != RETURN_DELIVERY_TRANSACTION
+            or result.get("action") not in {"skip", "private", "verify", "send"}
+            or type(result.get("processed")) is not int or result["processed"] not in {0, 1}):
+        raise RuntimeError("return delivery transaction result shape mismatch")
     return result
 
 
-def _transport_route(route, reply, external_sender):
-    attachments = reply.get("attachments") or []
-    if not attachments:
-        return route
-    if getattr(external_sender, "supports_result_files", False) is not True:
-        raise ValueError("return_transport_unavailable")
-    # Ephemeral transport payload, never part of the persisted audience/grant.
-    return {**route, "result_attachments": attachments}
+def _return_provider(plan, source, sender, record_attempt):
+    route, session, turn = (source[key] for key in ("route", "session", "turn"))
+    attachments = plan.get("attachments") or []
+    if attachments:
+        if getattr(sender, "supports_result_files", False) is not True:
+            raise ValueError("return_transport_unavailable")
+        route = {**route, "result_attachments": attachments}
+    if plan["action"] == "private":
+        return {"kind": "private"}
+    if plan["action"] == "verify":
+        attempt = plan.get("attempt")
+        if not attempt or attempt.get("message_ref") is None:
+            return {"kind": "locator_unavailable"}
+        verifier = getattr(sender, "verify", None)
+        if not callable(verifier):
+            return {"kind": "verify_unavailable"}
+        return {"kind": "verified", "verification": verifier(route, session, turn, plan["text"], attempt)}
+    provider = getattr(sender, "send_with_attempt", None)
+    if callable(provider):
+        sent = provider(route, session, turn, plan["text"], record_attempt)
+    elif callable(sender):
+        sent = sender(route, session, turn, plan["text"])
+    else:
+        return {"kind": "sender_unavailable"}
+    return {"kind": "sent", "reply_verified": sent.get("reply_verified"),
+            "external_write_performed": sent.get("external_write_performed"),
+            "idempotency_key": sent.get("idempotency_key")}
 
 
-def _resolve_delivery_sender(external_sender):
-    """Resolve a manager return transport to ``(sender, attempt_aware)``.
+def _deliver_return(host, path, sender, frozen_route):
+    store, cancelled = host["store"], host["cancelled"]
+    with _return_source(host, path, frozen_route) as facts:
+        plan = _return_transaction(host, path, "prepare", {"facts": facts})
+        source = dict(facts)
+    if plan.get("source_unavailable") is True:
+        logging.getLogger(__name__).warning("Exact manager return admission unavailable")
+    if plan["action"] == "skip":
+        return plan["processed"]
+    if cancelled():
+        return 0
+    checkpoint = {key: plan[key] for key in ("revision", "token")}
 
-    Two transport shapes are legitimate: an object exposing a callable
-    ``send_with_attempt`` (the attempt-aware protocol) and a bare callable
-    transport. The predicate is shape-based on purpose — the transports
-    share no base class, so an ``isinstance`` check would reject valid
-    transports. ``(None, False)`` means the transport cannot deliver:
-    callers must record ``return_transport_unavailable`` before invoking
-    instead of letting the call raise ``TypeError`` mid-loop.
-    """
-    sender = getattr(external_sender, "send_with_attempt", None)
-    if callable(sender):
-        return sender, True
-    if callable(external_sender):
-        return external_sender, False
-    return None, False
+    def transact(phase, **payload):
+        with _return_source(host, path, frozen_route, source["grant"]) as current:
+            return _return_transaction(host, path, phase,
+                {"facts": current, **checkpoint, **payload})
+
+    def record_attempt(attempt):
+        saved = transact("attempt", attempt=dict(attempt))
+        checkpoint.update({key: saved[key] for key in ("revision", "token")})
+
+    try:
+        store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],
+            turn_id=source["turn"]["turn_id"], origin="manager_followup", message_id=plan["message_id"])
+        if cancelled():
+            return 0
+        outcome = _return_provider(plan, source, sender, record_attempt)
+    except ChatMessagePayloadConflictError as exc:
+        logging.getLogger(__name__).warning("Manager return payload conflict on %s: %s", plan["message_id"], exc.field)
+        outcome = {"kind": "conflict"}
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
+                   "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}
+    settled = transact("settle", outcome=outcome, message_id=plan["message_id"])
+    if settled.get("observe_verified"):
+        from ...usage_ping import observe_verified_return
+        observe_verified_return()
+    return settled["processed"]
 
 
 def _belongs_to_chat_host(root, store, path):
@@ -610,9 +446,6 @@ def _belongs_to_chat_host(root, store, path):
 
     route_path = _root(root) / "roundtrips" / (path.parent.name + ".json")
     try:
-        # Missing legacy routes can only be recovered from the coordination
-        # root's Chat receipts. Private hosts recover their frozen provenance
-        # at startup before draining; a foreign host must never claim them.
         route = _read(route_path) if route_path.exists() else {}
         return route.get("kind") != "peer" and is_source_chat_host(root, route, store)
     except (OSError, ValueError, TypeError):
@@ -620,703 +453,56 @@ def _belongs_to_chat_host(root, store, path):
         return False
 
 
-def _drain_exact(root, registry, store, external_sender, *, now, cancelled):
-    processed = 0
-    for path in iter_result_paths(_root(root) / "replies"):
-        if cancelled():
-            break
-        if not _belongs_to_chat_host(root, store, path):
-            continue
-        state_path = path.with_name(path.stem + ".delivery.json")
-        effect_locks = ExitStack()
-        try:
-            effect_locks.enter_context(
-                exclusive_file_lock(
-                    _root(root)
-                    / "return-effect-locks"
-                    / path.parent.name
-                    / path.stem,
-                    policy=LockAcquisitionPolicy.SINGLE_FLIGHT,
-                    operation="manager_return_delivery",
-                )
-            )
-        except LockAcquireTimeoutError:
-            continue
-        try:
-            context = _exact_return_context(
-                root,
-                registry,
-                store,
-                path,
-                state_path,
-                now,
-                effect_locks,
-            )
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-            effect_locks.close()
-            logging.getLogger(__name__).warning(
-                "Exact manager return admission unavailable"
-            )
-            continue
-        if context is None:
-            effect_locks.close()
-            continue
-        row = context["row"]
-        route = context["route"]
-        session = context["session"]
-        turn = context["turn"]
-        reply = context["reply"]
-        state = context["state"]
-        prefix = "处理结论" if reply["phase"] == "conclusion" else "处理进展"
-        text = (
-            f"{prefix} · {row['agent_id']} · 委托 {row['request_id'][:8]}"
-            f"\n\n{reply['text']}"
-        )
-        mid = "handoff." + _hash([row["request_id"], path.stem])
-        try:
-            if cancelled():
-                return processed
-            route = _transport_route(route, reply, external_sender)
-            try:
-                store.append_message(
-                    route["session_id"],
-                    role="agent",
-                    text=text,
-                    turn_id=turn["turn_id"],
-                    origin="manager_followup",
-                    message_id=mid,
-                )
-            except ChatMessagePayloadConflictError as exc:
-                logging.getLogger(__name__).warning(
-                    "Manager return payload conflict on %s: %s",
-                    mid,
-                    exc.field,
-                )
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    {
-                        "status": "explicit_unverified",
-                        "error": "manager_return_payload_conflict",
-                    },
-                )
-                processed += 1
-                continue
-            if cancelled():
-                return processed
-            if conversation_scope(session)["private_conversation"]:
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    {
-                        "status": "delivered",
-                        "delivered_at": now.isoformat(),
-                        "message_id": mid,
-                    },
-                )
-                processed += 1
-                continue
-
-            prior_status = state["admission"]["prior_status"]
-            if prior_status == "verification_required" or state.get("attempt") is not None:
-                attempt = state.get("attempt")
-                if attempt is None or _attempt_locator(attempt) is None:
-                    _write_exact_return_state(
-                        root,
-                        registry,
-                        context,
-                        {
-                            **({"attempt": attempt} if attempt is not None else {}),
-                            "status": "explicit_unverified",
-                            "error": "provider_locator_unavailable",
-                        },
-                    )
-                    processed += 1
-                    continue
-                normalized_attempt = _delivery_attempt(attempt)
-                verifier = getattr(external_sender, "verify", None)
-                if not callable(verifier):
-                    _write_exact_return_state(
-                        root,
-                        registry,
-                        context,
-                        {
-                            "status": "explicit_unverified",
-                            "error": "provider_verifier_unavailable",
-                        },
-                    )
-                    processed += 1
-                    continue
-                try:
-                    decision = _verification_decision(
-                        verifier(
-                            route,
-                            session,
-                            turn,
-                            text,
-                            normalized_attempt,
-                        )
-                    )
-                except (
-                    OSError,
-                    ValueError,
-                    KeyError,
-                    TypeError,
-                    RuntimeError,
-                ) as exc:
-                    error = _verification_exception_error(exc)
-                    next_state = (
-                        {
-                            "status": "explicit_unverified",
-                            "error": error,
-                        }
-                        if error
-                        else _retry_state(
-                            {"attempt": normalized_attempt, **state},
-                            now,
-                            error="provider_verification_unavailable",
-                        )
-                    )
-                    _write_exact_return_state(
-                        root,
-                        registry,
-                        context,
-                        next_state,
-                    )
-                    processed += 1
-                    continue
-                if decision["status"] == "delivered":
-                    next_state = {
-                        "status": "delivered",
-                        "delivered_at": now.isoformat(),
-                        "message_id": mid,
-                        "provider_receipt": normalized_attempt["provider_receipt"],
-                        "reply_verified": True,
-                        "verification": decision["verification"],
-                    }
-                elif decision["status"] == "explicit_unverified":
-                    next_state = {
-                        "status": "explicit_unverified",
-                        "error": decision["error"],
-                    }
-                else:
-                    next_state = _retry_state(
-                        {"attempt": normalized_attempt, **state},
-                        now,
-                        error=decision["error"],
-                    )
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    next_state,
-                )
-                processed += 1
-                continue
-
-            def record_attempt(value):
-                nonlocal state
-                attempt = _delivery_attempt(value)
-                existing = state.get("attempt")
-                if existing is not None and _delivery_attempt(existing) != attempt:
-                    raise ValueError("manager return delivery attempt conflict")
-                state = {**state, "attempt": attempt}
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    state,
-                    preserve_admission=True,
-                )
-
-            sender, attempt_aware = _resolve_delivery_sender(external_sender)
-            if sender is None:
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    _retry_state(
-                        state,
-                        now,
-                        error="return_transport_unavailable",
-                    ),
-                )
-                processed += 1
-                continue
-            sent = (
-                sender(route, session, turn, text, record_attempt)
-                if attempt_aware
-                else sender(route, session, turn, text)
-            )
-            if sent.get("reply_verified") is not True:
-                if sent.get("external_write_performed") is True:
-                    attempt = state.get("attempt")
-                    next_state = (
-                        {
-                            "status": "verification_required",
-                            "error": "provider_delivery_unverified",
-                            "attempt": attempt,
-                        }
-                        if attempt is not None and _attempt_locator(attempt) is not None
-                        else {
-                            **({"attempt": attempt} if attempt is not None else {}),
-                            "status": "explicit_unverified",
-                            "error": "provider_locator_unavailable",
-                        }
-                    )
-                    _write_exact_return_state(
-                        root,
-                        registry,
-                        context,
-                        next_state,
-                    )
-                    processed += 1
-                    continue
-                raise ValueError("return_transport_unavailable")
-            _write_exact_return_state(
-                root,
-                registry,
-                context,
-                {
-                    "status": "delivered",
-                    "delivered_at": now.isoformat(),
-                    "message_id": mid,
-                    "provider_receipt": sent.get("idempotency_key"),
-                    "reply_verified": True,
-                },
-            )
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-            attempt = state.get("attempt")
-            error = (
-                _verification_exception_error(exc)
-                if attempt is not None
-                else None
-            )
-            if error:
-                next_state = {
-                    "status": "explicit_unverified",
-                    "error": error,
-                }
-            elif attempt is not None and _attempt_locator(attempt) is None:
-                next_state = {
-                    "status": "explicit_unverified",
-                    "error": "provider_locator_unavailable",
-                    "attempt": attempt,
-                }
-            else:
-                next_state = _retry_state(
-                    state,
-                    now,
-                    # Before a provider write, preserve the Core-classified
-                    # resolution cause without changing its retry lifecycle.
-                    error=exc.reason if isinstance(exc, ReturnResolutionBlocked)
-                    else "original_route_or_return_delivery_unavailable",
-                )
-            try:
-                _write_exact_return_state(
-                    root,
-                    registry,
-                    context,
-                    next_state,
-                )
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                logging.getLogger(__name__).warning(
-                    "Exact manager return settlement unavailable"
-                )
-        finally:
-            effect_locks.close()
-        processed += 1
-        if processed >= 20:
-            break
-    return processed
+def _pending_return_paths(host, paths):
+    root, now, exact, cancelled = (host[key] for key in ("root", "now", "exact", "cancelled"))
+    paths = iter(paths)
+    while not cancelled() and (batch := list(islice(paths, 128))):
+        candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path in batch]
+        selected = effect_runtime_result("manager.return_delivery.transact", {
+            "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
+            "runtime_root": str(root.resolve()), "now": now.isoformat(), "exact": exact,
+            "candidates": candidates,
+        })
+        if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
+            raise RuntimeError("return delivery scan result shape mismatch")
+        if selected.get("unavailable_count"):
+            logging.getLogger(__name__).warning("Unreadable manager return receipt")
+        ready = {(row["request_id"], row["result_key"]) for row in selected["candidates"]}
+        yield from (path for path in batch if (path.parent.name, path.stem) in ready)
 
 
+@effect_runtime_request_scope()
 def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False):
-    """Restart-safe return delivery; transport retries never rerun the worker/model."""
+    """Run the typed return transaction with the existing Chat/provider adapters."""
+    if cancelled():
+        return 0
     now = now or datetime.now(timezone.utc)
     try:
-        profile_id = load_project_registry(registry).get("profile_id")
+        exact = load_project_registry(registry).get("profile_id") == SOURCE_SESSION_PROFILE_ID
     except (OSError, ValueError, TypeError):
-        profile_id = None
-    if profile_id == SOURCE_SESSION_PROFILE_ID:
-        return _drain_exact(
-            root,
-            registry,
-            store,
-            external_sender,
-            now=now,
-            cancelled=cancelled,
-        )
+        exact = False
     processed = 0
-    for path in iter_result_paths(_root(root) / "replies"):
+    host = {"root": root, "registry": registry, "store": store, "now": now, "exact": exact, "cancelled": cancelled}
+    paths = iter_result_paths(_root(root) / "replies")
+    for path in _pending_return_paths(host, paths):
         if cancelled():
             break
         if not _belongs_to_chat_host(root, store, path):
             continue
-        state_path = path.with_name(path.stem + ".delivery.json")
-        with exclusive_file_lock(path.with_suffix(".lock")), ExitStack() as effects:
-            try:
-                state = _read(state_path) if state_path.exists() else {}
-            except (OSError, ValueError):
-                # A damaged receipt has unknown delivery state: do not resend
-                # it blindly, and do not starve unrelated pending returns.
-                logging.getLogger(__name__).warning("Unreadable manager return receipt")
-                continue
-            if state.get("status") in {"delivered", "superseded", "explicit_unverified"}:
-                continue
-            if state.get("retry_at") and now.isoformat() < state["retry_at"]:
-                continue
-            try:
-                reply = _read(path)
-                row = _entry(
-                    root, reply["goal_id"], reply["agent_id"], reply["request_id"]
-                )
-                inspected = inspect_result_identity(reply, row, path)
-                if (
-                    path.parent.name != row["request_id"]
-                    or inspected is None
-                    or reply.get("source_id") != row["source_id"]
-                ):
-                    raise ValueError("return_reply_identity_mismatch")
-                route = _transport_route(_route(root, row), reply, external_sender)
-                if route.get("kind") == "peer":
-                    continue  # Delivered by the requester inbox, never a Chat audience.
-                _hold_return_source_fence(root, route, effects)
-                session = store.load_session(route["session_id"])
-                turn = store.turn_for_client(
-                    route["session_id"], route["client_turn_id"]
-                )
-                if (
-                    not session
-                    or session.get("status") == "closed"
-                    or session.get("channel_id") != route["channel_id"]
-                    or not turn
-                ):
-                    raise ReturnResolutionBlocked("original_route_unavailable", "original_conversation_unavailable")
-                grant = authority(root, registry, session, turn)
-                target = {k: row[k] for k in ("goal_id", "agent_id")}
-                if (
-                    target not in grant["targets"]
-                    or grant.get("source_id") != row["source_id"]
-                ):
-                    raise ReturnResolutionBlocked("return_authorization_unavailable", "return_authorization_unavailable")
-                with collaboration_goal_scope(registry, goal_id=row["goal_id"], agents=()) as scope:
-                    decide_collaboration_lifecycle(
-                        scope, operation="original_return_admit", record=row, route=route,
-                        initial_delivery=original_delivery_facts(row, route, turn, source_id=grant.get("source_id")),
-                    )
-                if inspected["interim_superseded"]:
-                    _write(
-                        state_path,
-                        {"status": "superseded", "reason": "conclusion_ready"},
-                    )
-                    continue
-                if not prior_result_delivered(path, reply):
-                    continue
-                # A conclusion can be a deferral or rejection. Transport completion
-                # is not completion of the delegated work.
-                prefix = "协作回复" if reply["phase"] == "conclusion" else "协作进展"
-                text = f"{prefix} · {row['agent_id']} · 委托 {row['request_id'][:8]}\n\n{reply['text']}"
-                # Transcript writes are independently idempotent, including when
-                # Lark is offline. Keep the original Turn and logical conversation.
-                mid = "handoff." + _hash([row["request_id"], path.stem])
-                if cancelled():
-                    return processed
-                try:
-                    store.append_message(
-                        route["session_id"],
-                        role="agent",
-                        text=text,
-                        turn_id=turn["turn_id"],
-                        origin="manager_followup",
-                        message_id=mid,
-                    )
-                except ChatMessagePayloadConflictError as exc:
-                    logging.getLogger(__name__).warning(
-                        "Manager return payload conflict on %s: %s",
-                        mid,
-                        exc.field,
-                    )
-                    _write(
-                        state_path,
-                        {
-                            **state,
-                            "status": "explicit_unverified",
-                            "error": "manager_return_payload_conflict",
-                        },
-                    )
-                    processed += 1
-                    continue
-                if cancelled():
-                    return processed
-                transport = {}
-                if not conversation_scope(session)["private_conversation"]:
-                    if state.get("status") == "verification_required":
-                        if state.get("attempt") is None:
-                            # A record written before locators were persisted has
-                            # no trustworthy provider identity: never guess and
-                            # never resend the conclusion.
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": "provider_locator_unavailable",
-                                },
-                            )
-                            continue
-                        try:
-                            attempt = _delivery_attempt(state.get("attempt"))
-                        except (ValueError, EffectRuntimeRejected):
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": "provider_locator_unavailable",
-                                },
-                            )
-                            continue
-                        if _attempt_locator(state.get("attempt")) is None:
-                            # The attempt records a provider write that carried no
-                            # locator, so no readback can prove it and the provider
-                            # must not be called again. Converging here keeps the
-                            # attempt as the evidence of that write while making
-                            # the return terminal, instead of looping the pump
-                            # through verification attempts forever.
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": "provider_locator_unavailable",
-                                },
-                            )
-                            continue
-                        verifier = getattr(external_sender, "verify", None)
-                        if not callable(verifier):
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": "provider_verifier_unavailable",
-                                },
-                            )
-                            continue
-                        try:
-                            verified = verifier(route, session, turn, text, attempt)
-                            decision = _verification_decision(verified)
-                        except (
-                            OSError,
-                            ValueError,
-                            KeyError,
-                            TypeError,
-                            RuntimeError,
-                        ) as exc:
-                            error = _verification_exception_error(exc)
-                            if error:
-                                _write(
-                                    state_path,
-                                    {**state, "status": "explicit_unverified", "error": error},
-                                )
-                                continue
-                            # An unclassified readback failure keeps the locator and
-                            # stays retryable, but must never re-run the provider on
-                            # every pump without backoff.
-                            attempts = int(state.get("attempts", 0)) + 1
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "verification_required",
-                                    "attempts": attempts,
-                                    "retry_at": (
-                                        now
-                                        + timedelta(
-                                            seconds=min(300, 5 * 2 ** min(attempts, 6))
-                                        )
-                                    ).isoformat(),
-                                },
-                            )
-                            continue
-                        if decision["status"] == "delivered":
-                            _write(
-                                state_path,
-                                {
-                                    "status": "delivered",
-                                    **({"result_key": path.stem} if "result_key" in reply else {}),
-                                    "delivered_at": now.isoformat(),
-                                    "message_id": mid,
-                                    "provider_receipt": attempt["provider_receipt"],
-                                    "reply_verified": True,
-                                    "verification": decision["verification"],
-                                },
-                            )
-                            continue
-                        if decision["status"] == "explicit_unverified":
-                            _write(
-                                state_path,
-                                {
-                                    **state,
-                                    "status": "explicit_unverified",
-                                    "error": decision["error"],
-                                },
-                            )
-                            continue
-                        attempts = int(state.get("attempts", 0)) + 1
-                        _write(
-                            state_path,
-                            {
-                                **state,
-                                "status": "verification_required",
-                                "attempts": attempts,
-                                "error": decision["error"],
-                                "retry_at": (
-                                    now
-                                    + timedelta(
-                                        seconds=min(300, 5 * 2 ** min(attempts, 6))
-                                    )
-                                ).isoformat(),
-                            },
-                        )
-                        continue
-
-                    def record_attempt(value):
-                        attempt = _delivery_attempt(value)
-                        current = _read(state_path) if state_path.exists() else {}
-                        existing = current.get("attempt")
-                        if existing is not None and _delivery_attempt(existing) != attempt:
-                            raise ValueError("manager return delivery attempt conflict")
-                        _write(
-                            state_path,
-                            {
-                                "status": "verification_required",
-                                "error": "provider_delivery_unverified",
-                                "attempt": attempt,
-                            },
-                        )
-
-                    sender, attempt_aware = _resolve_delivery_sender(external_sender)
-                    if sender is None:
-                        attempts = int(state.get("attempts", 0)) + 1
-                        _write(
-                            state_path,
-                            {
-                                "status": "retry_pending",
-                                "attempts": attempts,
-                                "error": "return_transport_unavailable",
-                                "retry_at": (
-                                    now
-                                    + timedelta(
-                                        seconds=min(300, 5 * 2 ** min(attempts, 6))
-                                    )
-                                ).isoformat(),
-                            },
-                        )
-                        processed += 1
-                        continue
-                    sent = (
-                        sender(route, session, turn, text, record_attempt)
-                        if attempt_aware
-                        else sender(route, session, turn, text)
-                    )
-                    if sent.get("reply_verified") is not True:
-                        if sent.get("external_write_performed") is True:
-                            current = _read(state_path) if state_path.exists() else {}
-                            if (
-                                current.get("attempt") is not None
-                                and _attempt_locator(current.get("attempt")) is not None
-                            ):
-                                _write(
-                                    state_path,
-                                    {
-                                        **current,
-                                        "status": "verification_required",
-                                        "error": "provider_delivery_unverified",
-                                    },
-                                )
-                            else:
-                                # Either nothing was recorded or the record says
-                                # the provider took the write without a locator.
-                                # Both leave no readback target, so the return is
-                                # terminal rather than retryable: a retry would
-                                # post the same text again.
-                                _write(
-                                    state_path,
-                                    (
-                                        {
-                                            **current,
-                                            "status": "explicit_unverified",
-                                            "error": "provider_locator_unavailable",
-                                        }
-                                        if current.get("attempt") is not None
-                                        else {
-                                            "status": "explicit_unverified",
-                                            "error": "provider_locator_unavailable",
-                                        }
-                                    ),
-                                )
-                            continue
-                        raise ValueError("return_transport_unavailable")
-                    transport = {
-                        "provider_receipt": sent.get("idempotency_key"),
-                        "reply_verified": True,
-                    }
-                _write(
-                    state_path,
-                    {
-                        "status": "delivered",
-                        **({"result_key": path.stem} if "result_key" in reply else {}),
-                        "delivered_at": now.isoformat(),
-                        "message_id": mid,
-                        **transport,
-                    },
-                )
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-                current = _read(state_path) if state_path.exists() else {}
-                if current.get("status") == "verification_required" and current.get(
-                    "attempt"
-                ) is not None:
-                    error = _verification_exception_error(exc)
-                    if error:
-                        _write(
-                            state_path,
-                            {**current, "status": "explicit_unverified", "error": error},
-                        )
-                    elif _attempt_locator(current.get("attempt")) is None:
-                        # The record says the provider took the write and named
-                        # no locator, so there is nothing left to verify and a
-                        # retry would post the same text again. Converge now
-                        # instead of leaving the return in a retryable state.
-                        _write(
-                            state_path,
-                            {
-                                **current,
-                                "status": "explicit_unverified",
-                                "error": "provider_locator_unavailable",
-                            },
-                        )
-                    processed += 1
-                    continue
-                attempts = int(state.get("attempts", 0)) + 1
-                _write(
-                    state_path,
-                    {
-                        "status": "retry_pending",
-                        "attempts": attempts,
-                        "error": exc.reason if isinstance(exc, ReturnResolutionBlocked)
-                        else "original_route_or_return_delivery_unavailable",
-                        "retry_at": (
-                            now + timedelta(seconds=min(300, 5 * 2 ** min(attempts, 6)))
-                        ).isoformat(),
-                    },
-                )
-            processed += 1
-            if processed >= 20:
-                break
+        lock_path = (_root(root) / "return-effect-locks" / path.parent.name / path.stem
+                     if exact else path.with_suffix(".lock"))
+        try:
+            with exclusive_file_lock(lock_path, **({"policy": LockAcquisitionPolicy.SINGLE_FLIGHT,
+                                     "operation": "manager_return_delivery"} if exact else {})), ExitStack() as effects:
+                frozen_route = _read(_root(root) / "roundtrips" / (path.parent.name + ".json"))
+                _hold_return_source_fence(root, frozen_route, effects)
+                processed += _deliver_return(host, path, external_sender, frozen_route)
+        except LockAcquireTimeoutError:
+            continue
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            logging.getLogger(__name__).warning("Manager return transaction unavailable")
+        if processed >= 20:
+            break
     return processed
 
 

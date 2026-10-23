@@ -112,16 +112,20 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     const audit = requireJsonObject(branch.typed_evidence_audit, "Explore evidence audit");
     return requireStringArray(audit.requested_node_refs ?? [], "Explore node refs");
   }) : []);
-  const attachedResults = findings.filter(row => Array.isArray(row.tags) && row.tags.includes("writeback-result"));
+  // Manual quantitative capture uses the same finding owner. Keep its sources
+  // available to the existing exact-result decision path, without requiring a
+  // writeback-origin tag or admitting unrelated unmeasured notes.
+  const decisionResults = findings.filter(row => row.measurements !== undefined
+    || Array.isArray(row.tags) && row.tags.includes("writeback-result"));
   // Keep the same detail budget, but do not let unrelated newer results evict
   // the applicability of evidence linked to the next selected work item.
   // Explicitly bound work can differ from this independent planner. Prioritize
   // its canonical links without changing candidates, scores or admission.
-  const plannerResults = prioritizeLinkedResults(attachedResults, selectedRefs);
+  const plannerResults = prioritizeLinkedResults(decisionResults, selectedRefs);
   // Shared links must not inherit another task's planner priority. Use source
   // recency within the focus and retain planner ordering only outside it.
   const writebackResults = focusedRefs.size
-    ? prioritizeLinkedResults(attachedResults, focusedRefs, plannerResults) : plannerResults;
+    ? prioritizeLinkedResults(decisionResults, focusedRefs, plannerResults) : plannerResults;
   const command = (...args: string[]) => [...route, "explore", ...args, "--goal-id", goal];
   const resultLimit = requireInteger(params.result_limit ?? 3, "result_limit");
   const resultOffset = requireInteger(params.result_offset ?? 0, "result_offset");
@@ -294,7 +298,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
           remaining: remainingMeasurements, revision: resultRevision,
           next_command: nextRead(remainingMeasurements, visibleMeasurements.length),
         },
-        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Follow measurement_feedback_page.next_command for omitted groups, or filter by node; existing result limit/offset/revision options apply and changed evidence requires restarting the read.",
+        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. A singleton group's null improvement is not zero gain: check whether candidate revisions or individual receipts were put in input_revision/evaluation_ref instead of candidate_ref/evidence_ref. Correct a recorded finding only with verified provenance; never merge unknown or changed conditions. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Follow measurement_feedback_page.next_command for omitted groups, or filter by node; existing result limit/offset/revision options apply and changed evidence requires restarting the read.",
       } : {}),
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),
       record_finding_template: command("finding", "--node", "<node-id>", "--title", "<evidence-backed result>", "--status", "<tentative|confirmed|refuted>"),

@@ -14,19 +14,31 @@ relations and authority revision without repeating the body. If no other
 canonical fields need a source record, `work_context.selected_todo_authority`
 carries the source and revision. When the view is bounded, the full canonical
 detail remains in `work_context.sources`.
-Registered Goal state remains a full progressive read in
-`agent_channel.required_reads`: the mixed Markdown document can also contain
-other tasks and historical evidence, so quota checks its availability but does
-not automatically copy that whole document into every response or infer Goal
-intent by trimming headings. Read it before dependent work. Enabled scoped
-acceptance does not replace the original Goal intent.
+Registered Goal state uses the existing writer's strict generated-region
+ownership. When every recognized Todo region is explicitly marked, the source
+adapter delivers **all other text verbatim** in `work_context.sources`: Goal
+intent, frontmatter, arbitrary sections, comments, history and final stops.
+`excluded_todo_regions` retains each generated region's role, line interval and
+SHA-256; `revision` hashes the entire original file, including those regions.
+Canonical exact Todo and scoped User reads retain task requirements and authority.
+This default read changes the Goal obligation from the mixed document to its
+complete non-generated text; it does not summarize requirements or erase history.
+No source file or canonical record is rewritten.
+
+Unmarked or mixed ownership keeps the original full progressive read in
+`agent_channel.required_reads`. Malformed markers, non-generated content inside
+a marked region, unavailable files and invalid UTF-8 fail closed. Unknown
+narrative is never classified by headings or clipped to a size budget. Read all
+delivered context and remaining reads before dependent work; changed sources need
+a fresh guard. Enabled scoped acceptance does not replace original Goal intent.
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
-and hashes all bytes for its revision. Only its path and revision cross the
-internal context-projection bridge; the typed owner does not consume the file
-body there. Missing files and invalid UTF-8 still block dependent delivery.
-Removing that unused internal copy does not shorten the Agent's required Goal
-read or establish model-token, latency or outcome gains.
+and hashes all bytes for its revision. For unmarked or mixed ownership, only its path and revision cross the
+internal context-projection bridge, preserving the complete progressive read
+without an unused body copy. Explicitly owned sources send the complete
+non-generated narrative and region lineage to the typed consumer. Missing files
+and invalid UTF-8 still block dependent delivery. Byte reduction alone does not
+establish model-token, latency or outcome gains.
 
 Already delivered sources disappear from `required_reads`; unresolved provider
 reads retain exact commands and ordering. The typed interaction owner owns this
@@ -109,13 +121,18 @@ transport flag does not restore the old exact Todo schema.
 
 普通 Heartbeat/quota 默认在 `agent_channel.work_context` 返回完整选定 Todo、
 启用的验收与当前 Agent 相关的 User Todo，附带来源和修订，不需要开启 TurnEnvelope。
-混合了其他 Todo 和历史证据的 Goal Markdown 文件保留为 `required_reads` 中的全文
-读取命令：quota 核验来源可用性，不每轮自动灌入整个文件，也不按标题猜测哪些文字
-可以替代原始 Goal。依赖交付前仍须读取；局部验收不能替代整体目标。
-Goal 可用性 adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；内部
-context projection 桥接只传路径与修订，typed owner 不在这里消费文件正文。
-文件缺失或非法 UTF-8 仍阻止依赖交付。移除内部未使用副本不会缩短 Agent 的 Goal
-必读范围，也不代表已取得模型 token、延迟或任务效果收益。
+Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
+显式标记时，`work_context.sources` 原样携带区域外的全部文字，保留目标、frontmatter、
+任意章节、注释、历史和末尾停止条件。`excluded_todo_regions` 保留每段的角色、行区间
+和 SHA-256，`revision` 仍覆盖完整原文件；任务要求与权限由 canonical 精确 Todo 和
+scoped User 读取保留。默认 Goal 必读对象改为完整非生成正文，不摘要要求、不删除历史，
+不重写原文件或权威记录。未标记或混合归属仍须渐进式读取全文；错误标记、标记内非生成
+内容、来源缺失及非法 UTF-8 均拒绝。不能按标题猜测或为预算截断正文；依赖交付前须读取
+全部已提供上下文与剩余必读，来源改变后重新准入，局部验收不能替代整体目标。
+Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；未标记或混合归属
+仅在内部桥接传路径与修订，避免未被消费的正文副本，Agent 仍须渐进式全文读取。显式
+归属的来源才向 typed owner 传完整非生成正文和区域血缘。字节减少不能证明模型费用、
+延迟或任务效果改善。
 已附带的内容不要求重复读取；未提供的 provider 内容继续保留精确命令与顺序。
 `work_context.complete` 只表示未发现来源失败，未完成的必读义务仍然有效。
 偏好只在对应作用域有记录时出现；Explore 和偏好沿用各自 hook 的真实 adapter，

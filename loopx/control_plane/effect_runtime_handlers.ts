@@ -707,8 +707,8 @@ export function createEffectRuntimeHandlers(
     ["reward_memory.app_outcome.bind", lazyHandler(() => import("./capabilities/reward_memory_app_outcome.ts"), ({bindRewardMemoryAppOutcome}) => bindRewardMemoryAppOutcome)],
     ["reward_memory.app_outcome.identity", lazyHandler(() => import("./capabilities/reward_memory_app_outcome.ts"), ({rewardMemoryAppOutcomeIdentity}) => rewardMemoryAppOutcomeIdentity)],
     [
-      "manager.return_delivery.normalize_attempt",
-      lazyHandler(() => import("./collaboration/return_delivery.ts"), ({normalizeManagerReturnDeliveryAttempt}) => (params) => normalizeManagerReturnDeliveryAttempt(params.attempt)),
+      "manager.return_delivery.transact",
+      lazyHandler(() => import("./collaboration/return_delivery.ts"), ({transactManagerReturnDelivery}) => transactManagerReturnDelivery),
     ],
     [
       "manager.return_delivery.classify_verification",

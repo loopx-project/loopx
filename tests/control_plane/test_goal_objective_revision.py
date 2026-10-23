@@ -90,6 +90,7 @@ def test_native_proposal_owner_apply_and_separate_peer_adoption(acceptance_goal,
     project, _, cli, run = acceptance_goal
     prepare_source(project)
     original = (project / "state.md").read_bytes()
+    initial_admission = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")[1]
     document = {"objective": "Maintain a reliable service", "reason": "Bootstrap is complete", "source_ref": "message:owner"}
     path = project / "revision.json"
     path.write_text(json.dumps(document))
@@ -100,6 +101,11 @@ def test_native_proposal_owner_apply_and_separate_peer_adoption(acceptance_goal,
     assert cli(*args)[1]["proposal"]["proposal_id"] == prepared["proposal"]["proposal_id"]
     other_args = ("prepare-objective", "--agent-id", "agent-b", "--document", str(path), "--operation-id", "peer-same-proposal", "--execute")
     assert cli(*other_args)[1]["proposal"]["proposal_id"] == prepared["proposal"]["proposal_id"], "peers share one pending owner review"
+    pending_admission = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")[1]
+    for field in ("normal_delivery_allowed", "requires_user_action", "should_run"):
+        assert pending_admission[field] == initial_admission[field], "surfacing a proposal cannot add an early gate"
+    assert not any(gap.get("kind") == "goal_objective_review_required"
+        for gap in pending_admission["goal_frontier_projection"]["acceptance_gaps"])
     from loopx.control_plane.work_items.team_plan_adapter import team_plan_state_fingerprint
     old_team_basis = team_plan_state_fingerprint(registry_path=project.parent / "registry.json", goal_id="goal-acceptance", basis_agent_id="agent-a")
     service = ChatActionService(store=ChatActionStore(project.parent / "runtime" / "chat" / "actions"), registry_path=project.parent / "registry.json")
@@ -149,6 +155,109 @@ def test_native_proposal_owner_apply_and_separate_peer_adoption(acceptance_goal,
         service.apply(next_proposal["proposal"]["proposal_id"])
     assert service.apply(next_proposal["proposal"]["proposal_id"])["proposal"]["status"] == "applied"
     assert cli("inspect")[1]["goal_acceptance_contract"]["goal_objective"]["revision"] == 2
+
+
+def test_cli_proposal_preview_authority_and_lost_response_recovery(acceptance_goal, monkeypatch):
+    project, checks, cli, _ = acceptance_goal
+    prepare_source(project)
+    original = (project / "state.md").read_bytes()
+    document = project / "objective.json"
+    document.write_text(json.dumps({"objective": "Maintain reliable exports", "reason": "The owner added recovery",
+        "source_ref": "message:owner-direction"}))
+    code, prepared = cli("prepare-objective", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "cli-direction", "--execute")
+    assert code == 0, prepared
+    proposal_id = prepared["proposal"]["proposal_id"]
+    code, inspected = cli("inspect-proposal", "--agent-id", "agent-a", "--proposal-id", proposal_id)
+    assert code == 0 and inspected["proposal"] == prepared["proposal"], inspected
+    before = cli("inspect")[1]
+    apply = ("apply-proposal", "--proposal-id", proposal_id)
+    code, preview = cli(*apply)
+    assert code == 0 and not preview["executed"], preview
+    assert preview["proposal"]["status"] == "preview_ready"
+    assert cli("inspect")[1] == before
+    code, denied = cli(*apply, "--agent-id", "agent-a", "--execute")
+    assert code == 1 and not denied["ok"], denied
+    assert cli("inspect-proposal", "--proposal-id", proposal_id)[1]["proposal"]["status"] == "preview_ready"
+    assert cli("inspect")[1] == before
+    code, missing = cli("inspect-proposal", "--proposal-id", "proposal-missing")
+    assert code == 1 and not missing["ok"], missing
+    check_document = json.loads(checks.read_text())
+    check_document["criteria"][0]["validation_argv"][0] = "python3"
+    checks.write_text(json.dumps(check_document))
+    code, check = cli("prepare", "--agent-id", "agent-a", "--document", str(checks),
+        "--operation-id", "check-is-not-objective", "--execute")
+    assert code == 0, check
+    code, wrong_kind = cli("apply-proposal", "--proposal-id", check["proposal"]["proposal_id"], "--execute")
+    assert code == 1 and not wrong_kind["ok"], wrong_kind
+    assert not (project / "artifact.txt").exists()
+    from loopx.control_plane.goals import goal_objective_actions
+    native_update = goal_objective_actions.update_goal_objective
+
+    def lose_reply(**kwargs):
+        value = native_update(**kwargs)
+        if kwargs.get("execute"):
+            monkeypatch.setattr(goal_objective_actions, "update_goal_objective", native_update)
+            raise OSError("synthetic lost reply after canonical commit")
+        return value
+
+    monkeypatch.setattr(goal_objective_actions, "update_goal_objective", lose_reply)
+    service = ChatActionService(store=ChatActionStore(project.parent / "runtime" / "chat" / "actions"),
+        registry_path=project.parent / "registry.json")
+    with pytest.raises(OSError, match="lost reply"):
+        service.apply(proposal_id)
+    assert cli("inspect")[1]["goal_acceptance_contract"]["goal_objective"]["revision"] == 1
+    code, recovered = cli(*apply, "--execute")
+    assert code == 0 and recovered["executed"] and recovered["proposal"]["status"] == "applied", recovered
+    own = cli("inspect", "--agent-id", "agent-a")[1]
+    objective = own["goal_acceptance_contract"]["goal_objective"]
+    document.write_text(json.dumps({"revision": objective["revision"], "digest": objective["digest"],
+        "work_digest": own["objective_work_digest"], "review_summary": "Existing export work includes recovery."}))
+    code, adopted = cli("adopt-objective", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "cli-adopt-direction", "--expected-provider-revision", own["provider_revision"], "--execute")
+    assert code == 0, adopted
+    peers = adopted["goal_acceptance_contract"]["goal_objective"]["peer_adoption"]
+    assert next(peer for peer in peers if peer["agent_id"] == "agent-a")["current"]
+    assert not next(peer for peer in peers if peer["agent_id"] == "agent-b")["current"]
+    apply_objective(project, cli, "Maintain exports and validate restored artifacts")
+    code, replay = cli(*apply, "--execute")
+    assert code == 0 and replay["proposal"]["status"] == "applied", replay
+    assert replay["current"]["goal_acceptance_contract"]["goal_objective"]["revision"] == 2
+    assert cli("inspect")[1]["goal_acceptance_contract"]["goal_objective"]["revision"] == 2
+    assert (project / "state.md").read_bytes() == original
+
+
+def test_pending_proposal_allows_independent_work_without_an_owner_gate(acceptance_goal):
+    project, _, cli, run = acceptance_goal
+    prepare_source(project)
+    document = project / "objective.json"
+    document.write_text(json.dumps({"objective": "Maintain export recovery", "reason": "Recorded owner direction includes recovery",
+        "source_ref": "message:owner-direction"}))
+    code, proposal = cli("prepare-objective", "--agent-id", "agent-a", "--document", str(document),
+        "--operation-id", "pending-work", "--execute")
+    assert code == 0 and proposal["proposal"]["status"] == "preview_ready", proposal
+    code, work = run("todo", "add", "--goal-id", "goal-acceptance", "--role", "agent",
+        "--claimed-by", "agent-a", "--text", "Validate the existing export recovery",
+        "--task-class", "advancement_task", "--action-kind", "implement")
+    assert code == 0 and work["ok"] and work["added"], work
+    listed = run("todo", "list", "--goal-id", "goal-acceptance", "--role", "agent")[1]
+    assert any(todo["text"].endswith("Validate the existing export recovery") for todo in listed["todos"])
+    assert "goal_objective" not in cli("inspect")[1]["goal_acceptance_contract"]
+    assert cli("inspect-proposal", "--proposal-id", proposal["proposal"]["proposal_id"])[1]["proposal"]["status"] == "preview_ready"
+
+
+@pytest.mark.parametrize("arguments", [
+    ("inspect-proposal",),
+    ("inspect-proposal", "--proposal-id", "proposal-example", "--execute"),
+    ("apply-proposal", "--proposal-id", "proposal-example", "--operation-id", "new-request"),
+    ("inspect", "--proposal-id", "proposal-example"),
+])
+def test_cli_proposal_rejects_ambiguous_or_mutating_inspection(acceptance_goal, arguments):
+    _, _, cli, _ = acceptance_goal
+    before = cli("inspect")[1]
+    code, rejected = cli(*arguments)
+    assert code == 1 and not rejected["ok"], rejected
+    assert cli("inspect")[1] == before
 
 
 def test_native_conversation_exposes_and_executes_revision_loop(conversation_check):

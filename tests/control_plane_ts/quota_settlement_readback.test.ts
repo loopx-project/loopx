@@ -976,6 +976,35 @@ test("monitor closeout requires the exact committed effect, not a matching obser
   }
 });
 
+test("a prior committed monitor poll never blocks a later unbound Turn rebind", async () => {
+  const priorTurn = "turn-prior-monitor";
+  const currentTurn = "turn-current-work";
+  const prior = await fixture({monitor: true, turnId: priorTurn});
+  const current = await fixture({guardUnbound: true, turnId: currentTurn});
+  try {
+    const priorLog = join(prior, "goals", goalId, "rollout-event-log.jsonl");
+    const priorEvents = (await readFile(priorLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    priorEvents[0].details.closeout_required = true;
+    await writeFile(
+      priorLog,
+      `${priorEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    );
+    await appendHistory(prior, current);
+    const result = await readQuotaSettlement(request(prior, {
+      turn_instance_id: currentTurn,
+    }));
+    const failure = (result.identity as any).result.failure;
+    assert.equal(failure.kind, "receipt_unbound");
+    assert.equal(failure.details.owed_prior_turn, undefined);
+  } finally {
+    await rm(prior, {recursive: true, force: true});
+    await rm(current, {recursive: true, force: true});
+  }
+});
+
 test("refresh recovery admission never survives a failed Turn identity", async () => {
   const root = await fixture({ guard: false, writeback: true });
   try {

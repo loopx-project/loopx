@@ -12,7 +12,7 @@ import shlex
 import subprocess
 from typing import Any
 
-from . import POLICY_SCHEMA, _root, _read, _write
+from . import POLICY_SCHEMA, _root, _read, _write, _require_external_channel
 from ...control_plane.collaboration.source_policy_fence import source_policy_fence
 from ...control_plane.status.ssh_host_catalog import configured_ssh_host_aliases
 
@@ -55,8 +55,7 @@ def grants(root, channel):
 
 
 def configure(root, *, channel, host, goal_ids, execute=False, config_path=None):
-    if not re.fullmatch(r"manager\.external\.[a-f0-9]{24}", channel):
-        raise ValueError("exact external manager channel required")
+    _require_external_channel(channel)
     if host not in configured_ssh_host_aliases(config_path):
         raise ValueError("host must be an existing SSH alias")
     if len(goal_ids) > 128 or any(

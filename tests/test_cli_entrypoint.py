@@ -499,7 +499,8 @@ def test_selected_manager_result_matches_full_replay_without_loading_full_cli(tm
 	argv = ["--registry", str(registry), "--runtime-root", str(tmp_path), "--format", "json",
 		"manager-inbox", "report", "--goal-id", "delivery", "--agent-id", "builder",
 		"--request-id", rid, "--reply-text", "The independent evidence check passed."]
-	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	selected = run_cli_main("loopx.entrypoint", argv,
+		forbidden_modules=("loopx.cli", "loopx.quota"))
 	path = _root(tmp_path) / "replies" / rid / "conclusion.json"
 	assert selected.returncode == 0, selected.stderr
 	committed = path.read_bytes()

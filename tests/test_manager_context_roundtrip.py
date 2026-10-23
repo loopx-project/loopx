@@ -246,8 +246,7 @@ def test_other_chat_host_cannot_delay_original_host_return(flow, explicit_source
     assert reply_status(root, receipt)[0]["status"] == "delivered"
 
 
-def test_exact_return_skips_other_host_before_admission(flow, monkeypatch):
-    from loopx.capabilities.manager_context import roundtrip
+def test_exact_return_skips_other_host_before_admission(flow):
     from loopx.control_plane.projects.registry_codec import SOURCE_SESSION_PROFILE_ID
 
     root, registry, store, create = flow
@@ -262,8 +261,9 @@ def test_exact_return_skips_other_host_before_admission(flow, monkeypatch):
     def unexpected(*args, **kwargs):
         raise AssertionError("A foreign host must not admit or deliver this return")
 
-    monkeypatch.setattr(roundtrip, "_exact_return_context", unexpected)
+    before = {path: path.read_bytes() for path in (_root(root) / "replies").rglob("*.json")}
     assert drain(root, registry, foreign, unexpected) == 0
+    assert {path: path.read_bytes() for path in before} == before
 
 
 def test_conclusion_coalesces_unsent_intermediate_decision_and_is_immutable(flow):
@@ -517,6 +517,69 @@ def test_ambiguous_provider_write_is_not_blindly_resent(flow):
         "delivered_at": None,
         "error": "provider_locator_unavailable",
     }
+
+
+def test_return_scan_isolates_invalid_address_from_valid_result(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "The original request is complete.")
+    orphan = _root(root) / "replies" / "!orphan" / "conclusion.json"
+    _write(orphan, {"text": "An unrelated damaged address."})
+    original = orphan.read_bytes()
+
+    assert drain(root, registry, store, None) == 1
+    assert drain(root, registry, ChatSessionStore(root), None) == 0
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    returned = [row for row in store.messages(session["session_id"])
+                if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert orphan.read_bytes() == original
+    assert not orphan.with_name("conclusion.delivery.json").exists()
+
+
+@pytest.mark.parametrize("missing", ["session", "turn"])
+def test_accepted_return_with_missing_original_route_terminates_without_resend(flow, missing):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "The original request is complete.")
+    attempt = {
+        "schema_version": "manager_return_delivery_attempt_v0", "provider": "lark",
+        "message_ref": "om_recorded_result", "intent_digest": "sha256:" + "a" * 64,
+        "provider_receipt": "sha256:" + "b" * 64,
+    }
+
+    class Transport:
+        sends = 0
+
+        def send_with_attempt(self, route, session, turn, text, record_attempt):
+            self.sends += 1
+            record_attempt(attempt)
+            return {"external_write_performed": True, "reply_verified": False}
+
+        def verify(self, *_):
+            pytest.fail("a missing original route cannot authorize verification")
+
+    sender = Transport()
+    drain(root, registry, store, sender)
+    path = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    assert json.loads(path.read_text())["status"] == "verification_required"
+    directory = store.root / "sessions" / session["session_id"]
+    (directory / "session.json" if missing == "session" else
+     directory / "turns" / (turn["turn_id"] + ".json")).unlink()
+
+    assert drain(root, registry, ChatSessionStore(root), sender) == 1
+    state = json.loads(path.read_text())
+    assert state["status"] == "explicit_unverified"
+    assert state["error"] == "original_route_unavailable"
+    assert state["attempt"] == attempt
+    saved = path.read_bytes()
+    assert drain(root, registry, ChatSessionStore(root), sender,
+                 now=datetime.now(timezone.utc) + timedelta(days=1)) == 0
+    assert sender.sends == 1 and path.read_bytes() == saved
 
 
 def test_known_provider_locator_is_verified_after_restart_without_resend(flow):
@@ -1331,81 +1394,44 @@ def test_stored_empty_attachments_list_replays_without_delivery_conflict(flow):
     assert len(stored) == 1 and stored[0]["attachments"] == []
 
 
-def test_exact_loop_payload_conflict_sets_terminal_state_without_retry(
-    flow,
-    monkeypatch,
-):
-    root, registry, store, create = flow
-    session, turn, receipt = create(True)
+def test_exact_loop_payload_conflict_sets_terminal_state_without_retry(tmp_path):
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+
+    registry = tmp_path / ".loopx" / "registry.json"
+    with source_session_registry_transaction(registry, operation="test_exact_return", create=lambda: {
+        "profile_id": "source_session_v1",
+        "goals": [{"id": "research", "repo": str(tmp_path), "status": "active",
+                   "goal_instance_id": "ginst_" + "a" * 32,
+                   "coordination": {"registered_agents": ["worker"]}}],
+        "session_bindings": [], "session_receipts": [], "lifetime_receipts": [],
+    }) as transaction:
+        transaction.commit(transaction.payload_copy())
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
+                                   upstream_thread_id="fixture", channel_id="manager")
+    turn, _ = store.create_turn(session["session_id"], client_turn_id="original",
+                                message="Review the evidence.", origin="web")
+    receipt = deliver(tmp_path, registry, session=session, turn=turn,
+                      request={"goal_id": "research", "agent_id": "worker"})
+    store.update_turn(session["session_id"], turn["turn_id"], status="completing",
+                       response={"context_handoff_receipt": receipt})
+    store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
     rid = receipt["request_id"]
-    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
-    report(
-        root,
-        "research",
-        "worker",
-        rid,
-        "conclusion",
-        "Checked with the current evidence and found no gap.",
-    )
-    conflicting_mid = "handoff." + _hash([rid, "conclusion"])
-    store.append_message(
-        session["session_id"],
-        role="agent",
-        text="An earlier, different version of this conclusion.",
-        turn_id=turn["turn_id"],
-        origin="manager_followup",
-        message_id=conflicting_mid,
-    )
-    # The exact admission machinery needs a source-session registry fixture
-    # this module does not build; stub the context construction and the
-    # settlement writer so the exact loop's own delivery-side conflict
-    # check is what runs against the real divergent row above.
-    import loopx.capabilities.manager_context.roundtrip as return_roundtrip
-    from loopx.control_plane.projects.registry_codec import (
-        SOURCE_SESSION_PROFILE_ID,
-    )
-
-    settlements = []
-
-    def fake_settlement(root, registry, context, value, **kwargs):
-        settlements.append(dict(value))
-
-    monkeypatch.setattr(
-        return_roundtrip, "_write_exact_return_state", fake_settlement
-    )
-
-    def fake_context(root, registry, store, path, state_path, now, effects):
-        reply = return_roundtrip._read(path)
-        return {
-            "reply": {**reply, "phase": path.stem},
-            "row": {"request_id": rid, "agent_id": "worker"},
-            "route": {"session_id": session["session_id"]},
-            "session": session,
-            "turn": turn,
-            "store": store,
-            "state_path": state_path,
-            "state": {},
-            "token": "fixture",
-            "source_id": "lark:om_fixture_source",
-        }
-
-    monkeypatch.setattr(return_roundtrip, "_exact_return_context", fake_context)
-    profile = json.loads(registry.read_text())
-    profile["profile_id"] = SOURCE_SESSION_PROFILE_ID
-    registry.write_text(json.dumps(profile))
+    acknowledge(tmp_path, "research", "worker", rid, "adopt", "Checked", registry=registry)
+    report(tmp_path, "research", "worker", rid, "conclusion", "Checked the evidence.", registry=registry)
+    mid = "handoff." + _hash([rid, "conclusion"])
+    store.append_message(session["session_id"], role="agent", text="An earlier, different conclusion.",
+                         turn_id=turn["turn_id"], origin="manager_followup", message_id=mid)
     deliveries = []
-
-    def recording_transport(route, session, turn, text):
-        deliveries.append(text)
-        return {"reply_verified": True, "idempotency_key": "sha256:provider-proof"}
-
-    drain(root, registry, store, recording_transport)
+    assert drain(tmp_path, registry, store, lambda *args: deliveries.append(args)) == 1
     assert deliveries == []
-    assert len(settlements) == 1
-    assert settlements[0] == {
-        "status": "explicit_unverified",
-        "error": "manager_return_payload_conflict",
-    }
+    state_path = _root(tmp_path) / "replies" / rid / "conclusion.delivery.json"
+    state = json.loads(state_path.read_text())
+    assert state["status"] == "explicit_unverified"
+    assert state["error"] == "manager_return_payload_conflict"
+    assert state["goal_ref"] == receipt["goal_ref"]
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 0
+    assert json.loads(state_path.read_text()) == state
 
 
 def test_explicit_channel_return_completes_transcript_only_without_sender(flow):

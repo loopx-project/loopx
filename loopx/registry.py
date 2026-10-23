@@ -17,7 +17,6 @@ from .file_lock import write_json_atomic
 from .explore_graph import compact_explore_graph_policy
 from .orchestration import compact_orchestration_policy, orchestration_policy_summary
 from .presentation.markdown import markdown_code, markdown_table_row, markdown_table_separator
-from .quota import goal_quota_config
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -329,6 +328,8 @@ def inspect_registry_boundary(path: Path) -> dict[str, Any]:
 
 
 def inspect_registry(path: Path) -> dict[str, Any]:
+    from .quota import goal_quota_config
+
     if not path.exists():
         return {
             "ok": False,

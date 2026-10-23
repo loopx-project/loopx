@@ -7,10 +7,13 @@
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
-**本地权威检查点（2026-10-16）。** 贡献者主导的 #6396 已落地 2.0 普通 writer
-截止并吸收恢复／原生补缺。沿 [R5 合入后顺序](#post-6396-delivery-plan) 推进最终主干
-安装资格、完整恢复／生命周期 owner 集成及独立 D2/D3 证据。保留具名历史和兼容
-1.4.2 路线；不重复创建 writer 任务、不宣称发布默认或全局等待所有 RFC。
+**本地权威检查点（2026-10-23）。** 贡献者主导的 #6396 已完成 2.0 普通 writer
+截止；[#7032](https://github.com/loopx-project/loopx/pull/7032) 也已结束未迁移 Goal 的
+普通读取回退。复用 canonical 创建及显式备份／迁移／恢复，不重建已退役兼容路径，
+也不把这些已完成变更列为待实现前置。沿 [R5 合入后顺序](#post-6396-delivery-plan)
+继续验收适用的安装升级、完整恢复／生命周期集成及剩余 D2/D3 证据。保留具名失败、
+贡献者署名和兼容 1.4.2 路线；源码集成或一次安装可用不能证明所有平台、完整 CI、
+存储持续证据或长程收益。
 
 **S2/S12 启动诊断检查点（2026-10-04）** 已移至[执行账本](ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.zh-CN.md)。
 
@@ -88,7 +91,7 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | 工作流 | 目标及当前基础 | 下一完整切片、前置与退出证据 |
 | --- | --- | --- |
 | **S1 产品与持久管家 · P0** | 从需求、调查、分解到验收回报；现有 manager runtime、team intake 和 settings 是基础，端到端持续工作未完整证明 | 以 R1/R2 为第一批：承诺保留、已绑定 worker 实际推进、用户补充方向后继续；CLI/packaged frontend/Lark 分别标记资格。以两轮依赖产物及独立验收关闭最小旅程 |
-| **S2 typed 内核与 durable authority · P0/P1** | Effect/Todo/quota/recovery owner、TS 事务迁移与 store 候选已存在；writer 和 provider 晋升仍未全闭合 | 每次迁移一个真实事务/恢复生命周期，先语义反例再切换/删除旧 owner；R1 正确性先于迁移数量。真实 backend、并发/fence、ambiguous commit、保留/导出恢复、bridge 成本及 D1–D3 资格 |
+| **S2 typed 内核与 durable authority · P0/P1** | Effect/Todo/quota/recovery owner 及 canonical File/SQLite/PostgreSQL 路径已存在；2.0 普通 writer 与未迁移读取截止已集成，完整恢复、适用安装升级及 D2/D3 证据仍未全闭合 | 每次迁移一个真实事务/恢复生命周期，先语义反例再切换/删除旧 owner；R1 正确性先于迁移数量。真实 backend、并发/fence、ambiguous commit、保留/导出恢复、bridge 成本及 D1–D3 资格 |
 | **S3 目标规划与 multi-Agent 协作 · P0/P1** | Vision/replan、peer frontier、claim/lease、directory、manager_context 和显式接续有基础；通用 handoff/共享修订未闭环 | R2 必须证明 peer 依赖；R3 完成并行汇合、流水线、求助/复核、接续、自动回报；R4 做一个保持 intent 的 amendment class。检查依赖环、输入失效、拒绝/延期、lease 转移、同基线竞争及 aggregate acceptance |
 | **S4 runtime/host/daemon · P0/P1** | attached/managed、Turn、broker、runtime connector 和 Desktop 修复存在；“registered”不等于可执行 | 选择一个真实合格组合完成多 Turn supervision；restart/cancel/drain/stop 不丢工作且旧 executor 被 fence。之后扩 host parity、service-profile 唯一 owner、干净安装与版本升级；按 adapter 能力显示不支持项 |
 | **S5 前端、Lark 与人机交互 · P0/P1** | 本地对话、settings、proposal 和部分 Goal Channel vertical 已有；Goal 概览、任务、W1 工作地图、用量、验收回读与生命周期停止作为分散区域已交付，但没有统一页面 owner；统一受众/会话/工作回读仍需资格 | 用一个团队旅程贯穿设置、工作图、handoff、阻塞、成本、修订、产物和回报。**页面：**[Goal 工作区](goal-workspace-surface-v0.zh-CN.md)在共享 typed projection 之上按 Goal 组合这条旅程：带限定范围停止的常驻页头、每个数字只有一种含义的指标（标明窗口与覆盖度，未知不是零）、按负责人分组的工作、成果与全部工作侧栏；先做 M1–M2，将具体首屏放入 PR description；获准方向内的细化不重复确认。**场景：**验证重连/重复点击/stale/原路反馈。**实时 IM** 复用 Chat/Turn：先让同一 listener 下的独立会话互不阻塞，再按[共享运行契约](capable-manager-semantic-handoff-v0.zh-CN.md#10-运行契约)验收普通私聊开通、显式角色选择、忙碌会话准入、临时进度、媒体和精确权限回调。**团队：**[团队实时工作区](live-team-workspace-v0.zh-CN.md)让交换、修订与原协调员继续推进可见；其[工作尺度地图分线](live-team-workspace-v0.zh-CN.md#11-交付顺序与激进推进-r2-的关系)先画出每个 Goal 的类型化 Todo 关系（W1，即 Goal 工作区的地图镜头），再在同一节点叠加实时状态与产出。再做 intelligent review、无障碍键盘流程与只作启动器的命令面板、中英术语、错误可恢复和离线降级；只在真实决策处打断人 |
@@ -97,7 +100,7 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | **S8 能力、扩展与领域集成 · P1/P2** | 已有 capability catalog、extension 生命周期、hook、工程/研究/content/office 能力及 computer-use 合同 | 优先用现有 issue-fix/PR-review 和材料/研究 caller 检验共享控制面；每个 provider 带 readiness、版本、权限、默认关闭、卸载/回滚、失败隔离与真实入口证据。新 domain effect 从模拟单操作闭环开始，不先建市场或通用工作流 DSL |
 | **S9 身份、权限、隐私与信任 · P0 持续/P1–P2 远端** | public/private 边界、作用域、capability gate、fence 与确认合同分布在已有 owner | 随 R1/R3 验 sender/audience/artifact scope 和 stale authority；远端 R6 必须认证 tenant/Goal/actor/host、轮换撤销与最小权限。凭据保管、非可信工具/文档输入、依赖供应链、审计留存/删除及漏洞响应纳入真实路径；角色、消息或 memory 不铸造写权限 |
 | **S10 可靠性、诊断与运行运营 · P0/P1** | recovery/canary、read-only diagnostics 原型及 DSH event adapter 已有；C0/C1、开销和完整运营资格仍未闭合 | 故障分类→可观察状态→恢复演练→防复发；覆盖进程/存储/网络/投递故障和数据增长。Chat 上下文或 provider 读取晚于停止等待返回时，按持久 Turn 和精确 Session claim 判断：即使新请求已完成，也不得再启动旧请求或交接迟到结果。这项有界 GQ08 修复不证明上游 interrupt 保真，也不取消其他 owner 已准入的效果；完整恢复仍遵循[共享对话运行契约](capable-manager-semantic-handoff-v0.md#10-operational-contract)。定义并冻结 SLO、RPO/RTO、容量/保留边界，实测后标 qualified；Lark 传输背压与 drain 保留 App consumer lease；未持久化的缓冲消息不算已受理工作或完成回执。运行手册含升级、备份恢复、停止与人工接管，不以测试数代替恢复结果 |
-| **S11 评测与科学研究 · P1 持续/P2 研究** | benchmark toolkit、Explore、长程 portfolio 与十轨 frontier science 有设计/局部实现 | 固定 native/passive/governed arm、模型/harness/预算/task split 与 evaluator；报告原生分数、成本、失败、人工介入和不确定性。sequential evidence、continuation、stride 为早期研究；memory、formal kernel、curriculum/evolution、主动实验与多尺度状态按 T01–T10 分阶段，不自动影响生产 |
+| **S11 评测与科学研究 · P1 持续/P2 研究** | benchmark toolkit、限定任务的 Explore 证据和独立 Research 阅读入口已集成；完整成本覆盖、实际决策采用及匹配研究收益仍是独立缺口 | 固定 native/passive/governed arm、模型/harness/预算/task split 与 evaluator；报告原生分数、成本、失败、人工介入和不确定性。sequential evidence、continuation、stride 为早期研究；memory、formal kernel、curriculum/evolution、主动实验与多尺度状态按 T01–T10 分阶段，不自动影响生产 |
 | **S12 发布、开发体验与社区治理 · P0 卫生/P1** | 安装、源码验证、扩展注册、DCO/PR、测试层级、contributor route 与双语文档已存在 | 从干净机器/发布包验一条首次工作和一次升级/回滚；host/OS 支持以 release contract 为准。缩短合理改动的定位、测试和 review 成本；公开精确 head、可重复 fixture、兼容窗口、维护者路由和贡献归属，退休重复协议及过时证据 |
 | **S13 采用、生态与商业可持续性 · P1 发现/P2 试点** | 公开 adoption loop、showcase、license/governance、observer-first 产品合同已存在；付费 PMF 未证明 | 先收集真实独立首次使用/重复使用/退出原因，做可复现案例和有固定预算/验收/回滚的试点；沉淀 reusable adapter 与交付手册。核算模型/计算/存储/支持成本及维护负担；满足重复需求后再决策商业托管边界、支持等级和分发，不承诺 SLA 或擅改开源条款 |
 
@@ -108,6 +111,23 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 只读分析，再交付含来源/访问/恢复及理解检查的一条打包证据阅读旅程。设计、科学资格、
 安装行为和因果收益分开。本提案不改变分线优先级、实验预算、冻结处理或评分规则，
 不阻塞其它合法实验准备或既有 L1/R2 旅程。
+
+### 研究与验收集成后的当前优先级
+
+本检查点固定在 main `5550e91bab`（2026-10-23），核对公共源码交付，不公布私有实验
+结果，也不认证整体规模资格。优先完成以下既有路径，而非再增加 controller 或统计存储：
+
+| 路径 | 已集成边界 | 下一决定性成果与既有 owner |
+| --- | --- | --- |
+| 保留意图 · S3/R4、S5 | 重复复核保留声明来源；声明／复核容量及恢复分离；完整 Goal 叙述避免生成 Todo 重复。 [#7035](https://github.com/loopx-project/loopx/pull/7035)、[#7056](https://github.com/loopx-project/loopx/pull/7056)、[#7057](https://github.com/loopx-project/loopx/pull/7057)、[#7069](https://github.com/loopx-project/loopx/pull/7069) | Goal/acceptance 与产品 owner 验证：纠正到达负责 Agent，改变或有依据地保留后续工作，并满足累计要求。复核证据不是新的声明来源或独立验收。 |
+| 证据进入决策 · S6/S11 | 当前任务证据排序、版本化比较及分页结论／完整关联任务恢复已集成。 [#7053](https://github.com/loopx-project/loopx/pull/7053)、[#7077](https://github.com/loopx-project/loopx/pull/7077)、[#7084](https://github.com/loopx-project/loopx/pull/7084) | Explore/研究及产品 owner 验证“来源 → 交付证据 → 实际下一探针 → 可归属产物／结果”。先影子观察；考虑可选强制前保留合理接续、负证据和未知。 |
+| 可解释结果与成本 · S7/S11 | 未完成 Turn 用量须显式选择观测模式；部分 native 分数不证明完成。 [#7054](https://github.com/loopx-project/loopx/pull/7054)、[#7072](https://github.com/loopx-project/loopx/pull/7072) | Benchmark/usage owner 验证请求、压缩与重试覆盖，再按既有测量模型比较匹配结果和完整边际成本。[#7087](https://github.com/loopx-project/loopx/pull/7087) 在本检查点仍是提案，不代表覆盖已集成或计费已验收。 |
+| 可信验证 · S10/S12 | 普通读取要求 canonical authority；显式导入／恢复仍可用。 [#7032](https://github.com/loopx-project/loopx/pull/7032) | 通过既有真实 provider fixture 修复过期的合成消费者，保留原行为断言及未迁移拒绝。同负载做 base/head 归因；完整必需测试失败仍保持 hold。不恢复 fallback、不放宽预算、不复跑健康矩阵制造就绪。 |
+
+先恢复阻断所选交付的实际验证路径；由既有 owner 推进来源到决策的旅程，不等待无关
+RFC。然后比较验收成果和完整成本。晚期已验证提升是仍有有效收益空间的积极信号：
+保留最高有效产物，对照可信替代方案研究接续。单独一段平台期不是停止规则；该信号
+不延长预算，也不证明因果优势。具体比较由研究 RFC 拥有。
 
 ### RFC 之外的关键覆盖与 owning sources
 

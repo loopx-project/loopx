@@ -86,6 +86,7 @@ class LarkPrivateConversations:
                     or identity_ref(app_id) != row["provider_ref"]):
                 continue
             profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
+                "bot_app_id": app_id, "audience": row.get("audience", "owner"),
                 "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
         return profiles
 

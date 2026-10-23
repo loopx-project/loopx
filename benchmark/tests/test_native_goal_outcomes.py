@@ -186,7 +186,12 @@ def test_edgebench_cli_persists_native_outcome_even_when_transport_exits_zero(tm
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     backend = SimpleNamespace(image_exists=lambda image: True,
                               execution_receipt={"exit_code": 0, "execution_started": True},
-                              native_goal_receipt={"native_goal_outcome": outcome} if outcome else None)
+                              native_goal_receipt={"native_goal_outcome": outcome} if outcome else None,
+                              provider_failure_receipt=({
+                                  "schema_version": "codex_terminal_provider_failure_v0",
+                                  "kind": "response_too_many_failed_attempts",
+                                  "http_status_code": 429,
+                              } if outcome == "failed" else None))
     monkeypatch.setattr(run, "RecordingDockerBackend", lambda **kwargs: backend)
     trial = tmp_path / "runs" / "attempt" / "fixture"
     def completed_scoring(**kwargs):
@@ -204,6 +209,7 @@ def test_edgebench_cli_persists_native_outcome_even_when_transport_exits_zero(tm
     assert receipt["score_countable"] is False
     assert receipt["status"] == ("terminal" if expected_code == 0 else
                                   "cancelled" if expected_code == 130 else "runner_failed")
+    assert (receipt.get("provider_failure", {}).get("http_status_code") == 429) is (outcome == "failed")
     terminal = expected_code == 0
     artifact = trial / ("final_result.json" if terminal else "partial_result.json")
     result = json.loads(artifact.read_text())
@@ -299,4 +305,27 @@ def test_docker_collection_preserves_real_worker_outcome(tmp_path, goal, turn, e
     finally:
         if not cleaned:
             backend.cleanup_container(handle)
+        backend.client.close()
+
+
+@pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
+                    reason="Requires explicit isolated Docker qualification")
+def test_docker_cleanup_survives_provider_observation_failure(tmp_path, monkeypatch):
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None, oauth_proxy=True)
+    handle = backend.create_container("python:3.12-slim", "diagnostic-cleanup-" + uuid.uuid4().hex[:10],
+                                      cpu_limit=1, mem_limit="256m")
+    backend.start_container(handle)
+    monkeypatch.setattr("benchmark.runtime.sforge_backend.observe_terminal_provider_failure",
+                        lambda *args: (_ for _ in ()).throw(TypeError("unknown event shape")))
+    try:
+        backend.cleanup_container(handle)
+        assert not backend.container_exists(handle.name)
+        observations = json.loads((tmp_path / "collected" / "artifact-collection.json").read_text())
+        assert {"artifact": "provider-failure-observation", "collected": False,
+                "error_kind": "TypeError"} in observations
+    finally:
+        if backend.container_exists(handle.name):
+            DockerBackend.cleanup_container(backend, handle, None)
         backend.client.close()

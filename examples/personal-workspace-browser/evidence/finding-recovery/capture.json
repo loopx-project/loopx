@@ -1,0 +1,74 @@
+{
+  "base_revision": "e6a862958e219c111c0830074044b48c47e2a7aa",
+  "boundary": "Built frontend and disposable production HTTP/SQLite/Explore pagination; synthetic 45 findings / 90 events and one linked Task. No model execution or private Goal state.",
+  "source_sha256": {
+    "apps/presentation/dashboard/src/data/chat.ts": "95c1720f001c1855efb93311c02c383327e3b2bda0669ad17a5ea702f9f3458f",
+    "apps/presentation/dashboard/src/features/personal-workspace/goal-explore-results.tsx": "48cb2f084b8d79ed718399599ee195e33759a3293b0974449db51b8021e7a4a8",
+    "apps/presentation/dashboard/src/features/personal-workspace/goal-explore-results.css": "df450a78aa0bf199ab8ed50e45ecbaf59fe2e4b7f380b84b8241375f39e15c54",
+    "examples/personal-workspace-browser/research-history.mjs": "329f897df242465d9f5f4767395d30588f8f792c8fd64a51016bfa974d6611ff",
+    "examples/personal-workspace-browser/research-history-backend.py": "b21291658b3e06a0192e20d01486ccd65009c9c54b41db82663b33612ea9cbd8"
+  },
+  "images": [
+    {
+      "file": "after-error-narrow.png",
+      "width": 390,
+      "height": 844,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    },
+    {
+      "file": "after-original-narrow.png",
+      "width": 390,
+      "height": 844,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    },
+    {
+      "file": "after-retry-desktop.png",
+      "width": 1440,
+      "height": 1000,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    },
+    {
+      "file": "after-retry-narrow.png",
+      "width": 390,
+      "height": 844,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    },
+    {
+      "file": "after-task-desktop.png",
+      "width": 1440,
+      "height": 1000,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    },
+    {
+      "file": "after-task-narrow.png",
+      "width": 390,
+      "height": 844,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    },
+    {
+      "file": "before-default.png",
+      "width": 1200,
+      "height": 888,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    },
+    {
+      "file": "before-retry.png",
+      "width": 1200,
+      "height": 888,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    },
+    {
+      "file": "before-task.png",
+      "width": 390,
+      "height": 844,
+      "metadata": "PNG pixels and standard ICC profile; no text chunks"
+    }
+  ],
+  "observations": {
+    "expiry_before": "A real snapshot eviction causes both refresh attempts to reuse the expired cursor and return 409.",
+    "expiry_after": "Failure clears old content; next keyboard refresh restarts the first page; subsequent pagination works. Recovery copy is 16px.",
+    "task_before": "Expanded association repeats a 500-character preview and omits the final acceptance.",
+    "task_after": "Expansion fetches the full 709-character canonical Task. Summary remains two lines; body is 16px with a bounded reading width. Desktop and 390px inspected.",
+    "unverified": "Screenshots qualify the packaged read journey, not installed native WebView failure injection or research benefit. Historical English source text remains original."
+  }
+}

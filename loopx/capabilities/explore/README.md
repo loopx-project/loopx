@@ -31,6 +31,28 @@ attachments also require the same `input_revision`. Use a new finding id per
 evaluated candidate, and reuse an id only to correct that finding. Missing values
 are explicit `null`; zero and negative values remain valid measurements.
 
+Keep comparison conditions separate from the candidate and its result:
+
+| Field | Meaning across successive findings |
+| --- | --- |
+| `input_revision` | Evaluated task/data revision; retain it when the evaluated inputs are verified unchanged. |
+| `evaluation_ref` | Evaluator/scoring protocol version; retain it when the evaluation protocol is verified unchanged. |
+| `candidate_ref` | Code/artifact version actually evaluated; change it when the candidate changes. |
+| `evidence_ref` | Individual evaluation result/receipt; retain its exact provenance in the finding's `evidence_refs`. |
+
+For example, record candidate A's score 8 and candidate B's score 9 as **two
+findings** on the same question. With the other comparison fields unchanged,
+both use `input_revision=dataset-v1` and `evaluation_ref=evaluator:v1`, while
+their candidate/result refs are `candidate:a`/`result:a` and
+`candidate:b`/`result:b`. Feedback has two measured records and improvement +1.
+Putting each candidate hash in `input_revision` or each submission id in
+`evaluation_ref` instead creates singleton groups with null improvement.
+That null is not zero gain. Check provenance before correcting a mistaken
+finding through the existing correction path; historical records remain intact.
+Changed or unknown evaluation conditions must stay separate. Do not invent a
+shared revision merely to obtain a comparison. A growing local corpus does not
+change the input revision for an unchanged evaluated subset; changed samples do.
+
 Comparisons require the same node, metric, unit, direction, comparison scope,
 input revision and evaluator. Producers must change the scope when task,
 model/resource budget or evaluation conditions change, and separate native
@@ -51,6 +73,13 @@ regressions or revisit better candidates before repeating work. Best does not
 identify the current retained candidate, establish causality, satisfy acceptance
 or authorize execution. Actual adoption and outcome benefit require subsequent
 work and evidence; automatic branch rankings remain unchanged.
+
+Manually captured measured findings also appear in the existing result pages
+and, when linked to eligible work, its exact-source comparison cards. They need
+no `writeback-result` origin tag. Read the page before optionally binding a
+`selected_candidate`; normal source-revision, Todo-link and followthrough checks
+still apply. Unmeasured manual notes retain their existing summary/audit path.
+Reading or selecting a measured result does not certify adoption or execution.
 
 ## At a Glance
 

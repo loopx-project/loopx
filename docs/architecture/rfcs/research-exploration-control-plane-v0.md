@@ -145,7 +145,7 @@ milestone status.
 | Research evidence and cold shadow | [Research observation v0](../../reference/protocols/research-observation-v0.md) composes generic progress with typed closure and explicit binary candidates. CLI summary and Lark node summaries share the read-only projection; exact experiment input fingerprints guard stale results. |
 | Explicit M3 composition gate | [PR #5280](https://github.com/loopx-project/loopx/pull/5280) merged as `1e6cae19f` on 2026-10-12. Opt-in Goal-frontier, Todo, experiment and input lineage share a typed write-time qualification across File and SQLite; stale or unrelated evidence cannot discharge the current obligation. The existing Goal capability editor and CLI own activation. This is an integrated rule, not evidence of accepted scientific results or natural-host use. |
 | Explore planning | Optional branch planners are read-only and return execution to quota, Todo, claim, and lease. |
-| Evidence in turn context | Planning-mode turn-start reads retain bounded explicit Todo/node evidence diagnostics and existing exploring frontier nodes. Linked evidence is classified before detail truncation: all findings and relevant edges in the supplied projection contribute to diagnostic counts and hazards, while row details remain bounded. Turn context reports omitted detail counts from those totals. This delivers decision input, not the §11.5 adoption gate or proof of model behavior. |
+| Evidence in turn context | Planning-mode turn-start reads retain bounded explicit Todo/node evidence diagnostics and existing exploring frontier nodes. Linked evidence is classified before detail truncation: all findings and relevant edges in the supplied projection contribute to diagnostic counts and hazards, while row details remain bounded. Explicitly selected tasks retain source-recency ordering and reserved counterevidence before unrelated planner links; versioned measurements and replay use the same scope. [#7053](https://github.com/loopx-project/loopx/pull/7053), [#7077](https://github.com/loopx-project/loopx/pull/7077). Turn context reports omitted detail counts. This delivers decision input, not the §11.5 adoption gate or proof of model behavior. |
 | Model behavior qualification | Real function-tool conversations can test whether a model reads an actual packet and selects a real semantic writeback. |
 
 ### 5.2 What is missing
@@ -153,7 +153,7 @@ milestone status.
 | Gap | Consequence |
 |---|---|
 | M3 integrated behavior lacks complete remote qualification | PR #5280 has an exact-head approved review and local File/SQLite, default-off and packaged-configuration evidence. Its final-head CI did not finish green: jobs were cancelled on merge and the Stage2c aggregate failed because its matrix result was `cancelled`. This is not a demonstrated Stage2c test failure or remote browser acceptance. The separate browser CI source-install and composer-focus PRs #6287/#6282 closed without merging; their unresolved checks remain independent of M3's local evidence. |
-| No experiment-result adoption gate | Negative evidence can be recorded without proving that the next bound decision used its scope, validity or uncertainty. Proposed single-experiment integration is defined in §11.5; merged PR #5280 does not enforce it. |
+| Actual experiment-result adoption remains unqualified | Capture, task-focused delivery and recoverable reading exist. They do not prove that the next bound decision used a result's scope, validity or uncertainty. Qualify shadow adoption through §11.5 before proposing more enforcement; merged PR #5280 does not enforce that decision duty. |
 | Execution attribution is not effect authority | An exact Todo/experiment/input receipt does not grant a task lease, effect permission or accepted Goal closure. |
 | Live qualification incomplete | Deterministic and real CLI/file-log tests establish state semantics, not model selection quality or scientific truth; no live Lark sync is qualified by projection tests. |
 | No promotion evidence for inferred combinations | Shared constraints are not known to be precise enough to trigger obligations. |
@@ -612,6 +612,29 @@ decision must retain. Explore is the nearest capability owner. Native
 measurement, statistical interpretation and job/artifact handling stay with
 the domain or benchmark provider. Generic kernel rules do not interpret scores
 or infer research truth from Todo churn.
+
+#### Integrated input and the next qualification
+
+At main `5550e91bab` (2026-10-23), scoped evidence ordering and comparison
+version identity are integrated, and the Research reader can recover paged
+findings and read complete linked tasks through
+[#7084](https://github.com/loopx-project/loopx/pull/7084). Do not rebuild capture,
+ranking or another evidence inbox to begin this pilot. These fixes qualify
+delivery/readback boundaries; neither a readable page nor a cited finding
+establishes actual decision adoption.
+
+Select one existing authorized pending question and retain its exact incumbent,
+candidate/input/result revisions, applicable counterevidence and remaining
+budget. Observe whether the normally admitted next action uses that evidence,
+then inspect its actual artifact and provider result. Compare with evidence
+delivery alone under the same conditions; report justified continuation,
+changed method, invalid prerequisites and inconclusive results separately.
+Keep late verified gains as positive evidence for continuation, as described
+in [the measurement/replan study](long-horizon-harness-benchmark-research-program-v0.md#82-evidence-stall-detection-and-semantic-replan).
+The next review evaluates result quality and complete marginal cost, including
+control and validation. A citation, new identifier or forced pivot is not the
+acceptance oracle. This is the next shadow qualification of the existing path,
+not a launched experiment, default behavior change or completed M3/M4 claim.
 
 #### Bind a question and the scope of its evidence
 

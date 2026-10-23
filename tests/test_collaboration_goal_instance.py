@@ -22,7 +22,6 @@ from loopx.capabilities.manager_context import (
     register_ingress,
 )
 from loopx.capabilities.manager_context.roundtrip import (
-    EXACT_DELIVERY_ADMISSION_SECONDS,
     ReturnResolutionBlocked,
     drain,
     report,
@@ -40,6 +39,7 @@ from loopx.file_lock import exclusive_cross_runtime_file_lock
 
 INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+RETURN_ADMISSION_SECONDS = 60
 
 
 @pytest.mark.skipif(os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW"),
@@ -677,7 +677,7 @@ def test_exact_return_single_flight_outlives_admission_without_holding_lifetime(
             store,
             transport,
             now=admitted_at
-            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
+            + timedelta(seconds=RETURN_ADMISSION_SECONDS + 1),
         )
         assert second.result(timeout=5) == 0
         release.set()
@@ -720,7 +720,7 @@ def test_exact_external_return_does_not_resend_after_expired_unknown_admission(
                 "admitted_at": admitted_at.isoformat(),
                 "expires_at": (
                     admitted_at
-                    + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS)
+                    + timedelta(seconds=RETURN_ADMISSION_SECONDS)
                 ).isoformat(),
             },
         },
@@ -744,7 +744,7 @@ def test_exact_external_return_does_not_resend_after_expired_unknown_admission(
             store,
             transport,
             now=admitted_at
-            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
+            + timedelta(seconds=RETURN_ADMISSION_SECONDS + 1),
         )
         == 0
     )
@@ -844,7 +844,7 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
             store,
             transport,
             now=admitted_at
-            + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1),
+            + timedelta(seconds=RETURN_ADMISSION_SECONDS + 1),
         )
         == 1
     )
@@ -863,7 +863,7 @@ def test_exact_external_return_verifies_after_recreation_without_resend(
             assert failed["attempt"] == first["attempt"]
             # Another immediate pump must honor backoff, even after recreation.
             drain(tmp_path, registry, ChatSessionStore(tmp_path), transport,
-                  now=admitted_at + timedelta(seconds=EXACT_DELIVERY_ADMISSION_SECONDS + 1))
+                  now=admitted_at + timedelta(seconds=RETURN_ADMISSION_SECONDS + 1))
             assert transport.verify_calls == 1
         drain(tmp_path, registry, ChatSessionStore(tmp_path), transport,
               now=admitted_at + timedelta(days=1))
@@ -1347,3 +1347,57 @@ def test_exact_instance_updates_keep_original_route_and_http_readback(tmp_path):
     assert messages[-1]["return_delivery"]["status"] == "delivered"
     with pytest.raises((ValueError, FileNotFoundError)):
         report(tmp_path, "delivery", "builder", rid, "conclusion", "Wrong generation.", registry=registry, caller_goal_ref={"goal_id": "delivery", "goal_instance_id": INSTANCE_B}, update_id="wrong-instance")
+
+
+def test_native_return_process_exit_recovers_the_original_attempt(tmp_path):
+    from loopx.capabilities.manager_context import target_authority
+    from loopx.control_plane.collaboration.source_chat_observation import original_delivery_facts
+
+    registry = _create_source_registry(tmp_path)
+    store, session, receipt = _external_manager_request(tmp_path, registry)
+    rid = receipt["request_id"]
+    folder = _root(tmp_path)
+    entry_path = folder / "entries" / _hash({"goal_ref": receipt["goal_ref"], "agent_id": "builder"}) / (rid + ".json")
+    entry = json.loads(entry_path.read_text())
+    route = json.loads((folder / "roundtrips" / (rid + ".json")).read_text())
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    grant = target_authority(tmp_path, session=session, turn=turn,
+                             target={"goal_id": "delivery", "agent_id": "builder"})
+    command = {
+        "schema_version": "manager_return_delivery_transaction_v0", "runtime_root": str(tmp_path),
+        "request_id": rid, "result_key": "conclusion", "exact": True,
+        "now": "2026-01-02T03:04:05.123456+00:00",
+        "facts": {"entry": entry, "entry_path": str(entry_path), "route": route,
+                  "session": session, "turn": turn, "grant": grant,
+                  "scope": {"profile_id": "source_session_v1", "caller_goal_ref": receipt["goal_ref"],
+                            "current_goal_ref": receipt["goal_ref"]},
+                  "initial_delivery": original_delivery_facts(entry, route, turn, source_id=grant["source_id"])},
+    }
+    module = (Path(__file__).parents[1] / "loopx/control_plane/collaboration/return_delivery.ts").as_uri()
+
+    def invoke(phase, *, crash=False, **payload):
+        script = (f"import {{transactManagerReturnDelivery}} from {json.dumps(module)};"
+                  "const result=await transactManagerReturnDelivery(JSON.parse(process.argv[1]));"
+                  + ("process.exit(17);" if crash else "process.stdout.write(JSON.stringify(result));"))
+        child = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module",
+                                "-e", script, json.dumps({**command, **payload, "phase": phase})],
+                               capture_output=True, text=True, encoding="utf-8", timeout=10)
+        assert child.returncode == (17 if crash else 0), child.stderr
+        return None if crash else json.loads(child.stdout)
+
+    plan = invoke("prepare")
+    assert plan["action"] == "send"
+    attempt = {"schema_version": "manager_return_delivery_attempt_v0", "provider": "fixture",
+               "message_ref": "om_original", "intent_digest": "sha256:" + "a" * 64,
+               "provider_receipt": "sha256:" + "b" * 64}
+    invoke("attempt", crash=True, **{**plan, "attempt": attempt})
+    resumed = invoke("prepare", now="2026-01-02T03:06:05.123456+00:00")
+    assert resumed["action"] == "verify" and resumed["attempt"] == attempt
+    invoke("settle", **resumed, now="2026-01-02T03:06:05.123456+00:00",
+           outcome={"kind": "verified", "verification": {"verification_performed": True, "reply_verified": True}})
+    state_path = folder / "replies" / rid / "conclusion.delivery.json"
+    state = json.loads(state_path.read_text())
+    assert state["status"] == "delivered" and state["goal_ref"] == receipt["goal_ref"]
+    assert state["provider_receipt"] == attempt["provider_receipt"]
+    assert invoke("prepare")["action"] == "skip"
+    assert json.loads(state_path.read_text()) == state

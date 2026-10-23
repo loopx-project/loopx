@@ -747,6 +747,16 @@ protocol input cover configured checks and outcomes without checks; Todo-less
 inspection still returns its original inventory. This qualifies the scoped IO
 boundary, not live model benefit, installed adoption or total Turn cost.
 
+The Goal source context now separates explicitly generated Todo regions using
+the existing writer's strict ownership parser. All remaining text is delivered
+verbatim through the shared typed context owner, with the full-file hash and
+excluded-region lineage. Unmarked/mixed documents retain their progressive read;
+malformed ownership fails closed. This changes default context delivery, not
+canonical Todo authority, source files or cumulative acceptance. File/SQLite
+native guard and signed DSH protocol-input checks qualify this source boundary;
+model adoption, installed App/Lark, full Turn cost and all three convergence
+streams remain open. Large arbitrary narrative is retained without truncation.
+
 Next, inventory authorized real Goal captures across active work, peer/replan,
 wait/recovery and optional-capability shapes, then map each retained clause to
 its shared typed owner and actual consumer. Migrate one complete caller family

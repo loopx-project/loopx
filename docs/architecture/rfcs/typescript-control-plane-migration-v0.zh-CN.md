@@ -101,6 +101,16 @@ Python 保留有界地址扫描、请求者注册检查和实时 `Delegations.re
 每页复用既有代码版本请求作用域；操作记录仍实时读取，下一页重新解析当前代码。
 
 
+管家结果回传现由既有 `collaboration/return_delivery.ts` 事务负责准入、provider
+尝试检查点、重试／核验消解和投递回执的原子落盘。Python 的 exact／legacy 两套
+投递编排与私有 attempt 规范化 RPC 同时退役。Python 保留原始 Chat／授权事实读取、
+Host fence 和真实 provider IO。有界扫描只提供读取提示，写入锁内重新检查；provider
+接受写入后的尝试记录先落盘，再继续核验，不增加第二份队列或 Python 决策回退。
+原 request／result／route 身份、历史 codec 和公开回读保留。这实现 R3/T1–T2 的
+一个完整回传事务改造，不等于 Inbox 接收、来源授权迁移、安装采用或真实 provider
+资格已完成。
+
+
 <a id="当前交付边界2026-10-02"></a>
 
 ## 当前交付边界（合入后，2026-10-16）
