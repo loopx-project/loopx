@@ -78,8 +78,9 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {onMarkSeen ? <button onClick={onMarkSeen} type="button">{t("since.markSeen")}</button> : null}
       </p>
     ) : null}
-    <div className={`goal-overview-summary${showAttention ? " has-attention" : ""}`}>
-      <section className="goal-overview-direction" aria-label={copy.direction}>
+    <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
+      readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board}
+      brief={<section className="goal-overview-direction" aria-label={copy.direction}>
         <p className={`goal-overview-objective${digest.objective ? "" : " is-unavailable"}`} data-testid="goal-declared-objective">{digest.objective ?? copy.objectiveUnavailable}</p>
         {currentWork && currentRow ? <details className="goal-overview-current">
           <summary><small>{copy.current} · {goalWorkClassLabel(currentRow.displayClass, locale === "zh-CN")}</small><span>{currentWork.text}</span><ChevronDown aria-hidden size={15}/></summary>
@@ -91,15 +92,15 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         </div>
         <WorkerReadback goal={goal} zh={locale === "zh-CN"} onViewTasks={() => onView("tasks")}/>
         <GoalAcceptanceContractSection overview goalId={goal.goalId} contract={observation?.goal_acceptance_contract} copy={acceptanceCopy} current={review.usable} localSource={!readOnly} canManage={!readOnly && active && review.usable}/>
-      </section>
-      {showAttention ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
+      </section>}
+      attention={showAttention ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
         <header>
           <h2>{copy.attention}</h2>
           <span className={blocking ? "goal-overview-count is-blocking" : "goal-overview-count"}>{blocking ?? "—"}</span>
           {optional ? <small>{copy.optional.replace("{count}", String(optional))}</small> : null}
         </header>
-        <ul>{attention.slice(0, 3).map(item => <li key={item.todoId}><button type="button" onClick={() => onSelect({ kind: "attention", item })}>
-          <Hand aria-hidden size={15} />
+        <ul>{attention.slice(0, 3).map(item => <li key={item.todoId}><button type="button" data-attention-id={item.todoId} onClick={() => onSelect({ kind: "attention", item })}>
+          <Hand aria-hidden size={17} />
           <span className="goal-attention-text"><span>{item.text}</span>
             {item.updatedAt ? <time dateTime={item.updatedAt}>{relativeTime(item.updatedAt, locale)}</time> : null}</span>
           <ArrowRight aria-hidden size={14} />
@@ -107,10 +108,8 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         {needs.availability === "ok" && needs.coverage !== "complete" ? <small>{t("vitals.needsYouPartial", { count: needs.listed })}</small> : null}
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section> : null}
-    </div>
-    <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
-      readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board}
       map={readOnly ? <p className="goal-work-scope">{copy.remote}</p> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
+
     {readOnly ? <GoalAcceptanceObservationCard goal={goal} overview />
       : <OverviewDeliveryEvidence key={`delivery:${goal.goalId}`} review={review} zh={locale === "zh-CN"}>
         <DeliveryReviewContent review={review} hideWorkMap hideAcceptanceContract active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />
