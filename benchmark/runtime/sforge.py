@@ -32,6 +32,7 @@ from .worker import PHASE_WORK_RESERVE_SECONDS
 # Experiment profiles, local to the research runner; not new LoopX modes.
 PROFILES = ("official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore")
 DEFAULT_TIMEOUT_SECONDS = 18 * 60 * 60
+_RUNTIME_CREDENTIAL_PLACEHOLDER = "runtime-managed-credential"
 
 
 class SForgeEnvironment:
@@ -233,10 +234,27 @@ class SForgeWorker(CodexAgent):
         effort = self._config.agent_effort
         common = dict(logs_dir=log_dir / "worker", model_name=self._config.agent_model,
                       reasoning_effort=effort)
+        runtime_base_url = self._config.agent_api_base_url
+        runtime_api_key = self._config.agent_api_key
         if self._config.agent_api_base_url:
+            route = backend.exec_run(
+                handle,
+                ["/bin/bash", "-c", 'printf "%s" "${OPENAI_BASE_URL:-}"'],
+                user="agent",
+            )
+            runtime_base_url = (getattr(route, "output", "") or "").strip()
+            if route.exit_code or not runtime_base_url:
+                raise RuntimeError("Could not read the effective model route from the trial")
+            if runtime_base_url != self._config.agent_api_base_url:
+                # SForge may replace a provider route with a host credential
+                # gateway after constructing this Agent. Keep the provider
+                # credential on the host and give child runtimes a non-secret
+                # value; SForge supplies the same effective route to the outer
+                # solver process.
+                runtime_api_key = _RUNTIME_CREDENTIAL_PLACEHOLDER
             common["extra_env"] = {
-                "OPENAI_BASE_URL": self._config.agent_api_base_url,
-                "OPENAI_API_KEY": self._config.agent_api_key,
+                "OPENAI_BASE_URL": runtime_base_url,
+                "OPENAI_API_KEY": runtime_api_key,
                 "CODEX_AUTH_JSON_PATH": "",
             }
         if self.profile in {"official", "single"}:
@@ -253,8 +271,8 @@ class SForgeWorker(CodexAgent):
                 prepare_codex_home(
                     home, execution=Execution(mode="plain"), workspace=Path(self.cwd),
                     model=self._config.agent_model, effort=effort,
-                    base_url=self._config.agent_api_base_url or "",
-                    api_key=self._config.agent_api_key or "", wire_api="responses", skills=None,
+                    base_url=runtime_base_url or "",
+                    api_key=runtime_api_key or "", wire_api="responses", skills=None,
                     model_catalog=offline._model_catalog_source,
                     model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
                                                if offline._model_catalog_staged else None),

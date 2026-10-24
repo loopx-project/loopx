@@ -170,7 +170,8 @@ def test_official_installer_binds_staged_catalog_without_leaking_host_path(tmp_p
         if source.name == "config.toml":
             observed.update(tomllib.loads(source.read_text()))
     backend = SimpleNamespace(copy_to_container=copy,
-        exec_run=lambda *args, **kwargs: SimpleNamespace(exit_code=0))
+        exec_run=lambda *args, **kwargs: SimpleNamespace(
+            exit_code=0, output="http://example.invalid/v1"))
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="max",
         agent_api_base_url="http://example.invalid/v1", agent_api_key="fixture"),
         profile="official", cwd="/task")
@@ -1155,7 +1156,8 @@ def test_custom_provider_uses_environment_credential_without_copying_login(tmp_p
     copied = {}
     def copy(handle, source, target):
         copied[str(target)] = source.read_text()
-    backend = SimpleNamespace(exec_run=lambda *a, **k: SimpleNamespace(exit_code=0),
+    backend = SimpleNamespace(exec_run=lambda *a, **k: SimpleNamespace(
+                                  exit_code=0, output=config.agent_api_base_url),
                               copy_to_container=copy)
     config = SForgeConfig(agent_model='fixture', agent_effort='xhigh',
                          agent_api_base_url='http://127.0.0.1:9876/v1',
@@ -1183,6 +1185,61 @@ def test_custom_provider_uses_environment_credential_without_copying_login(tmp_p
     config.agent_api_key = None
     with pytest.raises(ValueError, match='API credential'):
         SForgeWorker(config, profile=profile, cwd='/task')
+
+
+@pytest.mark.parametrize('profile', ['official', 'native-goal'])
+def test_custom_provider_preserves_sforge_runtime_gateway(tmp_path, monkeypatch, profile):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    import tomllib
+    from types import SimpleNamespace
+    from sforge.harness.agent.codex import CodexAgent
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, CodexOffline, BenchmarkCodex
+
+    provider_url = 'https://provider.invalid/v1'
+    provider_key = 'synthetic-provider-secret'
+    runtime_url = 'http://host.docker.internal:43123'
+    monkeypatch.setenv('CODEX_AUTH_JSON_PATH', str(tmp_path / 'must-not-read-auth.json'))
+    monkeypatch.setenv('OPENAI_API_KEY', provider_key)
+    monkeypatch.setenv('OPENAI_BASE_URL', provider_url)
+
+    async def installed(self, environment):
+        pass
+
+    monkeypatch.setattr(CodexOffline, 'install', installed)
+    monkeypatch.setattr(BenchmarkCodex, 'install', installed)
+    monkeypatch.setattr(CodexAgent, 'install_stop_hook', lambda *args: None)
+    copied = {}
+
+    def execute(handle, command, **kwargs):
+        output = runtime_url if isinstance(command, list) and 'OPENAI_BASE_URL' in command[-1] else ''
+        return SimpleNamespace(exit_code=0, output=output)
+
+    def copy(handle, source, target):
+        copied[str(target)] = source.read_text()
+
+    backend = SimpleNamespace(exec_run=execute, copy_to_container=copy)
+    config = SForgeConfig(
+        agent_model='fixture', agent_effort='xhigh',
+        agent_api_base_url=provider_url, agent_api_key=provider_key,
+    )
+    worker = SForgeWorker(config, profile=profile, cwd='/task')
+    worker.install_stop_hook(backend, None, tmp_path, None)
+
+    if profile == 'official':
+        settings = tomllib.loads(copied['/home/agent/.codex/config.toml'])
+        assert settings['model_providers']['harbor']['base_url'] == runtime_url
+    else:
+        env = worker.runtime._worker_env(cwd='/task')
+        assert env['OPENAI_BASE_URL'] == runtime_url
+        assert env['OPENAI_API_KEY'] == 'runtime-managed-credential'
+        worker.prepared = True
+    command = worker.format_run_cmd('/task/prompt.md')
+    assert provider_url not in command
+    assert provider_key not in command
+    assert all(provider_url not in contents for contents in copied.values())
+    assert all(provider_key not in contents for contents in copied.values())
 
 
 def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, monkeypatch):
