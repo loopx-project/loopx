@@ -187,14 +187,14 @@ def project_replan_context(
             "goal_id": goal_id, "agent_id": agent_id,
             "obligation": dict(obligation) if obligation is not None else None,
             "rows": replan_evidence_rows(runs, goal_id=goal_id, agent_id=agent_id,
-                include_decisions=strategy != "off" or bool(evidence_ref and evidence_ref.startswith("replan-decision-")),
+                include_decisions=bool(agent_id),
                 history_newest_first=history_newest_first),
             "stride_strategy": strategy,
             # Canonical caller-owned facts only. TypeScript joins the declared
             # work with the accepted decision and causally later observations.
             **({"todo_items": [{key: item[key] for key in (
                 "todo_id", "goal_id", "role", "status", "claimed_by", "task_class", "action_kind",
-            ) if key in item} for item in todo_items]} if strategy != "off" and todo_items is not None else {}),
+            ) if key in item} for item in todo_items]} if agent_id and todo_items is not None else {}),
             **({"explore_context": explore_context} if explore_context is not None else {}),
             "evidence_ref": evidence_ref,
             "read_prefix": shlex.join(prefix),

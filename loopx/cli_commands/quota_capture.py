@@ -8,10 +8,26 @@ import os
 import shlex
 import socket
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
+from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import validate_handoff_socket
+
+
+def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
+    """Validate transport options before allocating a new guard capture."""
+    if directory is None and (
+        getattr(args, "decision_output_dir", None) is not None
+        or getattr(args, "decision_output_root", None) is not None
+        or getattr(args, "decision_handoff_socket", None) is not None
+    ):
+        from .quota_context import validate_quota_command_context_request
+
+        validate_quota_command_context_request(args)
+        return prepare_decision_capture(args)
+    return directory
 
 
 def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
@@ -123,3 +139,29 @@ def handoff_decision(directory: Path | None, socket_path: str | None) -> None:
             "Decision handoff failed after guard evaluation; inspect the original "
             f"Turn receipt and {path}. Do not blindly rerun the guard."
         ) from exc
+
+
+def read_replan_view(args: argparse.Namespace) -> dict:
+    """Read a captured observation only; no registry, provider, guard or receipts."""
+    from ..control_plane.quota.turn_envelope import _turn_envelope_result
+
+    if not args.decision_file or not args.source_hash:
+        raise ValueError("replan-view requires --decision-file and --source-hash")
+    path = Path(args.decision_file).expanduser()
+    with path.open(encoding="utf-8") as stream:
+        payload = json.load(stream)
+    return _turn_envelope_result("replan_view", payload=payload, source_hash=args.source_hash,
+                                 stage=args.replan_stage, outcome_ref=args.outcome_ref)
+
+
+def handle_replan_view(
+    args: argparse.Namespace,
+    print_payload: Callable[[dict[str, object], str, Callable[[dict[str, object]], str]], None],
+) -> int:
+    """Render the captured read without entering live quota dispatch or recovery."""
+    try:
+        view = read_replan_view(args)
+    except (OSError, ValueError, EffectRuntimeRejected) as exc:
+        view = {"ok": False, "reason": str(exc)}
+    print_payload(view, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+    return 0 if view["ok"] else 1

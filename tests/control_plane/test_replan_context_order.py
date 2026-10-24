@@ -84,7 +84,9 @@ def test_carrier_metadata_preserves_feature_off_parity_and_rejects_non_boolean_o
     ordinary = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows)
     declared = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,
         history_newest_first=True, stride_strategy="off")
-    assert declared == ordinary
+    assert "decision_followthrough" not in ordinary
+    _assert_followthrough(declared)
+    assert "stride_strategy" not in declared
     for invalid in [0, 1, "newest_first"]:
         with pytest.raises(ValueError, match="boolean or unknown"):
             project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,

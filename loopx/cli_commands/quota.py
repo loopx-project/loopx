@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from .quota_capture import bind_capture_selection_transport, capture_decision, handoff_decision, prepare_decision_capture
+from .quota_capture import bind_capture_selection_transport, capture_decision, handoff_decision, handle_replan_view, prepare_quota_capture
 from ..usage_goal import observe_quota_result
 
 from ..capabilities.explore.composition_frontier import (
@@ -411,6 +412,9 @@ def _project_quota_cli_payload(
         if args.quota_command in {"status", "plan"}:
             return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
         if args.quota_command == "should-run":
+            if captured_decision_path and "vision" not in detail_sections:
+                from ..control_plane.quota.turn_envelope import _turn_envelope_result
+                payload = _turn_envelope_result("replan_cli_view", payload=payload)
             return compact_quota_should_run_cli_payload(
                 payload,
                 include_todo_summary_detail="agent-todos" in detail_sections,
@@ -464,6 +468,11 @@ def _emit_quota_result(
             started_at=usage_quota_started,
         )
     bind_capture_selection_transport(payload, args)
+    if capture_directory is not None and payload.get("replan_action_packet"):
+        from ..command_invocation import loopx_cli_argv
+
+        payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
+            "replan_read_argv": loopx_cli_argv()}
     try:
         capture_decision(capture_directory, payload)
         if payload.get("ok") is True:
@@ -504,6 +513,8 @@ def handle_quota_command(
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
 ) -> int:
+    if args.quota_command == "replan-view":
+        return handle_replan_view(args, print_payload)
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
@@ -518,13 +529,7 @@ def handle_quota_command(
     context: QuotaCommandContext | None = None
     goal_ref: dict[str, str] | None = None
     try:
-        if capture_directory is None and (
-            getattr(args, "decision_output_dir", None) is not None
-            or getattr(args, "decision_output_root", None) is not None
-            or getattr(args, "decision_handoff_socket", None) is not None
-        ):
-            validate_quota_command_context_request(args)
-            capture_directory = prepare_decision_capture(args)
+        capture_directory = prepare_quota_capture(args, capture_directory)
         goal_ref, turn_start_hook_dispatch, context = (
             _prepare_quota_command_execution(
                 args,

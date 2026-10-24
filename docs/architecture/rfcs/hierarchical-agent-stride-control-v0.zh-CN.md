@@ -632,14 +632,22 @@ revision、考虑的 finding 与适用/暂缓等理由，不建新图或第二�
 拒绝缺少复盘、错误引用以及过期或不可用依据的错误声明，校验提案结构和来源，
 不能证明研究已执行或有收益。
 
-启用策略后，`decision_followthrough.planned_work` 将上次决定中既有 `todo_delta`
+replan context 中的 `decision_followthrough.planned_work` 将上次决定中既有 `todo_delta`
 指向的 Todo 与当前规范状态、认领人和该工作项在决定之后的观测引用一起返回。
 Todo 来源缺失和省略数量明确保留；缺少观测不等于没有执行，Todo 完成也不等于
 目标收益。历史描述性 Todo delta 保持可读并注明关联未解析；过长引用不会截断成
 另一个 Todo 的身份。相关观测不会被大量较新的无关活动挤出有限窗口。
-同一份有界反馈进入
-`stride_control`，紧凑 Host envelope 可直接消费，避免为这些信息再读完整上下文。
-历史决定的引用身份及 off 模式输出不变。
+通用执行回顾在 stride 关闭时也可读取：`result_counts` 区分推进、未变、阻塞和
+终态观测，明细保留结果分类及交付结果。兼容字段 `recorded_progress_count` 表示
+观测数量，不表示成功工作。历史决定引用及 stride 准入/结算门禁不变；off 模式
+新增反馈上下文，但不启用 stride。
+
+[捕获后的重规划读取](../../reference/protocols/turn-envelope-v0.md#captured-replan-reads--捕获后的重规划读取)
+把状态审视和写回格式分开，复用同一不可变决策快照。累计验收通过内容绑定的明细
+读取完整保留，Explore 使用独立的上下文增量预算；未捕获快照的调用仍完整投递。
+File/SQLite 源码测试和真实规模 packet 预算验证传输与写回连续性；已安装采用、真实
+模型决策及可比成果/成本收益仍待资格化。不新增规划回执、模型 checkpoint 或强制
+改变方向的要求。
 
 下一轮输入还通过 `ordinary_work` 与各 Todo 的 `ordinary_evidence_refs` 返回已
 声明工作在决定之后的普通回写。详情最多六项，保留总数、省略数和稳定 history
