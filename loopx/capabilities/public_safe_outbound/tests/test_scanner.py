@@ -80,6 +80,41 @@ def test_detects_escaped_and_mixed_windows_private_path() -> None:
         assert any(h.rule_id == "private_abs_path" for h in res.hits), label
 
 
+def test_detects_common_private_home_path_variants() -> None:
+    # Home paths are often copied from an environment variable or config value:
+    # they may end at the account segment, use a non-ASCII account name, or use
+    # the case-insensitive spelling a Windows host accepts. Each is the same
+    # private root the rule already names, not a new policy.
+    slash = "/"
+    sep = "\\"
+    user = "示例用户"
+    cases = {
+        "posix-home-value": slash + "home" + slash + "example-user",
+        "windows-home-value": "C:" + sep + "Users" + sep + "example-user",
+        "non-ascii-user": "C:" + sep + "Users" + sep + user + sep + "some_workspace",
+        "lowercase-root": "c:" + sep + "users" + sep + "example-user" + sep + "some_workspace",
+    }
+    for label, private in cases.items():
+        res = scan_texts({label: "value=" + private})
+        assert res.ok is False, label
+        assert any(h.rule_id == "private_abs_path" for h in res.hits), label
+
+
+def test_private_root_without_an_account_segment_stays_clean() -> None:
+    # Dropping the trailing separator must not turn the root keyword itself or
+    # a relative path that merely contains it into a private absolute path.
+    sep = "\\"
+    public_values = (
+        "/home/",
+        "home/example-user",
+        "C:" + sep + "Users" + sep,
+        "https://example.com/home/",
+    )
+    for value in public_values:
+        res = scan_texts({"public": "value=" + value})
+        assert res.ok is True, value
+
+
 def test_native_windows_path_outside_the_private_roots_stays_clean() -> None:
     # The rule keeps the same root keywords as the POSIX spelling carried, so
     # an ordinary drive path that is not under a private root must stay clean

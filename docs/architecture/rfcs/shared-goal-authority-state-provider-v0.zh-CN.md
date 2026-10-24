@@ -124,6 +124,13 @@ SQLite 跨 provider 恢复复用逻辑归档。这不晋升 provider／默认值
 
 ## 当前实现事实
 
+合格 NoKV SDK 契约在 `loopx/control_plane/coordination/nokv_qualification.py`
+中保留唯一的、无依赖的 Python 定义。SDK 准入和阶段验收 ladder 都导入这份
+定义；bridge 保留原有版本名导出。只读取资格数据时，不加载可选 SDK transport
+或它的 CLI 导入。这保留
+单一所有者约束，并使类型契约目标可以独立检查。版本值、SDK 能力和 incarnation
+fence 检查、按文件启动的 helper 行为、provider 启用及资格门槛保持既有合同。
+
 长历史 closeout 读取复用仅缓存可重新验证的解析前缀，不新增持久 authority 或放宽
 writer fence/D2。剩余三个实现边界不因该运行缺陷修复而机械减一。
 [证据与边界](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md#长历史收尾检查本次修复与剩余边界)。

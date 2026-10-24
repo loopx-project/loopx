@@ -175,8 +175,8 @@ class StewardReports:
         selected = self.selected(binding_id)
         session = selected["session"]
         folder = attempt_directory(self.root, window)
-        expected = json.loads((folder / "editorial-request.json").read_text())
-        source = json.loads((folder / "source.json").read_text())
+        expected = json.loads((folder / "editorial-request.json").read_text(encoding="utf-8"))
+        source = json.loads((folder / "source.json").read_text(encoding="utf-8"))
         frozen_ids = source.get("goal_ids")
         current_ids = self.bindings.steward_scope(session)
         if (expected.get("request_digest") != _canonical_digest(
@@ -221,7 +221,7 @@ class StewardReports:
                 for name in ["private-generation.json", "private-delivery.json"]:
                     path = folder / name
                     if path.is_file():
-                        value = json.loads(path.read_text())
+                        value = json.loads(path.read_text(encoding="utf-8"))
                         if name == "private-generation.json":
                             generation = value["generation_id"]
                         else:
@@ -463,7 +463,7 @@ class ManagedSessionReports(StewardReports):
         if self.subscription(session_id, expected_revision=window["subscription_revision"]) is None:
             return False
         actor = self.selected(session_id)["actor"]
-        frozen = json.loads((attempt_directory(self.root, window) / "editorial-request.json").read_text())
+        frozen = json.loads((attempt_directory(self.root, window) / "editorial-request.json").read_text(encoding="utf-8"))
         return (actor == frozen.get("managed_session_actor")
             and frozen.get("window") == window and actor["goal_id"] == window["goal_id"]
             and actor["agent_id"] == window["agent_id"]
@@ -517,7 +517,7 @@ class ManagedSessionReports(StewardReports):
                 if (len(readback) != 1 or readback[0]["text"] != body or readback[0]["role"] != "agent"
                         or readback[0]["turn_id"] != turn["turn_id"] or not self.delivery_current(session_id, window)):
                     raise ValueError("the complete original report message did not verify")
-                candidate = json.loads((folder / "publication-candidate.json").read_text())
+                candidate = json.loads((folder / "publication-candidate.json").read_text(encoding="utf-8"))
                 identity = [session_id, window["window_id"], generation["generation_id"], message_id, generation["body_sha256"]]
                 commit_periodic_report_publication_cursor(runtime_root=self.root, candidate=candidate,
                     publication_id="session-report-" + hashlib.sha256(json.dumps(identity).encode()).hexdigest(),

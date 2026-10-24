@@ -497,7 +497,7 @@ class StewardTurnHost:
             if local_session and not delivered:
                 return {"schema_version": "loopx_chat_agent_response_v0", "message": "本期报告已生成，原会话送达条件尚未满足；保留原结果等待核验。",
                     "proposals": [], "gate": None, "native_loopx": result}
-            return {"schema_version": "loopx_chat_agent_response_v0", "message": (folder / "report.md").read_text(),
+            return {"schema_version": "loopx_chat_agent_response_v0", "message": (folder / "report.md").read_text(encoding="utf-8"),
                 "proposals": [], "gate": None, "native_loopx": result,
                 "periodic_report": {"window_id": window["window_id"], "generation_id": generation["generation_id"],
                     "delivery_verified": delivered}}

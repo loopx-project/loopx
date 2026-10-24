@@ -180,6 +180,12 @@ def conditional_branch_confidence(
     return round(0.82 * raw + 0.18 * previous, 3)
 
 
+def _expected_evidence_units(candidate: Mapping[str, Any]) -> float:
+    # Zero is a known estimate; only a missing estimate uses the prior.
+    value = candidate.get("expected_evidence_units")
+    return 1.0 if value is None else float(value)
+
+
 def prefix_metrics(
     candidates: Sequence[Mapping[str, Any]],
     *,
@@ -205,7 +211,7 @@ def prefix_metrics(
         )
         previous_confidence = confidence
         survival *= confidence
-        expected_evidence += survival * float(candidate.get("expected_evidence_units") or 1.0)
+        expected_evidence += survival * _expected_evidence_units(candidate)
     throughput = step_throughput(limit, load_factor=load_factor)
     theta = expected_evidence * throughput
     return {
@@ -253,7 +259,7 @@ def schedule_confidence_prefix(
         )
         previous_confidence = confidence
         survival *= confidence
-        expected_units = float(candidate.get("expected_evidence_units") or 1.0)
+        expected_units = _expected_evidence_units(candidate)
         expected_evidence += survival * expected_units
         throughput = step_throughput(index, load_factor=load_factor)
         theta = expected_evidence * throughput
@@ -367,7 +373,7 @@ def schedule_independent_lanes(
     steps: list[dict[str, Any]] = []
     for index, candidate in enumerate(safe_candidates, 1):
         confidence = _clamp(float(candidate.get("confidence") or 0.05), 0.0, 1.0)
-        expected_units = float(candidate.get("expected_evidence_units") or 1.0)
+        expected_units = _expected_evidence_units(candidate)
         expected_evidence += confidence * expected_units
         throughput = step_throughput(index, load_factor=load)
         lane_value = confidence * expected_units * throughput

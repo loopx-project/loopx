@@ -27,9 +27,9 @@ from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 
-from ..coordination.nokv_jsonl_helper import (
-    QUALIFIED_NOKV_API_VERSION,
-    QUALIFIED_NOKV_SDK_VERSION,
+from ..coordination.nokv_qualification import (
+    QUALIFIED_NOKV_API_VERSION as QUALIFIED_NOKV_API_VERSION,
+    QUALIFIED_NOKV_SDK_VERSION as QUALIFIED_NOKV_SDK_VERSION,
 )
 from .authority_e2e_row_support import (
     AGENT_A,
@@ -108,9 +108,8 @@ NOKV_QUALIFICATION_SCRIPT = Path("examples") / "nokv-authority-store" / "live-qu
 NOKV_HELPER = Path("loopx") / "control_plane" / "coordination" / "nokv_jsonl_helper.py"
 NOKV_QUALIFICATION_REPORT_SCHEMA = "loopx_nokv_authority_live_qualification_v0"
 NOKV_QUALIFICATION_SCOPE = "stage_2a_single_node_store_conformance"
-# The two qualified-version names above are imported, not restated: the product
-# helper is the one place that decides which NoKV release is qualified, and this
-# ladder only proves that the live probe agrees with it.
+# Admission and this report share the qualified contract without loading the
+# optional SDK transport into metadata consumers.
 # NoKV 0.11.1 refuses a publication fenced on a stale workbench incarnation
 # before any durable row or object exists; the live probe must prove it.
 NOKV_INCARNATION_FENCE_CHECKS: tuple[str, ...] = (

@@ -61,6 +61,13 @@ def test_local_agent_calendar_report_uses_original_worker_and_verified_core_retu
     with monkeypatch.context() as changed_source:
         changed_source.setattr(inspect, "getsource", lambda *_: "not the imported model callable")
         install_model(steward, tmp_path, sid)
+    # A host's default codec must not decide how frozen Chinese artifacts read.
+    real_read_text = Path.read_text
+    def host_codec_read_text(path, *args, **kwargs):
+        if path.name in {"editorial-request.json", "publication-candidate.json", "source.json", "report.md"} and not args and "encoding" not in kwargs:
+            kwargs["encoding"] = "ascii"
+        return real_read_text(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", host_codec_read_text)
     # This local report neither consumes nor borrows the private provider.
     runtime.project_contexts.conversation_bindings = None
     before, calls, writes = store.messages(sid), capture.read_bytes(), list(bot.writes)
@@ -73,14 +80,14 @@ def test_local_agent_calendar_report_uses_original_worker_and_verified_core_retu
     assert result["response"]["periodic_report"]["delivery_verified"]
     window = read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"])["window"]
     folder = attempt_directory(reports.root, window)
-    frozen = json.loads((folder / "editorial-request.json").read_text())
-    source = json.loads((folder / "source.json").read_text())
+    frozen = json.loads((folder / "editorial-request.json").read_text(encoding="utf-8"))
+    source = json.loads((folder / "source.json").read_text(encoding="utf-8"))
     assert frozen["destination"] == "original_managed_session_full_body"
     assert source["goal_id"] == session["goal_id"] and source["complete_native_task_read"]
     assert task_id in {row["todo_id"] for row in source["rows"]}
     assert frozen["actual_work_window"]["end_at"] == window["due_at"]
     assert datetime.fromisoformat(window["due_at"]) - datetime.fromisoformat(window["start_at"]) == timedelta(days=1)
-    body = (folder / "report.md").read_text()
+    body = (folder / "report.md").read_text(encoding="utf-8")
     messages = store.messages(sid)
     assert messages[:len(before)] == before
     returned = [row for row in messages if row["role"] == "agent" and row["text"] == body]
