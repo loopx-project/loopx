@@ -2066,6 +2066,38 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-goal-acceptance .personal-acceptance-observation { border-top: 1px solid var(--color-border, #ebebeb); padding: 8px 0; }
 .personal-goal-acceptance dd, .personal-goal-acceptance p { overflow-wrap: anywhere; }
 .personal-goal-acceptance details { margin-top: 16px; }
+.personal-acceptance-coverage { display: flex; align-items: baseline; gap: 8px; }
+.personal-acceptance-coverage > p { margin: 8px 0; }
+.personal-acceptance-next { margin: 20px 0; }
+.personal-goal-acceptance .personal-acceptance-check-failure { color: var(--pw-red); }
+
+/* Goal information is a reading surface; task/proposal inspectors keep their
+   existing interaction density. Long source text must not become a label column. */
+.personal-context-drawer[data-context-kind="goal"] { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.personal-context-drawer[data-context-kind="goal"] .personal-drawer-header { min-height: 68px; align-items: center; padding: 12px 22px; }
+.personal-context-drawer[data-context-kind="goal"] .personal-drawer-header h2 { font-size: var(--text-heading); line-height: var(--leading-heading); }
+.personal-context-drawer[data-context-kind="goal"] .personal-drawer-body { padding: 24px; }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card { min-width: 0; padding: 20px 0; border: 0; border-bottom: 1px solid var(--pw-line); border-radius: 0; box-shadow: none; }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card:first-child { padding-top: 0; }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card h3 { margin: 0 0 12px; font-size: var(--text-lead); line-height: var(--leading-lead); }
+.personal-context-drawer[data-context-kind="goal"] .personal-goal-detail-summary h3 { margin-top: 8px; font-size: var(--text-heading); line-height: var(--leading-heading); }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card p,
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card dd { margin: 8px 0 0; color: var(--pw-text); font-size: var(--text-lead); line-height: var(--leading-prose); overflow-wrap: anywhere; }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card small,
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card dt,
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card summary { color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card h3 { overflow-wrap: anywhere; }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card dl > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card details { margin-top: 12px; }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card summary { min-height: 44px; align-content: center; cursor: pointer; }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card summary:focus-visible { outline: 2px solid var(--pw-blue-ink); outline-offset: 2px; }
+.personal-context-drawer[data-context-kind="goal"] .personal-acceptance-observation { padding: 16px 0; }
+.personal-context-drawer[data-context-kind="goal"] .personal-acceptance-coverage > p { color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-context-drawer[data-context-kind="goal"] .personal-detail-card .personal-acceptance-check-failure { color: var(--pw-red); }
+.personal-goal-detail-usage table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--text-body); line-height: var(--leading-body); font-variant-numeric: tabular-nums; }
+.personal-goal-detail-usage :is(th, td) { padding: 8px 4px; text-align: right; overflow-wrap: anywhere; }
+.personal-goal-detail-usage th { color: var(--pw-muted); font-weight: 500; }
+.personal-goal-detail-usage th[scope="row"] { text-align: left; }
 
 .personal-channel-scroll[data-active-goal-view="overview"], .personal-channel-scroll[data-active-goal-view="research"], .personal-channel-scroll[data-active-goal-view="files"] { padding-inline: max(24px, calc((100% - 1120px) / 2)); }
 

@@ -246,10 +246,16 @@ async function verifyRemoteSelection(browser, url) {
     await observation.getByText('Archived totals have not been independently reconciled.',{exact:true}).waitFor();
     await observation.getByText("Cut-over remains held pending the owner's decision.",{exact:true}).waitFor();
     await page.screenshot({path:resolve(outputDir,'overview-readonly-expanded.png'),animations:'disabled'});
+    await verifyGoalDetails(page, snapshot);
     snapshot.run_history.goals[0].acceptance_observation.goal_id = 'another-goal';
     await page.getByRole('button',{name:'刷新状态',exact:true}).click();
     await observation.locator(':scope > summary').getByText('验收观测不可用，Goal 是否达成仍未知。',{exact:true}).waitFor();
     assert.equal(await observation.getByText('Archived totals have not been independently reconciled.',{exact:true}).count(),0,"Wrong-Goal observations never survive a refresh");
+    await page.getByRole('button',{name:'Goal 信息',exact:true}).click();
+    const unavailableDrawer = page.locator('.personal-context-drawer');
+    await unavailableDrawer.getByText('验收观测不可用，Goal 是否达成仍未知。',{exact:true}).waitFor();
+    assert.equal(await unavailableDrawer.getByText('Archived totals have not been independently reconciled.',{exact:true}).count(),0);
+    await page.keyboard.press('Escape');
     await page.getByRole("region",{name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
     assert.equal(await page.locator(".work-map").count(),0,"Remote selection cannot reuse a local map");
     target.searchParams.set("view", "conversation");
@@ -259,4 +265,97 @@ async function verifyRemoteSelection(browser, url) {
     assert.equal(await page.getByRole("region", {name:"Agent 工作会话",exact:true}).getByRole("textbox").count(),0);
     assert.deepEqual(localOwnerReads,[],"Remote deep link caused local owner reads");
   } finally {await session.close();}
+}
+
+// The whole Goal reader, including long original evidence, unknown usage and
+// a real owner gate. Styling must not alter any source fact or enable an effect.
+async function verifyGoalDetails(page, snapshot) {
+  const source = snapshot.run_history.goals[0];
+  const original = structuredClone(source.acceptance_observation);
+  const title = 'Ledger exports · 核对完整历史并保留各地区尚未解决的差异与原始证据';
+  source.display_name = title;
+  const owner = 'ledger-reconciliation-source-owner-with-a-long-native-identity';
+  const reason = 'Some regional totals remain unresolved. 保留负面结果、未知成本和原始记录；当前数据不能证明完整验收或独立收益。';
+  const required = 'Compare every original ledger entry and archive the differences with the exact input version. 不删除失败或未知，不把局部通过当成全部完成。';
+  const next = 'Continue the read-only reconciliation. Request the owner’s decision before any cut-over; do not execute the example command.';
+  const observed = '2026-08-01T09:15:00+00:00';
+  source.acceptance_observation = {...original, next_action: next, acceptance_gaps: [
+    {...original.acceptance_gaps[0], reason, evidence_required: required, owner, observed_at: observed,
+      component_checks: {checkpoint_satisfied:true,checkpoint_fresh:false,path_outcome_valid:true,evidence_refs_present:true,final_outcome_claim_present:false,no_reported_outcome_gap:false}},
+    {...original.acceptance_gaps[0], reason:'The retained candidate still lacks an independent comparison. 仍未完成独立对照。', evidence_required:'Keep the failed comparison and the complete original evidence.', owner:'second-reader'},
+  ]};
+  snapshot.usage_summary.goals = [];
+  await page.getByRole('button',{name:'刷新状态',exact:true}).click();
+  const info = page.getByRole('button',{name:'Goal 信息',exact:true});
+  await info.click();
+  const drawer = page.locator('.personal-context-drawer[data-context-kind="goal"]');
+  const acceptance = drawer.locator('.personal-goal-acceptance');
+  const usage = drawer.locator('.personal-goal-detail-usage');
+  await acceptance.getByText(reason,{exact:true}).waitFor();
+  assert.equal(await drawer.getByText(title,{exact:true}).count(),1,'The Goal title is not repeated in its header and body');
+  assert.equal(await usage.getByText('未采集',{exact:true}).count(),1,'An entirely unknown usage section has one status, not six identical missing values');
+  await acceptance.getByText(next,{exact:true}).waitFor();
+  assert.ok(await acceptance.evaluate(node => node.querySelector('.personal-acceptance-next').getBoundingClientRect().top < node.querySelector('.personal-acceptance-observation').getBoundingClientRect().top),'Next action precedes the long evidence collection');
+  assert.equal(await acceptance.getByText(owner,{exact:true}).isVisible(),false);
+  await acceptance.getByText('3 项检查未通过',{exact:true}).waitFor();
+  await acceptance.getByText("Cut-over remains held pending the owner's decision.",{exact:true}).waitFor();
+  const readCheck = async () => drawer.evaluate(node => {
+    const text = node.querySelector('.personal-acceptance-observation > p');
+    const styles = getComputedStyle(text);
+    return {font:Number.parseFloat(styles.fontSize),line:Number.parseFloat(styles.lineHeight),overflow:node.scrollWidth-node.clientWidth};
+  });
+  let reading = await readCheck();
+  assert.ok(reading.font >= 16 && reading.line >= 24,`Evidence is reading text, not caption metadata: ${JSON.stringify(reading)}`);
+  const help = acceptance.locator('.personal-acceptance-coverage .context-help-trigger');
+  await help.focus();
+  await page.getByRole('tooltip').getByText('当前仅有部分观测。任务完成或缺口列表为空，都不能证明 Goal 已通过验收。',{exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await drawer.isVisible(),true,'Closing optional help keeps the Goal reader open');
+  await page.screenshot({path:resolve(outputDir,'goal-detail-desktop.png'),animations:'disabled'});
+  const details = acceptance.locator('.personal-acceptance-observation details').first();
+  await details.locator('summary').focus(); await page.keyboard.press('Enter');
+  await details.getByText(owner,{exact:true}).waitFor();
+  await details.getByText(observed,{exact:true}).waitFor();
+  await details.getByText('最终成果声明齐全: 未通过',{exact:true}).waitFor();
+  assert.equal(await acceptance.getByText(required,{exact:true}).innerText(),required,'Complete original evidence stays readable');
+  await page.screenshot({path:resolve(outputDir,'goal-detail-expanded-desktop.png'),animations:'disabled'});
+  await page.keyboard.press('Escape');
+  await drawer.waitFor({state:'detached'});
+  assert.ok(await info.evaluate(node=>node===document.activeElement),'Closing the Goal reader returns to its exact trigger');
+
+  snapshot.usage_summary.goals = [{goal_id:source.id,cost_usd_24h:0,duration_ms_7d:7_200_000,input_tokens_7d:12500}];
+  await page.getByRole('button',{name:'刷新状态',exact:true}).click(); await info.click();
+  await usage.locator('table').waitFor();
+  const rows = usage.locator('tbody tr');
+  assert.match(await rows.nth(1).innerText(),/\$0\.00/,'A measured zero is not missing');
+  assert.match(await rows.nth(1).innerText(),/未采集/,'The other window remains unknown');
+  assert.match(await rows.nth(2).innerText(),/2\.0h/);
+  assert.equal(await usage.locator('thead th[scope="col"]').count(),2,'Periods own columns instead of wrapping inside each metric label');
+  await usage.scrollIntoViewIfNeeded();
+  await page.screenshot({path:resolve(outputDir,'goal-detail-usage-desktop.png'),animations:'disabled'});
+  await page.setViewportSize({width:390,height:844});
+  await drawer.locator('.personal-drawer-body').evaluate(node=>node.scrollTop=0);
+  await page.screenshot({path:resolve(outputDir,'goal-detail-phone.png'),animations:'disabled'});
+  const narrowDetails = acceptance.locator('.personal-acceptance-observation details').first();
+  await narrowDetails.locator('summary').click();
+  await narrowDetails.getByText(owner,{exact:true}).waitFor();
+  reading = await readCheck(); assert.ok(reading.overflow <= 1,`Long original text and identifiers fit the phone reader: ${JSON.stringify(reading)}`);
+  await page.screenshot({path:resolve(outputDir,'goal-detail-expanded-phone.png'),animations:'disabled'});
+  await page.evaluate(()=>document.documentElement.style.fontSize='200%');
+  reading = await readCheck(); assert.ok(reading.font >= 32 && reading.overflow <= 1,'Text preferences enlarge the complete reader without horizontal clipping');
+  await page.screenshot({path:resolve(outputDir,'goal-detail-large-text.png'),animations:'disabled'});
+  await page.evaluate(()=>document.documentElement.style.fontSize='');
+  await page.keyboard.press('Escape');
+  await page.evaluate(()=>localStorage.setItem('loopx-pw-locale','en'));
+  await page.reload({waitUntil:'networkidle'});
+  await page.getByRole('button',{name:'Goal information',exact:true}).click();
+  await drawer.getByRole('heading',{name:'Usage',exact:true}).waitFor();
+  await acceptance.getByText('3 checks failed',{exact:true}).waitFor();
+  await drawer.locator('.personal-drawer-body').evaluate(node=>node.scrollTop=0);
+  await page.screenshot({path:resolve(outputDir,'goal-detail-en-phone.png'),animations:'disabled'});
+  await page.keyboard.press('Escape');
+  await page.evaluate(()=>localStorage.setItem('loopx-pw-locale','zh-CN'));
+  source.acceptance_observation = original;
+  await page.setViewportSize({width:1512,height:982});
+  await page.reload({waitUntil:'networkidle'});
 }

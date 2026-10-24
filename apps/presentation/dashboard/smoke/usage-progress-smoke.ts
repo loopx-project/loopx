@@ -24,7 +24,6 @@ function excludes(source: string, snippet: string, label: string) {
 
 const statusSource = readFileSync("src/data/status.ts", "utf8");
 const dashboardSource = readFileSync("src/views/dashboard-page.tsx", "utf8");
-const drawerSource = readFileSync("src/features/personal-workspace/context-drawer.tsx", "utf8");
 const workspaceI18nSource = readFileSync("src/features/personal-workspace/i18n.tsx", "utf8");
 const packageSource = readFileSync("package.json", "utf8");
 const exampleStatus = readFileSync("../../../examples/status.example.json", "utf8");
@@ -168,12 +167,7 @@ for (const [snippet, label] of [
   includes(workspaceI18nSource, snippet, label);
 }
 
-for (const [snippet, label] of [
-  ["formatUsageValue(selection.item.usage?.tokens24h", "drawer unknown token value"],
-  ["formatUsageValue(selection.item.usage?.costUsd24h", "drawer unknown cost value"],
-  ["formatUsageValue(selection.item.usage?.durationMs24h", "drawer unknown duration value"],
-] as const) {
-  includes(drawerSource, snippet, label);
-}
+// The packaged Goal workspace scene checks unknown windows and measured zero
+// through the rendered reader. Source spelling is not a usage invariant.
 
 console.log("usage-progress smoke ok");
