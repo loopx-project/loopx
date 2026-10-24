@@ -33,6 +33,15 @@ try {
       api.transformStatus = fixture => {
         transform(fixture);
         fixture.run_history.goals.find(goal => goal.id === showcaseGoalId).display_name = longTitle;
+        if (state.quiet) {
+          const queue = fixture.attention_queue.items.find(item => item.goal_id === showcaseGoalId);
+          Object.assign(queue.agent_todos, { advancement_done_count: 0, done_count: 0, deferred_count: 0, open_count: 0, total_count: 0, items: [], deferred_items: [] });
+          Object.assign(queue.project_asset.agent_todos, { advancement_done_count: 0, done: 0, deferred_count: 0, open: 0, total: 0, items: [], recent_completed_advancement_items: [] });
+          Object.assign(queue.user_todos, { open_count: 0, total_count: 0, items: [] });
+          for (const agent of fixture.agent_management_projection.agents) {
+            if (agent.current_todo?.goal_id === showcaseGoalId) agent.current_todo = null;
+          }
+        }
       };
       await page.route('**/api/chat/delivery-review?*', route => route.fulfill({ json: {
         ok: true, goal_id: showcaseGoalId, observed_at: '2026-09-01T10:00:00Z', acceptance: null, graph: null,
@@ -45,8 +54,45 @@ try {
   try {
     await openShowcaseGoal(page);
     const inlineRail = page.getByTestId('goal-workspace-inline-rail');
-    assert.ok(await inlineRail.locator('.goal-all-work.is-inline').isVisible(), 'Desktop keeps the All work rail beside the Goal brief');
-    assert.ok(await inlineRail.locator('.goal-work-filters').isVisible(), 'Desktop rail exposes work filters without opening a drawer');
+    const inventory = inlineRail.locator('.goal-workspace-inventory');
+    const decision = page.locator('.goal-overview [data-attention-id="showcase-gate-window"]:visible');
+    assert.equal(await decision.count(), 1, 'The owner decision is shown once in the composed Overview');
+    assert.equal(await inlineRail.locator('.goal-all-work').count(), 0, 'The full inventory starts collapsed instead of repeating current work');
+    assert.ok(await decision.locator('.goal-attention-text').evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16), 'Owner decisions use readable lead-size text');
+    assert.ok(await decision.locator('svg').first().evaluate(element => {
+      const swatch = document.createElement('span');
+      swatch.style.color = 'var(--pw-caution)';
+      element.parentElement.append(swatch);
+      const matches = getComputedStyle(element).color === getComputedStyle(swatch).color;
+      swatch.remove();
+      return matches;
+    }), 'The owner-decision hand retains the theme gold');
+    await inventory.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    await inlineRail.locator('.goal-work-filters').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('.goal-overview [data-attention-id="showcase-gate-window"]:visible').count(), 1, 'Expanding All work does not duplicate the owner decision');
+    assert.equal(await inlineRail.getByRole('heading', { name: '等待决定', exact: true }).count(), 0, 'Empty work sections do not leave duplicate-looking headings');
+    assert.ok(await inlineRail.locator('.goal-work-row strong').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 14), 'Inventory tasks use body-size text rather than captions');
+    await inlineRail.getByRole('button', { name: '活动', exact: true }).click();
+    await inlineRail.locator('.goal-material-activity').waitFor({ state: 'visible' });
+    await inlineRail.getByRole('button', { name: '全部工作', exact: true }).click();
+    let historyReads = 0;
+    page.on('request', request => { if (new URL(request.url()).pathname === '/api/chat/completed-todos') historyReads++; });
+    const historyResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/chat/completed-todos');
+    await inlineRail.locator('[data-testid="completed-task-lane"] > header button').click();
+    await historyResponse;
+    const overview = page.locator('.goal-overview');
+    await overview.evaluate(element => element.style.maxWidth = '800px');
+    await page.waitForFunction(() => !document.querySelector('.goal-workspace-rail .goal-all-work'));
+    assert.equal(await inventory.isVisible(), false, 'Container reflow hides the inline inventory');
+    const readsBeforeHiddenRefresh = historyReads;
+    state.done++;
+    await page.getByRole('button', { name: '刷新状态', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="goal-vitals"] .goal-vital')[1]?.querySelector('.goal-vital-value')?.textContent === '24/29');
+    assert.equal(historyReads, readsBeforeHiddenRefresh, 'Refreshing a hidden inventory does not read completed history');
+    await overview.evaluate(element => element.style.removeProperty('max-width'));
+    await inlineRail.locator('.goal-work-filters').waitFor({ state: 'visible' });
+    await inventory.locator('summary').click();
     await page.getByRole("region", {name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
     const heading = page.locator('.personal-channel-title h1');
     assert.equal(await heading.innerText(), longTitle, 'The original Goal title remains complete');
@@ -79,14 +125,25 @@ try {
     assert.ok(await target.evaluate(element => element === document.activeElement), 'Closing details returns focus to the task');
     await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
     assert.equal(await map.locator('.work-map-node[aria-pressed="true"]').count(), 0, 'Escape closes the map selection');
+    await inventory.locator('summary').click();
+    await inlineRail.locator('.goal-all-work').waitFor({ state: 'visible' });
     await page.setViewportSize({ width: 1024, height: 768 });
-    assert.equal(await inlineRail.locator('.goal-all-work.is-inline').isVisible(), false, 'Narrow view falls back to the All work drawer instead of crowding the brief');
-    await page.getByRole('button', { name: '打开全部工作' }).click();
-    assert.ok(await page.locator('.goal-work-rail-dialog .goal-all-work.is-dialog').isVisible(), 'The narrow drawer keeps the same All work inventory reachable');
-    await page.getByRole('button', { name: '关闭全部工作' }).click();
+    await page.waitForFunction(() => !document.querySelector('.goal-workspace-rail .goal-all-work'));
+    assert.equal(await inventory.isVisible(), false, 'Narrow view falls back to the All work drawer instead of crowding the brief');
+    assert.equal(await page.locator('.goal-overview [data-attention-id="showcase-gate-window"]:visible').count(), 1, 'The owner decision remains visible once on the narrow page');
+    const openAllWork = page.getByRole('button', { name: '打开全部工作' });
+    await openAllWork.click();
+    const railDialog = page.locator('.goal-work-rail-dialog');
+    assert.ok(await railDialog.locator('.goal-all-work.is-dialog').isVisible(), 'The narrow drawer keeps the same All work inventory reachable');
+    await railDialog.locator('[data-attention-id="showcase-gate-window"]').waitFor({ state: 'visible' });
+    await page.keyboard.press('Escape');
+    assert.equal(await railDialog.isVisible(), false, 'Escape closes the inventory drawer');
+    assert.ok(await openAllWork.evaluate(element => element === document.activeElement), 'Closing the inventory restores focus to the original control');
     const measured = await heading.evaluate(element => ({ height: element.clientHeight, line: parseFloat(getComputedStyle(element).lineHeight), overflow: element.scrollWidth - element.clientWidth }));
     assert.ok(measured.height > measured.line && measured.overflow <= 1, 'A long title wraps without clipping or page overflow');
     await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.locator('.goal-overview [data-attention-id="showcase-gate-window"]:visible').count(), 1, 'Phone reflow retains one owner decision');
+    assert.ok(await page.locator('.goal-overview-attention .goal-attention-text').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16), 'Phone reflow does not shrink the requested reading text');
     const headerHeight = await page.locator('.personal-channel-header').evaluate(element => element.getBoundingClientRect().height);
     assert.ok(headerHeight <= 220, 'A long Goal title cannot consume the phone viewport');
     assert.equal(await heading.evaluate(element => getComputedStyle(element).overflow), 'hidden', 'Phone title clipping must survive the packaged CSS cascade, not just constrain the box height');
@@ -106,7 +163,16 @@ try {
     await map.getByRole('button', { name: '关闭事项详情' }).click();
     assert.ok(await mobile.evaluate(element => element === document.activeElement));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'The phone has no page-wide horizontal overflow');
+    state.quiet = true;
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole('button', { name: '刷新状态', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="goal-vitals"] .goal-vital')[1]?.querySelector('.goal-vital-value')?.textContent === '0/0');
+    await inlineRail.waitFor({ state: 'detached' });
+    assert.ok(await page.locator('.goal-workspace-composition').evaluate(element => {
+      const frame = element.getBoundingClientRect(), document = element.querySelector('.goal-workspace-document').getBoundingClientRect();
+      return Math.abs(frame.width - document.width) <= 1;
+    }), 'A known-quiet Goal gives its reading column the full width instead of reserving a blank rail');
     assert.deepEqual(session.errors, [], 'Packaged composition emits no browser errors');
-    console.log('Goal workspace craft: packaged long-title, readable geometry, stationary desktop selection, close/Escape/focus, 390px and reduced-motion checks passed');
+    console.log('Goal workspace craft: single gold attention rail, readable inventory, hidden-history isolation, quiet layout, long-title, stationary selection, close/Escape/focus, 390px and reduced-motion checks passed');
   } finally { await session.close(); }
 } finally { await browser?.close(); server.kill('SIGTERM'); }
