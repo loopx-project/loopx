@@ -44,6 +44,9 @@ try {
   const { page } = session;
   try {
     await openShowcaseGoal(page);
+    const inlineRail = page.getByTestId('goal-workspace-inline-rail');
+    assert.ok(await inlineRail.locator('.goal-all-work.is-inline').isVisible(), 'Desktop keeps the All work rail beside the Goal brief');
+    assert.ok(await inlineRail.locator('.goal-work-filters').isVisible(), 'Desktop rail exposes work filters without opening a drawer');
     await page.getByRole("region", {name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
     const heading = page.locator('.personal-channel-title h1');
     assert.equal(await heading.innerText(), longTitle, 'The original Goal title remains complete');
@@ -77,6 +80,10 @@ try {
     await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
     assert.equal(await map.locator('.work-map-node[aria-pressed="true"]').count(), 0, 'Escape closes the map selection');
     await page.setViewportSize({ width: 1024, height: 768 });
+    assert.equal(await inlineRail.locator('.goal-all-work.is-inline').isVisible(), false, 'Narrow view falls back to the All work drawer instead of crowding the brief');
+    await page.getByRole('button', { name: '打开全部工作' }).click();
+    assert.ok(await page.locator('.goal-work-rail-dialog .goal-all-work.is-dialog').isVisible(), 'The narrow drawer keeps the same All work inventory reachable');
+    await page.getByRole('button', { name: '关闭全部工作' }).click();
     const measured = await heading.evaluate(element => ({ height: element.clientHeight, line: parseFloat(getComputedStyle(element).lineHeight), overflow: element.scrollWidth - element.clientWidth }));
     assert.ok(measured.height > measured.line && measured.overflow <= 1, 'A long title wraps without clipping or page overflow');
     await page.setViewportSize({ width: 390, height: 844 });
