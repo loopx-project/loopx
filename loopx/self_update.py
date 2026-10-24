@@ -946,6 +946,27 @@ def build_update_plan(
     return (_windows_console_update_refusal(payload) if execute else None) or payload
 
 
+def _retain_pending_service_activation(updated: dict[str, Any]) -> bool:
+    """Keep installation success distinct from switching its live consumers."""
+    if not updated["execution"].get("activation_pending"):
+        return False
+    updated["ok"] = False
+    updated["recommended_action"] = (
+        "the runtime is installed, but managed-service activation is incomplete. "
+        "Let original Chat work finish, or inspect the reported service-state or "
+        "restart failure, then retry the same update source"
+    )
+    updated["next_action"] = {
+        "kind": "retry_runtime_activation",
+        "command": (updated.get("commands") or {}).get("apply")
+        or _update_action_command(UpdateAction.APPLY, updated.get("source") or {}),
+        "mutating": True,
+        "requires_explicit_approval": True,
+        "reason": updated["recommended_action"],
+    }
+    return True
+
+
 def _execute_python_distribution_update(
     payload: dict[str, Any],
     *,
@@ -1084,6 +1105,8 @@ def _execute_python_distribution_update(
             runtime_ready=runtime_ready,
         )
     )
+    if _retain_pending_service_activation(updated):
+        return updated
     if updated["ok"]:
         updated["recommended_action"] = (
             "PyPI update and host-material readback passed; use the new LoopX process"
@@ -1259,6 +1282,8 @@ def execute_update_plan(
             installed_bin=loopx_bin,
         )
     )
+    if _retain_pending_service_activation(updated):
+        return updated
     if not updated["ok"] and runtime_ready:
         updated["recommended_action"] = (
             "the updated runtime is installed; repair the blocked "
@@ -1539,6 +1564,11 @@ def render_update_plan_markdown(payload: dict[str, Any]) -> str:
                       f"- Version: `{installed_identity.get('package_version')}`",
                       f"- Source revision: `{installed_identity.get('source_revision')}`",
                       "- Fresh process installation check passed; the plan below describes the pre-update installation."])
+    if (payload.get("execution") or {}).get("activation_pending"):
+        lines.extend(["", "## Service activation pending", "",
+                      "- The CLI is installed; managed-service activation is incomplete.",
+                      f"- Reason: `{payload['execution'].get('restart_reason')}`",
+                      "- Accepted Chat work stays with its original consumer. Retry the same update after it finishes or its unreadable state is repaired."])
     lines.extend(
         [
             "",

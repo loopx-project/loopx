@@ -47,6 +47,17 @@ def test_app_restart_keeps_an_explicit_terminal_runtime_pin(monkeypatch):
     assert "--loopx-upgrade-channel=main" in launch_command
 
 
+def test_upgrade_never_restarts_the_app_while_service_activation_is_deferred():
+    payload = {"ok": False, "changes_applied": True,
+               "execution": {"install_returncode": 0, "doctor_returncode": 0, "activation_pending": True},
+               "desktop_upgrade": {"status": "planned"}}
+    with mock.patch("loopx.cli_commands.support_control_upgrade._upgrade_desktop") as upgrade:
+        result = finish_upgrade(payload, timeout_seconds=10)
+    upgrade.assert_not_called()
+    assert not result["ok"] and not result["upgrade_complete"]
+    assert result["desktop_upgrade"]["status"] == "skipped_service_activation_pending"
+
+
 def app_fixture(tmp_path: Path, version: str = "0.0.0-main.2.1") -> Path:
     app = tmp_path / "LoopX.app"
     runtime = app / "Contents/Resources/runtime"

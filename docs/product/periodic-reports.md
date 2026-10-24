@@ -84,6 +84,18 @@ eligible idle boundary. If host tools require a replacement upstream thread,
 preserve the visible conversation and history, and record that transport change.
 Do not claim to preserve a physical thread that was actually replaced.
 
+The macOS CLI update path checks every configured Chat store before switching
+its LaunchAgent services. Accepted, queued, completing or unreadable work defers
+the whole service switch; an empty Session summary is insufficient. Updated
+consumers and the updater share an admission lock through process replacement,
+so a new request cannot pass the idle check and begin on the retiring process.
+The first adoption from an older consumer without that fence still requires an
+independently established idle boundary. Installation readback remains visible
+when service activation is pending, including partial restart failures. The
+same-source update retry performs a fresh check; this adds no second consumer,
+automatic business replay or separate activation scheduler. The combined App
+upgrade also stops before restarting the App when this service switch is pending.
+
 Keep the steward's existing portfolio-read authority separate from its execution
 actor. Resolve both through their native owners on every admission. Registering
 the actor does not grant new project writes or broaden the original audience.

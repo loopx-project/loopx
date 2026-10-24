@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import threading
@@ -810,7 +811,9 @@ def test_restart_managed_loopx_services_restarts_only_loopx_launchagents(
         "com.goal-harness.status.plist",
         "unrelated.plist",
     ):
-        (agents / name).write_text("<plist/>", encoding="utf-8")
+        (agents / name).write_bytes(plistlib.dumps({
+            "ProgramArguments": ["loopx", "--runtime-root", str(tmp_path / "runtime"), "chat"],
+        }))
 
     calls: list[list[str]] = []
 

@@ -36,7 +36,7 @@ class ChatIngressStore:
         if normalized_attachments:
             validate_chat_turn_envelope({"message": message, "attachments": normalized_attachments})
         session_path = self._session_path(session_id)
-        with self._session_lock(session_id):
+        with self.runtime_activation_lock(), self._session_lock(session_id):
             with exclusive_file_lock(
                 session_path,
                 agent_id="loopx-chat",
