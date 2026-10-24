@@ -13,7 +13,8 @@ from unittest import mock
 
 import pytest
 
-from loopx.chat_store import ChatSessionStore, chat_runtime_activation_lock
+from loopx.chat_store import ChatSessionStore
+from loopx.chat_ingress import chat_runtime_activation_lock
 from loopx.runtime_activation import restart_services_for_runtime_activation
 from loopx.self_update import execute_update_plan, render_update_plan_markdown
 
@@ -240,7 +241,7 @@ def test_contended_admission_is_not_treated_as_idle(services, monkeypatch):
     session(store)
     original = chat_runtime_activation_lock
     monkeypatch.setattr(
-        "loopx.chat_store.chat_runtime_activation_lock",
+        "loopx.chat_ingress.chat_runtime_activation_lock",
         lambda root, **_kwargs: original(root, timeout_seconds=0),
     )
     with original(runtime):

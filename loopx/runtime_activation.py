@@ -108,7 +108,10 @@ def restart_managed_loopx_services() -> list[str]:
             chat_plists.append(plist)
     restarted: list[str] = []
     uid = os.getuid() if hasattr(os, "getuid") else 0
-    from .chat_store import chat_runtime_activation_lock, chat_runtime_activation_state
+    from .chat_ingress import (
+        chat_runtime_activation_lock,
+        chat_runtime_activation_state,
+    )
 
     try:
         roots = sorted({_chat_runtime_root(plist) for plist in chat_plists})

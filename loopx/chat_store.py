@@ -59,57 +59,6 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def chat_runtime_activation_lock(runtime_root: Path, *, timeout_seconds: float | None = None):
-    """Fence new durable input against a managed-service runtime switch."""
-    return exclusive_file_lock(
-        runtime_root.expanduser().resolve() / "chat" / "runtime-activation",
-        agent_id="loopx-chat",
-        operation="chat_runtime_activation",
-        timeout_seconds=timeout_seconds,
-    )
-
-
-def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
-    """Strict read of all accepted work; never initialize or recover a store.
-
-    The caller holds ``chat_runtime_activation_lock`` through the service switch.
-    Session summaries alone omit queued input and are insufficient for this check.
-    Unknown or unreadable records must not authorize stopping their consumer.
-    """
-    sessions = runtime_root.expanduser().resolve() / "chat" / "sessions"
-    counts = {"sessions": 0, "nonterminal_turns": 0}
-    if not sessions.exists():
-        return counts
-    for directory in sessions.iterdir():
-        if not directory.is_dir():
-            continue
-        session = json.loads((directory / "session.json").read_text(encoding="utf-8"))
-        if not isinstance(session, dict) or session.get("schema_version") != CHAT_SESSION_SCHEMA_VERSION:
-            raise ValueError("unreadable Chat Session state")
-        counts["sessions"] += 1
-        active_id = session.get("active_turn_id")
-        active_found = not active_id
-        turns = directory / "turns"
-        for path in turns.iterdir() if turns.exists() else ():
-            if path.suffix != ".json":
-                continue
-            turn = json.loads(path.read_text(encoding="utf-8"))
-            if (not isinstance(turn, dict)
-                    or turn.get("schema_version") != CHAT_TURN_SCHEMA_VERSION
-                    or not isinstance(turn.get("status"), str)
-                    or turn.get("status") not in TERMINAL_TURN_STATES | {
-                        "queued", "starting", "running", "completing", "interrupting",
-                    }):
-                raise ValueError("unreadable Chat Turn state")
-            if turn.get("turn_id") == active_id:
-                active_found = True
-            if turn["status"] not in TERMINAL_TURN_STATES:
-                counts["nonterminal_turns"] += 1
-        if not active_found:
-            raise ValueError("active Chat Turn state is missing")
-    return counts
-
-
 def _instant(value: Any) -> datetime | None:
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
@@ -278,9 +227,6 @@ class ChatSessionStore(ChatIngressStore):
         if token in {".", ".."}:
             raise ValueError("session_id must be a compact opaque id")
         return self.sessions_root / token
-
-    def runtime_activation_lock(self):
-        return chat_runtime_activation_lock(self.root.parent)
 
     def _session_path(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "session.json"
