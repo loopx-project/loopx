@@ -172,6 +172,79 @@ def spent_slots(monitor, actor):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_due_monitor_observes_without_selecting_it_over_open_advancement(steward, tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.steward_commands import native_command
+
+    _, runtime, _, _, _, capture, _ = steward
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    added = native_command(runtime, ["todo", "add", "--goal-id", actor["goal_id"],
+        "--role", "agent", "--text", "[P1] Retain this independently executable work.",
+        "--claimed-by", actor["agent_id"], "--action-kind", "inspect",
+        "--continuation-policy", "same_agent_non_delivery", "--execute"])
+    work_id = added.get("todo_id") or added["todo"]["todo_id"]
+    before, used = capture.read_bytes(), spent_slots(monitor, actor)
+    accepted = pump_steward_monitors(runtime)
+    assert len(accepted) == 1
+    done = finish(runtime, accepted[0])
+    assert done["status"] == "completed", done
+    assert done["response"]["native_loopx"]["status"] == "observed"
+    assert monitor.current(actor).get("result_hash")
+    assert next(row for row in monitor.todos(actor) if row["todo_id"] == work_id)["status"] == "open"
+    assert spent_slots(monitor, actor) == used and capture.read_bytes() == before
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", [None, "different_error", "native_started", "delta", "interrupted", "retry_fails"])
+def test_original_monitor_recovers_only_the_known_pre_poll_rejection_once(steward, tmp_path, monkeypatch, provider, fault):
+    import copy
+    from loopx.capabilities.native_chat.steward_commands import native_command
+
+    store, runtime, _, _, _, capture, _ = steward
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    native_command(runtime, ["todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+        "--text", "[P1] Keep this independent work open.", "--claimed-by", actor["agent_id"],
+        "--continuation-policy", "same_agent_non_delivery", "--execute"])
+    observe = StewardMonitor.observe
+
+    def legacy(self, *, host, request, turn, context, todo):
+        return native_command(runtime, ["quota", "should-run", "--goal-id", actor["goal_id"],
+            "--agent-id", actor["agent_id"], "--todo-id", todo["todo_id"],
+            "--turn-instance-id", request["turn_instance_id"], "--runtime-profile", "codex_app_server",
+            "--available-capability", "filesystem", "--available-capability", "external_evidence_poll"])
+
+    monkeypatch.setattr(StewardMonitor, "observe", legacy)
+    calls, used = capture.read_bytes(), spent_slots(monitor, actor)
+    first = pump_steward_monitors(runtime)[0]
+    failed = finish(runtime, first)
+    assert failed["status"] == "failed" and "auxiliary_monitor_not_selectable" in failed["error"]
+    if fault and fault != "retry_fails":
+        change = {"different_error": {"error": "An unknown observation failed."},
+            "native_started": {"upstream_turn_id": "unknown-native-turn"},
+            "delta": {"delta_count": 1}, "interrupted": {"status": "interrupted"}}[fault]
+        store.update_turn(first["session_id"], first["turn_id"], **change)
+    retained = copy.deepcopy(store.load_turn(first["session_id"], first["turn_id"]))
+    monkeypatch.setattr(StewardMonitor, "observe", legacy if fault == "retry_fails" else observe)
+    runtime._steward_monitor_next_check.clear()
+    recovered = pump_steward_monitors(runtime)
+    if fault and fault != "retry_fails":
+        assert recovered == []
+    else:
+        assert len(recovered) == 1 and recovered[0]["turn_id"] != failed["turn_id"]
+        assert recovered[0]["loopx_request"]["turn_instance_id"] == failed["loopx_request"]["turn_instance_id"]
+        done = finish(runtime, recovered[0])
+        if fault == "retry_fails":
+            assert done["status"] == "failed"
+        else:
+            assert done["response"]["native_loopx"]["status"] == "observed"
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert store.load_turn(first["session_id"], first["turn_id"]) == retained
+    assert spent_slots(monitor, actor) == used and capture.read_bytes() == calls
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_restarted_host_reads_paused_state_then_runs_one_fresh_native_generation(steward, tmp_path, monkeypatch, provider):
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
@@ -275,10 +348,9 @@ def test_pause_resume_cannot_let_old_collection_acquire_a_new_lease_generation(s
     _, runtime, _, _, binding, capture, _ = steward
     _, actor, monitor = prepared(steward, tmp_path, monkeypatch)
     before, calls = monitor.current(actor), capture.read_bytes()
-    command, replaced = module.native_command, []
-    def change_after_guard(controller, argv):
-        result = command(controller, argv)
-        if argv[:2] == ["quota", "should-run"] and not replaced:
+    acquire, replaced = module.StewardMonitor._acquire, []
+    def change_after_collection(self, actor, todo, key, *, expected_version=None):
+        if expected_version is not None and not replaced:
             replaced.append(True)
             for operation in ["pause", "enable"]:
                 plan = monitor.configure(binding["binding_id"], operation=operation)["plan"]
@@ -286,8 +358,8 @@ def test_pause_resume_cannot_let_old_collection_acquire_a_new_lease_generation(s
             # Even an explicit owner restoring the same timestamp cannot
             # revive the old execution proof or its previously collected data.
             due_window(monitor, actor, before["next_due_at"])
-        return result
-    monkeypatch.setattr(module, "native_command", change_after_guard)
+        return acquire(self, actor, todo, key, expected_version=expected_version)
+    monkeypatch.setattr(module.StewardMonitor, "_acquire", change_after_collection)
     turn = pump_steward_monitors(runtime)[0]
     result = finish(runtime, turn)
     assert result["status"] == "failed"

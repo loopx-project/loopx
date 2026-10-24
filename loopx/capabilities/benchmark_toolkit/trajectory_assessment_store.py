@@ -653,6 +653,8 @@ def read_citation(
     )
     result = view["result"]
     citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]
+    citations.extend(c for field in ((result or {}).get("display") or {}).get("fields", [])
+                     for c in field.get("context_citations", []))
     native = (view.get("native_outcomes") or {}).get("projection") or {}
     native_citations = [native[key]["citation"] for key in ("initial", "best_valid", "retained", "final_valid") if native.get(key)]
     improvement = native.get("retained_improvement") or {}

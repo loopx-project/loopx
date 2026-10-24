@@ -168,13 +168,27 @@ class StewardReports:
     def delivery_current(self, binding_id: str, window: dict[str, Any]) -> bool:
         """Recheck the exact original read grant before every outbound part."""
         from ...chat_manager_context import manager_authorization_scope_id_for_registry
+        from ..periodic_report.pending_intent import _canonical_digest
         if self.subscription(binding_id, expected_revision=window["subscription_revision"]) is None:
             return False
         selected = self.selected(binding_id)
         session = selected["session"]
-        expected = json.loads((attempt_directory(self.root, window) / "editorial-request.json").read_text())
+        folder = attempt_directory(self.root, window)
+        expected = json.loads((folder / "editorial-request.json").read_text())
+        source = json.loads((folder / "source.json").read_text())
+        frozen_ids = source.get("goal_ids")
+        current_ids = self.bindings.steward_scope(session)
+        if (expected.get("request_digest") != _canonical_digest(
+                {k: v for k, v in expected.items() if k != "request_digest"})
+                or expected.get("source_artifact_sha256") != _canonical_digest(source)
+                or not isinstance(frozen_ids, list) or not all(isinstance(value, str) for value in frozen_ids)
+                or current_ids is None or not set(frozen_ids).issubset(current_ids)):
+            return False
+        # A new authorized Goal belongs to a future report. Recheck every frozen
+        # Goal's original identity and current grant, rather than treating scope
+        # growth as revocation or rewriting the already validated source/body.
         current = manager_authorization_scope_id_for_registry(self.controller.registry_path,
-            self.bindings.steward_scope(session), runtime_root=self.root, channel_id=session["channel_id"])
+            frozen_ids, runtime_root=self.root, channel_id=session["channel_id"])
         return current == expected["authorization_scope_id"]
 
     def health(self, binding_id: str) -> dict[str, Any]:
@@ -249,12 +263,13 @@ class StewardReports:
                 "--target-key", window["window_id"], "--continuation-policy", "same_agent_non_delivery",
                 "--execute"])
             rows = [row for row in StewardMonitor(self.controller).todos(actor) if row.get("target_key") == window["window_id"]]
-        if len(rows) == 1 and rows[0]["status"] == "done":
+        folder = attempt_directory(self.root, window)
+        if len(rows) == 1 and (rows[0]["status"] == "done"
+                or rows[0]["status"] == "open" and (folder / "private-generation.json").exists()):
             StewardTurnHost(self.controller).recover_report_settlement(actor, window, rows[0])
             return None, False
         if len(rows) != 1 or rows[0]["status"] != "open":
             return None, False
-        folder = attempt_directory(self.root, window)
         validator = [sys.executable, "-c", "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
             + f"validate_private_generation(Path({str(folder)!r}))"]
         return StewardTurnHost(self.controller).submit(binding["binding_id"],

@@ -26,6 +26,76 @@ def generated(steward, tmp_path, monkeypatch, provider="sqlite"):
     return actor, reports, window, attempt_directory(reports.root, window), binding
 
 
+@pytest.mark.parametrize("provider_kind", ["file", "sqlite"])
+@pytest.mark.parametrize("phase", ["before_send", "after_partial"])
+def test_added_authorized_goal_does_not_strand_an_existing_frozen_report(steward, tmp_path, monkeypatch, provider_kind, phase):
+    from datetime import datetime, timedelta, timezone
+    from loopx.bootstrap import bootstrap_project
+    from loopx.capabilities.native_chat import steward_reports as report_module
+    from loopx.capabilities.periodic_report import cadence_runtime
+
+    _, runtime, provider, transport, _, capture, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=3)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_module, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    actor, reports, window, folder, binding = generated(steward, tmp_path, monkeypatch, provider_kind)
+    frozen = (folder / "source.json").read_bytes(), (folder / "editorial-request.json").read_bytes()
+    calls = capture.read_bytes()
+    if phase == "after_partial":
+        provider.verify_replies = False
+        assert transport.steward_reports.reconcile() == 0
+        assert provider.writes
+        provider.verify_replies = True
+    sent = list(provider.writes)
+    project = tmp_path / "new-authorized-goal"
+    project.mkdir()
+    bootstrap_project(project=project, registry_path=runtime.registry_path,
+        runtime_root=runtime.coordination_runtime_root, goal_id="new-authorized-goal",
+        objective="Keep the independently authorized new work.", domain="test", role="primary",
+        parent_goal_id=None, state_file=None, goal_doc=None, adapter_kind="generic_project_goal_v0",
+        adapter_status="connected", next_probe=None, spawn_allowed=False, max_children=0,
+        allowed_domains=[], write_scope=[], preserve_todos=True, force=False, dry_run=False, sync_global=False)
+    assert reports.delivery_current(binding["binding_id"], window)
+    assert transport.steward_reports.reconcile() == 1
+    assert provider.writes[:len(sent)] == sent
+    assert capture.read_bytes() == calls
+    assert ((folder / "source.json").read_bytes(), (folder / "editorial-request.json").read_bytes()) == frozen
+    assert read_periodic_report_publication_cursor(runtime_root=reports.root,
+        goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == window["due_at"]
+    after = list(provider.writes)
+    assert transport.steward_reports.reconcile() == 0 and provider.writes == after
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    following = pump_steward_monitors(runtime)
+    assert len(following) == 1
+    done = finish(runtime, following[0])
+    assert done["status"] == "completed" and done["response"]["native_loopx"].get("status") == "committed", done
+    assert transport.steward_reports.reconcile() == 1
+    next_window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+    assert next_window["window_id"] != window["window_id"]
+    next_source = json.loads((attempt_directory(reports.root, next_window) / "source.json").read_text())
+    assert "new-authorized-goal" in next_source["goal_ids"]
+
+
+@pytest.mark.parametrize("provider_kind", ["file", "sqlite"])
+def test_replacing_a_frozen_goal_identity_still_blocks_report_delivery(steward, tmp_path, monkeypatch, provider_kind):
+    _, runtime, provider, transport, _, capture, _ = steward
+    actor, _, _, folder, _ = generated(steward, tmp_path, monkeypatch, provider_kind)
+    before = capture.read_bytes(), list(provider.writes), (folder / "source.json").read_bytes()
+    registry = json.loads(runtime.registry_path.read_text())
+    goal = next(row for row in registry["goals"] if row["id"] == actor["goal_id"])
+    goal["creation_operation_id"] += ".replacement"
+    runtime.registry_path.write_text(json.dumps(registry))
+    assert transport.steward_reports.reconcile() == 0
+    assert before == (capture.read_bytes(), provider.writes, (folder / "source.json").read_bytes())
+
+
 @pytest.mark.parametrize("fault", ["pause", "cancel", "revoked", "scope", "provider", "body", "source", "foreign_candidate"])
 def test_late_report_never_escapes_changed_original_authority_or_frozen_evidence(steward, tmp_path, monkeypatch, fault):
     _, runtime, provider, transport, _, capture, _ = steward

@@ -81,7 +81,8 @@ function comparisonReadback() {
   const names = ["variant-alpha", "variant-beta", "variant-gamma", "edge-aware"];
   p.episode_count = 4;
   p.episodes = names.map(id => ({id,
-    question: `${id} 的实验是否检验原始目标，并被后续候选选择实际采用？负结果、控制差异与未知分别保留。`,
+    question: id === "edge-aware" ? `${id} 是否只检验局部代理？不能据此推断原生收益；不同问题必须保留，不能并入其他片段。`
+      : `${id} 的实验是否检验原始目标，并被后续候选选择实际采用？负结果、控制差异与未知分别保留。`,
     source_ids: ["source"], eligible_metrics: p.result.metrics.map(row => row.metric)}));
   p.result.metrics = p.result.metrics.map(row => ({...row, yes: 1, no: 0, unknown: 3, eligible: 4, assessed_fraction: .25, missing_data_bounds: [.25, 1]}));
   p.result.assessments = p.result.metrics.flatMap(({metric}) => names.map((episode_id, index) => ({
@@ -980,8 +981,11 @@ print(json.dumps([
       const rows = metricDetail.locator('.research-assessment');
       assert.equal(await rows.count(), 4);
       assert.deepEqual(await rows.locator('.research-assessment-name').allTextContents(),
-        ['variant-alpha', 'variant-beta', 'variant-gamma', 'edge-aware'].map(id => `${id} 的实验是否检验原始目标，并被后续候选选择实际采用？负结果、控制差异与未知分别保留。`),
-        'Without a localized interpretation, the original question remains readable instead of a protocol id');
+        ['variant-alpha', 'variant-beta', 'variant-gamma', 'edge-aware 是否只检验局部代理？不能据此推断原生收益；不同问题必须保留，不能并入其他片段。'],
+        'Only exact shared questions use identity rows; a different comparison remains complete');
+      assert.equal(await metricDetail.locator('.research-assessment-shared-question').count(), 1);
+      assert.match(await metricDetail.locator('.research-assessment-shared-question').innerText(), /负结果、控制差异与未知分别保留/);
+      assert.match(await rows.first().locator(':scope > summary').getAttribute('aria-label'), /variant-alpha 的实验是否检验原始目标/);
       assert.deepEqual(await rows.locator('.research-assessment-verdict').allTextContents(), ['证据不足', '证据不足', '证据不足', '有依据']);
       assert.equal(await rows.locator('.research-assessment-body:visible').count(), 0);
       assert.equal(await metricDetail.locator('.research-effect-citations button:visible').count(), 0);
@@ -995,8 +999,13 @@ print(json.dumps([
       await page.screenshot({path: resolve(outputDir, 'research-assessment-comparison.png'), animations: 'disabled'});
       const firstRow = rows.first().locator(':scope > summary');
       await firstRow.focus(); await firstRow.press('Enter');
-      assert.match(await rows.first().innerText(), /variant-alpha 的实验是否检验原始目标/);
+      assert.equal(await rows.first().locator('.research-assessment-question:visible').count(), 0,
+        'Expanding a rationale does not repeat the shared question');
       assert.match(await rows.first().innerText(), /does not establish the intervention/);
+      const fullQuestion = rows.first().getByText('完整问题', {exact: true});
+      await fullQuestion.click();
+      assert.match(await rows.first().locator('.research-assessment-question').innerText(), /variant-alpha 的实验是否检验原始目标/);
+      await fullQuestion.click();
       const comparisonCitation = rows.first().getByRole('button', {name: /source.*行 1–2/});
       await comparisonCitation.click();
       await citedOriginal.waitFor(); await citedOriginal.press('Escape');
@@ -1008,8 +1017,9 @@ print(json.dumps([
       await comparison.scrollIntoViewIfNeeded();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       const collapsedQuestion = rows.first().locator('.research-assessment-name');
-      assert(await collapsedQuestion.evaluate(element => element.clientHeight <= 2 * parseFloat(getComputedStyle(element).lineHeight) + 1
-        && element.scrollHeight > element.clientHeight), 'Long questions occupy at most two lines in the narrow comparison index');
+      assert.equal(await collapsedQuestion.innerText(), 'variant-alpha', 'The shared paragraph is not repeated in each narrow row');
+      assert(await metricDetail.locator('.research-assessment-shared-question').evaluate(element => element.clientHeight >= element.scrollHeight),
+        'The shared question wraps fully, including negation and uncertainty');
       const narrowPositions = await metricPositions();
       await effects.locator('[data-metric="information_gain"]').click();
       assert.deepEqual(await metricPositions(), narrowPositions, 'Narrow metric navigation preserves the comparison band');
@@ -1031,6 +1041,7 @@ print(json.dumps([
       await progress.locator('[data-metric="goal_alignment"]').click();
       assert.equal(await metricDetail.locator('.research-assessment-name').first().innerText(), 'variant-alpha 是否检验原始目标？',
         'The metric reader uses the same localized question as deep analysis');
+      assert.equal(await metricDetail.locator('.research-assessment-shared-question').count(), 0, 'Small questions retain their full wording');
       await metricDetail.press('Escape');
       await history.getByRole('button', {name: '查看分析', exact: true}).click();
       const chineseAnalysis = history.getByRole('region', {name: '轨迹深度分析', exact: true});

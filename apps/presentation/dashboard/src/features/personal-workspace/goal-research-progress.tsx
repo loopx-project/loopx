@@ -66,6 +66,32 @@ function LoopXInputShare({usage, zh}: {usage: TrajectorySolverUsage | undefined;
 export const episodeQuestion = (result: TrajectoryAssessment, id: string, episode?: TrajectoryEpisode) =>
   result.episode_questions?.find(question => question.episode_id === id)?.question ?? episode?.question ?? id;
 
+// Factor only an exact, single occurrence of the declared episode identity.
+// This is lossless presentation, not a short-title generator or prose classifier.
+function assessmentGroups(result: TrajectoryAssessment, assessments: TrajectoryAssessment["assessments"], episodes: TrajectoryEpisode[] | undefined) {
+  const groups: Array<{before: string; after: string; exact: boolean; items: Array<{assessment: typeof assessments[number]; question: string}>}> = [];
+  for (const assessment of assessments) {
+    const id = assessment.episode_id;
+    const question = episodeQuestion(result, id, episodes?.find(episode => episode.id === id));
+    const index = question.indexOf(id);
+    const exact = index >= 0 && question.lastIndexOf(id) === index
+      && !/[\w./-]/u.test(question[index - 1] ?? "") && !/[\w./-]/u.test(question[index + id.length] ?? "");
+    const before = exact ? question.slice(0, index) : question, after = exact ? question.slice(index + id.length) : "";
+    const prior = groups.at(-1);
+    if (exact && prior?.exact && prior.before === before && prior.after === after) prior.items.push({assessment, question});
+    else groups.push({before, after, exact, items: [{assessment, question}]});
+  }
+  // Factor repeated prose only when it outweighs the identities. This also
+  // serves a pair of long questions; preserve source order and every verdict.
+  return groups.flatMap(group => {
+    const shared = group.before.length + group.after.length;
+    const identities = group.items.reduce((sum, item) => sum + item.assessment.episode_id.length, 0);
+    return group.items.length >= 2 && shared * (group.items.length - 1) > identities
+      ? [{...group, shared: true}]
+      : group.items.map(item => ({before: "", after: "", items: [item], shared: false}));
+  });
+}
+
 // Format the native owner's existing projection, without deriving a gain,
 // deciding adoption, or borrowing values from another pack.
 function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<ResearchProgressPack["native_outcomes"]>; zh: boolean; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
@@ -158,28 +184,32 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
     </div>
     {active ? <div className="research-effect-evidence" id={panelId} ref={panel} role="region" tabIndex={-1} aria-labelledby={`${panelId}-heading`}
       key={active.metric} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); close();}}}>
-      <header className="research-effect-detail-heading"><h4 id={`${panelId}-heading`}>{active.label[zh ? 0 : 1]}</h4><button type="button" onClick={close} aria-label={zh ? "收起指标详情" : "Close metric details"}><X size={16} aria-hidden/></button></header>
       {(() => {
         const {metric, label, row, assessments, excluded} = active;
         return <>
-                <div className="research-effect-help"><span>{zh ? "逐项判读" : "Episode judgments"}</span><ContextHelp label={`${label[zh ? 0 : 1]} · ${zh ? "判读口径" : "Interpretation"}`}>
+                <header className="research-effect-detail-heading"><div className="research-progress-title"><h4 id={`${panelId}-heading`}>{label[zh ? 0 : 1]}</h4><ContextHelp label={`${label[zh ? 0 : 1]} · ${zh ? "判读口径" : "Interpretation"}`}>
                   <p>{label[zh ? 2 : 3]}</p>
                   {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
                   {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
                   {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
-                </ContextHelp></div>
+                </ContextHelp></div><button type="button" onClick={close} aria-label={zh ? "收起指标详情" : "Close metric details"}><X size={16} aria-hidden/></button></header>
                 {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episodeQuestion(result, episode.id, episode)}</li>)}</ul></div> : null}
-                <div className="research-assessments">{assessments.map(assessment => {
+                <div className="research-assessments">{assessmentGroups(result, assessments, p.episodes).map(group => <div className="research-assessment-group" key={group.items[0]!.assessment.episode_id}>
+                  {group.shared ? <p className="research-assessment-shared-question">{group.before}<span>{zh ? "〔研究片段〕" : "[episode]"}</span>{group.after}</p> : null}
+                  {group.items.map(({assessment, question}) => {
                   const episode = p.episodes?.find(item => item.id === assessment.episode_id);
                   return <details className="research-assessment" key={assessment.episode_id}>
-                    <summary><span className="research-assessment-name">{episodeQuestion(result, assessment.episode_id, episode)}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
+                    <summary aria-label={`${question} · ${verdictLabel(metric, assessment.verdict, zh)}`}><span className="research-assessment-name">{group.shared ? assessment.episode_id : question}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
                     <div className="research-assessment-body">
-                      <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><code>{assessment.episode_id}</code>{episode ? <p>{episode.question}</p> : null}</details>
-                      <p>{assessment.reason}</p>
+                      <p className="research-assessment-reason">{assessment.reason}</p>
                       <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
+                      {group.shared || (episode && episode.question !== question) ? <details className="research-assessment-original"><summary>{group.shared ? (zh ? "完整问题" : "Full question") : (zh ? "原始研究问题" : "Original research question")}</summary>
+                        {group.shared ? <p className="research-assessment-question">{question}</p> : null}
+                        {episode && episode.question !== question ? <>{group.shared ? <h5>{zh ? "原文" : "Original"}</h5> : null}<p>{episode.question}</p></> : null}
+                      </details> : null}
                     </div>
                   </details>;
-                })}</div>
+                })}</div>)}</div>
                 {!row?.eligible ? <p>{zh ? "所选片段没有此指标的适用判读；未记作零。" : "No eligible judgment for this metric in the selected episodes; not recorded as zero."}</p> : null}
 
         </>;
