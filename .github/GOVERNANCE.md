@@ -322,12 +322,12 @@ voluntary: anyone may decline, narrow, pause, or hand back a scope without
 losing attribution for their work. Silence is not acceptance or approval.
 
 Status reflects accepted scopes and follow-up invitations in #4069 through
-2026-10-22. The last column says what still separates each contact from a `CODEOWNERS` route under the
+2026-10-24. The last column says what still separates each contact from a `CODEOWNERS` route under the
 [eligibility rule](#code-owner-eligibility).
 
 | Surface | Contact | Responsibility / status | Path to a code-owner route |
 | --- | --- | --- | --- |
-| Chat/runtime session lifecycle | [`@Duang777`](https://github.com/Duang777) | Accepted 2026-09-08: managed-session resume/submit/close, request idempotency, focused regressions and follow-up fixes. Shared goal, quota, lease and permission contracts remain outside this assignment. | Has write access and an accepted scope; needs three qualifying in-scope cross-author reviews. |
+| Chat/runtime session lifecycle and cohesive Host recovery | [`@Duang777`](https://github.com/Duang777) | Initial session scope accepted 2026-09-08; [expanded and accepted 2026-10-24](https://github.com/loopx-project/loopx/issues/4069#issuecomment-6377902612): first-review contact for resume/submit/close, request idempotency, focused regressions and follow-up maintenance, including Host/recovery surfaces within the same session boundary. Best-effort availability, no fixed SLA; will state on the PR when unavailable. Shared goal/quota/lease policy, canonical-authority promotion, provider activation, release and bypass decisions remain outside this scope. | Write remains active. No Maintain or code-owner change requested or granted; any future route still needs the existing qualifying cross-author reviews and a separate appointment PR. |
 | Shared goal authority qualification | [`@wchwawa`](https://github.com/wchwawa) | Accepted 2026-09-08: implementation review, writer/cursor recovery evidence and bounded qualification. Canonical-authority promotion, provider activation and shared-state policy require separate lead-maintainer review. | Has write access and an accepted scope; needs three in-scope cross-author reviews. |
 | Windows runtime correctness | [`@BigDataDZ`](https://github.com/BigDataDZ) | Accepted 2026-10-12: Python CLI Windows paths/encoding, filesystem behavior and native repro-first test qualification; best-effort availability and stated recusals retained. | Bounded Windows code-owner route recorded above; shared semantic and CI-policy decisions remain with existing owners. |
 | Usage and host usage ingestion | [`@liubf21`](https://github.com/liubf21) | Invited to coordinate usage correctness and historical-data compatibility review; no acceptance recorded. Pricing policy and unrelated host/session authority remain outside this scope. | Has write access; needs scope acceptance and in-scope reviews. |
