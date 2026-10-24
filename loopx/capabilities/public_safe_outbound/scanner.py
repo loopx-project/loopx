@@ -35,11 +35,14 @@ RULES: tuple[dict[str, str], ...] = (
     # covers the POSIX spelling (/Users/alice/), the native Windows spellings
     # (\Users\alice\ and C:\Users\alice\) and the mixed or escaped spellings of
     # serialized text (\\Users\\alice\\), matching the boundary scan's
-    # separator-run class (#6161).
+    # separator-run class (#6161). The account segment is Unicode-aware and
+    # need not be followed by another separator: environment variables and
+    # config values commonly end at the account name. Matching is
+    # case-insensitive because Windows path comparison is case-insensitive.
     {
         "id": "private_abs_path",
         "label": "private absolute path",
-        "pattern": r"[\\/]+(?:Users|home|data00|root)[\\/]+[A-Za-z0-9_.-]+[\\/]+",
+        "pattern": r"(?i)[\\/]+(?:users|home|data00|root)[\\/]+[^\s\\/\"'<>]+",
     },
 )
 
