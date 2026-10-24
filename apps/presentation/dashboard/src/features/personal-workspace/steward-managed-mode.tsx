@@ -1,5 +1,5 @@
-import type {PrivateConversation} from "../../data/chat";
-import {useEffect, useState} from "react";
+import {fetchManagedNativeTurn, startManagedNativeTurn, type ManagedNativeTurn, type ManagedNativeTurnSnapshot, type PrivateConversation} from "../../data/chat";
+import {useEffect, useRef, useState} from "react";
 import {StewardReport} from "./steward-report";
 
 /** Identity preparation is deliberately distinct from enabling scheduled work. */
@@ -42,5 +42,100 @@ export function StewardManagedMode({state, zh, busy, available, onPrepare, onMon
           {zh ? "准备管家身份" : "Prepare steward identity"}
         </button>
       </>}
+  </details>;
+}
+
+/** One explicit segment; calendar scheduling remains with its existing owner. */
+export function ManagedSessionTurnControl({sessionId, zh, onReadback}: {sessionId: string; zh: boolean; onReadback?: () => void}) {
+  const cacheKey = `loopx.managed-turn.${sessionId}`;
+  const [intent, setIntent] = useState<{agent: string; id: string} | null>(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(cacheKey) ?? "null");
+      return saved && typeof saved.agent === "string" && typeof saved.id === "string" ? saved : null;
+    } catch {return null;}
+  });
+  const [state, setState] = useState<ManagedNativeTurnSnapshot | null>(null);
+  const [agent, setAgent] = useState(intent?.agent ?? "");
+  const [turn, setTurn] = useState<ManagedNativeTurn | null>(null);
+  const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
+  const [readRevision, setReadRevision] = useState(0);
+  const alive = useRef(true);
+  const requestInFlight = useRef(false);
+  const readbackRef = useRef(onReadback);
+  readbackRef.current = onReadback;
+  const observedTurn = useRef("");
+  const terminal = Boolean(turn && ["completed", "failed", "interrupted"].includes(turn.status));
+  const unresolved = Boolean(intent && !terminal);
+  useEffect(() => {
+    alive.current = true;
+    let reading = false;
+    let cancelled = false;
+    async function read() {
+      if (reading) return;
+      reading = true;
+      try {
+        const next = await fetchManagedNativeTurn(sessionId, agent || undefined, intent?.id);
+        if (cancelled) return;
+        setState(next); setTurn(next.turn); setError("");
+        const identity = next.turn ? `${next.turn.turn_id}:${next.turn.status}` : "";
+        if (identity && next.turn && ["completed", "failed", "interrupted"].includes(next.turn.status)
+            && observedTurn.current !== identity) {observedTurn.current = identity; readbackRef.current?.();}
+        if (!agent && next.registered_agents.length === 1) setAgent(next.registered_agents[0]);
+      } catch (failure) {if (!cancelled) setError(failure instanceof Error ? failure.message : String(failure));}
+      finally {reading = false;}
+    }
+    void read();
+    const interval = unresolved ? window.setInterval(() => {if (!document.hidden) void read();}, 2500) : undefined;
+    return () => {cancelled = true; alive.current = false; if (interval) window.clearInterval(interval);};
+  }, [sessionId, agent, intent?.id, unresolved, readRevision]);
+  async function run() {
+    if (requestInFlight.current || !agent) return;
+    const next = unresolved && intent ? intent : {agent, id: crypto.randomUUID()};
+    requestInFlight.current = true; setSending(true); setError("");
+    try {
+      // Persist correlation before POST. An unknown response, reload or retry
+      // keeps this identity; only a known terminal result permits new work.
+      sessionStorage.setItem(cacheKey, JSON.stringify(next)); setIntent(next); setTurn(null);
+      const accepted = await startManagedNativeTurn(sessionId, next.agent, next.id);
+      if (alive.current) setTurn(accepted.turn);
+    } catch (failure) {if (alive.current) setError(failure instanceof Error ? failure.message : String(failure));}
+    finally {requestInFlight.current = false; if (alive.current) setSending(false);}
+  }
+  const native = turn?.response?.native_loopx;
+  const replayHeld = terminal && native?.status !== "committed" && native?.status !== "stopped";
+  const summaryState = error || replayHeld ? (zh ? " · 需要核验" : " · Review required")
+    : native?.result_kind === "user_action_required" ? (zh ? " · 需要处理" : " · Action required")
+    : turn && !terminal ? (zh ? " · 执行中" : " · Running")
+    : native?.status === "committed" ? (zh ? " · 已验收" : " · Validated")
+    : state && !state.available ? (zh ? " · 暂不可用" : " · Unavailable") : "";
+  const status = !turn ? intent ? (zh ? "正在核对原请求；重试会保留同一请求。" : "Checking the original request; retry keeps its identity.") : ""
+    : !terminal ? (zh ? "本轮任务正在执行。" : "This work segment is running.")
+    : native?.status === "committed" ? native.result_kind === "validated_completion"
+      ? (zh ? "本任务已验收并完成，结果已回写。" : "This task was validated, completed and recorded.")
+      : (zh ? "本轮进展已验收并回写。" : "This segment's progress was validated and recorded.")
+    : native?.result_kind === "wait" ? (zh ? "本轮等待执行条件。" : "This segment is waiting for execution conditions.")
+    : native?.result_kind === "user_action_required" ? turn?.response?.message ?? (zh ? "本任务需要补充执行条件。" : "This task requires an execution condition.")
+    : (zh ? "本轮未完成，原执行记录已保留。" : "This segment did not complete; its original record is retained.");
+  return <details className="goal-loopx-mode">
+    <summary aria-label={zh ? "按 LoopX 任务推进" : "Advance LoopX tasks"} style={{minHeight: 44, paddingBlock: 10, cursor: "pointer"}}>{zh ? "按 LoopX 任务推进" : "Advance LoopX tasks"}{summaryState}</summary>
+    <div className="goal-loopx-mode-actions" style={{flexWrap: "wrap", gap: 12, marginBlock: 8}}><label style={{display: "grid", gap: 4, flex: "1 1 220px", maxWidth: 420}}>{zh ? "执行身份" : "Registered Agent"}
+      <select style={{minHeight: 44, width: "100%", padding: 8, font: "inherit", borderRadius: 6, border: "1px solid var(--pw-line)"}} value={agent} disabled={sending || unresolved} onChange={event => setAgent(event.target.value)}>
+        <option value="">{zh ? "选择本 Goal 的 Agent" : "Select this Goal's Agent"}</option>
+        {state?.registered_agents.map(id => <option key={id} value={id}>{id}</option>)}
+      </select>
+    </label><button type="button" onClick={() => void run()}
+      disabled={sending || replayHeld || !agent || (!state?.available && !unresolved) || Boolean(turn && !terminal)}>
+      {unresolved && !turn ? (zh ? "重试原请求" : "Retry original request") : (zh ? "推进一次" : "Advance once")}
+    </button></div>
+    {status ? <p style={{fontSize: "var(--text-body)", lineHeight: "var(--leading-body)"}} role="status">{status}</p> : null}
+    {replayHeld ? <p role="status">{zh ? "请先核验原执行记录；此入口保留失败结果，不重放执行。" : "Review the original execution record first; this control retains failures without replaying them."}</p> : null}
+    {error ? <p role="alert">{error}</p> : null}
+    {native?.reason || native?.error || turn?.error || state && !state.available && !unresolved
+      ? <details><summary>{zh ? "未执行原因" : "Execution details"}</summary><p>{native?.reason || native?.error || turn?.error || state?.reason}</p></details> : null}
+    {error || state && !state.available ? <button type="button" disabled={sending} onClick={() => setReadRevision(value => value + 1)}>{zh ? "刷新状态" : "Refresh status"}</button> : null}
+    <details><summary>{zh ? "执行范围" : "Execution scope"}</summary><p>{zh
+      ? "沿用当前会话的沙箱和原任务的独立验收声明，不升级写入权限。普通只读会话可核验已授权来源；缺少验收时不会启动模型或记为完成。本入口不启用周期调度。"
+      : "Keep this conversation's sandbox and the task's declared validation without adding write permission. Ordinary read-only conversations can verify authorized sources. Missing validation starts no model and cannot count as completion. This control does not enable scheduling."}</p></details>
   </details>;
 }

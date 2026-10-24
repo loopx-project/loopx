@@ -46,6 +46,7 @@ import { useTypedActionReadback, useTypedActionProposalReadback } from "../../da
 
 import { ChannelHeader } from "./channel-header";
 import { GoalLoopXMode } from "./goal-loopx-mode";
+import { ManagedSessionTurnControl } from "./steward-managed-mode";
 import { GoalTeamResults } from "./goal-team-results";
 import { GoalManagedResults } from "./goal-managed-results";
 import { GoalResearchResults, type GoalResearchApi } from "./goal-research-results";
@@ -948,7 +949,7 @@ export function PersonalWorkspacePage({
   /** The bound managed executor offers native exact-turn steering. */
   conversationSupportsSteering?: boolean;
   conversationSessionId?: string;
-  conversationHistoryState?: ConversationHistoryStatus;
+  conversationHistoryState?: ConversationHistoryStatus & {refresh?: () => Promise<unknown>};
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
@@ -2807,6 +2808,9 @@ export function PersonalWorkspacePage({
           {!runtimeSourceUnavailable && selectedGoal && !selectedGoal.loadState && !agentWorkActive && selectedGoalTab === "overview" ? <GoalVitals digest={workspaceDigest} goal={selectedGoal} items={items} userTodos={model.userTodos} onFocusRegion={focusGoalRegion} />
             : !runtimeSourceUnavailable && selectedGoal?.loadState === "loading" && selectedGoalTab === "overview" ? <GoalVitalsSkeleton /> : null}
           {!readOnly ? <UsageStatisticsNotice onDetails={() => openSettings({ kind: "settings", tab: "machine" })} /> : null}
+          {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && conversationSessionId
+            ? <ManagedSessionTurnControl key={conversationSessionId} sessionId={conversationSessionId} zh={locale === "zh-CN"}
+              onReadback={() => {void conversationHistoryState?.refresh?.().catch(() => {}); void callbacks.onBackgroundRefresh?.();}}/> : null}
           </div>
             {selectedGoalId && selectedGoalTab === "chat" && !agentWorkActive && !readOnly && selectedAgentId === "codex" && callbacks.onStartLoopX ? <GoalLoopXMode
               onPrepare={() => callbacks.onPrepareLoopX!(selectedAgentId, selectedGoalId)}

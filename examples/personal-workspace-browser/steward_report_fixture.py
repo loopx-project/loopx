@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import signal
 import sys
@@ -21,6 +22,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--baseline-assets-dir", type=Path)
     parser.add_argument("--invalid-editorial", action="store_true", help="Return a known invalid synthetic report to inspect owner cancellation and retained failure.")
+    parser.add_argument("--managed-session", action="store_true", help="Exercise ordinary Goal Session native work with the existing task validator, instead of a scheduled report.")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(repo), str(repo / "tests")]
@@ -41,13 +43,21 @@ def main() -> None:
         fixture = steward.__wrapped__(root)
         data = next(fixture)
         store, runtime, provider, transport, binding, capture, workspace = data
-        sid, managed = original(data)
-        storage(runtime, "file")
-        plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
-        actor = managed.prepare(binding["binding_id"], session_id=sid, execute=True,
-            expected_plan_id=plan["plan_id"])["actor"]
+        managed_session = None
+        if args.managed_session:
+            import pytest
+            from test_native_steward_turn_host import managed_fixture
+            monkeypatch = pytest.MonkeyPatch()
+            _, managed_session, actor, managed_todo_id, artifact, _ = managed_fixture(data, root, monkeypatch)
+            sid, managed = actor["session_id"], transport.managed_steward
+        else:
+            sid, managed = original(data)
+            storage(runtime, "file")
+            plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
+            actor = managed.prepare(binding["binding_id"], session_id=sid, execute=True,
+                expected_plan_id=plan["plan_id"])["actor"]
+            install_model(data, root, sid)
         transport.reconcile()
-        install_model(data, root, sid)
         if args.invalid_editorial:
             helper = root / "report_model.py"
             helper.write_text(helper.read_text().replace('"request_digest": request["request_digest"]', '"request_digest": "known-invalid"'))
@@ -77,7 +87,10 @@ def main() -> None:
         signal.signal(signal.SIGINT, lambda *_: stop.set())
         threading.Thread(target=server.serve_forever, daemon=True).start()
         (output / "ready.json").write_text(json.dumps({"url": f"http://127.0.0.1:{server.server_port}/chat/",
-            "binding_id": binding["binding_id"], "session_id": sid}))
+            "fixture_pid": os.getpid(),
+            "binding_id": binding["binding_id"], "session_id": sid,
+            **({"managed_session_id": managed_session["session_id"], "goal_id": actor["goal_id"],
+                "managed_todo_id": managed_todo_id} if managed_session else {})}))
         wake, outbound, delivery = None, None, None
         try:
             while not stop.wait(.2):
@@ -97,6 +110,8 @@ def main() -> None:
                     "model_call_count": sum(json.loads(line).get("method") == "turn/start"
                         for line in capture.read_bytes()[len(before_calls):].splitlines()),
                     "provider_writes": len(provider.writes),
+                    **({"managed_source_present": artifact.exists(),
+                        "managed_session": store.load_session(managed_session["session_id"])} if managed_session else {}),
                     "synthetic_only": True}, ensure_ascii=False))
         finally:
             if wake:
@@ -106,6 +121,8 @@ def main() -> None:
                 delivery.join(5)
             server.shutdown()
             server.server_close()
+            if managed_session:
+                monkeypatch.undo()
             try:
                 next(fixture)
             except StopIteration:

@@ -1262,6 +1262,26 @@ export type LoopXModeSnapshot = {
 export function fetchLoopXMode(sessionId: string) {
   return requestJson<LoopXModeSnapshot>(`/api/chat/sessions/${sessionId}/loopx`);
 }
+export type ManagedNativeTurn = {
+  turn_id: string; status: string; error?: string;
+  response?: {message?: string; native_loopx?: {status?: string; result_kind?: string; reason?: string; error?: string}} | null;
+};
+export type ManagedNativeTurnSnapshot = {
+  ok: true; session_id: string; available: boolean; registered_agents: string[];
+  reason?: string; turn: ManagedNativeTurn | null;
+};
+export function fetchManagedNativeTurn(sessionId: string, agentId?: string, operationId?: string) {
+  const query = new URLSearchParams();
+  if (agentId) query.set("agent_id", agentId);
+  if (operationId) query.set("operation_id", operationId);
+  return requestJson<ManagedNativeTurnSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/native-turn?${query}`);
+}
+export function startManagedNativeTurn(sessionId: string, agentId: string, operationId: string) {
+  return requestJson<{ok: true; turn: ManagedNativeTurn; created: boolean}>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/native-turn`, {
+      method: "POST", body: JSON.stringify({agent_id: agentId, operation_id: operationId}),
+    });
+}
 export type DelegationInventory = {
   items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string;
     status: string; worker_active?: boolean; recovery_required: boolean | null;

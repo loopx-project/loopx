@@ -9,6 +9,54 @@ import type { JsonObject } from "../runtime_decode.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import {resolveConversationScope} from "./conversation_scope.ts";
+
+/** Local owner Sessions reuse the same governed Turn host. Registration is a
+ * selection, not a grant: the native Turn owner still admits the actual work.
+ * A bound steward keeps its stricter provider/source admission below.
+ */
+export function admitManagedSessionTurn(params: JsonObject): JsonObject {
+  const session = requireJsonObject(params.session, "managed Session");
+  const goal = requireJsonObject(params.goal, "original Goal");
+  const request = requireJsonObject(params.request, "native Turn request");
+  const actor = requireJsonObject(request.actor, "managed Session actor");
+  const turn = params.turn == null ? null : requireJsonObject(params.turn, "current Chat Turn");
+  if (resolveConversationScope(session).kind !== "owner_goal"
+      || session.project_context != null || session.steward_context != null
+      || session.session_mode !== "managed_runtime" || session.agent_id !== "codex"
+      || session.adapter_kind !== "codex_app_server" || session.upstream_mode === "goal"
+      || session.status === "closed" || params.goal_active !== true
+      || goal.goal_id !== session.goal_id || goal.goal_instance_id !== (session.goal_instance_id ?? null)
+      || !Array.isArray(goal.registered_agents) || !goal.registered_agents.includes(actor.agent_id)
+      || typeof goal.workspace_path !== "string" || !goal.workspace_path) {
+    throw new EffectRuntimeRequestError("select an active local Goal's managed Codex conversation and a registered Agent");
+  }
+  const fields = ["schema_version", "goal_id", "goal_instance_id", "agent_id", "session_id", "workspace_path"];
+  if (Object.keys(actor).some(key => !fields.includes(key))
+      || actor.schema_version !== "loopx_managed_session_actor_v0"
+      || actor.goal_id !== goal.goal_id || actor.goal_instance_id !== goal.goal_instance_id
+      || actor.workspace_path !== goal.workspace_path
+      || actor.session_id !== session.session_id
+      || typeof actor.agent_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(actor.agent_id)
+      || typeof actor.session_id !== "string" || !/^[a-f0-9]{32}$/.test(actor.session_id)) {
+    throw new EffectRuntimeRequestError("the native Turn must retain its original managed Session and Goal lifetime");
+  }
+  const requestFields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind"];
+  if (Object.keys(request).some(key => !requestFields.includes(key))
+      || request.operation !== "native_turn" || request.host !== "codex-app-server" || request.work_kind !== "native_turn"
+      || request.validation_command !== null
+      || typeof request.turn_instance_id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(request.turn_instance_id)
+      || request.todo_id !== null && (typeof request.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(request.todo_id))) {
+    throw new EffectRuntimeRequestError("managed work uses the native task's existing validation, without caller commands");
+  }
+  if (turn ? turn.session_id !== session.session_id || turn.turn_id !== session.active_turn_id
+      || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
+      || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request)
+    : session.active_turn_id || params.queued_turn_count !== 0) {
+    throw new EffectRuntimeRequestError("the original conversation is busy or no longer owns this Turn; retain its current work");
+  }
+  return {actor, workspace_path: goal.workspace_path, host: "codex-app-server", observation_only: false};
+}
 
 export const STEWARD_MANAGED_ACTOR_SCHEMA = "loopx_steward_managed_actor_v0";
 const AGENT_ID = "steward";
