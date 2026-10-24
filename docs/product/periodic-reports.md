@@ -316,6 +316,22 @@ outcome, real model start, changed identity or revoked permission cannot trigger
 another automatic model attempt. Existing no-model settlement recovery and
 independent full-body delivery readback still apply.
 
+Frozen generation is checked independently inside the original host using the
+same installed report provider. An embedded Python host's bootstrap does not
+imply that its bare child interpreter can import LoopX; no second installation
+or ambient import path is required. Ordinary CLI command validators are unchanged.
+
+If the original model has returned and the frozen generation validates, the
+original pump can resume a failed native **validation** phase without invoking
+the model again. The typed owner requires the same live subscription, actor,
+window and open generation Todo, the canonical cached host/result phases, and
+an explicit no-host recovery decision. The native driver revalidates the frozen
+artifacts and current authorization, reacquires the original task lease and
+performs ordinary completion and settlement. A paused subscription, changed
+identity or grant, invalid generation or unknown model effect stays blocked.
+The historical Chat response is retained; only the native committed receipt
+allows the existing original-audience sender to proceed.
+
 Once generation is frozen, delivery checks the original source Goal identities
 against the current authorized scope. Adding an authorized Goal does not revoke
 the frozen report or rewrite its source/body; later windows include the new

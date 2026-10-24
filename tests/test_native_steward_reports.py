@@ -87,6 +87,104 @@ def install_model(steward, tmp_path, sid, *, result_kind="validated_completion")
     runtime.adapters.pop(sid).close_session()  # Resume the same native thread with the synthetic response.
 
 
+def embedded_report_python(tmp_path, monkeypatch):
+    """A real child interpreter without the embedding host's LoopX bootstrap."""
+    import subprocess
+    import sys
+    import os
+    from types import SimpleNamespace
+    from loopx.capabilities.native_chat import steward_reports
+    folder = tmp_path / "embedded-python"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(folder)], check=True)
+    python = folder / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    missing = subprocess.run([str(python), "-I", "-c", "import loopx"],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert missing.returncode != 0 and "ModuleNotFoundError" in missing.stderr
+    monkeypatch.setattr(steward_reports, "sys", SimpleNamespace(executable=str(python)))
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_embedded_host_validates_report_without_a_second_python_installation(steward, tmp_path, monkeypatch, provider):
+    _, runtime, _, transport, binding, _, _ = steward
+    sid, _, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    install_model(steward, tmp_path, sid)
+    embedded_report_python(tmp_path, monkeypatch)
+    result = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert result["response"]["native_loopx"].get("status") == "committed", result
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(binding["binding_id"])["publication_verified"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("stop", [None, "pause", "tamper"])
+def test_original_frozen_report_recovers_validation_without_repeating_model_or_business(steward, tmp_path, monkeypatch, provider, stop):
+    from loopx.cli_commands import turn as turn_command
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity, turn_journal_path
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    install_model(steward, tmp_path, sid)
+    embedded_report_python(tmp_path, monkeypatch)
+    command = turn_command.handle_turn_command
+
+    def legacy_validator(*args, **kwargs):
+        # Seed the exact historical command failure, not a fabricated journal.
+        kwargs.pop("native_task_validator", None)
+        return command(*args, **kwargs)
+
+    with monkeypatch.context() as historical:
+        historical.setattr(turn_command, "handle_turn_command", legacy_validator)
+        original = pump_steward_monitors(runtime)[0]
+        failed = finish(runtime, original)
+    native = failed["response"]["native_loopx"]
+    assert native["result_kind"] == "validation_failed" and native["receipt"]["next_phase"] == "validation"
+    todo = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == original["loopx_request"]["todo_id"])
+    assert todo["status"] == "open"
+    key = find_loopx_turn_key_by_settlement_identity(reports.root, goal_id=actor["goal_id"],
+        agent_id=actor["agent_id"], todo_id=todo["todo_id"], turn_instance_id=original["loopx_request"]["turn_instance_id"])
+    path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key)
+    journal = json.loads(path.read_text())
+    assert journal["completed_phases"] == ["host_execute", "typed_result"]
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    generation = validate_private_generation(folder)
+    body, history, calls, writes = (folder / "report.md").read_bytes(), store.load_turn(sid, original["turn_id"]), capture.read_bytes(), list(bot.writes)
+    assert transport.steward_reports.reconcile() == 0
+    if stop == "pause":
+        preview = reports.configure(binding["binding_id"], operation="pause")
+        reports.configure(binding["binding_id"], operation="pause", execute=True, expected_plan_id=preview["plan"]["plan_id"])
+    elif stop == "tamper":
+        (folder / "report.md").write_bytes(body + b"altered")
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert capture.read_bytes() == calls and bot.writes == writes
+    if stop:
+        assert transport.steward_reports.reconcile() == 0
+        assert json.loads(path.read_text()) == journal
+        assert not (folder / "private-delivery.json").exists()
+        return
+    recovered = json.loads(path.read_text())
+    assert recovered["status"] == "committed", recovered
+    assert recovered["turn_key"] == key and recovered["host_attempt_count"] == journal["host_attempt_count"]
+    assert store.load_turn(sid, original["turn_id"]) == history
+    task = next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == todo["todo_id"])
+    assert task["status"] == "done" and task["completion_turn_key"] == original["loopx_request"]["turn_instance_id"]
+    events = [row["payload"] for row in store.events_after(sid, original["turn_id"], None)
+        if row["kind"] == "native_loopx.result" and row["payload"].get("status") == "committed"]
+    assert len(events) == 1 and events[0]["recovery"]["actual"]["host_invoked"] is False
+    assert transport.steward_reports.reconcile() == 1
+    assert (folder / "report.md").read_bytes() == body
+    delivery = json.loads((folder / "private-delivery.json").read_text())
+    proof = delivery["deliveries"]["periodic_report." + window["window_id"]]
+    assert proof["verified"] and proof["text"] == body.decode().strip()
+    cursor = read_periodic_report_publication_cursor(runtime_root=reports.root, goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+    assert cursor["generation_id"] == generation["generation_id"] and cursor["covered_until"] == window["due_at"]
+    sent = list(bot.writes)
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime) and transport.steward_reports.reconcile() == 0
+    assert capture.read_bytes() == calls and bot.writes == sent
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("result_kind", ["validated_progress", "validated_completion"])
 def test_original_due_report_freezes_once_and_returns_full_body_after_native_settlement(steward, tmp_path, monkeypatch, provider, result_kind):

@@ -126,12 +126,17 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
     let settlementOnly = false;
     if (recovery) {
       const decision = requireJsonObject(recovery.recovery_decision, "native journal recovery decision");
+      const cachedGeneration = todo.status === "open" && recovery.journal_status === "failed"
+        && decision.action === "continue" && decision.resume_from === "validation"
+        && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
+        && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result";
+      const completedGeneration = todo.status === "done" && todo.completion_turn_key === request.turn_instance_id
+        && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
+          || decision.action === "return_existing" && recovery.journal_status === "committed");
       settlementOnly = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
         && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
         && recovery.journal_consistent === true && decision.reinvoke_host === false
-        && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
-          || decision.action === "return_existing" && recovery.journal_status === "committed")
-        && todo.status === "done" && todo.completion_turn_key === request.turn_instance_id;
+        && (cachedGeneration || completedGeneration);
       if (!settlementOnly || params.preparing_model_context === true) {
         throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
       }

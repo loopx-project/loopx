@@ -7,7 +7,7 @@ writeback, quota and scheduler handoff. Chat retains its own execution fence.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -125,6 +125,74 @@ class StewardTurnHost:
             "host_attempt_count": (journal or {}).get("host_attempt_count"),
             "generation_present": window is None or (attempt_directory(root, window) / "private-generation.json").exists()}
 
+    def _report_validator(self, request: Mapping[str, Any]):
+        """Validate with the owning installed package, outside model execution.
+
+        An embedded host may import LoopX through its bootstrap rather than the
+        Python interpreter's site-packages. Its bare child interpreter is not
+        an independent installation of the same package.
+        """
+        def validate(_plan: Mapping[str, Any], _result: Mapping[str, Any]) -> dict[str, Any]:
+            from ..periodic_report.private_generation import attempt_directory, validate_private_generation
+            from .steward_reports import StewardReports
+            reports = StewardReports(self.controller)
+            binding_id = request["actor"]["goal_id"].removeprefix("steward-agent-")
+            try:
+                subscription, window = reports.current_window(binding_id)
+                if (not subscription or not window or window["window_id"] != request["report_window_id"]
+                        or window["subscription_revision"] != request["report_subscription_revision"]):
+                    raise ValueError("the original report window changed")
+                validate_private_generation(attempt_directory(reports.root, window))
+                if not reports.delivery_current(binding_id, window):
+                    raise ValueError("the original report authorization changed")
+            except (OSError, ValueError, RuntimeError):
+                return {"status": "failed", "validator_kind": "callback",
+                    "summary": "independent original report validation failed", "recovery_kind": "repair_required"}
+            return {"status": "passed", "validator_kind": "callback",
+                "summary": "independent original report validation passed"}
+        return validate
+
+    def _report_lease_proof(self, request: Mapping[str, Any], lease: Mapping[str, Any] | None) -> dict[str, Any]:
+        from .steward_commands import native_command
+        observed = native_command(self.controller, ["task-lease", "inspect", "--goal-id", request["actor"]["goal_id"],
+            "--todo-id", request["todo_id"]]).get("lease")
+        if (not lease or not observed or observed.get("status") != "active"
+                or any(observed.get(key) != lease.get(key) for key in
+                    ("owner", "idempotency_key", "lease_epoch", "version"))):
+            raise ValueError("the original report execution lease changed")
+        return {"task_lease_idempotency_key": observed["idempotency_key"],
+            "task_lease_expected_version": observed["version"]}
+
+    @contextmanager
+    def _report_execution_lease(self, request: Mapping[str, Any], turn_id: str, *, recovery: bool = False):
+        """Both generation and cached validation use the original Todo owner."""
+        from .steward_commands import native_command
+        actor = request["actor"]
+        retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
+            "--todo-id", request["todo_id"]]).get("lease")
+        version = retained["version"] if retained else 0
+        suffix = ".validation-recovery." + str(version) if recovery else ".admission-retry" if request.get("resume_turn_key") else ""
+        lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
+            "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
+            "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
+            "--expected-version", str(version)])["lease"]
+        try:
+            yield lease
+        finally:
+            # Completion retires this lease. Never release a later owner's.
+            try:
+                retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
+                    "--todo-id", request["todo_id"]]).get("lease")
+                if retained and retained.get("status") == "active":
+                    proof = self._report_lease_proof(request, lease)
+                    native_command(self.controller, ["task-lease", "release", "--goal-id", actor["goal_id"],
+                        "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
+                        "--idempotency-key", proof["task_lease_idempotency_key"],
+                        "--expected-version", str(proof["task_lease_expected_version"])])
+            except (OSError, ValueError, RuntimeError):
+                self.store.append_event(actor["session_id"], turn_id, kind="native_loopx.report_lease_release_unconfirmed",
+                    payload={"todo_id": request["todo_id"], "lease_epoch": lease["lease_epoch"]})
+
     def recover_report_settlement(self, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]) -> None:
         """Resume only cached, validated native effects of the original report.
 
@@ -169,11 +237,15 @@ class StewardTurnHost:
                 "--host", "generic-cli", "--resume-turn-key", key, "--retry-failed-turn", "--execute"])
             args.host, args.session_scope = "codex-app-server", "agent"
             result: dict[str, Any] = {}
-            handle_turn_command(args, registry_path=self.controller.registry_path,
-                runtime_root_arg=str(reports.root), output_format=lambda *_a, **_kw: "json",
-                print_payload=lambda value, *_a: result.update(value), native_host_runner=no_model,
-                native_session_binding_resolver=lambda _envelope: {"schema_version": "loopx_turn_session_binding_v0",
-                    "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]})
+            with (self._report_execution_lease(request, original["turn_id"], recovery=True)
+                    if todo["status"] == "open" else nullcontext(None)) as lease:
+                handle_turn_command(args, registry_path=self.controller.registry_path,
+                    runtime_root_arg=str(reports.root), output_format=lambda *_a, **_kw: "json",
+                    print_payload=lambda value, *_a: result.update(value), native_host_runner=no_model,
+                    native_session_binding_resolver=lambda _envelope: {"schema_version": "loopx_turn_session_binding_v0",
+                        "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]},
+                    native_task_validator=self._report_validator(request),
+                    **({"native_completion_lease_resolver": lambda: self._report_lease_proof(request, lease)} if lease else {}))
             # Retain the historical outer failure. The actual native owner
             # supplies the new event; no status or publication proof is forged.
             self.store.append_event(actor["session_id"], original["turn_id"], kind="native_loopx.result", payload=result)
@@ -286,15 +358,7 @@ class StewardTurnHost:
         report_context = ""
 
         def report_lease_proof():
-            from .steward_commands import native_command
-            observed = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"]]).get("lease")
-            if (not report_lease or not observed or observed.get("status") != "active"
-                    or any(observed.get(key) != report_lease.get(key) for key in
-                        ("owner", "idempotency_key", "lease_epoch", "version"))):
-                raise ValueError("the original report execution lease changed")
-            return {"task_lease_idempotency_key": observed["idempotency_key"],
-                "task_lease_expected_version": observed["version"]}
+            return self._report_lease_proof(request, report_lease)
 
         def current():
             fresh = self.store.load_turn(session_id, turn_id)
@@ -370,16 +434,7 @@ class StewardTurnHost:
         # The kernel records the actual app-server host and independent profile.
         args.host, args.session_scope = "codex-app-server", "agent"
         result: dict[str, Any] = {}
-        if report_work:
-            from .steward_commands import native_command
-            retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"]]).get("lease")
-            report_lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                "--idempotency-key", request["turn_instance_id"] + (".admission-retry" if request.get("resume_turn_key") else ""),
-                "--ttl-seconds", "3600",
-                "--expected-version", str(retained["version"] if retained else 0)])["lease"]
-        try:
+        with (self._report_execution_lease(request, turn_id) if report_work else nullcontext(None)) as report_lease:
             if report_work:
                 from .steward_reports import StewardReports
                 # Portfolio collection can take minutes and legitimately see
@@ -395,24 +450,8 @@ class StewardTurnHost:
                 output_format=lambda *_a, **_kw: "json",
                 print_payload=lambda value, *_a: result.update(value),
                 native_host_runner=run, native_session_binding_resolver=session_binding,
-                **({"native_completion_lease_resolver": report_lease_proof} if report_work else {}))
-        finally:
-            if report_lease:
-                # Completion atomically retires this lease. On a non-completion
-                # release only our unchanged claim, never a later owner's lease.
-                try:
-                    retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                        "--todo-id", request["todo_id"]]).get("lease")
-                    if retained and retained.get("status") == "active":
-                        proof = report_lease_proof()
-                        native_command(self.controller, ["task-lease", "release", "--goal-id", actor["goal_id"],
-                            "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                            "--idempotency-key", proof["task_lease_idempotency_key"],
-                            "--expected-version", str(proof["task_lease_expected_version"])])
-                except (OSError, ValueError, RuntimeError):
-                    self.store.append_event(session_id, turn_id,
-                        kind="native_loopx.report_lease_release_unconfirmed",
-                        payload={"todo_id": request["todo_id"], "lease_epoch": report_lease["lease_epoch"]})
+                **({"native_completion_lease_resolver": report_lease_proof,
+                    "native_task_validator": self._report_validator(request)} if report_work else {}))
         self.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=result)
         if request.get("work_kind") == "report" and result.get("status") == "committed":
             from ..periodic_report.private_generation import attempt_directory, validate_private_generation
