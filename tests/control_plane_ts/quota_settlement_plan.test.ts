@@ -4,6 +4,8 @@ import {settlementPlanPayload} from "../../loopx/control_plane/effect_program.ts
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {projectMcpInteraction} from "../../loopx/control_plane/turn_driver/host_interaction.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
+import {DELIVERY_OUTCOMES, decodeOptionalDeliveryOutcome, isTurnScopedSettlementOutcome}
+  from "../../loopx/control_plane/work_items/delivery_outcome.ts";
 
 const input = {
   identity: {goal_id: "goal", agent_id: "agent", todo_id: "todo", turn_instance_id: "turn"},
@@ -13,6 +15,30 @@ const input = {
     quota_spend: "spend", terminal_closeout: "terminal completion",
   },
 };
+
+for (const lane of ["ordinary", "in_flight", "autonomous_replan"]) {
+  test(`${lane} settlement offers only outcomes that its writer can qualify`, () => {
+    const identity = lane === "autonomous_replan"
+      ? {goal_id: "goal", agent_id: "agent", replan_obligation_id: "replan", turn_instance_id: "turn"}
+      : input.identity;
+    const plan = turnScopedCliSettlementPlan({...input, identity,
+      ...(lane === "in_flight" ? {delivery_boundary: "in_flight_continuation"} : {}),
+    });
+    const guidance = plan.steps[1].precondition;
+    const offered = guidance.match(/; outcome=([a-z_|]+)\./)?.[1].split("|");
+    const binding = lane === "autonomous_replan" ? "replan" : "todo";
+    const blocked = {schema_version: "typed_progress_observation_v0", result_class: "blocked",
+      work_item_id: binding, blocker_id: "blocker", evidence_ids: ["evidence:failure"]};
+    // The writer's qualification rule, rather than the projection's source list,
+    // is the independent oracle for this Turn's advertised choices.
+    assert.deepEqual(offered, DELIVERY_OUTCOMES.filter(outcome =>
+      isTurnScopedSettlementOutcome(outcome, blocked, binding)));
+    assert.equal(isTurnScopedSettlementOutcome("outcome_gap", undefined, binding), false);
+    assert.equal(decodeOptionalDeliveryOutcome("surface_only"), "surface_only");
+    assert.equal(isTurnScopedSettlementOutcome("surface_only", blocked, binding), false);
+    assert.match(guidance, /do not relabel preparation-only work as progress/i);
+  });
+}
 
 test("ordinary completion is conditional on deliverable acceptance, not Turn accounting", () => {
   const plan = turnScopedCliSettlementPlan(input);

@@ -2440,12 +2440,20 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
     assert Path(refreshed["json_path"]).read_bytes() == writeback_bytes
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.work_items.delivery_outcome import (
+        qualifies_turn_scoped_settlement,
+    )
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     first_turn_id = "turn-settlement-continuation-1"
-    _initialize_fixture_authority(project, runtime)
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     guard_rc, guard = _run_cli(
         registry_path,
         runtime,
@@ -2469,6 +2477,29 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     writeback_step = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
     assert "vision_authoring" not in writeback_step
     assert "outcome_gap requires semantic_closeout" in writeback_step["precondition"]
+    offered = writeback_step["precondition"].split("; outcome=", 1)[1].split(".", 1)[0].split("|")
+    blocked = {
+        "schema_version": "typed_progress_observation_v0", "result_class": "blocked",
+        "work_item_id": TODO_ID, "blocker_id": "blocker_fixture", "evidence_ids": ["evidence:fixture"],
+    }
+    assert offered and all(qualifies_turn_scoped_settlement(
+        outcome, blocked, work_item_id=TODO_ID,
+    ) for outcome in offered)
+
+    # A caller must not escape an honest preparation result by renaming it.
+    # Refusing it leaves this original Turn available for actual progress.
+    refused_rc, refused = _run_cli(
+        registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--classification", "preparation_only", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "surface_only", "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", first_turn_id,
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert refused_rc == 1 and refused["appended"] is False, refused
+    assert "surface_only cannot settle a Turn" in refused["error"]
+    assert _classification_count(runtime, "preparation_only") == 0
+    assert _spend_run_count(runtime) == 0
+    assert "outcome_progress" in offered
 
     refresh_rc, refresh = _run_cli(
         registry_path,
