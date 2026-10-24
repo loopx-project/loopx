@@ -502,7 +502,8 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
 
 
 @pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1"])
-def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding):
+@pytest.mark.parametrize("context", [False, True])
+def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding, context):
     scope, _, _, input_path, sources, _ = pack
     data = json.loads(input_path.read_text())
     history = {"ok": True, "goal_id": "solver", "total": 2, "next_cursor": None, "items": [
@@ -519,6 +520,9 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
     data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="source-a")
     if encoding is not None:
         data["display_snapshot"]["translation_encoding"] = encoding
+    context_citation = dict(source_id="source", first_line=2, last_line=2)
+    if context:
+        data["display_snapshot"]["contexts"] = [dict(event_id="question-old", field="summary", citations=[context_citation])]
     input_path.write_text(json.dumps(data))
     registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Whole history · synthetic")
     current = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
@@ -545,6 +549,14 @@ print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_to
     assert execute_pack(**operation, codex=str(provider))["status"] == "succeeded"
     result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
     assert result["result"]["display"]["coverage"] == dict(eligible=4, translated=3, missing=1, invalid=0)
+    if context:
+        field = next(field for field in result["result"]["display"]["fields"] if field["field"] == "summary")
+        assert field["context_citations"] == [context_citation]
+        assert read_citation(**operation, **context_citation)["text"] == data["sources"][0]["text"]
+        with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+            read_citation(**operation, source_id="history", first_line=1, last_line=1)
+    else:
+        assert not any("context_citations" in field for field in result["result"]["display"]["fields"])
     if encoding == "source_text_aliases_with_literal_values_v1":
         assert any(field["text"] == "第4次尝试有2项检查未通过（Trial4failed2checks）。"
                    for field in result["result"]["display"]["fields"])

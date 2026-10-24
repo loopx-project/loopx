@@ -316,6 +316,22 @@ outcome, real model start, changed identity or revoked permission cannot trigger
 another automatic model attempt. Existing no-model settlement recovery and
 independent full-body delivery readback still apply.
 
+Frozen generation is checked independently inside the original host using the
+same installed report provider. An embedded Python host's bootstrap does not
+imply that its bare child interpreter can import LoopX; no second installation
+or ambient import path is required. Ordinary CLI command validators are unchanged.
+
+If the original model has returned and the frozen generation validates, the
+original pump can resume a failed native **validation** phase without invoking
+the model again. The typed owner requires the same live subscription, actor,
+window and open generation Todo, the canonical cached host/result phases, and
+an explicit no-host recovery decision. The native driver revalidates the frozen
+artifacts and current authorization, reacquires the original task lease and
+performs ordinary completion and settlement. A paused subscription, changed
+identity or grant, invalid generation or unknown model effect stays blocked.
+The historical Chat response is retained; only the native committed receipt
+allows the existing original-audience sender to proceed.
+
 Once generation is frozen, delivery checks the original source Goal identities
 against the current authorized scope. Adding an authorized Goal does not revoke
 the frozen report or rewrite its source/body; later windows include the new
@@ -323,6 +339,20 @@ Goal. Removing a frozen Goal, replacing its identity, revoking the original
 grant or changing frozen artifacts still blocks delivery, including after a
 partial or uncertain send. Existing provider readback decides which original
 parts remain unsent; scope growth never authorizes another model run or resend.
+
+Read coverage and authorization are separate. A partial source may omit an
+unreadable or oversized Goal without revoking the original report grant. New
+private editorial requests freeze the complete authorized Goal identities
+alongside their existing authorization digest. Delivery checks this immutable
+witness, including unread Goals; it never upgrades partial coverage to complete.
+Later authorized additions belong to a future report, while removal or identity
+replacement of an original authorized Goal still blocks publication.
+
+Older frozen requests remain immutable. When their readable Goal list does not
+reconstruct the original authorization digest, recovery requires the complete
+current authorized scope to match that original digest exactly. An absent
+identity witness never permits guessing which Goals were originally authorized;
+an ambiguous later scope change remains retained, without another model run.
 
 The existing idle Chat wake producer admits one calendar window and creates
 one native finite generation Todo for it. The original Chat worker and native

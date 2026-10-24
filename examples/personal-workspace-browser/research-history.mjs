@@ -927,7 +927,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /原生测量.*未采集/);
       await history.getByRole("button", {name: "查看分析", exact: true}).click();
       await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis C$/}).waitFor();
-      await analysis.press('Escape');
+      await analysis.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await analysis.waitFor({state: 'hidden'});
       await progress.getByRole('combobox').selectOption('d'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
       await progress.locator('.research-progress-basis > summary').click();

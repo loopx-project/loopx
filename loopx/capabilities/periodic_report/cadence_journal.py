@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .field_shapes import REPORT_IDENTITY_PATTERN
 from ...file_lock import LockAcquisitionPolicy, exclusive_file_lock
 from ...registry import atomic_write_json
 from .cadence import report_cadence_next_due_at, report_cadence_window
@@ -20,7 +21,6 @@ from ...control_plane.digest_envelope import sha256_envelope
 
 CADENCE_WINDOW_SCHEMA = "periodic_report_cadence_window_v0"
 JOURNAL_SCHEMA = "periodic_report_cadence_journal_v0"
-_ID = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
 
 
 def _digest(value: object) -> str:
@@ -30,7 +30,7 @@ def _digest(value: object) -> str:
 
 
 def cadence_journal_path(root: Path, goal_id: str) -> Path:
-    if not _ID.fullmatch(goal_id):
+    if not REPORT_IDENTITY_PATTERN.fullmatch(goal_id):
         raise ValueError("cadence Goal identity is invalid")
     return root / "goals" / goal_id / "periodic_reports" / "cadence.json"
 
@@ -44,7 +44,7 @@ def validate_cadence_window(raw: object) -> dict[str, Any]:
         raise ValueError("cadence window contract is invalid")
     value = dict(raw)
     if value["schema_version"] != CADENCE_WINDOW_SCHEMA or any(
-        not isinstance(value[key], str) or not _ID.fullmatch(value[key])
+        not isinstance(value[key], str) or not REPORT_IDENTITY_PATTERN.fullmatch(value[key])
         for key in ("goal_id", "agent_id")
     ):
         raise ValueError("cadence window identity is invalid")
@@ -150,7 +150,7 @@ def admit_cadence_window(
     A configuration change may supersede an unprepared interval under the same
     lock used by consumption, preserving its predecessor as immutable history.
     """
-    if not _ID.fullmatch(agent_id):
+    if not REPORT_IDENTITY_PATTERN.fullmatch(agent_id):
         raise ValueError("cadence Agent identity is invalid")
     path = cadence_journal_path(runtime_root, goal_id)
     if subscription_resolver is None and (

@@ -78,6 +78,20 @@ test("a model report requires the exact live calendar window and original task, 
       journal_consistent: true, journal_status: "failed", recovery_decision:
       {action: "continue", reinvoke_host: false, resume_from: "quota_spend"}}};
   assert.equal(admitStewardManagedTurn(recovery).observation_only, false);
+  const validation = {...input, report_settlement_recovery: {...recovery.report_settlement_recovery,
+    completed_phases: ["host_execute", "typed_result"], recovery_decision:
+    {action: "continue", reinvoke_host: false, resume_from: "validation"}}};
+  assert.equal(admitStewardManagedTurn(validation).observation_only, false);
+  for (const invalid of [
+    {...validation, preparing_model_context: true},
+    {...validation, report_todo: {...todo, todo_id: "another-task"}},
+    {...validation, report_subscription: {...subscription, enabled: false}},
+    {...validation, report_settlement_recovery: {...validation.report_settlement_recovery, journal_status: "in_progress"}},
+    ...[[], ["host_execute"], ["typed_result", "host_execute"]].map(completed_phases =>
+      ({...validation, report_settlement_recovery: {...validation.report_settlement_recovery, completed_phases}})),
+    {...validation, report_settlement_recovery: {...validation.report_settlement_recovery, recovery_decision:
+      {action: "continue", reinvoke_host: true, resume_from: "validation"}}},
+  ]) assert.throws(() => admitStewardManagedTurn(invalid));
   for (const invalid of [
     {...recovery, report_settlement_recovery: {...recovery.report_settlement_recovery, journal_consistent: false}},
     {...recovery, report_todo: {...recovery.report_todo, completion_turn_key: "another-original-turn"}},
