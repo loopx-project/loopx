@@ -482,7 +482,7 @@ deadline and open/blocked lifecycle are authoritative. For example, after
 selecting an authorized existing Goal, Agent and bound Session:
 
 ```sh
-loopx todo add --goal-id PROJECT --role agent --agent-id WRITER \
+loopx todo add --goal-id PROJECT --role agent \
   --claimed-by WRITER --text 'Observe this Goal native work' \
   --task-class continuous_monitor --action-kind local_runtime_observe \
   --target-key managed-session-watch.ORIGINAL_SESSION_ID --watch-only \
