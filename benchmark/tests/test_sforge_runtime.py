@@ -1199,7 +1199,7 @@ def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, mon
 
 
 @pytest.mark.parametrize('custom', [False, True])
-def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatch, custom):
+def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, monkeypatch, custom):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from types import SimpleNamespace
@@ -1208,6 +1208,11 @@ def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatc
     monkeypatch.setenv('LOOPX_EXPECTED_COMMIT', 'fixture')
     monkeypatch.setenv('CODEX_AUTH_JSON_PATH', '/synthetic-login')
     monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-provider-secret')
+    attestation_key = tmp_path / 'runtime-attestation.key'
+    attestation_key.write_text('synthetic-attestation-key')
+    monkeypatch.setenv('SFORGE_RUNTIME_ATTESTATION_KEY_FILE', str(attestation_key))
+    monkeypatch.setenv('SFORGE_RUNNER_SOURCE_REVISION', 'a' * 40)
+    monkeypatch.setenv('SFORGE_WORK_CPU_LIMIT', '9')
     if custom:
         monkeypatch.setenv('OPENAI_BASE_URL', 'http://127.0.0.1:9876/v1')
     else:
@@ -1227,6 +1232,9 @@ def test_edgebench_cli_forwards_only_explicit_provider_pair(tmp_path, monkeypatc
         config = kwargs['config']
         assert config.agent_api_base_url == ('http://127.0.0.1:9876/v1' if custom else None)
         assert config.agent_api_key == ('synthetic-provider-secret' if custom else None)
+        assert config.runtime_attestation_key_file == attestation_key
+        assert config.runner_source_revision == 'a' * 40
+        assert config.work_cpu_limit == 4
         raise RuntimeError('synthetic launch boundary')
     monkeypatch.setattr(run, 'run_agent', stop_before_solver)
     with pytest.raises(RuntimeError, match='synthetic launch boundary'):

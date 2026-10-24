@@ -24,7 +24,7 @@ if __name__ == "__main__":
     bootstrap()  # Select SForge before any provider or adapter imports.
 
 from sforge.harness.benchmark import load_benchmark
-from sforge.harness.config import SForgeConfig
+from sforge.harness.config import load_config
 from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
@@ -284,16 +284,16 @@ def main(argv=None):
             # task remains the separately owned Goal objective.
             feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
         task_objective = task.work.agent_query
-    config = SForgeConfig(
-        agent_api_base_url=api_base_url, agent_api_key=api_key,
-        agent_model=args.model, agent_effort=args.effort,
-        agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
-        work_cpu_limit=4, work_mem_limit="16g",
+    config = load_config({
+        "agent_api_base_url": api_base_url, "agent_api_key": api_key,
+        "agent_model": args.model, "agent_effort": args.effort,
+        "agent_timeout": args.timeout, "log_dir": args.log_dir, "tasks_dir": args.tasks_dir,
+        "work_cpu_limit": 4, "work_mem_limit": "16g",
         # A restored judge already owns its captured resource profile. Cold
         # defaults must not replace or conflict with that live registration.
-        judge_cpu_limit=None if args.restore_checkpoint else 4,
-        judge_mem_limit=None if args.restore_checkpoint else "8g",
-    )
+        "judge_cpu_limit": None if args.restore_checkpoint else 4,
+        "judge_mem_limit": None if args.restore_checkpoint else "8g",
+    })
     if args.api_proxy_url:
         config.agent_extra_env = {
             "HTTPS_PROXY": args.api_proxy_url, "HTTP_PROXY": args.api_proxy_url,
