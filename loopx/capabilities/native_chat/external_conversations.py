@@ -21,6 +21,7 @@ from ...control_plane.quota.automation_cadence_readback import (
     unavailable_automation_cadence_readback,
 )
 from ...file_lock import exclusive_file_lock
+from .codex_context import checked_session_home
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -133,7 +134,7 @@ class ChatExternalConversations:
                 session = self.controller.store.load_session(row["session_id"])
                 turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
                 assert session is not None and turn is not None
-                model_auth_home = self.controller._check_codex_home(session)
+                model_auth_home = checked_session_home(self.controller.codex_home, session)
                 context = self.controller.project_contexts.session_context(session)
                 proof = None if plan.get("admitted_turn_id") else CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),

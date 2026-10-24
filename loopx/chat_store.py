@@ -776,7 +776,13 @@ class ChatSessionStore(ChatIngressStore):
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for path in self.sessions_root.glob("*/session.json"):
-            payload = _read_json(path)
+            try:
+                payload = _read_json(path)
+            except UnicodeDecodeError:
+                # Discovery can skip damaged metadata, just as malformed JSON.
+                # Direct Session/Turn reads stay strict: unreadable queued work
+                # must never become false evidence that a conversation is idle.
+                continue
             if payload.get("schema_version") != CHAT_SESSION_SCHEMA_VERSION:
                 continue
             if goal_id and payload.get("goal_id") != goal_id:

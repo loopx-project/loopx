@@ -256,10 +256,18 @@ class ManagedSessionTurn:
         actor = request["actor"]
         session = self.store.load_session(actor["session_id"])
         goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
+        monitor = None
+        if request.get("work_kind") == "monitor":
+            from ...control_plane.todos.list_readback import list_goal_todos
+            readback = list_goal_todos(registry_path=self.controller.registry_path,
+                runtime_root_arg=str(self.controller.coordination_runtime_root),
+                goal_id=actor["goal_id"], todo_id=request.get("todo_id"), role="agent")
+            monitor = readback.get("todo")
         return ChatConversationBindings._core("collaboration.session.managed_turn.admit", {
             "session": session, "request": request, "turn": turn,
             "goal": StewardManagedMode(self.controller, None)._goal(actor["goal_id"]),
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
+            "monitor_todo": monitor,
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
@@ -284,14 +292,26 @@ class ManagedSessionTurn:
         return result
 
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,
-               todo_id: str | None = None) -> tuple[dict[str, Any], bool]:
+               todo_id: str | None = None, monitor_deadline: str | None = None) -> tuple[dict[str, Any], bool]:
         from ...attached_session import managed_session_goal_commit
         controller = self.controller
         with controller._session_adapter_lock(session_id):
             request = self._request(session_id, agent_id, operation_id, todo_id)
+            if monitor_deadline is not None:
+                if not todo_id:
+                    raise ValueError("a native watch requires its original Todo")
+                from .steward_commands import native_command
+                retained = native_command(controller, ["task-lease", "inspect", "--goal-id", request["actor"]["goal_id"],
+                    "--todo-id", todo_id]).get("lease")
+                request.update(work_kind="monitor", monitor_deadline=monitor_deadline,
+                    monitor_lease_version=retained["version"] if retained else 0)
             existing = self.store.turn_for_client(session_id, "managed." + operation_id)
             if existing is not None:
-                if existing.get("loopx_request") != request:
+                frozen = dict(existing.get("loopx_request") or {})
+                if monitor_deadline is not None:
+                    # The original attempt owns its captured lease generation.
+                    request["monitor_lease_version"] = frozen.get("monitor_lease_version")
+                if frozen != request:
                     raise ValueError("managed Turn request identity conflict; inspect the original operation")
                 return existing, False  # Failed/unknown work is never replayed.
             commit = managed_session_goal_commit(store=self.store,
@@ -299,14 +319,19 @@ class ManagedSessionTurn:
             with commit():
                 admitted = self.admit(request)
                 accepted = self.store.accept_managed_turn(session_id, client_turn_id="managed." + operation_id,
-                    message="Advance the currently admitted native LoopX work.", display_message="推进一次 LoopX 任务。",
+                    message="Advance the currently admitted native LoopX work.",
+                    display_message="检查当前 Goal 原生任务状态。" if monitor_deadline is not None else "推进一次 LoopX 任务。",
                     origin="native_loopx", loopx_execution=True, loopx_request=request)
             try:
                 session = self.store.load_session(session_id)
-                adapter = controller._ensure_adapter_locked(session, work_dir=Path(admitted["workspace_path"]),
-                    objective="Advance this Goal's authorized work.", accepted_turn_id=accepted.turn["turn_id"])
-                if Path(adapter.session.work_dir).resolve() != Path(admitted["workspace_path"]).resolve():
-                    raise ValueError("the original managed conversation workspace changed")
+                if admitted["observation_only"]:
+                    from .steward_monitor import StewardObservationAdapter
+                    adapter = StewardObservationAdapter(session.get("upstream_thread_id"))
+                else:
+                    adapter = controller._ensure_adapter_locked(session, work_dir=Path(admitted["workspace_path"]),
+                        objective="Advance this Goal's authorized work.", accepted_turn_id=accepted.turn["turn_id"])
+                    if Path(adapter.session.work_dir).resolve() != Path(admitted["workspace_path"]).resolve():
+                        raise ValueError("the original managed conversation workspace changed")
                 controller._start_accepted_turn_worker(session_id=session_id, turn_id=accepted.turn["turn_id"],
                     message=accepted.turn["message"], attachments=[], adapter=adapter, loopx_execution=True)
             except Exception as exc:

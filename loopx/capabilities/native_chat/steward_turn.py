@@ -352,7 +352,9 @@ class StewardTurnHost:
         if admitted["observation_only"]:
             from .steward_monitor import StewardMonitor
             monitor = StewardMonitor(self.controller)
-            return monitor.observe(host=self, request=request, turn=turn, context=context, todo=monitor.current(actor))
+            todo = (next((row for row in monitor.todos(actor) if row["todo_id"] == request["todo_id"]), None)
+                if managed_turn else monitor.current(actor))
+            return monitor.observe(host=self, request=request, turn=turn, context=context, todo=todo)
         if not isinstance(adapter, CodexAppServerAdapter):
             raise ValueError("native steward work requires the original Codex app-server adapter")
         original_thread = adapter.upstream_thread_id

@@ -1,5 +1,5 @@
 """Actual native Todo/deadline/Chat worker/poll path; no model is needed to observe."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import time
 
 import pytest
@@ -11,6 +11,259 @@ from loopx.capabilities.native_chat.steward_monitor import StewardMonitor, pump_
 from loopx.chat_loopx_mode import DelegationWakeService
 
 steward = steward_fixture
+
+
+def local_watch(steward, tmp_path, monkeypatch, provider="sqlite"):
+    from test_native_steward_turn_host import managed_fixture, cli
+    service, session, actor, _, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    runtime = steward[1]
+    added = cli(runtime, "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+        "--text", "Observe this Goal's native work without running a business task.",
+        "--claimed-by", actor["agent_id"], "--task-class", "continuous_monitor",
+        "--action-kind", "local_runtime_observe", "--continuation-policy", "same_agent_non_delivery",
+        "--required-capability", "filesystem", "--target-key", "managed-session-watch." + session["session_id"],
+        "--watch-only", "--cadence", "30m", "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat(), "--execute")
+    return service, session, actor, added["todo_id"], capture
+
+
+def local_watch_row(runtime, actor, todo_id):
+    from loopx.control_plane.todos.list_readback import list_goal_todos
+    return list_goal_todos(registry_path=runtime.registry_path,
+        runtime_root_arg=str(runtime.coordination_runtime_root), goal_id=actor["goal_id"],
+        todo_id=todo_id, role="agent")["todo"]
+
+
+def edit_local_watch(runtime, actor, todo_id, *changes):
+    from loopx.capabilities.native_chat.steward_commands import native_command
+    monitor = StewardMonitor(runtime)
+    todo = local_watch_row(runtime, actor, todo_id)
+    key = "edit-watch." + str(time.time_ns())
+    if "--status" in changes:
+        native_command(runtime, ["todo", "update", "--goal-id", actor["goal_id"], "--todo-id", todo_id,
+            "--role", "agent", "--agent-id", actor["agent_id"], "--update-operation-id", key,
+            "--reason", "Owner changed the native watch lifecycle.", *changes, "--execute"])
+        runtime._steward_monitor_next_check = {}
+        return
+    lease = monitor._acquire(actor, todo, key)["lease"]
+    try:
+        native_command(runtime, ["todo", "update", "--goal-id", actor["goal_id"],
+            "--todo-id", todo_id, "--agent-id", actor["agent_id"],
+            "--task-lease-idempotency-key", key, "--task-lease-expected-version", str(lease["version"]),
+            *changes, "--execute"])
+    finally:
+        monitor._release(actor, todo, lease)
+    runtime._steward_monitor_next_check = {}  # a lost hint is never the deadline authority
+
+
+def test_registration_and_a_managed_session_do_not_implicitly_enable_a_watch(steward, tmp_path, monkeypatch):
+    from test_native_steward_turn_host import managed_fixture
+    _, session, actor, _, _, capture = managed_fixture(steward, tmp_path, monkeypatch)
+    store, runtime, *_ = steward
+    runtime.project_contexts.conversation_bindings = None
+    before, history = capture.read_bytes(), store.messages(session["session_id"])
+    todos = StewardMonitor(runtime).todos(actor)
+    assert not pump_steward_monitors(runtime)
+    assert capture.read_bytes() == before and store.messages(session["session_id"]) == history
+    assert StewardMonitor(runtime).todos(actor) == todos
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_local_managed_watch_uses_existing_idle_worker_without_private_binding(steward, tmp_path, monkeypatch, provider):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.chat_runtime import ChatRuntimeController
+
+    service, session, actor, todo_id, capture = local_watch(steward, tmp_path, monkeypatch, provider)
+    store, runtime, _, transport, *_ = steward
+    # No private source/provider is needed for this local Goal execution path.
+    runtime.project_contexts.conversation_bindings = None
+    before, history = capture.read_bytes(), store.messages(session["session_id"])
+    quota = spent_slots(StewardMonitor(runtime), actor)
+    turns, original_worker = [], runtime._start_accepted_turn_worker
+    def record(**kw):
+        turns.append(kw)
+        return original_worker(**kw)
+    monkeypatch.setattr(runtime, "_start_accepted_turn_worker", record)
+    wake = DelegationWakeService(runtime, interval=.02).start()
+    try:
+        deadline = time.monotonic() + 15
+        while not turns:
+            assert time.monotonic() < deadline, "the existing production pump did not continue the local native watch"
+            time.sleep(.02)
+        result = finish(runtime, turns[0])
+    finally:
+        wake.close()
+    assert result["status"] == "completed", result
+    native = result["response"]["native_loopx"]
+    assert native["status"] == "observed" and not native["model_invoked"] and not native["quota_spent"]
+    assert native["monitor"]["observed_task_count"] >= 1  # unrelated P1 validation work remains runnable
+    after = local_watch_row(runtime, actor, todo_id)
+    assert after["result_hash"] == native["monitor"]["result_hash"]
+    assert datetime.fromisoformat(after["next_due_at"].replace("Z", "+00:00")) > datetime.now(timezone.utc)
+    assert store.messages(session["session_id"])[:len(history)] == history
+    assert capture.read_bytes() == before and spent_slots(StewardMonitor(runtime), actor) == quota
+    assert len(turns) == 1 and not pump_steward_monitors(runtime)
+    # Exact accepted operation readback remains non-executing, even though its
+    # completed poll has advanced both the deadline and native lease generation.
+    request = result["loopx_request"]
+    old = store.load_turn(session["session_id"], result["turn_id"])
+    same, created = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        todo_id=todo_id, operation_id=request["turn_instance_id"].removeprefix("managed-session."),
+        monitor_deadline=request["monitor_deadline"])
+    assert not created and same == old and capture.read_bytes() == before
+    # Actual controller restart observes the existing future native deadline.
+    runtime.close()
+    restarted = ChatRuntimeController(store=ChatSessionStore(store.root.parent),
+        codex_bin=runtime.codex_bin, registry_path=runtime.registry_path, project_contexts=runtime.project_contexts)
+    try:
+        assert not pump_steward_monitors(restarted)
+        # Distinct native poll effects require strictly increasing observation
+        # time. Advance to the next real scheduler tick before authoring this
+        # synthetic second window; do not retry a rejected/unknown operation.
+        from loopx.control_plane.runtime.time import now_utc
+        checked = datetime.fromisoformat(after["last_checked_at"].replace("Z", "+00:00"))
+        limit = time.monotonic() + 2
+        while now_utc() <= checked:
+            assert time.monotonic() < limit
+            time.sleep(.02)
+        edit_local_watch(restarted, actor, todo_id, "--next-due-at",
+            now_utc().isoformat())
+        second = pump_steward_monitors(restarted)
+        current_watch = local_watch_row(restarted, actor, todo_id)
+        from loopx.control_plane.scheduler.monitor_todo import monitor_todo_is_due
+        current_session = restarted.store.load_session(session["session_id"])
+        assert len(second) == 1, {"session_status": current_session["status"], "active": current_session["active_turn_id"],
+            "due": monitor_todo_is_due(current_watch), "watch": {k: current_watch.get(k) for k in
+                ["status", "next_due_at", "resume_when", "resume_ready", "watch_only", "claimed_by"]}}
+        complete = finish(restarted, second[0])
+        assert complete["status"] == "completed", complete
+        assert not complete["response"]["native_loopx"]["monitor"]["material_change"]
+        assert local_watch_row(restarted, actor, todo_id)["result_hash"] == after["result_hash"]
+        assert capture.read_bytes() == before
+        edit_local_watch(restarted, actor, todo_id, "--status", "blocked", "--clear-resume-when")
+        assert not pump_steward_monitors(restarted)
+    finally:
+        restarted.close()
+
+
+def test_a_failed_accepted_local_watch_is_read_back_without_replaying_after_restart(steward, tmp_path, monkeypatch):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.chat_runtime import ChatRuntimeController
+    _, session, actor, todo_id, capture = local_watch(steward, tmp_path, monkeypatch)
+    store, runtime, *_ = steward
+    runtime.project_contexts.conversation_bindings = None
+    before, watch = capture.read_bytes(), local_watch_row(runtime, actor, todo_id)
+    def unavailable(*_args):
+        raise OSError("Synthetic source became unavailable before native commit")
+    with monkeypatch.context() as mutation:
+        mutation.setattr(StewardMonitor, "_commit_poll", unavailable)
+        turns = pump_steward_monitors(runtime)
+        assert len(turns) == 1
+        failed = finish(runtime, turns[0])
+        assert failed["status"] == "failed"
+    history = store.messages(session["session_id"])
+    runtime.close()
+    restarted = ChatRuntimeController(store=ChatSessionStore(store.root.parent),
+        codex_bin=runtime.codex_bin, registry_path=runtime.registry_path, project_contexts=runtime.project_contexts)
+    try:
+        assert not pump_steward_monitors(restarted)
+        assert restarted.store.load_turn(session["session_id"], failed["turn_id"]) == failed
+        assert restarted.store.messages(session["session_id"]) == history and capture.read_bytes() == before
+        assert local_watch_row(restarted, actor, todo_id) == watch
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize("fault", ["session", "queued_turn"])
+def test_unreadable_local_conversation_does_not_starve_an_independent_watch(steward, tmp_path, monkeypatch, fault):
+    _, session, actor, todo_id, capture = local_watch(steward, tmp_path, monkeypatch)
+    store, runtime, *_ = steward
+    runtime.project_contexts.conversation_bindings = None
+    original = store.load_session(session["session_id"])
+    other = store.create_session(goal_id=actor["goal_id"], goal_instance_id=actor["goal_instance_id"],
+        managed_agent_id=actor["agent_id"], managed_workspace_path=original["managed_workspace_path"],
+        agent_id="codex", adapter_kind="codex_app_server", upstream_thread_id="independent-original",
+        channel_id=original["channel_id"])
+    if fault == "queued_turn":
+        queued, _ = store.create_queued_turn(other["session_id"], client_turn_id="user-first",
+            message="Retain this original request.", origin="web")
+        path = store._turn_path(other["session_id"], queued["turn_id"])
+    else:
+        path = store._session_path(other["session_id"])
+    saved, before = path.read_bytes(), capture.read_bytes()
+    path.write_bytes(b"\xff")
+    try:
+        turns = pump_steward_monitors(runtime)
+        assert len(turns) == 1 and turns[0]["session_id"] == session["session_id"]
+        assert finish(runtime, turns[0])["status"] == "completed"
+        assert path.read_bytes() == b"\xff" and capture.read_bytes() == before
+        assert local_watch_row(runtime, actor, todo_id).get("last_checked_at")
+    finally:
+        path.write_bytes(saved)
+
+
+@pytest.mark.parametrize("fault", ["not_due", "paused", "busy", "queued", "revoked", "stopped", "lifetime", "wrong_session", "not_watch"])
+def test_local_native_watch_denials_keep_original_deadline_and_invoke_no_model(steward, tmp_path, monkeypatch, fault):
+    import json
+    from datetime import timedelta
+    service, session, actor, todo_id, capture = local_watch(steward, tmp_path, monkeypatch)
+    store, runtime, *_ = steward
+    if fault in {"not_due", "paused", "wrong_session", "not_watch"}:
+        changes = {"not_due": ["--next-due-at", (datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()],
+            "paused": ["--status", "blocked", "--clear-resume-when"],
+            "wrong_session": ["--target-key", "managed-session-watch." + "0"*32],
+            "not_watch": ["--action-kind", "different_source"]}[fault]
+        edit_local_watch(runtime, actor, todo_id, *changes)
+    elif fault in {"revoked", "stopped", "lifetime"}:
+        data = json.loads(runtime.registry_path.read_text())
+        goal = next(g for g in data["goals"] if g["id"] == actor["goal_id"])
+        if fault == "revoked": goal["coordination"]["registered_agents"] = ["peer"]
+        elif fault == "stopped": goal["status"] = "stopped"
+        else: goal["goal_instance_id"] = "replacement"
+        runtime.registry_path.write_text(json.dumps(data))
+    elif fault == "busy":
+        store.update_session(session["session_id"], active_turn_id="original-busy")
+    else:
+        store.create_queued_turn(session["session_id"], client_turn_id="user-first", message="Keep this first", origin="web")
+    before, watch = capture.read_bytes(), local_watch_row(runtime, actor, todo_id)
+    history = store.messages(session["session_id"])
+    assert not pump_steward_monitors(runtime)
+    assert capture.read_bytes() == before and local_watch_row(runtime, actor, todo_id) == watch
+    assert store.messages(session["session_id"]) == history
+
+
+@pytest.mark.parametrize("fault", ["pause", "revoke", "stop"])
+def test_local_watch_rechecks_native_authority_after_collection_before_poll(steward, tmp_path, monkeypatch, fault):
+    import json
+    from loopx.capabilities.native_chat.steward_commands import native_command
+    _, session, actor, todo_id, capture = local_watch(steward, tmp_path, monkeypatch)
+    store, runtime, *_ = steward
+    before, watch = capture.read_bytes(), local_watch_row(runtime, actor, todo_id)
+    original_commit = StewardMonitor._commit_poll
+    def changed(monitor, host, request, turn, context, argv):
+        if fault == "pause":
+            native_command(runtime, ["todo", "update", "--goal-id", actor["goal_id"],
+                "--todo-id", todo_id, "--agent-id", actor["agent_id"], "--update-operation-id", "pause-original-watch",
+                "--role", "agent", "--reason", "Owner paused the original native watch.",
+                "--status", "blocked", "--clear-resume-when", "--execute"])
+        else:
+            data = json.loads(runtime.registry_path.read_text())
+            goal = next(g for g in data["goals"] if g["id"] == actor["goal_id"])
+            if fault == "revoke": goal["coordination"]["registered_agents"] = ["peer"]
+            else: goal["status"] = "stopped"
+            runtime.registry_path.write_text(json.dumps(data))
+        return original_commit(monitor, host, request, turn, context, argv)
+    monkeypatch.setattr(StewardMonitor, "_commit_poll", changed)
+    turns = pump_steward_monitors(runtime)
+    assert len(turns) == 1
+    result = finish(runtime, turns[0])
+    assert result["status"] == "failed", result
+    after = local_watch_row(runtime, actor, todo_id)
+    for key in ["result_hash", "last_checked_at", "next_due_at", "material_change_generation"]:
+        assert after.get(key) == watch.get(key)
+    assert not [event for event in store.events_after(session["session_id"], result["turn_id"], None)
+        if event["kind"] == "native_loopx.monitor_poll"]
+    assert capture.read_bytes() == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

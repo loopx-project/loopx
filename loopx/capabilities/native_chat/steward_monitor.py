@@ -91,6 +91,13 @@ class StewardMonitor:
         # Configuration and revocation use this original binding fence too.
         # Keep the final scoped admission and native write in one ordering;
         # data collected under an earlier scope cannot become a new result.
+        if request["actor"].get("schema_version") == "loopx_managed_session_actor_v0":
+            from ...attached_session import managed_session_goal_commit
+            commit = managed_session_goal_commit(store=self.controller.store,
+                registry_path=self.controller.registry_path, session_id=turn["session_id"])
+            with self.controller.lock, commit():
+                host._admit(request, turn=self.controller.store.load_turn(turn["session_id"], turn["turn_id"]))
+                return self._native_poll(argv)
         with self.controller.lock, exclusive_file_lock(self.bindings.path, operation="commit_steward_monitor"):
             admitted = host._admit(request, turn=self.controller.store.load_turn(turn["session_id"], turn["turn_id"]))
             if not context.get("authorization_scope_id") or admitted["observed_scope_id"] != context["authorization_scope_id"]:
@@ -224,9 +231,15 @@ class StewardMonitor:
             "--available-capability", "filesystem", "--available-capability", "external_evidence_poll",
             "--runtime-profile", "codex_app_server"]
         host._admit(request, turn=turn)
-        observation = self.bindings._core("collaboration.steward.monitor.observation", {
-            "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
-            "actor_goal_id": actor["goal_id"], "previous_hash": todo.get("result_hash")})
+        if actor.get("schema_version") == "loopx_managed_session_actor_v0":
+            from .conversation_bindings import ChatConversationBindings
+            observation = ChatConversationBindings._core("collaboration.session.monitor.observation", {
+                "goal": self.managed._goal(actor["goal_id"]), "actor": actor,
+                "todos": self.todos(actor), "previous_hash": todo.get("result_hash")})
+        else:
+            observation = self.bindings._core("collaboration.steward.monitor.observation", {
+                "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
+                "actor_goal_id": actor["goal_id"], "previous_hash": todo.get("result_hash")})
         # The native poll owner evaluates fresh gate/due/capability facts. This
         # is an observation in the original Chat Turn, not a request to choose
         # the watch as a heartbeat's advancement task.
@@ -236,7 +249,7 @@ class StewardMonitor:
             expected_version=request["monitor_lease_version"])["lease"]
         try:
             result = self._commit_poll(host, request, turn, context, ["quota", "monitor-poll", *route,
-                "--target-key", TARGET, "--result-hash", observation["result_hash"],
+                "--target-key", todo["target_key"], "--result-hash", observation["result_hash"],
                 "--task-lease-idempotency-key", request["turn_instance_id"],
                 "--task-lease-expected-version", str(lease["version"]), "--execute",
                 *(["--material-change"] if observation["material_change"] else [])])
@@ -254,13 +267,13 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
     from .steward_turn import StewardTurnHost
 
     bindings = getattr(getattr(controller, "project_contexts", None), "conversation_bindings", None)
-    if bindings is None or controller.closed.is_set():
+    if controller.closed.is_set():
         return []
     service, changed = StewardMonitor(controller), []
     cache = getattr(controller, "_steward_monitor_next_check", None)
     if cache is None:
         cache = controller._steward_monitor_next_check = {}
-    for binding in bindings.read()["bindings"]:
+    for binding in bindings.read()["bindings"] if bindings is not None else []:
         if cancelled():
             break
         actor = binding.get("managed_actor")
@@ -306,4 +319,50 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
             # One unreadable conversation or unavailable provider must not starve
             # other native monitors; retain its original data and deadline.
             _LOG.warning("A native steward monitor is unavailable; original work retained")
+    return changed + pump_managed_session_monitors(controller, cancelled=cancelled)
+
+
+def pump_managed_session_monitors(controller: Any, *, cancelled=lambda: False) -> list[dict[str, Any]]:
+    """Continue explicitly authored native watches through the same idle pump.
+
+    The existing Todo target pins its original Session. Registration or merely
+    opening a managed Session never enables a watch. No external binding or
+    provider is needed, and no model or task is created by a due observation.
+    """
+    from .steward_managed_mode import ManagedSessionTurn
+
+    changed, monitor = [], StewardMonitor(controller)
+    cache = controller._steward_monitor_next_check
+    for session in controller.store.list_sessions():
+        if cancelled():
+            break
+        try:
+            if (not session.get("managed_agent_id") or session.get("active_turn_id")
+                    or session.get("status") == "closed" or controller.store.queued_turns(session["session_id"])):
+                continue
+            key = "session." + session["session_id"]
+            if cache.get(key, 0) > time.monotonic():
+                continue
+            cache[key] = time.monotonic() + 60
+            service = ManagedSessionTurn(controller)
+            request = service._request(session["session_id"], session["managed_agent_id"], "preview")
+            service.admit(request)
+            rows = [row for row in monitor.todos(request["actor"])
+                if row.get("target_key") == "managed-session-watch." + session["session_id"]]
+            if len(rows) != 1:
+                if rows:
+                    raise ValueError("the original managed Session watch is ambiguous")
+                continue
+            todo = rows[0]
+            if not monitor_todo_is_due(todo):
+                if todo.get("status") == "open" and todo.get("next_due_at"):
+                    due = datetime.fromisoformat(todo["next_due_at"].replace("Z", "+00:00"))
+                    cache[key] = time.monotonic() + min(60, max(0, (due - datetime.now(timezone.utc)).total_seconds()))
+                continue
+            accepted, created = service.submit(session["session_id"], agent_id=session["managed_agent_id"],
+                operation_id=monitor_turn_id(todo), todo_id=todo["todo_id"], monitor_deadline=todo["next_due_at"])
+            if created:
+                changed.append(accepted)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            _LOG.warning("A managed Session watch is unavailable; its original task and deadline are retained")
     return changed
