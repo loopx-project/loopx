@@ -45,6 +45,7 @@ class WarmStart:
     normal_cadence: int = 6
     research_component_ids: tuple[str, ...] = ()
     fresh_replan: bool = False
+    destination_config: Path | None = None
 
     def verify(self, workspace: str) -> dict:
         from loopx.hosts.checkpoint_retention import checkpoint_bank_use
@@ -60,8 +61,10 @@ class WarmStart:
                 or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", v)
                        for v in (self.goal_id, self.agent_id, self.source_todo_id))):
             raise ValueError("Warm start needs fresh explicit identities and its original open deadline")
-        if any(not path.is_absolute() or path.resolve(strict=True) != path
-               for path in (self.root, self.config)):
+        paths = (self.root, self.config)
+        if self.destination_config is not None:
+            paths += (self.destination_config,)
+        if any(not path.is_absolute() or path.resolve(strict=True) != path for path in paths):
             raise ValueError("Warm start requires physical absolute participant paths")
         # Hashing a complete checkpoint can exceed the ordinary RPC budget.
         # This read allowance never extends the original execution deadline.
@@ -74,9 +77,10 @@ class WarmStart:
         metadata = json.loads((self.root / "checkpoint.json").read_bytes())["point_metadata"]
         native, source = metadata["native_session"], metadata["loopx_state"]
         if (native["guest_workspace"] != workspace or native["guest_home"] != _CODEX_HOME
-                or source["goal_id"] == self.goal_id or source["agent_id"] == self.agent_id
-                or hashlib.sha256(self.config.read_bytes()).hexdigest() != native["config_sha256"]):
+                or source["goal_id"] == self.goal_id or source["agent_id"] == self.agent_id):
             raise ValueError("Warm start paths, configuration or destination lineage differ")
+        from loopx.hosts.codex_checkpoint import checkpoint_destination_config
+        checkpoint_destination_config(self.config, native["config_sha256"], self.destination_config)
         _workspace_component(self.root, metadata, Path(workspace))
         _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
         context = metadata["research_context"]
@@ -110,6 +114,12 @@ class WarmStart:
                        goal_id=self.goal_id, agent_id=self.agent_id,
                        source_todo_id=self.source_todo_id, deadline_epoch=self.deadline_epoch,
                        normal_cadence=self.normal_cadence)
+        protected_files = [config, f"{_CONTROL}/warm-start.json"]
+        if self.destination_config is not None:
+            target = f"{_CONTROL}/restored-model-config.toml"
+            await environment.upload_file(self.destination_config, target)
+            payload["destination_config"] = target
+            protected_files.append(target)
         if self.research_component_ids:
             payload["research_component_ids"] = list(self.research_component_ids)
         if self.fresh_replan:
@@ -118,12 +128,12 @@ class WarmStart:
             path = Path(folder) / "input.json"
             path.write_text(json.dumps(payload))
             await environment.upload_file(path, f"{_CONTROL}/warm-start.json")
+        protected = shlex.join(protected_files)
         result = await environment.exec(
             # Modes are part of the sealed digest. Change transport ownership,
             # never widen modes (native stores commonly contain 0600 members).
             f"chown -R -P agent:agent {shlex.quote(unit)} && "
-            f"chown agent:agent {config} {_CONTROL}/warm-start.json && "
-            f"chmod 0400 {config} {_CONTROL}/warm-start.json", user="root")
+            f"chown agent:agent {protected} && chmod 0400 {protected}", user="root")
         if result.return_code:
             raise RuntimeError("Could not stage the verified checkpoint participants")
         # The root-only materializer preserves sealed modes. Its receiver must
@@ -290,7 +300,9 @@ def admit_warm_session(env: dict[str, str], declaration: dict) -> dict:
 
     timeout = _phase_read_timeout(declaration, 90)
     result = admit_native_checkpoint_session(env, Path(declaration["root"]), declaration["sha256"],
-        Path(declaration["config"]), sandbox=env["LOOPX_CODEX_SANDBOX"], timeout=timeout)
+        Path(declaration["config"]), sandbox=env["LOOPX_CODEX_SANDBOX"], timeout=timeout,
+        **({"destination_config": Path(declaration["destination_config"])}
+           if declaration.get("destination_config") is not None else {}))
     _phase_read_timeout(declaration, 90)
     return result
 

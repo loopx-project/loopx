@@ -74,7 +74,7 @@ def point(tmp_path):
     (workspace / "candidate").write_text("retained candidate")
     (workspace / "candidate").chmod(0o600)
     config = tmp_path / "config.toml"
-    config.write_text("[features]\ngoals = false\n")
+    config.write_text('model="original"\nmodel_reasoning_effort="high"\n[features]\ngoals = false\n')
     context = tmp_path / "context.json"
     context.write_text(json.dumps({"snapshot": {"todos": [{"todo_id": "source-todo"}]}}))
     components = [{"id": "workspace", "source_path": str(workspace)},
@@ -174,8 +174,14 @@ def test_restore_replaces_image_files_preserves_modes_and_refuses_second_attempt
     assert workspace.with_name("workspace.before-checkpoint").is_dir()
 
 
-def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path):
+@pytest.mark.parametrize("model_transition", [False, True])
+def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path, model_transition):
     start, workspace = point
+    if model_transition:
+        destination = tmp_path / "destination.toml"
+        destination.write_text(start.config.read_text().replace('"original"', '"next"')
+                               .replace('"high"', '"max"'))
+        start = replace(start, destination_config=destination)
     control = tmp_path / "control"
     control.mkdir()
     monkeypatch.setattr(warm, "_CONTROL", str(control))
@@ -194,6 +200,12 @@ def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path):
         "expected_sha256": start.sha256})
     declaration = json.loads((control / "warm-start.json").read_bytes())
     assert declaration["deadline_epoch"] == start.deadline_epoch
+    if model_transition:
+        assert (control / "restored-model-config.toml").read_bytes() == destination.read_bytes()
+        assert declaration["destination_config"] == str(control / "restored-model-config.toml")
+        assert (control / "restored-config.toml").read_bytes() == start.config.read_bytes()
+    else:
+        assert "destination_config" not in declaration
 
 
 def test_normal_cadence_requires_accepted_current_replan_and_is_applied_once(tmp_path, monkeypatch):

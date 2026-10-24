@@ -291,7 +291,8 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Requires an explicit real native Host binary; only a local static provider is used")
 @pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change", "joint", "binding_reply_loss",
-                                 "fork_reply_loss", "fork_missing", "fork_ambiguous", "warm_preparation"])
+                                 "fork_reply_loss", "fork_missing", "fork_ambiguous", "warm_preparation",
+                                 "model_transition"])
 def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case, request):
     """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
 
@@ -417,7 +418,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     binary = os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"]
     # The warm receiver uses the benchmark's execution profile inside its
     # isolated worker. Other cases retain their original sandbox contract.
-    sandbox = ("danger-full-access" if case == "warm_preparation" else
+    sandbox = ("danger-full-access" if case in {"warm_preparation", "model_transition"} else
                "workspace-write" if case == "joint" else "read-only")
     execution = Execution(context="resume", sandbox=sandbox)
     with real_native_source(tmp_path / "native", binary, workspace, close_source=True,
@@ -516,6 +517,14 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         env.update(LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                    LOOPX_GOAL_ID=destination_goal, LOOPX_AGENT_ID=destination_agent,
                    MODEL_NAME="fixture", REASONING_EFFORT="high")
+        admission_options, model_config_args = {}, []
+        if case == "model_transition":
+            target_config = tmp_path / "destination-model.toml"
+            target_config.write_text(config.read_text().replace('model="fixture"', 'model="fixture-next"')
+                                     .replace('model_reasoning_effort="high"', 'model_reasoning_effort="max"'))
+            env.update(MODEL_NAME="fixture-next", REASONING_EFFORT="max")
+            admission_options = {"destination_config": target_config}
+            model_config_args = ["--destination-model-config", str(target_config)]
         lifecycle_registry = tmp_path / "lifecycle-only" / "registry.json"
         assert main(["--format", "json", "--registry", str(lifecycle_registry),
             "--runtime-root", str(tmp_path / "lifecycle-only/runtime"), "project", "register",
@@ -619,7 +628,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
                 "agent_id": destination_agent}, session_scope="agent")["checkpoint_artifact_sha256"] == digest
             assert len(calls) == 1
         admitted_cli = subprocess.run([sys.executable, "-m", "loopx.hosts.codex_checkpoint",
-            "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", execution.sandbox],
+            "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config),
+            "--sandbox", execution.sandbox, *model_config_args],
             env=env, text=True, capture_output=True, timeout=40)
         assert admitted_cli.returncode == 0, admitted_cli.stderr
         admitted = json.loads(admitted_cli.stdout)
@@ -636,7 +646,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             def forbidden_fork(*args, **kwargs):
                 raise AssertionError("a repeated admission must not create a second native fork")
             replay.setattr("loopx.hosts.codex_checkpoint.fork_native_checkpoint", forbidden_fork)
-            recovered = admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
+            recovered = admit_native_checkpoint_session(env, unit, digest, config,
+                sandbox=(execution).sandbox, timeout=30, **admission_options)
             assert recovered == admitted
             assert bound["checkpoint_artifact_sha256"] == digest
             # Transport reply loss leaves the atomic source-bound binding as the
@@ -644,9 +655,9 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             retry_cli = subprocess.run(admitted_cli.args, env=env, text=True, capture_output=True, timeout=40)
             assert retry_cli.returncode == 0, retry_cli.stderr
             assert json.loads(retry_cli.stdout) == admitted
-            with pytest.raises(ValueError, match="profile changed"):
+            with pytest.raises(ValueError, match="profile changed|destination model differs"):
                 admit_native_checkpoint_session({**env, "REASONING_EFFORT": "low"}, unit, digest,
-                                                config, sandbox=(execution).sandbox, timeout=30)
+                    config, sandbox=(execution).sandbox, timeout=30, **admission_options)
         assert len(calls) == 1 and load_codex_cli_session(runtime, lineage={
             "goal_id": destination_goal, "agent_id": destination_agent}, session_scope="agent") == bound
         if case == "resume":
@@ -788,6 +799,9 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         (logs / "stdout.jsonl").write_text(result.stdout)
         wake.observe(logs / "stdout.jsonl")
         assert wake.session_id == admitted["session_id"] and len(calls) == 3
+        if case == "model_transition":
+            assert requests[1]["model"] == "fixture-next"
+            assert requests[1]["reasoning"]["effort"] == "max"
         retained_message = ("previous Host deadline has passed" if case == "warm_preparation"
                             else "Synthetic source result.")
         assert retained_message in json.dumps(requests[1])
@@ -842,7 +856,8 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
             "agent_id": destination_agent}, session_scope="agent")
         assert after_work["checkpoint_artifact_sha256"] == digest
         with pytest.raises(ValueError, match="advanced or differs"):
-            admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
+            admit_native_checkpoint_session(env, unit, digest, config,
+                sandbox=(execution).sandbox, timeout=30, **admission_options)
         assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
             "agent_id": destination_agent}, session_scope="agent") == after_work
         if case != "warm_preparation":

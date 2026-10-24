@@ -178,8 +178,9 @@ class CodexAgentSession:
         self.session_id = None
         self.receipt["session"].update(action="start_new", session_id=None)
 
-    def _bind_verified_fork(self, session_id: str, source_profile_digest: str,
-                            checkpoint_artifact_sha256: str, checkpoint_artifact_root: str) -> None:
+    def _bind_verified_fork(self, session_id: str, verified_profile_digest: str,
+                            checkpoint_artifact_sha256: str, checkpoint_artifact_root: str,
+                            *, model_transition: dict[str, str] | None = None) -> None:
         """Bind a controller-verified native fork through the existing session owner.
 
         This admits the conversation binding only. It does not claim work,
@@ -188,7 +189,7 @@ class CodexAgentSession:
         """
         if self.session_id is not None:
             raise ValueError("checkpoint session adoption requires an absent destination binding")
-        require_codex_session_profile({"session_profile_digest": source_profile_digest}, self.digest)
+        require_codex_session_profile({"session_profile_digest": verified_profile_digest}, self.digest)
         self.admission.accept_result(
             lambda: _store_codex_cli_session(
                 self.root,
@@ -200,6 +201,7 @@ class CodexAgentSession:
                 require_absent=True,
                 checkpoint_artifact_sha256=checkpoint_artifact_sha256,
                 checkpoint_artifact_root=checkpoint_artifact_root,
+                **({"checkpoint_model_transition": model_transition} if model_transition is not None else {}),
             )
         )
         self.session_id = session_id

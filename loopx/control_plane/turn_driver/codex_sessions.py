@@ -198,6 +198,7 @@ def _store_codex_cli_session(
     require_absent: bool = False,
     checkpoint_artifact_sha256: str | None = None,
     checkpoint_artifact_root: str | None = None,
+    checkpoint_model_transition: Mapping[str, str] | None = None,
 ) -> None:
     if checkpoint_artifact_sha256 is not None and not BARE_SHA256_PATTERN.fullmatch(checkpoint_artifact_sha256):
         raise ValueError("checkpoint session source digest is invalid")
@@ -215,12 +216,14 @@ def _store_codex_cli_session(
         retained_source = None
         retained_root = None
         retained_refresh = None
+        retained_transition = None
         if prior and (prior.get("session_id"), prior.get("goal_ref"), prior.get("session_profile_digest")) == (
             session_id, dict(goal_ref) if goal_ref is not None else None, session_profile_digest
         ):
             retained_source = prior.get("checkpoint_artifact_sha256")
             retained_root = prior.get("checkpoint_artifact_root")
             retained_refresh = prior.get("checkpoint_context_refresh")
+            retained_transition = prior.get("checkpoint_model_transition")
         if retained_source is not None:
             if not isinstance(retained_source, str) or not BARE_SHA256_PATTERN.fullmatch(retained_source):
                 raise ValueError("stored checkpoint session source digest is invalid")
@@ -231,6 +234,9 @@ def _store_codex_cli_session(
                 raise ValueError("stored checkpoint session source root is invalid")
             if retained_root is not None and checkpoint_artifact_root not in (None, retained_root):
                 raise ValueError("checkpoint session source root cannot change")
+            if retained_transition is not None and checkpoint_model_transition not in (None, retained_transition):
+                raise ValueError("checkpoint model transition cannot change")
+        transition = checkpoint_model_transition if checkpoint_model_transition is not None else retained_transition
         _write_codex_cli_session(
             runtime_root,
             lineage=lineage,
@@ -245,6 +251,7 @@ def _store_codex_cli_session(
             checkpoint_artifact_sha256=checkpoint_artifact_sha256 or retained_source,
             checkpoint_artifact_root=checkpoint_artifact_root or retained_root,
             checkpoint_context_refresh=retained_refresh,
+            checkpoint_model_transition=transition,
         )
 
 
@@ -270,7 +277,8 @@ def _replace_checkpoint_codex_session(
             session_profile_digest=current["session_profile_digest"],
             checkpoint_artifact_sha256=current["checkpoint_artifact_sha256"],
             checkpoint_artifact_root=current["checkpoint_artifact_root"],
-            checkpoint_context_refresh={**refresh, "session_id": session_id})
+            checkpoint_context_refresh={**refresh, "session_id": session_id},
+            checkpoint_model_transition=current.get("checkpoint_model_transition"))
 
 
 def _write_codex_cli_session(
@@ -288,8 +296,14 @@ def _write_codex_cli_session(
     checkpoint_artifact_sha256: str | None = None,
     checkpoint_artifact_root: str | None = None,
     checkpoint_context_refresh: dict[str, Any] | None = None,
+    checkpoint_model_transition: Mapping[str, str] | None = None,
 ) -> None:
     schema = _host_session_schema(host)
+    if checkpoint_model_transition is not None:
+        validate_checkpoint_model_transition(checkpoint_model_transition)
+        if (not checkpoint_artifact_sha256 or
+                checkpoint_model_transition["destination_profile_digest"] != session_profile_digest):
+            raise ValueError("checkpoint model transition requires its source-bound destination profile")
     normalized_session_id = _valid_session_id(session_id)
     if not normalized_session_id:
         raise ValueError("Codex CLI returned an invalid session id")
@@ -323,6 +337,8 @@ def _write_codex_cli_session(
                 payload["checkpoint_artifact_root"] = checkpoint_artifact_root
             if checkpoint_context_refresh is not None:
                 payload["checkpoint_context_refresh"] = checkpoint_context_refresh
+            if checkpoint_model_transition is not None:
+                payload["checkpoint_model_transition"] = dict(checkpoint_model_transition)
             if operation_profile_digest is not None:
                 payload["operation_transport"] = (
                     "dsh-native-operation-tools-v0" if host == "dsh"
@@ -410,6 +426,17 @@ def select_codex_cli_session(
     return dict(value)
 
 
+def validate_checkpoint_model_transition(value: Mapping[str, str]) -> None:
+    """Validate the source/destination facts retained by checkpoint admission."""
+    digests = ("source_config_sha256", "destination_config_sha256",
+               "source_profile_digest", "destination_profile_digest")
+    settings = ("source_model", "source_effort", "destination_model", "destination_effort")
+    if (not isinstance(value, Mapping) or set(value) != {*digests, *settings} or
+            any(not isinstance(value[k], str) or not BARE_SHA256_PATTERN.fullmatch(value[k]) for k in digests) or
+            any(not isinstance(value[k], str) or not value[k].strip() for k in settings)):
+        raise ValueError("checkpoint model transition facts are invalid")
+
+
 def codex_session_profile_digest(
     *,
     project: Path,
@@ -419,8 +446,13 @@ def codex_session_profile_digest(
     reasoning_effort: str | None = None,
     sandbox: str | None = None,
     mcp_server: Mapping[str, Any] | None = None,
+    config_bytes: bytes | None = None,
 ) -> str:
-    """Bind a shared conversation to its workspace, provider home and settings."""
+    """Bind a conversation to its workspace, provider home and settings.
+
+    ``config_bytes`` compares inert captured settings at their qualified guest
+    paths. It does not install them or admit a changed active-session profile.
+    """
     config = home / "config.toml"
     profile = {
         "workspace": str(project.resolve()),
@@ -431,6 +463,7 @@ def codex_session_profile_digest(
         "sandbox": sandbox,
         "mcp_server": mcp_server,
         "config_digest": hashlib.sha256(
+            config_bytes if config_bytes is not None else
             config.read_bytes() if config.exists() else b""
         ).hexdigest(),
     }

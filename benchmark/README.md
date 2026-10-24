@@ -1038,6 +1038,31 @@ Fresh credentials come from the ordinary runner credential source. The native
 activation's absolute deadline includes receiver installation and preparation;
 restarting the entry cannot grant another full budget or submission allowance.
 
+To continue with a different model or reasoning effort, retain the exact sealed
+source settings in `--restore-config` and explicitly pass
+`--restore-model-config DESTINATION_CONFIG`. Only the top-level `model` and
+`model_reasoning_effort` may differ; provider, tools, permissions and other
+settings must remain semantically identical. The destination model/effort must
+also match `--model`/`--effort`. The native session participant records both
+configuration digests, verifies the original session profile and full retained
+history, then binds the new profile to a distinct destination session. Retry
+uses that same source/destination intent; it cannot switch an already running
+receiver. Without the option, exact-configuration admission is unchanged.
+The host controller exposes the same explicit transition as
+`--destination-model-config`; this remains a CLI/Host journey, with frontend
+restore support still open. Changing the model changes the experiment treatment:
+do not claim a matched mechanism comparison solely from shared checkpoint data.
+It grants no extra native submissions, cooldown relief, permission or time.
+
+切换模型或思考深度时，`--restore-config` 仍传封存源配置，另显式传入
+`--restore-model-config DESTINATION_CONFIG`。仅顶层 `model` 与
+`model_reasoning_effort` 可变化，其余 provider、工具、权限及配置语义保持一致，
+目标选择还须匹配 `--model`/`--effort`。接收端保留源配置摘要和完整历史校验，
+在全新会话绑定目标配置；恢复重试不得换意图或改写已运行接收端。省略选项仍要求
+配置完全一致，不增加评测机会、豁免冷却、权限或预算。宿主 CLI 对应选项为
+`--destination-model-config`；frontend restore 旅程仍未交付。模型变化是新的实验因素，
+共享 checkpoint 本身不能证明机制收益。
+
 Warm verification hashes the complete checkpoint with a read window of up to
 60 seconds, capped by the original execution deadline. It rejects a read that
 finishes after that deadline. The launcher reuses this verified metadata before

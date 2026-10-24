@@ -135,21 +135,33 @@ def _handoff(env, payload):
 
 
 
-def _context_session(env, metadata, timeout=30):
+def _context_session(env, metadata, timeout=30, *, checkpoint_sha256=None):
     """Read the admitted native branch before publishing captured Todo context."""
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
     from loopx.hosts.codex_checkpoint import native_session_checkpoint
 
     wake = CodexAgentSession(env, context="resume", sandbox=env["LOOPX_CODEX_SANDBOX"], receipt={})
     native = metadata["native_session"]
+    expected_profile = metadata.get("session", {}).get("session_profile_digest")
+    expected_config = native["config_sha256"]
+    transition = (wake.binding or {}).get("checkpoint_model_transition")
+    if transition is not None:
+        from loopx.control_plane.turn_driver.codex_sessions import validate_checkpoint_model_transition
+        validate_checkpoint_model_transition(transition)
+        if (not checkpoint_sha256 or wake.binding.get("checkpoint_artifact_sha256") != checkpoint_sha256 or
+                transition["source_profile_digest"] != expected_profile or
+                transition["source_config_sha256"] != expected_config):
+            raise ValueError("context adoption model transition does not match the captured source")
+        expected_profile = transition["destination_profile_digest"]
+        expected_config = transition["destination_config_sha256"]
     if (not wake.session_id or wake.session_id == native["session_id"] or
-            wake.digest != metadata.get("session", {}).get("session_profile_digest")):
+            wake.digest != expected_profile):
         raise ValueError("context adoption requires the admitted destination session profile")
     observed = native_session_checkpoint(env, wake.session_id, timeout=timeout,
         interrupted_guard=native.get("interrupted_guard"))["metadata"]
     cursor_key = "interrupted_turn_id" if native.get("interrupted_guard") is not None else "completed_turn_id"
     for key in ("visible_history_sha256", "turn_ids", cursor_key, "host_version", "config_sha256"):
-        if observed[key] != native[key]:
+        if observed[key] != (expected_config if key == "config_sha256" else native[key]):
             raise ValueError("destination native history or configuration moved beyond the captured context")
     return wake.session_id
 
@@ -189,7 +201,7 @@ def adopt_todo_context(env: dict[str, str], unit: Path, digest: str, *, source_t
         read_timeout()  # A late successful read cannot authorize the next write.
 
     def read_session():
-        session = _context_session(env, metadata, read_timeout())
+        session = _context_session(env, metadata, read_timeout(), checkpoint_sha256=digest)
         read_timeout()
         return session
 

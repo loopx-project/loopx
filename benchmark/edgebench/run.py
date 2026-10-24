@@ -159,6 +159,8 @@ def main(argv=None):
     retention.add_argument("--no-checkpoint-retention", action="store_true",
                            help="Keep every captured point; disable default checkpoint rotation")
     parser.add_argument("--restore-config", type=Path)
+    parser.add_argument("--restore-model-config", type=Path,
+                        help="Explicit destination config for changing only model/effort in a new checkpoint receiver; --restore-config retains the sealed source config")
     parser.add_argument("--restore-goal")
     parser.add_argument("--restore-agent")
     parser.add_argument("--restore-source-todo")
@@ -228,6 +230,8 @@ def main(argv=None):
         parser.error("Research component restoration requires an explicit warm checkpoint continuation")
     if args.restore_fresh_replan and not args.restore_checkpoint:
         parser.error("Fresh context requires an explicit warm checkpoint continuation")
+    if args.restore_model_config is not None and not args.restore_checkpoint:
+        parser.error("Model transition requires an explicit warm checkpoint continuation")
     if args.restore_checkpoint and (not handoff or args.eval_interval != 0 or args.replan_after_todos is not None):
         parser.error("Warm continuation requires full native checkpoint capture, no periodic evaluation and effective-Turn cadence")
     # One directory is one attempt: never reuse native registration or overwrite
@@ -307,8 +311,16 @@ def main(argv=None):
         candidate = WarmStart(args.restore_checkpoint, args.restore_sha256, args.restore_config,
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
-            tuple(args.restore_research_component), args.restore_fresh_replan)
+            tuple(args.restore_research_component), args.restore_fresh_replan,
+            destination_config=args.restore_model_config)
         metadata = candidate.verify(task.cwd)
+        if args.restore_model_config is not None:
+            from loopx.hosts.codex_checkpoint import checkpoint_destination_config
+            _, transition = checkpoint_destination_config(args.restore_config,
+                metadata["native_session"]["config_sha256"], args.restore_model_config)
+            if (transition["destination_model"] != args.model or
+                    transition["destination_effort"] != args.effort):
+                raise ValueError("Checkpoint destination model must match the explicit runner model/effort")
         snapshot = metadata["worker_file_snapshot"]
         capsule = args.restore_checkpoint / "components" / snapshot["native_capsule_component_id"]
         clock = attempt / "restored-phase-deadline"
