@@ -82,3 +82,58 @@ def test_readonly_participant_capture_and_limited_basis_read(tmp_path):
     with pytest.raises(EffectRuntimeRemoteError):
         effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(unit),
             "expected_sha256": captured["sha256"]})
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("cited", [False, True])
+def test_successor_review_needs_checkpoint_linked_settlement(tmp_path, monkeypatch, provider, cited):
+    """A legal successor can close out without losing the recovery-specific review.
+
+    Exercise real CLI authoring, canonical storage and settlement. The native
+    conversation completion check is a separate Host gate, not established here.
+    """
+    import json
+    import shlex
+
+    from test_replan_successor_guard_reentry import _fixture, _guard, _add, GOAL, AGENT, TURN
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider)
+    original = _guard(call)
+    obligation = original["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"]
+    successor = _add(call, obligation)
+    assert successor["host_action"] == "end_current_heartbeat"
+    # The original guard's closeout route remains authoritative. Neither the
+    # successor's creation receipt nor its open status is a completed review.
+    closeout = _guard(call)
+    actions = closeout["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert closeout["replan_action_packet"]["settlement_only"] is True
+    sha = "a" * 64
+
+    def capture():
+        observed = read_heartbeat_settlement(runtime, goal_id=GOAL, agent_id=AGENT,
+            todo_id=None, turn_instance_id=TURN, resolve_original_binding=True,
+            registry_path=tmp_path / "registry.json")
+        return effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "restore_capture", "checkpoint_sha256": sha,
+            "goal_id": GOAL, "agent_id": AGENT, "current_obligation_id": None,
+            "review": {"identity": observed.identity.value.as_dict(),
+                "progress": observed.progress, "writeback_run": observed.writeback_run,
+                "semantic_replan_guard": observed.semantic_replan_guard}})
+
+    assert capture()["capture_allowed"] is False
+    packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Retained checkpoint evidence supports the next source audit."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The retained source needs review.",
+            "observed_reality": "Reviewed source evidence supports the independently validated successor.",
+            "retained": ["Original acceptance and remaining evaluation opportunity"],
+            "evidence_refs": ["checkpoint:" + sha if cited else "evidence:source-review"]}}
+    vision = tmp_path / "checkpoint-review.json"
+    vision.write_text(json.dumps(packet))
+    call(*shlex.split(actions[0])[1:], "--agent-vision-json", str(vision),
+         "--no-global-sync", "--suppress-external-sinks")
+    assert capture()["capture_allowed"] is False  # Writeback alone is not settled.
+    call(*shlex.split(actions[1])[1:])
+    assert capture()["capture_allowed"] is cited
+    assert call("todo", "list", "--goal-id", GOAL,
+                "--todo-id", successor["todo_id"])["todo"]["status"] == "open"

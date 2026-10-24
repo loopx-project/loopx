@@ -132,6 +132,16 @@ admission and inspect the next accepted replan. A useful readback cites retained
 evidence, explains the next complete experiment and later checks its outcome.
 Restoring files or accepting a structured review alone proves no research gain.
 
+For a restored benchmark conversation, recapture also requires a settled,
+checkpoint-linked current review and a completed destination Codex conversation
+turn. That conversation turn is not a benchmark evaluation. A successor Todo
+can be a valid replan outcome without satisfying this recovery check. When the
+current guard offers original-Turn closeout, include
+`checkpoint:<capture-digest>` in `agent_vision.path_delta.evidence_refs` in that
+writeback and finish its settlement. If the Turn has ended, carry the unresolved
+review to the next admitted replan; do not replay or rebind historical Turns.
+Normal research cadence resumes only after the existing recovery gate passes.
+
 ## Default bank rotation
 
 **Default change:** new controller-enabled benchmark checkpoint banks rotate
