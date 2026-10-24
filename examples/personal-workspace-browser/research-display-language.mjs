@@ -93,6 +93,16 @@ export const researchDisplayLanguageScenario = {
       for (const width of [1440, 390]) {
         const page = await browser.newPage({viewport: {width, height: 1000}, reducedMotion: "reduce"});
         const context = page.context();
+        // Model an appended analysis version becoming visible in the same
+        // real owner's catalog after this page has already read its snapshot.
+        let newVersionVisible = false;
+        await page.route(url => url.pathname === "/api/chat/research-analysis", async route => {
+          if (route.request().method() !== "GET") return route.continue();
+          const response = await route.fetch();
+          const value = await response.json();
+          if (!newVersionVisible) value.catalog.packs = value.catalog.packs.filter(pack => pack.title !== "部分译文");
+          await route.fulfill({response, json: value});
+        });
         const url = `${owner.base}/chat/?goalId=${owner.goal_id}&view=research&statusUrl=%2Fstatus.json`;
         await page.goto(url, {waitUntil: "domcontentloaded"});
         await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
@@ -101,6 +111,19 @@ export const researchDisplayLanguageScenario = {
         const original = history.getByRole("button", {name: "查看原文", exact: true});
         await original.waitFor(); await page.waitForFunction(() => !document.querySelector(".research-display-language > button")?.disabled);
         assert.match(await history.locator(".research-route-caption").first().innerText(), /是否在固定预算/);
+        const scope = history.locator(".research-progress > header select").first();
+        assert.equal(await scope.locator("option").filter({hasText: "部分译文"}).count(), 0);
+        const beforeRefresh = await fetch(`${owner.base}/fixture/readback`).then(response => response.json());
+        const selectedScope = await scope.inputValue(), selectedUrl = page.url();
+        newVersionVisible = true;
+        await history.getByRole("button", {name: "刷新记录", exact: true}).click();
+        await scope.locator("option").filter({hasText: "部分译文"}).waitFor({state: "attached", timeout: 5000});
+        const afterRefresh = await fetch(`${owner.base}/fixture/readback`).then(response => response.json());
+        assert.ok(afterRefresh.history_reads > beforeRefresh.history_reads, "One refresh reloads history as well as the analysis catalog");
+        assert.equal(afterRefresh.mutation_attempts, beforeRefresh.mutation_attempts, "Refreshing never executes analysis");
+        assert.equal(await scope.inputValue(), selectedScope, "Refreshing preserves the selected analysis version");
+        assert.equal(page.url(), selectedUrl);
+        assert.equal(await history.getByRole("region", {name: "轨迹深度分析", exact: true}).count(), 0, "Refreshing does not open analysis");
         await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
         await page.screenshot({path: resolve(outputDir, `research-display-language-first-${width}.png`), animations: "disabled"});
         const metric = history.locator('[data-metric="goal_alignment"]');
@@ -113,8 +136,10 @@ export const researchDisplayLanguageScenario = {
           ['证据不足', '证据不足', '证据不足', '未建立', '有依据', '有依据', '有依据', '有依据']);
         const firstJudgment = judgments.locator('.research-assessment').first();
         await firstJudgment.locator(':scope > summary').focus(); await page.keyboard.press('Enter');
+        await page.waitForFunction(element => element.open, await firstJudgment.elementHandle());
         const peerJudgment = judgments.locator('.research-assessment').nth(1);
         await peerJudgment.locator(':scope > summary').click();
+        await page.waitForFunction(element => element.open, await peerJudgment.elementHandle());
         assert.equal(await judgments.locator('.research-assessment[open]').count(), 2, "Independent row expansion is preserved");
         assert.equal(await judgments.locator('.research-assessment-question:visible').count(), 0, "Opening several rationales never repeats the shared question");
         assert.equal(await firstJudgment.locator('.research-assessment-reason').innerText(), capture.analyses.at(-1).outputs.zh.assessments[0].reason);
@@ -178,7 +203,48 @@ export const researchDisplayLanguageScenario = {
         await allRecords.getByRole("button", {name: "清除筛选", exact: true}).click();
         assert.equal(await allRecords.locator(".research-history-records > li").count(), capture.events.length);
         await allRecords.locator(":scope > summary").click();
-        const scope = history.locator(".research-progress > header select").first();
+        await history.getByRole("button", {name: "查看分析", exact: true}).click();
+        const analysis = history.getByRole("region", {name: "轨迹深度分析", exact: true});
+        const episodes = analysis.locator(".analysis-episode");
+        await episodes.last().waitFor();
+        assert.equal(await episodes.count(), 8, "The real analysis API retains all declared episodes, including the independent comparison");
+        await analysis.evaluate(element => element.scrollIntoView({block: "start"}));
+        await page.mouse.move(0, 0);
+        await page.locator('.context-help-popover:popover-open').waitFor({state: 'hidden'});
+        await page.screenshot({path: resolve(outputDir, `research-analysis-comparison-${width}.png`), animations: "disabled"});
+        const firstEpisode = episodes.first(), firstSummary = firstEpisode.locator(":scope > summary");
+        await firstSummary.focus(); await firstSummary.press("Enter");
+        await firstEpisode.getByText(/缺少原目标瓶颈的记录/).first().waitFor();
+        assert.equal(await firstEpisode.getByText(capture.analyses[2].outputs.zh.assessments[0].reason, {exact: true}).count(), 1,
+          "The same exact rationale and evidence are not repeated for each judgment");
+        assert(await firstEpisode.locator('.analysis-episode-context p').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16),
+          "Expanded rationale is reading copy, not a metadata caption");
+        await page.screenshot({path: resolve(outputDir, `research-analysis-comparison-expanded-${width}.png`), animations: "disabled"});
+        await firstSummary.press("Enter");
+        assert.deepEqual(await episodes.locator(".analysis-episode-name").allTextContents(), [
+          "variant-alpha", "variant-beta", "variant-gamma", "variant-delta", "variant-epsilon",
+          "独立对照是否支持 V18 的收益？尚无依据。", "paired-alpha", "paired-beta",
+        ], "Only exact declared-identity substitutions share a question; the independent question stays complete");
+        assert.equal(await analysis.locator(".analysis-shared-question").count(), 2, "Both a long sequence and a pair share their question once");
+        assert.match(await firstSummary.getAttribute("aria-label"), /variant-alpha 的实验证据是否检验原始目标/);
+        assert.match(await firstSummary.innerText(), /证据不足 6 项/, "Unknown judgments stay visible even before reading evidence");
+        assert.match(await episodes.nth(4).locator(":scope > summary").innerText(), /发现无益重复/, "A yes for repetition is an exception, not a positive judgment");
+        await firstSummary.press("Enter");
+        const fullQuestion = firstEpisode.getByText("完整问题", {exact: true});
+        await fullQuestion.click();
+        await firstEpisode.getByText(capture.analyses[2].outputs.zh.episode_questions[0].question, {exact: true}).waitFor();
+        assert.equal(await firstEpisode.evaluate(element => element.open), true, "Reading the full question does not toggle its parent episode");
+        await fullQuestion.click();
+        await episodes.nth(4).locator(":scope > summary").click();
+        assert.equal(await analysis.locator(".analysis-episode[open]").count(), 1, "A second episode replaces the previous full document");
+        const episodeCitation = episodes.nth(4).getByRole("button", {name: "evidence · 行 1–1", exact: true}).first();
+        await episodeCitation.click();
+        await history.getByRole("region", {name: "引用原文", exact: true}).press("Escape");
+        await page.waitForFunction(element => element === document.activeElement, await episodeCitation.elementHandle());
+        assert.equal(await episodeCitation.evaluate(element => element === document.activeElement), true);
+        assert.equal(await analysis.locator(".analysis-episode[open]").count(), 1, "Citation return retains the selected episode");
+        assert(await analysis.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+        await history.getByRole("button", {name: "关闭分析", exact: true}).click();
         await scope.selectOption({label: "部分译文"});
         await history.locator(".research-display-language > span").filter({hasText: /译文 \d+ \/ \d+/}).waitFor();
         assert.match(await history.locator(".research-route-caption").first().innerText(), /Does V18/, "Missing/invalid title remains original");

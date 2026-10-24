@@ -382,7 +382,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <div className="research-analysis-scoped-action"><ResearchAnalysisButton analysis={analysis}/>
           {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}
         </div>
-        <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
+        <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => {
+          setRevision(n => n + 1);
+          void analysis.read().catch(() => undefined);
+        }}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
     <div className="research-history-meta">
       <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`

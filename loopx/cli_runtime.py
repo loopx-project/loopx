@@ -71,6 +71,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
+	"agent-context", "agent-directory", "agent-capabilities",
 }
 
 
@@ -325,6 +326,18 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.manager_inbox import register_manager_inbox
 
 		register_manager_inbox(subparsers, add_subcommand_format)
+	elif command == "agent-context":
+		from .cli_commands.agent_context import register_agent_context
+
+		register_agent_context(subparsers, add_subcommand_format)
+	elif command == "agent-directory":
+		from .cli_commands.agent_directory import register_agent_directory
+
+		register_agent_directory(subparsers, add_subcommand_format)
+	elif command == "agent-capabilities":
+		from .cli_commands.agent_capabilities import register_agent_capabilities
+
+		register_agent_capabilities(subparsers, add_subcommand_format)
 	elif command == "authority-archive":
 		from .cli_commands.authority_archive import register_authority_archive_command
 
@@ -360,6 +373,19 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command in {"agent-context", "agent-directory", "agent-capabilities"}:
+		from .paths import effective_runtime_root
+
+		if args.command == "agent-context":
+			from .cli_commands.agent_context import handle_agent_context as handle
+		elif args.command == "agent-directory":
+			from .cli_commands.agent_directory import handle_agent_directory as handle
+		else:
+			from .cli_commands.agent_capabilities import handle_agent_capabilities as handle
+		return handle(
+			args, registry_path, effective_runtime_root(registry_path, args.runtime_root),
+			print_payload, output_format,
+		)
 	if args.command == "manager-inbox":
 		from .cli_commands.manager_inbox import handle_manager_inbox
 		from .control_plane.projects.registry_codec import load_project_registry

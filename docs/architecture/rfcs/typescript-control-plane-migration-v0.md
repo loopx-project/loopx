@@ -45,6 +45,17 @@ resolution, guards, formatting and typed owners. This adds no domain rule, bridg
 operation or data cache. Incremental qualification accounts for pending quota
 request-scope adoption separately rather than counting its gain again.
 
+### Agent collaboration CLI caller adoption
+
+`agent-context`, `agent-directory` and `agent-capabilities` now use the existing
+selected parser and shared dispatcher. Full-parser compatibility callers use
+the same dispatcher; their old handler branches are removed. Each command keeps
+its original registration, handler, registry/runtime resolution, native-controller
+guard and output. The dispatcher reuses the existing executable-revision request
+scope; source and capability observations remain live. No new module, bridge,
+semantic owner or state cache is introduced. This is bounded caller adoption;
+it does not qualify peer execution, model outcomes or the complete native CLI.
+
 ### Product conversations and asynchronous inbox
 
 **Chat HTTP POST scope.** `ChatRequestHandler.do_POST` now joins the existing

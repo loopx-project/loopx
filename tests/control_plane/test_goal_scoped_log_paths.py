@@ -103,6 +103,46 @@ def test_history_evidence_cli_rejects_unsafe_goal_without_writing_outside_root(
     assert not (runtime_root / "escape").exists()
 
 
+def test_bootstrap_rejects_unsafe_goal_id_before_any_write(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import json
+
+    from loopx.cli import main
+
+    project = tmp_path / "project"
+    registry_path = project / ".loopx" / "registry.json"
+    runtime_root = tmp_path / "runtime"
+    escaped_state = tmp_path / "escaped" / "ACTIVE_GOAL_STATE.md"
+
+    exit_code = main(
+        [
+            "--registry",
+            str(registry_path),
+            "--runtime-root",
+            str(runtime_root),
+            "--format",
+            "json",
+            "bootstrap",
+            "--project",
+            str(project),
+            "--goal-id",
+            "../../../escaped",
+            "--objective",
+            "Synthetic path boundary check",
+            "--no-global-sync",
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"] == "goal id must be a single path segment"
+    assert not registry_path.exists()
+    assert not escaped_state.exists()
+
+
 def test_cli_rollout_event_does_not_create_path_outside_goals_root(tmp_path: Path) -> None:
     from loopx.cli_rollout import append_cli_rollout_event
 

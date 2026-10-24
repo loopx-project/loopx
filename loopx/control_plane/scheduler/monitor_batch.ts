@@ -122,7 +122,8 @@ function planWriteback(input: MonitorBatchInput) {
     const created = planCoordinationTodoCreate({goal_id: input.goal_id, operation_id: input.operation_id,
       actor_agent_id: actor, registered_agents: input.registered_agents, dry_run: input.dry_run,
       now: new Date(String(observation.generated_at)), todo}, plannedTodos,
-      input.read_model_schema ?? TODO_DOMAIN_READ_RECORD_SCHEMA, "role_text", "actor_owned");
+      input.read_model_schema ?? TODO_DOMAIN_READ_RECORD_SCHEMA,
+      role === "agent" && intent.next_target_key ? "role_target" : "role_text", "actor_owned");
     if (created.status !== "planned" && created.status !== "no_change") throw new EffectRuntimeRequestError(String(created.reason));
     const record = canonicalAuthorityObject(created.todo, "successor Todo");
     nextTodos.push({...record, todo: record.text, ok: true, dry_run: input.dry_run});

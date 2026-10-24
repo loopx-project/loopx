@@ -54,6 +54,71 @@ test("monitor and independent successor commit together, preview is inert, recei
   "coordination_operation_identity_mismatch");
 });
 
+test("explicit successor target reuses one compatible open Todo across material generations", async () => {
+  const {store, request} = await seeded();
+  const intent = {...request.intent, next_target_key: "deliver-watch-a"};
+  const first = await executeCoordinationMonitorPoll(store, {...request, intent});
+  assert.equal(first.status, "applied", JSON.stringify(first));
+  const firstWriteback = first.writeback as JsonObject;
+  const firstTodo = (firstWriteback.next_todos as JsonObject[])[0]!;
+  const secondRequest = {...request, operation_id: "poll-b", intent,
+    observation: {...request.observation, generated_at: "2026-09-01T01:00:00Z", result_hash: "result-b"}};
+  const second = await executeCoordinationMonitorPoll(store, secondRequest);
+  assert.equal(second.status, "applied", JSON.stringify(second));
+  const secondWriteback = second.writeback as JsonObject;
+  assert.equal(secondWriteback.material_change_generation, 2);
+  assert.equal((secondWriteback.next_todos as JsonObject[])[0]!.todo_id, firstTodo.todo_id);
+  assert.equal((secondWriteback.successor_receipts as JsonObject[])[0]!.todo_id, firstTodo.todo_id);
+  assert.deepEqual(
+    (secondWriteback.next_todos as JsonObject[]).map(todo => todo.todo_id),
+    (secondWriteback.successor_receipts as JsonObject[]).map(todo => todo.todo_id),
+  );
+  const after = await store.loadAuthority();
+  assert.equal(after.status, "loaded");
+  if (after.status !== "loaded") return;
+  assert.equal((after.head.todos as JsonObject[]).length, 2);
+  assert.equal((after.head.todos as JsonObject[]).filter(todo => todo.target_key === "deliver-watch-a").length, 1);
+  assert.equal((await executeCoordinationMonitorPoll(store, secondRequest)).status, "replayed");
+  assert.deepEqual(await store.loadAuthority(), after);
+});
+
+test("explicit successor target rejects incompatible text or route without updating the Monitor", async () => {
+  const {store, request} = await seeded();
+  const intent = {...request.intent, next_target_key: "deliver-watch-a"};
+  assert.equal((await executeCoordinationMonitorPoll(store, {...request, intent})).status, "applied");
+  const before = await store.loadAuthority();
+  for (const [operation_id, result_hash, intentChange, mismatch] of [
+    ["poll-text-conflict", "result-b", {next_agent_todo: "Deliver a different result"}, "text"],
+    ["poll-route-conflict", "result-c", {next_action_kind: "validate"}, "action_kind"],
+  ] as const) {
+    const result = await executeCoordinationMonitorPoll(store, {...request, operation_id,
+      observation: {...request.observation, generated_at: "2026-09-01T01:00:00Z", result_hash},
+      intent: {...intent, ...intentChange}});
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason_code, "monitor_poll_rejected");
+    assert.match(String(result.reason), new RegExp(`role/target_key.*${mismatch}`));
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(operation_id)).status, "missing");
+  }
+});
+
+test("explicit successor target rejects ambiguous active identity without updating the Monitor", async () => {
+  const duplicate = (todo_id: string): JsonObject => ({schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id,
+    role: "agent", status: "open", done: false, text: "Deliver the newly observed result",
+    archive_state: "active", task_class: "advancement_task", action_kind: "implementation",
+    continuation_policy: "independent_handoff", target_key: "deliver-watch-a",
+    unblocks_todo_id: "todo_monitor"});
+  const {store, request} = await seeded({}, [duplicate("todo_z_existing_a"), duplicate("todo_z_existing_b")]);
+  const before = await store.loadAuthority();
+  const result = await executeCoordinationMonitorPoll(store, {...request,
+    intent: {...request.intent, next_target_key: "deliver-watch-a"}});
+  assert.equal(result.status, "failed");
+  assert.equal(result.reason_code, "monitor_poll_rejected");
+  assert.match(String(result.reason), /multiple active Todos have the same role\/target_key/);
+  assert.deepEqual(await store.loadAuthority(), before);
+  assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+});
+
 test("receipt-only recovery preserves the original hash and never plans fresh work", async () => {
   const {store, request} = await seeded();
   const before = await store.loadAuthority();

@@ -806,7 +806,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await analysis.locator('.analysis-episode > summary').count(), 2, 'The reader starts with one comparable row per episode');
       const firstEpisode = analysis.locator('.analysis-episode').first();
       assert.equal(await analysis.locator('.analysis-episode[open]').count(), 0);
-      assert.match(await firstEpisode.locator(':scope > summary').innerText(), /Does a useful diagnosis prove original-objective utility\?.*收益检验.*尚未检验收益.*证据采用.*有依据/s);
+      assert.match(await firstEpisode.locator(':scope > summary').getAttribute('aria-label'), /Does a useful diagnosis prove original-objective utility\?.*收益检验.*尚未检验收益.*证据采用.*有依据/s);
       assert.equal(await analysis.locator('.analysis-citations button:visible').count(), 0);
       await firstEpisode.locator(':scope > summary').focus();
       await firstEpisode.locator(':scope > summary').press('Enter');
@@ -1062,10 +1062,10 @@ print(json.dumps([
       const episodeCitation = episodeRows.first().getByRole('button', {name: /source.*行 1–2/}).first();
       await episodeCitation.click(); await citedOriginal.waitFor(); await citedOriginal.press('Escape');
       assert.equal(await episodeCitation.evaluate(element => element === document.activeElement), true);
-      const otherJudgments = episodeRows.first().locator('.analysis-judgments details');
-      assert.equal(await otherJudgments.count(), 4);
-      await otherJudgments.first().locator('summary').click();
-      await otherJudgments.first().getByText('来源只记录了实验结果，缺少干预与目标瓶颈的联系。', {exact: true}).waitFor();
+      assert.equal(await episodeRows.first().locator('[data-analysis-judgment]').count(), 6, 'Every metric and its verdict remain available');
+      await episodeRows.first().getByText('来源只记录了实验结果，缺少干预与目标瓶颈的联系。', {exact: true}).waitFor();
+      assert.equal(await episodeRows.first().getByText('来源只记录了实验结果，缺少干预与目标瓶颈的联系。', {exact: true}).count(), 1,
+        'Identical rationales with identical evidence are read once across all six judgments');
       const originalQuestion = chineseAnalysis.locator('.analysis-episode').first().getByText('原始研究问题', {exact: true});
       await originalQuestion.click();
       assert.match(await chineseAnalysis.locator('.analysis-episode').first().innerText(), /variant-alpha 的实验是否检验原始目标/);
@@ -1085,10 +1085,12 @@ print(json.dumps([
       await page.evaluate(key => localStorage.setItem(key, 'en'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});
       const englishAnalysis = page.getByRole('region', {name: 'Trajectory analysis', exact: true});
-      await englishAnalysis.locator('.analysis-episode-name').first().filter({hasText: 'Did variant-alpha test the original objective?'}).waitFor();
+      await englishAnalysis.locator('.analysis-episode-name').first().filter({hasText: 'variant-alpha'}).waitFor();
       assert.equal(await englishAnalysis.locator('.analysis-episode[open]').count(), 0, 'Language changes reset optional episode details');
       await englishAnalysis.locator('.analysis-episode > summary').first().click();
-      assert.equal(await englishAnalysis.locator('.analysis-episode-name').first().innerText(), 'Did variant-alpha test the original objective?');
+      assert.match(await englishAnalysis.locator('.analysis-episode > summary').first().getAttribute('aria-label'), /Did variant-alpha test the original objective\?/);
+      await englishAnalysis.locator('.analysis-episode').first().getByText('Full question', {exact: true}).click();
+      await englishAnalysis.locator('.analysis-episode').first().getByText('Did variant-alpha test the original objective?', {exact: true}).waitFor();
       assert.doesNotMatch(await englishAnalysis.innerText(), /来源只记录了实验结果/);
       await page.evaluate(key => localStorage.setItem(key, 'zh-CN'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});

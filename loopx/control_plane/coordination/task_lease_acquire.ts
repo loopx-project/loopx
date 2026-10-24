@@ -7,13 +7,13 @@ import {AuthorityStoreProtocolError, canonicalAuthorityObject, canonicalAuthorit
 import {CoordinationCommandReceipt, commandReceiptResult} from "./command_receipt.ts";
 import {indexCoordinationProjection, prepareCoordinationProjectionCommit} from "./coordination_projection.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
-import {decideTaskLeaseAcquire, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
+import {canonicalWriteScope, comparisonWriteScopes, decideTaskLeaseAcquire, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {acquisitionFacts, currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
 import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {goalObjectiveWorkGuard} from "../goals/goal_objective.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {normalizeGoalId, normalizeTodoId, normalizeOwner, normalizeIdempotencyKey,
-  normalizeWriteScopes, normalizeTtl, leaseEpoch, leaseVersion, leaseIsActive,
+  requireWriteScopes, normalizeTtl, leaseEpoch, leaseVersion, leaseIsActive,
   TaskLeaseAcquireError} from "../work_items/task_lease_acquire.ts";
 
 export interface CanonicalTaskLeaseAcquireInput {
@@ -33,7 +33,7 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
     input = {...raw, goal_id: normalizeGoalId(raw.goal_id), todo_id: normalizeTodoId(raw.todo_id),
       owner: normalizeOwner(raw.owner), idempotency_key: normalizeIdempotencyKey(raw.idempotency_key),
       write_workspace: leaseWorkspace(raw.write_workspace),
-      write_scopes: normalizeWriteScopes(raw.write_scopes), ttl_seconds: normalizeTtl(raw.ttl_seconds),
+      write_scopes: requireWriteScopes(raw.write_scopes), ttl_seconds: normalizeTtl(raw.ttl_seconds),
       registered_agents: raw.registered_agents.map(normalizeOwner)};
     if (input.expected_version !== null && (!Number.isSafeInteger(input.expected_version) || input.expected_version < 0)) {
       return failed("invalid_expected_version", "expected lease version must be a non-negative safe integer");
@@ -53,8 +53,12 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
     decode(original) {
       const payload = commandReceiptResult(original);
       const lease = canonicalTaskLease(canonicalAuthorityObject(payload.fields.lease, "acquire receipt lease"), input.goal_id, input.todo_id);
-      const scopes = [...(lease.write_scopes ?? []) as string[]].sort();
-      if (!sameLeaseWorkspace(lease.write_workspace, input.write_workspace) || JSON.stringify(scopes) !== JSON.stringify([...input.write_scopes].sort()) ||
+      const retainedScopes = (lease.write_scopes ?? []) as string[];
+      if (retainedScopes.some(scope => canonicalWriteScope(scope) === null)) {
+        throw new AuthorityStoreProtocolError("acquire receipt contains an invalid write scope");
+      }
+      const scopes = comparisonWriteScopes(retainedScopes).sort();
+      if (!sameLeaseWorkspace(lease.write_workspace, input.write_workspace) || JSON.stringify(scopes) !== JSON.stringify(comparisonWriteScopes(input.write_scopes).sort()) ||
           (lease.acquire_ttl_seconds != null && lease.acquire_ttl_seconds !== input.ttl_seconds) ||
           (payload.changed && input.expected_version !== null && leaseVersion(lease) !== input.expected_version + 1)) {
         throw new AuthorityStoreProtocolError("acquire receipt does not match its original parameters");

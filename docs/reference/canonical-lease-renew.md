@@ -43,6 +43,18 @@ code-edit mode below. Host/path case aliases remain overlapping.
 The existing complete-head scan, owner eligibility, TTL, generations, CAS and
 receipt identities are unchanged; an empty scope set still does not conflict.
 
+Scope comparison folds lexical path aliases such as `src//main.ts` and
+`src/./main.ts`, while preserving slash and dot members inside glob character
+classes. Fresh lease records use this canonical scope set. The original request
+spellings remain part of the immutable acquisition identity, so an exact retry
+of a retained request recovers its original receipt, including after renewal.
+Equivalent strings in an accepted Todo declaration do not require a declaration
+revision before atomic claim/acquire.
+
+冲突比较会归并相对路径的词法别名，但保留 glob 字符类中的斜杠、点与字面量右括号。
+新租约保存规范范围；原请求的拼写仍参与不可变请求身份，旧请求在升级或续租后按原参数
+重试会恢复原回执与当前执行证明。已有 Todo 声明中的等价字符串不会要求用户先重录声明。
+
 Old grants without `write_repository` (or with null) remain unknown and
 conservatively overlap any repository for ordinary exclusive acquisition.
 Reading or renewing them does not

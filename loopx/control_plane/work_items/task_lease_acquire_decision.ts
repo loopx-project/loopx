@@ -10,6 +10,8 @@ import type {TodoFact, LeaseRecord} from "./task_lease_acquire.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository, leaseRepositoryRejection, repositoryScopesMayOverlap} from "./task_lease_repository.ts";
 
+export const TODO_WRITE_SCOPE_MAX_CHARS = 160;
+
 export interface AcquireDecisionLease {
   present: boolean;
   active: boolean;
@@ -66,6 +68,70 @@ function stringValue(value: unknown, label: string): string {
   return value;
 }
 
+function characterClassEnd(pattern: string, start: number): number {
+  let end = start + 1;
+  if (pattern[end] === "!") end += 1;
+  if (pattern[end] === "]") end += 1;
+  return pattern.indexOf("]", end);
+}
+
+/**
+ * Canonicalize one repository-relative scope without resolving it against a
+ * host filesystem. Glob character classes retain their own slash semantics.
+ */
+export function canonicalWriteScope(value: string): string | null {
+  const scope = value.trim();
+  if (
+    scope.length === 0 || scope.length > TODO_WRITE_SCOPE_MAX_CHARS ||
+    scope.startsWith("/") || scope.startsWith("~") || scope.includes("\\") ||
+    /[\s<>]/u.test(scope)
+  ) {
+    return null;
+  }
+  const parts: string[] = [];
+  let start = 0;
+  for (let index = 0; index < scope.length; index += 1) {
+    if (scope[index] === "[") {
+      const closing = characterClassEnd(scope, index);
+      if (closing >= 0) {
+        index = closing;
+        continue;
+      }
+    }
+    if (scope[index] !== "/") continue;
+    parts.push(scope.slice(start, index));
+    start = index + 1;
+  }
+  parts.push(scope.slice(start));
+  const trailingSlash = scope.endsWith("/");
+  const canonical: string[] = [];
+  for (const part of parts) {
+    if (part.length === 0 || part === ".") continue;
+    if (part === "..") return null;
+    canonical.push(part);
+  }
+  if (canonical.length === 0) return trailingSlash ? "./" : null;
+  return `${canonical.join("/")}${trailingSlash ? "/" : ""}`;
+}
+
+/**
+ * Build a conflict-comparison view for persisted scopes without rewriting the
+ * retained record. An unreadable legacy scope blocks new work conservatively.
+ */
+export function comparisonWriteScopes(scopes: readonly string[]): string[] {
+  const canonical: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of scopes) {
+    const scope = canonicalWriteScope(raw);
+    if (scope === null) return ["**"];
+    if (!seen.has(scope)) {
+      seen.add(scope);
+      canonical.push(scope);
+    }
+  }
+  return canonical;
+}
+
 function optionalInteger(value: unknown, label: string): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== "number" || !Number.isInteger(value)) {
@@ -79,10 +145,7 @@ function classMatch(
   start: number,
   value: string,
 ): { end: number; matches: boolean } | null {
-  let end = start + 1;
-  if (pattern[end] === "!") end += 1;
-  if (pattern[end] === "]") end += 1;
-  end = pattern.indexOf("]", end);
+  const end = characterClassEnd(pattern, start);
   if (end < 0) return null;
   let body = pattern.slice(start + 1, end);
   const negated = body.startsWith("!");
@@ -168,7 +231,8 @@ function scopePairOverlaps(left: string, right: string): boolean {
 
 function writeScopesOverlap(left: readonly string[], right: readonly string[]): boolean {
   if (left.length === 0 || right.length === 0) return false;
-  return left.some((a) => right.some((b) => scopePairOverlaps(a, b)));
+  const a = comparisonWriteScopes(left), b = comparisonWriteScopes(right);
+  return a.some((first) => b.some((second) => scopePairOverlaps(first, second)));
 }
 
 function decisionStringArray(value: unknown, label: string): string[] {
@@ -239,7 +303,9 @@ function decodeDecisionLease(value: unknown): AcquireDecisionLease | null {
     ),
     version: decisionInteger(lease.version, "lease.version"),
     lease_epoch: decisionInteger(lease.lease_epoch, "lease.lease_epoch"),
-    write_scopes: decisionStringArray(lease.write_scopes, "lease.write_scopes"),
+    write_scopes: comparisonWriteScopes(
+      decisionStringArray(lease.write_scopes, "lease.write_scopes"),
+    ),
     write_repository: leaseWriteRepository(lease.write_repository),
     write_workspace: leaseWorkspace(lease.write_workspace),
     acquire_ttl_seconds: optionalInteger(
@@ -264,10 +330,10 @@ function decodeAcquireDecisionInput(value: unknown): AcquireDecisionInput {
       effective: decisionBoolean(lease.effective, `other_leases[${index}].effective`),
       write_repository: leaseWriteRepository(lease.write_repository),
       write_workspace: leaseWorkspace(lease.write_workspace),
-      write_scopes: decisionStringArray(
+      write_scopes: comparisonWriteScopes(decisionStringArray(
         lease.write_scopes,
         `other_leases[${index}].write_scopes`,
-      ),
+      )),
     };
   });
   return {
@@ -286,10 +352,10 @@ function decodeAcquireDecisionInput(value: unknown): AcquireDecisionInput {
         "command.idempotency_key",
       ),
       ttl_seconds: decisionInteger(command.ttl_seconds, "command.ttl_seconds"),
-      write_scopes: decisionStringArray(
+      write_scopes: comparisonWriteScopes(decisionStringArray(
         command.write_scopes,
         "command.write_scopes",
-      ),
+      )),
       write_workspace: leaseWorkspace(command.write_workspace),
       expected_version: optionalInteger(
         command.expected_version,
@@ -414,7 +480,7 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
       idempotency_key: command.idempotency_key,
       version: actualVersion + 1,
       lease_epoch: (lease?.lease_epoch ?? 0) + 1,
-      write_scopes: [...command.write_scopes],
+      write_scopes: comparisonWriteScopes(command.write_scopes),
       ...(workspace ? {write_workspace: workspace} : {}),
       ...(repository === null ? {} : {write_repository: repository}),
       acquire_ttl_seconds: command.ttl_seconds,
@@ -423,8 +489,8 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
 }
 
 function equalScopeSets(left: readonly string[], right: readonly string[]): boolean {
-  const a = [...new Set(left)].sort((first, second) => first.localeCompare(second));
-  const b = [...new Set(right)].sort((first, second) => first.localeCompare(second));
+  const a = comparisonWriteScopes(left).sort((first, second) => first.localeCompare(second));
+  const b = comparisonWriteScopes(right).sort((first, second) => first.localeCompare(second));
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
@@ -438,7 +504,7 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
   return {schema_version: "task_lease_v0", goal_id: identity.goal_id, todo_id: identity.todo_id,
     owner: command.owner, idempotency_key: command.idempotency_key,
     ...(decision.next_lease.write_workspace ? {write_workspace: leaseWorkspace(decision.next_lease.write_workspace)} : {}),
-    write_scopes: [...command.write_scopes], acquire_ttl_seconds: command.ttl_seconds,
+    write_scopes: comparisonWriteScopes(command.write_scopes), acquire_ttl_seconds: command.ttl_seconds,
     ...(decision.next_lease.write_repository == null ? {} :
       {write_repository: leaseWriteRepository(decision.next_lease.write_repository)}),
     version: decisionInteger(decision.next_lease.version, "next_lease.version"),
