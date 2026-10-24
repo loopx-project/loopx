@@ -34,30 +34,30 @@ def _int_number(value: Any, *, default: int) -> int:
     return default
 
 
-def load_quota_event_from_run(run: dict[str, Any]) -> dict[str, Any] | None:
+def load_quota_event_from_run(run: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
     if str(run.get("classification") or "") not in {
         QUOTA_SLOT_SPENT_CLASSIFICATION,
         QUOTA_SLOT_VOIDED_CLASSIFICATION,
     }:
-        return None
+        return None, False
     event = run.get("quota_event") if isinstance(run.get("quota_event"), dict) else None
     if event:
-        return event
+        return event, False
 
     raw_json_path = str(run.get("json_path") or "")
     if not raw_json_path:
-        return None
+        return None, False
     json_path = Path(raw_json_path).expanduser()
     if not json_path.exists():
-        return None
+        return None, True
     try:
         record = json.loads(json_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return None
+        return None, True
     if not isinstance(record, dict):
-        return None
+        return None, True
     event = record.get("quota_event") if isinstance(record.get("quota_event"), dict) else None
-    return event
+    return event, False
 
 
 def quota_slot_contribution(run: dict[str, Any]) -> tuple[str, str, int] | None:
@@ -71,7 +71,7 @@ def quota_slot_contribution(run: dict[str, Any]) -> tuple[str, str, int] | None:
     ledger already assumed.
     """
 
-    event = load_quota_event_from_run(run)
+    event, is_unreadable = load_quota_event_from_run(run)
     if not event:
         return None
     slots = max(0, _int_number(event.get("slots"), default=0))
