@@ -11,7 +11,7 @@ from threading import Thread
 import pytest
 
 from test_replan_successor_guard_reentry import AGENT, GOAL, TURN, _add, _fixture, _guard
-from test_external_scheduler_worker import _args, worker
+from test_external_scheduler_worker import _args, _guarded_host, worker
 from loopx.extensions.process_runtime import CappedProcessResult
 from loopx.history import collect_history
 
@@ -306,3 +306,29 @@ def test_real_worker_observation_survives_source_global_materialization(tmp_path
     assert Path(args.state_file).read_bytes() == original_attempt
     assert requests == [1]
     assert index.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_quota_retry_preserves_original_obligation_without_settlement(tmp_path, monkeypatch, provider):
+    _, runtime, history = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    args, count = _guarded_host(tmp_path, kind="provider_capacity", recover_at=2)
+    args.cli_bin = str(Path(sys.executable).parent / "loopx")
+    args.registry, args.runtime_root = str(tmp_path / "registry.json"), str(runtime)
+    args.goal_id, args.agent_id, args.quota_timeout_seconds = GOAL, AGENT, 90
+    now, delays = [1000.0], []
+    def sleep(seconds):
+        delays.append(seconds)
+        now[0] += seconds
+    before = history.read_bytes()
+    # Real CLI admission and authority stores; only the model process is synthetic.
+    # Its second response succeeds without semantically settling the replan.
+    assert worker.run_worker(args, sleep=sleep, clock=lambda: now[0]) == 0
+    assert count.read_text() == "2"
+    assert delays == [30.0]
+    attempts = json.loads(Path(args.state_file).read_text())["replan_attempts"]
+    assert len(attempts) == 1 and attempts[0]["status"] == "returned"
+    assert history.read_bytes() == before
+    args.once = True
+    assert worker.run_worker(args, clock=lambda: now[0]) == 0
+    assert count.read_text() == "2"
+    assert history.read_bytes() == before
