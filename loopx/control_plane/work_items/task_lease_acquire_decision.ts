@@ -68,6 +68,13 @@ function stringValue(value: unknown, label: string): string {
   return value;
 }
 
+function characterClassEnd(pattern: string, start: number): number {
+  let end = start + 1;
+  if (pattern[end] === "!") end += 1;
+  if (pattern[end] === "]") end += 1;
+  return pattern.indexOf("]", end);
+}
+
 /**
  * Canonicalize one repository-relative scope without resolving it against a
  * host filesystem. Glob character classes retain their own slash semantics.
@@ -85,7 +92,7 @@ export function canonicalWriteScope(value: string): string | null {
   let start = 0;
   for (let index = 0; index < scope.length; index += 1) {
     if (scope[index] === "[") {
-      const closing = scope.indexOf("]", index + 1);
+      const closing = characterClassEnd(scope, index);
       if (closing >= 0) {
         index = closing;
         continue;
@@ -138,10 +145,7 @@ function classMatch(
   start: number,
   value: string,
 ): { end: number; matches: boolean } | null {
-  let end = start + 1;
-  if (pattern[end] === "!") end += 1;
-  if (pattern[end] === "]") end += 1;
-  end = pattern.indexOf("]", end);
+  const end = characterClassEnd(pattern, start);
   if (end < 0) return null;
   let body = pattern.slice(start + 1, end);
   const negated = body.startsWith("!");
@@ -227,7 +231,8 @@ function scopePairOverlaps(left: string, right: string): boolean {
 
 function writeScopesOverlap(left: readonly string[], right: readonly string[]): boolean {
   if (left.length === 0 || right.length === 0) return false;
-  return left.some((a) => right.some((b) => scopePairOverlaps(a, b)));
+  const a = comparisonWriteScopes(left), b = comparisonWriteScopes(right);
+  return a.some((first) => b.some((second) => scopePairOverlaps(first, second)));
 }
 
 function decisionStringArray(value: unknown, label: string): string[] {
@@ -241,8 +246,8 @@ export function evaluateTaskLeaseWriteScopesOverlap(value: unknown): JsonObject 
   const input = requireJsonObject(value, "task lease write-scope overlap");
   return {
     overlap: writeScopesOverlap(
-      comparisonWriteScopes(decisionStringArray(input.left, "left")),
-      comparisonWriteScopes(decisionStringArray(input.right, "right")),
+      decisionStringArray(input.left, "left"),
+      decisionStringArray(input.right, "right"),
     ),
   };
 }
@@ -475,7 +480,7 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
       idempotency_key: command.idempotency_key,
       version: actualVersion + 1,
       lease_epoch: (lease?.lease_epoch ?? 0) + 1,
-      write_scopes: [...command.write_scopes],
+      write_scopes: comparisonWriteScopes(command.write_scopes),
       ...(workspace ? {write_workspace: workspace} : {}),
       ...(repository === null ? {} : {write_repository: repository}),
       acquire_ttl_seconds: command.ttl_seconds,
@@ -484,8 +489,8 @@ export function decideTaskLeaseAcquire(input: AcquireDecisionInput): AcquireDeci
 }
 
 function equalScopeSets(left: readonly string[], right: readonly string[]): boolean {
-  const a = [...new Set(left)].sort((first, second) => first.localeCompare(second));
-  const b = [...new Set(right)].sort((first, second) => first.localeCompare(second));
+  const a = comparisonWriteScopes(left).sort((first, second) => first.localeCompare(second));
+  const b = comparisonWriteScopes(right).sort((first, second) => first.localeCompare(second));
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
@@ -499,7 +504,7 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
   return {schema_version: "task_lease_v0", goal_id: identity.goal_id, todo_id: identity.todo_id,
     owner: command.owner, idempotency_key: command.idempotency_key,
     ...(decision.next_lease.write_workspace ? {write_workspace: leaseWorkspace(decision.next_lease.write_workspace)} : {}),
-    write_scopes: [...command.write_scopes], acquire_ttl_seconds: command.ttl_seconds,
+    write_scopes: comparisonWriteScopes(command.write_scopes), acquire_ttl_seconds: command.ttl_seconds,
     ...(decision.next_lease.write_repository == null ? {} :
       {write_repository: leaseWriteRepository(decision.next_lease.write_repository)}),
     version: decisionInteger(decision.next_lease.version, "next_lease.version"),

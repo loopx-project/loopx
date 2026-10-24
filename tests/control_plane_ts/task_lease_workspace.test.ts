@@ -4,7 +4,7 @@ import {execFileSync} from "node:child_process";
 import {mkdtemp, rm, mkdir, writeFile, symlink, realpath} from "node:fs/promises";
 import {platform, tmpdir} from "node:os";
 import {join} from "node:path";
-import {decideTaskLeaseAcquire, evaluateTaskLeaseAcquireDecision, evaluateTaskLeaseWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
+import {canonicalWriteScope, comparisonWriteScopes, decideTaskLeaseAcquire, evaluateTaskLeaseAcquireDecision, evaluateTaskLeaseWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
 import {normalizeWriteScopes} from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
 import {canonicalTaskLeaseAcquireFacts} from "../../loopx/control_plane/coordination/task_lease_state.ts";
 import {indexCoordinationProjection} from "../../loopx/control_plane/coordination/coordination_projection.ts";
@@ -251,9 +251,11 @@ test("malformed retained scopes conservatively conflict without rewriting histor
   }
 });
 
-test("scope normalization and pure overlap agree on lexical aliases", () => {
+test("scope comparison canonicalizes aliases while request identity keeps its spelling", () => {
+  const aliases = ["src//main.ts", "src/./main.ts", "./src/main.ts"];
+  assert.deepEqual(normalizeWriteScopes(aliases), aliases);
   assert.deepEqual(
-    normalizeWriteScopes(["src//main.ts", "src/./main.ts", "./src/main.ts"]),
+    comparisonWriteScopes(aliases),
     ["src/main.ts"],
   );
   assert.deepEqual(
@@ -267,6 +269,17 @@ test("scope normalization and pure overlap agree on lexical aliases", () => {
     }).overlap,
     true,
   );
+});
+test("scope comparison and matching share literal right-bracket character classes", () => {
+  for (const [scope, target] of [
+    ["src/[]/./]x", "src/.x"],
+    ["src/[]/./]x", "src/]x"],
+    ["src/[!]/./]x", "src/ax"],
+  ]) {
+    assert.equal(canonicalWriteScope(scope), scope);
+    assert.equal(evaluateTaskLeaseWriteScopesOverlap({left: [scope], right: [target]}).overlap, true);
+  }
+  assert.equal(evaluateTaskLeaseWriteScopesOverlap({left: ["src/[!]/./]x"], right: ["src/.x"]}).overlap, false);
 });
 test("a known same-checkout collision wins over changed repository metadata", () => {
   const other = {...workspace, repository: "git:github.com/example/other"};

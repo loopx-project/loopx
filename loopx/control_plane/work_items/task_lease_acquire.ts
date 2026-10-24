@@ -246,14 +246,15 @@ function writeScopeCandidates(value: unknown): unknown[] {
   return raw;
 }
 
+/** Keep request spellings stable for immutable receipts and declared work. */
 export function normalizeWriteScopes(value: unknown): string[] {
   const raw = writeScopeCandidates(value);
   const scopes: string[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
-    const scope = canonicalWriteScope(compact(item));
+    const scope = compact(item);
     if (
-      scope === null || seen.has(scope)
+      canonicalWriteScope(scope) === null || seen.has(scope)
     ) {
       continue;
     }
