@@ -88,4 +88,8 @@ class Receipt:
     def projection(self) -> dict[str, Any]:
         return {key: self.data.get(key) for key in (
             "schema_version", "stage", "error", "provider_usage", "cleanup", "resource_label",
-        )} | {"tool_calls": len(self.data.get("tools", {})), "has_candidate": "candidate" in self.data}
+            "tool_boundary_revision", "session_boundary_digest", "creation_rejection",
+        )} | {"tool_calls": len(self.data.get("tools", {})),
+              "builtin_tool_calls": len(self.data.get("builtin_tools", {})), "has_candidate": "candidate" in self.data} | (
+                  {"cleanup_interrupt_attempted": self.data["cleanup_interrupt_attempted"]}
+                  if "cleanup_interrupt_attempted" in self.data else {})

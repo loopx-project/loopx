@@ -34,8 +34,11 @@ class Config:
     tool_timeout_seconds: float = 60
     poll_interval_seconds: float = 1
     max_tool_calls: int = 32
+    sandbox_builtins: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.sandbox_builtins, bool):
+            raise AdapterError("sandbox_builtins_must_be_boolean")
         if (not isinstance(self.model, str) or not self.model.strip()
                 or not isinstance(self.environment_id, str) or not self.environment_id.strip() or not self.workspace.is_dir()):
             raise AdapterError("model_environment_and_workspace_required")
