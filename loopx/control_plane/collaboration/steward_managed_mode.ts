@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import type { JsonObject } from "../runtime_decode.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export const STEWARD_MANAGED_ACTOR_SCHEMA = "loopx_steward_managed_actor_v0";
 const AGENT_ID = "steward";
@@ -152,7 +153,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("report execution requires the original live subscription, window and task");
     }
     if (request.resume_turn_key !== undefined) {
-      if (typeof request.resume_turn_key !== "string" || !/^sha256:[a-f0-9]{64}$/.test(request.resume_turn_key)) {
+      if (typeof request.resume_turn_key !== "string" || !ENVELOPED_SHA256_PATTERN.test(request.resume_turn_key)) {
         throw new EffectRuntimeRequestError("report recovery requires the original native Turn key");
       }
       // An already accepted worker retains its ordinary active-Turn fence.
