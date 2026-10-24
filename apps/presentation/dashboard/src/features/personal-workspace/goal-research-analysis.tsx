@@ -289,6 +289,39 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
 }
 
+function CitationContent({citation, zh}: {citation: Citation; zh: boolean}) {
+  // A reading projection of the native completed-command envelope, not a
+  // source verifier. Unknown or mixed formats retain the complete literal.
+  const commands: {output: string; argv: string[]; exitCode: number; status: string}[] = [];
+  try {
+    for (const line of citation.text.split("\n")) {
+      const event: {type?: unknown; payload?: {type?: unknown; item?: Record<string, unknown>}} | null = JSON.parse(line);
+      const item = event?.payload?.item;
+      if (event?.type !== "event_msg" || event.payload?.type !== "item_completed"
+        || item?.type !== "CommandExecution" || typeof item.aggregated_output !== "string"
+        || !Array.isArray(item.command) || !item.command.every((arg: unknown) => typeof arg === "string")
+        || typeof item.exit_code !== "number" || !Number.isSafeInteger(item.exit_code) || typeof item.status !== "string") {
+        return <pre>{citation.text}</pre>;
+      }
+      commands.push({output: item.aggregated_output, argv: item.command, exitCode: item.exit_code, status: item.status});
+    }
+  } catch {
+    return <pre>{citation.text}</pre>;
+  }
+  return <div className="analysis-source-content">
+    {commands.map((command, index) => <div className="analysis-source-command" key={index}>
+      <div className="analysis-source-command-meta">
+        {commands.length > 1 ? <span>{zh ? "行" : "Line"} {citation.first_line + index}</span> : null}
+        <span>{zh ? "退出码" : "Exit code"} {command.exitCode}</span><span>{command.status}</span>
+      </div>
+      {command.output ? <pre className="analysis-source-output">{command.output}</pre>
+        : <p className="analysis-source-empty">{zh ? "输出为空" : "Empty output"}</p>}
+      <details><summary>{zh ? "命令参数" : "Command arguments"}</summary><pre>{JSON.stringify(command.argv, null, 2)}</pre></details>
+    </div>)}
+    <details className="analysis-source-raw"><summary>{zh ? "完整原始记录" : "Complete raw record"}</summary><pre>{citation.text}</pre></details>
+  </div>;
+}
+
 export function ResearchCitationPanel({analysis: a}: {analysis: Controller}) {
   if (!a.citation && !a.citationBusy && !a.citationError) return null;
   const zh = a.zh;
@@ -298,7 +331,8 @@ export function ResearchCitationPanel({analysis: a}: {analysis: Controller}) {
     <header><h4>{zh ? "引用原文" : "Cited original"}</h4><button type="button" onClick={a.closeCitation} aria-label={zh ? "关闭原文" : "Close source"}><X size={14} aria-hidden/></button></header>
     {a.citationBusy ? <p role="status">{zh ? "正在读取引用原文…" : "Reading cited source…"}</p> : null}
     {a.citationError ? <p className="analysis-error" role="alert">{a.citationError}</p> : null}
-    {a.citation ? <><p>{a.citation.artifact} · {zh ? "行" : "lines"} {a.citation.first_line}–{a.citation.last_line}</p><pre>{a.citation.text}</pre></> : null}
+    {a.citation ? <><p>{a.citation.artifact} · {zh ? "行" : "lines"} {a.citation.first_line}–{a.citation.last_line}</p>
+      <CitationContent key={`${a.pack?.analysis_key}:${a.citation.source_id}:${a.citation.first_line}:${a.citation.last_line}`} citation={a.citation} zh={zh}/></> : null}
   </section>;
 }
 

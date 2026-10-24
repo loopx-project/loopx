@@ -59,6 +59,12 @@
 .analysis-source { border: 1px solid var(--pw-line); border-radius: 8px; padding: 16px; margin-block: 16px; }
 .analysis-source p { font-size: var(--text-caption); color: var(--pw-muted); }
 .analysis-source pre { font-family: var(--font-mono); font-size: var(--text-body); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.analysis-source-command + .analysis-source-command { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--pw-line); }
+.analysis-source-command-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--pw-muted); }
+.analysis-source pre.analysis-source-output { font-size: var(--text-lead); line-height: var(--leading-prose); max-height: none; overflow: visible; }
+.analysis-source p.analysis-source-empty { font-size: var(--text-lead); color: var(--pw-text); }
+.analysis-source-content details > summary { min-height: 44px; padding-block: 10px; cursor: pointer; }
+.analysis-source-raw { margin-top: 12px; border-top: 1px solid var(--pw-line); }
 .analysis-method { border-block-start: 1px solid var(--pw-line); margin-top: 16px; padding-top: 12px; color: var(--pw-muted); font-size: var(--text-lead); }
 .analysis-method > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--pw-text); }
 .analysis-method dl { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px 16px; }
