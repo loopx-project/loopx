@@ -30,6 +30,20 @@ the original conversation automatically. Acknowledgement or adoption does not
 remove the request from the receiver's hook; a committed conclusion does. The
 Chat runtime then owns transport recovery, separately from work completion.
 
+An ordinary private project request interrupted by a host restart after tool
+work is not safe to replay. The original worker can reserve one separately
+correlated read-only review in the same native thread, retaining the failed
+Turn and its notice. Core rechecks the original source, binding, grant, idle
+state and absence of stop/correction intent. Complete, stable native inventory
+must show an interrupted request without a final answer or live work. The
+existing workspace-only read profile denies writes and network, disables MCP,
+Apps and delegation, and retains the original native store and project grant.
+The review returns verified existing results or an explicit verification gap;
+it cannot redo business effects. A failed review remains pending without an
+automatic second attempt. Steward/attached/group requests are outside this
+staged path. Delivery uses the original transport and independent readback;
+admission or review completion alone does not certify business completion.
+
 The expected exchange is receipt → receiver assessment/work → conclusion.
 Meaningful intermediate feedback is optional and coalesced when a conclusion
 is already ready. Normal delegation requires neither a second confirmation nor

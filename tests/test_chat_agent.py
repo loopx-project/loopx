@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from loopx.capabilities.native_chat.codex_adapter import failed_request_readback
+from loopx.capabilities.native_chat.codex_adapter import failed_request_readback, interrupted_result_readback
 
 import contextlib
 import io
@@ -19,6 +19,123 @@ import loopx.chat_agent as chat_agent
 import loopx.chat_providers as chat_providers
 import loopx.chat_runtime as chat_runtime
 import pytest
+
+
+@pytest.mark.parametrize("fault", [None, "active", "completed", "final", "missing-phase", "correction",
+    "unknown", "foreign", "duplicate", "live-tool", "late-items", "late-turn"])
+def test_interrupted_result_review_requires_stable_full_inventory_without_final_or_live_effects(tmp_path, monkeypatch, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="original", work_dir=tmp_path, response_timeout_sec=.2)
+    calls = []
+    turns_read = items_read = 0
+
+    def write(packet):
+        nonlocal turns_read, items_read
+        method, params = packet["method"], packet["params"]
+        calls.append(method)
+        assert params["threadId"] == "original"
+        if method == "thread/turns/list":
+            turns_read += 1
+            rows = [{"id": "later", "status": "inProgress" if fault == "active" else "completed"},
+                {"id": "interrupted", "status": "completed" if fault == "completed" else "interrupted"}]
+            if fault == "late-turn" and turns_read > 1:
+                rows.append({"id": "new", "status": "inProgress"})
+            result = {"data": rows}
+        else:
+            assert method == "thread/items/list"
+            if not params.get("cursor"):
+                items_read += 1
+                rows = [{"turnId": "interrupted", "item": {"id": "user", "type": "userMessage"}}]
+                result = {"data": rows, "nextCursor": "second"}
+            else:
+                item = {"id": "effect", "type": "fileChange", "status": "completed"}
+                item.update({"type": "futureItem"} if fault == "unknown" else
+                    {"id": "user"} if fault == "duplicate" else
+                    {"status": "inProgress"} if fault == "live-tool" else {})
+                rows = [{"turnId": "foreign" if fault == "foreign" else "interrupted", "item": item},
+                    {"turnId": "interrupted", "item": {"id": "comment", "type": "agentMessage", "phase": "commentary"}}]
+                if fault in {"final", "missing-phase", "correction"} or fault == "late-items" and items_read > 1:
+                    rows.append({"turnId": "interrupted", "item": {"id": "extra",
+                        "type": "userMessage" if fault == "correction" else "agentMessage",
+                        **({} if fault == "missing-phase" else {"phase": "final_answer"})}})
+                result = {"data": rows}
+        session.messages.put({"id": packet["id"], "result": result})
+
+    monkeypatch.setattr(session, "_write", write)
+    proof = interrupted_result_readback(session, "interrupted")
+    if fault is None:
+        assert proof == {"thread_id": "original", "turn_id": "interrupted", "read_only_review": True,
+            "no_final_answer": True, "effects_observed": True}
+        assert turns_read == items_read == 2
+    else:
+        assert proof is None
+    assert set(calls) <= {"thread/turns/list", "thread/items/list"}
+
+
+@pytest.mark.parametrize("background", [False, True])
+def test_result_review_enforces_workspace_read_profile_on_the_original_thread_and_home(monkeypatch, tmp_path, background):
+    context = {"kind": "project_workspace", "project_ref": "a" * 24, "workspace_path": str(tmp_path),
+        "audience": "bound_owner", "grant": "workspace_write", "binding_id": "b" * 24,
+        "source_ref": "c" * 24, "provider_ref": "d" * 24, "operator_ref": "e" * 24}
+    profile = "loopx_workspace_only_read"
+    process = _FakeAppServerProcess(config_response={"config": {"features": {"apps": True},
+        "mcp_servers": {"private_tool": {"command": "sensitive"}, "loopx_public_source_read": {"enabled": True}}}},
+        thread_response={"thread": {"id": "thread-loopx-chat"},
+            "activePermissionProfile": {"id": profile}, "runtimeWorkspaceRoots": [str(tmp_path)]})
+    process.stdout = io.StringIO(process.stdout.getvalue() + json.dumps({"id": 5, "result": {"data":
+        [{"itemId": "command", "processId": "still-running"}] if background else []}}) + "\n")
+    binary = tmp_path / "native-codex"
+    launched = []
+    real_which, real_popen = chat_agent.shutil.which, chat_agent.subprocess.Popen
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda name: str(binary) if name == "codex" else real_which(name))
+    def popen(command, *a, **kw):
+        if command[0] != str(binary):
+            return real_popen(command, *a, **kw)
+        launched.append(kw["env"])
+        return process
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", popen)
+    monkeypatch.setenv("LOOPX_CHAT_PUBLIC_SOURCE_READ", "on")
+    monkeypatch.setenv("PRIVATE_FIXTURE_TOKEN", "not-for-tools")
+    home = tmp_path / "original-home"
+    if background:
+        with pytest.raises(chat_agent.CodexChatAgentError, match="still has background work"):
+            chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+                goal_id=None, objective="project", project_context=context, codex_home=home,
+                resume_thread_id="thread-loopx-chat", read_only_review=True, model="synthetic", reasoning_effort="high")
+        assert process.returncode == 0
+        assert not any(json.loads(line).get("method") == "turn/start" for line in process.stdin.getvalue().splitlines())
+        return
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+        goal_id=None, objective="project", project_context=context, codex_home=home,
+        resume_thread_id="thread-loopx-chat", read_only_review=True, model="synthetic", reasoning_effort="high")
+    try:
+        sent = []
+        def request(method, params, **_kw):
+            assert method == "turn/start"
+            sent.append(params)
+            return {"turn": {"id": "review"}}
+        events = iter([
+            {"method": "item/agentMessage/delta", "params": {"delta": "Verified existing result."}},
+            {"method": "turn/completed", "params": {"turn": {"id": "review", "status": "completed"}}},
+        ])
+        monkeypatch.setattr(session, "_request", request)
+        monkeypatch.setattr(session, "_next_event", lambda **_kw: next(events))
+        session.send("Integrate the original material.")
+        packets = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        resume = next(p["params"] for p in packets if p.get("method") == "thread/resume")
+        config = resume["config"]
+        assert launched[0]["CODEX_HOME"] == str(home) and "PRIVATE_FIXTURE_TOKEN" not in launched[0]
+        assert resume["threadId"] == "thread-loopx-chat" and resume["permissions"] == profile
+        assert "dynamicTools" not in resume and session.project_context == context
+        assert config["features"] == {"apps": False, "multi_agent": False, "multi_agent_v2": False}
+        assert resume["runtimeWorkspaceRoots"] == [str(tmp_path)]
+        assert all(value == {"enabled": False} for value in config["mcp_servers"].values())
+        policy = config["permissions"][profile]
+        assert policy["filesystem"][":workspace_roots"] == {".": "read"} and policy["network"]["enabled"] is False
+        turn = sent[0]
+        assert turn["permissions"] == profile and "do not re-execute" in turn["input"][0]["text"]
+    finally:
+        session.close()
 
 
 def test_silent_event_reader_releases_dispatch_fence_for_control_receipt(tmp_path, monkeypatch):

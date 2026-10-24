@@ -506,12 +506,19 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
       || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
+  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
+  // A failed review cannot fall through to routing/quota business retries.
+  if ((previous?.read_only_review === true && previous.failed_turn_id !== row.turn_id)
+      || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
+        requireJsonObject(value, "prior recovery").read_only_review === true))) return no;
+  if (!steward && failed.error_code === "server_restarted") {
+    return planResultReview(recovery, row, current, failed, previous, version);
+  }
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
       || recovery.steering_observed !== false
       || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded", "usage_limit_exceeded"].includes(String(failed.error_code))
       || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
-  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
   const retryKind = failed.error_code === "usage_limit_exceeded" ? "quota" : "routing";
   const attemptKey = `${retryKind}_attempt`;
   if (recovery.admitted_turn != null && previous !== null && previous.failed_turn_id === failed.turn_id
@@ -568,6 +575,48 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     }
   }
   return {...candidate, recovery_eligible: transient};
+}
+
+/** Interrupted work may have effects. Never retry it. The original worker may
+ * reserve one read-only review of existing results, with its own presentation.
+ * The adapter enforces the existing workspace-only read policy, without tools
+ * which could send, write, delegate or repeat the original business operation.
+ */
+function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.status !== "failed" || failed.response !== null
+      || !Number.isSafeInteger(failed.delta_count) || Number(failed.delta_count) <= 0
+      || recovery.steering_observed !== false || recovery.stop_observed !== false
+      || recovery.attachments_present !== false
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
+  if (previous?.read_only_review === true && (previous.failed_turn_id !== failed.turn_id
+      || previous.version !== version || previous.client_turn_id !== client)) return no;
+  if (recovery.admitted_turn != null && previous?.read_only_review === true) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted result review");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === failed.turn_id || admitted.message !== row.message
+        || admitted.origin !== row.origin || (admitted.attachments != null
+          && (!Array.isArray(admitted.attachments) || admitted.attachments.length))) return no;
+    return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
+      read_only_review: true, client_turn_id: client, session_id: current.session_id,
+      admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted result review"), native_thread_ids: []};
+  }
+  if (current.active_turn_id != null || current.status !== "ready") return no;
+  const now = Date.parse(String(recovery.observed_at)), completed = Date.parse(String(failed.completed_at));
+  if (!Number.isFinite(now) || !Number.isFinite(completed) || now < completed + 60_000) return no;
+  const native = sessionIdentity(current.upstream_thread_id, "original native thread");
+  const candidate = {...no, recovery_candidate: true, read_only_review: true,
+    client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
+    native_thread_ids: [native]};
+  if (recovery.native_observation == null) return candidate;
+  const observed = requireJsonObject(recovery.native_observation, "interrupted result inventory");
+  return {...candidate, recovery_eligible: recovery.source_verified === true
+    && observed.thread_id === native && observed.turn_id === failed.upstream_turn_id
+    && observed.read_only_review === true && observed.no_final_answer === true
+    && observed.effects_observed === true};
 }
 
 /** Routing outages outlive one worker or context migration. Reserve at most

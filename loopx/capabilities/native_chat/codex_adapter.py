@@ -95,6 +95,57 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         return None
 
 
+def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
+    """Prove a stable interrupted inventory, not that its effects are safe to retry.
+
+    Only a separately sandboxed result review can consume this proof. Unknown
+    items, a final answer, user corrections or any live native work fail closed.
+    Do not return tool bodies, reasoning, private arguments or credential data.
+    """
+    deadline = time.monotonic() + session.response_timeout_sec
+    try:
+        def turns() -> list[dict[str, Any]]:
+            return list(session._control_items("thread/turns/list", {
+                "sortDirection": "desc", "itemsView": "summary",
+            }, deadline))
+
+        inventory = turns()
+        ids = [item.get("id") for item in inventory]
+        if (not ids or any(not isinstance(value, str) or not value for value in ids)
+                or len(set(ids)) != len(ids)
+                or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in inventory)
+                or not any(item["id"] == turn_id and item.get("status") == "interrupted" for item in inventory)):
+            return None
+        items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
+        seen: set[str] = set()
+        users = effects = 0
+        for entry in items:
+            item = entry.get("item")
+            if (entry.get("turnId") != turn_id or not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str) or not item["id"] or item["id"] in seen):
+                return None
+            seen.add(item["id"])
+            kind = item.get("type")
+            if kind == "userMessage":
+                users += 1
+            elif kind == "agentMessage":
+                if item.get("phase") != "commentary":
+                    return None
+            elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
+                if item.get("status") not in {"completed", "failed", "declined"}:
+                    return None
+                effects += 1
+            elif kind not in {"reasoning", "webSearch", "contextCompaction"}:
+                return None
+        if (users != 1 or not effects or turns() != inventory
+                or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items):
+            return None
+        return {"thread_id": session.thread_id, "turn_id": turn_id, "read_only_review": True,
+                "no_final_answer": True, "effects_observed": True}
+    except (CodexChatAgentError, OSError, TypeError, ValueError):
+        return None
+
+
 @dataclass
 class CodexAppServerAdapter:
     session: CodexChatAgentSession
@@ -103,6 +154,7 @@ class CodexAppServerAdapter:
     @staticmethod
     def failed_request_observation(*, codex_bin: str, codex_home: Path,
                                    thread_ids: list[str], turn_id: str,
+                                   read_only_review: bool = False,
                                    model_auth_home: Path | None = None) -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
 
@@ -127,9 +179,9 @@ class CodexAppServerAdapter:
             for thread_id in dict.fromkeys(thread_ids):
                 native.thread_id = thread_id
                 native.response_timeout_sec = max(.01, deadline - time.monotonic())
-                proof = failed_request_readback(native, turn_id)
+                proof = (interrupted_result_readback if read_only_review else failed_request_readback)(native, turn_id)
                 if proof is not None:
-                    if proof["codex_error_info"] == "usageLimitExceeded":
+                    if proof.get("codex_error_info") == "usageLimitExceeded":
                         # Reuse the optional provider's TS availability owner;
                         # neither a reset clock nor a generic successful RPC
                         # establishes usable allowance. Absence fails closed.
@@ -189,6 +241,7 @@ class CodexAppServerAdapter:
         runtime_profile: str = "restricted",
         sandbox: str | None = None,
         project_context: dict[str, str] | None = None,
+        read_only_review: bool = False,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
@@ -223,6 +276,7 @@ class CodexAppServerAdapter:
                     runtime_profile=runtime_profile,
                     sandbox=sandbox,
                     project_context=project_context,
+                    read_only_review=read_only_review,
                     resume_thread_id=resume_thread_id,
                     codex_home=codex_home,
                     model=model,
