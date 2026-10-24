@@ -304,6 +304,18 @@ source and execution lease are checked after collection and again at dispatch;
 authority changes after plan capture still reject the launch. This ordering
 does not authorize replay of a historical attempt with unknown host effects.
 
+The original pump can resume one retained report after the first-party launch
+owner's exact `stale_goal_authority` refusal. That owner rejects before publishing
+`turn/start`; a missing answer or missing events alone is insufficient. The
+typed admission checks the original Chat request, canonical native transaction,
+one recorded attempt, no generation or settlement, and the current original
+subscription and grant. A separately correlated Chat attempt resumes the same
+native journal, window, Todo and settlement identity through `run-once` recovery.
+The historical outer response is retained. A failed recovery, unknown transport
+outcome, real model start, changed identity or revoked permission cannot trigger
+another automatic model attempt. Existing no-model settlement recovery and
+independent full-body delivery readback still apply.
+
 Once generation is frozen, delivery checks the original source Goal identities
 against the current authorized scope. Adding an authorized Goal does not revoke
 the frozen report or rewrite its source/body; later windows include the new

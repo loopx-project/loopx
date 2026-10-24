@@ -163,6 +163,80 @@ def test_report_collects_evidence_before_capturing_native_launch_authority(stewa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("reject_recovery", [False, True])
+def test_original_pump_resumes_exact_prelaunch_rejection_once_without_replaying_unknown_work(steward, tmp_path, monkeypatch, provider, reject_recovery):
+    from loopx.chat_agent import CodexChatAgentSession
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    install_model(steward, tmp_path, sid)
+    history, calls = store.messages(sid), capture.read_bytes()
+    write = CodexChatAgentSession._write
+
+    def concurrent_registry_update(self, payload, **kwargs):
+        if payload.get("method") == "turn/start":
+            # The genuine legacy witness check rejects immediately before
+            # transport publication, after source collection and native plan.
+            runtime.registry_path.write_bytes(runtime.registry_path.read_bytes() + b"\n")
+        return write(self, payload, **kwargs)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(CodexChatAgentSession, "_write", concurrent_registry_update)
+        first = pump_steward_monitors(runtime)[0]
+        rejected = finish(runtime, first)
+    failure = rejected["response"]["native_loopx"]
+    assert failure["error_code"] == "stale_goal_authority", rejected
+    assert rejected["delta_count"] == 0 and rejected["upstream_turn_id"] is None
+    native = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=failure["resume_turn_key"])
+    assert json.loads(native.read_text())["host_attempt_count"] == 1
+    assert json.loads(native.read_text())["completed_phases"] == []
+    original_turn = store._turn_path(sid, first["turn_id"]).read_bytes()
+    assert not any(json.loads(line).get("method") == "turn/start" for line in capture.read_bytes()[len(calls):].splitlines())
+    assert transport.steward_reports.reconcile() == 0
+    # A new host adapter after idle/restart uses the original producer and
+    # canonical journal, rather than replaying the failed outer Chat request.
+    runtime._steward_monitor_next_check.clear()
+    with monkeypatch.context() as retry_fault:
+        if reject_recovery:
+            retry_fault.setattr(CodexChatAgentSession, "_write", concurrent_registry_update)
+        retry = pump_steward_monitors(runtime)[0]
+        assert retry["turn_id"] != first["turn_id"]
+        assert retry["loopx_request"]["turn_instance_id"] == first["loopx_request"]["turn_instance_id"]
+        assert retry["loopx_request"]["resume_turn_key"] == failure["resume_turn_key"]
+        completed = finish(runtime, retry)
+    assert completed["status"] == "completed", {key: completed.get(key) for key in ("status", "error", "error_code", "response")}
+    if reject_recovery:
+        assert completed["response"]["native_loopx"]["error_code"] == "stale_goal_authority"
+        before = capture.read_bytes(), list(bot.writes), native.read_bytes()
+        for _ in range(2):
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+            assert transport.steward_reports.reconcile() == 0
+        assert (capture.read_bytes(), bot.writes, native.read_bytes()) == before
+        assert store._turn_path(sid, first["turn_id"]).read_bytes() == original_turn
+        return
+    assert completed["response"]["native_loopx"].get("status") == "committed", completed
+    assert completed["response"]["native_loopx"]["resume_turn_key"] == failure["resume_turn_key"]
+    assert store._turn_path(sid, first["turn_id"]).read_bytes() == original_turn
+    assert json.loads(native.read_text())["host_attempt_count"] == 2
+    # The existing no-model settlement recovery supplies the original return
+    # reader with the committed native event; publication remains separate.
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(binding["binding_id"])["publication_verified"]
+    assert store.messages(sid)[:len(history)] == history
+    tail = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in tail) == 1
+    sent, calls = list(bot.writes), capture.read_bytes()
+    for _ in range(2):
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        assert transport.steward_reports.reconcile() == 0
+    assert bot.writes == sent and capture.read_bytes() == calls
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_report_source_revoked_during_collection_never_enters_native_execution(steward, tmp_path, monkeypatch, provider):
     _, runtime, bot, _, binding, capture, _ = steward
     sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)

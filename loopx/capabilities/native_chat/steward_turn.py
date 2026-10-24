@@ -45,7 +45,8 @@ class StewardTurnHost:
                 for row in self.store.events_after(turn["session_id"], turn["turn_id"], None)))
 
     def _admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
-               prepare_context: bool = False, settlement_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
+               prepare_context: bool = False, settlement_recovery: dict[str, Any] | None = None,
+               launch_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         if self.controller.closed.is_set():
             raise ValueError("the original Chat host is stopped")
         actor = request["actor"]
@@ -87,10 +88,42 @@ class StewardTurnHost:
             "goal": self.managed._goal(actor["goal_id"]), "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
             "request": request, "turn": turn, "scope": scope, "monitor_todo": monitor,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
+            **({"report_launch_recovery": launch_recovery} if launch_recovery is not None else {}),
             **({"preparing_model_context": True} if prepare_context else {}), **report})
         if admitted["refresh_original_scope"]:
             self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
         return {**admitted, "observed_scope_id": scope["current"] if scope else None}
+
+    def _report_launch_recovery(self, original: dict[str, Any]) -> dict[str, Any] | None:
+        """Read the original typed launch refusal and its canonical transaction.
+
+        Missing model events alone prove nothing. Only the native launch
+        owner's specific pre-publication rejection can qualify this path;
+        the typed conversation owner checks it with the current journal.
+        """
+        result = (original.get("response") or {}).get("native_loopx") or {}
+        if result.get("error_code") != "stale_goal_authority":
+            return None
+        from ...control_plane.turn_driver import inspect_loopx_turn_journal
+        from ...control_plane.turn_driver.journal_store import (
+            find_loopx_turn_key_by_settlement_identity, load_turn_journal, turn_journal_path,
+        )
+        from ..periodic_report.private_generation import attempt_directory
+        from .steward_reports import StewardReports
+        request = original["loopx_request"]
+        actor = request["actor"]
+        root = self.controller.coordination_runtime_root
+        key = find_loopx_turn_key_by_settlement_identity(root, goal_id=actor["goal_id"],
+            agent_id=actor["agent_id"], todo_id=request["todo_id"], turn_instance_id=request["turn_instance_id"])
+        if key is None:
+            raise ValueError("the original launch rejection has no canonical Turn")
+        inspection = inspect_loopx_turn_journal(root, goal_id=actor["goal_id"],
+            agent_id=actor["agent_id"], turn_key=key, retry_failed=True)
+        journal = load_turn_journal(turn_journal_path(root, goal_id=actor["goal_id"], turn_key=key))
+        _, window = StewardReports(self.controller).current_window(actor["goal_id"].removeprefix("steward-agent-"))
+        return {"original": original, "inspection": inspection, "turn_key": key,
+            "host_attempt_count": (journal or {}).get("host_attempt_count"),
+            "generation_present": window is None or (attempt_directory(root, window) / "private-generation.json").exists()}
 
     def recover_report_settlement(self, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]) -> None:
         """Resume only cached, validated native effects of the original report.
@@ -173,6 +206,7 @@ class StewardTurnHost:
                     report_subscription_revision=report_window["subscription_revision"])
             client_id = native_steward_client_id(actor, turn_instance_id)
             existing = self.store.turn_for_client(actor["session_id"], client_id)
+            launch_recovery = None
             if existing is not None:
                 # Never replay a failed/unknown model Turn. A committed Chat
                 # request is observed; native journal recovery remains separate.
@@ -181,7 +215,8 @@ class StewardTurnHost:
                 frozen.setdefault("work_kind", "native_turn")
                 if frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
                     raise ValueError("native steward request identity conflict")
-                if work_kind != "monitor" or not self._monitor_selection_failed_before_poll(existing):
+                monitor_retry = work_kind == "monitor" and self._monitor_selection_failed_before_poll(existing)
+                if not monitor_retry and work_kind != "report":
                     return existing, False
                 # One separately correlated retry after the proven admission
                 # failure. Retain the failed Chat Turn and original native
@@ -190,6 +225,11 @@ class StewardTurnHost:
                 retry = self.store.turn_for_client(actor["session_id"], client_id)
                 if retry is not None:
                     return retry, False
+                if work_kind == "report":
+                    launch_recovery = self._report_launch_recovery(existing)
+                    if launch_recovery is None:
+                        return existing, False
+                    request["resume_turn_key"] = existing["response"]["native_loopx"].get("resume_turn_key")
             if work_kind == "monitor":
                 from .steward_commands import native_command
                 if not todo_id or not monitor_deadline:
@@ -198,7 +238,7 @@ class StewardTurnHost:
                     "--todo-id", todo_id]).get("lease")
                 request.update(monitor_deadline=monitor_deadline,
                     monitor_lease_version=retained["version"] if retained else 0)
-            admitted = self._admit(request)
+            admitted = self._admit(request, launch_recovery=launch_recovery)
             session = self.store.load_session(actor["session_id"])
             accepted = self.store.accept_managed_turn(actor["session_id"], client_turn_id=client_id,
                 message="Advance the currently admitted native LoopX work.",
@@ -314,9 +354,14 @@ class StewardTurnHost:
                 **({"allow_completion": True} if report_work else {}))
 
         argv = ["turn", "run-once", "--goal-id", actor["goal_id"], "--agent-id", actor["agent_id"],
-            "--project", admitted["workspace_path"], "--host", "generic-cli", "--execute",
-            "--turn-instance-id", request["turn_instance_id"]]
-        if request["todo_id"] is not None:
+            "--project", admitted["workspace_path"], "--host", "generic-cli", "--execute"]
+        if request.get("resume_turn_key"):
+            # Keep the original plan, Todo, native Turn and settlement identity.
+            # The kernel rechecks its journal and current launch authority.
+            argv += ["--resume-turn-key", request["resume_turn_key"], "--retry-failed-turn"]
+        else:
+            argv += ["--turn-instance-id", request["turn_instance_id"]]
+        if request["todo_id"] is not None and not request.get("resume_turn_key"):
             argv += ["--todo-id", request["todo_id"]]
         if request["validation_command"] is not None:
             argv += ["--validation-command-json", json.dumps(request["validation_command"])]
@@ -331,7 +376,8 @@ class StewardTurnHost:
                 "--todo-id", request["todo_id"]]).get("lease")
             report_lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
                 "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                "--idempotency-key", request["turn_instance_id"], "--ttl-seconds", "3600",
+                "--idempotency-key", request["turn_instance_id"] + (".admission-retry" if request.get("resume_turn_key") else ""),
+                "--ttl-seconds", "3600",
                 "--expected-version", str(retained["version"] if retained else 0)])["lease"]
         try:
             if report_work:

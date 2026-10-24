@@ -112,3 +112,60 @@ test("a model report requires the exact live calendar window and original task, 
     {...input, report_todo: {...todo, status: "done"}},
   ]) assert.throws(() => admitStewardManagedTurn(invalid));
 });
+
+test("a retained pre-publication launch refusal can resume only its original native transaction", () => {
+  const p = original();
+  const prior = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: "report.cadence_original", todo_id: "todo_report", validation_command: ["python", "validate.py"],
+    work_kind: "report", report_window_id: "cadence_original", report_subscription_revision: "sha256:original"};
+  const key = "sha256:" + "a".repeat(64);
+  const request = {...prior, resume_turn_key: key};
+  const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    error_code: "stale_goal_authority", error: "first-party Host runtime rejected: stale_goal_authority",
+    effects_scope: "current_invocation", effects: {host_invoked: null, state_written: null, quota_spent: null},
+    resume_turn_key: key};
+  const source = {session_id: p.session.session_id, status: "completed", origin: "native_loopx", loopx_execution: true,
+    delta_count: 0, upstream_turn_id: null, loopx_request: prior, response: {native_loopx: result}};
+  const inspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+    journal_status: "in_progress", completed_phases: [],
+    recorded_effects: {host_invoked: null, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+    recovery_decision: {action: "continue", reinvoke_host: true, resume_from: "host_execute"}};
+  const proof = {original: source, inspection, turn_key: key, host_attempt_count: 1, generation_present: false};
+  const input = {...p, request, report_launch_recovery: proof,
+    report_window: {window_id: prior.report_window_id, subscription_revision: prior.report_subscription_revision,
+      goal_id: p.actor.goal_id, agent_id: p.actor.agent_id},
+    report_subscription: {enabled: true, profile_preset: "portfolio-progress",
+      route_ref: `steward-private:${p.binding.binding_id}:${p.source}`, effective_revision: prior.report_subscription_revision},
+    report_todo: {todo_id: prior.todo_id, target_key: prior.report_window_id,
+      claimed_by: "steward", action_kind: "generate_periodic_report", status: "open"}};
+  assert.equal(admitStewardManagedTurn(input).observation_only, false);
+  for (const invalid of [
+    {...input, report_launch_recovery: null},
+    {...input, request: prior},
+    {...input, request: {...request, resume_turn_key: "sha256:" + "b".repeat(64)}},
+    {...input, report_launch_recovery: {...proof, turn_key: "sha256:" + "b".repeat(64)}},
+    {...input, report_launch_recovery: {...proof, host_attempt_count: 2}},
+    {...input, report_launch_recovery: {...proof, generation_present: true}},
+    ...["failed", "running", "interrupted"].map(status => ({...input,
+      report_launch_recovery: {...proof, original: {...source, status}}})),
+    {...input, report_launch_recovery: {...proof, original: {...source, delta_count: 1}}},
+    {...input, report_launch_recovery: {...proof, original: {...source, upstream_turn_id: "actual-start"}}},
+    {...input, report_launch_recovery: {...proof, original: {...source,
+      loopx_request: {...prior, todo_id: "todo_other"}}}},
+    ...["transport_lost", "goal_launch_not_allowed", "unknown"].map(error_code => ({...input,
+      report_launch_recovery: {...proof, original: {...source, response: {native_loopx: {...result, error_code}}}}})),
+    {...input, report_launch_recovery: {...proof, original: {...source, response: {native_loopx:
+      {...result, effects: {state_written: true}}}}}},
+    ...["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].map(key => ({...input,
+      report_launch_recovery: {...proof, inspection: {...inspection, [key]: false}}})),
+    {...input, report_launch_recovery: {...proof, inspection: {...inspection, completed_phases: ["host_execute"]}}},
+    {...input, report_launch_recovery: {...proof, inspection: {...inspection,
+      recorded_effects: {...inspection.recorded_effects, quota_spent: null}}}},
+    {...input, report_launch_recovery: {...proof, inspection: {...inspection,
+      recorded_effects: {...inspection.recorded_effects, host_invoked: true}}}},
+    {...input, report_subscription: {...input.report_subscription, enabled: false}},
+    {...input, goal_active: false},
+    {...input, queued_turn_count: 1},
+  ]) assert.throws(() => admitStewardManagedTurn(invalid));
+});
