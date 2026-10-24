@@ -77,6 +77,113 @@ CLI from becoming another reader of the legacy guidance field.
 事实仍在当前包内，不需再次执行 guard。不同副本和既有详细视图保留；原始决定与
 capture 不变。动作维度等价不意味着不同渲染可以共用原始 source hash。
 
+### Captured replan reads / 捕获后的重规划读取
+
+For a successful replan with `--decision-output-dir` or `--decision-output-root`,
+the CLI and TurnEnvelope expose `replan_action_packet.review` followed by
+`writeback`. Both are executable `quota replan-view` commands bound to the same
+captured JSON value and source hash. The first read supplies goal context,
+previous decision/results, planning dependencies and evidence references; the
+second supplies the existing authoring shape and settlement commands. No read
+runs another guard, writes a receipt or authorizes work. There is no additional
+read acknowledgement, mandatory model call or prescribed route change.
+
+Captured reads retain the caller's explicit `--cli-bin` route, including later
+acceptance and Explore reads; an ambient executable cannot silently replace it.
+The review stage provides structured facts without a prescribed diagnostic
+method. Writeback omits filled-in Vision/stride examples while retaining field
+limits, legal options, source bindings and settlement rules. Stride exposes its
+required field names and basis options independently of examples. The unchanged
+full capture remains available for optional examples and source inspection.
+This intentionally reduces advisory prompting; it does not remove acceptance,
+authority or stop obligations, nor demonstrate better autonomous decisions.
+
+Cumulative outcome requirements are indexed by exact content hash. Every
+objective, revision and requirement count remains visible; the acceptance read
+returns the complete original outcome. Identical IDs with different revisions
+or evidence remain distinct. Equal context/horizon copies share references;
+differing goal scopes remain separate. The full capture retains all evidence,
+original guidance and authoring examples. Explore has an optional, separately
+readable basis; unavailable evidence remains unavailable. These views do not
+assess acceptance, infer execution from counts or make a dependency global.
+
+`quota replan-view --decision-file <file> --source-hash <hash>` defaults to
+`--replan-stage review`; `writeback`, `acceptance --outcome-ref <ref>` and
+`explore` read the corresponding original-source detail. Missing/mutated sources
+fail without guard replay. Existing uncaptured calls and native journal captures
+without the CLI read route retain their prior delivery. The existing generic
+followthrough is now available with stride off; its result-class counts and
+observations remain evidence, not successful-work or goal-gain verdicts.
+
+Live decisions replace the previous method checklist and duplicate stride
+planning advice with compact goal, evidence and authority boundaries. Review
+delivers those boundaries once, with the facts; writeback delivers the existing
+format. Eligible Todo order and agent-proposed candidate rules remain revisable
+planning choices, while original priorities, constraints, budgets and stops
+remain binding. Old captures retain their original text. This is an intentional
+change to advisory prompting, not a lossless claim about model behavior.
+
+The benchmark checkpoint preflight uses the same CLI decision capture with
+TurnEnvelope off. It retains the complete captured source for checkpoint
+selection and verification, and sends the projected CLI view to the model.
+The view's review/writeback commands read that exact observation; capture does
+not rerun admission, change evaluation opportunities or select a strategy.
+Identical work-context acceptance copies use that same read; other revisions
+stay inline. A source exceeding the RPC request bound uses the existing bounded
+local-snapshot transport for pure projection, preserving both transport limits.
+
+对使用 `--decision-output-dir` 或 `--decision-output-root` 的成功 replan，CLI 和
+TurnEnvelope 先给出 `review` 状态读取，再给出 `writeback` 格式读取。两步绑定同一
+快照和来源哈希，不重新准入、不新增回执或授权，也不强制换路线。累计验收按完整
+内容哈希建立索引：每个目标、版本及要求数量可见，明细完整读回；相同 ID 的不同
+版本不会覆盖。相同的目标上下文副本共享引用，不同范围保留。Explore 明细单独按需
+读取；不可用保持不可用。完整快照仍保存原指导、示例和证据。没有捕获或没有 CLI
+读取路径的原生 journal 保持原交付方式。通用执行回顾不再依赖 stride 开关；分类
+计数只表示观测，不等于工作成功或目标收益。
+
+捕获后的读取沿用调用方显式选择的 `--cli-bin`，后续验收和 Explore 读取也不会
+悄悄切换到环境中的其他版本。复盘视图提供结构化事实，不预设诊断方法；写回视图
+移除预填的 Vision／stride 答案示例，保留字段限制、合法选项、来源绑定和结算规则。
+stride 的必需字段与 basis 选项独立展示，完整快照仍可用于按需查看示例与源材料。
+这是有意减少建议性提示，不删除验收、权限或停止义务，也不证明自主决策质量提升。
+
+新决定用精简的目标、证据和权限边界替换原方法清单及重复的 stride 规划建议：复盘
+一次交付这些边界与事实，写回提供既有格式。可执行 Todo 的次序和 agent 自拟候选
+规则可以调整，原有优先目标、硬约束、预算与停止仍须保留。旧快照保留原文；这是
+有意改变建议性提示，不能称为对模型行为无损。benchmark checkpoint 前置检查也
+使用同一 CLI 捕获入口，TurnEnvelope 关闭仍生效：完整源包供 checkpoint 选择和
+校验，模型读取投影视图，再从同一观察分段读取。不重复准入、不改变评测机会，
+也不替 agent 选择策略。
+work context 中完全相同的验收副本复用该读取，不同版本保留。超过 RPC 请求限额的
+完整源包用既有有界本地快照传输做纯投影；两种传输限额均不放宽。
+
+Regression budgets use compact UTF-8 JSON, separately from compute quota and
+provider tokens. The synthetic workload uses a real append index with 1,500
+records, 21 later observations, 24 cumulative outcomes and a populated Explore
+log. Limits protect default input while exact details remain readable:
+
+| View | Regression allocation |
+| --- | --- |
+| Replan entry packet | 2 KiB |
+| Populated history review | 16 KiB |
+| Planning inventory increment | 8 KiB |
+| Cumulative acceptance index increment | 12 KiB |
+| Explore increment in entry / review | 128 B / 768 B |
+| Explore detail / writeback | 8 KiB / 16 KiB |
+
+The whole-envelope differential also prevents a large acceptance copy moving to
+another hot carrier. These are fixture regression allocations, not runtime
+truncation or refusal limits; the existing 8 KiB envelope warning remains.
+File/SQLite CLI tests cover capture → reads → existing writeback, hash rejection
+and unchanged state during reads. They do not establish model choice quality,
+installed adoption, token savings or matched long-horizon benefit.
+
+大小回归使用紧凑 UTF-8 JSON，与算力 quota 和 provider token 分开。通用 review、
+累计验收索引和 Explore 分别约束增量，同时检查整个 envelope，防止把大副本挪到
+另一处热输入。预算不在运行时截断或拒绝合法内容，原 8 KiB envelope 警告保留。
+File/SQLite CLI 验证快照、分步读取、既有写回和哈希拒绝，不据此宣称模型决策、
+已安装采用、token 节省或长程收益改善。
+
 ### Native Turn Host capture
 
 Executing `turn run-once --execute` now saves the original full decision before

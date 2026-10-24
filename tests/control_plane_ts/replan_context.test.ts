@@ -259,7 +259,7 @@ test("ordinary declared-work evidence reaches followthrough without becoming typ
     assert.throws(() => validateReplanContext({...context,
       decision_followthrough: {...follow, ...patch}}), /ordinary work/);
   }
-  assert.equal(projectReplanContext({...request, rows: [decision, actual]}).decision_followthrough, undefined);
+  assert.deepEqual(projectReplanContext({...request, rows: [decision, actual]}).decision_followthrough.ordinary_work.evidence, follow.ordinary_work.evidence);
 });
 
 test("ordinary followthrough retains corrections and bounded coverage under source scope", () => {
@@ -371,8 +371,7 @@ test("declared work returns canonical state and only its subsequent observations
   // Live work state changes the review basis, never the historical decision identity.
   assert.equal(withoutSource.decision_followthrough.previous_decision.evidence_ref,
     follow.previous_decision.evidence_ref);
-  assert.deepEqual(projectReplanContext({...request, rows: [decision], todo_items: [{invalid: true}]}),
-    projectReplanContext({...request, rows: [decision]}));
+  assert.equal(projectReplanContext({...request, rows: [decision], todo_items: [{invalid: true}]}).decision_followthrough.planned_work[0].current, null);
   for (const patch of [{todo_source_available: false},
     {planned_work: [{...work, observation_refs: ["evidence:invented"]}]},
     {planned_work: [work, work]}, {omitted_planned_work_count: -1}]) {
@@ -414,7 +413,7 @@ test("autonomous decisions return through their own binding and resolve without 
   assert.throws(() => projectReplanContext({...resolve, rows: [autonomousReviewed(2, "replan-other")]}), /unavailable/);
   const ordinary = projectReplanContext({...request, rows});
   assert.deepEqual(projectReplanContext({...request, rows, stride_strategy: "off"}), ordinary);
-  assert.equal(ordinary.decision_followthrough, undefined);
+  assert.equal(ordinary.decision_followthrough.previous_decision.evidence_ref, context.decision_followthrough.previous_decision.evidence_ref);
 });
 
 test("autonomous followthrough rejects conflicting identities, bindings and acknowledgements", () => {
@@ -539,12 +538,13 @@ test("stall frontier projects its current strategy through the shared outcome ow
   }
 });
 
-test("strategy off preserves context identity and selection despite decision transport facts", () => {
+test("generic followthrough is available with strategy off without enabling stride", () => {
   const rows = [reviewed(), subsequent(1)];
   const ordinary = projectReplanContext({...request, rows});
   const off = projectReplanContext({...request, rows, stride_strategy: "off"});
   assert.deepEqual(off, ordinary);
-  assert.equal(off.decision_followthrough, undefined);
+  assert.deepEqual(off.decision_followthrough, projectReplanContext({...strideRequest, rows}).decision_followthrough);
+  assert.deepEqual(validateReplanContext(off), off);
   const enabled = projectReplanContext({...strideRequest, rows});
   assert.equal(enabled.stride_strategy, "evidence_conditioned_v1");
   assert.deepEqual(validateReplanContext(enabled), enabled);
@@ -553,7 +553,7 @@ test("strategy off preserves context identity and selection despite decision tra
     assert.throws(() => validateReplanContext({...enabled, decision_followthrough: {
       ...enabled.decision_followthrough as JsonObject, ...patch}}), /followthrough/);
   }
-  assert.throws(() => validateReplanContext({...enabled, stride_strategy: "off"}), /enabled strategy/);
+  assert.deepEqual(validateReplanContext({...enabled, stride_strategy: "off"}).decision_followthrough, enabled.decision_followthrough);
 
   assert.notEqual(enabled.context_id, off.context_id);
   for (const field of ["evidence", "coverage_ledger", "uncovered_frontier", "evidence_count"]) {
@@ -627,4 +627,25 @@ test("invalid source digest shapes cannot authorize accounting reduction", () =>
         String(item.summary).includes(String(rows[0].recommended_action))));
     }
   }
+});
+
+test("blocked and unchanged observations never count as advanced work; caps preserve result totals", () => {
+  const observations = Array.from({length: 13}, (_, i) => ({...subsequent(i + 3),
+    delivery_outcome: i === 0 ? "outcome_progress" : "outcome_gap",
+    progress_observation: {...progress, fingerprint: "mixed-" + i,
+      result_class: i === 0 ? "advanced" : i < 11 ? "blocked" : "unchanged"}}));
+  const context = projectReplanContext({...request, rows: [reviewed(2), ...observations]});
+  const follow = context.decision_followthrough;
+  assert.equal(follow.recorded_progress_count, 13);
+  assert.deepEqual(follow.result_counts, {advanced: 1, blocked: 10, unchanged: 2,
+    exploration_exhausted: 0, no_followup: 0});
+  assert.equal(follow.observations.length, 6);
+  assert.equal(follow.omitted_observation_count, 7);
+  assert.equal(follow.execution_and_goal_gain, "unknown");
+  assert.ok(follow.observations.every((row: JsonObject) => typeof row.result_class === "string" && row.delivery_outcome));
+  assert.deepEqual(validateReplanContext(context), context);
+  assert.throws(() => validateReplanContext({...context, decision_followthrough: {...follow,
+    result_counts: {...follow.result_counts, advanced: 13}}}), /result counts/);
+  assert.throws(() => validateReplanContext({...context, decision_followthrough: {...follow,
+    observations: [{...follow.observations[0], result_class: "invented"}]}}), /followthrough/);
 });

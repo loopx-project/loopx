@@ -1290,11 +1290,9 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
     guidance = " ".join(payload["replan_action_packet"]["planning_guidance"])
     assert "a reasonable in-scope next step" in guidance
     assert "Otherwise explain why no such step remains" in guidance
-    assert "do not invent work, exceed authority or consume budget merely to stay active" in guidance
+    assert "do not invent work or consume budget merely to stay active" in guidance
     assert "provisional agent-created candidate rules" in guidance
-    assert "or rewrite criteria after failure" in guidance
-    assert "executed path and current artifact" in guidance
-    assert "Reuse still-applicable evidence" in guidance
+    assert "do not rewrite criteria after failure" in guidance
 
 
 def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(

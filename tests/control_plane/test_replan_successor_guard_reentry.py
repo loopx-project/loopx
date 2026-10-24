@@ -193,9 +193,7 @@ def test_real_mcp_replan_delivers_objective_and_evidence_guidance(
     assert packet["decision"] == "autonomous_replan_required"
     guidance = " ".join(packet["replan_action_packet"]["planning_guidance"])
     assert "provisional agent-created candidate rules" in guidance
-    assert "Do not relax frozen acceptance" in guidance
-    assert "executed path and current artifact" in guidance
-    assert "scope negative results to tested conditions" in guidance
+    assert "relax frozen acceptance" in guidance
     assert packet["autonomous_replan_obligation"]["required"] is True
     core = packet["autonomous_replan_obligation"]["replan_context"]["core_goal"]
     assert core["objective"] == objective
@@ -391,9 +389,7 @@ def test_later_vision_replan_can_close_covered_frontier_and_settle_once(
     # retaining the same independently covered frontier and single-debit path.
     guidance = " ".join(guard["replan_action_packet"]["planning_guidance"])
     assert "provisional agent-created candidate rules" in guidance
-    assert "Do not relax frozen acceptance" in guidance
-    assert "executed path and current artifact" in guidance
-    assert "scope negative results to tested conditions" in guidance
+    assert "relax frozen acceptance" in guidance
     binding = ("--goal-id", GOAL, "--agent-id", AGENT,
                "--turn-instance-id", TURN, "--replan-obligation-id", identity["replan_obligation_id"])
     vision = tmp_path / "covered-vision.json"

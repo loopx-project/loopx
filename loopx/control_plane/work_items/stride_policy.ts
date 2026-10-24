@@ -43,28 +43,6 @@ const decisionValueReview = {
     "Distinguish local or synthetic gains from authoritative transfer, and repeated identical outcomes from new information. " +
     "Choose decisive coverage before broadening a sweep; retain uncertainty and relevant negative evidence.",
 };
-export function stridePlanningGuidance(value: unknown): string[] {
-  if (normalizeStrideStrategy(value) === "off") return [];
-  return ["Review actual adoption of the previous decision, new information and authoritative goal outcomes separately. " +
-    "Choose grow to expand useful completed scope on a supported route, switch to test a different mechanism, or verify to resolve a route decision. " +
-    "Describe work size, route distance and validation breadth independently as concrete plans, with a reason for each. " +
-    "Name the reference method and the assumption or mechanism that changes; more tuning alone is not a route switch. " +
-    "Use the live decision_value_review questions to compare goal headroom and full cost through the three existing axes. " +
-    "Work size must cover a coherent accepted deliverable or an experiment capable of an interpretable conclusion: a new route may need a larger " +
-    "implementation and uncertain evidence may need broader validation. Expand useful work when evidence supports it; " +
-    "do not respond to a persistent unexplained gap by repeatedly making the same work smaller. " +
-    "For engineering, organizing or maintenance, grow can complete related implementation, integration, validation and readback together to reduce repeated planning and source reads. Work size is accepted scope, not Todo text, file count or tool calls. Do not bundle independent commitments or cross dependency, risk or authority boundaries to make work larger. Do not restart unfinished coherent work or repeat small probes unless changed inputs or a new uncertainty justify it. " +
-    "Where relevant, compare continuation, an alternative mechanism and replication using applicable Explore findings and scoped counterevidence. " +
-    "Do not force a pivot from elapsed time, a progress count or one noisy result. " +
-    "Missing or refuted evidence is not a universal route ban. Preserve the best qualified artifact and original priorities. " +
-    "Declare minimum evidence, a testable prediction, adoption criterion and full marginal cost including control and validation; review actual adoption, quality and cost next. Verify must resolve a named grow-or-switch question, not repeat an unchanged check. " +
-    "Carry the next_probe into existing executable Todo work, reusing an unfinished experiment when it still answers the question. " +
-    "Use agent_vision.todo_delta entries such as retain:todo_<id> to identify that work after its normal authoring/readback; do not invent IDs or add a planning-only Todo. " +
-    "Read planned_work and subsequent observations before crediting the previous decision. A negative experiment may finish its Todo while the broader goal remains open. " +
-    "Keep a candidate experiment separate from the best retained artifact: authorized evaluation may be informative before replacement is justified. " +
-    "Use the live stride_control contract for agent_vision.stride_decision. This controls proposal completeness, not execution, " +
-    "spawn, acceptance or a promise of utility; existing Todo/path and authority owners still govern work."];
-}
 
 export const STRIDE_DECISION_SCHEMA = decisionSchema.schema_version;
 export const STRIDE_PROBE_LIMITS = decisionSchema.probe_field_limits;
@@ -414,6 +392,9 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
   return {schema_version: decisionSchema.schema_version, strategy_version: context.stride_strategy,
     reference_context_id: context.context_id ?? null, reference_obligation_id: obligationId,
     axis_names: decisionSchema.axis_names, actions: decisionSchema.actions,
+    basis_options: decisionSchema.basis_options,
+    required_fields: ["schema_version", "strategy_version", "reference_context_id", "reference_obligation_id",
+      "basis", "action", "axes", "next_probe", ...(previous ? ["previous_review"] : []), ...(basis ? ["explore_review"] : [])],
     axis_plan_limit: decisionSchema.axis_plan_limit,
     axis_reason_limit: decisionSchema.axis_reason_limit, probe_field_limits: STRIDE_PROBE_LIMITS,
     decision_value_review: {...decisionValueReview},

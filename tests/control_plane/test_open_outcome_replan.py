@@ -73,9 +73,9 @@ def test_open_validation_replan_retains_requirements_and_executes_repair(tmp_pat
         assert outcomes["outcomes"][0]["work"] == [{"todo_id": TODO, "status": "open"}]
         assert not all(r["planning_satisfied"] for r in outcomes["outcomes"][0]["requirements"])
         assert any("even with open Todos" in s for s in admitted["replan_action_packet"]["planning_guidance"])
-        review = admitted["replan_action_packet"]["planning_guidance"][0]
+        review = " ".join(admitted["replan_action_packet"]["planning_guidance"])
         assert "operating objective and cumulative requirements" in review
-        assert "justified no-change decision" in review
+        assert "justified no-change" in review
         assert "goal-acceptance prepare-objective" in review
         envelope = call("quota", "should-run", "--codex-app", "--turn-envelope", "--goal-id", GOAL,
             "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", TURN,

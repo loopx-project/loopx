@@ -32,8 +32,9 @@ test("open-work review guidance does not require configured checks or outcome de
       assert.deepEqual(retired, ordinary);
       assert.deepEqual(current, ordinary, "default review and its authority do not depend on an outcome declaration");
       const guidance = (ordinary.planning_guidance as string[]).join(" ");
-      for (const clause of ["even with open Todos", "Strongest first delivery", "diagnostic validation",
-        "Flat metrics alone prove neither progress nor exhaustion", "scope negative results"]) assert.ok(guidance.includes(clause));
+      for (const clause of ["even with open Todos", "revisable planning choices", "never forces a pivot"]) {
+        assert.ok(guidance.includes(clause));
+      }
     }
   }
 });
@@ -334,18 +335,8 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
     const source = {triggers: [{kind}]};
     const projection = projectReplanSemantics({operation: "requirements", obligation: source});
     const guidance = projection.planning_guidance as string[];
-    assert.equal(guidance.length, 5);
-    assert.match(guidance[0], /operating objective and cumulative requirements/);
-    assert.match(guidance[0], /justified no-change decision/);
-    assert.match(guidance[0], /scope conflict, missing evidence or stale display text/);
-    assert.match(guidance[3], /provisional agent-created candidate rules/);
-    assert.match(guidance[3], /Do not relax frozen acceptance/);
-    assert.match(guidance[4], /Compare expected goal\/information gain with full marginal cost/);
-    assert.match(guidance[4], /executed path and current artifact/);
-    assert.match(guidance[4], /scope negative results to tested conditions/);
-    assert.match(guidance[4], /Correct within the affected work first/);
-    assert.match(guidance[4], /A due review can retain the path/);
-    assert.match(guidance[4], /neither adoption nor improvement/);
+    assert.ok(guidance.length > 0 && guidance.length <= 3);
+    assert.ok(guidance.join(" ").length < 3000, "boundaries replace the long method checklist");
     const refusal = projectReplanSemantics({operation: "qualify", obligation: source,
       planning_guidance: projection.planning_guidance});
     assert.equal(refusal.accepted, false);
@@ -355,7 +346,7 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
 });
 
 
-test("versioned stride advice is opt-in and never a semantic discharge", () => {
+test("stride format replaces duplicate strategy advice and never discharges a semantic review", () => {
   const plain = {triggers: [{kind: "typed_progress_repeat"}]};
   const base = projectReplanSemantics({operation: "requirements", obligation: plain});
   const off = projectReplanSemantics({operation: "requirements", obligation: {
@@ -363,12 +354,11 @@ test("versioned stride advice is opt-in and never a semantic discharge", () => {
   assert.deepEqual(off, base);
   const enabled = {...plain, replan_context: {stride_strategy: "evidence_conditioned_v1"}};
   const withStrategy = projectReplanSemantics({operation: "requirements", obligation: enabled});
-  assert.deepEqual((withStrategy.planning_guidance as string[]).slice(0, 5), base.planning_guidance);
-  assert.equal((withStrategy.planning_guidance as string[]).length, 6);
+  assert.deepEqual(withStrategy.planning_guidance, base.planning_guidance);
+  assert.ok(withStrategy.stride_control);
+  assert.equal(base.stride_control, undefined);
   assert.deepEqual(withStrategy.required_any_of,
     ["fresh_vision_path_outcome", ...(base.required_any_of as string[])]);
-  assert.match((withStrategy.planning_guidance as string[])[5], /work size, route distance and validation breadth independently/);
-  assert.match((withStrategy.planning_guidance as string[])[5], /Do not restart unfinished coherent work/);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: enabled,
     planning_guidance: withStrategy.planning_guidance}).accepted, false);
   for (const version of ["future_v2", null, 1]) {

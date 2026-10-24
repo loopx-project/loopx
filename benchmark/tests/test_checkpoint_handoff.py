@@ -473,7 +473,13 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
     request.write_text(json.dumps({"destination": str(tmp_path / "checkpoints"),
         "trigger": "fresh_replan", "native_session": native_participant,
         "components": [{"id": "code", "source_path": str(tmp_path / "code")}], "point_metadata": {}}))
-    monkeypatch.setattr(checkpoint.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps({"ok": True})))
+    def guard(command, **kwargs):
+        from pathlib import Path
+        captured = Path(command[command.index("--decision-output-root") + 1]) / "decision-original"
+        captured.mkdir()
+        (captured / "decision.json").write_text(json.dumps({"ok": True}))
+        return SimpleNamespace(stdout=json.dumps({"ok": True}))
+    monkeypatch.setattr(checkpoint.subprocess, "run", guard)
     monkeypatch.setattr(checkpoint, "effect_runtime_result", lambda *a, **k: {"capture": False, "reason": "no_fresh_replan"})
     observed = []
     def gate(*args, full_history):

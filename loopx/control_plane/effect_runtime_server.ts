@@ -41,6 +41,7 @@ const LOCAL_SNAPSHOT_METHODS = new Set([
   "work_item.task_graph.goal_topology",
   "work_item.replan_semantics.project",
   "quota.settlement.read",
+  "quota.turn_envelope.evaluate",
   "goal.checkpoint_read_context.resolve",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",

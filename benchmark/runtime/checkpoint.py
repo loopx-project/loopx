@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import subprocess
+import tempfile
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
@@ -137,24 +138,39 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("fresh_replan checkpoint trigger requires a heartbeat execute wake")
     started = time.monotonic()
     guard_path = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
-    command = [env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
+    # Use the CLI's original-decision capture, including with TurnEnvelope off.
+    # The checkpoint selector needs the full source; the model consumes the
+    # ordinary CLI projection of those same bytes, never a second guard.
+    capture_root = Path(tempfile.mkdtemp(prefix="checkpoint-start-", dir=guard_path.parent))
+    command = [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
                "--runtime-root", env["LOOPX_RUNTIME_ROOT"], "quota", "should-run",
                "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
-               "--available-capability", "shell", "--available-capability", "filesystem_write"]
+               "--available-capability", "shell", "--available-capability", "filesystem_write",
+               "--decision-output-root", str(capture_root)]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
-    guard = json.loads(guard_run.stdout)
-    if not isinstance(guard, dict) or guard.get("ok") is not True:
+    projected = json.loads(guard_run.stdout)
+    captures = list(capture_root.glob("decision-*/decision.json"))
+    if len(captures) != 1:
+        raise ValueError("checkpoint requires exactly one captured original quota decision; do not replay the guard")
+    raw_guard = captures[0].read_bytes()
+    guard = json.loads(raw_guard)
+    if (not isinstance(guard, dict) or guard.get("ok") is not True or
+            not isinstance(projected, dict) or projected.get("ok") is not True):
         raise ValueError("checkpoint requires a successful original quota guard")
     # A previous preflight on this wake may already have allowed model work,
     # even if its optional attempt marker (or final receipt) could not be saved.
     # Such reentry can verify an existing point, but cannot capture a later one.
     preflight_seen = guard_path.exists()
-    guard_path.write_text(guard_run.stdout, encoding="utf-8")
+    guard_path.write_bytes(raw_guard)
     guard_path.chmod(0o600)
+    view_path = guard_path.with_name("checkpoint-start-view.json")
+    view_path.write_text(guard_run.stdout, encoding="utf-8")
+    view_path.chmod(0o600)
     preloaded_body = (f"Host checkpoint preflight has already executed this wake's original quota guard once. "
-        f"Read the complete packet at {guard_path} before work, then follow its interaction_contract. "
+        f"Read the complete CLI view at {view_path} before work, then follow its interaction_contract "
+        "and replan review/writeback reads when present. "
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)
     receipt["checkpoint"] = {"captured": False, "research_point_qualified": False, "phase": "before_replan"}
     try:

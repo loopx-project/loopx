@@ -762,7 +762,7 @@ these facts do not change the admitted context/basis identity. Changed source
 requires rereading within the original Turn. Page coordinates persist with the
 decision into subsequent review; node-filtered/planner detail routes remain
 outside this bounded citation path. No separate receipt store is introduced.
-The enabled review also carries the prior decision's existing `todo_delta`
+The replan context also carries the prior decision's existing `todo_delta`
 targets in `decision_followthrough.planned_work`: current canonical status and
 claim, plus references to causally later observations of that exact work item.
 Legacy descriptive Todo deltas remain readable with unresolved linkage; an
@@ -770,9 +770,25 @@ overlong reference is never truncated into a different Todo identity.
 Missing Todo sources and omitted work remain explicit; a missing observation
 does not prove non-execution, and Todo completion does not prove objective gain.
 Related observations survive unrelated recent activity in the bounded window.
-The same bounded followthrough is included in `stride_control` so compact Host
-envelopes expose it without requiring another full-context read. Historical
-decision identities and off-mode output remain unchanged.
+Generic followthrough is available with stride off as well: `result_counts`
+separates advanced, unchanged, blocked and terminal observations, while visible
+rows retain their result class and delivery outcome. The compatibility
+`recorded_progress_count` is an observation count, never successful work.
+Historical decision identities and stride admission/settlement gates remain
+unchanged; off-mode context now includes this feedback without enabling stride.
+
+The [captured replan reader](../../reference/protocols/turn-envelope-v0.md#captured-replan-reads--捕获后的重规划读取)
+separates state review from authoring on one immutable decision snapshot.
+Cumulative acceptance uses lossless content-bound detail reads, and Explore
+receives a separate context increment. Existing uncaptured callers retain their
+full delivery. File/SQLite source tests and populated packet budgets qualify
+transport and writer continuity; installed adoption, real model decisions and
+matched outcome/cost benefit remain unqualified. This introduces no new planning
+receipt, model checkpoint or requirement to change direction.
+The reader replaces repeated method guidance with compact semantic boundaries
+and the existing stride format. Benchmark preflight captures the original
+decision through the CLI and delivers its staged view even with TurnEnvelope
+off; retaining a full checkpoint packet alone does not qualify model exposure.
 
 The next-review input also exposes causally later ordinary writebacks for the
 declared work in `ordinary_work`, with per-Todo `ordinary_evidence_refs`. Its

@@ -9,6 +9,7 @@ import {FRESH_PATH_DISPOSITIONS, requiredSemanticOutcomes} from "./replan_semant
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 import {normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis} from "./stride_policy.ts";
+import {PROGRESS_RESULT_CLASSES} from "./replan_history.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "./delivery_outcome.ts";
 
 const CONTEXT_SCHEMA = "replan_context_v0";
@@ -353,11 +354,16 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
     source_history_complete: fromFullIndex,
     unsequenced_progress_count: rows.filter(row => row.progress_observation &&
       !Number.isSafeInteger(objectOrNull(row._source_facts)?.history_position)).length,
+    // Compatibility count of observations, not a count of successful work.
     recorded_progress_count: observations.length,
+    result_counts: Object.fromEntries(PROGRESS_RESULT_CLASSES.map(result => [result,
+      observations.filter(row => (row.progress_observation as JsonObject).result_class === result).length])),
     observations: visible.map(row => ({
       evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
       generated_at: row.generated_at, todo_id: row.todo_id,
       coverage_ref: (row.progress_observation as JsonObject).fingerprint,
+      result_class: (row.progress_observation as JsonObject).result_class,
+      delivery_outcome: row.delivery_outcome ?? null,
     })),
     omitted_observation_count: Math.max(0, observations.length - 6),
     // Ordinary writebacks are source evidence, never fabricated typed progress.
@@ -455,8 +461,8 @@ export function validateReplanContext(value: unknown): JsonObject {
   if (context.stride_strategy !== undefined) normalizeStrideStrategy(context.stride_strategy);
   if (context.decision_followthrough !== undefined) {
     const follow = requireJsonObject(context.decision_followthrough, "decision_followthrough");
-    if (context.stride_strategy !== "evidence_conditioned_v1" || follow.execution_and_goal_gain !== "unknown") {
-      throw new EffectRuntimeRequestError("decision followthrough requires the enabled strategy and unknown utility");
+    if (follow.execution_and_goal_gain !== "unknown") {
+      throw new EffectRuntimeRequestError("decision followthrough requires unknown utility");
     }
     const observations = objects(follow.observations, "decision_followthrough.observations");
     validateWorkResultUse(follow);
@@ -466,6 +472,16 @@ export function validateReplanContext(value: unknown): JsonObject {
           key => !Number.isSafeInteger(follow[key]) || Number(follow[key]) < 0) ||
         Number(follow.recorded_progress_count) !== observations.length + Number(follow.omitted_observation_count)) {
       throw new EffectRuntimeRequestError("decision followthrough requires bounded detail and explicit coverage counts");
+    }
+    if (follow.result_counts !== undefined) {
+      const counts = requireJsonObject(follow.result_counts, "followthrough result counts");
+      if (Object.keys(counts).length !== PROGRESS_RESULT_CLASSES.length ||
+          PROGRESS_RESULT_CLASSES.some(result => !Number.isSafeInteger(counts[result]) || Number(counts[result]) < 0) ||
+          Object.values(counts).reduce<number>((sum, count) => sum + Number(count), 0) !== follow.recorded_progress_count ||
+          observations.some(row => !PROGRESS_RESULT_CLASSES.some(result => result === row.result_class)) ||
+          PROGRESS_RESULT_CLASSES.some(result => observations.filter(row => row.result_class === result).length > Number(counts[result]))) {
+        throw new EffectRuntimeRequestError("invalid followthrough result counts");
+      }
     }
     const previous = requireJsonObject(follow.previous_decision, "decision_followthrough.previous_decision");
     identifier(previous.evidence_ref, "previous_decision.evidence_ref");
@@ -648,7 +664,7 @@ export function projectReplanContext(value: unknown): JsonObject {
   if (evidenceReadTemplate) for (const row of shown) delete row.read_action;
   const core = projectCoreGoal(request.goal_facts);
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
-  const followthrough = agent && strideStrategy !== "off"
+  const followthrough = agent
     ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
     ...(evidenceReadTemplate ? {evidence_read_action_template: evidenceReadTemplate} : {}),
