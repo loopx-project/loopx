@@ -139,12 +139,7 @@ printf '%s' "$profile_dump" | node -e '
   exit 1
 }
 
-"$dsh_bin" plugin --profile "$PROFILE_NAME" exec node -e '
-  const manifest = require("dsh-loopx-plugin/package.json")
-  if (manifest.name !== "dsh-loopx-plugin" || manifest.version !== process.argv[1]) {
-    throw new Error(`installed plugin version does not match ${process.argv[1]}`)
-  }
-' "$PACKAGE_VERSION" || {
+"$dsh_bin" plugin --profile "$PROFILE_NAME" exec node -e 'const manifest = require("dsh-loopx-plugin/package.json"); if (manifest.name !== "dsh-loopx-plugin" || manifest.version !== process.argv[1]) { throw new Error(`installed plugin version does not match ${process.argv[1]}`); }' "$PACKAGE_VERSION" || {
   echo 'install: DSH installed package did not match the built version' >&2
   exit 1
 }

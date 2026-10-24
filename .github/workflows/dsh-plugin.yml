@@ -87,6 +87,10 @@ jobs:
           node -e 'require("node:fs").appendFileSync(process.env.GITHUB_ENV, "DSH_ARTIFACT=output/dsh-loopx-plugin-" + require("./package.json").version + ".tgz\n")'
       - name: Qualify the real package-name install and uninstall
         run: node smoke/dsh-registry-smoke.mjs --tarball "$DSH_ARTIFACT"
+      - name: Qualify the source installer and installed-version rejection
+        run: |
+          pnpm smoke:install
+          node smoke/dsh-installer-selected-host-smoke.mjs
       - name: Qualify packed Client and real web runtime
         if: runner.os == 'Linux'
         run: |
