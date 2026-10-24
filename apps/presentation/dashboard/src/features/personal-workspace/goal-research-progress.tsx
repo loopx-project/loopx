@@ -81,12 +81,12 @@ function assessmentGroups(result: TrajectoryAssessment, assessments: TrajectoryA
     if (exact && prior?.exact && prior.before === before && prior.after === after) prior.items.push({assessment, question});
     else groups.push({before, after, exact, items: [{assessment, question}]});
   }
-  // Leave small or different questions alone. Grouping must remove at least
-  // half the repeated question text; preserve source order and every verdict.
+  // Factor repeated prose only when it outweighs the identities. This also
+  // serves a pair of long questions; preserve source order and every verdict.
   return groups.flatMap(group => {
     const shared = group.before.length + group.after.length;
-    const total = group.items.reduce((sum, item) => sum + item.question.length, 0);
-    return group.items.length >= 3 && shared * (group.items.length - 1) >= total / 2
+    const identities = group.items.reduce((sum, item) => sum + item.assessment.episode_id.length, 0);
+    return group.items.length >= 2 && shared * (group.items.length - 1) > identities
       ? [{...group, shared: true}]
       : group.items.map(item => ({before: "", after: "", items: [item], shared: false}));
   });
@@ -201,10 +201,12 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
                   return <details className="research-assessment" key={assessment.episode_id}>
                     <summary aria-label={`${question} · ${verdictLabel(metric, assessment.verdict, zh)}`}><span className="research-assessment-name">{group.shared ? assessment.episode_id : question}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
                     <div className="research-assessment-body">
-                      {group.shared ? <p className="research-assessment-question">{question}</p> : null}
-                      <p>{assessment.reason}</p>
+                      <p className="research-assessment-reason">{assessment.reason}</p>
                       <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
-                      <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><code>{assessment.episode_id}</code>{episode ? <p>{episode.question}</p> : null}</details>
+                      {group.shared || (episode && episode.question !== question) ? <details className="research-assessment-original"><summary>{group.shared ? (zh ? "完整问题" : "Full question") : (zh ? "原始研究问题" : "Original research question")}</summary>
+                        {group.shared ? <p className="research-assessment-question">{question}</p> : null}
+                        {episode && episode.question !== question ? <>{group.shared ? <h5>{zh ? "原文" : "Original"}</h5> : null}<p>{episode.question}</p></> : null}
+                      </details> : null}
                     </div>
                   </details>;
                 })}</div>)}</div>

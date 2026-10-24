@@ -999,8 +999,13 @@ print(json.dumps([
       await page.screenshot({path: resolve(outputDir, 'research-assessment-comparison.png'), animations: 'disabled'});
       const firstRow = rows.first().locator(':scope > summary');
       await firstRow.focus(); await firstRow.press('Enter');
-      assert.match(await rows.first().innerText(), /variant-alpha 的实验是否检验原始目标/);
+      assert.equal(await rows.first().locator('.research-assessment-question:visible').count(), 0,
+        'Expanding a rationale does not repeat the shared question');
       assert.match(await rows.first().innerText(), /does not establish the intervention/);
+      const fullQuestion = rows.first().getByText('完整问题', {exact: true});
+      await fullQuestion.click();
+      assert.match(await rows.first().locator('.research-assessment-question').innerText(), /variant-alpha 的实验是否检验原始目标/);
+      await fullQuestion.click();
       const comparisonCitation = rows.first().getByRole('button', {name: /source.*行 1–2/});
       await comparisonCitation.click();
       await citedOriginal.waitFor(); await citedOriginal.press('Escape');

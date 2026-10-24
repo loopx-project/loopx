@@ -15,6 +15,20 @@ from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runti
 steward = steward_fixture
 
 
+def test_native_task_validator_cannot_replace_a_cli_host(tmp_path):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.turn import handle_turn_command
+    args = build_parser().parse_args(["turn", "run-once", "--goal-id", "example", "--agent-id", "worker",
+        "--host", "codex-cli", "--project", str(tmp_path), "--execute"])
+    payload, calls = {}, []
+    handle_turn_command(args, registry_path=tmp_path / "registry.json",
+        runtime_root_arg=str(tmp_path / "runtime"), output_format=lambda *_a, **_kw: "json",
+        print_payload=lambda value, *_a: payload.update(value),
+        native_task_validator=lambda *_a: calls.append("called"))
+    assert not payload["ok"] and "requires its original host connection" in payload["error"]
+    assert calls == [] and not (tmp_path / "registry.json").exists()
+
+
 def cli(runtime, *args):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):

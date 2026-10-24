@@ -30,13 +30,23 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
 `, path], {cwd: repoRoot});
   const capture = JSON.parse(await readFile(path, "utf8"));
   const history = JSON.stringify({ok: true, goal_id: capture.goal_id, items: capture.events, total: capture.events.length, next_cursor: null});
-  const evidence = "No native improvement was observed.\n";
-  const names = ["variant-alpha", "variant-beta", "variant-gamma", "variant-delta", "variant-epsilon", "independent-control"];
+  const evidence = "No native improvement was observed.\nThe initialization record does not identify the original bottleneck.\nThe radius comparison lacks a repair mechanism and complete controls.\nThe restart result does not identify the later adopted revision.\nTrial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.\n";
+  const names = ["variant-alpha", "variant-beta", "variant-gamma", "variant-delta", "variant-epsilon", "independent-control", "paired-alpha", "paired-beta"];
   const question = (id, language) => id === "independent-control"
     ? (language === "zh" ? "独立对照是否支持 V18 的收益？尚无依据。" : "Does the independent control support a benefit for V18? It is not established.")
+    : id.startsWith("paired-") ? (language === "zh" ? `${id} 是否在相同预算内排除相反解释？不能把未测结果当作通过，完整保留比较条件与未知。`
+      : `Did ${id} rule out the competing explanation under the same budget? Untested results are not passes; preserve the comparison conditions and unknowns.`)
     : (language === "zh" ? `${id} 的实验证据是否检验原始目标，并被后续选择实际采用？保留负面结果、控制差异与未知。`
       : `Does ${id} test the original objective and inform the subsequent selection? Preserve negative results, control differences and unknowns.`);
   const source = (id, artifact, text) => ({id, artifact, first_line: 1, text, artifact_sha256: createHash("sha256").update(text).digest("hex")});
+  const reasons = {
+    zh: ["缺少原目标瓶颈的记录。虽有候选初始化与完整求解结果，但没有对应关系，不能据此认定目标关联。",
+      "来源未说明修复机制，也未交代与参考方案的控制差异；判断保留未知，不能用候选名称代替机制证据。",
+      "后续选择没有标明采用版本。本地测试和原生结果之间缺少回读，不能从一次诊断推断持续收益或因果效果。"],
+    en: ["The initialization and full-solver result are recorded, but the original bottleneck is not identified. The intervention’s relationship to that bottleneck remains unknown.",
+      "The source does not describe the repair mechanism or complete controls against the reference. A candidate name cannot replace mechanism evidence; the judgment remains unknown.",
+      "The later selection does not identify the adopted revision. Without readback connecting local tests and native outcomes, this diagnosis cannot establish sustained or causal benefit."],
+  };
   const translate = row => row.text.replaceAll("Does ", "").replaceAll(" improve native utility under the fixed budget?", " 是否在固定预算内改善原生收益？")
     .replaceAll("Not established; no native validation yet.", "尚未确定；尚无原生验证。")
     .replaceAll("Negative evidence, not acceptance", "负向证据，尚未通过验收")
@@ -52,14 +62,16 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       sources: [source("evidence", "evidence.txt", evidence), source("history", "history.json", history)],
       episodes: names.map(id => ({id, question: question(id, "en"), source_ids: ["evidence"], eligible_metrics: [...TRAJECTORY_METRICS]})),
       display_snapshot: {schema_version: "research_display_snapshot_v1", source_id: "history", source_namespace: variant === "other-source" ? "other-source" : "local",
-        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literal_values_v1"} : {})}};
+        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literal_values_v1",
+          contexts: capture.events.filter(event => event.event_kind === "finding").map(event => ({event_id: event.event_id, field: "observation",
+            citations: [{source_id: "evidence", first_line: 5, last_line: 5}]}))} : {})}};
     const outputs = Object.fromEntries(["zh", "en"].map(language => {
       const p = prepareTrajectoryAssessment({input, config: {model: "gpt-6.1-sol", effort: "max", service_tier: "fast", output_language: language}});
       let rows = JSON.parse(p.prompt.split("\n\ndisplay_fields:\n")[1]).map(row => ({field_id: row.field_id, text: language === "zh" ? translate(row) : row.text}));
       if (variant === "partial") rows = [{...rows[0], text: "999"}, ...rows.slice(2)];
       return [language, {assessments: TRAJECTORY_METRICS.flatMap(metric => names.map((episode_id, index) => ({episode_id, metric,
         verdict: index < 3 ? "unknown" : index === 3 ? "no" : "yes",
-        reason: language === "zh" ? "合成证据；负面结果并未证明因果收益，原生效果仍未核验。" : "Synthetic evidence; a negative result does not establish causal benefit. Native effectiveness remains unverified.",
+        reason: reasons[language][index] ?? (language === "zh" ? "合成证据；负面结果并未证明因果收益，原生效果仍未核验。" : "Synthetic evidence; a negative result does not establish causal benefit. Native effectiveness remains unverified."),
         citations: index < 3 ? [] : [{source_id: "evidence", first_line: 1, last_line: 1}]}))),
         limitations: [language === "zh" ? "合成翻译仅用于交互验证。" : "Synthetic translation for interaction validation only."],
         episode_questions: names.map(episode_id => ({episode_id, question: question(episode_id, language)})), display_translations: rows}];
@@ -94,16 +106,22 @@ export const researchDisplayLanguageScenario = {
         const metric = history.locator('[data-metric="goal_alignment"]');
         await metric.click();
         const judgments = history.locator('.research-effect-evidence');
-        assert.equal(await judgments.locator('.research-assessment-shared-question').count(), 1);
+        assert.equal(await judgments.locator('.research-assessment-shared-question').count(), 2, "Both a long repeated group and a pair share exact context once");
         assert.deepEqual(await judgments.locator('.research-assessment-name').allTextContents(),
-          [...capture.analyses.at(-1).input.episodes.slice(0, 5).map(episode => episode.id), '独立对照是否支持 V18 的收益？尚无依据。']);
+          [...capture.analyses.at(-1).input.episodes.slice(0, 5).map(episode => episode.id), '独立对照是否支持 V18 的收益？尚无依据。', 'paired-alpha', 'paired-beta']);
         assert.deepEqual(await judgments.locator('.research-assessment-verdict').allTextContents(),
-          ['证据不足', '证据不足', '证据不足', '未建立', '有依据', '有依据']);
+          ['证据不足', '证据不足', '证据不足', '未建立', '有依据', '有依据', '有依据', '有依据']);
         const firstJudgment = judgments.locator('.research-assessment').first();
         await firstJudgment.locator(':scope > summary').focus(); await page.keyboard.press('Enter');
-        assert.match(await firstJudgment.locator('.research-assessment-question').innerText(), /保留负面结果、控制差异与未知/);
+        const peerJudgment = judgments.locator('.research-assessment').nth(1);
+        await peerJudgment.locator(':scope > summary').click();
+        assert.equal(await judgments.locator('.research-assessment[open]').count(), 2, "Independent row expansion is preserved");
+        assert.equal(await judgments.locator('.research-assessment-question:visible').count(), 0, "Opening several rationales never repeats the shared question");
+        assert.equal(await firstJudgment.locator('.research-assessment-reason').innerText(), capture.analyses.at(-1).outputs.zh.assessments[0].reason);
+        assert.notEqual(await peerJudgment.locator('.research-assessment-reason').innerText(), await firstJudgment.locator('.research-assessment-reason').innerText(), "Distinct source rationales stay distinct");
         assert(await firstJudgment.locator('.research-assessment-body p').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16));
         await firstJudgment.locator('.research-assessment-body details > summary').click();
+        assert.match(await firstJudgment.locator('.research-assessment-question').innerText(), /保留负面结果、控制差异与未知/);
         assert.match(await firstJudgment.innerText(), /Does variant-alpha test the original objective/);
         await judgments.press('Escape');
         assert.equal(await metric.evaluate(element => element === document.activeElement), true);
@@ -118,6 +136,20 @@ export const researchDisplayLanguageScenario = {
         assert.match(await reader.innerText(), /第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步/);
         assert.match(await reader.innerText(), /已反驳/);
         assert(!await reader.locator(".research-finding-sections").first().innerText().then(text => text.includes("Input revision:")));
+        const provenance = reader.locator('.research-node-provenance');
+        await provenance.locator(':scope > summary').click();
+        await provenance.getByRole('heading', {name: '译文依据', exact: true}).waitFor();
+        assert.equal(await provenance.getByRole('heading', {name: '显式关联', exact: true}).count(), 0, 'An empty relationship section adds no heading');
+        const contextCitation = provenance.getByRole('button', {name: 'evidence · 行 5–5', exact: true});
+        await contextCitation.focus(); await page.keyboard.press('Enter');
+        const sourceReader = history.getByRole('region', {name: '引用原文', exact: true});
+        await sourceReader.getByText('Trial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.', {exact: true}).waitFor();
+        await sourceReader.press('Escape');
+        await page.waitForFunction(element => element === document.activeElement, await contextCitation.elementHandle());
+        assert.equal(await contextCitation.evaluate(element => element === document.activeElement), true);
+        assert.equal(await history.getByRole('region', {name: '轨迹深度分析', exact: true}).count(), 0, 'A context citation preserves closed analysis');
+        await page.screenshot({path: resolve(outputDir, `research-display-context-reader-${width}.png`), animations: 'disabled'});
+        await provenance.locator(':scope > summary').click();
         await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
         await page.screenshot({path: resolve(outputDir, `research-display-language-reader-${width}.png`), animations: "disabled"});
         await original.click();
@@ -169,6 +201,19 @@ export const researchDisplayLanguageScenario = {
         await page.reload({waitUntil: "domcontentloaded"});
         await history.getByRole("button", {name: "Show originals", exact: true}).waitFor();
         assert.match(await history.locator(".research-route-caption").first().innerText(), /Does V18/);
+        await history.locator('.research-route-caption button').first().click(); await reader.waitFor();
+        const englishProvenance = reader.locator('.research-node-provenance');
+        await englishProvenance.locator(':scope > summary').click();
+        await englishProvenance.getByRole('heading', {name: 'Translation context', exact: true}).waitFor();
+        const englishCitation = englishProvenance.getByRole('button', {name: 'evidence · lines 5–5', exact: true});
+        await englishCitation.click();
+        const englishSource = history.getByRole('region', {name: 'Cited original', exact: true});
+        await englishSource.getByText('Trial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.', {exact: true}).waitFor();
+        await englishSource.press('Escape');
+        await page.waitForFunction(element => element === document.activeElement, await englishCitation.elementHandle());
+        assert.equal(await englishCitation.evaluate(element => element === document.activeElement), true);
+        await page.screenshot({path: resolve(outputDir, `research-display-context-reader-en-${width}.png`), animations: 'disabled'});
+        await reader.focus(); await reader.press('Escape');
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "No page-level narrow overflow");
         await page.addInitScript(() => Object.defineProperty(globalThis.crypto, "subtle", {value: undefined}));
         await page.reload({waitUntil: "domcontentloaded"});
