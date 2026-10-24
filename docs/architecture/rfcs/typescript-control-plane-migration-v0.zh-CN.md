@@ -41,6 +41,15 @@ SQLite CLI 性能。仅减少请求次数不能证明性能收益。
 guard、格式和 typed owner。这不新增领域规则、桥接操作或数据缓存。增量资格验证
 单独计入待合入的 quota 请求作用域接入，避免重复计算其收益。
 
+### Agent 协作 CLI 调用者接入
+
+`agent-context`、`agent-directory` 和 `agent-capabilities` 现在使用既有按命令 parser
+和共享 dispatcher。完整 parser 的兼容调用者复用相同 dispatcher，旧 handler 分支
+已删除。各命令保留原有注册、handler、registry/runtime 解析、native-controller
+guard 和输出。Dispatcher 复用既有 executable-revision 请求作用域；源数据与
+capability 观察仍实时读取。这不新增 module、桥接、语义 owner 或状态缓存。
+这是有界调用者接入，不证明 peer 执行、模型结果或完整原生 CLI 已通过资格验证。
+
 ### 产品对话与通用异步 inbox
 
 **Chat HTTP POST 作用域。** `ChatRequestHandler.do_POST` 现在为每次完整 HTTP
