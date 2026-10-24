@@ -18,6 +18,7 @@ from ...control_plane.capability_hooks import (
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.digest_envelope import sha256_envelope
 from ...history import load_registry
+from .field_shapes import REPORT_IDENTITY_PATTERN
 from .todo_source import read_report_todo_source
 from ...registry import (
     atomic_write_json,
@@ -56,7 +57,6 @@ EDITORIAL_RESPONSE_SCHEMA = "periodic_report_editorial_response_v0"
 HOOK_ID = "periodic_report.pending_intent"
 CAPABILITY_ID = "periodic-report"
 _DISPATCH_RE = re.compile(r"^pwh_[0-9a-f]{64}\.json$")
-_IDENTITY_RE = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
 _CHINESE_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _ANALYSIS_SECTION_CONTRACT = (
     ("overview", "全景判断"),
@@ -333,7 +333,7 @@ def pending_periodic_report_intents(
 ) -> list[dict[str, Any]]:
     """Read only exact, eligible, unconsumed intents for one Goal/Agent."""
 
-    if not _IDENTITY_RE.fullmatch(goal_id) or not _IDENTITY_RE.fullmatch(agent_id):
+    if not REPORT_IDENTITY_PATTERN.fullmatch(goal_id) or not REPORT_IDENTITY_PATTERN.fullmatch(agent_id):
         return []
     pending: list[dict[str, Any]] = []
     for intent in periodic_report_request_intents(
