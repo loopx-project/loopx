@@ -53,7 +53,7 @@ def test_bm25_handles_partial_terms_and_keeps_exact_ids_first():
 
 def test_labeled_repair_queries_improve_over_all_terms_filter():
     rows = lookup.read_patterns(lookup.CATALOG)
-    cases = json.loads((ROOT / "tests/fixtures/self_repair_queries.json").read_text())
+    cases = json.loads((ROOT / "tests/fixtures/self_repair_queries.json").read_text(encoding="utf-8"))
     baseline_hits = candidate_hits = 0
     for case in cases:
         assert any(row["pattern"] == case["relevant"] for row in rows)
@@ -69,7 +69,7 @@ def test_labeled_repair_queries_improve_over_all_terms_filter():
 
 
 def test_catalog_preserves_every_table_row_and_prose_appendix():
-    text = lookup.CATALOG.read_text()
+    text = lookup.CATALOG.read_text(encoding="utf-8")
     patterns = lookup.read_patterns(lookup.CATALOG)
     by_id = {row["pattern"]: row for row in patterns}
     for line in text.splitlines():
@@ -122,6 +122,9 @@ def test_real_install_delivers_lookup_and_runs_without_loopx_on_path(tmp_path):
         "--install", "--skills-dir", str(destination),
     ], cwd=ROOT, capture_output=True, text=True, check=True)
     assert json.loads(again.stdout)["installed"]["loopx-self-repair"] == "unchanged"
+    from loopx.skill_install_readback import hash_skill_tree
+
+    installed_tree = hash_skill_tree(destination)
     result = subprocess.run([
         sys.executable, "-I", str(installed), "--query", "closeout recovery",
     ], cwd=tmp_path, env={"PATH": str(tmp_path)}, capture_output=True, text=True, check=True)
@@ -133,6 +136,19 @@ def test_real_install_delivers_lookup_and_runs_without_loopx_on_path(tmp_path):
     ], cwd=tmp_path, env={"PATH": str(tmp_path)}, capture_output=True, text=True, check=True)
     row = json.loads(result.stdout)["pattern"]
     assert row == next(r for r in lookup.read_patterns(lookup.CATALOG) if r["pattern"] == row["pattern"])
+    # Ordinary isolated Python execution must not invalidate managed delivery.
+    assert hash_skill_tree(destination) == installed_tree
+    readback = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--format", "json", "workflow-skills",
+        "--skills-dir", str(destination),
+    ], cwd=ROOT, capture_output=True, text=True, check=True)
+    assert json.loads(readback.stdout)["before"]["ready"]
+    removed = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--format", "json", "workflow-skills",
+        "--uninstall", "--skills-dir", str(destination),
+    ], cwd=ROOT, capture_output=True, text=True, check=True)
+    assert json.loads(removed.stdout)["result"]["preserved_modified"] == []
+    assert not installed.exists()
     # Wheel data must deliver the same resources that source installation copied.
     with (ROOT / "pyproject.toml").open("rb") as stream:
         data = tomllib.load(stream)["tool"]["setuptools"]["data-files"]
@@ -140,4 +156,4 @@ def test_real_install_delivers_lookup_and_runs_without_loopx_on_path(tmp_path):
     assert "loopx/capabilities/context_providers/lexical_retrieval.py" in included
     for path in SKILL.rglob("*"):
         if path.is_file() and "__pycache__" not in path.parts:
-            assert str(path.relative_to(ROOT)) in included
+            assert path.relative_to(ROOT).as_posix() in included

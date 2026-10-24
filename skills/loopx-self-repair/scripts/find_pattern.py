@@ -21,7 +21,9 @@ if not _scorer_path.is_file():
 _spec = importlib.util.spec_from_file_location("repair_lexical_retrieval", _scorer_path)
 assert _spec is not None and _spec.loader is not None
 _scorer = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_scorer)
+# Lookup is read-only: the default loader writes bytecode into the managed skill
+# tree, invalidating its install digest and preventing a clean uninstall.
+exec(compile(_scorer_path.read_bytes(), str(_scorer_path), "exec"), _scorer.__dict__)
 
 
 def read_patterns(path: Path) -> list[dict[str, str]]:
