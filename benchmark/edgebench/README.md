@@ -656,6 +656,11 @@ Compare on/off from the same qualified pre-replan checkpoint with equal remainin
 budget, source and other settings. Input fidelity does not establish better
 research or scores. See the [shared Goal configuration and rollback](../../docs/reference/protocols/quota-planning-horizon-v0.md#enable-read-back-and-disable).
 
+The [proposed Goal-and-context replan study](studies/goal-context-replan/README.md)
+([中文](studies/goal-context-replan/README.zh-CN.md)) separates a whole-goal review
+instruction from source-bound context organization at a late pre-replan point.
+It is a Draft research design, not another implemented setting or a result.
+
 ### Optional structured stride strategy
 
 Add `--stride-strategy evidence_conditioned_v1` to a new `heartbeat-resume`
