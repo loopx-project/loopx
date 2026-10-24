@@ -125,8 +125,8 @@ class CheckpointWake:
             if self.request.get("native_session"):
                 from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
                 from .checkpoint_continuation import restored_capture_history
-                from .checkpoint import native_binding_participant
-                components, source_wake = native_binding_participant(self.env, components, metadata)
+                from .checkpoint import native_binding_participant, verify_native_binding_participant
+                components, source_wake, registry_bytes = native_binding_participant(self.env, components, metadata)
                 native_options = restored_capture_history(self.env, self.receipt.get("checkpoint_restore"),
                     session_id=self.receipt["session"]["session_id"])
                 guard = {"cli": self.env["LOOPX_CLI"], "workspace": self.env["LOOPX_PROJECT"],
@@ -160,13 +160,7 @@ class CheckpointWake:
                 confirmed = native_session_checkpoint(self.env, self.receipt["session"]["session_id"],
                     timeout=max(.1, window - time.time()), interrupted_guard=guard, transport=reader,
                     **native_options)
-                from .sessions import BenchmarkSessionWake
-                from .codex import Execution
-                confirmed_wake = BenchmarkSessionWake(self.env, Execution(context="resume",
-                    sandbox=self.env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
-                if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
-                        (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
-                    raise ValueError("interrupted source session binding moved before sealing")
+                verify_native_binding_participant(self.env, source_wake, registry_bytes)
                 if confirmed != native:
                     raise ValueError("interrupted native cursor moved before sealing")
             if self.request.get("loopx_state"):

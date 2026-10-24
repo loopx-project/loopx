@@ -18,7 +18,8 @@ from typing import Any
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.hosts.research_checkpoint import (
-    _participant_id, native_binding_participant, research_participants, verify_research_participants,
+    _participant_id, native_binding_participant, verify_native_binding_participant,
+    research_participants, verify_research_participants,
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 
@@ -335,11 +336,9 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             if request.get("native_session"):
                 from loopx.hosts.codex_checkpoint import native_checkpoint_reader, native_session_checkpoint
                 from .checkpoint_continuation import restored_capture_history
-                from .codex import Execution
-                from .sessions import BenchmarkSessionWake
 
                 session = receipt.get("session") or {}
-                components, source_wake = native_binding_participant(env, components, metadata)
+                components, source_wake, registry_bytes = native_binding_participant(env, components, metadata)
                 native_options = restored_capture_history(env, restore_gate,
                     session_id=session.get("session_id", ""))
                 reader = readers.enter_context(native_checkpoint_reader(env, timeout=max(.1, deadline - time.time())))
@@ -374,11 +373,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                                                       **native_options)
                 if confirmed != native:
                     raise ValueError("native checkpoint cursor or participant basis moved before sealing")
-                confirmed_wake = BenchmarkSessionWake(env, Execution(context="resume",
-                    sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access")), {})
-                if ((confirmed_wake.session_id, confirmed_wake.goal_ref, confirmed_wake.digest) !=
-                        (source_wake.session_id, source_wake.goal_ref, source_wake.digest)):
-                    raise ValueError("native checkpoint source session binding moved before sealing")
+                verify_native_binding_participant(env, source_wake, registry_bytes)
             if request.get("loopx_state"):
                 verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
             if opportunity is not None and opportunity["native_incumbent"] is not None:

@@ -130,8 +130,8 @@ def test_capture_preparation_uses_one_window_without_renewing_phase(tmp_path, mo
     binding = SimpleNamespace(session_id="native-session", goal_ref="source", digest="profile")
     monkeypatch.setattr(checkpoint, "research_participants", lambda env, components, *a: (components, {}))
     monkeypatch.setattr(checkpoint, "verify_research_participants", lambda *a: None)
-    monkeypatch.setattr(checkpoint, "native_binding_participant", lambda env, components, *a: (components, binding))
-    monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a, **k: binding)
+    monkeypatch.setattr(checkpoint, "native_binding_participant", lambda env, components, *a: (components, binding, b"registry"))
+    monkeypatch.setattr(checkpoint, "verify_native_binding_participant", lambda *a: None)
     monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_history", lambda *a, **k: {})
     @contextmanager
     def reader(*a, **k):
@@ -361,8 +361,8 @@ def test_interrupted_capture_keeps_reader_through_publication_and_cleans_up(tmp_
     held["path"].write_text("original guard")
     binding = SimpleNamespace(session_id="session", goal_ref="goal", digest="profile")
     monkeypatch.setattr("benchmark.runtime.checkpoint.native_binding_participant",
-                        lambda env, components, metadata: (components, binding))
-    monkeypatch.setattr("benchmark.runtime.sessions.BenchmarkSessionWake", lambda *a, **k: binding)
+                        lambda env, components, metadata: (components, binding, b"registry"))
+    monkeypatch.setattr("benchmark.runtime.checkpoint.verify_native_binding_participant", lambda *a: None)
     events = []
     token = object()
     native_options = {"retained_history": {"turn_ids": ["source"], "visible_history_sha256": "source-digest"},

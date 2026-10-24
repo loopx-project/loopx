@@ -412,8 +412,11 @@ def _loopx_state_components(env, components, output_dir):
 
 def native_binding_participant(env, components, metadata):
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    registry_bytes = Path(env["LOOPX_REGISTRY"]).read_bytes()
     source_wake = CodexAgentSession(env, context="resume",
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"), receipt={})
+    if Path(env["LOOPX_REGISTRY"]).read_bytes() != registry_bytes:
+        raise ValueError("checkpoint registry moved during session observation")
     if source_wake.session_id != metadata["session"].get("session_id"):
         raise ValueError("native checkpoint differs from the current source session binding")
     # This sideband record belongs to the existing session owner. It
@@ -427,7 +430,32 @@ def native_binding_participant(env, components, metadata):
     metadata["session"] = {**metadata["session"], "session_profile_digest": source_wake.digest}
     if source_wake.binding.get("checkpoint_context_refresh") is not None:
         metadata["session"]["checkpoint_context_refresh"] = source_wake.binding["checkpoint_context_refresh"]
-    return components, source_wake
+    return components, source_wake, registry_bytes
+
+
+def verify_native_binding_participant(env, source_wake, registry_bytes):
+    """Recheck the accepted binding without creating another launch admission.
+
+    The initial session owner selects the binding and Goal lifetime. After the
+    byte probe, constructing that owner again would write its advisory locks
+    and invalidate the snapshot. Compare the complete binding, profile and
+    unchanged registry instead; this observation grants no launch authority.
+    """
+    import shutil
+    from loopx.control_plane.turn_driver.codex_sessions import (
+        codex_session_profile_digest, select_codex_cli_session,
+    )
+    if Path(env["LOOPX_REGISTRY"]).read_bytes() != registry_bytes:
+        raise ValueError("checkpoint registry moved before sealing")
+    binding = select_codex_cli_session(source_wake.root, lineage=source_wake.lineage, session_scope="agent")
+    binary = shutil.which(env["CODEX_BIN"])
+    if binary is None:
+        raise ValueError("checkpoint native binary is unavailable")
+    digest = codex_session_profile_digest(project=Path(env["LOOPX_PROJECT"]), codex_bin=binary,
+        home=Path(env["CODEX_HOME"]), model=env["MODEL_NAME"], reasoning_effort=env["REASONING_EFFORT"],
+        sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"))
+    if binding != source_wake.binding or digest != source_wake.digest:
+        raise ValueError("checkpoint source session binding or profile moved before sealing")
 
 
 def research_participants(env, components, metadata, destination, evidence_path, deadline):
@@ -517,7 +545,7 @@ def capture_research_checkpoint(env: dict[str, str], request: dict, *,
             destination, Path(temporary) / "research-context.json", deadline)
         if research is None:
             raise ValueError("research capture requires canonical source coordination")
-        components, observed_session = native_binding_participant(env, components, metadata)
+        components, observed_session, registry_bytes = native_binding_participant(env, components, metadata)
         # Reopening the native reader after probing can checkpoint its history
         # database and invalidate our own byte witness. Keep one inspection
         # process open; the original logical reread and byte fence both remain.
@@ -535,10 +563,7 @@ def capture_research_checkpoint(env: dict[str, str], request: dict, *,
                 timeout=max(.1, deadline-time.time()), retry_safe=False, large_local_snapshot=True)
             if native_session_checkpoint(env, session.session_id, timeout=max(.1, deadline-time.time()), transport=reader) != native:
                 raise ValueError("native checkpoint source moved before sealing")
-            _, confirmed = native_binding_participant(env, components, metadata)
-            if ((confirmed.session_id, confirmed.goal_ref, confirmed.digest) !=
-                    (observed_session.session_id, observed_session.goal_ref, observed_session.digest)):
-                raise ValueError("research checkpoint session binding moved before sealing")
+            verify_native_binding_participant(env, observed_session, registry_bytes)
             verify_research_participants(env, components, metadata, research, probe["source_witness"], deadline)
             if settled().identity.value != original.identity.value:
                 raise ValueError("research checkpoint source settlement moved")
