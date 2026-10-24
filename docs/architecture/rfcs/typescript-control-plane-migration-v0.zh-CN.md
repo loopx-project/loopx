@@ -60,6 +60,16 @@ registry/runtime 选择和 native-controller guard 保持既有路径。这不�
 桥接操作或状态缓存。完整命令成本及真实写入／恢复行为与 import 计时分别验证；
 安装后行为和真实 provider 行为仍需各自的证据。
 
+### Handoff CLI 调用者接入
+
+`handoff` 和 `handoff-mode` 复用现有 selected parser 与共享 dispatcher。
+完整兼容 CLI 调用相同且未改动的处理器，原有 continuation 和 mode 分发块已删除。
+每条命令进入既有可执行版本请求 scope；registry、provider、workspace 和 authority
+观察仍实时读取。帮助、诊断、格式、native-controller guard 和操作重放身份保留
+原有所有者。不新增 module、语义所有者、bridge operation 或数据 cache。这是
+有界 Stage 3 调用者接入；完整 CLI 成本及真实 handoff／策略恢复，与完整 native CLI、
+Host 或 provider 晋升分别资格化。
+
 ### 产品对话与通用异步 inbox
 
 **Chat HTTP POST 作用域。** `ChatRequestHandler.do_POST` 现在为每次完整 HTTP

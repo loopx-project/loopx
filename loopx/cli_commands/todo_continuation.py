@@ -1,4 +1,8 @@
 """Host CLI adapter; all continuation and ownership decisions stay in TypeScript."""
+from __future__ import annotations
+
+import argparse
+from collections.abc import Callable
 from pathlib import Path
 import json
 
@@ -90,7 +94,10 @@ def _render_digest(payload: dict) -> str:
     return "\n".join(lines)
 
 
-def register_todo_continuation(subparsers, add_format):
+def register_todo_continuation(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    add_format: Callable[[argparse.ArgumentParser], None],
+) -> None:
     parser = subparsers.add_parser(
         "handoff", help="Explicit cross-agent Todo handoff: prepare/inspect/adopt ownership, or restore content without authority changes."
     )
@@ -118,7 +125,11 @@ def register_todo_continuation(subparsers, add_format):
         help="Output format. 'digest' renders inspect as a readable handoff summary (inspect only).")
 
 
-def handle_todo_continuation(args, *, registry_path, runtime_root_arg, output_format, print_payload):
+def handle_todo_continuation(
+    args: argparse.Namespace, *, registry_path: Path, runtime_root_arg: str | None,
+    output_format: Callable[[argparse.Namespace], str],
+    print_payload: Callable[[dict[str, object], str, Callable[[dict[str, object]], str]], None],
+) -> int | None:
     if args.command != "handoff":
         return None
     if args.action == "restore":

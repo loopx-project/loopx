@@ -277,6 +277,8 @@ assert payload["groups"]
 		(["review-packet", "--help"], "loopx.cli_commands.status_registration", "loopx.cli_commands.status"),
 		(["quota", "--help"], "loopx.cli_commands.quota_registration", "loopx.cli_commands.quota"),
 		(["task-lease", "--help"], "loopx.cli_commands.task_lease", "loopx.cli_commands.task_lease"),
+		(["handoff", "--help"], "loopx.cli_commands.todo_continuation", "loopx.cli_commands.todo_continuation"),
+		(["handoff-mode", "--help"], "loopx.cli_commands.handoff_mode", "loopx.cli_commands.handoff_mode"),
 		(["todo", "--help"], "loopx.cli_commands.todo_registration", "loopx.cli_commands.todo"),
 		(["delegation", "--help"], "loopx.cli_commands.delegation", "loopx.cli_commands.delegation"),
 		(["agent-context", "--help"], "loopx.cli_commands.agent_context", "loopx.cli_commands.agent_context"),
@@ -550,6 +552,52 @@ def test_selected_manager_inbox_refusals_match_without_loading_full_cli(tmp_path
 	assert selected.stdout == full.stdout
 	assert selected.stderr == full.stderr
 	assert json.loads(selected.stdout)["ok"] is False
+
+
+@pytest.mark.parametrize("arguments", [
+	["handoff", "inspect"],
+	["handoff", "prepare", "--goal-id", "perf-goal"],
+	["handoff", "inspect", "--format", "digest"],
+	["handoff-mode", "show", "--goal-id", "perf-goal", "--mode", "hard_lease"],
+	["handoff-mode", "migrate", "--goal-id", "perf-goal"],
+])
+def test_selected_handoff_refusals_match_without_loading_full_cli(tmp_path, arguments):
+	registry, runtime_root = write_command_fixture(tmp_path)
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root), "--format", "json", *arguments]
+	before = registry.read_bytes()
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert registry.read_bytes() == before
+
+
+def test_selected_handoff_parser_diagnostics_match_full_cli():
+	cases = [
+		["handoff"], ["handoff", "unknown"], ["handoff-mode"], ["handoff-mode", "unknown"],
+		["handoff", "inspect", "--format", "yaml"],
+		["handoff-mode", "set", "--mode", "invalid"],
+		["handoff-mode", "show", "--goal-id", "demo", "--unrecognized"],
+	]
+	assert run_cli_batch("loopx.entrypoint", cases) == run_cli_batch("loopx.cli", cases)
+
+
+@pytest.mark.parametrize("input_format", ["json", "markdown"])
+@pytest.mark.parametrize("format_name", ["json", "markdown"])
+def test_selected_handoff_restore_preserves_content_without_authority(tmp_path, input_format, format_name):
+	text = "保持完整要求。\n\nValidate the original Todo.\n"
+	source = tmp_path / "handoff.txt"
+	source.write_text(json.dumps({"ok": True, "handoff_text": text}) if input_format == "json" else text, encoding="utf-8")
+	registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "handoff", "restore",
+		"--input", str(source), "--input-format", input_format, "--format", format_name]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 0
+	assert selected.stdout == full.stdout
+	assert (json.loads(selected.stdout)["handoff_text"] if format_name == "json" else selected.stdout) == text
+	assert not registry.exists() and not runtime.exists()
 
 
 @pytest.mark.parametrize("arguments", [

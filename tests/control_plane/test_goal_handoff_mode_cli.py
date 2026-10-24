@@ -1,4 +1,4 @@
-"""CLI coverage for canonical handoff mode and pre-cutoff read compatibility."""
+"""CLI coverage for canonical handoff mode and refusal of unpromoted state."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import pytest
 from loopx.cli import main as cli_main
 from loopx.control_plane.todos.handoff_mode import (
     HANDOFF_MODE_HARD_LEASE,
-    HANDOFF_MODE_LEGACY,
     HANDOFF_MODE_SOFT_CLAIM,
 )
 from loopx.control_plane.work_items.task_lease import acquire_task_lease
@@ -111,20 +110,26 @@ def _add_todo(registry: Path, *, claimed_by: str | None = None) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 
-def test_handoff_mode_show_defaults_to_legacy(
+@pytest.mark.parametrize("handoff_mode", [None, "banana"])
+def test_unpromoted_show_requires_canonical_authority_without_mutation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    handoff_mode: str | None,
 ) -> None:
-    registry, _state = _write_workspace(tmp_path)
+    registry, state = _write_workspace(tmp_path, handoff_mode=handoff_mode)
+    before = state.read_bytes()
 
     exit_code, payload = _run_cli(
         capsys, registry, "handoff-mode", "show", "--goal-id", GOAL_ID
     )
 
-    assert exit_code == 0
-    assert payload["ok"] is True
-    assert payload["handoff_mode"] == HANDOFF_MODE_LEGACY
-    assert payload["source"] == "default"
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert payload["error_code"] == "canonical_authority_required"
+    assert payload["decision_read_from_provider"] is False
+    assert payload["legacy_fallback_used"] is False
+    assert payload["recovery"] == {"action": "migrate_goal_authority", "backup_required": True}
+    assert state.read_bytes() == before
 
 
 def test_unpromoted_legacy_set_is_retired_without_mutation(tmp_path, capsys):
@@ -141,24 +146,6 @@ def test_unpromoted_legacy_set_is_retired_without_mutation(tmp_path, capsys):
         "action": "migrate_goal_authority",
         "backup_required": True,
     }
-    assert state.read_bytes() == before
-
-
-def test_handoff_mode_show_rejects_invalid_frontmatter_without_mutation(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    registry, state = _write_workspace(tmp_path, handoff_mode="banana")
-    before = state.read_bytes()
-
-    exit_code, payload = _run_cli(
-        capsys, registry, "handoff-mode", "show", "--goal-id", GOAL_ID
-    )
-
-    assert exit_code == 1
-    assert payload["ok"] is False
-    assert payload["error_code"] == "invalid_handoff_mode"
-    assert payload["handoff_mode"] == "banana"
     assert state.read_bytes() == before
 
 

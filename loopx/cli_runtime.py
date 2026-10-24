@@ -75,6 +75,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
+	"handoff", "handoff-mode",
 }
 
 
@@ -317,6 +318,14 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.task_lease import register_task_lease_command
 
 		register_task_lease_command(subparsers, add_subcommand_format)
+	elif command == "handoff":
+		from .cli_commands.todo_continuation import register_todo_continuation
+
+		register_todo_continuation(subparsers, add_subcommand_format)
+	elif command == "handoff-mode":
+		from .cli_commands.handoff_mode import register_handoff_mode_command
+
+		register_handoff_mode_command(subparsers, add_subcommand_format)
 	elif command == "change-window":
 		from .capabilities.repository_change_window.cli import register_repository_change_window_commands
 
@@ -424,6 +433,15 @@ def _dispatch_common_command(
 		from .cli_commands.task_lease import handle_task_lease_command
 
 		return handle_task_lease_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command in {"handoff", "handoff-mode"}:
+		if args.command == "handoff":
+			from .cli_commands.todo_continuation import handle_todo_continuation as handoff_handler
+		else:
+			from .cli_commands.handoff_mode import handle_handoff_mode_command as handoff_handler
+		return handoff_handler(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)

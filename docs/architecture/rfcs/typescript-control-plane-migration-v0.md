@@ -68,6 +68,19 @@ on their established paths. This adds no domain rule, bridge operation or state
 cache. Complete command cost and real write/recovery behavior qualify separately
 from import timing; installed and live-provider behavior need their own evidence.
 
+### Handoff CLI caller adoption
+
+`handoff` and `handoff-mode` use the existing selected parser and shared
+dispatcher. The full compatibility CLI reaches the same unchanged handlers;
+its separate continuation and mode dispatch blocks are retired. Each command
+joins the existing executable-revision request scope, while registry, provider,
+workspace and authority observations remain live. Existing help, diagnostics,
+formats, native-controller guards and operation replay identities remain with
+their current owners. This adds no module, semantic owner, bridge operation or
+data cache. It is bounded Stage 3 caller adoption; complete CLI cost and real
+handoff/policy recovery qualify separately from the full native CLI and host
+or provider promotion.
+
 ### Product conversations and asynchronous inbox
 
 **Chat HTTP POST scope.** `ChatRequestHandler.do_POST` now joins the existing

@@ -22,7 +22,7 @@ from .cli_commands.agent_context import register_agent_context
 from .capabilities.multi_subagent.cli import (
     register_native_child_commands, handle_native_child_command,
 )
-from .cli_commands.todo_continuation import register_todo_continuation, handle_todo_continuation
+from .cli_commands.todo_continuation import register_todo_continuation
 from .cli_commands.manager_inbox import register_manager_inbox
 from .cli_commands.delegation import register_delegation
 from .capabilities.content_ops.cli import (
@@ -117,7 +117,6 @@ from .cli_commands import (
     handle_registry_admin_command,
     handle_starter_command,
     handle_support_control_command,
-    handle_handoff_mode_command,
     handle_task_lease_command,
     handle_authority_shadow_command,
     handle_version_command,
@@ -851,23 +850,6 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if authority_shadow_result is not None:
         return authority_shadow_result
-
-    continuation_result = handle_todo_continuation(
-        args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
-        output_format=output_format, print_payload=print_payload,
-    )
-    if continuation_result is not None:
-        return continuation_result
-
-    handoff_mode_result = handle_handoff_mode_command(
-        args,
-        registry_path=registry_path,
-        output_format=output_format,
-        print_payload=print_payload,
-        runtime_root_arg=args.runtime_root,
-    )
-    if handoff_mode_result is not None:
-        return handoff_mode_result
 
     goal_acceptance_result = handle_goal_acceptance_command(
         args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
