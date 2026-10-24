@@ -3,7 +3,10 @@ import {LeaseWorktreeObservationError, observeLeaseWorktree, type LeaseWorkspace
 import {isCanonicalTodoId} from "../todos/identity.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../coordination/task_lease_acquire.ts";
 import {withCanonicalTaskLeaseAuthority} from "./canonical_task_lease_lifecycle.ts";
-import {evaluateTaskLeaseWriteScopesOverlap} from "./task_lease_acquire_decision.ts";
+import {
+  canonicalWriteScope,
+  evaluateTaskLeaseWriteScopesOverlap,
+} from "./task_lease_acquire_decision.ts";
 import { ShadowManagementError } from "../coordination/shadow_management.ts";
 import { parseIsoTimestamp } from "../runtime_timestamp.ts";
 import { createHash } from "node:crypto";
@@ -35,8 +38,6 @@ export const TASK_LEASE_SCHEMA_VERSION = "task_lease_v0";
 
 const DEFAULT_TTL_SECONDS = 45 * 60;
 const MAX_TTL_SECONDS = 24 * 60 * 60;
-const TODO_WRITE_SCOPE_MAX_CHARS = 160;
-
 type FileState = "file" | "missing";
 export type TodoFactField =
   | "status"
@@ -232,7 +233,8 @@ export function normalizeIdempotencyKey(value: unknown): string {
   return key;
 }
 
-export function normalizeWriteScopes(value: unknown): string[] {
+function writeScopeCandidates(value: unknown): unknown[] {
+  if (value === null || value === undefined) return [];
   let raw: unknown[];
   if (Array.isArray(value)) {
     raw = value;
@@ -241,15 +243,17 @@ export function normalizeWriteScopes(value: unknown): string[] {
   } else {
     raw = [value];
   }
+  return raw;
+}
+
+export function normalizeWriteScopes(value: unknown): string[] {
+  const raw = writeScopeCandidates(value);
   const scopes: string[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
-    const scope = compact(item);
+    const scope = canonicalWriteScope(compact(item));
     if (
-      scope.length === 0 || scope.length > TODO_WRITE_SCOPE_MAX_CHARS ||
-      scope.startsWith("/") || scope.startsWith("~") ||
-      scope.split("/").includes("..") || /[\s<>]/u.test(scope) ||
-      seen.has(scope)
+      scope === null || seen.has(scope)
     ) {
       continue;
     }
@@ -257,6 +261,17 @@ export function normalizeWriteScopes(value: unknown): string[] {
     scopes.push(scope);
   }
   return scopes;
+}
+
+export function requireWriteScopes(value: unknown): string[] {
+  const raw = writeScopeCandidates(value);
+  if (raw.some(item => canonicalWriteScope(compact(item)) === null)) {
+    throw new TaskLeaseAcquireError(
+      "write_scopes must contain valid repository-relative scope tokens",
+      "invalid_write_scopes",
+    );
+  }
+  return normalizeWriteScopes(raw);
 }
 
 export function normalizeTtl(value: unknown): number {
@@ -424,7 +439,7 @@ function decodeRequest(value: unknown): AcquireRequest {
     owner: normalizeOwner(request.owner),
     todo_id: normalizeTodoId(request.todo_id),
     idempotency_key: normalizeIdempotencyKey(request.idempotency_key),
-    write_scopes: normalizeWriteScopes(request.write_scopes),
+    write_scopes: requireWriteScopes(request.write_scopes),
     ttl_seconds: normalizeTtl(request.ttl_seconds),
     expected_version: optionalInteger(request.expected_version, "expected_version"),
     authority,

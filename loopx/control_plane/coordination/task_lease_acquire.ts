@@ -13,7 +13,7 @@ import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {goalObjectiveWorkGuard} from "../goals/goal_objective.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {normalizeGoalId, normalizeTodoId, normalizeOwner, normalizeIdempotencyKey,
-  normalizeWriteScopes, normalizeTtl, leaseEpoch, leaseVersion, leaseIsActive,
+  requireWriteScopes, normalizeTtl, leaseEpoch, leaseVersion, leaseIsActive,
   TaskLeaseAcquireError} from "../work_items/task_lease_acquire.ts";
 
 export interface CanonicalTaskLeaseAcquireInput {
@@ -33,7 +33,7 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
     input = {...raw, goal_id: normalizeGoalId(raw.goal_id), todo_id: normalizeTodoId(raw.todo_id),
       owner: normalizeOwner(raw.owner), idempotency_key: normalizeIdempotencyKey(raw.idempotency_key),
       write_workspace: leaseWorkspace(raw.write_workspace),
-      write_scopes: normalizeWriteScopes(raw.write_scopes), ttl_seconds: normalizeTtl(raw.ttl_seconds),
+      write_scopes: requireWriteScopes(raw.write_scopes), ttl_seconds: normalizeTtl(raw.ttl_seconds),
       registered_agents: raw.registered_agents.map(normalizeOwner)};
     if (input.expected_version !== null && (!Number.isSafeInteger(input.expected_version) || input.expected_version < 0)) {
       return failed("invalid_expected_version", "expected lease version must be a non-negative safe integer");

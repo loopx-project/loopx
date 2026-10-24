@@ -4,7 +4,10 @@ import {execFileSync} from "node:child_process";
 import {mkdtemp, rm, mkdir, writeFile, symlink, realpath} from "node:fs/promises";
 import {platform, tmpdir} from "node:os";
 import {join} from "node:path";
-import {evaluateTaskLeaseAcquireDecision, evaluateTaskLeaseWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
+import {decideTaskLeaseAcquire, evaluateTaskLeaseAcquireDecision, evaluateTaskLeaseWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
+import {normalizeWriteScopes} from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
+import {canonicalTaskLeaseAcquireFacts} from "../../loopx/control_plane/coordination/task_lease_state.ts";
+import {indexCoordinationProjection} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {leaseWorkspace, sameLeaseCheckout, observeLeaseWorktree} from "../../loopx/control_plane/work_items/task_lease_workspace.ts";
 
 const repo = "git:github.com/example/project";
@@ -164,6 +167,106 @@ test("ordinary exclusive grants retain overlap rejection without worktree mode",
     const exclusive = {...input, command: {...input.command, write_workspace: null}};
     assert.equal(evaluateTaskLeaseAcquireDecision(exclusive).code, "write_scope_conflict");
   }
+});
+
+test("lexical scope aliases cannot bypass an ordinary exclusive lease", () => {
+  const now = new Date("2030-01-01T00:00:00Z");
+  const projection = indexCoordinationProjection({
+    goal_id: "goal-a",
+    todos: [
+      {goal_id: "goal-a", todo_id: "todo_target", archive_state: "active", status: "open", claimed_by: "agent-a"},
+      {goal_id: "goal-a", todo_id: "todo_holder", archive_state: "active", status: "open", claimed_by: "agent-b"},
+    ],
+    leases: [{
+      schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_holder",
+      owner: "agent-b", idempotency_key: "holder", status: "active", version: 1,
+      lease_epoch: 1, write_scopes: ["src/./main.ts"],
+      expires_at: "2031-01-01T00:00:00Z",
+    }],
+  }, "goal-a");
+  const facts = canonicalTaskLeaseAcquireFacts(
+    projection,
+    "goal-a",
+    "todo_target",
+    ["agent-a", "agent-b"],
+    now,
+  );
+  const decision = decideTaskLeaseAcquire({
+    handoff_mode: "hard_lease",
+    registered_agents: ["agent-a", "agent-b"],
+    ...facts,
+    command: {
+      owner: "agent-a",
+      idempotency_key: "target",
+      ttl_seconds: 60,
+      expected_version: 0,
+      write_scopes: normalizeWriteScopes(["src//main.ts"]),
+    },
+  });
+
+  assert.equal(decision.code, "write_scope_conflict");
+  assert.deepEqual(facts.other_leases[0].write_scopes, ["src/main.ts"]);
+  assert.deepEqual(projection.leases.get("todo_holder")?.write_scopes, ["src/./main.ts"]);
+});
+
+test("malformed retained scopes conservatively conflict without rewriting history", () => {
+  for (const holderScope of ["../legacy", "src\\legacy"]) {
+    const now = new Date("2030-01-01T00:00:00Z");
+    const projection = indexCoordinationProjection({
+      goal_id: "goal-a",
+      todos: [
+        {goal_id: "goal-a", todo_id: "todo_target", archive_state: "active", status: "open", claimed_by: "agent-a"},
+        {goal_id: "goal-a", todo_id: "todo_holder", archive_state: "active", status: "open", claimed_by: "agent-b"},
+      ],
+      leases: [{
+        schema_version: "task_lease_v0", goal_id: "goal-a", todo_id: "todo_holder",
+        owner: "agent-b", idempotency_key: "holder", status: "active", version: 1,
+        lease_epoch: 1, write_scopes: [holderScope],
+        expires_at: "2031-01-01T00:00:00Z",
+      }],
+    }, "goal-a");
+    const facts = canonicalTaskLeaseAcquireFacts(
+      projection,
+      "goal-a",
+      "todo_target",
+      ["agent-a", "agent-b"],
+      now,
+    );
+    const decision = decideTaskLeaseAcquire({
+      handoff_mode: "hard_lease",
+      registered_agents: ["agent-a", "agent-b"],
+      ...facts,
+      command: {
+        owner: "agent-a",
+        idempotency_key: "target",
+        ttl_seconds: 60,
+        expected_version: 0,
+        write_scopes: ["docs/next.md"],
+      },
+    });
+
+    assert.equal(decision.code, "write_scope_conflict");
+    assert.deepEqual(facts.other_leases[0].write_scopes, ["**"]);
+    assert.deepEqual(projection.leases.get("todo_holder")?.write_scopes, [holderScope]);
+  }
+});
+
+test("scope normalization and pure overlap agree on lexical aliases", () => {
+  assert.deepEqual(
+    normalizeWriteScopes(["src//main.ts", "src/./main.ts", "./src/main.ts"]),
+    ["src/main.ts"],
+  );
+  assert.deepEqual(
+    normalizeWriteScopes(["src/[./]/main.ts", "src/[//]/main.ts", "src/"]),
+    ["src/[./]/main.ts", "src/[//]/main.ts", "src/"],
+  );
+  assert.equal(
+    evaluateTaskLeaseWriteScopesOverlap({
+      left: ["src//main.ts"],
+      right: ["src/./main.ts"],
+    }).overlap,
+    true,
+  );
 });
 test("a known same-checkout collision wins over changed repository metadata", () => {
   const other = {...workspace, repository: "git:github.com/example/other"};
