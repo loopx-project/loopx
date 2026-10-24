@@ -395,7 +395,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 LOOPX_CODEX_HOME=str(home), LOOPX_PROJECT=str(project), LOOPX_SHARED_SKILLS=str(skills),
                 LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                 LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID, LOOPX_WAKE_LOG_DIR=str(workspace / "wakes"),
-                LOOPX_CLI=str(wrapper if hook_loss else Path(sys.executable).with_name("loopx")), CODEX_BIN=binary,
+                LOOPX_CLI=str(wrapper if hook_loss else installed_cli or Path(sys.executable).with_name("loopx")), CODEX_BIN=binary,
                 MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=url,
                 OPENAI_API_KEY="synthetic-loopback-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="90")
             if checkpoint_handoff:
@@ -498,6 +498,13 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                         if source["source"] == "selected_todo")
         assert selected["todo_id"] == TODO_ID and selected["text"] == body
     assert all(path.read_bytes() == raw for path, raw in snapshots)
+    if installed_cli:
+        expected_cli = str(wrapper) if host == "benchmark" and hook_loss else installed_cli
+        for _, raw in snapshots:
+            # The original guard's settlement routes reveal its actual CLI;
+            # installed page reads alone cannot qualify the worker preflight.
+            actions = json.loads(raw)["interaction_contract"]["cli_channel"]["next_cli_actions"]
+            assert actions and all(shlex.split(action)[0] == expected_cli for action in actions)
     if host == "benchmark" and resumed:
         assert _spend_run_count(runtime) == 1
         from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
