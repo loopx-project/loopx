@@ -34,6 +34,21 @@ def home_for_project(base_home: Path, context: dict[str, str] | None) -> Path:
     return codex_home(base_home, policy)
 
 
+def checked_session_home(base_home: Path, session: Mapping[str, Any]) -> Path:
+    if session.get("agent_id") != "codex" or session.get("session_mode") == "attached_host":
+        return base_home
+    selected = session_base_home(base_home, session)
+    require_session_home(selected, session)
+    return selected
+
+
+def managed_upstream_mode(session: Mapping[str, Any]) -> str:
+    from ...chat_codex_goal import UPSTREAM_MODE
+    if session.get("agent_id") == "codex":
+        return UPSTREAM_MODE if session.get("upstream_mode") == UPSTREAM_MODE else "chat"
+    return str(session.get("upstream_mode") or "default")
+
+
 def session_base_home(base_home: Path, session: Mapping[str, Any]) -> Path:
     """Recover an ordinary thread in its independently discovered native profile.
 

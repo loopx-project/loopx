@@ -187,6 +187,39 @@ def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, wo
         "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve())})
 
 
+def prepare_managed_session_route(controller: Any, *, goal_id: str | None, executor: str, workspace: Path,
+        channel_id: str, goal_instance_id: str | None, managed_agent_id: str | None,
+        project_context: Any, steward_context: Any) -> dict[str, Any]:
+    """Compose the existing Core route; unbound channels retain their old path."""
+    from ...chat_manager import is_manager_channel
+    route = {"goal_id": goal_id, "goal_instance_id": goal_instance_id, "channel_id": channel_id}
+    if managed_agent_id is None:
+        return route
+    if (controller.closed.is_set() or project_context is not None or steward_context is not None
+            or is_manager_channel(channel_id) or executor != "codex" or goal_id is None):
+        raise ValueError("registered managed Agents require the local Goal's managed Codex host")
+    identity = managed_session_identity(controller, goal_id=goal_id, agent_id=managed_agent_id, workspace=workspace)
+    if channel_id not in (f"goal.{goal_id}", identity["channel_id"]):
+        raise ValueError("the managed Agent channel cannot be substituted")
+    if goal_instance_id is not None and goal_instance_id != identity["goal_instance_id"]:
+        raise ValueError("the original managed Agent Goal lifetime changed")
+    return {**route, **identity, "session_mode": "managed_runtime", "managed_workspace_path": str(workspace.resolve())}
+
+
+def require_managed_agent_session(controller: Any, session: dict[str, Any], workspace: Path) -> None:
+    """Reobserve registration before Core admission, resume or host recovery."""
+    if session.get("managed_agent_id") is None:
+        return
+    from ...control_plane.collaboration import conversation_scope
+    if session.get("managed_workspace_path") != str(workspace.resolve()):
+        raise ValueError("the original managed Agent workspace changed")
+    identity = managed_session_identity(controller, goal_id=session["goal_id"], agent_id=session["managed_agent_id"], workspace=workspace)
+    if (identity["goal_instance_id"] != session.get("goal_instance_id")
+            or identity["channel_id"] != session.get("channel_id")
+            or conversation_scope(session)["kind"] != "owner_goal"):
+        raise ValueError("the original registered Agent Session identity changed")
+
+
 class ManagedSessionTurn:
     """Thin local-owner entry to the existing Turn worker and task validator.
 
