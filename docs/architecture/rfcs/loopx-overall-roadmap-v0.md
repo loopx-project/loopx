@@ -129,7 +129,7 @@ visibility limits, ordinary notices, current cadence floors and unchanged
 canonical waits/monitor clocks. Installed adoption and live host readback remain
 separate from this source repair.
 
-**S3/S7 administrative closeout proposal.** [#7117](https://github.com/loopx-project/loopx/pull/7117)
+**S3/S7 administrative closeout checkpoint.** [#7117](https://github.com/loopx-project/loopx/pull/7117)
 also separates an accepted blocked replan from the preceding real outcome
 checkpoint. File/SQLite CLI readback and long/compacted history regressions retain
 the previous milestone or genuine gap without creating a new outcome obligation
@@ -149,6 +149,14 @@ deadline recovery. Identical Explore guidance is referenced within the same CLI
 packet, preserving all clauses and standalone reads.
 Full-repository qualification, comparable full caller cost, installed adoption
 and measured long-horizon benefit remain distinct and incomplete.
+
+The follow-on timer repair retains readiness at positive CLI work admission.
+File/SQLite reentry distinguishes an unchanged timer already due at admission
+from a later-authored wait, including one already due when read. Both preserve
+the original binding and exactly-once result settlement. The shared TypeScript
+owner checks microseconds; missing legacy facts retain conservative recovery.
+This source qualification adds no scheduler, historical receipt rewrite or
+installed/live-host qualification.
 
 **S5/S11 long-horizon progress design.** The [research measurement refinement](long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement)
 and [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)

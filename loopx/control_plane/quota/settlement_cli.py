@@ -395,6 +395,13 @@ def quota_rollout_details(
         "quiet_noop_allowed": bool(agent_channel.get("quiet_noop_allowed")),
         "closeout_required": closeout_required,
     }
+    if closeout_required and selected_todo and selected_todo.get("todo_id") == todo_id:
+        # Freeze canonical selection facts at positive admission. Reentry must
+        # not mistake this already-runnable timer for a newly authored wait.
+        # The TypeScript recovery owner validates the comparison; unknown
+        # readiness and an absent timer remain explicit null facts here.
+        details["admission_resume_when"] = selected_todo.get("resume_when")
+        details["admission_resume_ready"] = selected_todo.get("resume_ready")
     replan_packet = payload.get("replan_action_packet")
     receipt = payload.get("heartbeat_receipt")
     capability_guard = (replan_packet.get("capability_guard") if isinstance(replan_packet, Mapping) else None) or (

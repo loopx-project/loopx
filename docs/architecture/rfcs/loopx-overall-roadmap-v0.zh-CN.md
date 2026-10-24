@@ -104,7 +104,7 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | **S12 发布、开发体验与社区治理 · P0 卫生/P1** | 安装、源码验证、扩展注册、DCO/PR、测试层级、contributor route 与双语文档已存在 | 从干净机器/发布包验一条首次工作和一次升级/回滚；host/OS 支持以 release contract 为准。缩短合理改动的定位、测试和 review 成本；公开精确 head、可重复 fixture、兼容窗口、维护者路由和贡献归属，退休重复协议及过时证据 |
 | **S13 采用、生态与商业可持续性 · P1 发现/P2 试点** | 公开 adoption loop、showcase、license/governance、observer-first 产品合同已存在；付费 PMF 未证明 | 先收集真实独立首次使用/重复使用/退出原因，做可复现案例和有固定预算/验收/回滚的试点；沉淀 reusable adapter 与交付手册。核算模型/计算/存储/支持成本及维护负担；满足重复需求后再决策商业托管边界、支持等级和分发，不承诺 SLA 或擅改开源条款 |
 
-**S3/S7 行政收尾提案。** [#7117](https://github.com/loopx-project/loopx/pull/7117)
+**S3/S7 行政收尾检查点。** [#7117](https://github.com/loopx-project/loopx/pull/7117)
 进一步区分已验收的阻塞重规划与前一个真实成果 checkpoint。File/SQLite CLI 回读和
 长期／压缩历史回归保留原里程碑或真实缺口，避免行政收尾制造新的成果义务。源码
 覆盖已包括通知／真门禁叠加、原截止恢复，以及各自持有 Vision 和时钟时的原生取消
@@ -116,6 +116,12 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 计数。File/SQLite 真实 CLI 覆盖阈值、独立工作、真实用户门禁与自然到期恢复。
 完全相同的 Explore 指引改为同一 CLI 包内引用，保留全部条款及独立读取。整仓
 资格、可比完整调用成本、安装采用与长程实测收益仍是分别验证的未完成项。
+
+后续定时等待修复保留 CLI 正向工作准入时的就绪事实。File/SQLite 重入区分准入时
+已经到期且未改变的等待与后来设置的等待，后者即使在回读时已到期也保留原结果
+收尾义务。两条路径均保留原绑定及单次结果结算；共享 TypeScript owner 核对微秒，
+旧回执缺失事实时保守进入恢复。这一源码资格不新增调度器、不改写历史回执，也不
+证明安装或真实 Host 采用。
 
 **S5/S11 长程进展设计。** [研究计量细化](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#基于证据的研究片段评估拟议细化)
 与[产品阅读旅程](../../product/use-cases/auto-research/long-horizon-progress-design.zh-CN.md)

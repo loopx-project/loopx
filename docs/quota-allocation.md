@@ -307,6 +307,21 @@ become progress through recovery. Promoted authority's existing typed blocked
 closeout can use a Turn-owned retry for an open Todo without a resume condition,
 without inventing an external dependency or restarting the trial's budget.
 
+Positive CLI work admission retains the selected Todo's `resume_when` and
+`resume_ready` as scalar receipt facts. On same-Turn reentry, an unchanged
+`resume_at` already satisfied at that admission can continue under the original
+binding. The typed recovery owner checks the original receipt timestamp with
+microsecond precision and current readiness. A newly authored or changed wait,
+even one already due, still requires the original result's closeout. Missing or
+malformed historical admission facts retain conservative recovery. No receipt,
+wait, deadline or debit is rewritten; these facts grant no new work authority.
+
+CLI 正向工作准入将所选 Todo 的 `resume_when` 和 `resume_ready` 作为标量事实保留
+在回执中。同 Turn 重入时，若仍为准入时已经满足的同一个 `resume_at`，可沿原绑定
+继续；typed recovery owner 用微秒精度核对原回执时间及当前就绪状态。后来新设或
+改变的等待，即使已经到期，仍须结清原结果。历史准入事实缺失或畸形时保守进入恢复，
+不改写回执、等待、期限或扣额，也不产生新的执行权限。
+
 A Todo-bound path replan can be qualified during execution even when the
 initial guard selected no replan obligation. Its exact durable writeback must
 carry a recorded `autonomous_replan_ack_v0` with an accepted semantic delta or

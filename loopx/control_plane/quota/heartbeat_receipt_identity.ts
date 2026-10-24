@@ -218,8 +218,12 @@ export function heartbeatWorkRequalification(
     throw receiptIdentityConflict("work requalification cannot replace the original semantic replan guard");
   }
   const qualified = {...oldDetails};
-  for (const field of ["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed"]) {
-    qualified[field] = currentDetails[field]!;
+  // The first positive work admission owns these facts. A repair-only
+  // receipt's earlier selection cannot describe the newly admitted work.
+  for (const field of ["ok", "should_run", "must_attempt_work", "delivery_allowed", "quiet_noop_allowed",
+    "admission_resume_when", "admission_resume_ready"]) {
+    if (currentDetails[field] !== undefined) qualified[field] = currentDetails[field]!;
+    else delete qualified[field];
   }
   // Preserve workspace causality, semantic guards, pending selection and all
   // original identities. Work admission makes this same Todo owe closeout.

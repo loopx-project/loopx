@@ -88,6 +88,68 @@ function externalWaitRequest(resume_when = "pr_merged:example/project#1") {
     state: "writeback_required", next_step: "durable_writeback"}};
 }
 
+function runnableAtAdmissionRequest() {
+  const input = externalWaitRequest("resume_at:2026-01-01T00:00:00Z");
+  input.observed_at = "2026-01-01T00:10:00Z";
+  input.todos[0]!.resume_ready = true;
+  Object.assign(input.todos[0]!.resume_condition, {satisfied: true});
+  return {...input, heartbeat_receipt: {...input.heartbeat_receipt,
+    recorded_at: "2026-01-01T00:01:00Z", details: {...input.heartbeat_receipt.details,
+      admission_resume_when: input.todos[0]!.resume_when, admission_resume_ready: true}}};
+}
+
+test("an unchanged timer already satisfied at work admission permits same-Turn continuation", () => {
+  const input = runnableAtAdmissionRequest(), before = structuredClone(input);
+  assert.deepEqual(projectReceiptBoundWait(input), {status: "none"});
+  assert.deepEqual(input, before);
+});
+
+for (const patch of [{admission_resume_when: null}, {admission_resume_when: undefined},
+  {admission_resume_when: "invalid"}, {admission_resume_when: 1},
+  {admission_resume_when: "resume_at:2025-12-31T23:59:00Z"},
+  {admission_resume_ready: false}, {admission_resume_ready: "true"}, {admission_resume_ready: undefined}]) {
+  test(`missing or incompatible admission facts retain conservative recovery: ${JSON.stringify(patch)}`, () => {
+    const input = runnableAtAdmissionRequest();
+    Object.assign(input.heartbeat_receipt.details, patch);
+    assert.equal((projectReceiptBoundWait(input).recovery as Record<string, unknown>).repair,
+      "durable_writeback");
+  });
+}
+
+for (const patch of [{status: "deferred"}, {resume_ready: false},
+  {resume_condition: {kind: "resume_at", resume_when: "resume_at:2026-01-01T00:00:00Z", satisfied: false}}]) {
+  test(`a changed runnable state cannot reuse admission facts: ${JSON.stringify(patch)}`, () => {
+    const input = runnableAtAdmissionRequest();
+    Object.assign(input.todos[0]!, patch);
+    assert.equal((projectReceiptBoundWait(input).recovery as Record<string, unknown>).repair,
+      "durable_writeback");
+  });
+}
+
+for (const recorded_at of [undefined, "invalid", "2026-01-01T00:00:00.123455Z",
+  "2025-12-31T23:59:59Z"]) {
+  test(`a timer not proven due at original admission retains recovery: ${recorded_at}`, () => {
+    const input = runnableAtAdmissionRequest();
+    const due = "resume_at:2026-01-01T00:00:00.123456Z";
+    input.todos[0]!.resume_when = due;
+    Object.assign(input.todos[0]!.resume_condition, {resume_when: due});
+    input.heartbeat_receipt.details.admission_resume_when = due;
+    assert.equal((projectReceiptBoundWait({...input, heartbeat_receipt: {
+      ...input.heartbeat_receipt, recorded_at}}).recovery as Record<string, unknown>).repair,
+    "durable_writeback");
+  });
+}
+
+test("admission timer comparison preserves exact microseconds and equivalent offsets", () => {
+  const input = runnableAtAdmissionRequest();
+  const due = "resume_at:2026-01-01T00:00:00.123456Z";
+  input.todos[0]!.resume_when = due;
+  Object.assign(input.todos[0]!.resume_condition, {resume_when: due});
+  input.heartbeat_receipt.details.admission_resume_when = due;
+  input.heartbeat_receipt.recorded_at = "2026-01-01T08:00:00.123456+08:00";
+  assert.deepEqual(projectReceiptBoundWait(input), {status: "none"});
+});
+
 for (const resume_when of ["resume_at:2026-01-01T00:10:00Z", "resume_at:2026-01-01T02:00:00Z",
   "pr_merged:example/project#1", "capacity_available:git_push"]) {
   for (const status of ["open", "deferred"]) {

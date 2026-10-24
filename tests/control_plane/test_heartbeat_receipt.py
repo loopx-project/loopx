@@ -159,11 +159,13 @@ def test_concurrent_identityless_receipt_upgrades_append_one_correction(
 def test_concurrent_work_requalification_appends_one_same_binding_receipt(tmp_path: Path) -> None:
     proof = {"ok": True, "should_run": True, "must_attempt_work": True,
              "delivery_allowed": True, "quiet_noop_allowed": False,
-             "todo_id": TODO_ID, "selected_todo_id": TODO_ID, "settlement_effect_id": EFFECT_ID}
+             "todo_id": TODO_ID, "selected_todo_id": TODO_ID, "settlement_effect_id": EFFECT_ID,
+             "admission_resume_when": "resume_at:2000-01-01T00:00:00Z", "admission_resume_ready": True}
     original = build_rollout_event(goal_id=GOAL_ID, event_kind="quota_should_run",
         agent_id=AGENT_ID, todo_id=TODO_ID, run_id=TURN_ID,
         status="successor_replan_required", summary="delivery denied",
-        details={**proof, "delivery_allowed": False})
+        details={**proof, "delivery_allowed": False,
+                 "admission_resume_when": None, "admission_resume_ready": None})
     log_path = rollout_event_log_path(tmp_path, GOAL_ID)
     append_rollout_event(log_path, original)
 
@@ -179,7 +181,15 @@ def test_concurrent_work_requalification_appends_one_same_binding_receipt(tmp_pa
     events = load_rollout_events(log_path)
     assert len(events) == 2 and events[0] == original
     assert events[1]["details"]["settlement_effect_id"] == EFFECT_ID
+    assert events[1]["details"]["admission_resume_when"] == proof["admission_resume_when"]
+    assert events[1]["details"]["admission_resume_ready"] is True
     assert events[1]["causality"]["caused_by"] == original["event_id"]
+    replay, appended = requalify_bound_heartbeat_receipt(tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        turn_instance_id=TURN_ID, todo_id=TODO_ID, replan_obligation_id=None,
+        status="normal_run", details={**proof, "admission_resume_when": "resume_at:2099-01-01T00:00:00Z"},
+        registry_path=None, goal_ref=None)
+    assert appended is False
+    assert replay == events[1]
 
 
 def test_legacy_todo_only_receipt_upgrades_derived_effect_identity(
@@ -227,3 +237,92 @@ def test_effective_receipt_does_not_downgrade_after_identity_correction(
 
     assert effective is not None
     assert effective["event_id"] == corrected["event_id"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("preexisting", [True, False], ids=["already-due", "introduced-later"])
+def test_cli_reentry_distinguishes_admission_timer_from_later_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, preexisting: bool,
+) -> None:
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID as actor, GOAL_ID as goal, TODO_ID as work, ALTERNATIVE_TODO_ID as successor,
+        _configure_selectable_alternative, _initialize_fixture_authority, _run_cli,
+        _run_generated_cli, _spend_run_count, _write_fixture,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    state = project / f".codex/goals/{goal}/ACTIVE_GOAL_STATE.md"
+    resume = "resume_at:2000-01-01T00:00:00Z"
+    if preexisting:
+        state.write_text(state.read_text().replace(
+            f"todo_id={work} status=open",
+            f"todo_id={work} status=open resume_when={resume} successor_todo_ids={successor}",
+        ))
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "admission-timer-reentry"
+    binding = ("--goal-id", goal, "--agent-id", actor, "--todo-id", work,
+               "--turn-instance-id", turn)
+    guard = ("quota", "should-run", "--codex-app", *binding)
+    rc, admitted = _run_cli(registry, runtime, *guard)
+    assert rc == 0, admitted
+    assert admitted["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    identity = admitted["heartbeat_receipt"]["settlement_identity"]
+    if not preexisting:
+        # The new wait is already due too. Its authoring after admission, not
+        # the deadline alone, requires closing the original admitted result.
+        rc, updated = _run_cli(registry, runtime, "todo", "update", "--goal-id", goal,
+            "--agent-id", actor, "--todo-id", work, "--resume-when", resume,
+            "--successor-todo-id", successor, "--reason", "Return the verified original result.")
+        assert rc == 0, updated
+
+    def rows():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal)["todos"]
+
+    before = rows()
+    rc, reentry = _run_cli(registry, runtime, *guard)
+    assert rc == 0, reentry
+    assert reentry["heartbeat_receipt"]["settlement_identity"] == identity
+    if preexisting:
+        assert reentry["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+        assert reentry["selected_todo"]["todo_id"] == work
+    else:
+        assert reentry["unsettled_host_turn_recovery"]["repair"] == "durable_writeback"
+        assert reentry["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    receipt = find_heartbeat_receipt(runtime, goal_id=goal, agent_id=actor, turn_instance_id=turn)
+    assert receipt is not None
+    assert receipt["details"]["admission_resume_when"] == (resume if preexisting else None)
+    if preexisting:
+        assert receipt["details"]["admission_resume_ready"] is True
+    assert rows() == before
+    assert _spend_run_count(runtime) == 0
+
+    # Both routes still owe the same result, writeback and exactly one debit.
+    (project / "validated-result.txt").write_text("Synthetic result validated before closeout.\n")
+    plan = reentry["interaction_contract"]["cli_channel"]["settlement_plan"]
+    command = next(s["command_template"] for s in plan["ordered_steps"] if s["kind"] == "durable_writeback")
+    command = command.replace("<validated_progress>", "admission_timer_validated").replace(
+        "<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+    command += (" --delivery-boundary in_flight_continuation --progress-result-class advanced"
+                f" --progress-work-item-id {work} --progress-evidence-id evidence:synthetic-result"
+                " --no-global-sync --suppress-external-sinks")
+    rc, written = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0, written
+    spend = written["settlement_owed"]["command"]
+    for attempt in range(2):
+        rc, settled = _run_generated_cli(spend, registry_path=registry, cwd=project)
+        assert rc == 0, settled
+        assert settled["settlement_result"]["ok"] is True
+        if attempt:
+            assert settled["idempotent_replay"] is True
+            assert settled["appended"] is False
+    assert _spend_run_count(runtime) == 1
+    rc, replay = _run_cli(registry, runtime, *guard)
+    assert rc == 0, replay
+    assert replay["effective_action"] == "heartbeat_settled_skip"
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert rows() == before

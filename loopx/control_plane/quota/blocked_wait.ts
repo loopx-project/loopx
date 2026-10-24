@@ -1,6 +1,7 @@
 import {settlementIdentity, type JsonObject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
+import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import {heartbeatReceiptBinding, heartbeatReceiptDetails, heartbeatReceiptFactFromEvent} from "./heartbeat_receipt_identity.ts";
 import {
@@ -231,6 +232,29 @@ function admittedBusinessResult(request: JsonObject): boolean {
     .report_permission === "new_operation";
 }
 
+/** A timer that was already satisfied at the original positive admission has
+ * not removed executable work. Missing historical facts retain recovery; the
+ * deadline alone cannot prove when a wait was authored. */
+function runnableTimerAtAdmission(request: JsonObject, todo: JsonObject, resumeWhen: string): boolean {
+  const receipt = jsonObject(request.heartbeat_receipt);
+  const admitted = receipt && heartbeatReceiptDetails(receipt);
+  const condition = jsonObject(todo.resume_condition);
+  if (!receipt || !admitted || admitted.admission_resume_ready !== true ||
+      todo.status !== "open" || todo.resume_ready !== true ||
+      condition?.satisfied !== true || !resumeWhen.startsWith("resume_at:") ||
+      typeof receipt.recorded_at !== "string") return false;
+  try {
+    const original = normalizeTodoResumeWhen({schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
+      resume_when: admitted.admission_resume_when});
+    if (original !== resumeWhen) return false;
+    const due = parseTodoTimestampMicros(resumeWhen.slice("resume_at:".length), true);
+    const recorded = parseTodoTimestampMicros(receipt.recorded_at, true);
+    return due !== null && recorded !== null && due <= recorded;
+  } catch {
+    return false;
+  }
+}
+
 /** A pending dependency changes executable work, never the Turn's receipts.
  * settlement_progress is the existing settlement owner's exact-Turn readback,
  * transported by the live guard, not an author-declared progress observation.
@@ -295,7 +319,8 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   if (["open", "deferred"].includes(String(todo.status)) &&
       todo.task_class === "advancement_task" &&
       writebackRequired && request.replay_phase === "open" &&
-      admittedBusinessResult(request) && externalWait) {
+      admittedBusinessResult(request) && externalWait &&
+      !runnableTimerAtAdmission(request, todo, resumeWhen!)) {
     const reason = "The original admitted Turn still owes durable writeback. Its later external wait cannot discard that identity. Inspect existing effects and record only the validated original result, then settle once under the original identity. Keep the wait unchanged; do not repeat business work, select a successor, or invent a retry clock.";
     return boundRecovery(request, "durable_writeback", reason);
   }
