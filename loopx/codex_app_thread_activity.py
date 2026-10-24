@@ -64,6 +64,7 @@ def codex_homes(env: Mapping[str, str] | None = None, user_home: Path | None = N
     ``LOOPX_CODEX_HOMES`` (``os.pathsep``-separated) is used verbatim when set.
     Otherwise ``CODEX_HOME``, ``~/.codex`` and sibling ``~/.codex-*`` homes are
     searched, because Codex App installs can each keep their own home.
+    Aliases of one directory retain only their first selected path.
     """
 
     env = os.environ if env is None else env
@@ -76,8 +77,10 @@ def codex_homes(env: Mapping[str, str] | None = None, user_home: Path | None = N
         candidates.append(user_home / ".codex")
         candidates.extend(sorted(user_home.glob(".codex-*")))
     homes: list[Path] = []
+    identities: set[Path] = set()
     for candidate in candidates:
-        if candidate.is_dir() and candidate not in homes:
+        if candidate.is_dir() and (identity := candidate.resolve()) not in identities:
+            identities.add(identity)
             homes.append(candidate)
     return homes
 

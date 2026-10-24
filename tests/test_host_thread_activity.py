@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -481,6 +483,57 @@ def _install_automation(
         f'prompt = "Advance `{goal_id}` from active state. Agent: `{agent_id}`."\n',
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize("selection", ["configured", "sibling", "explicit"])
+def test_aliased_homes_preserve_one_installed_heartbeat_cadence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
+    selection: str,
+) -> None:
+    home = CodexHome(tmp_path / ".codex")
+    alias = tmp_path / ".codex-alias"
+    if os.name == "nt":
+        created = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(home.root)],
+            capture_output=True,
+        )
+        assert created.returncode == 0, created.stderr or created.stdout
+        request.addfinalizer(alias.rmdir)
+    else:
+        alias.symlink_to(home.root, target_is_directory=True)
+    other = CodexHome(tmp_path / ".codex-other")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("LOOPX_CODEX_HOMES", raising=False)
+    first = home.root
+    if selection == "configured":
+        monkeypatch.setenv("CODEX_HOME", str(alias))
+        first = alias
+    elif selection == "explicit":
+        monkeypatch.setenv(
+            "LOOPX_CODEX_HOMES", os.pathsep.join(map(str, [alias, home.root, other.root]))
+        )
+        first = alias
+    _install_automation(
+        home, automation_id="one", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=5",
+    )
+    lane = HostDeliveryScope(
+        goal_id="bound", agent_id="a", host_surface="codex-app", thread_id="t-open"
+    )
+
+    assert codex_delivery_expectations([lane]) == {
+        lane: HostDeliveryExpectation(
+            expected_interval_minutes=5, source="codex_app_automation_rrule"
+        )
+    }
+    assert codex_homes() == [first, other.root]
+    # Two distinct automations remain ambiguous even when their home has aliases.
+    _install_automation(
+        home, automation_id="two", goal_id="bound", agent_id="a",
+        rrule="FREQ=MINUTELY;INTERVAL=9",
+    )
+    assert codex_delivery_expectations([lane]) == {}
 
 
 def test_delivery_expectations_resolve_only_installed_active_app_automations(
