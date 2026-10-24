@@ -144,25 +144,35 @@ function classMatch(
   pattern: string,
   start: number,
   value: string,
+  foldCase: boolean,
 ): { end: number; matches: boolean } | null {
   const end = characterClassEnd(pattern, start);
   if (end < 0) return null;
   let body = pattern.slice(start + 1, end);
   const negated = body.startsWith("!");
   if (negated) body = body.slice(1);
-  let matches = false;
-  for (let index = 0; index < body.length; index += 1) {
-    if (index + 2 < body.length && body[index + 1] === "-") {
-      if (body[index] <= value && value <= body[index + 2]) matches = true;
-      index += 2;
-    } else if (body[index] === value) {
-      matches = true;
+  const contains = (candidate: string) => {
+    for (let index = 0; index < body.length; index += 1) {
+      if (index + 2 < body.length && body[index + 1] === "-") {
+        if (body[index] <= candidate && candidate <= body[index + 2]) return true;
+        index += 2;
+      } else if (body[index] === candidate) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const candidates = new Set([value]);
+  if (foldCase) {
+    for (const candidate of [value.toLowerCase(), value.toUpperCase()]) {
+      if (candidate.length === 1) candidates.add(candidate);
     }
   }
+  const matches = [...candidates].some(contains);
   return { end, matches: negated ? !matches : matches };
 }
 
-function fnmatchcase(value: string, pattern: string): boolean {
+function fnmatchcase(value: string, pattern: string, foldCase = false): boolean {
   const memo = new Map<string, boolean>();
   const match = (valueIndex: number, patternIndex: number): boolean => {
     const key = `${valueIndex}:${patternIndex}`;
@@ -179,12 +189,13 @@ function fnmatchcase(value: string, pattern: string): boolean {
     } else if (pattern[patternIndex] === "?") {
       result = match(valueIndex + 1, patternIndex + 1);
     } else if (pattern[patternIndex] === "[") {
-      const characterClass = classMatch(pattern, patternIndex, value[valueIndex]);
+      const characterClass = classMatch(pattern, patternIndex, value[valueIndex], foldCase);
       result = characterClass === null
         ? value[valueIndex] === "[" && match(valueIndex + 1, patternIndex + 1)
         : characterClass.matches && match(valueIndex + 1, characterClass.end + 1);
     } else {
-      result = value[valueIndex] === pattern[patternIndex] &&
+      result = (value[valueIndex] === pattern[patternIndex] ||
+        (foldCase && value[valueIndex].toLowerCase() === pattern[patternIndex].toLowerCase())) &&
         match(valueIndex + 1, patternIndex + 1);
     }
     memo.set(key, result);
@@ -201,7 +212,9 @@ function scopeLiteralPrefix(scope: string): string {
 }
 
 function scopePairOverlaps(left: string, right: string): boolean {
-  if (left === right) return true;
+  const equal = (first: string, second: string) => first === second ||
+    first.toLowerCase() === second.toLowerCase();
+  if (equal(left, right)) return true;
   if (["*", "**", "./"].includes(left) || ["*", "**", "./"].includes(right)) {
     return true;
   }
@@ -209,24 +222,24 @@ function scopePairOverlaps(left: string, right: string): boolean {
   const rightGlob = ["*", "?", "["].some((token) => right.includes(token));
   if (leftGlob && !rightGlob) {
     const prefix = scopeLiteralPrefix(left);
-    return fnmatchcase(right, left) ||
-      (prefix.endsWith("/") && right.replace(/\/$/u, "") === prefix.replace(/\/$/u, ""));
+    return fnmatchcase(right, left, true) ||
+      (prefix.endsWith("/") && equal(right.replace(/\/$/u, ""), prefix.replace(/\/$/u, "")));
   }
   if (rightGlob && !leftGlob) {
     const prefix = scopeLiteralPrefix(right);
-    return fnmatchcase(left, right) ||
-      (prefix.endsWith("/") && left.replace(/\/$/u, "") === prefix.replace(/\/$/u, ""));
+    return fnmatchcase(left, right, true) ||
+      (prefix.endsWith("/") && equal(left.replace(/\/$/u, ""), prefix.replace(/\/$/u, "")));
   }
   if (leftGlob && rightGlob) {
-    const leftPrefix = scopeLiteralPrefix(left);
-    const rightPrefix = scopeLiteralPrefix(right);
+    const leftPrefix = scopeLiteralPrefix(left).toLowerCase();
+    const rightPrefix = scopeLiteralPrefix(right).toLowerCase();
     return !leftPrefix || !rightPrefix || leftPrefix.startsWith(rightPrefix) ||
       rightPrefix.startsWith(leftPrefix);
   }
-  const leftRoot = left.replace(/\/$/u, "");
-  const rightRoot = right.replace(/\/$/u, "");
-  return (left.endsWith("/") && right.startsWith(`${leftRoot}/`)) ||
-    (right.endsWith("/") && left.startsWith(`${rightRoot}/`));
+  const leftRoot = left.replace(/\/$/u, "").toLowerCase();
+  const rightRoot = right.replace(/\/$/u, "").toLowerCase();
+  return (left.endsWith("/") && right.toLowerCase().startsWith(`${leftRoot}/`)) ||
+    (right.endsWith("/") && left.toLowerCase().startsWith(`${rightRoot}/`));
 }
 
 function writeScopesOverlap(left: readonly string[], right: readonly string[]): boolean {

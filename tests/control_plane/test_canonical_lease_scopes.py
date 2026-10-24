@@ -98,10 +98,27 @@ def test_authored_alias_declaration_can_be_claimed_without_revision(scope_goal):
     assert cli("todo", "list", "--todo-id", todo_id)["todo"]["required_write_scopes"] == ALIASES
 
 
+def test_case_aliases_remain_exclusive_write_scopes(scope_goal):
+    cli, current = scope_goal
+    acquire = ("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
+        "--idempotency-key", "case-a", "--expected-version", "0", "--write-scope", "src/Main.ts")
+    assert cli(*acquire)["acquired"]
+    assert cli(*acquire)["idempotent"]
+    changed = cli(*acquire[:-1], "src/main.ts", expected_exit=1)
+    assert changed["error_code"] == "coordination_operation_identity_mismatch"
+    before = current()
+    rejected = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "case-b", "--expected-version", "0", "--write-scope", "src/main.ts",
+        expected_exit=1)
+    assert rejected["error_code"] == "write_scope_conflict"
+    assert current() == before
+
+
 @pytest.mark.parametrize("scope,target", [
     ("src/[]/./]x", "src/.x"),
     ("src/[]/./]x", "src/]x"),
     ("src/[!]/./]x", "src/ax"),
+    ("src/[A-b]x", "src/cx"),
 ])
 def test_glob_class_members_keep_exclusive_scope_coverage(scope_goal, scope, target):
     cli, current = scope_goal
@@ -112,3 +129,13 @@ def test_glob_class_members_keep_exclusive_scope_coverage(scope_goal, scope, tar
     rejected = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
         "--idempotency-key", "class-b", "--write-scope", target, "--expected-version", "0", expected_exit=1)
     assert rejected["error_code"] == "write_scope_conflict" and current() == before
+
+
+def test_case_folded_negated_glob_class_excludes_case_variant(scope_goal):
+    cli, _ = scope_goal
+    acquired = cli("task-lease", "acquire", "--todo-id", "todo_scope_a", "--owner", "agent-a",
+        "--idempotency-key", "case-class-a", "--write-scope", "src/[!A-b]x", "--expected-version", "0")
+    assert acquired["acquired"]
+    allowed = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
+        "--idempotency-key", "case-class-b", "--write-scope", "src/cx", "--expected-version", "0")
+    assert allowed["acquired"]
