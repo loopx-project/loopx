@@ -97,6 +97,57 @@ proxy when the pinned source installer needs to build frontend assets. It is
 passed only to setup subprocesses and cleared before solver execution and native
 network isolation. It is never placed in the container's persistent environment.
 
+### Continue after native account exhaustion
+
+Keep a quota interruption distinct from a task result. Codex's message-only
+`You've hit your usage limit` failure is hard quota; generic HTTP 429, unknown
+codes, authentication failures and unavailable quota observations do not prove
+that another login should be selected. Do not keep restarting an exhausted
+account, change the model or restart a task from zero to hide the interruption.
+
+On the host that owns the installed Native Codex accounts, an authorized
+operator can reuse that provider's credential reader and TypeScript selection
+policy to prepare an isolated continuation login. Install the optional
+[`loopx-codex-provider-routing`](../../packages/loopx-codex-provider-routing/NATIVE.md)
+package in this Python environment. Explicitly choose the permitted slots and
+retain the source run's absolute deadline:
+
+```sh
+python -m benchmark.runtime.codex_accounts \
+  --source-login /private/source-profile/auth.json \
+  --destination /private/continuation-profile --slots a b c \
+  --operation-id quota-continuation-1 --run-id SOURCE_RUN \
+  --deadline-epoch ORIGINAL_ABSOLUTE_DEADLINE
+```
+
+Preview only observes allowance. Add `--execute` to create one new private
+profile after fresh source exhaustion and target availability are verified.
+The content-free result reports the selected slot. Credentials never appear in
+stdout; the prepared `auth.json` is the ordinary `CODEX_AUTH_JSON_PATH` input.
+Native global selection, desktop clients, model configuration and history are
+untouched. A repeated operation verifies its original receipt and bytes; a
+partial or changed destination requires inspection, never an overwrite.
+Recheck usable allowance before admitting a delayed launch. This helper does
+not refresh logins, buy credits, launch jobs or mutate an active worker home.
+
+For a checkpoint-enabled worker whose container was removed, use the latest
+verified complete checkpoint with the standard `--restore-checkpoint` flow,
+fresh destination run/Goal/Agent identities and the selected login. Preserve
+the old failed attempt, source revision, research/session history, incumbent,
+accepted submission counters and remaining cooldown. Keep inherited and new
+results separate in the maintained comparison view. A credential preparation
+receipt alone does not qualify session recovery or subsequent useful work.
+
+The native checkpoint controller preserves captured remaining phase duration;
+it does **not** by itself retain the source's absolute wall-clock deadline.
+When that original deadline remains binding, the run owner must enforce an
+external finite cutoff at that deadline, including cleanup reserve. Do not edit
+the sealed checkpoint or activation receipt, grant a fresh task budget, refill
+evaluation opportunities or silently extend the experiment by its offline time.
+An Official worker without a checkpoint must retain its existing session and
+use its authorized runtime owner's idle credential handoff; this preparation
+helper does not provide a live credential-replacement transaction.
+
 When the product must run from main while the adapter is under development, set
 `LOOPX_SRC_DIR` / `LOOPX_EXPECTED_COMMIT` to the clean product checkout and
 `LOOPX_RUNNER_SRC_DIR` / `LOOPX_EXPECTED_RUNNER_COMMIT` to the clean runner checkout.

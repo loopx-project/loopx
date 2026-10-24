@@ -318,6 +318,8 @@ def test_codex_cli_result_schema_requires_only_bounded_contract_fields() -> None
         ("The service is overloaded.", "provider_overloaded"),
         ("Too many requests; retry later.", "rate_limited"),
         ("Quota exceeded. Check your plan and billing details.", "quota_exhausted"),
+        ("You've hit your usage limit. Try again after the reset.", "quota_exhausted"),
+        ("You’ve hit your usage limit. Try again after the reset.", "quota_exhausted"),
     ],
 )
 def test_codex_cli_diagnostic_fallback_keeps_failure_classes_distinct(
@@ -348,6 +350,19 @@ def test_codex_cli_unknown_structured_code_blocks_message_fallback() -> None:
     }
 
     assert _event_failure_category(event) == "unknown"
+
+
+@pytest.mark.parametrize("event_type", ["error", "turn.failed"])
+@pytest.mark.parametrize("apostrophe", ["'", "’"])
+def test_codex_cli_message_only_subscription_limit_is_not_a_transient_retry(event_type, apostrophe) -> None:
+    message = f"You{apostrophe}ve hit your usage limit. Try again after the reset."
+    event = {"type": event_type, "error": {"message": message}}
+    assert _event_failure_category(event) == "quota_exhausted"
+    # A present discriminator still wins over familiar prose.
+    event["error"]["code"] = "future_provider_failure"
+    assert _event_failure_category(event) == "unknown"
+    event["error"]["code"] = "rate_limit_exceeded"
+    assert _event_failure_category(event) == "rate_limited"
 
 
 @pytest.mark.parametrize(
@@ -1347,6 +1362,15 @@ def test_codex_cli_host_classifies_provider_capacity_as_retryable_without_prose(
                         "message": "Rate limit reached.",
                     }
                 },
+            },
+            "codex_cli_quota_exhausted",
+            "quota_exhausted",
+            None,
+        ),
+        (
+            {
+                "type": "turn.failed",
+                "error": {"message": "You’ve hit your usage limit. Try again after the reset."},
             },
             "codex_cli_quota_exhausted",
             "quota_exhausted",

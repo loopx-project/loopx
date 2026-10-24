@@ -190,6 +190,34 @@ separate: fewer bytes, calls or tokens are not proof of a better task outcome.
    Only claim paired results from `matched_pair_countable` comparisons. Keep
    diagnostic-only explore rows in a separate evidence lane.
 
+## Quota interruption and checkpoint continuation
+
+When an authorized run encounters hard native account exhaustion, preserve its
+actual failure and task progress. Verify the exact job, terminal/runtime state,
+source account and original budget before selecting a replacement. Unknown
+quota, login errors or generic rate limits are not proof of exhaustion. Reuse
+the installed native account provider's read-only observations and TypeScript
+selection through `python -m benchmark.runtime.codex_accounts`; inspect the
+preview, then execute only within the owner's explicit account allowlist.
+Never close the desktop or switch its global login to repair an isolated job.
+
+If the worker was removed, prefer its latest verified complete checkpoint to
+a fresh task. Retain the original attempt and source, restore native session
+history/research/incumbent/opportunity counters/cooldown through the existing
+receiver, and use fresh destination identities. Preregister the continuation
+and show its source and inherited results without merging attempt curves.
+Confirm actual adopted context, current replan and subsequent task work.
+Prepared credentials or a running container alone do not prove recovery.
+
+Follow the EdgeBench account-continuation protocol for the native controller's
+paused remaining-duration clock. An unchanged absolute deadline requires an
+external finite owner cutoff, including setup and cleanup; no implicit phase
+extension, replenished evaluation opportunities or repeated cold launches.
+The helper prepares a new private login only. Existing Official sessions need
+their own authorized idle handoff; never overwrite an active credential file
+using the preparation helper. If no allowed account is freshly usable, retain
+the observed reset/backoff and avoid repeated model probes.
+
 ## Run-row contract
 
 - `benchmark_id`, `study_id`, `case_id`, `run_id`, `arm_id`, `arm_role`,

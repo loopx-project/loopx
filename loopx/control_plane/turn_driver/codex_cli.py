@@ -373,7 +373,7 @@ def codex_cli_session_id_from_jsonl(value: str) -> str | None:
 
 
 def _diagnostic_failure_category(line: str) -> str | None:
-    text = line.lower()
+    text = line.lower().replace("’", "'")
     if any(
         marker in text
         for marker in (
@@ -409,6 +409,7 @@ def _diagnostic_failure_category(line: str) -> str | None:
             "exceeded your current quota",
             "check your plan and billing",
             "usage is not included",
+            "you've hit your usage limit",
             "upgrade to plus",
         )
     ):
