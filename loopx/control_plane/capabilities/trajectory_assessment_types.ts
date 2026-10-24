@@ -19,7 +19,10 @@ export interface TrajectoryInput {
   /** Trusted curator's complete Explore history capture, already in sources.
    * Omission keeps the existing assessment contract and identity unchanged. */
   display_snapshot?: {schema_version: 'research_display_snapshot_v1'; source_id: string; source_namespace: string;
-    translation_encoding?: 'source_text_aliases_v1' | 'source_text_aliases_with_literals_v1' | 'source_text_aliases_with_literal_values_v1'};
+    translation_encoding?: 'source_text_aliases_v1' | 'source_text_aliases_with_literals_v1' | 'source_text_aliases_with_literal_values_v1' | 'source_text_aliases_with_literal_values_v2';
+    /** Curator-selected evidence that explains a particular captured field.
+     * References only existing verified sources; never free-form instructions. */
+    contexts?: Array<{event_id: string; field: string; citations: AssessmentCitation[]}>};
 }
 export interface AssessmentCitation {source_id: string; first_line: number; last_line: number}
 export interface EpisodeAssessment {
@@ -41,7 +44,10 @@ export interface TrajectoryAssessment {
 
 /** Presentation sidecar only. Original events, statuses, references and metrics
  * remain authoritative; a translation is never a new finding or acceptance. */
-export interface TrajectoryDisplayField {event_id: string; field: string; source_text: string}
+export interface TrajectoryDisplayField {
+  event_id: string; field: string; source_text: string;
+  context_citations?: AssessmentCitation[];
+}
 export interface TrajectoryDisplay {
   schema_version: 'research_display_v1'; snapshot_key: string; source_id: string; source_namespace: string;
   language: TrajectoryOutputLanguage;

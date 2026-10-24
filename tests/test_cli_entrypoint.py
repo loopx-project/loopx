@@ -279,6 +279,9 @@ assert payload["groups"]
 		(["task-lease", "--help"], "loopx.cli_commands.task_lease", "loopx.cli_commands.task_lease"),
 		(["todo", "--help"], "loopx.cli_commands.todo_registration", "loopx.cli_commands.todo"),
 		(["delegation", "--help"], "loopx.cli_commands.delegation", "loopx.cli_commands.delegation"),
+		(["agent-context", "--help"], "loopx.cli_commands.agent_context", "loopx.cli_commands.agent_context"),
+		(["agent-directory", "--help"], "loopx.cli_commands.agent_directory", "loopx.cli_commands.agent_directory"),
+		(["agent-capabilities", "--help"], "loopx.cli_commands.agent_capabilities", "loopx.cli_commands.agent_capabilities"),
 		(["goal-portfolio", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-summary", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-gates", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
@@ -465,10 +468,64 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	for command in ("goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks"):
 		argv_cases.extend([[command, "--help"], [command, "--unknown-option"], [command, "--limit", "invalid"]])
 	argv_cases.append(["goal-portfolio", "--manager-view", "unknown"])
+	for command in ("agent-context", "agent-directory", "agent-capabilities"):
+		argv_cases.extend([[command, "--help"], [command], [command, "--unknown-option"],
+			[command, "--goal-id", "goal", "--agent-i", "agent"]])
+	argv_cases.append(["agent-context", "--goal-id", "goal", "--agent-id", "agent", "--phase", "unknown"])
 	selected = run_cli_batch("loopx.entrypoint", argv_cases)
 	full = run_cli_batch("loopx.cli", argv_cases)
 
 	assert selected == full
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("command", ["agent-context", "agent-directory", "agent-capabilities"])
+def test_agent_commands_read_registered_peer_without_changing_goal(
+	tmp_path: Path, module: str, command: str,
+) -> None:
+	from tests.control_plane.canonical_authority_fixture import (
+		assert_todo_read_unchanged, initialize_canonical_source_fixture,
+	)
+	from loopx.control_plane.todos.list_readback import list_goal_todos
+
+	registry, runtime_root = write_command_fixture(tmp_path)
+	state_path = registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md"
+	initialize_canonical_source_fixture(runtime_root, "perf-goal", state_path=state_path)
+	before = list_goal_todos(registry_path=registry, runtime_root_arg=str(runtime_root), goal_id="perf-goal")
+	registry_before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root),
+		"--format", "json", command, "--goal-id", "perf-goal", "--agent-id", "perf-agent"]
+	if command == "agent-context":
+		argv += ["--phase", "before_plan"]
+	completed = run_cli_main(module, argv,
+		forbidden_modules=("loopx.cli",) if module == "loopx.entrypoint" else ())
+	assert completed.returncode == 0, completed.stderr
+	payload = json.loads(completed.stdout)
+	assert payload["ok"] is True
+	if command == "agent-context":
+		assert payload["read_only"] is True
+		assert payload["agent_context"] is None
+	elif command == "agent-directory":
+		assert [row["agent_id"] for row in payload["rows"]] == ["perf-agent"]
+		assert payload["scope"]["caller_membership"] == "registered_agent"
+	else:
+		assert payload["agent_capabilities"]["agent_id"] == "perf-agent"
+		assert payload["agent_capabilities"]["goal_id"] == "perf-goal"
+		preview = run_cli_main(module, [*argv, "--unavailable-capability", "network"])
+		assert preview.returncode == 0, preview.stderr
+		assert json.loads(preview.stdout)["agent_capabilities"]["proposed"]["unavailable"] == ["network"]
+		assert not (runtime_root / "agent-runtime-capabilities").exists()
+		written = run_cli_main(module, [*argv, "--unavailable-capability", "network", "--execute"])
+		assert written.returncode == 0, written.stderr
+		assert json.loads(written.stdout)["agent_capabilities"]["written"] is True
+		other = "loopx.cli" if module == "loopx.entrypoint" else "loopx.entrypoint"
+		readback = run_cli_main(other, argv)
+		assert readback.returncode == 0, readback.stderr
+		assert json.loads(readback.stdout)["agent_capabilities"]["unavailable"] == ["network"]
+	assert registry.read_bytes() == registry_before
+	assert_todo_read_unchanged(
+		list_goal_todos(registry_path=registry, runtime_root_arg=str(runtime_root), goal_id="perf-goal"), before,
+	)
 
 
 @pytest.mark.parametrize("arguments", [

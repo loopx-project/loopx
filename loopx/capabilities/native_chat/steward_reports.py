@@ -184,12 +184,23 @@ class StewardReports:
                 or not isinstance(frozen_ids, list) or not all(isinstance(value, str) for value in frozen_ids)
                 or current_ids is None or not set(frozen_ids).issubset(current_ids)):
             return False
-        # A new authorized Goal belongs to a future report. Recheck every frozen
-        # Goal's original identity and current grant, rather than treating scope
-        # growth as revocation or rewriting the already validated source/body.
-        current = manager_authorization_scope_id_for_registry(self.controller.registry_path,
-            frozen_ids, runtime_root=self.root, channel_id=session["channel_id"])
-        return current == expected["authorization_scope_id"]
+        def scope_id(ids):
+            return manager_authorization_scope_id_for_registry(self.controller.registry_path,
+                ids, runtime_root=self.root, channel_id=session["channel_id"])
+        if "authorization_goal_ids" in expected:
+            authority_ids = expected["authorization_goal_ids"]
+            if (not isinstance(authority_ids, list)
+                    or any(not isinstance(value, str) or not value for value in authority_ids)
+                    or not set(frozen_ids).issubset(authority_ids)
+                    or not set(authority_ids).issubset(current_ids)):
+                return False
+            return scope_id(authority_ids) == expected["authorization_scope_id"]
+        # Old requests froze the whole authorization hash, but only recorded
+        # readable Goals. Full-coverage history can still tolerate scope growth.
+        # Partial history without an identity witness requires the entire live
+        # scope to match exactly; never infer missing identities or rewrite it.
+        return (scope_id(frozen_ids) == expected["authorization_scope_id"]
+            or scope_id(current_ids) == expected["authorization_scope_id"])
 
     def health(self, binding_id: str) -> dict[str, Any]:
         """Content-free metadata, never a source/provider verification receipt."""
@@ -263,12 +274,13 @@ class StewardReports:
                 "--target-key", window["window_id"], "--continuation-policy", "same_agent_non_delivery",
                 "--execute"])
             rows = [row for row in StewardMonitor(self.controller).todos(actor) if row.get("target_key") == window["window_id"]]
-        if len(rows) == 1 and rows[0]["status"] == "done":
+        folder = attempt_directory(self.root, window)
+        if len(rows) == 1 and (rows[0]["status"] == "done"
+                or rows[0]["status"] == "open" and (folder / "private-generation.json").exists()):
             StewardTurnHost(self.controller).recover_report_settlement(actor, window, rows[0])
             return None, False
         if len(rows) != 1 or rows[0]["status"] != "open":
             return None, False
-        folder = attempt_directory(self.root, window)
         validator = [sys.executable, "-c", "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
             + f"validate_private_generation(Path({str(folder)!r}))"]
         return StewardTurnHost(self.controller).submit(binding["binding_id"],
@@ -284,12 +296,19 @@ class StewardReports:
         if reader is None or not authorization_scope_id:
             raise ValueError("the original scoped report reader is unavailable")
         session = self.controller.store.load_session(request["actor"]["session_id"])
+        from ...chat_manager_context import manager_authorization_scope_id_for_registry
+        authority_ids = self.bindings.steward_scope(session)
+        if (authority_ids is None or manager_authorization_scope_id_for_registry(
+                self.controller.registry_path, authority_ids, runtime_root=self.root,
+                channel_id=session["channel_id"]) != authorization_scope_id):
+            raise ValueError("the original report authorization changed before collection")
         rules = self.managed._workspace(session) / "REPORTING.md"
         if rules.is_symlink():
             raise ValueError("the original reporting criteria changed source")
         reporting = rules.read_text(encoding="utf-8") if rules.exists() else "Use the existing overview-to-depth report contract and preserve all coverage gaps."
         frozen = prepare_private_report(root=self.root, window=window, read=lambda query: reader(TOOL_NAME, query),
-            authorization_scope_id=authorization_scope_id, reporting=reporting)
+            authorization_scope_id=authorization_scope_id, reporting=reporting,
+            authorization_goal_ids=authority_ids)
         return report_prompt(frozen, attempt_directory(self.root, window))
 
     def freeze(self, request: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
