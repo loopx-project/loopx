@@ -40,6 +40,17 @@ DECLARED_CROSS_RUNTIME_SITES: dict[str, int] = {
     "examples/nokv-authority-store/live-qualification.ts": 2,
 }
 
+def _rel(path: pathlib.PurePath) -> str:
+    """Normalize a scanned site to the "/" spelling the tables in this file use.
+
+    `str(Path.relative_to(root))` yields backslashes on Windows, which would make
+    these ownership assertions reject a correct tree on that platform.  `as_posix()`
+    is stable across both spellings, and a Windows-style relative path is pinned
+    below so the substitution cannot be dropped again.
+    """
+
+    return path.as_posix()
+
 
 def _product_sources() -> list[pathlib.Path]:
     return sorted(
@@ -72,7 +83,7 @@ def _module_level_definitions() -> dict[str, list[str]]:
             names, _ = _assigned_names(node)
             for name in names:
                 if name in found:
-                    found[name].append(str(path.relative_to(REPO_ROOT)))
+                    found[name].append(_rel(path.relative_to(REPO_ROOT)))
     return found
 
 
@@ -84,7 +95,7 @@ def _any_depth_definitions() -> list[tuple[str, int, str]]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             names, value = _assigned_names(node)
-            rel = str(path.relative_to(REPO_ROOT))
+            rel = _rel(path.relative_to(REPO_ROOT))
             hits.extend(
                 (rel, node.lineno, f"{name} = {value}")
                 for name in names
@@ -105,7 +116,7 @@ def _sdk_literal_sites(value: object) -> list[str]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and node.value == value:
-                sites.add(str(path.relative_to(REPO_ROOT)))
+                sites.add(_rel(path.relative_to(REPO_ROOT)))
     return sorted(sites)
 
 
@@ -118,7 +129,7 @@ def _cross_runtime_counts() -> dict[str, int]:
             if any(f"export const {name} = " in line for name in OWNED_NAMES)
         )
         if found:
-            total[str(path.relative_to(REPO_ROOT))] = found
+            total[_rel(path.relative_to(REPO_ROOT))] = found
     return total
 
 
@@ -138,6 +149,22 @@ def ladder() -> ModuleType:
     from loopx.control_plane.testing import authority_e2e_ladder
 
     return authority_e2e_ladder
+
+
+def test_scanned_sites_use_one_path_spelling(helper: ModuleType) -> None:
+    """A Windows-style relative path must fold to the same site string as POSIX."""
+
+    import ntpath
+    import posixpath
+
+    windows_relative = pathlib.PureWindowsPath(ntpath.join("loopx", "y.py"))
+    posix_relative = pathlib.PurePosixPath(posixpath.join("loopx", "y.py"))
+    assert str(windows_relative).count("\\") == 1
+    assert _rel(windows_relative) == _rel(posix_relative) == "loopx/y.py"
+    sites = _module_level_definitions()
+    assert all("\\" not in mod for mods in sites.values() for mod in mods), sites
+    assert OWNER_MODULE in sites["QUALIFIED_NOKV_SDK_VERSION"]
+
 
 
 def test_one_module_defines_each_qualified_version_name() -> None:
