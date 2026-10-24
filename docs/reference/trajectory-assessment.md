@@ -279,6 +279,36 @@ Ancestor response usage is deduplicated, but processing inherited context again
 is new cost. Analysis-job usage is separate from solver and native-evaluation cost.
 Never impute missing dollars from an unverified model price.
 
+### Select evidence around the research decision
+
+For a mechanism or attribution question, a submission neighborhood is a locator;
+the relevant decision can span earlier turns. Within the authorized history,
+follow the hypothesis through candidate design, comparison, selection and actual
+subsequent work. Include the source-bound baselines and candidate versions,
+inputs and budgets, completed results with regressions or failures, and the
+action that used or rejected them. Keep missing links unknown. Nearby messages
+and a reported plan alone do not establish this chain.
+
+Describe this coverage in `selection.rule` and bind the selected literal ranges
+through the existing episode `source_ids`. Early/middle/late sampling can still
+locate useful episodes; it does not establish that their immediate neighbors
+contain the experiments behind a decision. A judgment of insufficient supplied
+evidence does not establish that the experiment never happened in the run.
+
+Before proposing another comparison, reconcile it with applicable recorded
+designs and outcomes. Prioritize a missing condition, unresolved counterexample
+or necessary repeat when earlier comparisons already address part of the
+question. Preserve their input, timing and reuse limitations; local evidence
+can refine a hypothesis without allocating a native gain or proving a framework
+effect. Keep measured late gains visible while their mechanism remains open.
+
+Choose bounded excerpts that preserve the decision and its limitations. Reuse
+source references instead of repeating transport wrappers or replacing original
+evidence with a model summary. Added evidence belongs in an explicit successor
+pack; preserve the previous report, failures and usage. These are curator
+judgments, beyond automatic citation-range validation, and grant no analysis or
+experiment execution authority.
+
 ## Producer and consumer boundary
 
 ### Continuing a frozen analysis
