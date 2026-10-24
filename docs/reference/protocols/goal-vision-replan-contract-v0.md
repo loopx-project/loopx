@@ -933,6 +933,27 @@ decision merely because the scheduler woke up. Agents must start from
 projected boundary and identity flags; reconstructing a generic
 `semantic_closeout` command discards that continuity contract.
 
+For a Turn admitted with result freshness, this exemption applies only to
+requiring a new direction judgment. An in-flight writeback still restores the
+original `delivery_result` read token and compares its basis under the same
+source locks and File/SQLite provider fence as its durable append (or the
+legacy source locks for an admitted legacy Turn). A changed basis rejects the
+writeback with `checkpoint_read_context_stale` before history or Vision is
+committed; no quota is spent. This also covers an optional Vision patch.
+Read `checkpoint-context --purpose delivery_result` for the original Turn,
+revalidate the retained progress, and retry. The writeback never silently
+issues a replacement read. Successful historical replay precedes a later
+basis change. `result_work_context` records this work check separately from
+the direction checkpoint, so it cannot certify Todo completion or direction
+adoption. Historical admissions without result freshness retain their path;
+this local append does not expand PostgreSQL checkpoint-fence support.
+
+中途继续只豁免强制重新判断方向，不豁免已启用的工作依据检查。进展写回与可选
+Vision patch 都必须沿用原 Turn 的 `delivery_result` 依据；过期时先拒绝，不写入
+历史或 Vision，也不记账。显式重读并复核已有进展后才能重试。工作检查记录与方向
+判断分开，成功提交的历史重放不因后续需求变化而失效；未启用策略的历史准入保持
+兼容。本地 append 不扩展 PostgreSQL checkpoint fence 的支持范围。
+
 If the work actually replanned or completed the Todo, explicitly choose
 `semantic_closeout` and provide its required vision checkpoint. Do not simply
 remove the replan ACK to make a real replan pass as in-flight work. Conversely,

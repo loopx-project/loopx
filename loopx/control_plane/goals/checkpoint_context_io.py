@@ -91,6 +91,21 @@ def checkpoint_continuation_required(readback: Any) -> bool:
     })["required"]
 
 
+def result_work_read_id(root: Path, identity: SettlementIdentity) -> str:
+    """Restore the admitted work token; a writeback must never mint a new read."""
+    try:
+        receipt = _read_context_receipt(_receipt_path(root, identity, "delivery_result"))
+        token = receipt.get("read_context_id")
+        if isinstance(token, str) and token:
+            return token
+    except (OSError, ValueError):
+        pass
+    raise CheckpointReadContextRejected({
+        "ok": False, "error_code": "delivery_work_context_required", "reread_required": True,
+        "error": "Restore delivery_result context for the original Turn and revalidate the retained progress before retrying.",
+    })
+
+
 def result_work_context_exists(root: Path, identity: SettlementIdentity) -> bool:
     return _receipt_path(root, identity, "delivery_result").exists()
 
@@ -393,14 +408,14 @@ def first_delivery_context_enrolled(root: Path, identity: SettlementIdentity, *,
     return False
 
 
-def _inspect_attempt(root: Path, identity: SettlementIdentity) -> dict[str, Any]:
+def _inspect_attempt(root: Path, identity: SettlementIdentity, purpose: str = "first_delivery") -> dict[str, Any]:
     # Called with the original index and source locks held. The TS inspector is
     # read-only; only this locked IO adapter can clear a proved absent marker.
     result = _checkpoint_effect("goal.checkpoint_read_context.inspect_attempt", {
-        "runtime_root": str(root.resolve()), "identity": identity.as_dict(), "check_other_attempts": True})
+        "runtime_root": str(root.resolve()), "identity": identity.as_dict(), "purpose": purpose, "check_other_attempts": True})
     receipt = result.pop("receipt", None)
     if receipt is not None:
-        atomic_write_json(_receipt_path(root, identity), receipt)
+        atomic_write_json(_receipt_path(root, identity, purpose), receipt)
     return result
 
 
@@ -728,6 +743,13 @@ def read_checkpoint_context(
                         previous_receipt = json.loads(_receipt_path(root, identity, purpose).read_text(encoding="utf-8"))
                     except FileNotFoundError:
                         pass
+                if purpose == "delivery_result" and (previous_receipt or {}).get("commit_attempt") is not None:
+                    attempt = _inspect_attempt(root, identity, purpose)
+                    if attempt.get("status") == "committed":
+                        raise CheckpointReadContextRejected({"ok": False,
+                            "error_code": "delivery_result_already_committed", "reread_required": False,
+                            "error": "Progress is already committed. Replay its original writeback; do not replace its work basis."})
+                    previous_receipt = _read_context_receipt(_receipt_path(root, identity, purpose))
                 result = _resolve(root, phase="read", identity=identity.as_dict(), prior=readback.writeback_run,
                     writeback_committed=readback.writeback.failure is None,
                     quota_spend_committed=readback.spend_run is not None or readback.spend_event is not None,
@@ -744,7 +766,7 @@ def read_checkpoint_context(
                 atomic_write_json(_receipt_path(root, identity, purpose), receipt)
     return {**result, "read_context_id": receipt["read_context_id"], "settlement_identity": identity.as_dict(),
         "purpose": purpose,
-        "instructions": ("Read this basis and validate the candidate. Echo read_context_id as --delivery-read-context in todo complete. "
+        "instructions": ("Read this basis and revalidate the retained candidate or in-flight progress. Retry the original submission; todo complete requires --delivery-read-context. This read does not complete the Todo. "
         if purpose == "delivery_result" else "Read this basis and judge the direction again. Echo read_context_id as --checkpoint-read-context in the direction refresh for this exact Turn. ") +
         "A new checkpoint-context read replaces this receipt; do not run parallel confirmations "
         "for the same Turn. On stale/replaced context, reread and rejudge; do not repeat task mutations or spend."}
@@ -760,17 +782,17 @@ def checkpoint_commit_guard(
 ) -> Iterator[dict[str, Any]]:
     """Capture/preview under source locks. The native save repeats the check
     under the real provider fence; this preliminary check is not the commit."""
-    first_delivery = purpose == "first_delivery"
-    with _source_guard(runtime_root, identity.goal_id, state_file, registry_path if first_delivery else None):
+    protected = purpose != "supplement_checkpoint"
+    with _source_guard(runtime_root, identity.goal_id, state_file, registry_path if protected else None):
         readback = read_heartbeat_settlement(runtime_root, goal_id=identity.goal_id,
             agent_id=identity.agent_id, todo_id=identity.todo_id, turn_instance_id=identity.turn_instance_id,
             replan_obligation_id=identity.replan_obligation_id, registry_path=registry_path, goal_ref=goal_ref,
             source_admission=source_admission,
             borrow_source_admission=source_admission is not None)
-        if first_delivery:
-            _inspect_attempt(runtime_root, identity)
+        if protected:
+            _inspect_attempt(runtime_root, identity, purpose)
         try:
-            receipt = json.loads(_receipt_path(runtime_root, identity).read_text(encoding="utf-8"))
+            receipt = json.loads(_receipt_path(runtime_root, identity, purpose).read_text(encoding="utf-8"))
         except FileNotFoundError:
             receipt = None
         result = _resolve(runtime_root, phase="check", identity=identity.as_dict(), read_context_id=read_context_id,
@@ -782,7 +804,7 @@ def checkpoint_commit_guard(
                 state_file,
                 identity,
                 goal_ref,
-                first_delivery=first_delivery,
+                first_delivery=protected,
             ))
         yield result
 
@@ -793,19 +815,21 @@ def commit_checkpoint_run(
     goal_ref: Mapping[str, Any] | None = None,
     source_admission: Mapping[str, Any] | None = None,
     purpose: str = "supplement_checkpoint", decision_scope: str | None = None,
+    read_context_id: str | None = None,
 ) -> dict[str, Any]:
     """Handoff the held locks and parsed bytes to one native save operation."""
     root = runtime_root.resolve()
     index = root / "goals" / identity.goal_id / "runs" / "index.jsonl"
-    targets = (index, *((registry_path,) if purpose == "first_delivery" else ()),
+    protected = purpose != "supplement_checkpoint"
+    targets = (index, *((registry_path,) if protected else ()),
                shadow_maintenance_lock_target(root, identity.goal_id),
                legacy_coordination_todo_lock_path(runtime_root=root, goal_id=identity.goal_id), state_file)
     result = _checkpoint_effect("goal.checkpoint_read_context.commit", {
         "runtime_root": str(root), "state_file": str(state_file.resolve()), "identity": identity.as_dict(),
-        "purpose": purpose, "decision_scope": decision_scope,
+        "purpose": purpose, "decision_scope": decision_scope, "read_context_id": read_context_id,
         **({"registry_path": str(registry_path.resolve()),
             "registry_sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest()}
-           if purpose == "first_delivery" else {}),
+           if protected else {}),
         "locks": [cross_runtime_lock_witness(target) for target in targets],
         "state_sha256": hashlib.sha256(state_file.read_bytes()).hexdigest(),
         "index_sha256": hashlib.sha256(index.read_bytes() if index.exists() else b"").hexdigest(),
@@ -815,7 +839,7 @@ def commit_checkpoint_run(
             state_file,
             identity,
             goal_ref,
-            first_delivery=purpose == "first_delivery",
+            first_delivery=protected,
         ),
         "refresh_retry": refresh_retry, "record": record, "index_record": index_record, "markdown": markdown,
         **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
@@ -833,7 +857,9 @@ def commit_checkpoint_run(
 
 
 def inspect_checkpoint_replay(runtime_root: Path, goal_id: str, prior: dict[str, Any]) -> None:
-    if isinstance(prior.get("vision_checkpoint"), dict) and prior["vision_checkpoint"].get("read_context"):
+    if prior.get("result_work_context") is not None or (
+        isinstance(prior.get("vision_checkpoint"), dict) and prior["vision_checkpoint"].get("read_context")
+    ):
         _checkpoint_effect("goal.checkpoint_read_context.inspect_replay", {
             "runtime_root": str(runtime_root.resolve()), "goal_id": goal_id, "prior": prior,
         })

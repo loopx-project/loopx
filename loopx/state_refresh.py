@@ -108,7 +108,7 @@ from .control_plane.goals.vision_checkpoint import (
 from .control_plane.goals.goal_frontier import latest_agent_vision_from_runs
 from .control_plane.goals.checkpoint_context_io import (
     checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
-    first_delivery_context_enrolled, result_work_required, checkpoint_continuation_required,
+    first_delivery_context_enrolled, result_work_required, checkpoint_continuation_required, result_work_read_id,
 )
 from .registry import registry_goals as registry_goals, resolve_state_file as resolve_state_file
 from .runtime import validate_goal_id_path_segment
@@ -863,6 +863,8 @@ def refresh_state_run(
         default_checkpoint = False
         checkpoint_supplement = False
         first_delivery_checkpoint = False
+        result_work_checkpoint = False
+        work_read_id = None
         if todo_id or normalized_replan_obligation_id or turn_instance_id:
             if checkpoint_read_context_id or agent_vision_packet or vision_unchanged_reason:
                 require_complete_checkpoint_index(runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl")
@@ -943,6 +945,13 @@ def refresh_state_run(
                     result_only=result_work_required(settlement_readback))
             )
             default_checkpoint = checkpoint_continuation_required(settlement_readback)
+            result_work_checkpoint = (
+                not checkpoint_supplement and not first_delivery_checkpoint
+                and normalized_delivery_boundary == "in_flight_continuation"
+                and result_work_required(settlement_readback)
+            )
+            if result_work_checkpoint:
+                work_read_id = result_work_read_id(runtime_root, settlement_identity)
             if first_delivery != first_delivery_checkpoint and not default_checkpoint:
                 raise ValueError("first delivery requires matching --first-delivery and persisted first_delivery context; "
                     "read and judge checkpoint-context --purpose first_delivery on the original Turn")
@@ -1511,21 +1520,26 @@ def refresh_state_run(
                     source_context=recommendation_source_context(current_goal, current_text,
                         source_registry=next_action_source_registry, todo_fields=current_planning.todo_fields),
                     runs=newest_first_runs)
-            if checkpoint_supplement or first_delivery_checkpoint:
+            checkpoint_purpose = ("delivery_result" if result_work_checkpoint else
+                "first_delivery" if first_delivery_checkpoint else "supplement_checkpoint")
+            if checkpoint_supplement or first_delivery_checkpoint or result_work_checkpoint:
                 assert settlement_identity is not None
                 context = usage_booking_guard.enter_context(checkpoint_commit_guard(
                     runtime_root=runtime_root, registry_path=registry_path,
                     state_file=resolved_state_file, identity=settlement_identity,
-                    read_context_id=checkpoint_read_context_id,
+                    read_context_id=work_read_id if result_work_checkpoint else checkpoint_read_context_id,
                     goal_ref=goal_ref,
                     source_admission=source_admission,
-                    purpose="first_delivery" if first_delivery_checkpoint else "supplement_checkpoint",
+                    purpose=checkpoint_purpose,
                     decision_scope="goal" if default_checkpoint else normalized_progress_scope if first_delivery_checkpoint else None,
                 ))
                 for projection in (record, index_record, payload):
-                    projection["vision_checkpoint"] = {
-                        **projection["vision_checkpoint"], "read_context": context,
-                    }
+                    if result_work_checkpoint:
+                        projection["result_work_context"] = context
+                    else:
+                        projection["vision_checkpoint"] = {
+                            **projection["vision_checkpoint"], "read_context": context,
+                        }
             if usage_codex_session is not None:
                 if not dry_run:
                     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -1588,16 +1602,19 @@ def refresh_state_run(
                 index_record["markdown_path"] = str(markdown_path)
                 payload["json_path"] = str(json_path)
                 payload["markdown_path"] = str(markdown_path)
-                if checkpoint_supplement or first_delivery_checkpoint:
+                if checkpoint_supplement or first_delivery_checkpoint or result_work_checkpoint:
                     saved = commit_checkpoint_run(runtime_root=runtime_root, registry_path=registry_path,
                         state_file=resolved_state_file, identity=settlement_identity,
                         refresh_retry=refresh_retry_request, record=record, index_record=index_record,
                         markdown=render_state_refresh_markdown(payload) + "\n",
                         goal_ref=goal_ref, source_admission=source_admission,
-                        purpose="first_delivery" if first_delivery_checkpoint else "supplement_checkpoint",
+                        purpose=checkpoint_purpose, read_context_id=work_read_id,
                         decision_scope="goal" if default_checkpoint else normalized_progress_scope if first_delivery_checkpoint else None)
                     for projection in (record, index_record, payload):
-                        projection["vision_checkpoint"]["read_context"] = saved["context"]
+                        if result_work_checkpoint:
+                            projection["result_work_context"] = saved["context"]
+                        else:
+                            projection["vision_checkpoint"]["read_context"] = saved["context"]
                     for projection in (index_record, payload):
                         projection.update({key: saved[key] for key in ("json_path", "markdown_path")})
                     if saved["replayed"]:
