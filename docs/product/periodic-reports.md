@@ -528,7 +528,7 @@ existing preview/apply controls. Reload reads back the saved destination,
 calendar and original conversation's execution/delivery status. No calendar
 means no automatic local Session report; the status asks for a report time.
 After verified delivery, **Read this period's full report** opens the existing
-original-message report viewer, including its full body and download controls.
+original-message report viewer, including its full body and **Copy Markdown**.
 The link is available only while that exact returned body is readable.
 
 This is an explicit Goal override. Machine defaults, registration, opening a
@@ -583,9 +583,9 @@ production backlog completion or a natural production deadline.
 | --- | --- |
 | ![Previous report settings](../assets/personal-workspace/steward-reports/session-before-desktop.png) | ![Report returned to the selected original conversation](../assets/personal-workspace/steward-reports/session-delivered-desktop.png) |
 
-| Retained execution failure, narrow | Paused configuration |
+| Temporarily unknown delivery state, narrow | Paused configuration |
 | --- | --- |
-| ![Retained report failure on a narrow viewport](../assets/personal-workspace/steward-reports/session-failed-narrow.png) | ![Paused original report configuration](../assets/personal-workspace/steward-reports/session-paused-desktop.png) |
+| ![Unknown report delivery state on a narrow viewport](../assets/personal-workspace/steward-reports/session-unknown-narrow.png) | ![Paused original report configuration](../assets/personal-workspace/steward-reports/session-paused-desktop.png) |
 
 ### Original private steward
 
