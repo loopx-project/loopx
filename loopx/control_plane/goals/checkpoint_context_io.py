@@ -769,7 +769,8 @@ def read_checkpoint_context(
         "instructions": ("Read this basis and revalidate the retained candidate or in-flight progress. Retry the original submission; todo complete requires --delivery-read-context. This read does not complete the Todo. "
         if purpose == "delivery_result" else "Read this basis and judge the direction again. Echo read_context_id as --checkpoint-read-context in the direction refresh for this exact Turn. ") +
         "A new checkpoint-context read replaces this receipt; do not run parallel confirmations "
-        "for the same Turn. On stale/replaced context, reread and rejudge; do not repeat task mutations or spend."}
+        "for the same Turn. On stale/replaced context, reread and rejudge; do not repeat task mutations or spend."
+        + (" " + result["instructions"] if result.get("instructions") else "")}
 
 
 @contextmanager

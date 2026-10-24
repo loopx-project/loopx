@@ -746,7 +746,10 @@ if (database && installed) {
     await mkdir(runs, {recursive: true}); await mkdir(contexts);
     const state = join(root, "state.md"), registry = join(root, "registry.json"), index = join(runs, "index.jsonl");
     await writeFile(state, "Requirement A"); await writeFile(registry, "{}"); await writeFile(index, "");
-    const facts = {source: {state_file: state, runtime_root: root}, frontmatter: {objective: "deliver"},
+    const owner = join(root, "owner.md");
+    await writeFile(owner, "Owner requirement A");
+    const facts = {source: {state_file: state, runtime_root: root,
+      registry_goal: {repo: root, authority_sources: [{kind: "goal_doc", path: "owner.md"}]}}, frontmatter: {objective: "deliver"},
       goal_prose: "Deliver the owner requirement", agent_vision: null, acceptance: null, todos: []};
     const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
     const log = join(goalDir, "rollout-event-log.jsonl");
@@ -785,6 +788,15 @@ if (database && installed) {
         } finally {for (const [i, lock] of locks.entries()) await releaseFileMutationLock(targets[i]!, lock.token);}
       };
       if (turn === "two") {
+        // An owner-file change alone must invalidate the original result,
+        // even though the canonical Todo head has not changed.
+        await writeFile(owner, "Owner requirement B");
+        const beforeOwner = readFileSync(index, "utf8");
+        const ownerRejected = await submit();
+        assert.equal(ownerRejected.error_code, "checkpoint_read_context_stale");
+        assert.equal(readFileSync(index, "utf8"), beforeOwner);
+        context = await read("owner-two-reread"); await writeFile(receiptPath, JSON.stringify(context.receipt));
+        assert.equal(((context.basis as JsonObject).goal as JsonObject).prose, "Owner requirement B");
         const head = await store.loadAuthority(); assert.equal(head.status, "loaded");
         if (head.status !== "loaded") return;
         assert.equal((await store.commitAuthority({expected_provider_revision: head.provider_revision, operation_id: "change",

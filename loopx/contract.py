@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -250,6 +251,30 @@ def _credential_hits_are_all_references(line: str) -> bool:
     return all(_credential_match_is_reference(line, match) for match in matches)
 
 
+def _credential_hits_are_reviewed_placeholders(line: str, placeholders: list[str]) -> bool:
+    def reviewed(match: re.Match[str]) -> bool:
+        if _credential_match_is_reference(line, match):
+            return True
+        # Only complete assignment values qualify. In particular, matching the
+        # keyword alone or a prefix of a different secret must grant nothing.
+        if match.group(0).lower() not in {"tok" + "en=", "pass" + "word="}:
+            return False
+        value = line[match.end():].lstrip(" \t")
+        if value[:1] in {"\"", "'", "`"}:
+            quote = value[0]
+            end = value.find(quote, 1)
+            remainder = value[end + 1:].lstrip()
+            return (
+                end > 0 and value[1:end] in placeholders
+                and (not remainder or remainder[0] in ",)]};&")
+            )
+        literal = re.match(r"[^\s&\"'`]+", value)
+        return literal is not None and literal.group(0) in placeholders
+
+    matches = list(LEAK_RULES["credential"].pattern.finditer(line))
+    return bool(matches) and all(reviewed(match) for match in matches)
+
+
 DEFAULT_SCAN_SUFFIXES = {".md", ".py", ".toml", ".json", ".yaml", ".yml", ".sh"}
 DEFAULT_SKIP_DIRS = {
     ".git",
@@ -342,7 +367,7 @@ def _is_local_private_state_path(path: Path, scan_root: Path) -> bool:
     return bool(parts & LOCAL_PRIVATE_STATE_PARTS) or path.name in LOCAL_PRIVATE_STATE_FILE_NAMES
 
 
-def _public_boundary_policy(registry: dict[str, Any]) -> dict[str, str]:
+def _public_boundary_policy(registry: dict[str, Any]) -> dict[str, Any]:
     policy = registry.get("public_boundary") if isinstance(registry, dict) else None
     if not isinstance(policy, dict):
         policy = registry.get("privacy") if isinstance(registry, dict) else None
@@ -357,10 +382,21 @@ def _public_boundary_policy(registry: dict[str, Any]) -> dict[str, str]:
     if str(raw_mode).lower() == "allow" or policy.get("allow_tracked_private_doc_urls") is True:
         tracked_private_doc_urls = "allow"
 
-    return {
+    result: dict[str, Any] = {
         "schema_version": "loopx_public_boundary_policy_v0",
         "tracked_private_doc_urls": tracked_private_doc_urls,
     }
+    # Explicit owner-reviewed public fixtures remain scoped to the exact
+    # scanned content and rule. A path or test-directory name grants nothing.
+    if isinstance(policy.get("public_fixture_allowances"), dict) and policy["public_fixture_allowances"]:
+        result["public_fixture_allowances"] = policy["public_fixture_allowances"]
+    placeholders = policy.get("public_credential_placeholders")
+    if isinstance(placeholders, list) and placeholders and all(
+        isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", value)
+        for value in placeholders
+    ):
+        result["public_credential_placeholders"] = placeholders
+    return result
 
 
 def _hit_allowed_by_policy(name: str, git: dict[str, Any], policy: dict[str, str]) -> bool:
@@ -1074,6 +1110,11 @@ def scan_public_boundary(
     ``hits`` retains rule locations; ``blocking_hits`` excludes ambiguous IP
     advisories. ``ok`` requires no blocker or unread input. It
     never certifies an unrequested file, generated text or future publication.
+
+    Explicit ``public_fixture_allowances`` entries bind a relative path and
+    ``rule_ids`` to either a whole-file ``content_sha256`` or exact UTF-8 line
+    digests in ``line_sha256s`` (excluding line terminators). Line allowances
+    permit edits elsewhere, but never additions to the reviewed line itself.
     """
     hits: list[str] = []
     blocking_hits: list[str] = []
@@ -1197,8 +1238,37 @@ def scan_public_boundary(
         ]
         if not candidate_rules:
             continue
+        allowance = policy.get("public_fixture_allowances", {}).get(
+            path.relative_to(root).as_posix() if path.is_relative_to(root) else ""
+        )
+        fixture_rules: set[str] = set()
+        fixture_line_hashes: set[str] = set()
+        if isinstance(allowance, dict):
+            reviewed_lines = allowance.get("line_sha256s")
+            if isinstance(reviewed_lines, list) and reviewed_lines and all(
+                isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+                for value in reviewed_lines
+            ):
+                fixture_line_hashes = set(reviewed_lines)
+        if (
+            isinstance(allowance, dict)
+            and allowance.get("content_sha256") == hashlib.sha256(text.encode("utf-8")).hexdigest()
+            and isinstance(allowance.get("rule_ids"), list)
+        ):
+            fixture_rules = {
+                name for name in allowance["rule_ids"] if isinstance(name, str) and name in LEAK_RULES
+            }
         for line_no, line in enumerate(text.splitlines(), start=1):
             folded_line = _prefilter_fold(line)
+            # Exact reviewed lines survive unrelated edits; changed or extended
+            # lines still require review. Paths alone never exempt content.
+            line_fixture_rules = (
+                allowance.get("rule_ids", [])
+                if fixture_line_hashes
+                and hashlib.sha256(line.encode("utf-8")).hexdigest() in fixture_line_hashes
+                and isinstance(allowance.get("rule_ids"), list)
+                else []
+            )
             for name, rule in candidate_rules:
                 if not rule.is_candidate(folded_line):
                     continue
@@ -1207,8 +1277,20 @@ def scan_public_boundary(
                     scan_line = _PUBLIC_LARK_DEVELOPER_CONSOLE_HOST.sub("", scan_line)
                 if rule.pattern.search(scan_line):
                     hit = f"{rel_or_abs(path, root)}:{line_no}: {name}"
+                    if name in fixture_rules or name in line_fixture_rules:
+                        allowed_hits.append(hit)
+                        continue
                     if name == "credential" and _credential_hits_are_all_references(line):
                         credential_reference_hits.append(hit)
+                        continue
+                    if (
+                        name == "credential"
+                        and policy.get("public_credential_placeholders")
+                        and _credential_hits_are_reviewed_placeholders(
+                            line, policy["public_credential_placeholders"]
+                        )
+                    ):
+                        allowed_hits.append(hit)
                         continue
                     if (
                         name == "private_doc_url"

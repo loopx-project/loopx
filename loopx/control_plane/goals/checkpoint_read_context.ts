@@ -1,6 +1,7 @@
 /** Read basis for a missing decision/qualification checkpoint, not an execution/permission lease.
  * The commit effect holds source/index claims and the real provider fence. */
 import {settlementIdentity, type JsonObject} from "../effect_program.ts";
+import {createHash} from "node:crypto";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
@@ -13,6 +14,12 @@ import {originalTurnRequestsNoFollowup} from "../todos/completion_state.ts";
 import {terminalValidationRecovery} from "../todos/completion_validation_plan.ts";
 import {decodeTodoCompletionFenceRequest, evaluateTodoCompletionFence,
   TODO_COMPLETION_FENCE_REQUEST_SCHEMA} from "../todos/completion_fence.ts";
+
+const checkpointAuthorityInstructions =
+  "Current primary Goal documents govern requirements; plans, Todos and prior read contexts are derived records. " +
+  "A changed Goal is not proof of projection corruption. Reconcile the candidate and derived work with the current requirements; " +
+  "never restore an existing Goal document from an old plan or read context to make a result pass. " +
+  "Conflicting primary documents require owner resolution. File write isolation belongs to the host; a read receipt grants no document-edit authority.";
 
 const RECEIPT_SCHEMA = "checkpoint_read_context_v1";
 const FIRST_RECEIPT_SCHEMA = "checkpoint_read_context_v2";
@@ -115,11 +122,15 @@ export function checkpointBasisSnapshot(request: JsonObject): JsonObject {
     selected.set(id, todo);
     pending.push(...dependencies(todo));
   }
+  const documents = facts.goal_documents as JsonObject[] | undefined;
   const goal = {
     frontmatter: Object.fromEntries(Object.entries(metadata).filter(([key]) => key !== "updated_at")),
-    prose: facts.goal_prose,
+    prose: documents?.length ? documents.map(document => document.prose).join("\n\n") : facts.goal_prose,
     acceptance: facts.acceptance,
     user_todos: records.filter(todo => todo.role === "user"),
+    ...(documents?.length ? {state_prose: facts.goal_prose,
+      primary_documents: documents.map(document => ({path: document.path,
+        sha256: createHash("sha256").update(String(document.prose)).digest("hex")}))} : {}),
   };
   const basis: JsonObject = {
     todo: task ?? records,
@@ -212,11 +223,16 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
         error: "This Turn's result is already committed. Keep its original read identity for replay and read first_delivery for the pending direction."};
     }
     const prior = jsonObject(request.prior);
+    const ownerReview = jsonObject(projected.basis)?.goal as JsonObject;
+    const previousGoal = jsonObject(jsonObject(request.receipt)?.versions)?.goal;
+    const reviewAuthority = ownerReview.primary_documents !== undefined ||
+      (previousGoal !== undefined && previousGoal !== jsonObject(projected.versions)?.goal);
     const originalOutcome = prior === null ? null : Object.fromEntries([
       "classification", "delivery_outcome", "delivery_batch_scale", "recommended_action", "vision_checkpoint",
       "autonomous_replan_ack", "settlement_identity", "progress_observation"].filter(key => prior[key] !== undefined)
       .map(key => [key, prior[key]]));
-    return {ok: true, ...projected, ...(originalOutcome ? {original_outcome: originalOutcome} : {}),
+    return {ok: true, ...projected, ...(reviewAuthority ? {instructions: checkpointAuthorityInstructions} : {}),
+      ...(originalOutcome ? {original_outcome: originalOutcome} : {}),
       ...(use !== "delivery_result" ? {vision_authoring: visionAuthoringContract()} : {}), receipt: {
       schema_version: use !== "supplement_checkpoint" ? FIRST_RECEIPT_SCHEMA : RECEIPT_SCHEMA,
       ...(use !== "supplement_checkpoint" ? {purpose: use, decision_scope: request.decision_scope} : {}),
@@ -449,6 +465,7 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
     return terminalValidationRecovery(request, receipt);
   }
   if (request.phase === "restore") return {ok: true, basis,
+    ...(jsonObject(basis.goal)?.primary_documents !== undefined ? {instructions: checkpointAuthorityInstructions} : {}),
     read_context_id: readId, settlement_identity: identity};
   const terminal = jsonObject(request.terminal_input);
   const candidate = terminal ? terminalResultCandidate(terminal) : requireJsonObject(request.candidate, "result candidate");

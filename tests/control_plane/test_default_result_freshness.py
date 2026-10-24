@@ -12,7 +12,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
-def _default_fixture(provider, tmp_path, monkeypatch):
+def _default_fixture(provider, tmp_path, monkeypatch, *, handoff_mode="soft_claim"):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -22,7 +22,7 @@ def _default_fixture(provider, tmp_path, monkeypatch):
             "archive_state": "active", "source_section": "Agent Todo"}
     if provider != "legacy":
         initialize_canonical_authority(runtime, GOAL_ID,
-            build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo], handoff_mode="soft_claim"),
+            build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo], handoff_mode=handoff_mode),
             state_path=state, provider=provider)
     return project, runtime, registry, state
 

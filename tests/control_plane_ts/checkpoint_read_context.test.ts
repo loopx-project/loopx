@@ -62,6 +62,24 @@ const check = (receipt: unknown, overrides: JsonObject = {}) => evaluate({
   phase: "check", identity, facts, read_context_id: "read-A", receipt, ...overrides,
 });
 
+test("primary owner requirements stay in the Goal basis when an Agent rolls back derived state", () => {
+  const a = [{path: "/owner/goal.md", prose: "Export records without envelopes"}];
+  const b = [{path: "/owner/goal.md", prose: "Export versioned envelopes"}];
+  const first = read({facts: {...facts, goal_documents: a}});
+  assert.equal(first.ok, true);
+  const stale = check(first.receipt, {facts: {...facts, goal_documents: b}});
+  assert.equal(stale.error_code, "checkpoint_read_context_stale");
+  assert.deepEqual(stale.changed_components, ["goal"]);
+  const fresh = read({facts: {...facts, goal_prose: "Agent restored its old plan", goal_documents: b}});
+  const goal = (fresh.basis as JsonObject).goal as JsonObject;
+  assert.equal(goal.prose, b[0].prose);
+  assert.equal(goal.state_prose, "Agent restored its old plan");
+  assert.equal((goal.primary_documents as JsonObject[])[0].path, b[0].path);
+  assert.notDeepEqual((fresh.versions as JsonObject).goal, (first.versions as JsonObject).goal);
+  // No separately registered source preserves the historical basis shape.
+  assert.equal(Object.hasOwn((read().basis as JsonObject).goal as object, "primary_documents"), false);
+});
+
 test("Todo-only recovery cannot supply a complete Goal checkpoint basis", () => {
   const incomplete = {...facts, frontmatter: {...facts.frontmatter,
     goal_source_completeness: "todo_projection_only"}};

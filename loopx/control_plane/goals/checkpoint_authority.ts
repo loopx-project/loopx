@@ -1,6 +1,9 @@
 /** Same-head checkpoint facts and provider-owned writer fences.
  * Credentials and provider construction remain with the embedding service. */
 import type {JsonObject} from "../effect_program.ts";
+import {readFileSync} from "node:fs";
+import {resolve} from "node:path";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {authorityStoreSourceAuthority} from "../coordination/authority_store.ts";
 import {goalPathSegment} from "../rollout_receipt_log.ts";
@@ -16,12 +19,36 @@ import {readGoalAcceptance} from "./acceptance_contract.ts";
 import {evaluateCheckpointReadContext} from "./checkpoint_read_context.ts";
 import type {AuthorityStoreHead} from "../coordination/authority_store.ts";
 
+function primaryGoalDocuments(source: JsonObject): JsonObject[] {
+  const goal = jsonObject(source.registry_goal);
+  if (!Array.isArray(goal?.authority_sources)) return [];
+  const paths = new Set<string>();
+  for (const value of goal.authority_sources) {
+    const declaration = requireJsonObject(value, "Goal authority source");
+    if (declaration.kind !== "goal_doc") continue;
+    const path = resolve(requireNonEmptyString(goal.repo, "Goal project"),
+      requireNonEmptyString(declaration.path, "primary Goal document path"));
+    if (path !== resolve(String(source.state_file))) paths.add(path);
+  }
+  return [...paths].sort().map(path => {
+    try {
+      // Match the source reader's universal-newline text contract.
+      return {path, prose: readFileSync(path, "utf8").replace(/\r\n?/g, "\n")};
+    } catch {
+      throw new EffectRuntimeRequestError(
+        "A registered primary Goal document is unavailable; preserve the current state and locate the owner's current source, not an old plan.",
+        "checkpoint_goal_source_unavailable");
+    }
+  });
+}
+
 /** The same provider facts feed checkpoint append and Todo result CAS checks. */
 export function checkpointProviderFacts(
   goalId: string, facts: JsonObject, head: AuthorityStoreHead, storeIdentity: string,
   sourceAuthority: string, protectedDelivery: boolean,
 ): JsonObject {
   const source = requireJsonObject(facts.source, "checkpoint source");
+  const documents = primaryGoalDocuments(source);
   const projection = indexCoordinationProjection(head.head, goalId);
   validateCoordinationTodoReadModel(head.head, goalId);
   const acceptance = readGoalAcceptance(head.head, goalId);
@@ -29,6 +56,7 @@ export function checkpointProviderFacts(
   const lease = protectedDelivery && typeof todoId === "string" ? projection.leases.get(todoId) : null;
   const expiry = typeof lease?.expires_at === "string" ? parseIsoTimestamp(lease.expires_at) : null;
   return {...facts,
+    ...(documents.length ? {goal_documents: documents} : {}),
     ...(protectedDelivery ? {execution_lease: lease ? {...lease,
       active: lease.status === "active" && expiry !== null && expiry > new Date()} : null} : {}),
     todos: projection.todo_ids.map(id => projection.todos.get(id)!),
