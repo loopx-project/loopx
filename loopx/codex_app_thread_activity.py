@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .hosts.codex_rollout_cursor import Reader, RolloutCursor
+from .hosts.codex_rollout_file import open_rollout
 from .control_plane.agents.host_thread_activity import (
     HostDeliveryExpectation,
     HostDeliveryScope,
@@ -173,7 +174,7 @@ def _rollout_activity(
     try:
         if not path.is_file():
             return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
-        with path.open("rb") as handle:
+        with open_rollout(path) as handle:
             stat = os.fstat(handle.fileno())
             if Path(os.path.realpath(path)) != path or (stat.st_dev, stat.st_ino) != (path.stat().st_dev, path.stat().st_ino):
                 return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)

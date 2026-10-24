@@ -860,6 +860,12 @@ jobs:
       - name: Qualify TypeScript shard paths on native Windows
         run: python -m pytest -q tests/test_python_ci_workflow.py::test_typescript_shards_select_every_test_file_exactly_once
 
+      - name: Qualify read-only Codex rollout rotation on native Windows
+        run: >-
+          python -m pytest -q
+          tests/test_codex_rollout_file.py
+          tests/test_codex_rollout_cursor.py
+
       - name: Qualify the canary premerge contract smoke on native Windows
         run: python examples/canary/premerge-validation-gate-smoke.py
 

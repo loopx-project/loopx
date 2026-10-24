@@ -55,6 +55,72 @@ def write(path, data):
     path.write_bytes(data)
 
 
+def replace_rollout(replacement, path):
+    if os.name != "nt":
+        os.replace(replacement, path)
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    # MoveFileEx (os.replace) cannot replace an open Windows destination even
+    # with delete sharing. Exercise the native atomic replacement operation.
+    replace = ctypes.WinDLL("kernel32", use_last_error=True).ReplaceFileW
+    replace.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                        wintypes.DWORD, wintypes.LPVOID, wintypes.LPVOID)
+    replace.restype = wintypes.BOOL
+    if not replace(str(path), str(replacement), None, 0, None, None):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+@pytest.mark.parametrize("reader", ["messages", "content"])
+def test_visible_history_read_does_not_block_native_rollout_rotation(
+    tmp_path, monkeypatch, reader
+):
+    from loopx.capabilities.native_chat import codex_history as history
+
+    path, replacement = tmp_path / "rollout.jsonl", tmp_path / "replacement.jsonl"
+
+    def message(text):
+        return encode({
+            "type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "channel": "final",
+                        "content": [{"type": "output_text", "text": text}]},
+        })
+
+    path.write_bytes(message("Original visible result"))
+    replacement.write_bytes(message("Replacement visible result"))
+    previous = history.read_messages(path)
+    row = previous["messages"][0]
+    content_args = dict(entry_id=int(row["id"]), offset=0,
+                        expected_source=previous["source_ref"],
+                        content_ref=row["content_ref"])
+    original_display = history._display_record
+    rotations = []
+
+    def display(raw):
+        # Both production readers still own their source handle here; the
+        # message reader also owns a real read-only mmap of the old snapshot.
+        replace_rollout(replacement, path)
+        rotations.append(True)
+        return original_display(raw)
+
+    with monkeypatch.context() as during_read:
+        during_read.setattr(history, "_display_record", display)
+        if reader == "messages":
+            snapshot = history.read_messages(path)["messages"][0]
+        else:
+            snapshot = history.read_content(path, **content_args)
+        assert snapshot["text"] == "Original visible result"
+    assert rotations == [True]
+    current = history.read_messages(
+        path, after=previous["after"], expected_source=previous["source_ref"]
+    )
+    assert current["reset"] is True
+    assert [row["text"] for row in current["messages"]] == ["Replacement visible result"]
+    with pytest.raises(ValueError, match="History source changed"):
+        history.read_content(path, **content_args)
+
+
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     root = tmp_path / "host"
@@ -306,6 +372,7 @@ def test_cached_start_and_file_mtime_do_not_refresh_the_event_clock(store):
 def test_every_cold_and_incremental_read_obeys_the_byte_budget(store, monkeypatch):
     path = write_long(store)
     original = Path.open
+    source_open = observer.open_rollout
     reads = [0]
 
     class Counted:
@@ -334,9 +401,10 @@ def test_every_cold_and_incremental_read_obeys_the_byte_budget(store, monkeypatc
         stream = original(target, mode, *args, **kwargs)
         if target.parent == store[2] and mode == "rb":
             return Counted(stream, host=False)
-        return Counted(stream) if target == path and mode == "rb" else stream
+        return stream
 
     monkeypatch.setattr(Path, "open", opened)
+    monkeypatch.setattr(observer, "open_rollout", lambda target: Counted(source_open(target)))
     for _ in range(30):
         reads[0] = 0
         result = observe(store, cached=True)
@@ -356,13 +424,16 @@ def test_every_cold_and_incremental_read_obeys_the_byte_budget(store, monkeypatc
 
 
 @pytest.mark.parametrize("replace", [False, True])
+@pytest.mark.parametrize("cached", [False, True])
 def test_a_new_end_or_rotation_during_read_is_not_reported_as_open(
-    store, monkeypatch, replace
+    store, monkeypatch, replace, cached
 ):
     path = store[1]
     write(path, encode(event("task_started")))
     original = Path.open
+    source_open = observer.open_rollout
     injected = [False]
+    rotation_errors = []
 
     class Racing:
         def __init__(self, stream):
@@ -375,7 +446,11 @@ def test_a_new_end_or_rotation_during_read_is_not_reported_as_open(
                 if replace:
                     replacement = path.with_suffix(".replacement")
                     write(replacement, encode(event("task_complete", T2)))
-                    os.replace(replacement, path)
+                    try:
+                        replace_rollout(replacement, path)
+                    except OSError as error:
+                        rotation_errors.append(error)
+                        raise
                 else:
                     with original(path, "ab") as stream:
                         stream.write(encode(event("task_complete", T2)))
@@ -390,13 +465,15 @@ def test_a_new_end_or_rotation_during_read_is_not_reported_as_open(
         def __exit__(self, *args):
             return self.stream.__exit__(*args)
 
-    def opened(target, mode="r", *args, **kwargs):
-        stream = original(target, mode, *args, **kwargs)
-        return Racing(stream) if target == path and mode == "rb" else stream
+    def opened(target):
+        return Racing(source_open(target))
 
-    monkeypatch.setattr(Path, "open", opened)
-    assert observe(store).state is HostThreadState.UNKNOWN
-    assert converge(store).state is HostThreadState.IDLE
+    monkeypatch.setattr(observer, "open_rollout", opened)
+    assert observe(store, cached=cached).state is HostThreadState.UNKNOWN
+    assert not rotation_errors, f"read-only observation blocked host rotation: {rotation_errors}"
+    result = converge(store, cached=cached)
+    assert result.state is HostThreadState.IDLE
+    assert result.last_turn_ended_at == T2
 
 
 @pytest.mark.parametrize("chunk", [1, 7, 41, 4096])
