@@ -485,7 +485,7 @@ class StewardTurnHost:
                 raise ValueError("report publication was cancelled after native settlement")
             folder = attempt_directory(self.controller.coordination_runtime_root, window)
             generation = validate_private_generation(folder)
-            return {"schema_version": "loopx_chat_agent_response_v0", "message": (folder / "report.md").read_text(),
+            return {"schema_version": "loopx_chat_agent_response_v0", "message": (folder / "report.md").read_text(encoding="utf-8"),
                 "proposals": [], "gate": None, "native_loopx": result,
                 "periodic_report": {"window_id": window["window_id"], "generation_id": generation["generation_id"],
                     "delivery_verified": False}}

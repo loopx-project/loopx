@@ -174,8 +174,8 @@ class StewardReports:
         selected = self.selected(binding_id)
         session = selected["session"]
         folder = attempt_directory(self.root, window)
-        expected = json.loads((folder / "editorial-request.json").read_text())
-        source = json.loads((folder / "source.json").read_text())
+        expected = json.loads((folder / "editorial-request.json").read_text(encoding="utf-8"))
+        source = json.loads((folder / "source.json").read_text(encoding="utf-8"))
         frozen_ids = source.get("goal_ids")
         current_ids = self.bindings.steward_scope(session)
         if (expected.get("request_digest") != _canonical_digest(
@@ -220,7 +220,7 @@ class StewardReports:
                 for name in ["private-generation.json", "private-delivery.json"]:
                     path = folder / name
                     if path.is_file():
-                        value = json.loads(path.read_text())
+                        value = json.loads(path.read_text(encoding="utf-8"))
                         if name == "private-generation.json":
                             generation = value["generation_id"]
                         else:

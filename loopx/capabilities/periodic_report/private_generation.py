@@ -145,7 +145,8 @@ def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[
         bundle = build_periodic_report_generation_bundle(document=document, artifacts=[markdown, html])
         atomic_write_json(folder / "generation-bundle.json", bundle)
         body = str(markdown["content"])
-        (folder / "report.md").write_text(body, encoding="utf-8")
+        report_bytes = body.encode("utf-8")
+        (folder / "report.md").write_bytes(report_bytes)
         cursor = read_periodic_report_publication_cursor(runtime_root=root,
             goal_id=window["goal_id"], agent_id=window["agent_id"])
         candidate = build_periodic_report_publication_candidate(goal_id=window["goal_id"],
@@ -156,7 +157,7 @@ def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[
         receipt = {"window_id": window["window_id"], "request_digest": request["request_digest"],
             "generated_at": generated_at,
             "generation_id": bundle["generation_receipt"]["generation_id"],
-            "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            "body_sha256": hashlib.sha256(report_bytes).hexdigest(),
             "bundle_sha256": _canonical_digest(bundle), "publication_candidate_id": candidate["candidate_id"],
             "publication_candidate_sha256": _canonical_digest(candidate),
             "generation_complete": True, "delivery_verified": False}
@@ -195,6 +196,7 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
         agent_id=window["agent_id"], generation_id=checked["generation_receipt"]["generation_id"],
         trigger_receipt=document["trigger_receipt"], facts=request["facts"],
         baseline=candidate.get("incremental_baseline"))
+    report_bytes = (folder / "report.md").read_bytes()
     if (document != bundle["document"] or checked != bundle or receipt["bundle_sha256"] != _canonical_digest(checked)
             or receipt["window_id"] != window["window_id"]
             or receipt["generation_id"] != checked["generation_receipt"]["generation_id"]
@@ -202,7 +204,7 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
             or receipt["publication_candidate_id"] != candidate["candidate_id"]
             or receipt["publication_candidate_sha256"] != _canonical_digest(candidate)
             or receipt["request_digest"] != request["request_digest"]
-            or receipt["body_sha256"] != hashlib.sha256((folder / "report.md").read_bytes()).hexdigest()
-            or (folder / "report.md").read_text() != render_periodic_report_markdown(bundle["document"])["content"]):
+            or receipt["body_sha256"] != hashlib.sha256(report_bytes).hexdigest()
+            or report_bytes.decode("utf-8") != render_periodic_report_markdown(bundle["document"])["content"]):
         raise ValueError("frozen generation or full report body changed")
     return receipt
