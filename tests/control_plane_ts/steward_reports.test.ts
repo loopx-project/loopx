@@ -59,6 +59,55 @@ test("local native work observation excludes watch bookkeeping and retains real 
   assert.throws(() => observeManagedWork({...source, todos: undefined}));
 });
 
+test("a local calendar report retains its exact original Session, subscription, window and native Task", () => {
+  const goal = {goal_id: "project", goal_instance_id: "original", registered_agents: ["writer", "peer"], workspace_path: "/workspace"};
+  const session = {goal_id: goal.goal_id, goal_instance_id: goal.goal_instance_id, session_id: "a".repeat(32),
+    channel_id: "agent.writer", session_mode: "managed_runtime", managed_agent_id: "writer", agent_id: "codex",
+    executor_endpoint_id: "codex", adapter_kind: "codex_app_server", managed_workspace_path: goal.workspace_path};
+  const actor = {schema_version: "loopx_managed_session_actor_v0", goal_id: goal.goal_id, goal_instance_id: goal.goal_instance_id,
+    session_id: session.session_id, agent_id: "writer", workspace_path: goal.workspace_path};
+  const request = {operation: "native_turn", host: "codex-app-server", work_kind: "report", actor,
+    turn_instance_id: "managed-session.report.original", todo_id: "todo_report", validation_command: null,
+    report_window_id: "original-window", report_subscription_revision: "original-subscription"};
+  const subscription = {enabled: true, profile_preset: "weekly-progress", route_ref: `managed-session:${session.session_id}`,
+    effective_revision: request.report_subscription_revision};
+  const window = {goal_id: goal.goal_id, agent_id: "writer", window_id: request.report_window_id,
+    subscription_revision: request.report_subscription_revision};
+  const todo = {todo_id: request.todo_id, target_key: window.window_id, action_kind: "generate_periodic_report", claimed_by: "writer", status: "open"};
+  const input = {session, goal, request, goal_active: true, queued_turn_count: 0,
+    report_window: window, report_subscription: subscription, report_todo: todo};
+  assert.equal(admitManagedSessionTurn(input).observation_only, false);
+  for (const changed of [
+    {...input, goal_active: false}, {...input, queued_turn_count: 1},
+    {...input, session: {...session, managed_agent_id: "peer"}},
+    {...input, session: {...session, session_mode: "attached_host"}},
+    {...input, session: {...session, goal_instance_id: "replacement"}},
+    {...input, report_window: {...window, goal_id: "another"}},
+    {...input, report_window: {...window, agent_id: "peer"}},
+    {...input, report_window: {...window, window_id: "next-window"}},
+    {...input, report_subscription: {...subscription, enabled: false}},
+    {...input, report_subscription: {...subscription, effective_revision: "changed"}},
+    {...input, report_subscription: {...subscription, profile_preset: "portfolio-progress"}},
+    {...input, report_subscription: {...subscription, route_ref: "managed-session:" + "b".repeat(32)}},
+    {...input, report_todo: {...todo, target_key: "another-window"}},
+    {...input, report_todo: {...todo, claimed_by: "peer"}},
+    {...input, report_todo: {...todo, status: "done"}},
+    {...input, request: {...request, validation_command: ["a-caller-command"]}},
+    {...input, request: {...request, profile: "another-runtime"}},
+    {...input, request: {...request, work_kind: "native_turn"}},
+  ]) assert.throws(() => admitManagedSessionTurn(changed));
+  const inspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+    journal_status: "failed", completed_phases: ["host_execute", "typed_result"],
+    recovery_decision: {action: "continue", resume_from: "validation", reinvoke_host: false}};
+  assert.equal(admitManagedSessionTurn({...input, report_settlement_recovery: inspection}).observation_only, false);
+  for (const changed of [{owner_matches: false}, {journal_consistent: false}, {completed_phases: ["host_execute"]},
+    {recovery_decision: {...inspection.recovery_decision, reinvoke_host: true}},
+    {recovery_decision: {...inspection.recovery_decision, resume_from: "host_execute"}}]) {
+    assert.throws(() => admitManagedSessionTurn({...input, report_settlement_recovery: {...inspection, ...changed}}));
+  }
+});
+
 function original() {
   const binding = {binding_id: "b".repeat(24), transport_ref: "private-steward", provider_ref: "c".repeat(24),
     operator_ref: "d".repeat(24), project_ref: "a".repeat(24), context_kind: "steward",

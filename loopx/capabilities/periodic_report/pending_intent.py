@@ -441,7 +441,8 @@ def periodic_report_pending_intent_interaction_hook(
             if normalized_agent_id and subscription is not None
             else []
         )
-        if not intents or subscription.get("profile_preset") == "portfolio-progress":
+        from .goal_configuration import managed_session_report_destination
+        if not intents or subscription.get("profile_preset") == "portfolio-progress" or managed_session_report_destination(subscription) is not None:
             # This explicit source profile is consumed by the original Chat
             # host's admitted native report Todo. Projecting the Goal Channel
             # CLI action as well would preempt that controlled model Turn and
@@ -1085,7 +1086,8 @@ def _consume_pending_periodic_report_intent(
             "status": "subscription_disabled",
             "external_writes_performed": False,
         }
-    if subscription.get("profile_preset") == "portfolio-progress":
+    from .goal_configuration import managed_session_report_destination
+    if subscription.get("profile_preset") == "portfolio-progress" or managed_session_report_destination(subscription) is not None:
         # A CLI caller cannot manufacture the original conversation's reader
         # or private destination. Its host supplies those under the live grant.
         return {"ok": True, "schema_version": CONSUMPTION_RECEIPT_SCHEMA,

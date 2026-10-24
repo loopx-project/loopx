@@ -7,6 +7,7 @@ bound provider. This adapter creates no scheduler, executor or business store.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import contextmanager
 import json
 import sys
 from typing import Any
@@ -250,16 +251,27 @@ class StewardReports:
 
     def frontier(self, binding: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
         """Called only by the original host pump after its idle/cache checks."""
+        return self._frontier(binding["binding_id"], binding["managed_actor"])
+
+    def _submit(self, owner_key: str, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]):
+        from .steward_turn import StewardTurnHost
+        folder = attempt_directory(self.root, window)
+        validator = [sys.executable, "-c", "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
+            + f"validate_private_generation(Path({str(folder)!r}))"]
+        return StewardTurnHost(self.controller).submit(owner_key,
+            turn_instance_id="report." + window["window_id"], todo_id=todo["todo_id"],
+            work_kind="report", report_window=window, validation_command=validator)
+
+    def _frontier(self, owner_key: str, actor: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
         from .steward_monitor import StewardMonitor
         from .steward_turn import StewardTurnHost
 
-        actor = binding["managed_actor"]
-        subscription = self.subscription(binding["binding_id"])
+        subscription = self.subscription(owner_key)
         if subscription is None or subscription.get("schedule") is None:
             return None, False
         admitted = admit_cadence_window(runtime_root=self.root, goal_id=actor["goal_id"],
             agent_id=actor["agent_id"], subscription=subscription, now=datetime.now(timezone.utc),
-            subscription_resolver=lambda: self.subscription(binding["binding_id"]))
+            subscription_resolver=lambda: self.subscription(owner_key))
         if admitted["status"] != "pending":
             return None, False
         window = admitted["window"]
@@ -269,7 +281,9 @@ class StewardReports:
         if not rows:
             native_command(self.controller, ["todo", "add", "--goal-id", actor["goal_id"],
                 "--role", "agent", "--operation-id", window["window_id"],
-                "--text", f"[P1] Author the authorized portfolio report ending {window['due_at']}; retain counterevidence and coverage gaps. Generation is separate from verified private delivery.",
+                "--text", (f"[P1] Author the configured original Session report ending {window['due_at']}; retain evidence and coverage gaps. Generation is separate from verified delivery."
+                    if actor.get("schema_version") == "loopx_managed_session_actor_v0" else
+                    f"[P1] Author the authorized portfolio report ending {window['due_at']}; retain counterevidence and coverage gaps. Generation is separate from verified private delivery."),
                 "--claimed-by", actor["agent_id"], "--action-kind", "generate_periodic_report",
                 "--target-key", window["window_id"], "--continuation-policy", "same_agent_non_delivery",
                 "--execute"])
@@ -281,11 +295,7 @@ class StewardReports:
             return None, False
         if len(rows) != 1 or rows[0]["status"] != "open":
             return None, False
-        validator = [sys.executable, "-c", "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
-            + f"validate_private_generation(Path({str(folder)!r}))"]
-        return StewardTurnHost(self.controller).submit(binding["binding_id"],
-            turn_instance_id="report." + window["window_id"], todo_id=rows[0]["todo_id"],
-            work_kind="report", report_window=window, validation_command=validator)
+        return self._submit(owner_key, actor, window, rows[0])
 
     def prepare(self, request: dict[str, Any], adapter: Any, *, authorization_scope_id: str) -> str:
         from ..manager_context.inspection import TOOL_NAME
@@ -312,10 +322,239 @@ class StewardReports:
         return report_prompt(frozen, attempt_directory(self.root, window))
 
     def freeze(self, request: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
-        _, window = self.current_window(request["actor"]["goal_id"].removeprefix("steward-agent-"))
+        _, owner_key = report_service(self.controller, request["actor"])
+        _, window = self.current_window(owner_key)
         if not window or window["window_id"] != request["report_window_id"]:
             raise ValueError("the original report was paused, cancelled or changed")
         response = candidate.pop("editorial_response", None)
         if not isinstance(response, dict):
             raise ValueError("the original reporting Agent returned no editorial response")
         return freeze_private_report(root=self.root, window=window, response=response)
+
+
+def report_service(controller: Any, actor: dict[str, Any]):
+    """Select the existing source/return adapter, never another execution actor."""
+    if actor.get("schema_version") == "loopx_managed_session_actor_v0":
+        return ManagedSessionReports(controller), actor["session_id"]
+    return StewardReports(controller), actor["goal_id"].removeprefix("steward-agent-")
+
+
+@contextmanager
+def session_report_configuration_guard(controller: Any, goal_id: str, proposed: dict[str, Any] | None):
+    """Keep the existing settings transaction and native window in one ordering.
+
+    Preparing source artifacts takes the same Goal-local calendar lock. A
+    changed plan cannot strand a frozen undelivered report; pause and restoring
+    that same plan remain possible. Other destinations keep their old path.
+    """
+    from ..periodic_report.goal_configuration import managed_session_report_destination
+    from ..periodic_report.cadence_journal import cadence_journal_path
+    current = configuration_summary(load_goal_from_registry(controller.registry_path, goal_id) or {}) or {}
+    if not managed_session_report_destination(current) and not managed_session_report_destination(proposed or {}):
+        yield
+        return
+    with exclusive_file_lock(cadence_journal_path(controller.coordination_runtime_root, goal_id),
+                            operation="configure_session_report"):
+        current = configuration_summary(load_goal_from_registry(controller.registry_path, goal_id) or {}) or {}
+        destination = managed_session_report_destination(proposed or {})
+        if proposed and proposed.get("enabled") and destination:
+            actor = ManagedSessionReports(controller).selected(destination)["actor"]
+            if actor["goal_id"] != goal_id:
+                raise ValueError("select the original managed Agent Session in this Goal")
+        journal = read_cadence_journal(runtime_root=controller.coordination_runtime_root, goal_id=goal_id)
+        if journal and journal["publication"] is None and not journal.get("retirement"):
+            window = journal["window"]
+            reports = ManagedSessionReports(controller)
+            folder = attempt_directory(controller.coordination_runtime_root, window)
+            if folder.exists() and not reports._published_window(window):
+                before = {k: v for k, v in current.items() if k != "enabled"}
+                after = {k: v for k, v in (proposed or {}).items() if k != "enabled"}
+                if before != after:
+                    raise PendingStewardReportError("The original frozen report still requires verified delivery. Pause or restore the same plan; change its schedule or conversation after delivery.")
+        yield
+
+
+class ManagedSessionReports(StewardReports):
+    """Local source and Core return adapter for the shared report/Turn lifecycle.
+
+    An explicit Goal configuration pins one existing Agent Session. Its native
+    calendar, generation Task, frozen artifacts and publication cursor remain
+    the existing periodic-report owners. No private steward binding is needed.
+    """
+    def selected(self, session_id: str) -> dict[str, Any]:
+        from pathlib import Path
+        from .steward_managed_mode import ManagedSessionTurn, managed_session_identity
+        session = self.controller.store.load_session(session_id)
+        if not session or not session.get("managed_agent_id"):
+            raise ValueError("select the original registered Agent Session")
+        request = ManagedSessionTurn(self.controller)._request(session_id, session["managed_agent_id"], "report-identity")
+        actor = request["actor"]
+        managed_session_identity(self.controller, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+            workspace=Path(actor["workspace_path"]), session=session)
+        return {"session": session, "actor": actor}
+
+    def subscription(self, session_id: str, *, expected_revision: str | None = None) -> dict[str, Any] | None:
+        actor = self.selected(session_id)["actor"]
+        goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
+        # Only an explicit Goal override can choose this exact Session; a
+        # machine default cannot implicitly enroll another Goal/conversation.
+        config = configuration_summary(goal)
+        if not config or config.get("profile_preset") != "weekly-progress" or config.get("route_ref") != "managed-session:" + session_id:
+            return None
+        subscription = resolve_active_goal_periodic_report_subscription(goal)
+        if subscription and expected_revision is not None and subscription["effective_revision"] != expected_revision:
+            return None
+        return subscription
+
+    def _submit(self, owner_key: str, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]):
+        from .steward_managed_mode import ManagedSessionTurn
+        return ManagedSessionTurn(self.controller).submit(owner_key, agent_id=actor["agent_id"],
+            operation_id="report." + window["window_id"], todo_id=todo["todo_id"], report_window=window)
+
+    def frontier(self, session_id: str) -> tuple[dict[str, Any] | None, bool]:
+        from .steward_monitor import StewardMonitor
+        from .steward_turn import StewardTurnHost
+        actor = self.selected(session_id)["actor"]
+        subscription, window = self.current_window(session_id)
+        if subscription is None:
+            return None, False
+        if window and (attempt_directory(self.root, window) / "private-generation.json").exists():
+            todo = next((row for row in StewardMonitor(self.controller).todos(actor)
+                if row.get("target_key") == window["window_id"]), None)
+            if todo:
+                StewardTurnHost(self.controller).recover_report_settlement(actor, window, todo)
+                self.publish(session_id, window)
+        return self._frontier(session_id, actor)
+
+    def prepare(self, request: dict[str, Any], adapter: Any, *, authorization_scope_id: str | None = None) -> str:
+        from pathlib import Path
+        from ...control_plane.todos.list_readback import list_goal_todos
+        from ..periodic_report.pending_intent import _canonical_digest
+        from ..periodic_report.private_generation import prepare_session_report
+        from ..periodic_report.cadence_journal import cadence_journal_path
+        actor = self.selected(request["actor"]["session_id"])["actor"]
+        _, window = self.current_window(actor["session_id"])
+        if actor != request["actor"] or not window or window["window_id"] != request["report_window_id"]:
+            raise ValueError("the admitted original Session report changed")
+
+        def read():
+            active = list_goal_todos(registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                runtime_root_arg=str(self.root), limit=None)
+            history = list_goal_todos(registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                runtime_root_arg=str(self.root), role="agent", status="done", read_scope="completed_history", limit=None)
+            rows = {row["todo_id"]: row for row in [*active["todos"], *history["todos"]]}
+            source = {"goal_id": actor["goal_id"], "observed_at": datetime.now(timezone.utc).isoformat(),
+                "rows": [rows[key] for key in sorted(rows)], "complete_native_task_read": True,
+                "artifact_contents_independently_read": False, "as_of_window_reconstruction": False}
+            return {**source, "source_revision": _canonical_digest(source)}
+
+        rules = Path(actor["workspace_path"]) / "REPORTING.md"
+        if rules.is_symlink():
+            raise ValueError("the original reporting criteria changed source")
+        reporting = rules.read_text(encoding="utf-8") if rules.exists() else "Report this Goal's evidence-backed outcomes, current work, failures and next actions; preserve unknown times and verification gaps."
+        with exclusive_file_lock(cadence_journal_path(self.root, actor["goal_id"]), operation="freeze_session_report_source"):
+            if self.subscription(actor["session_id"], expected_revision=window["subscription_revision"]) is None:
+                raise ValueError("the original report configuration changed before collection")
+            frozen = prepare_session_report(root=self.root, window=window, actor=actor, read=read, reporting=reporting)
+        return report_prompt(frozen, attempt_directory(self.root, window))
+
+    def delivery_current(self, session_id: str, window: dict[str, Any]) -> bool:
+        from ..periodic_report.pending_intent import _canonical_digest
+        if self.subscription(session_id, expected_revision=window["subscription_revision"]) is None:
+            return False
+        actor = self.selected(session_id)["actor"]
+        frozen = json.loads((attempt_directory(self.root, window) / "editorial-request.json").read_text())
+        return (actor == frozen.get("managed_session_actor")
+            and frozen.get("window") == window and actor["goal_id"] == window["goal_id"]
+            and actor["agent_id"] == window["agent_id"]
+            and frozen.get("request_digest") == _canonical_digest({k: v for k, v in frozen.items() if k != "request_digest"}))
+
+    def publish(self, session_id: str, window: dict[str, Any]) -> bool:
+        """Read the original native commit, then publish/read back one Core message.
+
+        Core's explicit message identity reconciles an unknown append; a lost
+        publication-cursor response is recovered from that same full body.
+        There is no external send and no second Chat/model Turn.
+        """
+        import hashlib
+        from ..periodic_report.private_generation import validate_private_generation
+        from ..periodic_report.incremental import commit_periodic_report_publication_cursor
+        from .steward_turn import native_steward_client_id
+        actor = self.selected(session_id)["actor"]
+        turn = self.controller.store.turn_for_client(session_id, native_steward_client_id(actor, "report." + window["window_id"]))
+        if not turn:
+            return False
+        request = turn.get("loopx_request") or {}
+        if (request.get("actor") != actor or request.get("report_window_id") != window["window_id"]
+                or request.get("report_subscription_revision") != window["subscription_revision"]):
+            raise ValueError("the original report return changed identity")
+        if not any(row["kind"] == "native_loopx.result" and row["payload"].get("status") == "committed"
+                for row in self.controller.store.events_after(session_id, turn["turn_id"], None)):
+            return False
+        folder = attempt_directory(self.root, window)
+        from ..periodic_report.cadence_journal import cadence_journal_path
+        from ...control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission, capture_first_party_host_goal_ref
+        with exclusive_file_lock(cadence_journal_path(self.root, actor["goal_id"]), operation="publish_session_report"):
+            admission = FirstPartyHostGoalAdmission.for_plan(registry_path=self.controller.registry_path,
+                goal_id=actor["goal_id"], planned_goal_ref=capture_first_party_host_goal_ref(
+                    registry_path=self.controller.registry_path, goal_id=actor["goal_id"]))
+            with self.controller.lock, admission.launch_lifetime(operation="return_session_report"), exclusive_file_lock(
+                    folder / "delivery.lock", operation="return_session_report"):
+                generation = validate_private_generation(folder)
+                if not self.delivery_current(session_id, window):
+                    return False
+                body = (folder / "report.md").read_text(encoding="utf-8")
+                message_id = "managed." + turn["turn_id"] + ".completed"
+                messages = self.controller.store.messages(session_id)
+                existing = next((row for row in messages if row["message_id"] == message_id), None)
+                # A retained earlier partial/failed outer answer stays immutable.
+                # Only the newly recovered native commit permits the full report.
+                if existing and existing.get("text") != body:
+                    message_id = "report." + window["window_id"]
+                self.controller.store.append_message(session_id, role="agent", text=body,
+                    turn_id=turn["turn_id"], message_id=message_id)
+                readback = [row for row in self.controller.store.messages(session_id) if row["message_id"] == message_id]
+                if (len(readback) != 1 or readback[0]["text"] != body or readback[0]["role"] != "agent"
+                        or readback[0]["turn_id"] != turn["turn_id"] or not self.delivery_current(session_id, window)):
+                    raise ValueError("the complete original report message did not verify")
+                candidate = json.loads((folder / "publication-candidate.json").read_text())
+                identity = [session_id, window["window_id"], generation["generation_id"], message_id, generation["body_sha256"]]
+                commit_periodic_report_publication_cursor(runtime_root=self.root, candidate=candidate,
+                    publication_id="session-report-" + hashlib.sha256(json.dumps(identity).encode()).hexdigest(),
+                    delivered_at=readback[0]["created_at"], covered_until=window["due_at"])
+                return True
+
+    def health(self, session_id: str) -> dict[str, Any]:
+        try:
+            actor = self.selected(session_id)["actor"]
+            goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
+            config = configuration_summary(goal)
+            if not config or config.get("route_ref") != "managed-session:" + session_id:
+                return {"available": True, "configured": False, "enabled": False}
+            journal = read_cadence_journal(runtime_root=self.root, goal_id=actor["goal_id"])
+            window = journal["window"] if journal else None
+            folder = attempt_directory(self.root, window) if window else None
+            from .steward_turn import native_steward_client_id
+            turn = self.controller.store.turn_for_client(session_id,
+                native_steward_client_id(actor, "report." + window["window_id"])) if window else None
+            native = ((turn or {}).get("response") or {}).get("native_loopx") or {}
+            failed = bool(turn and (turn["status"] in {"failed", "interrupted", "timed_out"}
+                or native.get("status") == "failed"))
+            published = bool(window and self._published_window(window))
+            returned = []
+            if published and turn and folder and (folder / "report.md").is_file():
+                body = (folder / "report.md").read_text(encoding="utf-8")
+                returned = [row for row in self.controller.store.messages(session_id)
+                    if row["role"] == "agent" and row["turn_id"] == turn["turn_id"] and row["text"] == body]
+            verified = published and len(returned) == 1
+            return {"available": True, "configured": True, "enabled": bool(self.subscription(session_id)),
+                "scheduled": bool(config.get("schedule")),
+                "schedule": config.get("schedule"), "next_due_at": report_cadence_next_due_at(
+                    config.get("schedule"), now=datetime.now(timezone.utc)) if config.get("enabled") else None,
+                "retained_window_due_at": window["due_at"] if window else None,
+                "generation_complete": bool(folder and (folder / "private-generation.json").exists()),
+                "execution_failed": failed,
+                "publication_verified": verified,
+                "report_message_id": returned[0]["message_id"] if verified else None}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"available": False, "error_code": "managed_session_report_unavailable"}

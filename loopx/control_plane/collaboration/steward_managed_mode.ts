@@ -15,13 +15,31 @@ import {goalAgentConversationIdentity, resolveConversationScope} from "./convers
  * a message or the selected executor/model. This creates no scheduling grant. */
 export function admitManagedSessionIdentity(params: JsonObject): JsonObject {
   const goal = requireJsonObject(params.goal, "original registered Goal");
-  const identity = goalAgentConversationIdentity({goal_id: goal.goal_id, managed_agent_id: params.managed_agent_id});
+  let identity: JsonObject;
+  try {
+    identity = goalAgentConversationIdentity({goal_id: goal.goal_id, managed_agent_id: params.managed_agent_id});
+  } catch {
+    throw new EffectRuntimeRequestError("select an exact registered Goal and Agent");
+  }
   if (params.goal_active !== true || !Array.isArray(goal.registered_agents)
       || !goal.registered_agents.includes(identity.managed_agent_id)
       || goal.goal_instance_id != null && (typeof goal.goal_instance_id !== "string"
         || !/^[A-Za-z0-9._-]{1,160}$/.test(goal.goal_instance_id))
       || params.workspace_path !== goal.workspace_path) {
     throw new EffectRuntimeRequestError("the managed Agent must belong to the active local Goal and workspace");
+  }
+  if (params.session != null) {
+    const session = requireJsonObject(params.session, "original managed Session");
+    if (resolveConversationScope(session).kind !== "owner_goal"
+        || session.project_context != null || session.steward_context != null
+        || session.session_mode !== "managed_runtime" || session.agent_id !== "codex" || session.executor_endpoint_id !== "codex"
+        || session.adapter_kind !== "codex_app_server" || session.upstream_mode === "goal"
+        || session.status === "closed" || session.goal_id !== goal.goal_id
+        || (session.goal_instance_id ?? null) !== goal.goal_instance_id
+        || session.managed_agent_id !== identity.managed_agent_id
+        || session.managed_workspace_path !== goal.workspace_path || session.channel_id !== identity.channel_id) {
+      throw new EffectRuntimeRequestError("the original managed Agent Session identity is unavailable");
+    }
   }
   return {...identity, goal_instance_id: goal.goal_instance_id ?? null};
 }
@@ -36,18 +54,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   const request = requireJsonObject(params.request, "native Turn request");
   const actor = requireJsonObject(request.actor, "managed Session actor");
   const turn = params.turn == null ? null : requireJsonObject(params.turn, "current Chat Turn");
-  if (resolveConversationScope(session).kind !== "owner_goal"
-      || session.project_context != null || session.steward_context != null
-      || session.session_mode !== "managed_runtime" || session.agent_id !== "codex" || session.executor_endpoint_id !== "codex"
-      || session.adapter_kind !== "codex_app_server" || session.upstream_mode === "goal"
-      || session.status === "closed" || params.goal_active !== true
-      || goal.goal_id !== session.goal_id || goal.goal_instance_id !== (session.goal_instance_id ?? null)
-      || !Array.isArray(goal.registered_agents) || !goal.registered_agents.includes(actor.agent_id)
-      || session.managed_agent_id !== actor.agent_id
-      || session.managed_workspace_path !== goal.workspace_path
-      || typeof goal.workspace_path !== "string" || !goal.workspace_path) {
-    throw new EffectRuntimeRequestError("select an active local Goal's managed Codex conversation and a registered Agent");
-  }
+  admitManagedSessionIdentity({...params, managed_agent_id: actor.agent_id, workspace_path: goal.workspace_path});
   const fields = ["schema_version", "goal_id", "goal_instance_id", "agent_id", "session_id", "workspace_path"];
   if (Object.keys(actor).some(key => !fields.includes(key))
       || actor.schema_version !== "loopx_managed_session_actor_v0"
@@ -59,10 +66,12 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("the native Turn must retain its original managed Session and Goal lifetime");
   }
   const observationOnly = request.work_kind === "monitor";
+  const reportWork = request.work_kind === "report";
   const requestFields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
-    ...(observationOnly ? ["monitor_deadline", "monitor_lease_version"] : [])];
+    ...(observationOnly ? ["monitor_deadline", "monitor_lease_version"] : []),
+    ...(reportWork ? ["report_window_id", "report_subscription_revision"] : [])];
   if (Object.keys(request).some(key => !requestFields.includes(key))
-      || request.operation !== "native_turn" || request.host !== "codex-app-server" || !["native_turn", "monitor"].includes(String(request.work_kind))
+      || request.operation !== "native_turn" || request.host !== "codex-app-server" || !["native_turn", "monitor", "report"].includes(String(request.work_kind))
       || request.validation_command !== null
       || typeof request.turn_instance_id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(request.turn_instance_id)
       || request.todo_id !== null && (typeof request.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(request.todo_id))) {
@@ -79,6 +88,26 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("a local watch must retain its original Agent, Session, Todo and deadline");
     }
   }
+  if (reportWork) {
+    const window = requireJsonObject(params.report_window, "original report window");
+    const subscription = requireJsonObject(params.report_subscription, "current report subscription");
+    const todo = requireJsonObject(params.report_todo, "original report Todo");
+    const recovery = params.report_settlement_recovery == null ? null
+      : requireJsonObject(params.report_settlement_recovery, "native original report recovery");
+    const settlementOnly = reportSettlementOnly(params, request, todo);
+    if (subscription.enabled !== true || subscription.profile_preset !== "weekly-progress"
+        || subscription.route_ref !== `managed-session:${session.session_id}`
+        || subscription.effective_revision !== request.report_subscription_revision
+        || window.subscription_revision !== request.report_subscription_revision
+        || window.window_id !== request.report_window_id || window.goal_id !== actor.goal_id
+        || window.agent_id !== actor.agent_id || todo.todo_id !== request.todo_id
+        || todo.target_key !== window.window_id || todo.claimed_by !== actor.agent_id
+        || todo.action_kind !== "generate_periodic_report" || !(todo.status === "open" && !recovery || settlementOnly)) {
+      throw new EffectRuntimeRequestError("report execution requires the original Session subscription, window and task");
+    }
+  } else if (params.report_settlement_recovery != null) {
+    throw new EffectRuntimeRequestError("report recovery belongs only to its original calendar report");
+  }
   if (turn ? turn.session_id !== session.session_id || turn.turn_id !== session.active_turn_id
       || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
       || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request)
@@ -86,6 +115,28 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("the original conversation is busy or no longer owns this Turn; retain its current work");
   }
   return {actor, workspace_path: goal.workspace_path, host: "codex-app-server", observation_only: observationOnly};
+}
+
+/** Both original conversation hosts use the native journal's no-model recovery. */
+function reportSettlementOnly(params: JsonObject, request: JsonObject, todo: JsonObject): boolean {
+  if (params.report_settlement_recovery == null) return false;
+  const recovery = requireJsonObject(params.report_settlement_recovery, "native original report recovery");
+  const decision = requireJsonObject(recovery.recovery_decision, "native journal recovery decision");
+  const cachedGeneration = todo.status === "open" && recovery.journal_status === "failed"
+    && decision.action === "continue" && decision.resume_from === "validation"
+    && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
+    && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result";
+  const completedGeneration = todo.status === "done" && todo.completion_turn_key === request.turn_instance_id
+    && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
+      || decision.action === "return_existing" && recovery.journal_status === "committed");
+  const accepted = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
+    && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
+    && recovery.journal_consistent === true && decision.reinvoke_host === false
+    && (cachedGeneration || completedGeneration);
+  if (!accepted || params.preparing_model_context === true) {
+    throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+  }
+  return true;
 }
 
 export const STEWARD_MANAGED_ACTOR_SCHEMA = "loopx_steward_managed_actor_v0";
@@ -202,24 +253,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
     const todo = requireJsonObject(params.report_todo, "original report Todo");
     const recovery = params.report_settlement_recovery == null ? null
       : requireJsonObject(params.report_settlement_recovery, "native original report recovery");
-    let settlementOnly = false;
-    if (recovery) {
-      const decision = requireJsonObject(recovery.recovery_decision, "native journal recovery decision");
-      const cachedGeneration = todo.status === "open" && recovery.journal_status === "failed"
-        && decision.action === "continue" && decision.resume_from === "validation"
-        && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
-        && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result";
-      const completedGeneration = todo.status === "done" && todo.completion_turn_key === request.turn_instance_id
-        && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
-          || decision.action === "return_existing" && recovery.journal_status === "committed");
-      settlementOnly = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
-        && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
-        && recovery.journal_consistent === true && decision.reinvoke_host === false
-        && (cachedGeneration || completedGeneration);
-      if (!settlementOnly || params.preparing_model_context === true) {
-        throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
-      }
-    }
+    const settlementOnly = reportSettlementOnly(params, request, todo);
     if (request.validation_command === null || subscription.enabled !== true || subscription.profile_preset !== "portfolio-progress"
         || subscription.route_ref !== `steward-private:${current.id}:${current.source}`
         || subscription.effective_revision !== request.report_subscription_revision

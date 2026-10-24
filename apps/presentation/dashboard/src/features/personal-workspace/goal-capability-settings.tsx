@@ -15,6 +15,7 @@ import { goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCad
 import { useWorkspaceI18n } from "./i18n";
 import { CapabilityConfigurationFields } from "./capability-configuration-fields";
 import { withReportScheduleTimezone } from "./periodic-report-schedule-field";
+import {PeriodicReportSessionField} from "./periodic-report-session-field";
 import { localizeCapability, localizedCapabilityFieldCopy } from "./capability-localization";
 import { orderCapabilitiesForPresentation, canEditCapability, CapabilityCatalogNavigation, CapabilityConfigurationSummary, CapabilityDetailHeader, CapabilityEditorStatus, CapabilityConfigurationHelp } from "./capability-workbench";
 import { GoalAutoNotifyToggle } from "./notification-settings-panel";
@@ -426,6 +427,10 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
                 ? `复盘周期沿用${selected.machine_current ? "设备" : "产品"}默认；规划选项由本 Goal 设置。`
                 : `Review interval follows ${selected.machine_current ? "device" : "product"} defaults; this Goal sets the planning options.`}
             </p> : null}
+            {selected.capability_id === "periodic_report" && draft.profile_preset === "weekly-progress"
+              ? <PeriodicReportSessionField goalId={goalId} route={String(draft.route_ref ?? "")}
+                zh={locale === "zh-CN"} disabled={editorBusy} revision={JSON.stringify(selected.current)}
+                onChange={value => changeDraft("route_ref", value)} /> : null}
             <CapabilityConfigurationFields
               disabled={editorBusy}
               copy={localizedCapabilityFieldCopy(locale, localizedSelected.capability_id)}
@@ -433,6 +438,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
               advancedKeys={selected.capability_id === "todo_replan_cadence" ? ["planning_horizon_goal"] : []}
               omitKeys={selected.capability_id === "reward_memory"
                 ? ["agent_id", ...(draft.agent_id ? ["enabled_agents", ...(draft.enabled === false ? ["config_path"] : [])] : ["enabled"])]
+                : selected.capability_id === "periodic_report" && draft.profile_preset === "weekly-progress" ? ["route_ref"]
                 : []}
               onChange={changeDraft}
               value={draft}

@@ -1,7 +1,8 @@
 # Managed steward monitoring and periodic reports
 
-Status: source-bound identity preparation, opt-in status monitoring and the
-original steward's periodic full-body report path are implemented. Installation,
+Status: source-bound identity preparation, opt-in status monitoring, the
+original steward's periodic full-body reports and explicitly configured local
+Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
 readback evidence. Preparing an identity enables neither monitoring nor reports.
 
@@ -466,12 +467,12 @@ Registration removal, Goal stop, a changed lifetime or a mismatched workspace
 refuses continued execution rather than transferring the conversation.
 
 This is an API/host lifecycle slice, **not** the finished Agent workspace
-entry or general periodic journey. The Agent view still needs to expose this
+entry or arbitrary periodic-task journey. The Agent view still needs to expose this
 binding alongside attached sources, including all original history and honest
 unavailable states. Reuse existing Session, native Turn,
 monitor/calendar and periodic-report owners; do not add a second scheduler,
 task store or model worker. General writable execution, natural-language
-configuration and recurring task composition remain unfinished.
+configuration and arbitrary recurring task composition remain unfinished.
 
 An explicitly bound local managed Session can also observe its Goal's native
 work through an existing `continuous_monitor` Todo. Use the existing Todo
@@ -515,6 +516,76 @@ with disposable real Core/File data and a synthetic model/provider. It did not
 establish the correct Agent hierarchy, real-model adoption or natural-deadline
 acceptance. The UI withdrawal does not alter the original private steward's
 subscription, published reports, pending requests or publication route.
+
+### Calendar reports in an existing Agent Session
+
+In **Goal settings → Capability center → Periodic reports**, use the
+`weekly-progress` profile and choose an existing **Report conversation**.
+The selector lists only this Goal's already bound managed Agent Sessions. It
+does not create an Agent or assign a legacy Goal-wide conversation. Enable
+reports, set a daily or weekly calendar and optional first date, then use the
+existing preview/apply controls. Reload reads back the saved destination,
+calendar and original conversation's execution/delivery status. No calendar
+means no automatic local Session report; the status asks for a report time.
+After verified delivery, **Read this period's full report** opens the existing
+original-message report viewer, including its full body and download controls.
+The link is available only while that exact returned body is readable.
+
+This is an explicit Goal override. Machine defaults, registration, opening a
+Session and installation do not enroll a conversation. The reserved route
+`managed-session:<original-session-id>` is persisted in the existing
+periodic-report configuration; it is a destination reference, not an execution
+or permission grant. Other profiles and configured Goal Channel routes retain
+their existing path. Local Session reports do not enter the generic CLI
+report-consumption hook or gain a second Goal Channel delivery.
+
+The existing idle host wake admits the calendar window into the selected
+Session's original Core worker. Native periodic-report owns the finite
+generation Todo, fixed window, frozen source/editorial artifacts, validator,
+publication candidate and cursor. Native Turn owns the original executor,
+lease, validation, completion and quota. Busy or queued user work has priority;
+another registered Agent cannot claim this route. Paused/stopped Goals,
+removed registration and replaced Session/Goal identities refuse execution.
+
+The local source reads the complete original Goal's current native tasks and
+completed Agent history without a display limit, retaining full rows and
+observed times in the frozen source. The report distinguishes this fixed
+window's recorded completions from older history and current work. It does not
+reconstruct task state as of a past deadline, independently certify linked
+artifacts or read another Goal's portfolio. Source overflow or an unavailable
+complete read fails visibly rather than silently dropping trailing tasks.
+
+After native generation commits, the adapter writes one complete report to
+that original Core conversation and independently reads back its exact body,
+message and Turn identity. Only then does the existing publication cursor
+advance. The normal Core finalizer uses the same message identity. A lost
+append/cursor response reconciles that original body after restart without a
+second model call or duplicate publication. Cached validated generation can
+resume only the native journal's permitted remaining effects; an earlier
+partial/failed answer remains historical evidence.
+
+Use **Enable** to pause the same configuration; the original task, frozen
+window, failure and message history remain. Re-enable that exact plan to
+continue eligible native recovery. An unpublished frozen window prevents a
+schedule/destination change from stranding it. Failed/unknown generation is
+retained for repair by its original execution owner; toggling the setting does
+not replay it. This slice does not add cancellation of an invalid authored
+window, natural-language schedule authoring or arbitrary task profiles. Those
+remain part of the existing general recurring-task work.
+
+The packaged journey uses disposable Core/SQLite state and synthetic model
+and provider transports. It checks future-date inactivity, preview/apply/reload,
+one automatic full-body return, retained failure and pause. The 390×844 view is
+viewport emulation; this evidence does not establish real-model report quality,
+production backlog completion or a natural production deadline.
+
+| Before: raw route | After: original Agent conversation and verified return |
+| --- | --- |
+| ![Previous report settings](../assets/personal-workspace/steward-reports/session-before-desktop.png) | ![Report returned to the selected original conversation](../assets/personal-workspace/steward-reports/session-delivered-desktop.png) |
+
+| Retained execution failure, narrow | Paused configuration |
+| --- | --- |
+| ![Retained report failure on a narrow viewport](../assets/personal-workspace/steward-reports/session-failed-narrow.png) | ![Paused original report configuration](../assets/personal-workspace/steward-reports/session-paused-desktop.png) |
 
 ### Original private steward
 

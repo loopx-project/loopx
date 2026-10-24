@@ -669,44 +669,59 @@ class GoalConfigurationRequestMixin:
             )
             options = _goal_capability_options(capability_id, configuration)
             machine_namespaces = self._goal_configuration_machine_namespaces()
-            current_public, desired_public, plan, desired_configuration = (
-                self._prepare_goal_configuration_plan(
-                    goal_id=goal_id,
-                    capability_id=capability_id,
-                    machine_namespaces=machine_namespaces,
-                    options=options,
+            from contextlib import nullcontext
+            from .capabilities.native_chat.steward_reports import session_report_configuration_guard
+            controller = getattr(self.server, "runtime_controller", None)
+            guard = (session_report_configuration_guard(controller, goal_id, configuration)
+                if capability_id == "periodic_report" and controller is not None else nullcontext())
+            with guard:
+                current_public, desired_public, plan, desired_configuration = (
+                    self._prepare_goal_configuration_plan(
+                        goal_id=goal_id,
+                        capability_id=capability_id,
+                        machine_namespaces=machine_namespaces,
+                        options=options,
+                    )
                 )
-            )
-            if not execute:
-                plan["capability_catalog"] = desired_public["capability_catalog"]
-                self._send_json(plan, status=201)
-                return
-            require_expected_configuration_plan_revision(
-                expected_plan_revision=expected_revision,
-                actual_plan_revision=str(plan["plan_revision"]),
-                subject="Goal configuration",
-            )
-            applied = self._goal_configuration_writer()(
-                registry_path=self.server.registry_path,
-                goal_id=goal_id,
-                runtime_root_override=getattr(
-                    self.server, "runtime_root_override", None
-                ),
-                execute=True,
-                expected_goal_configuration_revision=current_public["revision"],
-                codex_home_override=getattr(
-                    getattr(self.server, "runtime_controller", None),
-                    "codex_home",
-                    None,
-                ),
-                codex_host_capacity_planner=plan_codex_subagent_capacity,
-                codex_host_capacity_applier=apply_codex_subagent_capacity,
-                **options,
-            )
-            if not applied.get("ok"):
-                if not (applied.get("written") and applied.get("partial_write")):
-                    raise RuntimeError("Goal configuration apply did not verify")
-                self._send_partial_write_receipt(
+                if not execute:
+                    plan["capability_catalog"] = desired_public["capability_catalog"]
+                    self._send_json(plan, status=201)
+                    return
+                require_expected_configuration_plan_revision(
+                    expected_plan_revision=expected_revision,
+                    actual_plan_revision=str(plan["plan_revision"]),
+                    subject="Goal configuration",
+                )
+                applied = self._goal_configuration_writer()(
+                    registry_path=self.server.registry_path,
+                    goal_id=goal_id,
+                    runtime_root_override=getattr(
+                        self.server, "runtime_root_override", None
+                    ),
+                    execute=True,
+                    expected_goal_configuration_revision=current_public["revision"],
+                    codex_home_override=getattr(
+                        getattr(self.server, "runtime_controller", None),
+                        "codex_home",
+                        None,
+                    ),
+                    codex_host_capacity_planner=plan_codex_subagent_capacity,
+                    codex_host_capacity_applier=apply_codex_subagent_capacity,
+                    **options,
+                )
+                if not applied.get("ok"):
+                    if not (applied.get("written") and applied.get("partial_write")):
+                        raise RuntimeError("Goal configuration apply did not verify")
+                    self._send_partial_write_receipt(
+                        applied=applied,
+                        capability_id=capability_id,
+                        desired_configuration=desired_configuration,
+                        desired_public=desired_public,
+                        goal_id=goal_id,
+                        plan=plan,
+                    )
+                    return
+                self._send_applied_goal_configuration(
                     applied=applied,
                     capability_id=capability_id,
                     desired_configuration=desired_configuration,
@@ -714,15 +729,6 @@ class GoalConfigurationRequestMixin:
                     goal_id=goal_id,
                     plan=plan,
                 )
-                return
-            self._send_applied_goal_configuration(
-                applied=applied,
-                capability_id=capability_id,
-                desired_configuration=desired_configuration,
-                desired_public=desired_public,
-                goal_id=goal_id,
-                plan=plan,
-            )
         except (TypeError, ValueError) as exc:
             stale = "preview again" in str(exc)
             self._send_error(

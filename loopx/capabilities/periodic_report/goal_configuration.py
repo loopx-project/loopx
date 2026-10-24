@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import re
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -9,6 +10,20 @@ from .cadence import normalize_report_cadence
 
 
 GoalPeriodicReportChange = tuple[bool, dict[str, Any] | None]
+
+
+def managed_session_report_destination(configuration: Mapping[str, Any]) -> str | None:
+    """Decode the reserved Core conversation route; this proves no authority.
+
+    The native Chat owner still validates the exact Session, registered Agent,
+    Goal lifetime, subscription, Task and original worker on every dispatch.
+    """
+    route = configuration.get("route_ref")
+    if configuration.get("profile_preset") == "weekly-progress" and isinstance(route, str):
+        match = re.fullmatch(r"managed-session:([a-f0-9]{32})", route)
+        if match:
+            return match[1]
+    return None
 
 
 def configuration_summary(goal: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -43,6 +58,8 @@ def normalize_configuration(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "enabled periodic_report requires profile_preset and route_ref"
         )
+    if route_ref.startswith("managed-session:") and managed_session_report_destination(value) is None:
+        raise ValueError("a managed Session report requires weekly-progress and its exact original Session route")
     normalized = {
         "enabled": enabled,
         "profile_preset": profile_preset or None,

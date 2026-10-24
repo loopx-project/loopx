@@ -177,14 +177,16 @@ class ManagedTaskValidationUnavailable(ValueError):
     """A native selection has no usable caller-declared independent validator."""
 
 
-def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, workspace: Path) -> dict[str, Any]:
+def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, workspace: Path,
+                             session: dict[str, Any] | None = None) -> dict[str, Any]:
     """Observe existing registration; the typed owner admits the exact binding."""
     from .conversation_bindings import ChatConversationBindings
     native_goal = load_goal_from_registry(controller.registry_path, goal_id)
     return ChatConversationBindings._core("collaboration.session.managed_identity", {
         "goal": StewardManagedMode(controller, None)._goal(goal_id),
         "goal_active": bool(native_goal and native_goal.get("status") == "active" and not goal_is_stopped(native_goal)),
-        "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve())})
+        "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve()),
+        **({"session": session} if session is not None else {})})
 
 
 def prepare_managed_session_route(controller: Any, *, goal_id: str | None, executor: str, workspace: Path,
@@ -249,25 +251,34 @@ class ManagedSessionTurn:
             "turn_instance_id": "managed-session." + operation_id, "todo_id": todo_id,
             "work_kind": "native_turn", "validation_command": None}
 
-    def admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None) -> dict[str, Any]:
+    def admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
+              settlement_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         from .conversation_bindings import ChatConversationBindings
         if self.controller.closed.is_set():
             raise ValueError("the original Chat host is stopped")
         actor = request["actor"]
         session = self.store.load_session(actor["session_id"])
         goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
-        monitor = None
+        monitor, report = None, {}
         if request.get("work_kind") == "monitor":
             from ...control_plane.todos.list_readback import list_goal_todos
             readback = list_goal_todos(registry_path=self.controller.registry_path,
                 runtime_root_arg=str(self.controller.coordination_runtime_root),
                 goal_id=actor["goal_id"], todo_id=request.get("todo_id"), role="agent")
             monitor = readback.get("todo")
+        if request.get("work_kind") == "report":
+            from .steward_reports import ManagedSessionReports
+            from .steward_monitor import StewardMonitor
+            subscription, window = ManagedSessionReports(self.controller).current_window(actor["session_id"])
+            report = {"report_subscription": subscription, "report_window": window,
+                "report_todo": next((row for row in StewardMonitor(self.controller).todos(actor)
+                    if row["todo_id"] == request.get("todo_id")), None)}
         return ChatConversationBindings._core("collaboration.session.managed_turn.admit", {
             "session": session, "request": request, "turn": turn,
             "goal": StewardManagedMode(self.controller, None)._goal(actor["goal_id"]),
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
-            "monitor_todo": monitor,
+            "monitor_todo": monitor, **report,
+            **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
@@ -289,14 +300,23 @@ class ManagedSessionTurn:
             result["available"] = True
         except ValueError as exc:
             result["reason"] = str(exc)
+        if session.get("managed_agent_id"):
+            from .steward_reports import ManagedSessionReports
+            result["report"] = ManagedSessionReports(self.controller).health(session_id)
         return result
 
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,
-               todo_id: str | None = None, monitor_deadline: str | None = None) -> tuple[dict[str, Any], bool]:
+               todo_id: str | None = None, monitor_deadline: str | None = None,
+               report_window: dict[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
         from ...attached_session import managed_session_goal_commit
         controller = self.controller
         with controller._session_adapter_lock(session_id):
             request = self._request(session_id, agent_id, operation_id, todo_id)
+            if report_window is not None:
+                if monitor_deadline is not None or not todo_id:
+                    raise ValueError("a report requires its original finite generation Todo")
+                request.update(work_kind="report", report_window_id=report_window["window_id"],
+                    report_subscription_revision=report_window["subscription_revision"])
             if monitor_deadline is not None:
                 if not todo_id:
                     raise ValueError("a native watch requires its original Todo")
@@ -320,7 +340,8 @@ class ManagedSessionTurn:
                 admitted = self.admit(request)
                 accepted = self.store.accept_managed_turn(session_id, client_turn_id="managed." + operation_id,
                     message="Advance the currently admitted native LoopX work.",
-                    display_message="检查当前 Goal 原生任务状态。" if monitor_deadline is not None else "推进一次 LoopX 任务。",
+                    display_message="生成本期定时报告。" if report_window is not None else
+                        "检查当前 Goal 原生任务状态。" if monitor_deadline is not None else "推进一次 LoopX 任务。",
                     origin="native_loopx", loopx_execution=True, loopx_request=request)
             try:
                 session = self.store.load_session(session_id)

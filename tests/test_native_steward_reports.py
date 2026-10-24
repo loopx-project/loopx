@@ -22,6 +22,232 @@ from loopx.capabilities.periodic_report.incremental import read_periodic_report_
 steward = steward_fixture
 
 
+def configured_local_report(steward, tmp_path, monkeypatch, provider="sqlite", start_date="2001-01-01"):
+    """An ordinary local Goal/Agent Session, with no report-enabled private binding."""
+    from loopx.agent_registry import load_goal_from_registry
+    from loopx.configure_goal import configure_goal
+    from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports
+    from test_native_steward_turn_host import cli
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    store, runtime, _, _, binding, capture, _ = steward
+    sid, managed = original(steward)
+    storage(runtime, provider)
+    plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
+    actor = managed.prepare(binding["binding_id"], session_id=sid,
+        expected_plan_id=plan["plan_id"], execute=True)["actor"]
+    workspace = Path(load_goal_from_registry(runtime.registry_path, actor["goal_id"])["repo"])
+    session, _ = runtime.open_session(goal_id=actor["goal_id"], agent_id="codex", work_dir=workspace,
+        objective="Report this Goal's original evidence", channel_id=f"goal.{actor['goal_id']}",
+        mode="new", managed_agent_id=actor["agent_id"])
+    task = cli(runtime, "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+        "--claimed-by", actor["agent_id"], "--text", "Keep this original work and its evidence visible.",
+        "--action-kind", "inspect", "--execute")
+    schedule = {"schema_version": "periodic_report_schedule_v0", "schedule_id": "local-report",
+        "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": start_date}
+    config = {"enabled": True, "profile_preset": "weekly-progress", "route_ref": "managed-session:" + session["session_id"],
+        "timezone": "UTC", "schedule": schedule}
+    assert configure_goal(registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        periodic_report_configuration=config, execute=True)["ok"]
+    return session, ManagedSessionReports(runtime), config, task["todo_id"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_local_agent_calendar_report_uses_original_worker_and_verified_core_return(steward, tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    session, reports, _, task_id = configured_local_report(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, _, _, capture, _ = steward
+    sid = session["session_id"]
+    with monkeypatch.context() as changed_source:
+        changed_source.setattr(inspect, "getsource", lambda *_: "not the imported model callable")
+        install_model(steward, tmp_path, sid)
+    # This local report neither consumes nor borrows the private provider.
+    runtime.project_contexts.conversation_bindings = None
+    before, calls, writes = store.messages(sid), capture.read_bytes(), list(bot.writes)
+    turns = pump_steward_monitors(runtime)
+    assert len(turns) == 1
+    result = finish(runtime, turns[0])
+    assert result["status"] == "completed", result
+    native = result["response"]["native_loopx"]
+    assert native["status"] == "committed", native
+    assert result["response"]["periodic_report"]["delivery_verified"]
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    frozen = json.loads((folder / "editorial-request.json").read_text())
+    source = json.loads((folder / "source.json").read_text())
+    assert frozen["destination"] == "original_managed_session_full_body"
+    assert source["goal_id"] == session["goal_id"] and source["complete_native_task_read"]
+    assert task_id in {row["todo_id"] for row in source["rows"]}
+    assert frozen["actual_work_window"]["end_at"] == window["due_at"]
+    assert datetime.fromisoformat(window["due_at"]) - datetime.fromisoformat(window["start_at"]) == timedelta(days=1)
+    body = (folder / "report.md").read_text()
+    messages = store.messages(sid)
+    assert messages[:len(before)] == before
+    returned = [row for row in messages if row["role"] == "agent" and row["text"] == body]
+    assert len(returned) == 1 and returned[0]["turn_id"] == result["turn_id"]
+    cursor = read_periodic_report_publication_cursor(runtime_root=reports.root, goal_id=session["goal_id"], agent_id=session["managed_agent_id"])
+    assert cursor["generation_id"] == validate_private_generation(folder)["generation_id"]
+    assert cursor["covered_until"] == window["due_at"] and reports.health(sid)["publication_verified"]
+    rows = StewardMonitor(runtime).todos(result["loopx_request"]["actor"])
+    assert next(row for row in rows if row["todo_id"] == result["loopx_request"]["todo_id"])["status"] == "done"
+    assert next(row for row in rows if row["todo_id"] == task_id)["status"] == "open"
+    assert bot.writes == writes
+    after_calls = capture.read_bytes()
+    assert len([json.loads(line) for line in after_calls[len(calls):].splitlines()
+        if json.loads(line).get("method") == "turn/start"]) == 1
+    assert not pump_steward_monitors(runtime)
+    assert reports.publish(sid, window)
+    assert store.messages(sid) == messages and capture.read_bytes() == after_calls
+    inspected = ManagedSessionTurn(runtime).inspect(sid)
+    assert inspected["report"]["publication_verified"] and inspected["available"]
+    assert inspected["report"]["report_message_id"] == returned[0]["message_id"]
+    # A publication cursor alone cannot offer a body that is no longer readable.
+    with monkeypatch.context() as unreadable_body:
+        unreadable_body.setattr(store, "messages", lambda *_: [row for row in messages
+            if row["message_id"] != returned[0]["message_id"]])
+        unavailable = reports.health(sid)
+        assert not unavailable["publication_verified"] and unavailable["report_message_id"] is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_local_agent_report_before_first_deadline_is_effect_free(steward, tmp_path, monkeypatch, provider):
+    session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider, start_date="2999-01-01")
+    store, runtime, bot, *_ = steward
+    before = store.messages(session["session_id"]), list(bot.writes)
+    assert not pump_steward_monitors(runtime)
+    assert read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"]) is None
+    assert (store.messages(session["session_id"]), list(bot.writes)) == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("lost_after_commit", [False, True])
+def test_local_report_restart_reads_back_unknown_publication_without_model_or_duplicate(steward, tmp_path, monkeypatch, provider, lost_after_commit):
+    from loopx.capabilities.periodic_report import incremental
+    from loopx.chat_store import ChatSessionStore
+    from loopx.chat_runtime import ChatRuntimeController
+    session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    install_model(steward, tmp_path, sid)
+    runtime.project_contexts.conversation_bindings = None
+    commit = incremental.commit_periodic_report_publication_cursor
+    def interrupted_commit(**kwargs):
+        if lost_after_commit:
+            commit(**kwargs)
+        raise OSError("Synthetic publication reply lost after the original Core message")
+    with monkeypatch.context() as failure:
+        failure.setattr(incremental, "commit_periodic_report_publication_cursor", interrupted_commit)
+        first = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert first["status"] == "failed"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    body = (folder / "report.md").read_text()
+    original_turn = store.load_turn(sid, first["turn_id"])
+    assert len([row for row in store.messages(sid) if row["text"] == body]) == 1
+    calls, writes = steward[5].read_bytes(), list(bot.writes)
+    runtime.close()
+    restarted = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,
+        registry_path=runtime.registry_path, project_contexts=runtime.project_contexts)
+    try:
+        assert not pump_steward_monitors(restarted)
+        assert store.load_turn(sid, first["turn_id"]) == original_turn
+        assert len([row for row in store.messages(sid) if row["text"] == body]) == 1
+        cursor = read_periodic_report_publication_cursor(runtime_root=reports.root,
+            goal_id=session["goal_id"], agent_id=session["managed_agent_id"])
+        assert cursor["generation_id"] == validate_private_generation(folder)["generation_id"]
+        assert steward[5].read_bytes() == calls and bot.writes == writes
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_local_frozen_report_recovers_only_native_validation_and_returns_full_body(steward, tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    install_model(steward, tmp_path, sid)
+    runtime.project_contexts.conversation_bindings = None
+    with monkeypatch.context() as failure:
+        failure.setattr(StewardTurnHost, "_report_validator", lambda *_: lambda *_: {
+            "status": "failed", "validator_kind": "callback", "summary": "Synthetic validator unavailable", "recovery_kind": "repair_required"})
+        original = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert original["response"]["native_loopx"]["result_kind"] == "validation_failed"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    calls, messages, writes = steward[5].read_bytes(), store.messages(sid), list(bot.writes)
+    assert not any(row["text"] == (folder / "report.md").read_text() for row in messages)
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert store.load_turn(sid, original["turn_id"]) == original
+    assert store.messages(sid)[:len(messages)] == messages
+    assert len([row for row in store.messages(sid) if row["text"] == (folder / "report.md").read_text()]) == 1
+    assert reports.health(sid)["publication_verified"]
+    assert steward[5].read_bytes() == calls and bot.writes == writes
+
+
+@pytest.mark.parametrize("fault", ["paused", "unscheduled", "wrong_session", "wrong_profile", "unregistered", "busy"])
+def test_local_report_denied_sources_never_launch_an_alternative_worker(steward, tmp_path, monkeypatch, fault):
+    from loopx.configure_goal import configure_goal
+    session, reports, config, _ = configured_local_report(steward, tmp_path, monkeypatch)
+    store, runtime, bot, *_ = steward
+    before = store.messages(session["session_id"]), steward[5].read_bytes(), list(bot.writes)
+    if fault in {"paused", "unscheduled", "wrong_session", "wrong_profile"}:
+        changed = {**config, **({"enabled": False} if fault == "paused" else
+            {"schedule": None} if fault == "unscheduled" else
+            {"route_ref": "managed-session:" + "b" * 32} if fault == "wrong_session" else
+            {"profile_preset": "portfolio-progress", "route_ref": "another-original-route"})}
+        assert configure_goal(registry_path=runtime.registry_path, goal_id=session["goal_id"],
+            periodic_report_configuration=changed, execute=True)["ok"]
+    elif fault == "unregistered":
+        assert configure_goal(registry_path=runtime.registry_path, goal_id=session["goal_id"],
+            registered_agents=["another-agent"], execute=True)["ok"]
+    else:
+        store.accept_managed_turn(session["session_id"], client_turn_id="original-busy-user-work",
+            message="Keep this user's current work", origin="web")
+        before = store.messages(session["session_id"]), steward[5].read_bytes(), list(bot.writes)
+    assert not pump_steward_monitors(runtime)
+    assert (store.messages(session["session_id"]), steward[5].read_bytes(), list(bot.writes)) == before
+    assert read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"]) is None
+    if fault == "unscheduled":
+        assert reports.health(session["session_id"])["enabled"]
+        assert reports.health(session["session_id"])["scheduled"] is False
+
+
+def test_local_report_configuration_retains_frozen_window_and_original_agent_election(steward, tmp_path, monkeypatch):
+    from loopx.capabilities.native_chat.steward_reports import session_report_configuration_guard
+    from loopx.capabilities.periodic_report.cadence_runtime import periodic_report_cadence_hooks
+    from loopx.capabilities.periodic_report.pending_intent import consume_pending_periodic_report_intent
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    from loopx.configure_goal import configure_goal
+    session, reports, config, _ = configured_local_report(steward, tmp_path, monkeypatch)
+    store, runtime, *_ = steward
+    # Another Agent's ordinary CLI guard cannot elect itself for this route.
+    assert configure_goal(registry_path=runtime.registry_path, goal_id=session["goal_id"],
+        registered_agents=["first-registration", session["managed_agent_id"]], execute=True)["ok"]
+    assert not periodic_report_cadence_hooks(registry_path=runtime.registry_path, runtime_root=reports.root,
+        goal_id=session["goal_id"], agent_id="first-registration")
+    assert read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"]) is None
+    install_model(steward, tmp_path, session["session_id"])
+    # Retain a generated but uncommitted window under its real native journal.
+    with monkeypatch.context() as failure:
+        failure.setattr(StewardTurnHost, "_report_validator", lambda *_: lambda *_: {
+            "status": "failed", "validator_kind": "callback", "summary": "Synthetic validator unavailable", "recovery_kind": "repair_required"})
+        original = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert original["response"]["native_loopx"]["result_kind"] == "validation_failed"
+    for changed in [None, {**config, "route_ref": "managed-session:" + "b" * 32},
+            {**config, "schedule": {**config["schedule"], "rrule": "FREQ=DAILY;BYHOUR=10;BYMINUTE=0"}}]:
+        with pytest.raises((ValueError, KeyError)):
+            with session_report_configuration_guard(runtime, session["goal_id"], changed):
+                pytest.fail("a frozen pending report must not be stranded by a settings edit")
+    before = runtime.registry_path.read_bytes()
+    with session_report_configuration_guard(runtime, session["goal_id"], {**config, "enabled": False}):
+        pass
+    assert runtime.registry_path.read_bytes() == before
+    assert consume_pending_periodic_report_intent(registry_path=runtime.registry_path, runtime_root=reports.root,
+        goal_id=session["goal_id"], agent_id=session["managed_agent_id"], execute=True)["status"] == "original_conversation_required"
+
+
 def configured(steward, tmp_path, monkeypatch, provider="sqlite", start_date="2001-01-01"):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     store, runtime, _, transport, binding, capture, _ = steward
@@ -75,10 +301,15 @@ def fake_report_model(params):
         "editorial_response": response}, ensure_ascii=False)
 
 
+# Keep the imported oracle stable if a developer edits this file during a run.
+# A late inspect.getsource can resolve its old line number into unrelated text.
+_REPORT_MODEL_SOURCE = inspect.getsource(fake_report_model)
+
+
 def install_model(steward, tmp_path, sid, *, result_kind="validated_completion"):
     _, runtime, _, _, _, _, _ = steward
     helper = tmp_path / "report_model.py"
-    helper.write_text(inspect.getsource(fake_report_model).replace(
+    helper.write_text(_REPORT_MODEL_SOURCE.replace(
         '"result_kind": "validated_completion"', '"result_kind": ' + repr(result_kind)))
     fake = Path(runtime.codex_bin)
     source = fake.read_text().replace('"message": "Runtime response."',

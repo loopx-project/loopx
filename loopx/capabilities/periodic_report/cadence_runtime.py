@@ -17,6 +17,7 @@ from .machine_defaults import (
     select_goal_periodic_report_executor,
 )
 from .machine_store import read_periodic_report_machine_defaults
+from .goal_configuration import managed_session_report_destination
 
 
 def periodic_report_cadence_hooks(
@@ -29,6 +30,11 @@ def periodic_report_cadence_hooks(
     subscription = resolve_active_goal_periodic_report_subscription(
         goal, read_periodic_report_machine_defaults(runtime_root))
     if subscription is None or subscription.get("schedule") is None:
+        return ()
+    if managed_session_report_destination(subscription) is not None:
+        # The original Session producer elects its immutable registered Agent
+        # and admits this calendar. A different lane's CLI hook must not reserve
+        # that same Goal window for the first registration or a Goal Channel.
         return ()
     # Prefer the frozen reporter for unfinished work. Registration reordering
     # must not make its recovery hook disappear or elect a second reporter.

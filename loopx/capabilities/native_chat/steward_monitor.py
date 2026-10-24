@@ -347,6 +347,18 @@ def pump_managed_session_monitors(controller: Any, *, cancelled=lambda: False) -
             service = ManagedSessionTurn(controller)
             request = service._request(session["session_id"], session["managed_agent_id"], "preview")
             service.admit(request)
+            goal = load_goal_from_registry(controller.registry_path, session["goal_id"])
+            report_config = (goal or {}).get("control_plane", {}).get("periodic_report", {})
+            if (report_config.get("enabled") is True and report_config.get("profile_preset") == "weekly-progress"
+                    and report_config.get("route_ref") == "managed-session:" + session["session_id"]):
+                from .steward_reports import ManagedSessionReports
+                try:
+                    accepted, created = ManagedSessionReports(controller).frontier(session["session_id"])
+                    if created:
+                        changed.append(accepted)
+                        continue
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                    _LOG.warning("A managed Session report is unavailable; its original window and other work are retained")
             rows = [row for row in monitor.todos(request["actor"])
                 if row.get("target_key") == "managed-session-watch." + session["session_id"]]
             if len(rows) != 1:
