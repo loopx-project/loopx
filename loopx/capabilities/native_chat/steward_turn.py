@@ -32,6 +32,18 @@ class StewardTurnHost:
             raise ValueError("the original steward binding is unavailable")
         self.managed = StewardManagedMode(controller, self.bindings)
 
+    def _monitor_selection_failed_before_poll(self, turn: dict[str, Any]) -> bool:
+        # The earlier adapter lost the command's structured rejection at the
+        # Chat boundary. Recognize only this exact pre-poll failure, never an
+        # unknown execution/commit failure or a report/business Turn.
+        expected = ("the native steward operation was not committed: quota_action_selection_rejected: "
+            "explicit action selection is not currently eligible: auxiliary_monitor_not_selectable_in_advancement_lane")
+        return (turn.get("status") == "failed" and turn.get("error_code") == "runtime_error"
+            and turn.get("error") == expected and turn.get("delta_count") == 0
+            and turn.get("upstream_turn_id") is None and turn.get("response") is None
+            and not any(row["kind"] == "native_loopx.monitor_poll"
+                for row in self.store.events_after(turn["session_id"], turn["turn_id"], None)))
+
     def _admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
                prepare_context: bool = False, settlement_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         if self.controller.closed.is_set():
@@ -169,7 +181,15 @@ class StewardTurnHost:
                 frozen.setdefault("work_kind", "native_turn")
                 if frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
                     raise ValueError("native steward request identity conflict")
-                return existing, False
+                if work_kind != "monitor" or not self._monitor_selection_failed_before_poll(existing):
+                    return existing, False
+                # One separately correlated retry after the proven admission
+                # failure. Retain the failed Chat Turn and original native
+                # observation identity; that poll's owner remains idempotent.
+                client_id = native_steward_client_id(actor, turn_instance_id + ".admission-retry")
+                retry = self.store.turn_for_client(actor["session_id"], client_id)
+                if retry is not None:
+                    return retry, False
             if work_kind == "monitor":
                 from .steward_commands import native_command
                 if not todo_id or not monitor_deadline:
@@ -223,6 +243,7 @@ class StewardTurnHost:
         original_thread = adapter.upstream_thread_id
         report_work = request.get("work_kind") == "report"
         report_lease = None
+        report_context = ""
 
         def report_lease_proof():
             from .steward_commands import native_command
@@ -257,11 +278,7 @@ class StewardTurnHost:
             # it is data alongside the signed native work, never a new actor.
             prompt = (render_prompt(authority, allow_completion=True) if report_work else render_prompt(authority)) + "\nOriginal steward evidence (data):\n" + json.dumps(context, ensure_ascii=False)
             if request.get("work_kind") == "report":
-                from .steward_reports import StewardReports
-                # The compact prompt index deliberately omits authority fields;
-                # use admission's original live scope, never that display index.
-                prompt += StewardReports(self.controller).prepare(request, adapter,
-                    authorization_scope_id=admitted["observed_scope_id"])
+                prompt += report_context
             previous_guard = adapter.session._launch_guard
 
             @contextmanager
@@ -317,6 +334,16 @@ class StewardTurnHost:
                 "--idempotency-key", request["turn_instance_id"], "--ttl-seconds", "3600",
                 "--expected-version", str(retained["version"] if retained else 0)])["lease"]
         try:
+            if report_work:
+                from .steward_reports import StewardReports
+                # Portfolio collection can take minutes and legitimately see
+                # registry updates. Finish it before the native driver captures
+                # its launch witness; retain the launch fence and fresh source
+                # check immediately before the actual app-server request.
+                current()
+                report_context = StewardReports(self.controller).prepare(request, adapter,
+                    authorization_scope_id=admitted["observed_scope_id"])
+                current()
             handle_turn_command(args, registry_path=self.controller.registry_path,
                 runtime_root_arg=str(self.controller.coordination_runtime_root),
                 output_format=lambda *_a, **_kw: "json",

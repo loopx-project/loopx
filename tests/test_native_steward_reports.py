@@ -136,6 +136,55 @@ def test_original_due_report_freezes_once_and_returns_full_body_after_native_set
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_report_collects_evidence_before_capturing_native_launch_authority(steward, tmp_path, monkeypatch, provider):
+    store, runtime, _, transport, binding, capture, _ = steward
+    sid, _, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    install_model(steward, tmp_path, sid)
+    prepare = StewardReports.prepare
+
+    def collect(self, *args, **kwargs):
+        result = prepare(self, *args, **kwargs)
+        # A legitimate registry rewrite during a long portfolio read must be
+        # captured by the later native plan, not make it stale before dispatch.
+        runtime.registry_path.write_bytes(runtime.registry_path.read_bytes() + b"\n")
+        return result
+
+    monkeypatch.setattr(StewardReports, "prepare", collect)
+    before = capture.read_bytes()
+    turn = pump_steward_monitors(runtime)[0]
+    done = finish(runtime, turn)
+    assert done["status"] == "completed", done
+    assert done["response"]["native_loopx"].get("status") == "committed", done
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(binding["binding_id"])["publication_verified"]
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in calls) == 1
+    assert store.load_session(sid)["upstream_thread_id"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_report_source_revoked_during_collection_never_enters_native_execution(steward, tmp_path, monkeypatch, provider):
+    _, runtime, bot, _, binding, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    install_model(steward, tmp_path, sid)
+    prepare = StewardReports.prepare
+
+    def revoked(self, *args, **kwargs):
+        result = prepare(self, *args, **kwargs)
+        bot.owner_ready = False
+        return result
+
+    monkeypatch.setattr(StewardReports, "prepare", revoked)
+    before = capture.read_bytes()
+    done = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert done["status"] == "failed", done
+    calls = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert not any(row.get("method") == "turn/start" for row in calls)
+    assert not list((reports.root / "goals" / actor["goal_id"] / "turns").glob("*.json"))
+    assert not reports.health(binding["binding_id"]).get("publication_verified")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_future_first_date_pause_and_cancel_never_start_models_or_shift_window(steward, tmp_path, monkeypatch, provider):
     store, runtime, bot, _, binding, capture, _ = steward
     sid, actor, reports, schedule = configured(steward, tmp_path, monkeypatch, provider, "2099-05-01")
@@ -248,7 +297,9 @@ def test_distinct_due_daily_windows_keep_normal_native_replan_and_quota_rules(st
     store, runtime, _, transport, _, capture, _ = steward
     sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch)
     install_model(steward, tmp_path, sid)
-    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=3)
+    # All three source windows must be complete even when tests run before
+    # 09:00 UTC; the report-source owner correctly rejects a future interval.
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=4)
 
     class CalendarClock(datetime):
         @classmethod

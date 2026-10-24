@@ -251,6 +251,16 @@ priority, replan, budget, stop and settlement policies remain effective. Pausing
 the steward prevents new scheduled model Turns without discarding accepted work
 or historical results.
 
+A native status watch calls the existing monitor-poll owner under its original
+Chat Turn and task lease. It does not select a continuous monitor as a heartbeat
+advancement task, so open executable work does not prevent a due observation.
+Fresh source, user-gate, capability, deadline and lease checks still apply; the
+poll keeps its stable Turn identity and does not invoke a model or spend a slot.
+The earlier adapter's exact pre-poll selection rejection can receive one
+separately correlated attempt only when its failed Turn has no native start,
+answer, delta or poll event. The original failure remains; unknown failures,
+interruptions and a failed recovery do not trigger a retry loop.
+
 ## Daily portfolio report
 
 Configure the original steward's daily report for 09:00 `Asia/Shanghai`. At
@@ -286,6 +296,21 @@ browser nor the model can supply another Goal, App or recipient. The generic
 single-Goal report consumer cannot consume this private portfolio preset.
 This preset requires a calendar; its switch cannot select the generic
 stage-boundary reporting mode. Pause or cancel through the report actions.
+
+Portfolio evidence collection finishes before the governed driver captures its
+launch authority. A long read can then observe legitimate registry rewrites
+without immediately invalidating an earlier launch witness. The original
+source and execution lease are checked after collection and again at dispatch;
+authority changes after plan capture still reject the launch. This ordering
+does not authorize replay of a historical attempt with unknown host effects.
+
+Once generation is frozen, delivery checks the original source Goal identities
+against the current authorized scope. Adding an authorized Goal does not revoke
+the frozen report or rewrite its source/body; later windows include the new
+Goal. Removing a frozen Goal, replacing its identity, revoking the original
+grant or changing frozen artifacts still blocks delivery, including after a
+partial or uncertain send. Existing provider readback decides which original
+parts remain unsent; scope growth never authorizes another model run or resend.
 
 The existing idle Chat wake producer admits one calendar window and creates
 one native finite generation Todo for it. The original Chat worker and native
