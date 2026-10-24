@@ -2,4 +2,4 @@ mkdocs>=1.6,<2
 mkdocs-material>=9.6.0,<10
 mkdocs-gen-files>=0.6.0,<1
 pymdown-extensions>=10.0,<11
-setuptools>=83.0.0,<84
+setuptools>=83.0.0,<85
