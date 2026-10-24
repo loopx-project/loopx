@@ -179,14 +179,18 @@ class ChatExternalConversations:
             return row
 
     def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
-        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-(?:(?:routing|quota)-[1-3]|review-1))?", str(turn.get("client_turn_id") or ""))
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-((?:routing|quota)-[1-3]|review-1))?", str(turn.get("client_turn_id") or ""))
         if match is None:
             return None
         row = self.read_request(match[1])
         recovery = row.get("context_recovery")
         if (row.get("session_id") == session["session_id"] and recovery
                 and recovery["client_turn_id"] == turn["client_turn_id"]):
+            if (match[2] == "review-1") != (recovery.get("read_only_review") is True):
+                raise ValueError("reserved result review policy changed")
             return {"request_ref": row["request_ref"], **recovery}
+        if match[2] == "review-1":
+            raise ValueError("reserved result review correlation unavailable")
         return None
 
     def queued_recovery_context(self, session: dict[str, Any], turn: dict[str, Any] | None,

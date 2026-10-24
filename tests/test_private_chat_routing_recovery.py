@@ -111,6 +111,11 @@ def test_original_worker_reviews_interrupted_effects_once_without_replaying_busi
     assert "-review-1" in recovered["context_recovery"]["client_turn_id"]
     result = finish(runtime, recovered)
     assert result["status"] == ("failed" if str(fault).startswith("review-") else "completed")
+    if str(fault).startswith("review-"):
+        # Cross routing/quota backoff: immediate rejection alone could hide a
+        # later writable replay of the original request after review failure.
+        store.update_turn(recovered["session_id"], recovered["turn_id"],
+            completed_at=(datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat())
     selected.reconcile_request(path)
     assert not selected.core.context_recovery_candidate(ref)
     delivered = json.loads(path.read_text())
@@ -136,6 +141,30 @@ def test_original_worker_reviews_interrupted_effects_once_without_replaying_busi
     assert finish(runtime, later)["status"] == "completed"
     assert runtime.adapters[original["session_id"]].session.read_only_review is False
     assert runtime.adapters[original["session_id"]].session.permissions_profile is None
+
+
+@pytest.mark.parametrize("fault", [None, "missing-policy", "missing-correlation"])
+def test_queued_result_review_cannot_fall_back_to_write_access_without_its_journal(steward, fault):  # noqa: F811
+    store, runtime, provider, transport, _, _, _ = steward
+    event = provider.event("notes-app", "journal-policy", "A normal original request")
+    transport.admit("notes-app", event)
+    binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    assert finish(runtime, row)["status"] == "completed"
+    client = f"external-{ref}-recovery-21-review-1"
+    row["context_recovery"] = {"client_turn_id": client,
+        **({} if fault == "missing-policy" else {"read_only_review": True})}
+    if fault == "missing-correlation":
+        row["context_recovery"]["client_turn_id"] = "another"
+    (transport.core.root / f"{ref}.json").write_text(json.dumps(row))
+    session = store.load_session(row["session_id"])
+    queued = {"turn_id": "review", "status": "queued", "client_turn_id": client}
+    if fault is None:
+        assert transport.core.queued_recovery_context(session, queued, "review")["read_only_review"] is True
+    else:
+        with pytest.raises(ValueError, match="reserved result review"):
+            transport.core.queued_recovery_context(session, queued, "review")
 
 
 @pytest.mark.parametrize("recovery_kind", ["routing", "quota"])
