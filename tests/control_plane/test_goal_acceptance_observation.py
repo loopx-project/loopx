@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from loopx.control_plane.goals.acceptance_observation import (
     build_goal_acceptance_observation,
@@ -85,6 +88,105 @@ def test_latest_vision_is_per_agent_and_closed_lane_does_not_hide_other_lane():
     }
     result = build_goal_acceptance_observation(goal, {})
     assert [gap["owner"] for gap in result["acceptance_gaps"]] == ["agent-b"]
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("retained", [("agent-a", "Current acceptance evidence")]),
+    ("replaced", [("agent-a", "Current acceptance evidence")]),
+    ("retired", []),
+    ("absent", []),
+    ("misattributed", []),
+    ("private", [("agent-a", None)]),
+])
+def test_acceptance_uses_the_current_semantic_lane(mode, expected):
+    stale = vision_run(acceptance="Obsolete acceptance evidence")
+    current = vision_run(acceptance="Current acceptance evidence")
+    current.update(run_id="current-vision", generated_at="2026-09-02T00:00:00Z")
+    foreign = {**vision_run("foreign-agent"), "goal_id": "another-goal"}
+    context = {"agent_id": "agent-a", "latest_agent_vision_run": current}
+    if mode == "retired":
+        context = {"agent_id": "agent-a", "vision_retired_at": "2026-09-02T00:00:00Z"}
+    elif mode == "misattributed":
+        context["latest_agent_vision_run"] = vision_run("agent-b")
+    elif mode == "private":
+        current["agent_vision"]["vision_patch"]["acceptance_summary"] = "x" * 500 + " /Users/private/report.json"
+    goal = {
+        "id": "acceptance-demo",
+        "latest_runs": [foreign] + ([] if mode in {"retained", "private"} else [stale]),
+        "semantic_history": {"agents": [] if mode == "absent" else [context]},
+    }
+    before = copy.deepcopy(goal)
+    result = build_goal_acceptance_observation(goal, None)
+    assert [(gap["owner"], gap["evidence_required"]) for gap in result["acceptance_gaps"]] == expected
+    assert result["acceptance_assessed"] is False
+    assert result["coverage"] == "partial"
+    validate_public_safe_value(result)
+    assert goal == before
+
+
+def test_unattributed_legacy_vision_is_not_assigned_to_a_retained_peer():
+    goal = {
+        "id": "acceptance-demo", "latest_runs": [vision_run("")],
+        "semantic_history": {"agents": [{
+            "agent_id": "agent-b", "latest_agent_vision_run": vision_run("agent-b"),
+        }]},
+    }
+    result = build_goal_acceptance_observation(goal, {})
+    assert [gap["owner"] for gap in result["acceptance_gaps"]] == [None, "agent-b"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("retired", [False, True])
+def test_status_keeps_current_acceptance_when_recent_history_changes(tmp_path, provider, retired):
+    from canonical_authority_fixture import promoted_create_fixture
+    from loopx.state_refresh import refresh_state_run
+
+    registry, runtime, state = promoted_create_fixture(
+        tmp_path, provider=provider, goal_id="acceptance-demo", registered_agents=["agent-a", "agent-b"],
+    )
+    configuration = json.loads(registry.read_text(encoding="utf-8"))
+    configuration["goals"][0].update(domain="software", adapter={"kind": "read_only_project_map_v0"})
+    registry.write_text(json.dumps(configuration), encoding="utf-8")
+    produced = refresh_state_run(
+        registry_path=registry, runtime_root_override=str(runtime), goal_id="acceptance-demo",
+        project=tmp_path / "project", state_file=state, classification="state_refreshed",
+        recommended_action="Verify the accepted outcome.", agent_id="agent-a",
+        agent_vision_packet={"vision_patch": {
+            "vision_summary": "Deliver the independently verified outcome.",
+            **vision_run()["agent_vision"]["vision_patch"],
+        }}, dry_run=False, sync_global=False,
+    )
+    assert produced["ok"] is True, produced
+    runs = runtime / "goals" / "acceptance-demo" / "runs"
+    index = runs / "index.jsonl"
+    source_paths = [registry, state, index, Path(produced["json_path"])]
+    with index.open("a", encoding="utf-8") as stream:
+        for number in range(1 if retired else 30):
+            run_path = runs / f"observation-{number}.json"
+            record = {
+                "goal_id": "acceptance-demo", "agent_id": "agent-a" if retired else "agent-b",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "classification": "state_refreshed" if retired else "monitor_poll",
+                "json_path": str(run_path),
+            }
+            if retired:
+                record["vision_checkpoint"] = {"satisfied": True, "decision": "retired_or_superseded"}
+            run_path.write_text(json.dumps(record), encoding="utf-8")
+            stream.write(json.dumps(record) + "\n")
+            source_paths.append(run_path)
+    before = {path: path.read_bytes() for path in source_paths}
+    for display_limit in (0, 5):
+        payload = collect_status(
+            registry_path=registry, runtime_root_override=str(runtime), limit=display_limit,
+        )
+        assert payload["ok"] is True, payload.get("contract")
+        goal = payload["run_history"]["goals"][0]
+        assert len(goal["latest_runs"]) <= display_limit
+        observation = goal["acceptance_observation"]
+        assert [gap["owner"] for gap in observation["acceptance_gaps"]] == ([] if retired else ["agent-a"])
+        assert observation["acceptance_assessed"] is False
+        validate_public_safe_value(observation)
+    assert {path: path.read_bytes() for path in source_paths} == before
 
 
 def test_missing_history_and_empty_observations_are_never_complete():

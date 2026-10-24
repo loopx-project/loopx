@@ -9,10 +9,8 @@ from .acceptance_readback import configured_checks
 from ..todos.user_gate import open_user_gate_todo_items
 from ..todos.contract import normalize_todo_decision_scope
 from ..runtime.public_safety import public_safe_compact_text, validate_public_safe_value
-from .goal_vision_read_model import (
-    acceptance_gaps_from_agent_vision,
-    latest_agent_vision_from_runs,
-)
+from .goal_vision_read_model import acceptance_gaps_from_agent_vision
+from .goal_frontier.semantic_history import latest_agent_vision_from_status_payload
 from .goal_frontier.outcome_continuity import (
     acceptance_gaps_from_outcome_checkpoint,
     latest_outcome_vision_checkpoint_from_status_payload,
@@ -72,13 +70,15 @@ def build_goal_acceptance_observation(
     """Reuse acceptance rules over already-read runs, keeping per-agent lineage.
 
     The collected history and Todo projections are bounded; empty observations
-    cannot establish complete Goal acceptance. No file, quota, or mutation IO.
+    cannot establish complete Goal acceptance. Retained lane history, when
+    present, owns current vision identity. No file, quota, or mutation IO.
     """
     item = _dict(item)
     asset = _dict(item.get("project_asset"))
     runs = _rows(goal.get("latest_runs"))
     goal_id = _text(goal.get("id")) or "unknown"
     runs = [run for run in runs if run.get("goal_id") in (None, goal.get("id"))]
+    semantic_contexts = _rows(_dict(goal.get("semantic_history")).get("agents"))
     historical_progress: list[dict[str, Any]] = []
     seen_flags: set[str] = set()
     for source in runs:
@@ -110,13 +110,20 @@ def build_goal_acceptance_observation(
 
     agents = list(
         dict.fromkeys(
-            str(
-                _dict(run.get("agent_vision")).get("agent_id")
-                or run.get("agent_id")
-                or ""
-            )
-            for run in runs
-            if isinstance(run.get("agent_vision"), dict)
+            [
+                str(
+                    _dict(run.get("agent_vision")).get("agent_id")
+                    or run.get("agent_id")
+                    or ""
+                )
+                for run in runs
+                if isinstance(run.get("agent_vision"), dict)
+            ]
+            + [
+                str(context.get("agent_id") or "").strip()
+                for context in semantic_contexts
+                if str(context.get("agent_id") or "").strip()
+            ]
         )
     )
     gaps: list[dict[str, Any]] = []
@@ -132,8 +139,9 @@ def build_goal_acceptance_observation(
             )
             == agent
         ]
-        vision = latest_agent_vision_from_runs(
-            agent_runs, goal_id=goal_id, agent_id=agent or None
+        vision = latest_agent_vision_from_status_payload(
+            {"run_history": {"goals": [{**goal, "latest_runs": agent_runs}]}},
+            goal_id=goal_id, agent_id=agent or None,
         )
         patch = _dict(_dict(vision).get("vision_patch"))
         checkpoint = latest_outcome_vision_checkpoint_from_status_payload(
@@ -216,7 +224,7 @@ def build_goal_acceptance_observation(
         "goal_id": goal_id,
         "read_only": True,
         "acceptance_assessed": False,
-        "coverage": "partial" if item or runs else "unavailable",
+        "coverage": "partial" if item or runs or semantic_contexts else "unavailable",
         "missing_sources": sources_missing,
         "truncated": len(gaps) > OBSERVATION_LIMIT or len(guards) > OBSERVATION_LIMIT,
         "historical_progress": historical_progress[:OBSERVATION_LIMIT],
