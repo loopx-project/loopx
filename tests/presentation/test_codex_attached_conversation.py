@@ -69,6 +69,51 @@ def open_body(binding):
     return {key: binding[key] for key in ("goal_id", "agent_id", "binding_ref")}
 
 
+def test_multiple_original_sessions_keep_exact_history_input_and_receipts(tmp_path, monkeypatch):
+    calls = opener_spy(monkeypatch)
+    with fixture(tmp_path) as (request, original, _, inputs, registry, home):
+        first, first_query = target(request)
+        second_id = "22222222-2222-4222-8222-222222222222"
+        second = _peer.add_conversation(registry, home, agent_id="worker", thread_id=second_id, text="Separate investigation")
+        status, directory = request()
+        assert status == 200 and len(directory["agents"]) == 2
+        binding = {**directory["agents"][1], "goal_id": "sample-goal"}
+        query = f"?goal_id=sample-goal&agent_id=worker&binding_ref={binding['binding_ref']}"
+        assert request(query=first_query)[1]["messages"][1]["text"] == "Original result"
+        assert request(query=query)[1]["messages"][1]["text"] == "Result: Separate investigation"
+        # A second binding does not invalidate the original, nor can omission
+        # select one by registry order. Each operation retains its exact target.
+        assert request(query="?goal_id=sample-goal&agent_id=worker")[0] == 409
+        assert request("POST", body(binding, "Only second Session"), query="")[0] == 200
+        assert inputs[0]["conversationId"] == second_id
+        assert "Only second Session" in second.read_text()
+        assert "Only second Session" not in original.read_text()
+        assert request("POST", body(binding, "Only second Session"), query="")[0] == 200
+        assert len(inputs) == 1
+        assert request(query=first_query + "&operation_id=same-operation")[0] == 409
+        assert request("POST", open_body(binding), query="", path="/api/chat/codex-attached/open")[0] == 200
+        assert calls[0][0][-1] == f"codex://threads/{second_id}"
+        value = json.loads(registry.read_text())
+        value["goals"][0]["goal_instance_id"] = "replacement-lifetime"
+        registry.write_text(json.dumps(value))
+        assert request(query=query)[0] == 409
+        assert request(query=first_query)[0] == 409
+        assert len(inputs) == 1
+
+
+def test_conflicting_thread_owner_cannot_read_or_reply(tmp_path):
+    with fixture(tmp_path) as (request, _, _, inputs, registry, _):
+        first, query = target(request)
+        value = json.loads(registry.read_text())
+        coordination = value["goals"][0]["coordination"]
+        coordination["registered_agents"].append("other")
+        coordination["thread_agent_bindings"].append({"agent_id": "other", "host_surface": "codex-app", "thread_id": THREAD})
+        registry.write_text(json.dumps(value))
+        assert request(query=query)[0] == 409
+        assert request("POST", body(first), query="")[0] == 409
+        assert inputs == []
+
+
 def test_explicit_open_uses_bound_local_thread_without_executing(tmp_path, monkeypatch):
     calls = opener_spy(monkeypatch)
     with fixture(tmp_path) as (request, _, methods, inputs, _, _):

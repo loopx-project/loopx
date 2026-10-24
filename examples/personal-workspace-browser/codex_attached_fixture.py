@@ -16,7 +16,7 @@ from unittest.mock import patch
 from loopx.chat_server import ChatRequestHandler, default_chat_assets_dir
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from codex_attached_peer import append_message, fixture, provider
+from codex_attached_peer import add_conversation, append_message, fixture, provider
 
 stop = threading.Event()
 signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -105,6 +105,11 @@ with (
 
             def do_POST(self):
                 global fail_next_open, live_revision, live_updates, body_fault
+                if self.path == "/fixture/second-conversation":
+                    add_conversation(registry, _home, agent_id="worker",
+                        thread_id="22222222-2222-4222-8222-222222222222", text="Separate investigation")
+                    self._send_json({"ok": True})
+                    return
                 if self.path in {
                     "/fixture/discovery-body-timeout",
                     "/fixture/discovery-body-drop",

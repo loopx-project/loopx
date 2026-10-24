@@ -69,8 +69,12 @@ def bound_conversations(goal: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def current_binding(goal: dict[str, Any], agent: str, expected: str) -> dict[str, str]:
-    rows = [row for row in bound_conversations(goal) if row["agent_id"] == agent]
-    if len(rows) != 1 or rows[0]["binding_ref"] != expected:
+    bindings = bound_conversations(goal)
+    rows = [row for row in bindings if row["agent_id"] == agent and row["binding_ref"] == expected]
+    if len(rows) != 1 or any(
+        row["thread_id"] == rows[0]["thread_id"] and row["agent_id"] != agent
+        for row in bindings
+    ):
         raise ValueError(
             "The Agent conversation binding changed or is ambiguous. Choose it again."
         )

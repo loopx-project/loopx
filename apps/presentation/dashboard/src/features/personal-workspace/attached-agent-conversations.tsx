@@ -79,13 +79,70 @@ async function readVisiblePage(params: URLSearchParams, current: () => boolean):
   return forward ? page : {...page, after: newestBoundary, has_more: newerAvailable};
 }
 
-/** Owner-only original conversation. It never changes the selected executor. */
+/** Select an exact original Session within the registered Agent, never an executor. */
 export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   goalId: string; zh: boolean; targetAgentId: string;
 }) {
+  const selectionKey = `loopx-attached-selection:${goalId}:${targetAgentId}`;
+  const [selected, setSelected] = useState(() => {
+    try {return sessionStorage.getItem(selectionKey) ?? "";} catch {return "";}
+  });
+  const [bindings, setBindings] = useState<Binding[]>([]);
   const [discovering, setDiscovering] = useState(true);
-  const [agents, setAgents] = useState<Binding[]>([]);
-  const [selected, setSelected] = useState("");
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const locale = useRef(zh);
+  useEffect(() => {locale.current = zh;}, [zh]);
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    setBindings([]); setDiscovering(true); setError("");
+    async function discover() {
+      try {
+        const value = await request<{agents: Binding[]}>(`/api/chat/codex-attached?${new URLSearchParams({goal_id: goalId})}`);
+        if (!Array.isArray(value.agents)) throw new Error("Conversation directory unavailable");
+        const choices = value.agents.filter(row => row.agent_id === targetAgentId);
+        if (active) {
+          setBindings(choices); setError("");
+          // A saved choice that was revoked stays unavailable. Never substitute
+          // another Session or carry its draft into a different conversation.
+          setSelected(previous => previous || (choices.length === 1 ? choices[0].binding_ref : ""));
+        }
+      } catch (failure) {
+        if (active) {
+          setError(readFailureMessage(failure, locale.current));
+          if (retryableRead(failure)) timer = setTimeout(discover, 1000);
+        }
+      } finally {if (active) setDiscovering(false);}
+    }
+    void discover();
+    return () => {active = false; clearTimeout(timer);};
+  }, [goalId, targetAgentId, refresh]);
+  const binding = bindings.find(row => row.binding_ref === selected);
+  const reconnect = () => setRefresh(value => value + 1);
+  return <>
+    {!discovering && bindings.length > 0 && (bindings.length > 1 || selected && !binding) ? <label className="attached-session-selection">
+      <span>{zh ? "工作会话" : "Conversation"}</span>
+      <select aria-label={zh ? "工作会话" : "Conversation"} value={binding ? selected : ""} onChange={event => {
+        const next = event.target.value;
+        setSelected(next);
+        try {sessionStorage.setItem(selectionKey, next);} catch {/* Reading needs no browser storage grant. */}
+      }}>
+        <option value="" disabled>{selected ? (zh ? "原会话绑定已变更" : "Original conversation binding changed") : (zh ? "选择工作会话" : "Choose a conversation")}</option>
+        {bindings.map(row => <option key={row.binding_ref} value={row.binding_ref}>Codex App · {row.thread_id}</option>)}
+      </select>
+    </label> : null}
+    {discovering ? <p role="status">{zh ? "正在连接原会话…" : "Connecting to the original conversation…"}</p>
+      : error ? <p role="alert">{error} <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button></p>
+      : !bindings.length ? <p role="status">{zh ? "此 Agent 暂无已绑定的本机 Codex App 原会话。" : "This Agent has no bound local Codex App conversation."}</p> : null}
+    {binding ? <AttachedConversation key={binding.binding_ref} goalId={goalId} binding={binding} zh={zh} reconnect={reconnect}/> : null}
+  </>;
+}
+
+/** Remount on binding changes so history, live readers and pending input cannot cross Sessions. */
+function AttachedConversation({goalId, binding, zh, reconnect}: {
+  goalId: string; binding: Binding; zh: boolean; reconnect: () => void;
+}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [before, setBefore] = useState<number | null>(null);
@@ -99,7 +156,6 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   const [opening, setOpening] = useState(false);
   const [openRequested, setOpenRequested] = useState(false);
   const [openError, setOpenError] = useState("");
-  const [refresh, setRefresh] = useState(0);
   const [readingHistory, setReadingHistory] = useState(false);
   const [unread, setUnread] = useState(false);
   const [liveView, setLiveView] = useState<LiveRecords>({identity: "", records: []});
@@ -124,16 +180,15 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   const position = useRef<{ids: string[]; group: boolean; offset: number; top: number} | null>(null);
   const readLocale = useRef(zh);
   useEffect(() => {readLocale.current = zh;}, [zh]);
-  const binding = agents.find(agent => agent.agent_id === selected);
   const awaitingReceipt = Boolean(submission?.status && submission.status !== "delivered");
-  const cacheKey = binding ? `loopx-attached-input:${goalId}:${binding.binding_ref}` : "";
+  const cacheKey = `loopx-attached-input:${goalId}:${binding.binding_ref}`;
   const liveEnabled = Boolean(snapshot?.connected && snapshot.activity.state !== "idle");
-  const liveIdentity = `${goalId}:${targetAgentId ?? ""}:${binding?.agent_id ?? ""}:${binding?.binding_ref ?? ""}`;
+  const liveIdentity = `${goalId}:${binding.agent_id}:${binding.binding_ref}`;
   const liveRecords = liveView.identity === liveIdentity ? liveView.records : [];
   // Frozen history is still readable, but must not look like current work.
   // Connection/registration alone is never an activity observation.
   const liveActive = liveEnabled && !liveUnavailable && !readingHistory;
-  const query = binding ? new URLSearchParams({goal_id: goalId, agent_id: binding.agent_id, binding_ref: binding.binding_ref}) : null;
+  const query = new URLSearchParams({goal_id: goalId, agent_id: binding.agent_id, binding_ref: binding.binding_ref});
 
   useLayoutEffect(() => {
     const element = transcript.current;
@@ -164,7 +219,7 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   useEffect(() => {
     let active = true;
     latestLive.current = {identity: "", records: []}; setLiveView(latestLive.current); setLiveUnavailable(false);
-    if (!binding || !liveEnabled) return;
+    if (!liveEnabled) return;
     const source = new EventSource(`/api/chat/codex-attached/live?${query}`);
     const unavailable = () => {latestLive.current = {identity: "", records: []}; setLiveView(latestLive.current); setLiveUnavailable(true);};
     source.addEventListener("observation", event => {
@@ -189,26 +244,6 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   }, [liveIdentity, liveEnabled]);
 
   useEffect(() => {
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    setAgents([]); setSelected(""); setMessages([]); setSnapshot(null); setError("");
-    setDiscovering(true);
-    async function discover() {
-      try {
-        const value = await request<{agents: Binding[]}>(`/api/chat/codex-attached?${new URLSearchParams({goal_id: goalId})}`);
-        if (active) {setAgents(value.agents); setSelected(targetAgentId); setError("");}
-      } catch (failure) {
-        if (active) {
-          setError(readFailureMessage(failure, readLocale.current));
-          if (retryableRead(failure)) timer = setTimeout(discover, 1000);
-        }
-      } finally {if (active) setDiscovering(false);}
-    }
-    void discover();
-    return () => {active = false; clearTimeout(timer);};
-  }, [goalId, refresh, targetAgentId]);
-
-  useEffect(() => {
     const current = ++generation.current;
     revision.current = "";
     history.current = null;
@@ -218,7 +253,6 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
     setOpening(false); setOpenRequested(false); setOpenError("");
     setSendNotice("");
     setMessages([]); setSnapshot(null); setBefore(null); setDraft(""); setSubmission(null); setSending(false); setLoadingOlder(false); setError(""); setRecoveryError("");
-    if (!binding) return;
     try {
       setDraft(sessionStorage.getItem(`${cacheKey}:draft`) ?? "");
       const stored = sessionStorage.getItem(cacheKey);
@@ -234,7 +268,7 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
     async function read() {
       if (paging.current !== null) {timer = setTimeout(read, 1000); return;}
       const epoch = historyEpoch.current;
-      const params = new URLSearchParams(query!);
+      const params = new URLSearchParams(query);
       if (following.current && after.current !== null) params.set("after", String(after.current));
       if (history.current) params.set("source_ref", history.current.source);
       if (revision.current) params.set("revision", revision.current);
@@ -272,7 +306,7 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   }, [goalId, binding?.binding_ref]);
 
   async function openOriginal() {
-    if (!binding || opening) return;
+    if (opening) return;
     const current = generation.current;
     setOpening(true); setOpenRequested(false); setOpenError("");
     try {
@@ -360,14 +394,14 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
     else if (scrollDirection.current) pageAtEdge(scrollDirection.current);
   }
   async function loadContent(record: Message, offset: number): Promise<ContentPage> {
-    const params = new URLSearchParams(query!);
+    const params = new URLSearchParams(query);
     params.set("entry_id", record.id); params.set("content_offset", String(offset));
     params.set("source_ref", history.current?.source ?? ""); params.set("content_ref", record.content_ref ?? "");
     return request<ContentPage>(`/api/chat/codex-attached?${params}`);
   }
 
   async function send() {
-    if (!binding || sending || error || recoveryError || !snapshot?.can_reply || !draft.trim() || awaitingReceipt) return;
+    if (sending || error || recoveryError || !snapshot?.can_reply || !draft.trim() || awaitingReceipt) return;
     const current = generation.current;
     const pending = {operation_id: crypto.randomUUID(), text: draft, status: "pending"};
     try {sessionStorage.setItem(cacheKey, JSON.stringify(pending));}
@@ -402,7 +436,7 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
   }
   async function readReceipt(pending = submission, current = generation.current) {
     // Recover from existing evidence only. Never retry the native effect.
-    if (!query || !pending || current !== generation.current) return;
+    if (!pending || current !== generation.current) return;
     const receiptVersion = receiptGeneration.current;
     const params = new URLSearchParams(query); params.set("operation_id", pending.operation_id);
     try {
@@ -424,14 +458,11 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
     try {sessionStorage.removeItem(cacheKey); sessionStorage.removeItem(`${cacheKey}:draft`); receiptGeneration.current++; setSubmission(null); setDraft(""); setError(""); setRecoveryError("");}
     catch {setError(zh ? "无法清理回复回执。" : "Reply recovery could not be cleared.");}
   }
-  const connectionError = error ? <p role="alert">{error} <button type="button" onClick={() => setRefresh(value => value + 1)}>{zh ? "重新连接" : "Reconnect"}</button></p> : null;
+  const connectionError = error ? <p role="alert">{error} <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button></p> : null;
   return <div className="attached-conversation-content">
 
-      {discovering ? <p role="status">{zh ? "正在连接原会话…" : "Connecting to the original conversation…"}</p> : !binding && !error ? <p role="status">{zh ? "此 Agent 暂无已绑定的本机 Codex App 原会话。" : "This Agent has no bound local Codex App conversation."}</p> : null}
       {recoveryError ? <p role="alert">{recoveryError} <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已在原 App 核对，清理本页回执" : "Checked in original App; clear this receipt"}</button></p> : null}
-      {!binding ? connectionError : null}
       {sendNotice ? <p role="status">{sendNotice}</p> : null}
-      {binding ? <>
         <div className="attached-connection-status"><div><p className="attached-conversation-source" title={zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}>Codex App</p><p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p></div>
         <button type="button" className="attached-conversation-open" aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}>{zh ? "在 Codex App 中打开" : "Open in Codex App"}</button></div>
         {openRequested ? <p role="status">{zh ? "已请求打开原会话，请在 Codex App 中查看。" : "Requested opening the original conversation; check Codex App."}</p> : null}
@@ -453,7 +484,6 @@ export function AttachedAgentConversations({goalId, zh, targetAgentId}: {
         {liveUnavailable ? <p role="status">{zh ? "实时观察暂不可用，已保存的消息与工具记录仍会自动更新。" : "Live observation is unavailable; saved messages and tools still update automatically."}</p> : null}
         {submission?.status ? <p role="status">{submission.status === "delivered" ? (zh ? "已由原 App 接纳；等待 Agent 结果。" : "Accepted by the original App; awaiting the Agent result.") : (zh ? "投递尚未确认，请先在原 App 核对，不会自动重发。" : "Delivery unconfirmed; check the original App. No automatic resend.")} {submission.status === "pending" ? <button type="button" disabled={sending} onClick={() => void readReceipt()}>{zh ? "重读投递回执" : "Recheck delivery receipt"}</button> : null}{awaitingReceipt ? <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已核对，写下一条" : "Checked; write another"}</button> : null}</p> : null}
         {!awaitingReceipt ? <form onSubmit={event => {event.preventDefault(); void send();}}><label>{zh ? `回复 ${binding.agent_id}` : `Reply to ${binding.agent_id}`}<textarea value={draft} maxLength={24000} disabled={sending} onChange={event => editDraft(event.target.value)}/></label><button type="submit" disabled={sending || Boolean(error || recoveryError) || !snapshot?.can_reply || !draft.trim()}>{sending ? (zh ? "正在交给原 App…" : "Sending to original App…") : (zh ? "发送到原会话" : "Send to original conversation")}</button></form> : null}
-      </> : null}
     </div>
   ;
 }

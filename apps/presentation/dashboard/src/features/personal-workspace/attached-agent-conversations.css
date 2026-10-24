@@ -11,6 +11,9 @@
 .attached-conversation-content button {font: inherit; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer;}
 .attached-conversation-content button:disabled, .attached-conversation-content button[aria-disabled="true"] {opacity: .5; cursor: default;}
 .attached-conversation-content .attached-conversation-open {border: 0; padding: 0; border-radius: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px;}
+.attached-session-selection {display: flex; align-items: center; gap: 12px; margin-block: 12px 4px; min-width: 0;}
+.attached-session-selection > span {flex-shrink: 0;}
+.attached-session-selection select {min-width: 0; max-width: 100%; min-height: 44px; font: inherit; padding: 8px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text);}
 .attached-conversation-messages {max-height: min(40vh, 360px); overflow: auto; overflow-anchor: none; overscroll-behavior: contain; margin-block: 16px; min-width: 0; scrollbar-gutter: stable;}
 .attached-conversation-messages article {padding-block: 16px; border-top: 1px solid var(--pw-line); overflow-wrap: anywhere;}
 .attached-conversation-messages header {display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;}
