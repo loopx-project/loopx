@@ -208,6 +208,8 @@ def _routing_discovery_timeout(error: Any) -> bool:
             and error.get("message") in (
                 "workspace routing discovery timed out",
                 "Error running remote compact task: workspace routing discovery timed out",
+                "workspace routing discovery failed",
+                "Error running remote compact task: workspace routing discovery failed",
             ))
 
 
@@ -700,6 +702,7 @@ class CodexChatAgentSession:
     _command_items_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _host_model_auth: Any = field(default=None, repr=False)
     _public_source_read_context: str = field(default="", repr=False)
+    read_only_review: bool = False
     _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
         default=None, repr=False
     )
@@ -721,6 +724,7 @@ class CodexChatAgentSession:
         runtime_profile: str = "restricted",
         sandbox: str | None = None,
         project_context: dict[str, str] | None = None,
+        read_only_review: bool = False,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
@@ -741,12 +745,15 @@ class CodexChatAgentSession:
         root = work_dir.resolve()
         if runtime_profile not in {"restricted", "trusted_owner"}:
             raise ValueError("unsupported Codex Chat runtime profile")
+        if read_only_review and (project_context is None or not resume_thread_id or dynamic_tools):
+            raise ValueError("result review must resume the original private thread without dynamic tools")
         if project_context is not None:
             from .control_plane.effect_runtime import effect_runtime_result
 
             if execution_mode or goal_id is not None or runtime_profile != "restricted":
                 raise ValueError("ordinary project runtime cannot borrow Goal or manager authority")
-            policy = effect_runtime_result("collaboration.project.session_identity", {"context": project_context})
+            policy = effect_runtime_result("collaboration.project.session_identity", {
+                "context": project_context, **({"read_only_review": True} if read_only_review else {})})
             if Path(policy["context"]["workspace_path"]).resolve() != root:
                 raise ValueError("project runtime workspace does not match its context")
             selected_sandbox = policy["sandbox"]
@@ -887,6 +894,7 @@ class CodexChatAgentSession:
             runtime_profile=runtime_profile,
             sandbox=selected_sandbox,
             permissions_profile=permissions_profile,
+            read_only_review=read_only_review,
             project_context=policy["context"] if project_context is not None else None,
             model=model,
             reasoning_effort=reasoning_effort,
@@ -955,10 +963,11 @@ class CodexChatAgentSession:
                         **settings, "writable_roots": list(dict.fromkeys([*writable, *owner_git_write_roots]))}}
                 if permissions_profile:
                     host_config = codex_context.disable_mcp_servers(effective, host_config or {})
-                    try:
-                        host_config = codex_context.public_source_reader(effective, host_config)
-                    except ValueError as exc:
-                        raise session._runtime_error(str(exc)) from None
+                    if not read_only_review:
+                        try:
+                            host_config = codex_context.public_source_reader(effective, host_config)
+                        except ValueError as exc:
+                            raise session._runtime_error(str(exc)) from None
                     if session._host_model_auth is not None:
                         # Use public native transport defaults, not the
                         # account's configuration or environment. Reject a
@@ -987,6 +996,10 @@ class CodexChatAgentSession:
                         else {}
                     ),
                     "cwd": str(root),
+                    # An ordinary native thread can retain Git/skill roots
+                    # from earlier writable Turns. Replace, then verify the
+                    # exact root rather than inheriting that broader inventory.
+                    **({"runtimeWorkspaceRoots": [str(root)]} if read_only_review else {}),
                     **({"model": model} if model else {}),
                     **({"modelProvider": provider_override} if provider_override else {}),
                     **(
@@ -1065,6 +1078,8 @@ class CodexChatAgentSession:
                 )
             if permissions_profile:
                 session._public_source_read_context = codex_context.public_source_read_context(host_config or {})
+            if read_only_review and session._background_terminals(time.monotonic() + response_timeout_sec):
+                raise session._runtime_error("The interrupted conversation still has background work; result review stopped.")
             # Chat keeps its Goal binding in LoopX's local Session state and supplies
             # that public-safe context in each Turn prompt. Codex Goal mode is reserved
             # for autonomous execution; enabling it here causes conversational messages
@@ -1072,6 +1087,8 @@ class CodexChatAgentSession:
             session.next_request_id = 4 if read_native_config else 3
             if session._host_model_auth is not None:
                 session.next_request_id = 5
+            if read_only_review:
+                session.next_request_id = max(session.next_request_id, 6)
             return session
         except _LegacyModelCatalogSchemaError as exc:
             session.close()
@@ -1092,6 +1109,7 @@ class CodexChatAgentSession:
                     runtime_profile=runtime_profile,
                     sandbox=selected_sandbox,
                     project_context=project_context,
+                    read_only_review=read_only_review,
                     codex_home=base_home,
                     model=model,
                     reasoning_effort=reasoning_effort,
@@ -1669,6 +1687,16 @@ class CodexChatAgentSession:
         text = " ".join(str(user_message or "").split())
         if not text:
             raise ValueError("user message is required")
+        if self.read_only_review:
+            text = (
+                "Review the existing results of the interrupted original request below. "
+                "Its earlier execution may have already changed files or external systems. "
+                "Use the original native history and current local artifacts to verify what actually happened. "
+                "This Turn is read-only: do not re-execute the business request, write, send, delegate or start background work. "
+                "Return a clear answer to the original user, distinguishing verified results from remaining gaps. "
+                "If verification is incomplete, report the concrete limitation; do not claim completion. "
+                "Original request: " + text
+            )
         if output_schema is not None and not self.execution_mode:
             raise ValueError("structured Turn output requires an execution session")
         with self._request_id_lock:

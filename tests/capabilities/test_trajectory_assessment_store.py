@@ -501,8 +501,9 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
-@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1"])
-def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding):
+@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1"])
+@pytest.mark.parametrize("context", [False, True])
+def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding, context):
     scope, _, _, input_path, sources, _ = pack
     data = json.loads(input_path.read_text())
     history = {"ok": True, "goal_id": "solver", "total": 2, "next_cursor": None, "items": [
@@ -511,12 +512,17 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
         dict(schema_version="loopx_explore_result_event_v0", event_id="question-new", result_id="question", goal_id="solver", event_kind="node",
              node_kind="question", recorded_at="2026-01-02T00:00:00Z", title="Does V19 help?", summary="Still unknown.", status="blocked"),
     ]}
+    if encoding == "source_text_aliases_with_literal_values_v1":
+        history["items"][0]["summary"] = "Trial4failed2checks"
     text = json.dumps(history, ensure_ascii=False)
     (sources / "history.json").write_text(text)
     data["sources"].append(dict(id="history", artifact="history.json", artifact_sha256=hashlib.sha256(text.encode()).hexdigest(), first_line=1, text=text))
     data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="source-a")
     if encoding is not None:
         data["display_snapshot"]["translation_encoding"] = encoding
+    context_citation = dict(source_id="source", first_line=2, last_line=2)
+    if context:
+        data["display_snapshot"]["contexts"] = [dict(event_id="question-old", field="summary", citations=[context_citation])]
     input_path.write_text(json.dumps(data))
     registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Whole history · synthetic")
     current = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
@@ -527,9 +533,14 @@ import json,sys
 from pathlib import Path
 prompt = sys.stdin.read()
 fields = json.loads(prompt.split("\\n\\ndisplay_fields:\\n")[1])
+def translation(field):
+    if field.get("literals") == ["Trial4failed2checks"]:
+        assert field["explanation_numbers"] == ["4", "2"]
+        return "第4次尝试有2项检查未通过（" + field["text"] + "）。"
+    return "译文：" + field["text"]
 output = {"assessments":[{"episode_id":"episode","metric":"benefit_test","verdict":"unknown","reason":"合成过程测试，未验证实际收益。","citations":[]}],
           "limitations":["合成译文，非模型质量验收。"], "episode_questions":[{"episode_id":"episode","question":"是否有帮助？"}],
-          "display_translations":[{"field_id":f["field_id"], "text":"译文：" + f["text"]} for f in fields[:-1]]}
+          "display_translations":[{"field_id":f["field_id"], "text":translation(f)} for f in fields[:-1]]}
 Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output))
 print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_tokens":7}}))
 ''')
@@ -538,6 +549,17 @@ print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_to
     assert execute_pack(**operation, codex=str(provider))["status"] == "succeeded"
     result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
     assert result["result"]["display"]["coverage"] == dict(eligible=4, translated=3, missing=1, invalid=0)
+    if context:
+        field = next(field for field in result["result"]["display"]["fields"] if field["field"] == "summary")
+        assert field["context_citations"] == [context_citation]
+        assert read_citation(**operation, **context_citation)["text"] == data["sources"][0]["text"]
+        with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+            read_citation(**operation, source_id="history", first_line=1, last_line=1)
+    else:
+        assert not any("context_citations" in field for field in result["result"]["display"]["fields"])
+    if encoding == "source_text_aliases_with_literal_values_v1":
+        assert any(field["text"] == "第4次尝试有2项检查未通过（Trial4failed2checks）。"
+                   for field in result["result"]["display"]["fields"])
     assert result["job"]["usage"]["input_tokens"] == 19  # one shared attempt, not four new jobs
     assert len(result["result"]["metrics"]) == 6 and result["result"]["metrics"][1]["unknown"] == 1
     assert execute_pack(**operation, codex="must-not-run")["reused"] is True
@@ -1116,3 +1138,65 @@ def test_observed_usage_real_cli_without_model_dispatch(pack):
     assert view['solver_usage']['projection']['incomplete_turn']['usage']['input_tokens'] == 40
     assert inspect_pack(**scope, pack_id=record['pack_id'])['job'] is None
     assert not list(scope['runtime_root'].rglob('receipt.json'))
+
+
+@pytest.mark.parametrize("coverage", ["complete", "partial", "conflicting", "invalid_cache"])
+def test_loopx_input_attribution_real_transport_and_privacy(pack, monkeypatch, coverage):
+    import loopx.capabilities.benchmark_toolkit.trajectory_assessment_store as store
+
+    scope, _, old, input_path, sources, _ = pack
+    rows = [json.loads(line) for line in _request_usage_fixture().splitlines()]
+    annotations = []
+    for response, turn, total, loopx, cached in [
+        ("one", "a", 100, 20, 12), ("compact", "a", 20, 5, 4),
+        ("two", "b", 40, 15, 10),
+    ]:
+        annotations.append(dict(type="loopx_input_token_attribution", payload=dict(
+            method="provider_input_token_attribution_v1", response_id=response,
+            session_id="solver-session", thread_id="solver-session", turn_id=turn,
+            root_turn_id=turn, input_tokens=total, loopx_input_tokens=loopx,
+            loopx_cached_input_tokens=cached,
+            raw_packet="SYNTHETIC-PRIVATE-PACKET-DO-NOT-TRANSPORT")))
+    if coverage == "partial":
+        annotations = annotations[:1]
+    if coverage == "conflicting":
+        conflict = json.loads(json.dumps(annotations[0]))
+        conflict["payload"]["loopx_input_tokens"] = 21
+        annotations.append(conflict)
+    if coverage == "invalid_cache":
+        annotations[0]["payload"]["loopx_cached_input_tokens"] = True
+    path = sources / "usage.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in [*rows, *annotations]) + "\n")
+    original = path.read_bytes()
+    actual = store.effect_runtime_result
+    transported = []
+
+    def observe(command, params, **kwargs):
+        if command == "benchmark.trajectory.codex-usage":
+            transported.append(params)
+        return actual(command, params, **kwargs)
+
+    monkeypatch.setattr(store, "effect_runtime_result", observe)
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+        title="Synthetic attributed input", usage_jsonl="usage.jsonl", usage_session_id="solver-session")
+    assert registered["analysis_key"] == old["analysis_key"]
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    usage = view["solver_usage"]["projection"]
+    assert usage["input_tokens"] == 140
+    assert usage["request_coverage"]["status"] == "verified"
+    attribution = usage["loopx_input"]
+    assert attribution["status"] == ("unavailable" if coverage in {"conflicting", "invalid_cache"} else coverage)
+    if coverage == "complete":
+        assert attribution["loopx_input_tokens"] == 40
+        assert attribution["total_input_tokens"] == 160
+        assert attribution["input_fraction"] == 0.25
+        assert attribution["uncached_input_fraction"] == 0.2
+    elif coverage == "partial":
+        assert attribution["input_fraction"] is None
+        assert attribution["input_fraction_bounds"] == [0.125, 0.5]
+    else:
+        assert "input_fraction" not in attribution
+    assert transported and "SYNTHETIC-PRIVATE-PACKET" not in json.dumps(transported)
+    assert path.read_bytes() == original
+    assert view["job"] is None and view["result"] is None
+    assert "loopx_input" not in inspect_pack(**scope, pack_id=old["pack_id"]).get("solver_usage", {}).get("projection", {})

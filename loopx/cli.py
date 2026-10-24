@@ -16,9 +16,9 @@ from .cli_commands.automation_cadence import (
 import argparse
 import sys
 
-from .cli_commands.agent_capabilities import register_agent_capabilities, handle_agent_capabilities
-from .cli_commands.agent_directory import register_agent_directory, handle_agent_directory
-from .cli_commands.agent_context import register_agent_context, handle_agent_context
+from .cli_commands.agent_capabilities import register_agent_capabilities
+from .cli_commands.agent_directory import register_agent_directory
+from .cli_commands.agent_context import register_agent_context
 from .capabilities.multi_subagent.cli import (
     register_native_child_commands, handle_native_child_command,
 )
@@ -69,10 +69,6 @@ from .capabilities.machine_configuration.cli import (
     handle_machine_configuration_command,
     register_machine_configuration_commands,
 )
-from .capabilities.periodic_report.post_writeback_hook import (
-    build_periodic_report_post_writeback_projection,
-    periodic_report_post_writeback_hooks_for_goal,
-)
 from .paths import (
     effective_runtime_root,
 )
@@ -114,7 +110,6 @@ from .cli_commands import (
     handle_presentation_command,
     handle_dash_command,
     handle_project_command,
-    handle_project_lifecycle_command,
     handle_pr_review_command,
     handle_deepresearch_command,
     handle_ready_score_command,
@@ -196,7 +191,6 @@ from .cli_commands.reliability_diagnostics import (
     handle_reliability_diagnostics_command,
     register_reliability_diagnostics_commands,
 )
-from .cli_rollout import append_cli_rollout_event
 from .capabilities.project_skill_delivery.cli import (
     handle_project_skill_command,
     register_project_skill_commands,
@@ -745,33 +739,6 @@ def _main(argv: list[str] | None = None) -> int:
             print_payload=print_payload,
         )
 
-    project_lifecycle_result = handle_project_lifecycle_command(
-        args,
-        registry_path=registry_path,
-        print_payload=print_payload,
-        output_format=output_format,
-        append_cli_rollout_event=append_cli_rollout_event,
-        post_writeback_hooks=(
-            periodic_report_post_writeback_hooks_for_goal(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                runtime_root=effective_runtime_root(
-                    registry_path,
-                    args.runtime_root,
-                ),
-            )
-            if args.command == "refresh-state"
-            else ()
-        ),
-        post_writeback_projection_builder=(
-            build_periodic_report_post_writeback_projection
-            if args.command == "refresh-state"
-            else None
-        ),
-    )
-    if project_lifecycle_result is not None:
-        return project_lifecycle_result
-
     goal_channel_result = handle_goal_channel_command(
         args,
         registry_path=registry_path,
@@ -792,29 +759,8 @@ def _main(argv: list[str] | None = None) -> int:
     if lark_kanban_result is not None:
         return lark_kanban_result
 
-    if args.command == "agent-capabilities":
-        return handle_agent_capabilities(
-            args, registry_path, effective_runtime_root(registry_path, args.runtime_root),
-            print_payload, output_format,
-        )
-
-    if args.command == "agent-context":
-        return handle_agent_context(
-            args,
-            registry_path,
-            effective_runtime_root(registry_path, args.runtime_root),
-            print_payload,
-            output_format,
-        )
-
     if args.command == "native-child":
         return handle_native_child_command(
-            args, registry_path, effective_runtime_root(registry_path, args.runtime_root),
-            print_payload, output_format,
-        )
-
-    if args.command == "agent-directory":
-        return handle_agent_directory(
             args, registry_path, effective_runtime_root(registry_path, args.runtime_root),
             print_payload, output_format,
         )

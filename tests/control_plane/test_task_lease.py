@@ -52,6 +52,7 @@ def test_local_lease_reader_preserves_bytes_and_types_corruption(tmp_path: Path,
         (["**"], ["loopx/cli.py"], True),
         (["docs/a.md"], ["docs/b.md"], False),
         ([], ["docs/a.md"], False),
+        (["src//main.ts"], ["src/./main.ts"], True),
     ],
 )
 def test_write_scopes_overlap(

@@ -16,6 +16,7 @@ from ...control_plane.digest_envelope import sha256_envelope
 from ...file_lock import exclusive_file_lock
 from ...history import load_registry
 from ...registry import atomic_write_json, find_registry_goal
+from .field_shapes import REPORT_IDENTITY_PATTERN
 from .machine_defaults import resolve_goal_periodic_report_subscription
 from .machine_store import read_periodic_report_machine_defaults
 from .presets import build_periodic_report_preset_activation
@@ -32,7 +33,6 @@ REQUEST_BIND_PORT = "periodic_report.request.bind_source"
 REQUEST_SETTLE_PORT = "periodic_report.request.settle_source"
 REQUEST_ADAPTER_PHASE = "capability_action"
 _REQUEST_FILE_RE = re.compile(r"^prq_[0-9a-f]{64}\.json$")
-_IDENTITY_RE = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
 
 SourceBinder = Callable[..., Mapping[str, Any]]
 SourceSettler = Callable[..., Mapping[str, Any]]
@@ -414,7 +414,7 @@ def record_periodic_report_request(
     source_adapter_id: str | None,
     execute: bool,
 ) -> dict[str, Any]:
-    if not _IDENTITY_RE.fullmatch(goal_id) or not _IDENTITY_RE.fullmatch(agent_id):
+    if not REPORT_IDENTITY_PATTERN.fullmatch(goal_id) or not REPORT_IDENTITY_PATTERN.fullmatch(agent_id):
         raise ValueError("periodic-report request Goal/Agent identity is invalid")
     opaque_ref = _source_ref(source_ref)
     selected_adapter_id = str(source_adapter_id or "").strip()
@@ -674,7 +674,7 @@ def settle_periodic_report_request(
         or result.get("raw_content_returned") is not False
         or (
             result.get("status") == SOURCE_SETTLEMENT_TERMINAL_STATUS
-            and not _IDENTITY_RE.fullmatch(str(result.get("failure_code") or ""))
+            and not REPORT_IDENTITY_PATTERN.fullmatch(str(result.get("failure_code") or ""))
         )
     ):
         raise ValueError("periodic-report source settlement receipt is invalid")

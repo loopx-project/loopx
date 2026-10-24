@@ -30,6 +30,20 @@ the original conversation automatically. Acknowledgement or adoption does not
 remove the request from the receiver's hook; a committed conclusion does. The
 Chat runtime then owns transport recovery, separately from work completion.
 
+An ordinary private project request interrupted by a host restart after tool
+work is not safe to replay. The original worker can reserve one separately
+correlated read-only review in the same native thread, retaining the failed
+Turn and its notice. Core rechecks the original source, binding, grant, idle
+state and absence of stop/correction intent. Complete, stable native inventory
+must show an interrupted request without a final answer or live work. The
+existing workspace-only read profile denies writes and network, disables MCP,
+Apps and delegation, and retains the original native store and project grant.
+The review returns verified existing results or an explicit verification gap;
+it cannot redo business effects. A failed review remains pending without an
+automatic second attempt. Steward/attached/group requests are outside this
+staged path. Delivery uses the original transport and independent readback;
+admission or review completion alone does not certify business completion.
+
 The expected exchange is receipt → receiver assessment/work → conclusion.
 Meaningful intermediate feedback is optional and coalesced when a conclusion
 is already ready. Normal delegation requires neither a second confirmation nor
@@ -415,6 +429,26 @@ bind the resulting receipt to the exact target. Replays return that receipt
 without reapplying. After a crash with an uncertain external effect, reconcile
 by provider idempotency/readback before retry; if the provider cannot prove the
 result, retain outcome-unknown. Do not promise universal exactly-once effects.
+
+For private native Chat, a verified failure notice does not close its original
+request. The existing reply worker may reserve a bounded, separately correlated
+continuation after a recognized routing discovery failure or timeout. Admission
+rechecks the original provider message, binding, grant and idle Session. Native
+readback must enumerate every Turn and the failed Turn's complete item history:
+all Turns are terminal, and an older failure contains exactly its original user
+item. Later completed work alone does not establish execution of that request.
+The native compaction exception applies only to the latest failed Turn. Any
+answer, tool, correction, unknown item, local response delta or interrupted work
+keeps the original failure pending; it cannot be replayed by this path. Existing
+backoff, three-attempt limit, reservation recovery and per-attempt delivery
+readback remain in force, preserving the failed Turn and its original notice.
+
+个人原生 Chat 的失败通知不代表原请求完成。既有回复 worker 只能在明确识别的路由
+发现失败或超时、原消息和绑定权限再次核验、会话空闲及原生完整读回后，有界接续原
+请求。历史失败必须只有原始用户输入；之后其他请求完成不能证明它已经执行。仅最新
+失败可包含原生压缩记录；任何回答、工具、纠正、未知项、本地回答增量或中断的工作
+仍保留待核对，不能走此路径重放。退避、三次上限、稳定接续身份、失败历史和逐次
+原受众送达读回均保持原约束。
 
 Default manager duties allow authorized reads and summaries; reminders use an
 existing authorized destination/subscription. Goal changes, steering,

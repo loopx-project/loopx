@@ -59,6 +59,26 @@ Fields use content-bound opaque identities. Literal code, links, numeric tokens
 and technical identifiers are protected; missing, duplicate or corrupt rows fall
 back to the original with explicit partial/invalid coverage. This mechanical
 check does not verify linguistic quality, causal meaning or model calibration.
+
+For ambiguous compact notes, the curator can add `display_snapshot.contexts`
+rows with `event_id`, `field` and `citations` (existing `source_id`, absolute
+inclusive `first_line`/`last_line`). Bind only a narrative field in that captured
+snapshot and verified source ranges. Empty evidence, duplicate bindings, missing
+fields/sources and out-of-range lines are rejected. The same explicit analysis
+reads those numbered ranges to resolve terms, units and referents; it must not
+import later outcomes, new measurements or stronger certainty into the original
+field. Context evidence is supplied once through the existing source pack.
+The versioned display field retains `context_citations`; equal text with different
+context does not share a translation identity. Context additions, corrections or
+removal invalidate reuse. Omission preserves existing prompts and identities.
+The original source reader and existing job budget, cancellation and retry remain
+the entrypoints; neither a context binding nor an ordinary read launches a model.
+
+压缩记录有歧义时，可由原输入整理者把准确事件/字段关联到已有证据的具体行。
+同一次明确分析据此解释术语、单位和指代，不能把上下文的新结果补写成原记录结论。
+关联随展示产物保存并参与版本隔离；不同上下文不共用同一译文。没有关联时沿用原路径，
+字面校验和来源关联仍不等于译文已获独立语义验证。
+
 For a large capture, the curator can set the optional
 `display_snapshot.translation_encoding: "source_text_aliases_v1"`. The same
 owner requests one translation per exactly equal original string using compact
@@ -77,6 +97,33 @@ uncertainty opaque inside a placeholder. It grants no tools or source authority.
 This explicit encoding has a distinct analysis identity; prior direct and alias
 jobs remain unchanged. Context availability does not certify translation quality:
 read the resulting language and negative/uncertain claims, not only coverage.
+When those compound terms also hide numbers, the explicit
+`"source_text_aliases_with_literal_values_v1"` encoding additionally supplies
+`explanation_numbers`. The translation may restate each listed exact signed
+component once in readable prose while retaining every original placeholder.
+For example, a compact trial/check term can retain its source spelling while
+explaining the trial number and failed-check count in the interface language.
+Code, hashes and links contribute no explanation numbers. Changed signs,
+rounding, new values and excess repetitions fail the field check and retain its
+original. This is lexical integrity, not verification of units, referents or
+scientific meaning: ambiguous glued digits must remain ambiguous rather than
+being guessed into counts. The existing job, language selection, original-text
+reader, partial coverage and explicit execution boundaries are unchanged.
+This encoding has its own analysis identity. Existing direct, alias and
+literal-context artifacts keep their original preparation and remain readable;
+viewing an old result does not upgrade it or launch a new analysis.
+The explicit `"source_text_aliases_with_literal_values_v2"` variant retains those
+exact-value checks and asks the model to explain context-bound quantities in
+ordinary prose, including the exact permitted number and its referent. Keeping
+only an opaque source term in parentheses is insufficient. Unknown meanings stay
+unknown; supporting preparation steps must not become new claims in the field.
+This is a model instruction, not a semantic validator. Earlier encodings retain
+their original prompts and identities; selecting this variant requires a new
+explicit analysis with separately recorded usage.
+
+显式数值编码 v2 要求把有来源语境支持的数量及其所指写成可读正文，仍保留原始标记和
+准确数值限制；未知所指不猜测，不能把支持材料的准备步骤补成原记录的新行动。这不是
+机器语义校验。旧编码及结果保持，新版本仅随明确分析生成并单独记账。
 Translated prose is applied to decoded narrative fields; it is never serialized
 and reparsed as an Explore decision. Owner-format labels or list markers inside
 model text cannot change the original outcome, eligibility or list cardinality.
@@ -686,3 +733,122 @@ existing TypeScript owner; replacement history and response text are excluded.
 Registration retains the source hash, and changed or missing sources mark the
 saved capture historical. Re-registering a source with this additional
 projection can create a new pack identity; old packs are never rewritten.
+
+### LoopX packet share of model input
+
+Research → Sources and usage also exposes **LoopX input share**. For the same
+reconciled requests and capture window, the metric is:
+
+`sum(LoopX packet input tokens) / sum(all request input tokens)`
+
+Both include cached input. Reprocessed packet context counts in each request;
+duplicate receipts and compaction mirrors count once. A compaction request is
+not automatically all LoopX input. The separate uncached share requires an
+explicit cache attribution, rather than charging every LoopX token as uncached.
+This is a measured resource share, not a percentage loss of task effectiveness,
+avoidable time, monetary cost or LoopX's causal impact. Compare native outcomes
+and complete costs separately; a lower packet share alone is not an improvement.
+
+The existing frozen usage JSONL import accepts an optional **host-produced
+attribution receipt**, bound to a native `token_usage_record` in the same
+capture. For example, a synthetic receipt for a request with 100 input tokens:
+
+```json
+{"type":"loopx_input_token_attribution","payload":{
+  "method":"provider_input_token_attribution_v1",
+  "session_id":"synthetic-session","thread_id":"synthetic-session",
+  "turn_id":"synthetic-turn","root_turn_id":"synthetic-turn",
+  "response_id":"synthetic-response",
+  "input_tokens":100,"loopx_input_tokens":20,"loopx_cached_input_tokens":12
+}}
+```
+
+The host is responsible for classifying the actual delivered packet spans and
+counting them on the **same provider token basis** as that request's input.
+Count each span once even when several LoopX components describe it. References
+or packets emitted but not consumed are not processed input. Do not classify
+arbitrary prose or commands as LoopX usage by substring matching, divide byte or
+character counts into estimated tokens, or append invented receipts to original
+client logs. A recorder may export an immutable annotated capture; preserve the
+original log separately. The import validates identities and arithmetic, not
+the truth of a host's attribution or its billing completeness. Raw prompts,
+packet text and account metadata never cross the counter transport.
+
+This reader does **not** add instrumentation to Codex or reconstruct attribution
+from historical counters. Existing Codex captures without these receipts retain
+their exact saved projection and show **uncaptured**, not zero. Hosts capable of
+producing attribution use the existing `--usage-jsonl` registration path; no
+model call, second accounting store or new configuration is introduced.
+
+With provider receipts, the TypeScript usage owner adds
+`solver_usage.projection.loopx_input`. Every receipt must bind the original session, response,
+Turn/root identity and input total. Counts must fit the native input/cache
+subsets; conflicts withhold only attribution, leaving valid session and request
+counters intact. Complete coverage shows the ratio. Partial coverage retains
+the attributed request/input denominators and withholds the whole-window ratio;
+its optional bounds allocate missing request input as none/all LoopX, **not a
+confidence interval**. Zero input has an undefined ratio. Missing cache
+attribution keeps the uncached ratio unknown. Source changes retain historical
+values with the existing warning and never borrow another pack's measurement.
+
+中文：同一请求窗口内，LoopX packet 的实际输入 token 总量除以全部输入 token 总量，
+含缓存；重复处理按请求计量，重复回执不重复记账。需要宿主真实归因，现有历史计数
+不能反推 packet token；未采集、部分覆盖与真实零分开。比例是结构开销，不能单独
+当作净效率损失、可避免成本或因果贡献。普通阅读不调用模型。
+
+### Recorded Turn packet estimate
+
+The existing native `codex-cli` Turn host can record its actual injected packet
+when the invocation already has `CODEX_ROLLOUT_TRACE_ROOT` enabled. This is a
+local, opt-in Codex diagnostic feature; LoopX does not enable it globally or
+change a running experiment. The Agent prepares a private, invocation-scoped
+trace directory through the existing host environment. Native tracing contains
+sensitive prompts and outputs; keep it and `loopx-input-sources/*.json` private.
+The host records the exact injection only beside its newly observed session
+bundle. It never edits the original client rollout or changes task results,
+session authority, permissions, account selection or model execution.
+
+An Agent can prepare the optional computation provider with
+`uv sync --extra input-token-estimates` in a source checkout, or install the
+`input-token-estimates` package extra in its existing qualified runtime. This
+uses [tiktoken 0.12.0](https://pypi.org/project/tiktoken/0.12.0/) and the explicitly named `o200k_base` encoding. Its first
+encoding load can download the public encoding asset; packet text stays local.
+It does **not** establish the tokenizer of an unknown provider model.
+
+Register a frozen host source with the existing usage capture using
+`--loopx-input-json <relative-source-json>` alongside `--usage-jsonl` and
+`--usage-session-id`. The Agent prepares those artifacts within the existing
+source root; the owner need not discover ids or copy a command. Registration
+reads the native trace and tokenizes locally, without running a model. Ordinary
+Research reads use the saved projection and make no tokenizer or model call.
+
+The same TS request owner binds the recorded source digest to one unambiguous
+native input item, then follows that item and content across full requests.
+Each native response, Turn, model and all six counters must match the existing
+usage capture. Repeated consumption counts per request; duplicate responses
+do not increase totals, and copies under another item id are not classified as
+extra LoopX input. Changed source files become historical. Missing dependencies,
+invalid references and conflicting identities withhold only this observation,
+preserving valid native totals. Compressed websocket requests need verified
+replay; compaction and uncovered requests cannot supply invented attribution.
+
+Research labels this **LoopX Turn packet · estimate** with method
+`tiktoken_o200k_base_input_estimate_v1`. Its numerator covers only the explicitly
+recorded Turn packet text; it excludes other LoopX tool output, model framing
+and compacted summaries. It is not the total LoopX footprint. The denominator
+is native input, including cache, for the same captured requests. The native
+model, encoding and tokenizer version remain available in details. Unknown
+cache allocation stays unknown. Partial request coverage withholds the whole
+capture ratio; estimates provide no mathematical or confidence bounds. A token
+estimate larger than its native input is withheld, never clamped. Existing
+provider-measured receipts take precedence; the two methods are not mixed.
+
+This producer supplies a recorded-component estimate, not a scientific
+calibration of model tokenization, a retrospective reconstruction, or proof of
+net efficiency loss. Existing uninstrumented experiments remain unknown; do not
+launch or retune a frozen solver just to populate this field.
+
+中文：Agent 可在既有获准调用的私有原生 trace 中记录真实注入的 Turn packet，
+并在登记同一会话用量时以 o200k_base 做明确标注的文本估计。只统计已记录的
+Turn packet，不冒充全部 LoopX 输入或 provider 实测；原生模型分词器、缓存归属、
+压缩回放和缺失范围保持各自边界。原始记录不改，读取不调用模型，不重启既有实验。

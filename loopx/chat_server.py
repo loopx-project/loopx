@@ -64,6 +64,7 @@ from .capabilities.manager_context.roundtrip import (
     project_chat_session_snapshot,
 )
 from .control_plane.goals.active_state_metadata import active_state_section_text
+from .control_plane.effect_runtime import effect_runtime_request_scope
 from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 from .control_plane.status.ssh_host_catalog import (
     SSH_HOST_CATALOG_PATH,
@@ -1649,6 +1650,7 @@ class ChatRequestHandler(
             return self._serve_asset(path)
         self._send_error("unknown path", status=404)
 
+    @effect_runtime_request_scope()
     def do_POST(self) -> None:
         if not self._require_loopback_origin():
             return
@@ -1676,6 +1678,7 @@ class ChatRequestHandler(
             PRIVATE_CONVERSATIONS_PATH + "/owner-notifications": self._private_conversation_owner_notifications,
             PRIVATE_CONVERSATIONS_PATH + "/managed-steward": self._private_conversation_managed_steward,
             PRIVATE_CONVERSATIONS_PATH + "/managed-steward/monitor": self._private_conversation_steward_monitor,
+            PRIVATE_CONVERSATIONS_PATH + "/managed-steward/report": self._private_conversation_steward_report,
             **self._configuration_post_routes(),
             **self._ssh_source_post_routes(),
         }

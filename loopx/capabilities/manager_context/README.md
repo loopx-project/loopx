@@ -1,5 +1,12 @@
 # Manager context delivery
 
+For a fixed-window periodic-report input, the original scoped read tool also
+supports `view=report_source`. It batches the existing local evidence readers
+and exposes a frozen, revision-bound paged snapshot. Original audience checks
+apply to every page; the snapshot grants no execution or publication authority.
+See [portfolio report sources](../../../docs/product/periodic-reports.md#authorized-portfolio-source)
+for coverage limits and the separate generation/delivery acceptance.
+
 Built-in capability for original intent delivery and receiver-owned replanning.
 The `manager-inbox` CLI uses the shared selected-command dispatcher and one
 executable-revision scope per command. It retains the existing handler and

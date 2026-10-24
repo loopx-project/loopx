@@ -30,8 +30,23 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
 `, path], {cwd: repoRoot});
   const capture = JSON.parse(await readFile(path, "utf8"));
   const history = JSON.stringify({ok: true, goal_id: capture.goal_id, items: capture.events, total: capture.events.length, next_cursor: null});
-  const evidence = "No native improvement was observed.\n";
+  const evidence = "No native improvement was observed.\nThe initialization record does not identify the original bottleneck.\nThe radius comparison lacks a repair mechanism and complete controls.\nThe restart result does not identify the later adopted revision.\nTrial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.\n";
+  const names = ["variant-alpha", "variant-beta", "variant-gamma", "variant-delta", "variant-epsilon", "independent-control", "paired-alpha", "paired-beta"];
+  const question = (id, language) => id === "independent-control"
+    ? (language === "zh" ? "独立对照是否支持 V18 的收益？尚无依据。" : "Does the independent control support a benefit for V18? It is not established.")
+    : id.startsWith("paired-") ? (language === "zh" ? `${id} 是否在相同预算内排除相反解释？不能把未测结果当作通过，完整保留比较条件与未知。`
+      : `Did ${id} rule out the competing explanation under the same budget? Untested results are not passes; preserve the comparison conditions and unknowns.`)
+    : (language === "zh" ? `${id} 的实验证据是否检验原始目标，并被后续选择实际采用？保留负面结果、控制差异与未知。`
+      : `Does ${id} test the original objective and inform the subsequent selection? Preserve negative results, control differences and unknowns.`);
   const source = (id, artifact, text) => ({id, artifact, first_line: 1, text, artifact_sha256: createHash("sha256").update(text).digest("hex")});
+  const reasons = {
+    zh: ["缺少原目标瓶颈的记录。虽有候选初始化与完整求解结果，但没有对应关系，不能据此认定目标关联。",
+      "来源未说明修复机制，也未交代与参考方案的控制差异；判断保留未知，不能用候选名称代替机制证据。",
+      "后续选择没有标明采用版本。本地测试和原生结果之间缺少回读，不能从一次诊断推断持续收益或因果效果。"],
+    en: ["The initialization and full-solver result are recorded, but the original bottleneck is not identified. The intervention’s relationship to that bottleneck remains unknown.",
+      "The source does not describe the repair mechanism or complete controls against the reference. A candidate name cannot replace mechanism evidence; the judgment remains unknown.",
+      "The later selection does not identify the adopted revision. Without readback connecting local tests and native outcomes, this diagnosis cannot establish sustained or causal benefit."],
+  };
   const translate = row => row.text.replaceAll("Does ", "").replaceAll(" improve native utility under the fixed budget?", " 是否在固定预算内改善原生收益？")
     .replaceAll("Not established; no native validation yet.", "尚未确定；尚无原生验证。")
     .replaceAll("Negative evidence, not acceptance", "负向证据，尚未通过验收")
@@ -39,22 +54,27 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
     .replaceAll("The measured change was ", "实测变化为 ").replaceAll(" and does not establish causal benefit.", "，尚不能证明因果收益。")
     .replace(/(⟪LX\d+⟫); (⟪LX\d+⟫) evidence remains preliminary\./g, (original, trial, scope) =>
       row.literals?.includes("Trial4failed2checks") && row.literals?.includes("local-only")
-        ? `本次尝试未通过检查（${trial}）；仅限本地（${scope}）的证据仍属初步。` : original)
+        ? `第4次尝试有2项检查未通过（${trial}）；仅限本地（${scope}）的证据仍属初步。` : original)
     .replaceAll("Keep ", "保留 ").replaceAll("Check the original evidence", "核对原始证据").replaceAll("Never claim native success", "不得宣称原生成功");
   capture.analyses = ["partial", "other-source", "complete"].map(variant => {
     const input = {schema_version: "trajectory_assessment_input_v1", scope: {goal_id: capture.goal_id, case_id: "synthetic-case", run_id: "synthetic-run", revision: variant, window: "fixed twenty-hour record window"},
-      objective: "Improve native utility", selection: {rule: "Synthetic episode, not a whole-run rate", population_episodes: 1, exhaustive: true},
+      objective: "Improve native utility", selection: {rule: "Synthetic episodes, not a whole-run rate", population_episodes: names.length, exhaustive: true},
       sources: [source("evidence", "evidence.txt", evidence), source("history", "history.json", history)],
-      episodes: [{id: "episode", question: "Does V18 help?", source_ids: ["evidence"], eligible_metrics: [...TRAJECTORY_METRICS]}],
+      episodes: names.map(id => ({id, question: question(id, "en"), source_ids: ["evidence"], eligible_metrics: [...TRAJECTORY_METRICS]})),
       display_snapshot: {schema_version: "research_display_snapshot_v1", source_id: "history", source_namespace: variant === "other-source" ? "other-source" : "local",
-        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literals_v1"} : {})}};
+        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literal_values_v1",
+          contexts: capture.events.filter(event => event.event_kind === "finding").map(event => ({event_id: event.event_id, field: "observation",
+            citations: [{source_id: "evidence", first_line: 5, last_line: 5}]}))} : {})}};
     const outputs = Object.fromEntries(["zh", "en"].map(language => {
       const p = prepareTrajectoryAssessment({input, config: {model: "gpt-6.1-sol", effort: "max", service_tier: "fast", output_language: language}});
       let rows = JSON.parse(p.prompt.split("\n\ndisplay_fields:\n")[1]).map(row => ({field_id: row.field_id, text: language === "zh" ? translate(row) : row.text}));
       if (variant === "partial") rows = [{...rows[0], text: "999"}, ...rows.slice(2)];
-      return [language, {assessments: TRAJECTORY_METRICS.map(metric => ({episode_id: "episode", metric, verdict: "unknown", reason: language === "zh" ? "合成证据，实际收益未核验。" : "Synthetic evidence; native benefit is unverified.", citations: []})),
+      return [language, {assessments: TRAJECTORY_METRICS.flatMap(metric => names.map((episode_id, index) => ({episode_id, metric,
+        verdict: index < 3 ? "unknown" : index === 3 ? "no" : "yes",
+        reason: reasons[language][index] ?? (language === "zh" ? "合成证据；负面结果并未证明因果收益，原生效果仍未核验。" : "Synthetic evidence; a negative result does not establish causal benefit. Native effectiveness remains unverified."),
+        citations: index < 3 ? [] : [{source_id: "evidence", first_line: 1, last_line: 1}]}))),
         limitations: [language === "zh" ? "合成翻译仅用于交互验证。" : "Synthetic translation for interaction validation only."],
-        episode_questions: [{episode_id: "episode", question: language === "zh" ? "V18 是否有帮助？" : "Does V18 help?"}], display_translations: rows}];
+        episode_questions: names.map(episode_id => ({episode_id, question: question(episode_id, language)})), display_translations: rows}];
     }));
     return {title: {partial: "部分译文", "other-source": "其他来源", complete: "完整固定快照"}[variant], input, artifacts: {"evidence.txt": evidence, "history.json": history}, outputs};
   });
@@ -73,6 +93,16 @@ export const researchDisplayLanguageScenario = {
       for (const width of [1440, 390]) {
         const page = await browser.newPage({viewport: {width, height: 1000}, reducedMotion: "reduce"});
         const context = page.context();
+        // Model an appended analysis version becoming visible in the same
+        // real owner's catalog after this page has already read its snapshot.
+        let newVersionVisible = false;
+        await page.route(url => url.pathname === "/api/chat/research-analysis", async route => {
+          if (route.request().method() !== "GET") return route.continue();
+          const response = await route.fetch();
+          const value = await response.json();
+          if (!newVersionVisible) value.catalog.packs = value.catalog.packs.filter(pack => pack.title !== "部分译文");
+          await route.fulfill({response, json: value});
+        });
         const url = `${owner.base}/chat/?goalId=${owner.goal_id}&view=research&statusUrl=%2Fstatus.json`;
         await page.goto(url, {waitUntil: "domcontentloaded"});
         await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
@@ -81,8 +111,45 @@ export const researchDisplayLanguageScenario = {
         const original = history.getByRole("button", {name: "查看原文", exact: true});
         await original.waitFor(); await page.waitForFunction(() => !document.querySelector(".research-display-language > button")?.disabled);
         assert.match(await history.locator(".research-route-caption").first().innerText(), /是否在固定预算/);
+        const scope = history.locator(".research-progress > header select").first();
+        assert.equal(await scope.locator("option").filter({hasText: "部分译文"}).count(), 0);
+        const beforeRefresh = await fetch(`${owner.base}/fixture/readback`).then(response => response.json());
+        const selectedScope = await scope.inputValue(), selectedUrl = page.url();
+        newVersionVisible = true;
+        await history.getByRole("button", {name: "刷新记录", exact: true}).click();
+        await scope.locator("option").filter({hasText: "部分译文"}).waitFor({state: "attached", timeout: 5000});
+        const afterRefresh = await fetch(`${owner.base}/fixture/readback`).then(response => response.json());
+        assert.ok(afterRefresh.history_reads > beforeRefresh.history_reads, "One refresh reloads history as well as the analysis catalog");
+        assert.equal(afterRefresh.mutation_attempts, beforeRefresh.mutation_attempts, "Refreshing never executes analysis");
+        assert.equal(await scope.inputValue(), selectedScope, "Refreshing preserves the selected analysis version");
+        assert.equal(page.url(), selectedUrl);
+        assert.equal(await history.getByRole("region", {name: "轨迹深度分析", exact: true}).count(), 0, "Refreshing does not open analysis");
         await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
         await page.screenshot({path: resolve(outputDir, `research-display-language-first-${width}.png`), animations: "disabled"});
+        const metric = history.locator('[data-metric="goal_alignment"]');
+        await metric.click();
+        const judgments = history.locator('.research-effect-evidence');
+        assert.equal(await judgments.locator('.research-assessment-shared-question').count(), 2, "Both a long repeated group and a pair share exact context once");
+        assert.deepEqual(await judgments.locator('.research-assessment-name').allTextContents(),
+          [...capture.analyses.at(-1).input.episodes.slice(0, 5).map(episode => episode.id), '独立对照是否支持 V18 的收益？尚无依据。', 'paired-alpha', 'paired-beta']);
+        assert.deepEqual(await judgments.locator('.research-assessment-verdict').allTextContents(),
+          ['证据不足', '证据不足', '证据不足', '未建立', '有依据', '有依据', '有依据', '有依据']);
+        const firstJudgment = judgments.locator('.research-assessment').first();
+        await firstJudgment.locator(':scope > summary').focus(); await page.keyboard.press('Enter');
+        await page.waitForFunction(element => element.open, await firstJudgment.elementHandle());
+        const peerJudgment = judgments.locator('.research-assessment').nth(1);
+        await peerJudgment.locator(':scope > summary').click();
+        await page.waitForFunction(element => element.open, await peerJudgment.elementHandle());
+        assert.equal(await judgments.locator('.research-assessment[open]').count(), 2, "Independent row expansion is preserved");
+        assert.equal(await judgments.locator('.research-assessment-question:visible').count(), 0, "Opening several rationales never repeats the shared question");
+        assert.equal(await firstJudgment.locator('.research-assessment-reason').innerText(), capture.analyses.at(-1).outputs.zh.assessments[0].reason);
+        assert.notEqual(await peerJudgment.locator('.research-assessment-reason').innerText(), await firstJudgment.locator('.research-assessment-reason').innerText(), "Distinct source rationales stay distinct");
+        assert(await firstJudgment.locator('.research-assessment-body p').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16));
+        await firstJudgment.locator('.research-assessment-body details > summary').click();
+        assert.match(await firstJudgment.locator('.research-assessment-question').innerText(), /保留负面结果、控制差异与未知/);
+        assert.match(await firstJudgment.innerText(), /Does variant-alpha test the original objective/);
+        await judgments.press('Escape');
+        assert.equal(await metric.evaluate(element => element === document.activeElement), true);
         await original.click();
         await page.screenshot({path: resolve(outputDir, `research-display-language-original-${width}.png`), animations: "disabled"});
         await history.getByRole("button", {name: "查看译文", exact: true}).click();
@@ -91,9 +158,23 @@ export const researchDisplayLanguageScenario = {
         await entry.focus(); await page.keyboard.press("Enter"); await reader.waitFor();
         assert.match(await reader.locator("h3").first().innerText(), /V18 是否在固定预算/);
         assert.match(await reader.innerText(), /实测变化为 -0.25ms/);
-        assert.match(await reader.innerText(), /本次尝试未通过检查（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步/);
+        assert.match(await reader.innerText(), /第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步/);
         assert.match(await reader.innerText(), /已反驳/);
         assert(!await reader.locator(".research-finding-sections").first().innerText().then(text => text.includes("Input revision:")));
+        const provenance = reader.locator('.research-node-provenance');
+        await provenance.locator(':scope > summary').click();
+        await provenance.getByRole('heading', {name: '译文依据', exact: true}).waitFor();
+        assert.equal(await provenance.getByRole('heading', {name: '显式关联', exact: true}).count(), 0, 'An empty relationship section adds no heading');
+        const contextCitation = provenance.getByRole('button', {name: 'evidence · 行 5–5', exact: true});
+        await contextCitation.focus(); await page.keyboard.press('Enter');
+        const sourceReader = history.getByRole('region', {name: '引用原文', exact: true});
+        await sourceReader.getByText('Trial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.', {exact: true}).waitFor();
+        await sourceReader.press('Escape');
+        await page.waitForFunction(element => element === document.activeElement, await contextCitation.elementHandle());
+        assert.equal(await contextCitation.evaluate(element => element === document.activeElement), true);
+        assert.equal(await history.getByRole('region', {name: '轨迹深度分析', exact: true}).count(), 0, 'A context citation preserves closed analysis');
+        await page.screenshot({path: resolve(outputDir, `research-display-context-reader-${width}.png`), animations: 'disabled'});
+        await provenance.locator(':scope > summary').click();
         await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
         await page.screenshot({path: resolve(outputDir, `research-display-language-reader-${width}.png`), animations: "disabled"});
         await original.click();
@@ -122,7 +203,48 @@ export const researchDisplayLanguageScenario = {
         await allRecords.getByRole("button", {name: "清除筛选", exact: true}).click();
         assert.equal(await allRecords.locator(".research-history-records > li").count(), capture.events.length);
         await allRecords.locator(":scope > summary").click();
-        const scope = history.locator(".research-progress > header select").first();
+        await history.getByRole("button", {name: "查看分析", exact: true}).click();
+        const analysis = history.getByRole("region", {name: "轨迹深度分析", exact: true});
+        const episodes = analysis.locator(".analysis-episode");
+        await episodes.last().waitFor();
+        assert.equal(await episodes.count(), 8, "The real analysis API retains all declared episodes, including the independent comparison");
+        await analysis.evaluate(element => element.scrollIntoView({block: "start"}));
+        await page.mouse.move(0, 0);
+        await page.locator('.context-help-popover:popover-open').waitFor({state: 'hidden'});
+        await page.screenshot({path: resolve(outputDir, `research-analysis-comparison-${width}.png`), animations: "disabled"});
+        const firstEpisode = episodes.first(), firstSummary = firstEpisode.locator(":scope > summary");
+        await firstSummary.focus(); await firstSummary.press("Enter");
+        await firstEpisode.getByText(/缺少原目标瓶颈的记录/).first().waitFor();
+        assert.equal(await firstEpisode.getByText(capture.analyses[2].outputs.zh.assessments[0].reason, {exact: true}).count(), 1,
+          "The same exact rationale and evidence are not repeated for each judgment");
+        assert(await firstEpisode.locator('.analysis-episode-context p').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16),
+          "Expanded rationale is reading copy, not a metadata caption");
+        await page.screenshot({path: resolve(outputDir, `research-analysis-comparison-expanded-${width}.png`), animations: "disabled"});
+        await firstSummary.press("Enter");
+        assert.deepEqual(await episodes.locator(".analysis-episode-name").allTextContents(), [
+          "variant-alpha", "variant-beta", "variant-gamma", "variant-delta", "variant-epsilon",
+          "独立对照是否支持 V18 的收益？尚无依据。", "paired-alpha", "paired-beta",
+        ], "Only exact declared-identity substitutions share a question; the independent question stays complete");
+        assert.equal(await analysis.locator(".analysis-shared-question").count(), 2, "Both a long sequence and a pair share their question once");
+        assert.match(await firstSummary.getAttribute("aria-label"), /variant-alpha 的实验证据是否检验原始目标/);
+        assert.match(await firstSummary.innerText(), /证据不足 6 项/, "Unknown judgments stay visible even before reading evidence");
+        assert.match(await episodes.nth(4).locator(":scope > summary").innerText(), /发现无益重复/, "A yes for repetition is an exception, not a positive judgment");
+        await firstSummary.press("Enter");
+        const fullQuestion = firstEpisode.getByText("完整问题", {exact: true});
+        await fullQuestion.click();
+        await firstEpisode.getByText(capture.analyses[2].outputs.zh.episode_questions[0].question, {exact: true}).waitFor();
+        assert.equal(await firstEpisode.evaluate(element => element.open), true, "Reading the full question does not toggle its parent episode");
+        await fullQuestion.click();
+        await episodes.nth(4).locator(":scope > summary").click();
+        assert.equal(await analysis.locator(".analysis-episode[open]").count(), 1, "A second episode replaces the previous full document");
+        const episodeCitation = episodes.nth(4).getByRole("button", {name: "evidence · 行 1–1", exact: true}).first();
+        await episodeCitation.click();
+        await history.getByRole("region", {name: "引用原文", exact: true}).press("Escape");
+        await page.waitForFunction(element => element === document.activeElement, await episodeCitation.elementHandle());
+        assert.equal(await episodeCitation.evaluate(element => element === document.activeElement), true);
+        assert.equal(await analysis.locator(".analysis-episode[open]").count(), 1, "Citation return retains the selected episode");
+        assert(await analysis.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+        await history.getByRole("button", {name: "关闭分析", exact: true}).click();
         await scope.selectOption({label: "部分译文"});
         await history.locator(".research-display-language > span").filter({hasText: /译文 \d+ \/ \d+/}).waitFor();
         assert.match(await history.locator(".research-route-caption").first().innerText(), /Does V18/, "Missing/invalid title remains original");
@@ -145,6 +267,19 @@ export const researchDisplayLanguageScenario = {
         await page.reload({waitUntil: "domcontentloaded"});
         await history.getByRole("button", {name: "Show originals", exact: true}).waitFor();
         assert.match(await history.locator(".research-route-caption").first().innerText(), /Does V18/);
+        await history.locator('.research-route-caption button').first().click(); await reader.waitFor();
+        const englishProvenance = reader.locator('.research-node-provenance');
+        await englishProvenance.locator(':scope > summary').click();
+        await englishProvenance.getByRole('heading', {name: 'Translation context', exact: true}).waitFor();
+        const englishCitation = englishProvenance.getByRole('button', {name: 'evidence · lines 5–5', exact: true});
+        await englishCitation.click();
+        const englishSource = history.getByRole('region', {name: 'Cited original', exact: true});
+        await englishSource.getByText('Trial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.', {exact: true}).waitFor();
+        await englishSource.press('Escape');
+        await page.waitForFunction(element => element === document.activeElement, await englishCitation.elementHandle());
+        assert.equal(await englishCitation.evaluate(element => element === document.activeElement), true);
+        await page.screenshot({path: resolve(outputDir, `research-display-context-reader-en-${width}.png`), animations: 'disabled'});
+        await reader.focus(); await reader.press('Escape');
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "No page-level narrow overflow");
         await page.addInitScript(() => Object.defineProperty(globalThis.crypto, "subtle", {value: undefined}));
         await page.reload({waitUntil: "domcontentloaded"});

@@ -112,7 +112,7 @@ def main():
                     metrics["history_reads"] += 1
                 if path in {"/healthz", "/status.json", "/api/chat/explore-results",
                     "/api/chat/capabilities", "/api/chat/endpoints", "/api/chat/sessions", "/api/chat/goal-configuration",
-                    "/api/chat/research-analysis",
+                    "/api/chat/research-analysis", "/api/chat/research-analysis/citation",
                     "/api/actions", "/api/chat/goals/contexts", "/api/chat/goal-results",
                     "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics", "/api/chat/todo/detail",
                     "/api/chat/delivery-review", "/api/chat/goal-acceptance", "/api/chat/projects",

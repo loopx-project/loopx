@@ -19,7 +19,10 @@ export interface TrajectoryInput {
   /** Trusted curator's complete Explore history capture, already in sources.
    * Omission keeps the existing assessment contract and identity unchanged. */
   display_snapshot?: {schema_version: 'research_display_snapshot_v1'; source_id: string; source_namespace: string;
-    translation_encoding?: 'source_text_aliases_v1' | 'source_text_aliases_with_literals_v1'};
+    translation_encoding?: 'source_text_aliases_v1' | 'source_text_aliases_with_literals_v1' | 'source_text_aliases_with_literal_values_v1' | 'source_text_aliases_with_literal_values_v2';
+    /** Curator-selected evidence that explains a particular captured field.
+     * References only existing verified sources; never free-form instructions. */
+    contexts?: Array<{event_id: string; field: string; citations: AssessmentCitation[]}>};
 }
 export interface AssessmentCitation {source_id: string; first_line: number; last_line: number}
 export interface EpisodeAssessment {
@@ -41,7 +44,10 @@ export interface TrajectoryAssessment {
 
 /** Presentation sidecar only. Original events, statuses, references and metrics
  * remain authoritative; a translation is never a new finding or acceptance. */
-export interface TrajectoryDisplayField {event_id: string; field: string; source_text: string}
+export interface TrajectoryDisplayField {
+  event_id: string; field: string; source_text: string;
+  context_citations?: AssessmentCitation[];
+}
 export interface TrajectoryDisplay {
   schema_version: 'research_display_v1'; snapshot_key: string; source_id: string; source_namespace: string;
   language: TrajectoryOutputLanguage;
@@ -74,7 +80,22 @@ export interface TrajectorySolverUsage {
   limitations: string[];
   /** Supplementary reconciliation, never a replacement for the session-counter basis. */
   request_coverage?: TrajectoryRequestCoverage;
+  /** Optional measured attribution or a labeled recorded-packet estimate; not a counter authority. */
+  loopx_input?: TrajectoryLoopXInput;
 }
+
+export type TrajectoryLoopXInput = {
+  method: 'provider_input_token_attribution_v1' | 'tiktoken_o200k_base_input_estimate_v1';
+  estimate_basis?: {tokenizer: string; version: string; encoding: 'o200k_base';
+    scope: 'recorded_turn_packets'; models: string[]};
+} & ({status: 'complete' | 'partial'; attributed_requests: number; total_requests: number;
+  attributed_input_tokens: number; total_input_tokens: number; loopx_input_tokens: number;
+  loopx_cached_input_tokens: number | null;
+  /** Whole-capture shares remain unknown until every request has attribution. */
+  input_fraction: number | null; uncached_input_fraction: number | null;
+  /** Possible allocation of missing requests, not a statistical confidence interval. */
+  input_fraction_bounds: [number, number] | null;
+} | {status: 'unavailable'; reason: string});
 
 export interface TrajectoryRequestTokens {
   input_tokens: number; cached_input_tokens: number; cache_write_input_tokens: number;

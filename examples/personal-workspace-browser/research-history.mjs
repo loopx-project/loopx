@@ -81,7 +81,8 @@ function comparisonReadback() {
   const names = ["variant-alpha", "variant-beta", "variant-gamma", "edge-aware"];
   p.episode_count = 4;
   p.episodes = names.map(id => ({id,
-    question: `${id} 的实验是否检验原始目标，并被后续候选选择实际采用？负结果、控制差异与未知分别保留。`,
+    question: id === "edge-aware" ? `${id} 是否只检验局部代理？不能据此推断原生收益；不同问题必须保留，不能并入其他片段。`
+      : `${id} 的实验是否检验原始目标，并被后续候选选择实际采用？负结果、控制差异与未知分别保留。`,
     source_ids: ["source"], eligible_metrics: p.result.metrics.map(row => row.metric)}));
   p.result.metrics = p.result.metrics.map(row => ({...row, yes: 1, no: 0, unknown: 3, eligible: 4, assessed_fraction: .25, missing_data_bounds: [.25, 1]}));
   p.result.assessments = p.result.metrics.flatMap(({metric}) => names.map((episode_id, index) => ({
@@ -805,7 +806,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await analysis.locator('.analysis-episode > summary').count(), 2, 'The reader starts with one comparable row per episode');
       const firstEpisode = analysis.locator('.analysis-episode').first();
       assert.equal(await analysis.locator('.analysis-episode[open]').count(), 0);
-      assert.match(await firstEpisode.locator(':scope > summary').innerText(), /Does a useful diagnosis prove original-objective utility\?.*收益检验.*尚未检验收益.*证据采用.*有依据/s);
+      assert.match(await firstEpisode.locator(':scope > summary').getAttribute('aria-label'), /Does a useful diagnosis prove original-objective utility\?.*收益检验.*尚未检验收益.*证据采用.*有依据/s);
       assert.equal(await analysis.locator('.analysis-citations button:visible').count(), 0);
       await firstEpisode.locator(':scope > summary').focus();
       await firstEpisode.locator(':scope > summary').press('Enter');
@@ -926,7 +927,8 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.match(await progress.innerText(), /原生测量.*未采集/);
       await history.getByRole("button", {name: "查看分析", exact: true}).click();
       await analysis.locator("header p").first().filter({hasText: /^Synthetic analysis C$/}).waitFor();
-      await analysis.press('Escape');
+      await analysis.getByRole('button', {name: '关闭分析', exact: true}).click();
+      await analysis.waitFor({state: 'hidden'});
       await progress.getByRole('combobox').selectOption('d'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
       await progress.locator('.research-progress-basis > summary').click();
@@ -980,8 +982,11 @@ print(json.dumps([
       const rows = metricDetail.locator('.research-assessment');
       assert.equal(await rows.count(), 4);
       assert.deepEqual(await rows.locator('.research-assessment-name').allTextContents(),
-        ['variant-alpha', 'variant-beta', 'variant-gamma', 'edge-aware'].map(id => `${id} 的实验是否检验原始目标，并被后续候选选择实际采用？负结果、控制差异与未知分别保留。`),
-        'Without a localized interpretation, the original question remains readable instead of a protocol id');
+        ['variant-alpha', 'variant-beta', 'variant-gamma', 'edge-aware 是否只检验局部代理？不能据此推断原生收益；不同问题必须保留，不能并入其他片段。'],
+        'Only exact shared questions use identity rows; a different comparison remains complete');
+      assert.equal(await metricDetail.locator('.research-assessment-shared-question').count(), 1);
+      assert.match(await metricDetail.locator('.research-assessment-shared-question').innerText(), /负结果、控制差异与未知分别保留/);
+      assert.match(await rows.first().locator(':scope > summary').getAttribute('aria-label'), /variant-alpha 的实验是否检验原始目标/);
       assert.deepEqual(await rows.locator('.research-assessment-verdict').allTextContents(), ['证据不足', '证据不足', '证据不足', '有依据']);
       assert.equal(await rows.locator('.research-assessment-body:visible').count(), 0);
       assert.equal(await metricDetail.locator('.research-effect-citations button:visible').count(), 0);
@@ -995,8 +1000,13 @@ print(json.dumps([
       await page.screenshot({path: resolve(outputDir, 'research-assessment-comparison.png'), animations: 'disabled'});
       const firstRow = rows.first().locator(':scope > summary');
       await firstRow.focus(); await firstRow.press('Enter');
-      assert.match(await rows.first().innerText(), /variant-alpha 的实验是否检验原始目标/);
+      assert.equal(await rows.first().locator('.research-assessment-question:visible').count(), 0,
+        'Expanding a rationale does not repeat the shared question');
       assert.match(await rows.first().innerText(), /does not establish the intervention/);
+      const fullQuestion = rows.first().getByText('完整问题', {exact: true});
+      await fullQuestion.click();
+      assert.match(await rows.first().locator('.research-assessment-question').innerText(), /variant-alpha 的实验是否检验原始目标/);
+      await fullQuestion.click();
       const comparisonCitation = rows.first().getByRole('button', {name: /source.*行 1–2/});
       await comparisonCitation.click();
       await citedOriginal.waitFor(); await citedOriginal.press('Escape');
@@ -1008,8 +1018,9 @@ print(json.dumps([
       await comparison.scrollIntoViewIfNeeded();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       const collapsedQuestion = rows.first().locator('.research-assessment-name');
-      assert(await collapsedQuestion.evaluate(element => element.clientHeight <= 2 * parseFloat(getComputedStyle(element).lineHeight) + 1
-        && element.scrollHeight > element.clientHeight), 'Long questions occupy at most two lines in the narrow comparison index');
+      assert.equal(await collapsedQuestion.innerText(), 'variant-alpha', 'The shared paragraph is not repeated in each narrow row');
+      assert(await metricDetail.locator('.research-assessment-shared-question').evaluate(element => element.clientHeight >= element.scrollHeight),
+        'The shared question wraps fully, including negation and uncertainty');
       const narrowPositions = await metricPositions();
       await effects.locator('[data-metric="information_gain"]').click();
       assert.deepEqual(await metricPositions(), narrowPositions, 'Narrow metric navigation preserves the comparison band');
@@ -1031,6 +1042,7 @@ print(json.dumps([
       await progress.locator('[data-metric="goal_alignment"]').click();
       assert.equal(await metricDetail.locator('.research-assessment-name').first().innerText(), 'variant-alpha 是否检验原始目标？',
         'The metric reader uses the same localized question as deep analysis');
+      assert.equal(await metricDetail.locator('.research-assessment-shared-question').count(), 0, 'Small questions retain their full wording');
       await metricDetail.press('Escape');
       await history.getByRole('button', {name: '查看分析', exact: true}).click();
       const chineseAnalysis = history.getByRole('region', {name: '轨迹深度分析', exact: true});
@@ -1050,10 +1062,10 @@ print(json.dumps([
       const episodeCitation = episodeRows.first().getByRole('button', {name: /source.*行 1–2/}).first();
       await episodeCitation.click(); await citedOriginal.waitFor(); await citedOriginal.press('Escape');
       assert.equal(await episodeCitation.evaluate(element => element === document.activeElement), true);
-      const otherJudgments = episodeRows.first().locator('.analysis-judgments details');
-      assert.equal(await otherJudgments.count(), 4);
-      await otherJudgments.first().locator('summary').click();
-      await otherJudgments.first().getByText('来源只记录了实验结果，缺少干预与目标瓶颈的联系。', {exact: true}).waitFor();
+      assert.equal(await episodeRows.first().locator('[data-analysis-judgment]').count(), 6, 'Every metric and its verdict remain available');
+      await episodeRows.first().getByText('来源只记录了实验结果，缺少干预与目标瓶颈的联系。', {exact: true}).waitFor();
+      assert.equal(await episodeRows.first().getByText('来源只记录了实验结果，缺少干预与目标瓶颈的联系。', {exact: true}).count(), 1,
+        'Identical rationales with identical evidence are read once across all six judgments');
       const originalQuestion = chineseAnalysis.locator('.analysis-episode').first().getByText('原始研究问题', {exact: true});
       await originalQuestion.click();
       assert.match(await chineseAnalysis.locator('.analysis-episode').first().innerText(), /variant-alpha 的实验是否检验原始目标/);
@@ -1073,10 +1085,12 @@ print(json.dumps([
       await page.evaluate(key => localStorage.setItem(key, 'en'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});
       const englishAnalysis = page.getByRole('region', {name: 'Trajectory analysis', exact: true});
-      await englishAnalysis.locator('.analysis-episode-name').first().filter({hasText: 'Did variant-alpha test the original objective?'}).waitFor();
+      await englishAnalysis.locator('.analysis-episode-name').first().filter({hasText: 'variant-alpha'}).waitFor();
       assert.equal(await englishAnalysis.locator('.analysis-episode[open]').count(), 0, 'Language changes reset optional episode details');
       await englishAnalysis.locator('.analysis-episode > summary').first().click();
-      assert.equal(await englishAnalysis.locator('.analysis-episode-name').first().innerText(), 'Did variant-alpha test the original objective?');
+      assert.match(await englishAnalysis.locator('.analysis-episode > summary').first().getAttribute('aria-label'), /Did variant-alpha test the original objective\?/);
+      await englishAnalysis.locator('.analysis-episode').first().getByText('Full question', {exact: true}).click();
+      await englishAnalysis.locator('.analysis-episode').first().getByText('Did variant-alpha test the original objective?', {exact: true}).waitFor();
       assert.doesNotMatch(await englishAnalysis.innerText(), /来源只记录了实验结果/);
       await page.evaluate(key => localStorage.setItem(key, 'zh-CN'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});

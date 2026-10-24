@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...project_prompt import render_turn_bootstrap
 from .rules import (
     CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE,
     DEFAULT_MATERIAL_QUEUE_RULE,
@@ -53,10 +54,15 @@ def bind_exact_turn_settlement_task_body(
 ) -> str:
     if turn_instance_id is None:
         return task_body
-    bound = task_body.replace(
+    bound = task_body
+    for placeholder in (
         "LOOPX_TURN=<current_time_iso>",
-        f"LOOPX_TURN={turn_instance_id}",
-    )
+        '$LOOPX_TURN = "<current_time_iso>"',
+    ):
+        bound = bound.replace(
+            placeholder,
+            render_turn_bootstrap(value=turn_instance_id),
+        )
     plan_path = ("writeback.settlement_plan.ordered_steps" if captured_envelope
                  else "interaction_contract.cli_channel.settlement_plan.ordered_steps")
     return (
@@ -103,7 +109,7 @@ Before spending delivery compute, make the CLI reachable.
 
 ```bash
 {cli_preflight}
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_block}{quota_guard_command}
 ```
 
@@ -273,7 +279,7 @@ Brief detail:
 
 ```bash
 {cli_preflight}
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_block}{quota_guard_command}
 ```
 
@@ -341,7 +347,7 @@ Detail: `{expanded_prompt_command}`.
 
 ```bash
 {cli_preflight}
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_block}{quota_guard_command}
 ```
 
@@ -638,7 +644,7 @@ guard; each call saves its own immutable observation.
 After a workspace or state change, re-enter the guard before continuing work.
 
 ```sh
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_instruction}{quota_guard_command}
 ```
 {SCOPE_BOUNDED_WORK_RULE}
@@ -665,7 +671,7 @@ P0 blocked -> admitted P1/P2; quiet polls do not spend.
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
 {HEARTBEAT_TURN_BOOTSTRAP_RULE}
 ```sh
-LOOPX_TURN=<current_time_iso>
+{render_turn_bootstrap()}
 {pr_review_pre_quota_instruction}{quota_guard_command}
 ```
 {HEARTBEAT_NOTIFICATION_RULE_SHORT}

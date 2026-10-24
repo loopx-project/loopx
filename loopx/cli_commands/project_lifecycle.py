@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from ..cli_runtime import PROJECT_LIFECYCLE_COMMANDS as PROJECT_LIFECYCLE_COMMANDS
 from ..control_plane.capability_hooks import (
     PostWritebackHookRegistration,
 )
@@ -39,15 +40,6 @@ PrintPayload = Callable[
 ]
 OutputFormat = Callable[[argparse.Namespace], str]
 AppendCliRolloutEvent = Callable[..., dict[str, object]]
-
-PROJECT_LIFECYCLE_COMMANDS = {
-    "refresh-state",
-    "checkpoint-context",
-    "read-only-map",
-    "reward",
-    "operator-gate",
-}
-
 
 def register_project_lifecycle_commands(
     subparsers: argparse._SubParsersAction,

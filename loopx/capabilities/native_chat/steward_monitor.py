@@ -95,7 +95,51 @@ class StewardMonitor:
             admitted = host._admit(request, turn=self.controller.store.load_turn(turn["session_id"], turn["turn_id"]))
             if not context.get("authorization_scope_id") or admitted["observed_scope_id"] != context["authorization_scope_id"]:
                 raise ValueError("the portfolio scope changed after observation")
-            return native_command(self.controller, argv)
+            return self._native_poll(argv)
+
+    def _native_poll(self, argv):
+        """Use the native poll owner; a Chat observation is no heartbeat task.
+
+        The original managed Turn and lease already identify this observation.
+        Selecting it through heartbeat advancement qualification would reject
+        a due watch whenever unrelated executable work is also available.
+        """
+        from ...cli import build_parser
+        from ...cli_commands.lark_inbox import build_lark_operator_inbox_urgency_projector
+        from ...cli_commands.quota_context import prepare_quota_command_context
+        from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
+        from ..explore.composition_frontier import project_live_explore_composition_frontier
+        from ...quota import record_quota_monitor_poll
+        from .steward_commands import NativeStewardCommandError
+
+        args = build_parser().parse_args(["--format", "json", *argv])
+
+        def current():
+            return prepare_quota_command_context(args,
+                registry_path=self.controller.registry_path,
+                runtime_root_arg=str(self.controller.coordination_runtime_root),
+                operator_inbox_urgency_projector_factory=build_lark_operator_inbox_urgency_projector,
+                force_projection_refresh=True)
+
+        admission = current()
+        goal_ref = capture_first_party_host_goal_ref(
+            registry_path=self.controller.registry_path, goal_id=args.goal_id)
+        result = record_quota_monitor_poll(admission.status_payload,
+            registry_path=self.controller.registry_path, goal_id=args.goal_id,
+            agent_id=args.agent_id, available_capabilities=args.available_capabilities,
+            scheduler_execution_context=admission.scheduler_context,
+            operator_inbox_urgency_projector=admission.operator_inbox_urgency_projector,
+            bounded_research_frontier_projector=project_live_explore_composition_frontier,
+            status_reloader=lambda: current().status_payload,
+            todo_id=args.todo_id, target_key=args.target_key,
+            turn_instance_id=args.turn_instance_id,
+            result_hash=args.result_hash, material_change=args.material_change,
+            task_lease_idempotency_key=args.task_lease_idempotency_key,
+            task_lease_expected_version=args.task_lease_expected_version,
+            source="adapter", goal_ref=goal_ref, execute=True)
+        if result.get("ok") is not True:
+            raise NativeStewardCommandError(result)
+        return result
 
     def configure(self, binding_id: str, *, operation: str, cadence_minutes: int = 30,
                   expected_plan_id: str | None = None, execute: bool = False) -> dict[str, Any]:
@@ -183,10 +227,9 @@ class StewardMonitor:
         observation = self.bindings._core("collaboration.steward.monitor.observation", {
             "context": context, "goal_ids": self.bindings.steward_scope(self.controller.store.load_session(actor["session_id"])),
             "actor_goal_id": actor["goal_id"], "previous_hash": todo.get("result_hash")})
-        # The native monitor-poll owner below evaluates this fresh guard,
-        # including observation-only admission; normal delivery eligibility
-        # is not a second Python policy for a watch.
-        native_command(self.controller, ["quota", "should-run", *route])
+        # The native poll owner evaluates fresh gate/due/capability facts. This
+        # is an observation in the original Chat Turn, not a request to choose
+        # the watch as a heartbeat's advancement task.
         # Freeze admission's generation. A pause/re-enable between collection
         # and acquisition must not turn an old observation into fresh work.
         lease = self._acquire(actor, todo, request["turn_instance_id"],
@@ -233,6 +276,20 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
             # it immediately; external edits are observed within a minute. Every
             # actual dispatch rechecks native state, original grant and provider.
             cache[binding["binding_id"]] = time.monotonic() + 60
+            # The existing pump also observes the optional report frontier.
+            # No second consumer/timer is installed. Closed/not-due calendars
+            # never invoke a model, and original user work wins the idle check.
+            goal = load_goal_from_registry(controller.registry_path, actor["goal_id"])
+            report_config = (goal or {}).get("control_plane", {}).get("periodic_report", {})
+            if report_config.get("enabled") is True and report_config.get("profile_preset") == "portfolio-progress":
+                from .steward_reports import StewardReports
+                try:
+                    accepted, created = StewardReports(controller).frontier(binding)
+                    if created:
+                        changed.append(accepted)
+                        continue
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                    _LOG.warning("An original steward report is unavailable; its window and other work are retained")
             todo = service.current(actor)
             if todo is None or not monitor_todo_is_due(todo):
                 if todo and todo.get("next_due_at") and todo.get("status") == "open":

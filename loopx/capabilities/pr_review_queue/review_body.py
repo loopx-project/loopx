@@ -9,6 +9,12 @@ from typing import Any
 REQUIRED_FINAL_SECTIONS = ["动机", "改动思路", "具体改动", "对主干的风险", "我的整体评价"]
 FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
+AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE = (
+    "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)"
+)
+AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE = (
+    "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)"
+)
 
 
 def review_body_requirements(*, behavior_bearing: bool) -> dict[str, int]:
@@ -69,6 +75,15 @@ def _visible_lines(body: str) -> Iterator[str]:
 
 def visible_review_text(body: str) -> str:
     return "\n".join(_visible_lines(body))
+
+
+def author_owned_review_title_matches(body: str, verdict: str | None) -> bool:
+    """Use the same visible, literal conclusion at publication and readback."""
+    expected = {
+        "APPROVE": AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
+        "REQUEST_CHANGES": AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
+    }.get(verdict or "")
+    return bool(expected and expected in visible_review_text(body))
 
 
 def reviewer_declaration_lines(body: str) -> list[str]:

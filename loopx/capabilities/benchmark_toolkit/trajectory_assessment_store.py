@@ -126,6 +126,8 @@ def _usage_capture(
     session_id: str,
     *,
     include_incomplete: bool = False,
+    loopx_input_json: str | None = None,
+    input_goal_id: str | None = None,
 ) -> dict:
     data = _source_path(source_root, artifact).read_bytes()
     events = []
@@ -142,6 +144,21 @@ def _usage_capture(
             payload = {k: payload[k] for k in ("id", "forked_from_id") if k in payload}
         elif event.get("type") == "token_usage_record":
             payload = _request_usage_record(payload)
+        elif event.get("type") == "loopx_input_token_attribution":
+            # Optional host measurement, not a tokenizer or prose classifier.
+            # Preserve only binding/counts; raw prompts and packet text stay private.
+            payload = {
+                key: payload[key] if isinstance(payload[key], str) else None
+                for key in (
+                    "method", "thread_id", "session_id", "turn_id",
+                    "root_turn_id", "response_id",
+                ) if key in payload
+            } | {
+                key: payload[key] if type(payload[key]) is int else None
+                for key in (
+                    "input_tokens", "loopx_input_tokens", "loopx_cached_input_tokens",
+                ) if key in payload
+            }
         elif event.get("type") == "compacted":
             payload = {
                 "compaction_response_id": payload.get("compaction_response_id")
@@ -185,12 +202,25 @@ def _usage_capture(
                 "payload": payload,
             }
         )
+    observation = None
+    input_artifacts = []
+    if loopx_input_json is not None:
+        from .trajectory_input_capture import load_codex_input_observation
+        try:
+            observation = load_codex_input_observation(source_root, loopx_input_json)
+            input_artifacts = observation.pop("artifacts")
+        except (ImportError, OSError, ValueError, KeyError, TypeError):
+            # A supplementary observation cannot erase independently valid
+            # native counters. The typed owner withholds only input attribution.
+            observation = {"error": "Input observation or tokenizer is unavailable"}
     projection = effect_runtime_result(
         "benchmark.trajectory.codex-usage",
         {
             "events": events,
             "session_id": session_id,
             "include_incomplete": include_incomplete,
+            **({"loopx_input_trace": observation, "input_goal_id": input_goal_id}
+               if loopx_input_json is not None else {}),
         },
         large_local_snapshot=True,
     )
@@ -198,6 +228,7 @@ def _usage_capture(
         "artifact": artifact,
         "artifact_sha256": hashlib.sha256(data).hexdigest(),
         "projection": projection,
+        **({"input_artifacts": input_artifacts} if input_artifacts else {}),
     }
 
 
@@ -212,6 +243,10 @@ def _captured_view(record: dict, field: str) -> dict | None:
         ).read_bytes()
         if hashlib.sha256(data).hexdigest() != captured["artifact_sha256"]:
             reason = "source_changed"
+        for artifact in captured.get("input_artifacts", []):
+            data = _source_path(Path(record["source_root"]), artifact["artifact"]).read_bytes()
+            if hashlib.sha256(data).hexdigest() != artifact["artifact_sha256"]:
+                reason = "source_changed"
     except (OSError, ValueError):
         reason = "source_unavailable"
     return {
@@ -294,6 +329,7 @@ def register_pack(
     usage_jsonl: str | None = None,
     usage_session_id: str | None = None,
     include_incomplete_usage: bool = False,
+    loopx_input_json: str | None = None,
     native_outcomes_json: str | None = None,
     base_pack_id: str | None = None,
 ) -> dict:
@@ -327,6 +363,8 @@ def register_pack(
         record["base_pack_id"] = _opaque(base_pack_id)
     if include_incomplete_usage and usage_jsonl is None:
         raise ValueError("include-incomplete-usage requires a usage capture")
+    if loopx_input_json is not None and usage_jsonl is None:
+        raise ValueError("LoopX input observation requires a usage capture")
     if (usage_jsonl is None) != (usage_session_id is None):
         raise ValueError(
             "Usage capture and expected session identity must be supplied together"
@@ -335,6 +373,8 @@ def register_pack(
         record["solver_usage"] = _usage_capture(
             source_root, usage_jsonl, usage_session_id,
             include_incomplete=include_incomplete_usage,
+            loopx_input_json=loopx_input_json,
+            input_goal_id=record["input"]["scope"]["goal_id"],
         )
     if native_outcomes_json is not None:
         data = _source_path(source_root, native_outcomes_json).read_bytes()
@@ -613,6 +653,8 @@ def read_citation(
     )
     result = view["result"]
     citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]
+    citations.extend(c for field in ((result or {}).get("display") or {}).get("fields", [])
+                     for c in field.get("context_citations", []))
     native = (view.get("native_outcomes") or {}).get("projection") or {}
     native_citations = [native[key]["citation"] for key in ("initial", "best_valid", "retained", "final_valid") if native.get(key)]
     improvement = native.get("retained_improvement") or {}

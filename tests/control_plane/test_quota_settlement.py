@@ -55,6 +55,22 @@ TODO_ID = "todo_settlement"
 TURN_ID = "turn-settlement-1"
 
 
+def test_writeback_guidance_uses_current_cli_scale_vocabulary():
+    from loopx.control_plane.work_items.delivery_batch_scale import (
+        DELIVERY_BATCH_SCALE_INPUT_CHOICES, DELIVERY_BATCH_SCALE_ALIASES,
+    )
+
+    plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
+    )
+    hint = plan.as_dict()["ordered_steps"][1]["precondition"]
+    for scale in DELIVERY_BATCH_SCALE_INPUT_CHOICES:
+        assert scale in hint
+    for alias in DELIVERY_BATCH_SCALE_ALIASES:
+        assert alias not in hint  # Historical aliases remain read-only.
+
+
 @pytest.mark.parametrize("replan", [False, True])
 def test_command_plan_supplies_actor_from_identity(replan):
     plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(

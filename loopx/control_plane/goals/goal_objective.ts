@@ -5,6 +5,7 @@ import {canonicalAuthorityObject, canonicalAuthoritySha256, AuthorityStoreProtoc
 import {indexCoordinationProjectionTodos} from "../coordination/coordination_projection.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {readGoalAcceptanceLifecycle, sameExactGoalRef, parseWireExactGoalRef, type WireExactGoalRef} from "./acceptance_lifecycle.ts";
+import {normalizeRegisteredTodoAgents} from "../coordination/todo_agents.ts";
 
 export const GOAL_OBJECTIVE_SCHEMA = "goal_objective_revision_v0";
 export const GOAL_OBJECTIVE_REVIEW_REQUIRED = "goal_objective_review_required";
@@ -28,7 +29,8 @@ function keys(row: JsonObject, names: string[]): void {
 function agents(value: unknown): string[] {
   requireValue(Array.isArray(value) && value.length <= 128, "registered Agents must be a bounded list");
   const result = value.map(v => text(v, "Agent", 128));
-  requireValue(result.every(v => /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(v)) && new Set(result).size === result.length, "Agent identities must be unique safe identifiers");
+  // Retain historical ID forms while accepting the registry's @ aliases.
+  requireValue(result.every(v => /^[A-Za-z0-9][A-Za-z0-9_.:@-]*$/.test(v)) && new Set(result).size === result.length, "Agent identities must be unique safe identifiers");
   return result;
 }
 export function readGoalObjective(head: JsonObject): GoalObjectiveState | null {
@@ -83,11 +85,13 @@ export function goalObjectiveWorkGuard(head: JsonObject, agent: string): JsonObj
     revision: state.revisions.length, digest: state.revisions.at(-1)!.digest,
     read_action: `loopx --format json goal-acceptance inspect --goal-id ${head.goal_id} --agent-id ${agent}`};
 }
-export function projectGoalObjective(head: JsonObject): JsonObject | null {
+export function projectGoalObjective(head: JsonObject, registeredAgents?: unknown): JsonObject | null {
+  requireValue(registeredAgents === undefined || Array.isArray(registeredAgents), "registered_agents must be an array");
+  const currentPeers = registeredAgents === undefined ? [] : normalizeRegisteredTodoAgents(registeredAgents);
   const state = currentGoalObjective(head);
   if (!state) return null;
   const current = state.revisions.at(-1)!;
-  const peers = [...new Set([...state.registered_agents, ...Object.keys(state.adoptions)])];
+  const peers = [...new Set([...state.registered_agents, ...Object.keys(state.adoptions), ...currentPeers])];
   return {...current, original_objective: state.original_objective,
     peer_adoption: peers.map(agent => ({agent_id: agent, revision: state.adoptions[agent]?.revision ?? null, current: !objectiveAdoptionRequired(state, agent)})),
     acceptance_gaps: peers.filter(agent => objectiveAdoptionRequired(state, agent)).map(agent => ({

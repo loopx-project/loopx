@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ...chat_manager_details import read_manager_goal_details
-from ...chat_manager_history import read_manager_delivery_history
+from ...chat_manager_history import delivery_history_window, read_manager_delivery_history
 from ...control_plane.effect_runtime import effect_runtime_result
 
 
@@ -28,6 +29,10 @@ READ_TOOL = {
         "or a typed unavailable gap naming why it could not be derived. Use that to state where "
         "the Goal stands before listing detail. Use concrete evidence "
         "to answer progress and priority questions. Paginate with next_offset. "
+        "Use view=report_source with a closed window_start/window_end for a frozen periodic-report "
+        "source over all authorized local Goals including stopped ones, current tasks, window deliveries "
+        "and their associated tasks, and handoff receipts. Copy source.source_revision when paging. "
+        "It reads evidence; it neither enables a schedule nor generates or sends a report. "
         "No shell, writes, raw files, or additional Goal authorization."
     ),
     "inputSchema": {
@@ -36,10 +41,15 @@ READ_TOOL = {
         "properties": {
             "view": {
                 "type": "string",
-                "enum": ["sources", "portfolio", "todos", "deliveries", "handoffs", "agents", "agent_route"],
+                "enum": ["sources", "portfolio", "todos", "deliveries", "handoffs", "agents", "agent_route", "report_source"],
             },
             "source_id": {"type": "string", "description": "Default local. For SSH use an exact source_id from view=sources; local Goal IDs do not discover remote Goals."},
             "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Deliveries lookback; expand for latest known progress older than yesterday."},
+            "include_outcome_gaps": {"type": "boolean", "description": "Local deliveries: include recorded outcome_gap counterevidence alongside progress. Default false for ordinary delivery queries; report_source always includes it. Observations and untyped host failures are not delivery outcomes."},
+            "window_start": {"type": "string", "description": "Local deliveries/report_source: exact inclusive ISO-8601 timestamp with offset. Pair with window_end instead of days, e.g. a frozen report window."},
+            "window_end": {"type": "string", "description": "Local deliveries/report_source: exact exclusive ISO-8601 timestamp with offset. Boundaries do not move while paging; report_source requires a closed window."},
+            "expected_source_revision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries/report_source: copy source.source_revision from the first page onto subsequent pages. A conflicting response requires restarting this read, not merging pages from different snapshots."},
+            "delivery_ref": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "Local deliveries only: use an observed row's source_ref to recover its full permitted recorded_details and evidence references within the same read window/revision. Does not read referenced artifacts or prove the recorded claims."},
             "goal_id": {"type": "string"},
             "agent_id": {"type": "string", "minLength": 1,
                          "description": "Agent_route only, with goal_id: exact registered Agent to locate. Search view=agents first; does not delegate or create an execution driver."},
@@ -162,8 +172,42 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
                 "days:must_be_an_integer_between_"
                 f"{READ_DAYS_RANGE[0]}_and_{READ_DAYS_RANGE[1]}"
             )
+    if "include_outcome_gaps" in arguments:
+        if view != "deliveries" or arguments.get("source_id", "local") != "local":
+            rejected.append("include_outcome_gaps:only_for_local_deliveries")
+        elif type(arguments["include_outcome_gaps"]) is not bool:
+            rejected.append("include_outcome_gaps:must_be_a_boolean")
     if not isinstance(arguments.get("source_id", "local"), str):
         rejected.append("source_id:must_be_a_string")
+    exact_arguments = {"window_start", "window_end", "expected_source_revision", "delivery_ref"} & arguments.keys()
+    for name in sorted(exact_arguments):
+        if view not in {"deliveries", "report_source"} or name == "delivery_ref" and view != "deliveries":
+            rejected.append(f"{name}:only_for_view_deliveries" if name == "delivery_ref" else f"{name}:only_for_view_deliveries_or_report_source")
+        elif arguments.get("source_id", "local") != "local":
+            rejected.append(f"{name}:only_for_source_local")
+    if {"window_start", "window_end"} & arguments.keys():
+        if "days" in arguments:
+            rejected.append("days:cannot_combine_with_exact_window")
+        try:
+            if not all(isinstance(arguments.get(name), str) for name in ("window_start", "window_end")):
+                raise ValueError("two timestamps required")
+            delivery_history_window(arguments.get("window_start"), arguments.get("window_end"))
+        except ValueError:
+            rejected.append("window_start,window_end:require_two_offset_timestamps_increasing_at_most_90_days")
+        if ((type(offset) is int and offset > 0) or "delivery_ref" in arguments) and "expected_source_revision" not in arguments:
+            rejected.append("expected_source_revision:required_for_exact_window_pagination")
+    for name in ("expected_source_revision", "delivery_ref"):
+        if name in arguments and (not isinstance(arguments[name], str)
+                or not re.fullmatch(r"sha256:[a-f0-9]{64}", arguments[name])):
+            rejected.append(f"{name}:must_be_a_sha256_revision")
+    if "delivery_ref" in arguments and offset != 0:
+        rejected.append("delivery_ref:requires_offset_0")
+    if view == "report_source":
+        for name in ("goal_id", "include_stopped"):
+            if name in arguments:
+                rejected.append(f"{name}:report_source_uses_complete_authorized_local_portfolio")
+        if not {"window_start", "window_end"} <= arguments.keys():
+            rejected.append("report_source:requires_window_start_and_window_end")
     return rejected
 
 
@@ -309,6 +353,9 @@ class ManagerInspection:
         self.ssh_config_path = ssh_config_path
         self.discovery_scope = discovery_scope
         self.delegation_authority = delegation_authority
+        # An explicit report read freezes one bounded source in this original
+        # Turn's reader. No durable shadow history or cross-session cache.
+        self._report_snapshot = None
 
     def sources(self):
         if self.context.get("scope") == "owner_goal":
@@ -393,8 +440,11 @@ class ManagerInspection:
         offset, limit = arguments.get("offset", 0), arguments.get("limit", 8)
         include_stopped = arguments.get("include_stopped", False)
         if not self.scope_valid():
+            self._report_snapshot = None
             return {"ok": False, "error": "authorization_changed"}
         source_id = arguments.get("source_id", "local")
+        if view == "report_source":
+            return self._report_source(tool, arguments)
         if self.context.get("scope") == "owner_goal" and source_id != "local":
             return {"ok": False, "error": "source_outside_available_scope"}
         if view == "sources":
@@ -495,7 +545,9 @@ class ManagerInspection:
             matched = source.get("coverage", {}).get("active")
         else:
             source = read_manager_delivery_history(
-                self.runtime_root, goal_id, limit=limit, offset=offset, lookback_days=arguments.get("days", 1)
+                self.runtime_root, goal_id, limit=limit, offset=offset, lookback_days=arguments.get("days", 1),
+                **{name: arguments[name] for name in ("window_start", "window_end", "expected_source_revision", "delivery_ref", "include_outcome_gaps")
+                   if name in arguments},
             )
             page = source.pop("deliveries", [])
             matched = source.get("coverage", {}).get("matched")
@@ -510,6 +562,16 @@ class ManagerInspection:
                 r["todo_id"]: r.get("title")
                 for r in details.get("todos", []) + details.get("completed_todos", [])
             }
+            # A delivery's task can be beyond the overview page. Recover only
+            # its exact canonical record; never mistake the first page's cap
+            # for an absent task, or treat a completed record as new authority.
+            for todo_id in {row.get("todo_id") for row in page} - titles.keys():
+                if not todo_id:
+                    continue
+                exact = read_manager_goal_details(self.registry_path, self.runtime_root, goal_id,
+                    owner_scope=self.owner_scope, todo_id=todo_id)
+                for row in exact.get("todos", []):
+                    titles[row["todo_id"]] = row.get("title")
             page = [{**r, "todo_title": titles.get(r.get("todo_id"))} for r in page]
         if not self.scope_valid():
             return {"ok": False, "error": "authorization_changed"}
@@ -541,6 +603,11 @@ class ManagerInspection:
             if isinstance(matched, int) and page and end < matched
             else None,
             "unknown": matched is None or portfolio_unknown
+            or ("window_start" in arguments and (
+                source.get("window_complete") is False
+                or bool(source.get("coverage", {}).get("invalid_delivery_records"))
+                or bool(source.get("coverage", {}).get("invalid_index_records"))
+                or bool(oversized)))
             or (
                 view == "handoffs"
                 and (
@@ -554,5 +621,54 @@ class ManagerInspection:
             "source_id": "local",
             "source_host": "local",
         }
+        self.record(result)
+        return result
+
+    def _report_source(self, tool, arguments):
+        from .report_source import collect_manager_report_source
+
+        start, end = delivery_history_window(arguments["window_start"], arguments["window_end"])
+        window = {"window_start": start.isoformat(), "window_end": end.isoformat()}
+        snapshot = self._report_snapshot
+        expected = arguments.get("expected_source_revision")
+        if snapshot is None or snapshot["window"] != window:
+            # A lost/another Turn's snapshot never silently resumes at offset N.
+            if arguments.get("offset", 0) or expected:
+                return {"ok": False, "error": "report_snapshot_unavailable", "rows": []}
+            try:
+                snapshot = collect_manager_report_source(lambda query: self.read(tool, query), window)
+            except PermissionError:
+                self._report_snapshot = None
+                return {"ok": False, "error": "authorization_changed", "rows": []}
+            except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+                return {"ok": False, "error": "report_source_unavailable_or_window_not_closed", "rows": []}
+            self._report_snapshot = snapshot
+        if not self.scope_valid():
+            self._report_snapshot = None
+            return {"ok": False, "error": "authorization_changed", "rows": []}
+        if expected is not None and expected != snapshot["source_revision"]:
+            return {"ok": False, "error": "report_snapshot_revision_mismatch", "rows": []}
+        offset, limit = arguments.get("offset", 0), arguments.get("limit", 8)
+        page = deepcopy(snapshot["rows"][offset:offset + limit])
+        while len(page) > 1 and len(json.dumps(page, ensure_ascii=False)) > 24000:
+            page.pop()
+        oversized = []
+        for i, row in enumerate(page):
+            if len(json.dumps(row, ensure_ascii=False)) > 24000:
+                oversized.append(offset + i)
+                page[i] = {"kind": row["kind"], "goal_id": row["goal_id"],
+                    "source_ref": row["source_ref"], "status": "oversized_record"}
+        end = offset + len(page)
+        result = {"ok": True, "view": "report_source", "rows": page, "offset": offset,
+            "included": len(page), "matched": len(snapshot["rows"]),
+            "next_offset": end if page and end < len(snapshot["rows"]) else None,
+            "source": {**{key: snapshot[key] for key in (
+                "source_revision", "window", "window_bounds", "observed_at", "coverage")},
+                "gap_count": len(snapshot["gaps"]), "source_observation_count": len(snapshot["sources"])},
+            "report_source": {key: snapshot["source_result"][key] for key in (
+                "schema_version", "source_id", "source_kind", "status", "snapshot_digest", "snapshot_ref", "item_count")},
+            "unknown": not snapshot["coverage"]["complete"] or bool(oversized),
+            "oversized_rows": oversized, "source_id": "local", "source_host": "local",
+            "note": "Frozen read evidence, not an authored report, independent artifact verification, schedule activation or permission to publish."}
         self.record(result)
         return result

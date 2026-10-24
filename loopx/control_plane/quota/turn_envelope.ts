@@ -4,6 +4,7 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import {
   interpretQuotaShouldRunPacket,
+  assertSupportedQuotaPacket,
   settlementIdentityFromPlan,
   settlementIdentityPayload,
   type JsonObject,
@@ -88,7 +89,6 @@ export const ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0;
 const EXECUTABLE_CLI_ARGS_MAX_ITEMS = 64;
 const EXECUTABLE_CLI_ARGS_MAX_ITEM_CHARS = 512;
 const EXECUTABLE_CLI_ARGS_MAX_TOTAL_CHARS = 2_048;
-const PROTOCOL_ACTION_PACKET_LLM_POLICY = "no_api";
 const PLANNING_HORIZON_DETAIL_REFS_REF = "$.detail_ref";
 
 const ACTIONABLE_WARNING_FIELDS = [
@@ -510,67 +510,7 @@ function executionPolicy(payload: JsonObject): JsonObject {
   return result;
 }
 
-function renderProtocolActionPacketSummary(fields: JsonObject): string {
-  return Object.entries(fields).map(([key, value]) => {
-    const rendered = typeof value === "boolean"
-      ? String(value)
-      : scalarString(value, `protocol_action_fields.${key}`);
-    return `${key}=${rendered}`;
-  }).join(" ");
-}
-
-function derivedProtocolActionPacketFields(
-  action: JsonObject,
-  user: JsonObject,
-  capsule: JsonObject,
-  schedulerValue: JsonObject,
-): JsonObject {
-  const interaction = object(capsule.interaction_contract);
-  const workLane = object(capsule.work_lane_contract);
-  const automation = object(capsule.automation_liveness);
-  const mode = scalarString(interaction.mode, "interaction_contract.mode");
-  const userRequired = Boolean(user.action_required);
-  const agentRequired = Boolean(action.must_attempt);
-  const actor = userRequired && ["scoped_user_gate_fallback", "bounded_delivery_with_user_notice"].includes(mode)
-    ? "agent_with_user_gate"
-    : userRequired ? "user" : "agent";
-  const fields: JsonObject = {
-    actor,
-    user_action_required: userRequired,
-    agent_action_required: agentRequired,
-    quiet_noop_allowed: Boolean(action.quiet_noop_allowed),
-  };
-  if (workLane.lane) fields.lane = workLane.lane;
-  if (automation.automation_action) fields.automation = automation.automation_action;
-  if (schedulerValue.action) fields.scheduler = schedulerValue.action;
-  if (automation.pause_allowed === false) fields.pause_allowed = false;
-  fields.llm = PROTOCOL_ACTION_PACKET_LLM_POLICY;
-  const userActions = Array.isArray(user.actions) ? user.actions : [];
-  const actionKey = agentRequired || !userRequired ? "agent_action" : "user_action";
-  if (userActions.length > 0 && (!userRequired || actionKey !== "user_action")) {
-    fields.user_action_pending = true;
-    const userAction = text(userActions[0], 80);
-    if (userAction) fields.user_action = userAction;
-  }
-  const actionValue = agentRequired
-    ? action.primary_action
-    : userRequired && userActions.length > 0
-    ? userActions[0]
-    : workLane.obligation === "quiet_until_material_monitor_transition"
-    ? "quiet until a material monitor transition, regression, or concrete blocker appears"
-    : action.primary_action || "quiet no-op; no material transition";
-  const rendered = text(actionValue, 80);
-  if (rendered) fields[actionKey] = rendered;
-  return fields;
-}
-
-function contractCapsule(
-  payload: JsonObject,
-  action: JsonObject,
-  user: JsonObject,
-  schedulerValue: JsonObject,
-  protocolActionFields: JsonObject,
-): JsonObject {
+function contractCapsule(payload: JsonObject): JsonObject {
   const capsule: JsonObject = {
     schema_version: CONTRACT_CAPSULE_SCHEMA_VERSION,
     source: "full_quota_decision",
@@ -635,42 +575,12 @@ function contractCapsule(
     );
     capsule.work_lane_contract = compactLane;
   }
-  const packet = object(payload.protocol_action_packet);
-  if (Object.keys(packet).length > 0 && Object.keys(object(payload.replan_action_packet)).length === 0) {
-    const summary = text(packet.summary, 2_000);
-    const derived = derivedProtocolActionPacketFields(action, user, capsule, schedulerValue);
-    const residue: JsonObject = {};
-    for (const [key, value] of Object.entries(protocolActionFields)) {
-      if (JSON.stringify(derived[key]) !== JSON.stringify(value)) residue[key] = value;
-    }
-    const reconstructed: JsonObject = {};
-    for (const key of Object.keys(protocolActionFields)) {
-      reconstructed[key] = key in residue ? residue[key] : derived[key];
-    }
-    const verified = Boolean(summary) && renderProtocolActionPacketSummary(reconstructed) === summary;
-    const projection: JsonObject = {
-      schema_version: packet.schema_version,
-      present: true,
-      summary_hash: canonicalHash(summary || ""),
-      derivation_status: verified
-        ? Object.keys(residue).length > 0 ? "verified_with_residue" : "verified"
-        : "unverified_retain_summary",
-      reconstruction_verified: verified,
-      llm_policy: PROTOCOL_ACTION_PACKET_LLM_POLICY,
-      candidate_derivation_inputs: [
-        "action", "user", "work_lane_contract", "automation_liveness", "scheduler",
-      ],
-    };
-    if (Object.keys(residue).length > 0) projection.residue = residue;
-    if (!verified) projection.summary = summary;
-    capsule.protocol_action_packet = projection;
-  }
   const warnings = ACTIONABLE_WARNING_FIELDS.filter((field) => Boolean(payload[field]));
   if (warnings.length > 0) capsule.actionable_warning_refs = warnings;
   return capsule;
 }
 
-function actionProjection(payload: JsonObject, protocolActionFields: JsonObject): JsonObject {
+function actionProjection(payload: JsonObject): JsonObject {
   const agentIdentity = object(payload.agent_identity);
   const semanticAgentId = scalarString(
     payload.agent_id || agentIdentity.agent_id,
@@ -789,9 +699,7 @@ function actionProjection(payload: JsonObject, protocolActionFields: JsonObject)
     writeback,
     scheduler: schedulerValue,
   };
-  projection.contract_capsule = contractCapsule(
-    payload, action, user, schedulerValue, protocolActionFields,
-  );
+  projection.contract_capsule = contractCapsule(payload);
   const context = object(interaction.agent_context);
   if (Object.keys(context).length > 0) projection.agent_context = structuredClone(context);
   // Source verification belongs to the selected task above. Preserve one carrier while
@@ -831,8 +739,8 @@ function compactPeerActivation(contract: JsonObject, detailRef: string): JsonObj
   };
 }
 
-function turnActionProjection(payload: JsonObject, protocolActionFields: JsonObject): JsonObject {
-  const projection = actionProjection(payload, protocolActionFields);
+function turnActionProjection(payload: JsonObject): JsonObject {
+  const projection = actionProjection(payload);
   const orchestration = object(projection.task_orchestration_contract);
   if (Object.keys(orchestration).length > 0) {
     const peer = object(orchestration.peer_activation_diagnostic);
@@ -926,6 +834,7 @@ function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): st
 
 export function turnEnvelopeActionSignatureDocument(value: unknown): JsonObject {
   const envelope = requireJsonObject(value, "turn_envelope");
+  assertSupportedQuotaPacket(envelope);
   const responsePlanValue = envelope.response_plan;
   const signature: JsonObject = {
     schema_version: ACTION_SIGNATURE_SCHEMA_VERSION,
@@ -950,13 +859,10 @@ export function turnEnvelopeActionSignatureDocument(value: unknown): JsonObject 
   return signature;
 }
 
-export function quotaActionSignatureDocument(
-  value: unknown,
-  protocolActionFields: unknown = {},
-): JsonObject {
+export function quotaActionSignatureDocument(value: unknown): JsonObject {
   const payload = requireJsonObject(value, "quota payload");
   return turnEnvelopeActionSignatureDocument(
-    turnActionProjection(payload, object(protocolActionFields)),
+    turnActionProjection(payload),
   );
 }
 
@@ -1005,10 +911,6 @@ function coldPath(
 export function buildTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const payload = requireJsonObject(request.payload, "turn envelope payload");
-  const protocolActionFields = requireJsonObject(
-    request.protocol_action_fields,
-    "turn envelope protocol_action_fields",
-  );
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError(
       "turn envelope scheduler_execution_args must be a string",
@@ -1025,7 +927,7 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     object(payload.agent_identity).agent_id,
     "quota payload agent_identity.agent_id",
   ).trim() || null;
-  const actionProjectionValue = turnActionProjection(payload, protocolActionFields);
+  const actionProjectionValue = turnActionProjection(payload);
   const envelope: JsonObject = {
     ok: Boolean(payload.ok),
     schema_version: TURN_ENVELOPE_SCHEMA_VERSION,
@@ -1057,7 +959,9 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
 // it cannot manufacture a quota receipt or authorize a later action.
 function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   const payload = requireJsonObject(request.payload, "captured decision");
+  assertSupportedQuotaPacket(payload);
   const envelope = requireJsonObject(request.envelope, "captured decision envelope");
+  assertSupportedQuotaPacket(envelope);
   const path = scalarString(request.captured_decision_path, "capture path");
   const turnId = scalarString(request.turn_instance_id, "capture Turn identity");
   const turnKey = scalarString(request.turn_key, "capture Turn key");
@@ -1102,13 +1006,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return turnEnvelopeActionSignatureDocument(request.envelope);
   }
   if (operation === "quota_signature") {
-    return quotaActionSignatureDocument(
-      request.payload,
-      requireJsonObject(
-        request.protocol_action_fields,
-        "turn envelope protocol_action_fields",
-      ),
-    );
+    return quotaActionSignatureDocument(request.payload);
   }
   throw new EffectRuntimeRequestError("turn envelope operation is unsupported");
 }
@@ -1117,6 +1015,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
  * session or a missing Todo. Journal validation reuses this exact binding rule.
  */
 export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+  assertSupportedQuotaPacket(envelope);
   const plan = object(object(envelope.writeback).settlement_plan);
   const raw = object(plan.identity);
   if (raw.replan_obligation_id == null && raw.binding_kind !== "autonomous_replan") return null;

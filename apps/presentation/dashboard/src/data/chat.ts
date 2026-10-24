@@ -2630,6 +2630,14 @@ const privateConversationSchema = z.object({
       goal_active: z.boolean().optional(), monitor: z.object({todo_id: z.string(), status: z.string(),
         cadence_minutes: z.number().int().nullable(), next_due_at: z.string().nullable(),
         last_checked_at: z.string().nullable()}).nullable().optional(),
+      report: z.discriminatedUnion("available", [
+        z.object({available: z.literal(true), enabled: z.boolean(), configured: z.boolean(),
+          schedule: z.record(z.string(), z.unknown()).nullable().optional(), next_due_at: z.string().nullable().optional(),
+          retained_window_due_at: z.string().nullable().optional(), generation_id: z.string().nullable().optional(),
+          delivery_status: z.string().optional(), publication_verified: z.boolean().optional(),
+          destination: z.string().optional()}),
+        z.object({available: z.literal(false), error_code: z.string()}),
+      ]).optional(),
       goal_id: z.string().optional(), agent_id: z.string().optional(), session_id: z.string().optional()}),
     z.object({available: z.literal(false), error_code: z.string()}),
   ]).optional(),
@@ -2693,6 +2701,21 @@ export async function changePrivateAgentTarget(bindingId: string, revision: numb
   return privateConversationsSchema.parse(await requestJson<unknown>("/api/chat/lark/private-conversations/agent-targets", {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({binding_id: bindingId, revision, ...target}),
   }));
+}
+
+const stewardReportPlanSchema = z.object({ok: z.literal(true), applied: z.boolean(), stop_status: z.string().optional(), plan: z.object({
+  schema_version: z.literal("loopx_steward_report_plan_v0"), plan_id: z.string().regex(/^[a-f0-9]{64}$/),
+})});
+export async function configureStewardReport(bindingId: string, operation: "enable" | "pause" | "cancel", schedule?: Record<string, unknown>) {
+  const path = "/api/chat/lark/private-conversations/managed-steward/report";
+  const send = (body: unknown) => requestJson<unknown>(path, {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const request = {binding_id: bindingId, operation, ...(operation === "enable" ? {schedule} : {})};
+  const preview = stewardReportPlanSchema.parse(await send({...request, execute: false}));
+  const applied = stewardReportPlanSchema.parse(await send({...request, execute: true, plan_id: preview.plan.plan_id}));
+  if (!applied.applied) throw new Error("The original report setting was not applied.");
+  if (applied.stop_status === "unconfirmed") throw new Error("汇报计划已取消；正在生成的任务是否停止尚未确认。Report cancelled; the active task's stop is unconfirmed.");
+  return applied;
 }
 
 export async function changeOwnerNotifications(bindingId: string, bindingRevision: number, revision: number, enabled: boolean) {

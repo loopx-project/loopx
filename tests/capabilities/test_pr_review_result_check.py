@@ -773,6 +773,82 @@ def test_semantic_change_needs_authorization_beyond_a_compression_target():
     assert not check_review_result(packet, result)["evidence_truth_verified"]
 
 
+@pytest.mark.parametrize("author_owned,verdict,title,valid", [
+    (True, "APPROVE", "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)", True),
+    (True, "APPROVE", "Approval conclusion", False),
+    (True, "APPROVE", "", False),
+    (True, "APPROVE", "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)", False),
+    (True, "APPROVE", "<!-- Approval conclusion (author-owned PR; GitHub blocks formal self-approval) -->", False),
+    (True, "APPROVE", "```text\nApproval conclusion (author-owned PR; GitHub blocks formal self-approval)\n```", False),
+    (True, "REQUEST_CHANGES", "Request changes conclusion (author-owned PR; GitHub blocks formal self-review)", True),
+    (True, "REQUEST_CHANGES", "Request changes conclusion", False),
+    (True, "REQUEST_CHANGES", "Approval conclusion (author-owned PR; GitHub blocks formal self-approval)", False),
+    (False, "APPROVE", "", True),
+    (False, "REQUEST_CHANGES", "", True),
+])
+def test_publication_and_readiness_agree_on_author_conclusions(
+    tmp_path, capsys, author_owned, verdict, title, valid,
+):
+    from loopx.pr_review import _review_conclusion
+    from loopx.capabilities.pr_review_queue.merge_readiness import build_merge_readiness
+
+    packet, result = _review()
+    packet["request"] = {"source": "fixture"}
+    item = packet["pull_requests"][0]
+    item["author_owned"] = author_owned
+    result["verdict"] = verdict
+    result["review_body"] = title + "\n\n" + result["review_body"].replace(
+        "English verdict: APPROVE", "English verdict: " + verdict)
+    if verdict == "REQUEST_CHANGES":
+        result["evidence"]["failure_analysis"]["status"] = "unverified"
+    packet_path, result_path = tmp_path / "packet.json", tmp_path / "result.json"
+    packet_path.write_text(json.dumps(packet))
+    result_path.write_text(json.dumps(result))
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    assert main(["--format", "json", "pr-review", "--check-result", str(result_path),
+                 "--packet", str(packet_path)]) == (0 if valid else 1)
+    checked = json.loads(capsys.readouterr().out)
+    assert checked["ok"] is valid
+    assert not checked["evidence_truth_verified"]
+    assert not checked["external_writes_performed"]
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+    state = "COMMENTED" if author_owned else (
+        "APPROVED" if verdict == "APPROVE" else "CHANGES_REQUESTED")
+    conclusion = _review_conclusion({
+        "headRefOid": "a" * 40, "author": {"login": "author"},
+        "reviews": [{"state": state, "body": result["review_body"],
+                     "author": {"login": "author" if author_owned else "reviewer"},
+                     "commit": {"oid": "a" * 40}}],
+    }, reviewer_login="author" if author_owned else "reviewer")
+    assert conclusion["valid"] is valid
+    readiness = build_merge_readiness(
+        repository="owner/repo", expected_exact_head="42@" + "a" * 40,
+        item=item | {"state": "OPEN", "review_conclusion": conclusion,
+                     "review_decision": state, "merge_state": "CLEAN",
+                     "mergeability": "MERGEABLE"},
+        review_threads={"complete": True, "unresolved_count": 0},
+        source="fixture", wait_for_ci=False,
+    )
+    assert readiness["ready"] is (valid and verdict == "APPROVE")
+
+
+def test_decision_text_authorization_requirement_is_declared_and_conditional():
+    contract = build_review_execution_contract()
+    rule = next(row for row in contract["evidence_requirements"]
+                if row["evidence_id"] == "observable_semantics")["decision_text_assessment"]
+    assert rule["fields_by_verdict"] == {
+        "intentional_change_validated": ["authorization_basis"],
+    }
+    packet, result = _decision_text_review()
+    assert check_review_result(packet, result)["approval_consistent"]
+    row = result["evidence"]["observable_semantics"]["decision_text_assessment"]
+    row["verdict"] = "not_applicable"
+    for field in rule["applicable_fields"]:
+        del row[field]
+    assert check_review_result(packet, result)["approval_consistent"]
+
+
 def test_no_candidate_exits_after_scope_and_reason() -> None:
     packet, result = _review()
     result["evidence"]["semantic_alignment"] = {

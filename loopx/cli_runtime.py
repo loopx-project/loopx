@@ -67,10 +67,14 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 )
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
-_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | {
+PROJECT_LIFECYCLE_COMMANDS = {
+	"refresh-state", "checkpoint-context", "read-only-map", "reward", "operator-gate",
+}
+_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
+	"agent-context", "agent-directory", "agent-capabilities",
 }
 
 
@@ -297,6 +301,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.summary_all_registration import register_summary_all_command
 
 		register_summary_all_command(subparsers, add_subcommand_format)
+	elif command in PROJECT_LIFECYCLE_COMMANDS:
+		from .cli_commands.project_lifecycle import register_project_lifecycle_commands
+
+		register_project_lifecycle_commands(subparsers, add_subcommand_format)
 	elif command == "todo":
 		from .cli_commands.todo_registration import register_todo_command
 
@@ -325,6 +333,18 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.manager_inbox import register_manager_inbox
 
 		register_manager_inbox(subparsers, add_subcommand_format)
+	elif command == "agent-context":
+		from .cli_commands.agent_context import register_agent_context
+
+		register_agent_context(subparsers, add_subcommand_format)
+	elif command == "agent-directory":
+		from .cli_commands.agent_directory import register_agent_directory
+
+		register_agent_directory(subparsers, add_subcommand_format)
+	elif command == "agent-capabilities":
+		from .cli_commands.agent_capabilities import register_agent_capabilities
+
+		register_agent_capabilities(subparsers, add_subcommand_format)
 	elif command == "authority-archive":
 		from .cli_commands.authority_archive import register_authority_archive_command
 
@@ -360,6 +380,38 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command in {"agent-context", "agent-directory", "agent-capabilities"}:
+		from .paths import effective_runtime_root
+
+		if args.command == "agent-context":
+			from .cli_commands.agent_context import handle_agent_context as handle
+		elif args.command == "agent-directory":
+			from .cli_commands.agent_directory import handle_agent_directory as handle
+		else:
+			from .cli_commands.agent_capabilities import handle_agent_capabilities as handle
+		return handle(
+			args, registry_path, effective_runtime_root(registry_path, args.runtime_root),
+			print_payload, output_format,
+		)
+	if args.command in PROJECT_LIFECYCLE_COMMANDS:
+		from .cli_commands.project_lifecycle import handle_project_lifecycle_command
+		from .cli_rollout import append_cli_rollout_event
+		from .capabilities.periodic_report.post_writeback_hook import (
+			build_periodic_report_post_writeback_projection,
+			periodic_report_post_writeback_hooks_for_goal,
+		)
+		from .paths import effective_runtime_root
+
+		return handle_project_lifecycle_command(
+			args, registry_path=registry_path, print_payload=print_payload,
+			output_format=output_format, append_cli_rollout_event=append_cli_rollout_event,
+			post_writeback_hooks=(periodic_report_post_writeback_hooks_for_goal(
+				registry_path=registry_path, goal_id=args.goal_id,
+				runtime_root=effective_runtime_root(registry_path, args.runtime_root),
+			) if args.command == "refresh-state" else ()),
+			post_writeback_projection_builder=(build_periodic_report_post_writeback_projection
+				if args.command == "refresh-state" else None),
+		)
 	if args.command == "manager-inbox":
 		from .cli_commands.manager_inbox import handle_manager_inbox
 		from .control_plane.projects.registry_codec import load_project_registry

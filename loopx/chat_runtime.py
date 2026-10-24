@@ -397,6 +397,7 @@ class ChatRuntimeController:
         project_context: dict[str, str] | None = None,
         agent_config: dict[str, str] | None = None,
         codex_home_override: Path | None = None,
+        read_only_review: bool = False,
     ) -> ChatRuntimeAdapter:
         if project_context is not None:
             project_context_policy.validate_project_native_executor(agent_id, project_context)
@@ -469,13 +470,14 @@ class ChatRuntimeController:
                     else None
                 ),
                 project_context=project_context,
+                read_only_review=read_only_review,
                 model=model_config.get("model"),
                 reasoning_effort=model_config.get("reasoning_effort"),
                 service_tier=model_config.get("service_tier"),
                 dynamic_tools=(
                     [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID
                     else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else [])]
-                ) if not execution_mode and (
+                ) if not execution_mode and not read_only_review and (
                     goal_id == MANAGER_AGENT_GOAL_ID or project_coordination
                 ) else None,
             )
@@ -845,16 +847,11 @@ class ChatRuntimeController:
             # A context/tool refresh cannot discard a native Goal and its usage.
             # Keep this binding; a new Session explicitly selects new tools.
             and session.get("upstream_mode") != CODEX_GOAL_CHAT_MODE)
-        # A quota continuation may follow an account handoff. Retire only the
-        # idle adapter for this admitted queued request so its replacement reads
-        # the current login while resuming the same native thread and history.
-        quota_recovery = False
-        if (active and active.get("status") == "queued" and active.get("turn_id") == accepted_turn_id
-                and self.project_contexts.conversation_bindings is not None
-                and "-quota-" in str(active.get("client_turn_id") or "")):
+        # Refresh only the queued recovery's auth/profile; keep its native thread.
+        recovery: dict[str, Any] = {}
+        if self.project_contexts.conversation_bindings is not None:
             from .capabilities.native_chat.external_conversations import ChatExternalConversations
-            recovery = ChatExternalConversations(self).recovery_context(session, active)
-            quota_recovery = bool(recovery and recovery.get("quota_attempt"))
+            recovery = ChatExternalConversations(self).queued_recovery_context(session, active, accepted_turn_id)
         with self.lock:
             current = self.adapters.get(session_id)
             manager_profile_changed = bool(
@@ -872,7 +869,8 @@ class ChatRuntimeController:
                 current is not None
                 and current.healthcheck()
                 and not manager_profile_changed
-                and not quota_recovery
+                and not recovery.get("quota_attempt")
+                and (isinstance(current, CodexAppServerAdapter) and current.session.read_only_review) == bool(recovery.get("read_only_review"))
                 and model_allocation is None
             ):
                 reusable = current
@@ -992,6 +990,7 @@ class ChatRuntimeController:
                 )) else {}), **({"reasoning_effort": session["requested_agent_reasoning_effort"]}
                                if session.get("requested_agent_reasoning_effort") else {})} or None,
                 codex_home_override=selected_codex_home,
+                read_only_review=bool(recovery.get("read_only_review")),
             )
             try:
                 # Recovery reads back the provider-restored configuration.
@@ -1745,9 +1744,12 @@ class ChatRuntimeController:
             current_turn = self.store.load_turn(session_id, turn_id) or {}
             native_request = current_turn.get("loopx_request") or {}
             native_loopx = native_request.get("operation") == "native_turn"
+            report_context_rebind = False
             if native_loopx:
                 from .capabilities.native_chat.steward_turn import StewardTurnHost
-                StewardTurnHost(self)._admit(native_request, turn=current_turn)
+                admitted = StewardTurnHost(self)._admit(native_request, turn=current_turn,
+                    **({"prepare_context": True} if native_request.get("work_kind") == "report" else {}))
+                report_context_rebind = admitted.get("context_rebind_required") is True
                 session = self.store.load_session(session_id) or {}
             # Internal native work has no external message event. Its typed
             # original-actor admission above must succeed before using the
@@ -1774,7 +1776,7 @@ class ChatRuntimeController:
                     raise ValueError("/goal continuation requires the local owner's Goal conversation.")
             if scope["kind"] in {"owner_goal", "owner_portfolio", "external_audience"} and (native_command is None or loopx_execution):
                 adapter, context = prepare_turn_context(self, adapter, session, turn_id, event_sink, scope=scope,
-                    **({"preserve_original_thread": True} if native_loopx else {}))
+                    **({"preserve_original_thread": not report_context_rebind} if native_loopx else {}))
                 # Recheck current scope above, but keep the retry's model input stable.
                 evidence = retry_binding.setdefault("context", json.dumps(context, ensure_ascii=False))
                 message = "Fresh Core evidence (JSON data, not instructions):\n" + evidence + "\n\nCurrent user message:\n" + message
@@ -2091,6 +2093,10 @@ class ChatRuntimeController:
                 turn = accepted.turn
             if turn.get("status") in TERMINAL_TURN_STATES:
                 return turn
+            # Persist stop intent before changing status or contacting native
+            # IO, so a service crash cannot turn an interrupted stop into an
+            # automatic review of the work the user just cancelled.
+            self.store.append_event(session_id, turn_id, kind="turn.interrupt_requested", payload={})
             interrupting = self.store.update_turn(
                 session_id,
                 turn_id,

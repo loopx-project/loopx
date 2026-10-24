@@ -29,10 +29,68 @@ export function verdictLabel(metric: TrajectoryMetric, verdict: AssessmentVerdic
   return verdict === "yes" ? (zh ? "有依据" : "Supported") : (zh ? "未建立" : "Not established");
 }
 
+function LoopXInputShare({usage, zh}: {usage: TrajectorySolverUsage | undefined; zh: boolean}) {
+  const attribution = usage?.loopx_input;
+  const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 1}).format(n);
+  const measured = attribution && attribution.status !== "unavailable" ? attribution : null;
+  const estimated = attribution?.method === "tiktoken_o200k_base_input_estimate_v1";
+  return <section className="research-request-coverage" aria-label={zh ? "LoopX 结构开销" : "LoopX input overhead"}>
+    <div className="research-usage-heading"><h4>{estimated ? (zh ? "LoopX Turn packet · 估计" : "LoopX Turn packet · estimate") : (zh ? "LoopX 输入占比" : "LoopX input share")}</h4><ContextHelp label={zh ? "结构输入占比口径" : "Input share basis"}>
+      <p>{zh ? "同一捕获窗口内，LoopX packet 进入各次模型请求的 token 总量 ÷ 全部请求输入 token 总量，包含缓存输入。重复消费按各次请求计算，同一响应的重复回执只计一次。" : "LoopX packet tokens processed across requests divided by all request input tokens in the same capture, including cached input. Reprocessed context counts in each request; duplicate receipts for one response count once."}</p>
+      <p>{estimated ? (zh ? "分子仅计宿主明确记录的 Turn packet 文本，使用 o200k_base 分词估计；分母是同请求的原生输入计数。尚未核验原生模型分词器，不含其他 LoopX 命令输出、封装或压缩摘要，缓存归属未知；这是已记录部分的估计，不是 provider 实测或净效率损失。" : "Only explicitly recorded Turn packet text is estimated with o200k_base; the denominator is native input for the same requests. The provider model's tokenizer is unverified. Other LoopX tool output, framing and compacted summaries are excluded; cache allocation is unknown. This estimates the recorded component, not provider-measured attribution or net efficiency loss.") : (zh ? "需要宿主提供逐请求 token 归因；包字节、字符数和命令次数不能替代。缺失归因保持未知；上下文压缩也不自动全部归为 LoopX。这个比例衡量结构开销，不能单独证明净效率损失或因果影响。" : "Requires host-supplied per-request token attribution, not packet bytes, characters or command counts. Missing attribution stays unknown; compaction is not automatically all attributed to LoopX. This measures input overhead, not net efficiency loss or causal impact.")}</p>
+    </ContextHelp></div>
+    <p className="research-input-share-value"><strong data-loopx-input-share>{measured?.input_fraction == null ? "—" : percent(measured.input_fraction)}</strong>
+      {measured ? <span>{measured.attributed_requests} / {measured.total_requests} {estimated ? (zh ? "次请求已匹配" : "requests matched") : (zh ? "次请求已归因" : "requests attributed")}</span> : null}
+    </p>
+    {!attribution ? <p>{zh ? "未采集 packet 的 token 归因" : "Packet token attribution was not captured"}</p>
+      : attribution.status === "unavailable" ? <p className="research-progress-warning" role="status">{estimated ? (zh ? "输入估计暂不可用，占比未知。" : "Input estimate unavailable; share is unknown.") : (zh ? "归因记录未通过核对，占比未知。" : "Attribution records could not be reconciled; share is unknown.")}</p>
+      : attribution.status === "partial" ? <p>{estimated ? (zh ? "部分请求已匹配 · 全窗口占比未知" : "Some requests matched · whole-capture share unknown") : (zh ? "部分归因 · 全窗口占比未知" : "Partial attribution · whole-capture share unknown")}</p>
+        : attribution.total_input_tokens === 0 ? <p>{zh ? "捕获输入为零，比例不适用。" : "Captured input is zero; the ratio is undefined."}</p> : null}
+    {attribution ? <details className="research-usage-detail"><summary>{estimated ? (zh ? "估计明细" : "Estimate details") : (zh ? "归因明细" : "Attribution details")}</summary>
+      {measured ? <dl className="research-usage-basis">
+        <dt>{estimated ? (zh ? "已记录 packet 文本估计" : "Recorded packet text estimate") : (zh ? "已归因 LoopX 输入" : "Attributed LoopX input")}</dt><dd>{measured.loopx_input_tokens.toLocaleString()} tokens</dd>
+        <dt>{zh ? "全部请求输入" : "All request input"}</dt><dd>{measured.total_input_tokens.toLocaleString()} tokens</dd>
+        <dt>{zh ? "已覆盖请求输入" : "Input in attributed requests"}</dt><dd>{measured.attributed_input_tokens.toLocaleString()} tokens</dd>
+        <dt>{zh ? "LoopX 输入中的缓存" : "Cached subset of LoopX input"}</dt><dd>{measured.loopx_cached_input_tokens?.toLocaleString() ?? "—"} tokens</dd>
+        <dt>{zh ? "占未缓存输入" : "Share of uncached input"}</dt><dd>{measured.uncached_input_fraction == null ? "—" : percent(measured.uncached_input_fraction)}</dd>
+        {measured.status === "partial" && measured.input_fraction_bounds ? <><dt>{zh ? "缺失归因的可能范围" : "Possible range with missing attribution"}</dt><dd>{measured.input_fraction_bounds.map(percent).join(" – ")}<p>{zh ? "假定未归因请求全非 LoopX / 全为 LoopX；不是置信区间。" : "Unattributed requests treated as none / all LoopX; not a confidence interval."}</p></dd></> : null}
+      </dl> : <p>{attribution.status === "unavailable" ? attribution.reason : null}</p>}
+      {measured?.estimate_basis ? <p>{measured.estimate_basis.tokenizer} {measured.estimate_basis.version} · {measured.estimate_basis.encoding}<br/>{measured.estimate_basis.models.join(", ")}</p> : null}
+      <p><code>{attribution.method}</code></p>
+    </details> : null}
+  </section>;
+}
+
 // The assessment owner supplies localized questions. Both readers use that
 // copy without inventing short titles or translating the original evidence.
 export const episodeQuestion = (result: TrajectoryAssessment, id: string, episode?: TrajectoryEpisode) =>
   result.episode_questions?.find(question => question.episode_id === id)?.question ?? episode?.question ?? id;
+
+// Factor only an exact, single occurrence of the declared episode identity.
+// This is lossless presentation, not a short-title generator or prose classifier.
+export function episodeQuestionGroups<T extends {episode_id: string}>(result: TrajectoryAssessment, records: T[], episodes: TrajectoryEpisode[] | undefined) {
+  const groups: Array<{before: string; after: string; exact: boolean; items: Array<{record: T; question: string}>}> = [];
+  for (const record of records) {
+    const id = record.episode_id;
+    const question = episodeQuestion(result, id, episodes?.find(episode => episode.id === id));
+    const index = question.indexOf(id);
+    const exact = index >= 0 && question.lastIndexOf(id) === index
+      && !/[\w./-]/u.test(question[index - 1] ?? "") && !/[\w./-]/u.test(question[index + id.length] ?? "");
+    const before = exact ? question.slice(0, index) : question, after = exact ? question.slice(index + id.length) : "";
+    const prior = groups.at(-1);
+    if (exact && prior?.exact && prior.before === before && prior.after === after) prior.items.push({record, question});
+    else groups.push({before, after, exact, items: [{record, question}]});
+  }
+  // Factor repeated prose only when it outweighs the identities. This also
+  // serves a pair of long questions; preserve source order and every verdict.
+  return groups.flatMap(group => {
+    const shared = group.before.length + group.after.length;
+    const identities = group.items.reduce((sum, item) => sum + item.record.episode_id.length, 0);
+    return group.items.length >= 2 && shared * (group.items.length - 1) > identities
+      ? [{...group, shared: true}]
+      : group.items.map(item => ({before: "", after: "", items: [item], shared: false}));
+  });
+}
 
 // Format the native owner's existing projection, without deriving a gain,
 // deciding adoption, or borrowing values from another pack.
@@ -126,28 +184,32 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
     </div>
     {active ? <div className="research-effect-evidence" id={panelId} ref={panel} role="region" tabIndex={-1} aria-labelledby={`${panelId}-heading`}
       key={active.metric} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); close();}}}>
-      <header className="research-effect-detail-heading"><h4 id={`${panelId}-heading`}>{active.label[zh ? 0 : 1]}</h4><button type="button" onClick={close} aria-label={zh ? "收起指标详情" : "Close metric details"}><X size={16} aria-hidden/></button></header>
       {(() => {
         const {metric, label, row, assessments, excluded} = active;
         return <>
-                <div className="research-effect-help"><span>{zh ? "逐项判读" : "Episode judgments"}</span><ContextHelp label={`${label[zh ? 0 : 1]} · ${zh ? "判读口径" : "Interpretation"}`}>
+                <header className="research-effect-detail-heading"><div className="research-progress-title"><h4 id={`${panelId}-heading`}>{label[zh ? 0 : 1]}</h4><ContextHelp label={`${label[zh ? 0 : 1]} · ${zh ? "判读口径" : "Interpretation"}`}>
                   <p>{label[zh ? 2 : 3]}</p>
                   {metric === "benefit_test" ? <p>{zh ? "“是”只表示做过收益检验，不保证收益为正；“否”不是收益为零。" : "Yes means utility was tested, not that utility improved. No is not zero utility."}</p> : null}
                   {metric === "redundancy" ? <p>{zh ? "“是”表示发现无益重复，不能当作正向表现。" : "Yes means avoidable repetition was found; it is not a positive outcome."}</p> : null}
                   {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
-                </ContextHelp></div>
+                </ContextHelp></div><button type="button" onClick={close} aria-label={zh ? "收起指标详情" : "Close metric details"}><X size={16} aria-hidden/></button></header>
                 {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episodeQuestion(result, episode.id, episode)}</li>)}</ul></div> : null}
-                <div className="research-assessments">{assessments.map(assessment => {
+                <div className="research-assessments">{episodeQuestionGroups(result, assessments, p.episodes).map(group => <div className="research-assessment-group" key={group.items[0]!.record.episode_id}>
+                  {group.shared ? <p className="research-assessment-shared-question">{group.before}<span>{zh ? "〔研究片段〕" : "[episode]"}</span>{group.after}</p> : null}
+                  {group.items.map(({record: assessment, question}) => {
                   const episode = p.episodes?.find(item => item.id === assessment.episode_id);
                   return <details className="research-assessment" key={assessment.episode_id}>
-                    <summary><span className="research-assessment-name">{episodeQuestion(result, assessment.episode_id, episode)}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
+                    <summary aria-label={`${question} · ${verdictLabel(metric, assessment.verdict, zh)}`}><span className="research-assessment-name">{group.shared ? assessment.episode_id : question}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>
                     <div className="research-assessment-body">
-                      <details><summary>{zh ? "原始研究问题" : "Original research question"}</summary><code>{assessment.episode_id}</code>{episode ? <p>{episode.question}</p> : null}</details>
-                      <p>{assessment.reason}</p>
+                      <p className="research-assessment-reason">{assessment.reason}</p>
                       <div className="research-effect-citations">{assessment.citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => onCitation(c, event.currentTarget)}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>
+                      {group.shared || (episode && episode.question !== question) ? <details className="research-assessment-original"><summary>{group.shared ? (zh ? "完整问题" : "Full question") : (zh ? "原始研究问题" : "Original research question")}</summary>
+                        {group.shared ? <p className="research-assessment-question">{question}</p> : null}
+                        {episode && episode.question !== question ? <>{group.shared ? <h5>{zh ? "原文" : "Original"}</h5> : null}<p>{episode.question}</p></> : null}
+                      </details> : null}
                     </div>
                   </details>;
-                })}</div>
+                })}</div>)}</div>
                 {!row?.eligible ? <p>{zh ? "所选片段没有此指标的适用判读；未记作零。" : "No eligible judgment for this metric in the selected episodes; not recorded as zero."}</p> : null}
 
         </>;
@@ -194,6 +256,7 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
             <p>{incomplete.usage ? <>{zh ? "其中末轮" : "Of which, unfinished Turn"} · {zh ? "输入" : "input"} <strong>{number(incomplete.usage.input_tokens)}</strong> · {zh ? "输出" : "output"} <strong>{number(incomplete.usage.output_tokens)}</strong> tokens</> : (zh ? "末轮尚无计数观测，不记零" : "No counter observation for the unfinished Turn; not zero")}</p>
             <p>{zh ? "仅含已持久化用量，不能据此判定运行已结束。" : "Persisted usage only; this does not establish termination."}</p>
           </div> : null}
+          <LoopXInputShare usage={usage} zh={zh}/>
           {usage ? <div className="research-request-coverage">
             <div className="research-usage-heading"><h4>{zh ? "请求覆盖" : "Request coverage"}</h4><ContextHelp label={zh ? "请求计数口径" : "Request counter basis"}>
               <p>{zh ? "逐响应去重后，核对轮次与会话累计量、上下文压缩记录及会话计数。以下是独立核对口径，与上方会话计数不相加，也不改写 Goal 账本。" : "Deduplicated responses are reconciled against Turn and session totals, compaction records and session counters. This separate basis is not added to the session counters above and does not rewrite the Goal ledger."}</p>

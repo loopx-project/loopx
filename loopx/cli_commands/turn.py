@@ -49,6 +49,8 @@ def handle_turn_command(
     print_payload: PrintPayload,
     native_host_runner: Callable[..., dict[str, Any]] | None = None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
+    native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> int | None:
     if args.command != "turn":
         return None
@@ -75,6 +77,10 @@ def handle_turn_command(
             args.host != "codex-app-server" or native_host_runner is None or native_session_binding_resolver is None
         ):
             raise ValueError("an app-server Turn requires its original host connection and session resolver")
+        if native_completion_lease_resolver is not None and native_host_runner is None:
+            raise ValueError("a native completion lease requires its original host connection")
+        if native_task_validator is not None and native_host_runner is None:
+            raise ValueError("a native task validator requires its original host connection")
         if getattr(args, "todo_id", None) is not None and (
             getattr(args, "resume_turn_key", None)
             or any(getattr(args, key, None) for key in ("resume_goal_id", "resume_agent_id", "resume_todo_id"))
@@ -340,6 +346,8 @@ def handle_turn_command(
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
                 native_host_runner=native_host_runner,
                 native_session_binding_resolver=native_session_binding_resolver,
+                native_completion_lease_resolver=native_completion_lease_resolver,
+                native_task_validator=native_task_validator,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")

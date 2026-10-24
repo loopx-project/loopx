@@ -37,6 +37,7 @@ from ..control_plane.todos.durable_completion import (
     read_persisted_todo_record,
     read_persisted_todo_record_with_source,
 )
+from ..control_plane.todos.completion_fence import evaluate_todo_completion_fence
 from ..control_plane.turn_driver import (
     build_loopx_turn_command_validator,
     codex_cli_session_binding,
@@ -75,6 +76,8 @@ def execute_turn_run_once(
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
     native_host_runner: Callable[..., dict[str, Any]] | None = None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
+    native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
@@ -110,6 +113,9 @@ def execute_turn_run_once(
             if args.host_command_json:
                 raise ValueError(f"{args.host} does not accept --host-command-json")
             raw_argv = None
+        if native_task_validator is not None and args.host != "codex-app-server":
+            raise ValueError("a native task validator cannot replace a selected CLI validator")
+        task_validator = native_task_validator
         if args.validation_command_json:
             raw_validation_argv = json.loads(args.validation_command_json)
             if not isinstance(raw_validation_argv, list) or not all(
@@ -118,14 +124,13 @@ def execute_turn_run_once(
                 raise ValueError(
                     "--validation-command-json must be a JSON string array"
                 )
-            task_validator = build_loopx_turn_command_validator(
-                raw_validation_argv,
-                project=project,
-                timeout_seconds=args.validation_timeout_seconds,
-                failure_recovery_kind=args.validation_failure_kind,
-            )
-        else:
-            task_validator = None
+            if task_validator is None:
+                task_validator = build_loopx_turn_command_validator(
+                    raw_validation_argv,
+                    project=project,
+                    timeout_seconds=args.validation_timeout_seconds,
+                    failure_recovery_kind=args.validation_failure_kind,
+                )
         envelope = (
             payload.get("turn_envelope")
             if isinstance(payload.get("turn_envelope"), dict)
@@ -382,6 +387,7 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
+                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {}),
             )
             if completion.get("ok") is not True:
                 return completion
@@ -451,7 +457,27 @@ def execute_turn_run_once(
             *,
             effect_ref: str,
         ) -> dict[str, object]:
-            completion = todo_completion(result, effect_ref=effect_ref)
+            require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            prior = completion_readback()
+            if prior is None:
+                completion = todo_completion(result, effect_ref=effect_ref)
+            else:
+                # Completion may have atomically retired the execution lease
+                # before refresh failed. Read its exact canonical Turn receipt;
+                # resubmitting completion with a different/missing old fence is
+                # neither a new execution grant nor an idempotent request.
+                retained = read_heartbeat_settlement(runtime_root,
+                    goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                    todo_id=settlement_identity.todo_id, turn_instance_id=settlement_identity.turn_instance_id,
+                    replan_obligation_id=settlement_identity.replan_obligation_id,
+                    registry_path=registry_path, goal_ref=goal_ref)
+                if retained is None:
+                    raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
+                if retained.completion_event is None:
+                    append_settlement_event({"ok": True, "appended": True}, event_kind="todo_complete",
+                        status="terminal_no_followup" if prior["continuation"] == "no_followup" else "completed",
+                        details={"command": "turn recovery probe", "no_followup": prior["continuation"] == "no_followup"})
+                completion = {"ok": True, "appended": True, "completion": prior}
             if not completion.get("ok"):
                 return completion
             todo_id = str(selected_todo.get("todo_id") or "")
@@ -549,12 +575,18 @@ def execute_turn_run_once(
                     project=None,
                     state_file=None,
                 )
-                durable_todo, existing_todo_ids = read_persisted_todo_record(
+                durable_todo, existing_todo_ids, projection_source = read_persisted_todo_record_with_source(
                     state_file,
                     todo_id=todo_id,
                     registry_path=registry_path,
                     goal_id=args.goal_id,
                     runtime_root=runtime_root,
+                )
+                evaluate_todo_completion_fence(
+                    todo=durable_todo,
+                    projection_source=projection_source,
+                    completion_turn_key=settlement_identity.turn_instance_id,
+                    no_followup=False,
                 )
                 return project_durable_completion_outcome(
                     todo=durable_todo,

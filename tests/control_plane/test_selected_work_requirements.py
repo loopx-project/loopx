@@ -163,9 +163,11 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     state.write_text(
         goal_requirements + "## Agent Todo\n- [ ] Stale display: do only an easier check.\n",
     )
+    cli_bin = Path(sys.executable).parent / "loopx"
 
     def guard(*extra: str) -> dict:
-        code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
+        code, packet = run_json_cli_result("--cli-bin", str(cli_bin),
+            "quota", "should-run", "--goal-id", "requirements-goal",
             "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
@@ -176,7 +178,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     before = state.read_bytes()
     # Run the actual default product prompt's guard: no capture/envelope opt-in.
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(Path(sys.executable).parent / "loopx"),
+        "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(cli_bin),
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and generated["ok"], generated
     body = generated["task_body"]
@@ -224,12 +226,13 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert selected["todo_id"] == "todo_cursor_work"
     read = reads[-1]
     tokens = shlex.split(read["command"])
+    assert tokens[:3] == [str(cli_bin), "--cli-bin", str(cli_bin)]
     assert tokens[tokens.index("--registry") + 1] == str(registry)
     assert tokens[tokens.index("--runtime-root") + 1] == str(runtime)
     assert tokens[tokens.index("--todo-id") + 1] == "todo_cursor_work"
 
     def read_detail() -> dict:
-        result = subprocess.run([sys.executable, "-m", "loopx.cli", *tokens[1:]],
+        result = subprocess.run(tokens, cwd=REPO, env=env,
             capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
 
@@ -275,7 +278,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     # The old observation remains an observation, not a rewritten current brief.
     assert reads[-1]["content"]["todo"]["text"] == expected
     missing_tokens = ["todo_missing" if token == "todo_cursor_work" else token for token in tokens]
-    missing = subprocess.run([sys.executable, "-m", "loopx.cli", *missing_tokens[1:]],
+    missing = subprocess.run(missing_tokens, cwd=REPO, env=env,
         capture_output=True, text=True, check=True)
     assert json.loads(missing.stdout)["not_found"] is True
     # Source reads are fresh, not snapshots of the earlier guard. Failure is

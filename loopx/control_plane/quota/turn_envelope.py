@@ -11,7 +11,6 @@ from ..scheduler.execution_context import (
     render_scheduler_execution_args,
     resolve_scheduler_execution_context,
 )
-from ..work_items.interaction_contract import protocol_action_packet_fields
 
 TURN_ENVELOPE_SCHEMA_VERSION = "loopx_turn_envelope_v0"
 TURN_ENVELOPE_BUDGET_BYTES = 8_192
@@ -42,12 +41,6 @@ def _turn_envelope_result(
     return dict(result)
 
 
-def _protocol_action_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Prepare the separately versioned protocol-packet projection."""
-
-    return protocol_action_packet_fields(dict(payload))
-
-
 def turn_envelope_action_signature_document(
     envelope: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -61,7 +54,6 @@ def quota_action_signature_document(payload: Mapping[str, Any]) -> dict[str, Any
     return _turn_envelope_result(
         "quota_signature",
         payload=dict(payload),
-        protocol_action_fields=_protocol_action_fields(payload),
     )
 
 
@@ -97,7 +89,6 @@ def build_turn_envelope(
     return _turn_envelope_result(
         "build",
         payload=dict(payload),
-        protocol_action_fields=_protocol_action_fields(payload),
         scheduler_execution_args=scheduler_execution_args,
         **({"captured_decision_path": captured_decision_path}
            if captured_decision_path is not None else {}),

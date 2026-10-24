@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import type { JsonObject } from "../runtime_decode.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 export const STEWARD_MANAGED_ACTOR_SCHEMA = "loopx_steward_managed_actor_v0";
 const AGENT_ID = "steward";
@@ -36,7 +37,7 @@ export function normalizeStewardManagedActor(value: unknown): JsonObject {
     creation_operation_id: text(row.creation_operation_id, "managed Goal creation")};
 }
 
-function basis(params: JsonObject, executing = false) {
+export function stewardManagedBasis(params: JsonObject, executing = false) {
   const binding = requireJsonObject(params.binding, "steward binding");
   const session = requireJsonObject(params.session, "original steward Session");
   const context = requireJsonObject(session.steward_context, "original steward authority");
@@ -81,16 +82,16 @@ function basis(params: JsonObject, executing = false) {
  */
 export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   const turn = params.turn == null ? null : requireJsonObject(params.turn, "current Chat Turn");
-  const current = basis(params, turn !== null);
+  const current = stewardManagedBasis(params, turn !== null);
   if (!current.actor || !current.goal || params.goal_active !== true) {
     throw new EffectRuntimeRequestError("the original prepared steward Goal must be active");
   }
   const request = requireJsonObject(params.request, "native steward Turn request");
   const fields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
-    "monitor_deadline", "monitor_lease_version"];
+    "monitor_deadline", "monitor_lease_version", "report_window_id", "report_subscription_revision", "resume_turn_key"];
   if (Object.keys(request).some(key => !fields.includes(key))
       || request.operation !== "native_turn" || request.host !== "codex-app-server"
-      || ![undefined, "native_turn", "monitor"].includes(request.work_kind as string | undefined)
+      || ![undefined, "native_turn", "monitor", "report"].includes(request.work_kind as string | undefined)
       || JSON.stringify(normalizeStewardManagedActor(request.actor)) !== JSON.stringify(current.actor)
       || typeof request.turn_instance_id !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(request.turn_instance_id)
       || request.todo_id !== null && (typeof request.todo_id !== "string" || !/^todo_[A-Za-z0-9_-]{1,100}$/.test(request.todo_id))) {
@@ -117,7 +118,89 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       || !Number.isSafeInteger(request.monitor_lease_version) || Number(request.monitor_lease_version) < 0)) {
     throw new EffectRuntimeRequestError("observation-only execution requires the original native watch Todo");
   }
+  if (request.work_kind === "report") {
+    const window = requireJsonObject(params.report_window, "original report window");
+    const subscription = requireJsonObject(params.report_subscription, "current report subscription");
+    const todo = requireJsonObject(params.report_todo, "original report Todo");
+    const recovery = params.report_settlement_recovery == null ? null
+      : requireJsonObject(params.report_settlement_recovery, "native original report recovery");
+    let settlementOnly = false;
+    if (recovery) {
+      const decision = requireJsonObject(recovery.recovery_decision, "native journal recovery decision");
+      const cachedGeneration = todo.status === "open" && recovery.journal_status === "failed"
+        && decision.action === "continue" && decision.resume_from === "validation"
+        && Array.isArray(recovery.completed_phases) && recovery.completed_phases.length === 2
+        && recovery.completed_phases[0] === "host_execute" && recovery.completed_phases[1] === "typed_result";
+      const completedGeneration = todo.status === "done" && todo.completion_turn_key === request.turn_instance_id
+        && (decision.action === "continue" && ["durable_writeback", "quota_spend", "scheduler_apply", "scheduler_ack"].includes(String(decision.resume_from))
+          || decision.action === "return_existing" && recovery.journal_status === "committed");
+      settlementOnly = recovery.schema_version === "loopx_turn_journal_inspection_v1" && recovery.ok === true
+        && recovery.goal_matches === true && recovery.owner_matches === true && recovery.turn_key_matches === true
+        && recovery.journal_consistent === true && decision.reinvoke_host === false
+        && (cachedGeneration || completedGeneration);
+      if (!settlementOnly || params.preparing_model_context === true) {
+        throw new EffectRuntimeRequestError("original report recovery requires validated remaining effects without a model");
+      }
+    }
+    if (request.validation_command === null || subscription.enabled !== true || subscription.profile_preset !== "portfolio-progress"
+        || subscription.route_ref !== `steward-private:${current.id}:${current.source}`
+        || subscription.effective_revision !== request.report_subscription_revision
+        || window.subscription_revision !== request.report_subscription_revision
+        || window.window_id !== request.report_window_id || window.goal_id !== current.actor.goal_id
+        || window.agent_id !== current.actor.agent_id || todo.todo_id !== request.todo_id
+        || todo.target_key !== window.window_id || todo.claimed_by !== AGENT_ID
+        || todo.action_kind !== "generate_periodic_report" || !(todo.status === "open" && !recovery || settlementOnly)) {
+      throw new EffectRuntimeRequestError("report execution requires the original live subscription, window and task");
+    }
+    if (request.resume_turn_key !== undefined) {
+      if (typeof request.resume_turn_key !== "string" || !ENVELOPED_SHA256_PATTERN.test(request.resume_turn_key)) {
+        throw new EffectRuntimeRequestError("report recovery requires the original native Turn key");
+      }
+      // An already accepted worker retains its ordinary active-Turn fence.
+      // Before acceptance, qualify one exact transport refusal against native
+      // history. This code is emitted only before turn/start publication by
+      // the first-party launch owner; absent events or a timeout do not qualify.
+      if (!turn) {
+        const proof = requireJsonObject(params.report_launch_recovery, "original launch rejection");
+        const original = requireJsonObject(proof.original, "original rejected Chat Turn");
+        const prior = requireJsonObject(original.loopx_request, "original rejected request");
+        const result = requireJsonObject(requireJsonObject(original.response, "original response").native_loopx, "native rejection");
+        const journal = requireJsonObject(proof.inspection, "canonical original Turn inspection");
+        const decision = requireJsonObject(journal.recovery_decision, "original native recovery decision");
+        const effects = requireJsonObject(journal.recorded_effects, "original native effects");
+        const invocation = requireJsonObject(result.effects, "original invocation effects");
+        const keys = Object.keys(request).filter(key => key !== "resume_turn_key");
+        if (original.session_id !== current.sessionId || original.origin !== "native_loopx"
+            || original.loopx_execution !== true || original.status !== "completed"
+            || original.delta_count !== 0 || original.upstream_turn_id !== null
+            || Object.keys(prior).length !== keys.length
+            || keys.some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+            || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
+            || result.mode !== "run_once" || result.effects_scope !== "current_invocation"
+            || result.error_code !== "stale_goal_authority"
+            || result.error !== "first-party Host runtime rejected: stale_goal_authority"
+            || result.resume_turn_key !== request.resume_turn_key
+            || proof.turn_key !== request.resume_turn_key || Object.values(invocation).some(value => value === true)
+            || journal.schema_version !== "loopx_turn_journal_inspection_v1" || journal.ok !== true
+            || journal.goal_matches !== true || journal.owner_matches !== true || journal.turn_key_matches !== true
+            || journal.journal_consistent !== true || journal.journal_status !== "in_progress"
+            || !Array.isArray(journal.completed_phases) || journal.completed_phases.length !== 0
+            || proof.host_attempt_count !== 1 || proof.generation_present !== false
+            || effects.host_invoked !== null || effects.state_written !== false
+            || effects.quota_spent !== false || effects.scheduler_acknowledged !== false
+            || decision.action !== "continue" || decision.reinvoke_host !== true || decision.resume_from !== "host_execute") {
+          throw new EffectRuntimeRequestError("report launch recovery is not proven safe by the original native rejection");
+        }
+      }
+    } else if (params.report_launch_recovery != null) {
+      throw new EffectRuntimeRequestError("launch recovery must retain the original native Turn key");
+    }
+  } else if (request.report_window_id !== undefined || request.report_subscription_revision !== undefined
+      || request.resume_turn_key !== undefined || params.report_settlement_recovery != null || params.report_launch_recovery != null) {
+    throw new EffectRuntimeRequestError("report fields belong only to an original calendar report");
+  }
   let refreshScope = false;
+  let rebindContext = false;
   if (turn) {
     const scope = requireJsonObject(params.scope, "original steward scope observation");
     if (typeof scope.current !== "string" || !scope.current) {
@@ -130,7 +213,12 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       // external-conversation isolation boundary.
       const knownSelfRegistration = current.binding.goal_scope === "all_registered"
         && scope.without_actor && current.session.manager_authorization_scope_id === scope.without_actor;
-      if (!knownSelfRegistration && !observationOnly) {
+      // A due report may enter only the existing context-preparation owner.
+      // It must discard old model context before strict execution admission;
+      // this phase never updates the saved scope hash or permits a model call.
+      rebindContext = !knownSelfRegistration && current.binding.goal_scope === "all_registered"
+        && request.work_kind === "report" && params.preparing_model_context === true;
+      if (!knownSelfRegistration && !observationOnly && !rebindContext) {
         throw new EffectRuntimeRequestError("the original portfolio changed beyond the prepared steward creation");
       }
       // A pure native watch uses only the fresh scoped reader and cannot
@@ -140,7 +228,8 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
     }
   }
   return {actor: current.actor, workspace_path: current.workspace, host: "codex-app-server",
-    refresh_original_scope: refreshScope, observation_only: observationOnly};
+    refresh_original_scope: refreshScope, observation_only: observationOnly,
+    ...(rebindContext ? {context_rebind_required: true} : {})};
 }
 
 export const STEWARD_MONITOR_TARGET = "steward-portfolio-watch";
@@ -152,7 +241,7 @@ function isStewardMonitorTodo(row: JsonObject): boolean {
 
 /** The monitor Todo is the configuration authority; the binding stores no toggle. */
 export function planStewardMonitor(params: JsonObject): JsonObject {
-  const current = basis(params, true);
+  const current = stewardManagedBasis(params, true);
   if (!current.actor || !current.goal || params.operation === "enable" && params.goal_active !== true) {
     throw new EffectRuntimeRequestError("prepare the original active steward first");
   }
@@ -208,7 +297,7 @@ export function observeStewardPortfolio(params: JsonObject): JsonObject {
 }
 
 export function planStewardManagedMode(params: JsonObject): JsonObject {
-  const current = basis(params);
+  const current = stewardManagedBasis(params);
   if (!Number.isSafeInteger(params.binding_revision) || Number(params.binding_revision) < 0) {
     throw new EffectRuntimeRequestError("current conversation revision is required");
   }
@@ -227,7 +316,7 @@ export function planStewardManagedMode(params: JsonObject): JsonObject {
 }
 
 export function bindStewardManagedActor(params: JsonObject): JsonObject {
-  const current = basis(params);
+  const current = stewardManagedBasis(params);
   const goal = current.goal;
   if (!goal || !Array.isArray(goal.registered_agents) || !goal.registered_agents.includes(AGENT_ID)) {
     throw new EffectRuntimeRequestError("native Goal and Agent registration must be read back before binding");

@@ -142,6 +142,25 @@ for (const kind of ["project", "steward"]) {
       assert.throws(() => listLocalBoundSessions({...lookup, ...change, sessions: []}));
     }
   });
+
+  test(`${kind} bound identity is independent of JSON object property order`, () => {
+    const reordered = Object.fromEntries(Object.entries(context as Record<string, unknown>).reverse());
+    const field = kind === "steward" ? "steward_context" : "project_context";
+    const restored = {...session, [field]: reordered};
+    assert.deepEqual(listLocalBoundSessions({...lookup, sessions: [restored]}), {session_ids: ["original"]});
+    // The ingress snapshot and canonical store may use different serialization
+    // order. Neither changes the audience, workspace or original Session.
+    for (const saved of [context, reordered]) {
+      assert.deepEqual(resolveBoundConversation({...continuation, session_context: saved,
+        session: restored}).context, context);
+    }
+    for (const change of [{source_ref: "f".repeat(24)}, {grant: "workspace_write"},
+      {operator_ref: "f".repeat(24)}, {unexpected: true}]) {
+      const changed = {...reordered, ...change};
+      assert.throws(() => resolveBoundConversation({...continuation, session_context: changed,
+        session: {...restored, [field]: changed}}));
+    }
+  });
 }
 
 test("local discovery never promotes a group binding to a private recipient", () => {

@@ -438,6 +438,43 @@ def _bound_project(fixture):
     return bindings, args, binding, session, turn
 
 
+def test_bound_http_continuation_preserves_identity_after_json_key_reordering(ordinary):  # noqa: F811
+    store, runtime, _contexts, request, capture, _fake, _workspace = ordinary
+    bindings, _args, binding, session, active = _bound_project(ordinary)
+    sid = session["session_id"]
+    original_thread = store.load_session(sid)["upstream_thread_id"]
+    runtime.interrupt_turn(session_id=sid, turn_id=active["turn_id"])
+    # A JSON writer may reorder object members without changing their values.
+    # Exercise the real store, HTTP discovery/admission and queued worker path.
+    saved = dict(reversed(list(session["project_context"].items())))
+    try:
+        # Re-serialize only this idle, isolated fixture. Source context remains
+        # immutable through the production Session update API.
+        from loopx.chat_store import _atomic_write_json
+        _atomic_write_json(store._session_path(sid), {**store.load_session(sid), "project_context": saved})
+        status, discovered = request(f"/api/chat/sessions?conversation_binding_id={binding['binding_id']}")
+        assert status == 200, discovered
+        assert [row["session_id"] for row in discovered["sessions"]] == [sid]
+        body = {"message": "Continue in the original project", "client_turn_id": "reordered-context", "delivery": "queue"}
+        status, accepted = request(f"/api/chat/sessions/{sid}/turns", body)
+        assert status == 202, accepted
+        assert runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)["status"] == "completed"
+        status, replay = request(f"/api/chat/sessions/{sid}/turns", body)
+        assert status == 202 and not replay["created"] and replay["turn_id"] == accepted["turn_id"]
+        current = store.load_session(sid)
+        assert current["goal_id"] is None and current["upstream_thread_id"] == original_thread
+        assert current["project_context"] == saved
+        inputs = [row for row in store.messages(sid) if row["turn_id"] == accepted["turn_id"] and row["role"] == "user"]
+        assert len(inputs) == 1 and inputs[0]["origin"] == "web"
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(row.get("method") == "turn/start" for row in calls) == 2
+        bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        status, _ = request(f"/api/chat/sessions/{sid}/turns", {**body, "client_turn_id": "revoked-context"})
+        assert status == 400 and store.turn_for_client(sid, "revoked-context") is None
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("committed", [False, True])
 def test_http_queue_retry_retains_original_managed_acceptance(ordinary, monkeypatch, committed):  # noqa: F811
     store, runtime, contexts, request, capture, _fake, _workspace = ordinary

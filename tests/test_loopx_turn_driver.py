@@ -2643,9 +2643,9 @@ def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
     assert resumed_exit_code == 0, json.dumps(resumed, indent=2)
     assert resumed["status"] == "committed"
     assert resumed["effects"]["host_invoked"] is False
-    assert committed_results[1]["status"] == "done"
-    assert committed_results[1]["provider_status"] == "replayed"
-    assert committed_results[1]["idempotent_replay"] is True
+    # The exact canonical completion is read back after the lost response.
+    # Reissuing completion would carry a lease already retired by its commit.
+    assert len(committed_results) == 1
     assert _turn_journal(runtime)["writeback"]["completion"] == {
         "todo_id": "todo_fixture0001",
         "continuation": "active_goal",

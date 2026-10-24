@@ -1480,6 +1480,37 @@ def test_codex_cli_host_discards_missing_resume_session(
     assert codex_cli_session_binding(runtime_root, envelope) is None
 
 
+def test_native_input_observation_is_opt_in_and_does_not_change_host_result(tmp_path, monkeypatch):
+    from loopx.control_plane.turn_driver import codex_input_trace as trajectory_input_capture
+
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    project = tmp_path / "project"
+    project.mkdir()
+    request = _request()
+    observed = []
+
+    def record(root, **fields):
+        observed.append((root, fields))
+        raise OSError("Synthetic diagnostic failure must not fail the Host")
+
+    monkeypatch.setattr(trajectory_input_capture, "record_codex_input_source", record)
+    baseline = run_codex_cli_host(request, runtime_root=tmp_path / "off", project=project,
+                                 codex_bin=str(executable), timeout_seconds=5)
+    assert observed == []
+    trace = tmp_path / "traces"
+    (trace / "trace-old").mkdir(parents=True)
+    monkeypatch.setenv("CODEX_ROLLOUT_TRACE_ROOT", str(trace))
+    result = run_codex_cli_host(request, runtime_root=tmp_path / "on", project=project,
+                               codex_bin=str(executable), timeout_seconds=5)
+    assert result == baseline
+    assert len(observed) == 1 and observed[0][0] == trace
+    fields = observed[0][1]
+    assert fields["text"] == _prompt(request) and fields["goal_id"] == "fixture-goal"
+    assert fields["prior_bundles"] == {"trace-old"}
+
+
 def test_public_e2e_smoke_runs_n_transactions_on_one_session() -> None:
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run(

@@ -17,6 +17,11 @@ from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context import pending
 from loopx.capabilities.manager_context.inspection import ManagerInspection, CONTEXT_TOOL_NAME
 from loopx.capabilities.manager_context.roundtrip import drain, reply_status
+from tests.control_plane.canonical_authority_fixture import (
+    empty_todo_display,
+    initialize_canonical_source_fixture,
+    isolate_sqlite_runtime,
+)
 
 
 def test_failed_stop_keeps_active_claim_and_retry_preserves_unrelated_work(tmp_path):
@@ -127,8 +132,9 @@ def test_stop_during_native_start_binds_current_turn_without_borrowing_previous_
         controller.close()
 
 
-@pytest.fixture
-def project(tmp_path):
+@pytest.fixture(params=["file", "sqlite"])
+def project(tmp_path, monkeypatch, request):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     root = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
     goals = []
@@ -142,6 +148,10 @@ def project(tmp_path):
         goals.append({"id": goal_id, "domain": title, "repo": str(repo),
             "state_file": state.name, "status": "active-read-only",
             "coordination": {"registered_agents": agents, "agent_model": "peer_v1"}})
+        if request.param is not None:
+            initialize_canonical_source_fixture(root, goal_id, state_path=state, provider=request.param)
+            # A stale display must not replace the canonical Todo source.
+            empty_todo_display(state)
     registry.write_text(json.dumps({"schema_version": "0.1", "common_runtime_root": str(root),
                                     "goals": goals}), encoding="utf-8")
     return root, registry, tmp_path / "research"
@@ -170,9 +180,26 @@ def test_project_evidence_scopes_before_reads_and_rejects_remote_and_other_goal(
     assert [s["source_id"] for s in reader.sources()] == ["local"]
     result = reader.read(CONTEXT_TOOL_NAME, {"view": "todos", "goal_id": "research"})
     assert result["ok"] and "Verify corrected source" in json.dumps(result)
+    assert result["source"]["status"] == "read" and not result["unknown"]
+    assert [row["title"] for row in result["rows"]] == ["Verify corrected source"]
     assert reader.read(CONTEXT_TOOL_NAME, {"view": "todos", "goal_id": "other"})["ok"] is False
     assert reader.read(CONTEXT_TOOL_NAME, {"view": "sources", "source_id": "ssh:other"}) == {
         "ok": False, "error": "source_outside_available_scope"}
+
+
+@pytest.mark.parametrize("project", [None], indirect=True, ids=["unmigrated"])
+def test_project_todo_read_refuses_unmigrated_markdown(project):
+    root, registry, repo = project
+    state = repo / "ACTIVE_GOAL_STATE.md"
+    before = state.read_bytes()
+    context = collect_manager_turn_context(registry,
+        {"channel_id": "goal.research", "goal_id": "research"}, root)
+    reader = ManagerInspection(context=context, registry_path=registry, runtime_root=root,
+        owner_scope=True, channel_id="goal.research", scope_valid=lambda: True, record=lambda _: None)
+    result = reader.read(CONTEXT_TOOL_NAME, {"view": "todos", "goal_id": "research"})
+    assert result["source"]["status"] == "unavailable"
+    assert result["unknown"] and result["matched"] is None and result["rows"] == []
+    assert state.read_bytes() == before
 
 
 def test_project_chat_nested_cli_handoff_returns_once_after_restart(project, monkeypatch):

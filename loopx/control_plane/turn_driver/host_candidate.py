@@ -147,7 +147,7 @@ def extract_action_text(request: Mapping[str, Any]) -> str:
     return str(extract_turn_authority(request)["primary_action"])
 
 
-def render_prompt(authority: Mapping[str, Any]) -> str:
+def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = False) -> str:
     """Wrap one signed Turn authority packet in a typed JSON result request.
 
     The host owns execution. The final assistant message is the only channel this
@@ -224,7 +224,9 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         f"Turn authority JSON:\n{authority_json}\n\n"
         "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"
-        "- result_kind: one of validated_progress | repair_required | "
+        "- result_kind: one of validated_progress | "
+        + ("validated_completion | " if allow_completion else "")
+        + "repair_required | "
         "replan_required | user_action_required | wait | iteration_failed\n"
         "- classification: short label (<=120 chars)\n"
         "- summary: what changed or why stopped (<=400 chars)\n"
@@ -239,7 +241,8 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "hypothesis_id/probe_kind or blocker/coverage fields and opaque evidence_ids; "
         "use independently checked evidence to satisfy the original replan packet.\n"
         "For material result kinds (validated_progress, repair_required, and "
-        "replan_required), describe the path outcome. For a material goal-path "
+        + ("validated_completion, " if allow_completion else "")
+        + "replan_required), describe the path outcome. For a material goal-path "
         "change, set path_delta_mode to material_replan, "
         "result_kind to replan_required, and agent_vision_json to a JSON-encoded "
         "bounded goal_vision_replan_contract_v0 packet whose path_delta is "
@@ -328,6 +331,7 @@ def build_result(
     *,
     fallback_reason: str = "",
     host_name: str = "Host",
+    allow_completion: bool = False,
 ) -> dict[str, Any]:
     """Shape a host model result block into a valid loopx_turn_result_v0."""
 
@@ -352,8 +356,13 @@ def build_result(
             ),
         }
 
+    # A finite-task host may expose the kernel's existing completion result.
+    # Default transports retain their old vocabulary and prompt byte-for-byte;
+    # this option grants no lifecycle authority or validator exemption.
+    material_kinds = MATERIAL_KINDS | ({"validated_completion"} if allow_completion else set())
+    accepted_kinds = ACCEPTED_RESULT_KINDS | ({"validated_completion"} if allow_completion else set())
     kind = str(candidate.get("result_kind") or "").strip()
-    if kind not in ACCEPTED_RESULT_KINDS:
+    if kind not in accepted_kinds:
         return {
             "schema_version": LOOPX_TURN_RESULT_SCHEMA,
             "turn_key": turn_key,
@@ -371,7 +380,7 @@ def build_result(
                 limit=TEXT_LIMITS["vision_unchanged_reason"],
             ),
         }
-    if kind in MATERIAL_KINDS and _execution_profile_present(request):
+    if kind in material_kinds and _execution_profile_present(request):
         missing_evidence = [
             field for field in HOST_RESULT_EVIDENCE_LIMITS
             if field not in candidate
@@ -410,7 +419,7 @@ def build_result(
         text = value.strip() if isinstance(value, str) else value
         if text or (value is not None and not isinstance(value, str)):
             result[field] = text
-    if kind in MATERIAL_KINDS:
+    if kind in material_kinds:
         _complete_material_fields(result, candidate, kind)
     for field in ("path_delta_mode", "agent_vision_json", "progress_observation_json"):
         if field in candidate:
@@ -437,7 +446,7 @@ def build_result(
         # Keep the legacy material-without-packet behavior for older hosts.
         result["vision_unchanged_reason"] = _bounded(
             "host reported material work without a goal vision replan packet"
-            if kind in MATERIAL_KINDS
+            if kind in material_kinds
             else "host reported no material change",
             limit=TEXT_LIMITS["vision_unchanged_reason"],
         )

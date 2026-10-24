@@ -161,8 +161,16 @@ def assert_installed_release(
     assert not message.startswith("/goal "), message
     assert "setup/bootstrap instruction" in normalized_message, message
     assert "/goal <loader task_body>" in normalized_message, message
-    assert "python3 -m pip install --upgrade loopx" in normalized_message, message
-    assert "workflow-skills --install" in normalized_message, message
+    assert "loopx doctor" in normalized_message, message
+    if os.name == "nt":
+        assert "| bash" not in normalized_message, message
+        assert (
+            "install-windows.ps1" in normalized_message
+            or "-m pip install --upgrade loopx" in normalized_message
+        ), message
+    else:
+        assert "python3 -m pip install --upgrade loopx" in normalized_message, message
+        assert "workflow-skills --install" in normalized_message, message
     assert "Codex CLI TUI" in normalized_message, message
     assert "quota should-run" in normalized_message, message
     assert "settlement_plan.ordered_steps" in normalized_message, message

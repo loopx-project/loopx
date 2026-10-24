@@ -9,11 +9,28 @@ from pathlib import Path
 
 from .chat_manager_details import _text
 from .control_plane.runtime.run_context_retention import goal_semantic_history_from_runs
-from .control_plane.work_items.delivery_outcome import PROGRESS_DELIVERY_OUTCOMES
-from .history import STATUS_NEUTRAL_CLASSIFICATIONS, load_index
+from .control_plane.work_items.delivery_outcome import MATERIAL_DELIVERY_OUTCOMES, PROGRESS_DELIVERY_OUTCOMES
+from .history import STATUS_NEUTRAL_CLASSIFICATIONS, load_index_snapshot
 
 
-def _recorded_details(run):
+def delivery_history_window(window_start=None, window_end=None):
+    """Validate explicit read bounds; calendar admission remains with its owner."""
+    if window_start is None and window_end is None:
+        return None
+    if not isinstance(window_start, str) or not isinstance(window_end, str):
+        raise ValueError("window_start and window_end must both be offset timestamps")
+    try:
+        start, end = (datetime.fromisoformat(value.replace("Z", "+00:00"))
+                      for value in (window_start, window_end))
+    except ValueError as exc:
+        raise ValueError("window_start and window_end must be ISO-8601 timestamps") from exc
+    if (start.tzinfo is None or end.tzinfo is None
+            or not timedelta(0) < end - start <= timedelta(days=90)):
+        raise ValueError("delivery window must be positive, offset-aware and at most 90 days")
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def _recorded_details(run, *, complete=False):
     """Hydrate existing Core fields; never dereference artifact paths or URLs."""
     observation = run.get("progress_observation")
     checkpoint = run.get("vision_checkpoint")
@@ -31,6 +48,9 @@ def _recorded_details(run):
         "probe_kind": (observation.get("probe_kind"), 160),
         "surface_id": (observation.get("surface_id"), 160),
     }
+    if complete:
+        fields = {key: (value, len(value) if isinstance(value, str) else limit)
+                  for key, (value, limit) in fields.items()}
     values = {
         key: _text(value, limit)
         for key, (value, limit) in fields.items()
@@ -44,7 +64,7 @@ def _recorded_details(run):
     # treating arbitrary evidence identifiers as fetch instructions.
     refs = [
         "sha256:" + hashlib.sha256(item.encode()).hexdigest()
-        for item in evidence[:8]
+        for item in (evidence if complete else evidence[:8])
     ] if valid_evidence else []
     return {
         "source": "core_run_index",
@@ -74,21 +94,28 @@ def _recorded_details(run):
 
 def read_manager_delivery_history(
     runtime_root: Path, goal_id: str, *, now=None, limit=24, offset=None, lookback_days=1,
-    total_limit=None,
+    total_limit=None, window_start=None, window_end=None, expected_source_revision=None,
+    delivery_ref=None, include_outcome_gaps=False,
 ):
     now = now or datetime.now().astimezone()
     if type(lookback_days) is not int or not 1 <= lookback_days <= 90:
         raise ValueError("lookback_days must be 1..90")
+    if type(include_outcome_gaps) is not bool:
+        raise ValueError("include_outcome_gaps must be a boolean")
     if total_limit is not None and (
         type(total_limit) is not int or not 1 <= total_limit <= 500
     ):
         raise ValueError("total_limit must be 1..500")
-    start = (now - timedelta(days=lookback_days)).replace(hour=0, minute=0, second=0, microsecond=0)
+    window = delivery_history_window(window_start, window_end)
+    start, end = window or ((now - timedelta(days=lookback_days)).replace(
+        hour=0, minute=0, second=0, microsecond=0), now)
     path = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
     base = {
         "window_start": start.isoformat(),
-        "window_end": now.isoformat(),
-        "window_days": lookback_days,
+        "window_end": end.isoformat(),
+        "window_days": None if window else lookback_days,
+        **({"window_bounds": "[start,end)", "window_complete": end <= now} if window else {}),
+        **({"includes_outcome_gaps": True} if include_outcome_gaps else {}),
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "deliveries": [],
     }
@@ -96,7 +123,8 @@ def read_manager_delivery_history(
         if not path.is_file():
             raise OSError("missing Core run index")
         before = path.stat()
-        runs, raw_count = load_index(path)
+        snapshot = load_index_snapshot(path, include_artifact_status=False)
+        runs, raw_count = snapshot.records, snapshot.raw_count
         after = path.stat()
 
         def signature(st):
@@ -108,13 +136,18 @@ def read_manager_delivery_history(
                 "status": "conflicting",
                 "coverage": {"matched": None, "included": 0, "omitted": None},
             }
+        if expected_source_revision is not None and snapshot.digest != expected_source_revision:
+            return {**base, "status": "conflicting", "source_revision": snapshot.digest,
+                    "expected_source_revision": expected_source_revision,
+                    "coverage": {"matched": None, "included": 0, "omitted": None}}
 
         rows = []
         invalid = 0
+        outcomes = MATERIAL_DELIVERY_OUTCOMES if include_outcome_gaps else PROGRESS_DELIVERY_OUTCOMES
         for run in runs:
             if run.get("classification") in STATUS_NEUTRAL_CLASSIFICATIONS:
                 continue
-            if run.get("delivery_outcome") not in PROGRESS_DELIVERY_OUTCOMES:
+            if run.get("delivery_outcome") not in outcomes:
                 continue
             try:
                 at = datetime.fromisoformat(
@@ -125,7 +158,7 @@ def read_manager_delivery_history(
             except ValueError:
                 invalid += 1
                 continue
-            if not start <= at <= now:
+            if not (start <= at < end if window else start <= at <= end):
                 continue
             if run.get("goal_id") not in (None, goal_id):
                 invalid += 1
@@ -134,7 +167,10 @@ def read_manager_delivery_history(
             evidence = any(
                 a.get("latest_evidence_delivery_run") for a in semantic["agents"]
             )
-            details = _recorded_details(run)
+            source_ref = "sha256:" + hashlib.sha256(json.dumps(run, sort_keys=True).encode()).hexdigest()
+            if delivery_ref is not None and delivery_ref != source_ref:
+                continue
+            details = _recorded_details(run, complete=delivery_ref is not None)
             rows.append(
                 {
                     "recorded_at": at.isoformat(),
@@ -149,10 +185,7 @@ def read_manager_delivery_history(
                     else "agent_reported_outcome",
                     "recorded_details": details,
                     "evidence_count": details["evidence_coverage"]["known"],
-                    "source_ref": "sha256:"
-                    + hashlib.sha256(
-                        json.dumps(run, sort_keys=True).encode()
-                    ).hexdigest(),
+                    "source_ref": source_ref,
                 }
             )
         rows.sort(key=lambda r: datetime.fromisoformat(r["recorded_at"]), reverse=True)
@@ -176,8 +209,9 @@ def read_manager_delivery_history(
         return {
             **base,
             "status": "read",
-            "source_revision": "sha256:"
-            + hashlib.sha256(str(signature(after)).encode()).hexdigest(),
+            # Content identity survives restart and detects an index rewrite
+            # even when its size and modification timestamp are preserved.
+            "source_revision": snapshot.digest,
             "deliveries": included,
             "coverage": {
                 "index_records": raw_count,
@@ -189,6 +223,7 @@ def read_manager_delivery_history(
                 "total_limit": total_limit if offset is None else None,
                 **({"offset": offset} if offset is not None else {}),
                 "invalid_delivery_records": invalid,
+                **({"invalid_index_records": snapshot.invalid_count} if window else {}),
             },
             "limitations": [
                 "Recorded time is not necessarily work time. Agent-reported outcomes are not independent verification.",

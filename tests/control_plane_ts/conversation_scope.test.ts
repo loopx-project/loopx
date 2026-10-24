@@ -1,6 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {resolveConversationScope} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+import {resolveConversationScope, projectConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+
+test("result review narrows runtime effects without rewriting the original grant or native store", () => {
+  const context = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/synthetic/project",
+    audience: "bound_owner", grant: "workspace_write", binding_id: "b".repeat(24),
+    source_ref: "c".repeat(24), provider_ref: "d".repeat(24), operator_ref: "e".repeat(24)};
+  const before = structuredClone(context);
+  const normal = projectConversationIdentity({context});
+  const review = projectConversationIdentity({context, read_only_review: true});
+  assert.deepEqual(review.context, normal.context);
+  assert.deepEqual(context, before);
+  assert.equal(review.channel_id, normal.channel_id);
+  assert.equal(review.host_store_key, undefined);
+  assert.equal(review.sandbox, "read-only");
+  assert.equal(normal.sandbox, "workspace-write");
+  const config = review.host_config as Record<string, any>;
+  assert.equal(config.permissions.loopx_workspace_only_read.filesystem[":workspace_roots"]["."], "read");
+  assert.equal(config.permissions.loopx_workspace_only_read.filesystem[":root"], "deny");
+  assert.equal(config.permissions.loopx_workspace_only_read.network.enabled, false);
+  assert.deepEqual(config.features, {apps: false, multi_agent: false, multi_agent_v2: false});
+  assert.equal(projectConversationIdentity({context: {...context, filesystem_scope: "workspace_only"},
+    read_only_review: true}).host_store_key,
+    projectConversationIdentity({context: {...context, filesystem_scope: "workspace_only"}}).host_store_key);
+  assert.throws(() => projectConversationIdentity({context: {...context, audience: "local_owner"}, read_only_review: true}));
+});
 
 test("owner steward is independent of the selected project; project scope is exact", () => {
   assert.deepEqual(resolveConversationScope({channel_id: "manager", goal_id: "alpha"}),

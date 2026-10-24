@@ -86,16 +86,24 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
   const groupedIds = new Set(dayGroups.flatMap(group => group.nodes.map(node => node.id)));
   const swarm = timeline.singles.filter(id => !groupedIds.has(id)).map(id => timeline.nodes.get(id)!).filter(item => item.first !== null);
   const unknownTime = [...timeline.nodes.values()].filter(item => item.first === null).length;
-  const phaseCard = (item: TimelinePhase) => {
+  const phaseName = (item: TimelinePhase) => [copy.early, copy.middle, copy.late][item.index];
+  const phaseDescription = (item: TimelinePhase) => {
     const counts = Object.entries(item.decisions);
+    return [
+      `${timeLabel(item.start)} — ${timeLabel(item.end)}`,
+      `${item.nodes} ${copy.items} · ${item.findings} ${copy.findings}`,
+      LABELS.map(key => `${label(key)} ${item.labels[key] ?? 0}`).join(" · "),
+      timeline.decisions.length ? (counts.length ? `${copy.decisions} · ${counts.map(([key, value]) => `${label(key)} ${value}`).join(" · ")}` : (timeline.structuredCount ? copy.none : copy.unstructured)) : null,
+    ].filter(Boolean).join(" · ");
+  };
+  const phaseCard = (item: TimelinePhase) => {
     return <button key={item.index} type="button" aria-pressed={phase === item.index} onClick={() => onPhase(phase === item.index ? null : item.index)}
+      aria-label={`${phaseName(item)} · ${phaseDescription(item)}`} title={`${phaseName(item)} · ${phaseDescription(item)}`}
       className={`research-phase${phase === item.index ? " is-active" : ""}`}>
-      <span className="research-phase-head"><strong>{[copy.early, copy.middle, copy.late][item.index]}</strong><time>{timeLabel(item.start)} — {timeLabel(item.end)}</time></span>
-      <span className="research-phase-counts"><b>{item.nodes}</b> {copy.items}<b>{item.findings}</b> {copy.findings}</span>
+      <span className="research-phase-head"><strong>{phaseName(item)}</strong><span>{item.findings} {copy.findings}</span></span>
       <span className="research-phase-bar" aria-label={LABELS.map(key => `${label(key)} ${item.labels[key] ?? 0}`).join(" · ")}>
         {LABELS.map(key => item.labels[key] ? <span key={key} className={tone(key)} style={{flexGrow: item.labels[key]}}>{item.labels[key]}</span> : null)}
       </span>
-      {timeline.decisions.length ? <span className="research-phase-decisions">{counts.length ? `${copy.decisions} · ${counts.map(([key, value]) => `${label(key)} ${value}`).join(" · ")}` : (timeline.structuredCount ? copy.none : copy.unstructured)}</span> : null}
     </button>;
   };
   return <div className="research-timeline">
@@ -104,6 +112,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
       {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
       <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>
       <p>{zh ? "未关联问题按首次记录 UTC 日期收纳，不推断路线或因果。决策轨迹保留各轮显式决策，最新记录在前。" : "Unlinked questions group by first-record UTC date, without inferring a route or cause. Decision history retains each explicit decision, newest record first."}</p>
+      <dl className="research-phase-details">{timeline.phases.map(item => <div key={item.index}><dt>{phaseName(item)}</dt><dd>{phaseDescription(item)}</dd></div>)}</dl>
     </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}</div>
       <span className="research-phase-legend">{LABELS.map(key => <span key={key}><i className={tone(key)} aria-hidden="true"/>{label(key)}</span>)}</span>
     <div className="research-phases" role="group" aria-label={copy.phaseNote}>{timeline.phases.map(phaseCard)}</div>

@@ -87,6 +87,8 @@ class LarkGoalTopicRuntimeService:
         attempted: dict[Path, int] = {}
         attention: Future[int] | None = None
         attention_due = 0.0
+        reports: Future[int] | None = None
+        reports_due = 0.0
         ingress: Future[list[str]] | None = None
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
@@ -98,6 +100,13 @@ class LarkGoalTopicRuntimeService:
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
+                if reports is not None and reports.done():
+                    try:
+                        reports.result()
+                    except Exception:
+                        logging.getLogger(__name__).warning("Original private report delivery is pending")
+                    reports = None
+                    reports_due = time.monotonic() + 30
                 if ingress is not None and ingress.done():
                     try:
                         for profile in ingress.result():
@@ -140,17 +149,24 @@ class LarkGoalTopicRuntimeService:
                     observer = getattr(transport, "ingress", None)
                     ingress_ready = (observer is not None and ingress is None
                         and time.monotonic() >= ingress_due)
+                    report_provider = getattr(transport, "steward_reports", None)
+                    reports_ready = (report_provider is not None and reports is None
+                        and time.monotonic() >= reports_due and report_provider.pending())
+                    if report_provider is not None and reports is None and time.monotonic() >= reports_due:
+                        reports_due = time.monotonic() + 30
                     for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
-                        if (len(pending) + int(attention is not None or attention_ready)
+                        if (len(pending) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
                                 + int(ingress is not None or ingress_ready) >= 4 or self._closed.is_set()):
                             break
                         if path in pending:
                             continue
                         pending[path] = pool.submit(transport.reconcile_request, path)
                         attempted[path] = attempted.get(path, 0) + 1
-                    if attention_ready and len(pending) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                    if reports_ready and len(pending) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                        reports = pool.submit(report_provider.reconcile)
+                    if attention_ready and len(pending) + int(reports is not None) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
                         attention = pool.submit(owner_attention.reconcile)
-                    if ingress_ready and len(pending) + int(attention is not None) < 4 and not self._closed.is_set():
+                    if ingress_ready and len(pending) + int(reports is not None) + int(attention is not None) < 4 and not self._closed.is_set():
                         ingress = pool.submit(observer.observe, cancelled=self._closed.is_set)
                 except Exception:
                     logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")

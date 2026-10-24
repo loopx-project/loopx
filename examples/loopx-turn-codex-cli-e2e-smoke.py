@@ -21,6 +21,9 @@ from loopx.cli import main as cli_main  # noqa: E402
 from loopx.control_plane.turn_driver import (  # noqa: E402
     load_loopx_turn_plan_from_journal,
 )
+from tests.control_plane.canonical_authority_fixture import (  # noqa: E402
+    initialize_canonical_source_fixture,
+)
 from tests.control_plane.host_process_fixture import write_python_host_fixture  # noqa: E402
 
 
@@ -359,6 +362,12 @@ def main() -> int:
         project, runtime, workspace, registry = _write_fixture(
             root,
             turn_count=args.turn_count,
+        )
+        initialize_canonical_source_fixture(
+            runtime,
+            GOAL_ID,
+            state_path=project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md",
+            provider="sqlite",
         )
         if args.real_codex_cli:
             candidate = args.codex_bin or (

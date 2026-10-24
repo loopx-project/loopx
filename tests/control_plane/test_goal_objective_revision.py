@@ -32,6 +32,39 @@ def apply_objective(project, cli, objective):
     assert service.apply(prepared["proposal"]["proposal_id"])["proposal"]["status"] == "applied"
 
 
+@pytest.mark.parametrize("peer_id", ["later-peer", "later@host"])
+def test_later_registered_peer_is_visible_and_requires_its_own_adoption(acceptance_goal, peer_id):
+    project, _, cli, _ = acceptance_goal
+    prepare_source(project)
+    apply_objective(project, cli, "Maintain the accepted export")
+    before = cli("inspect")[1]
+    registry_path = project.parent / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["coordination"]["registered_agents"].append(peer_id)
+    registry_path.write_text(json.dumps(registry))
+
+    code, inspected = cli("inspect", "--agent-id", peer_id)
+    assert code == 0, inspected
+    assert inspected["provider_revision"] == before["provider_revision"], "inspection cannot persist membership or adoption"
+    assert inspected["goal_objective_guard"]["allowed"] is False
+    objective = inspected["goal_acceptance_contract"]["goal_objective"]
+    assert objective["digest"] == before["goal_acceptance_contract"]["goal_objective"]["digest"]
+    peer = next((row for row in objective["peer_adoption"] if row["agent_id"] == peer_id), None)
+    assert peer == {"agent_id": peer_id, "revision": None, "current": False}
+    assert any(row["agent_id"] == peer_id for row in objective["acceptance_gaps"])
+    assert cli("inspect")[1]["goal_acceptance_contract"]["goal_objective"]["peer_adoption"] == objective["peer_adoption"]
+    adoption = project / "later-adoption.json"
+    adoption.write_text(json.dumps({"revision": objective["revision"], "digest": objective["digest"],
+        "work_digest": inspected["objective_work_digest"], "review_summary": "Reviewed my current work against the shared objective."}))
+    code, adopted = cli("adopt-objective", "--agent-id", peer_id, "--document", str(adoption),
+        "--operation-id", "later-peer-adoption", "--expected-provider-revision", inspected["provider_revision"], "--execute")
+    assert code == 0, adopted
+    current = cli("inspect", "--agent-id", peer_id)[1]
+    assert current["goal_objective_guard"] is None
+    assert next(row for row in current["goal_acceptance_contract"]["goal_objective"]["peer_adoption"]
+        if row["agent_id"] == peer_id)["current"] is True
+
+
 @pytest.mark.parametrize("acceptance_kind", ["configured-checks", "cumulative-outcome"])
 def test_objective_and_acceptance_guidance_share_real_inline_goal_read(acceptance_goal, acceptance_kind):
     project, acceptance_file, cli, run = acceptance_goal

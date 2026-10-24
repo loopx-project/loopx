@@ -37,13 +37,20 @@ export function normalizeProjectContext(value: unknown): Record<string, string> 
 
 export function projectConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
   const context = normalizeProjectContext(input.context);
-  const writable = context.grant === "workspace_write";
-  const permissions = context.filesystem_scope === "workspace_only" ? {
+  // A Core-admitted result review narrows this one adapter. Keep the original
+  // grant/store/thread identity; never migrate an ordinary thread into a new
+  // isolated store merely to inspect work which already ran.
+  const review = input.read_only_review === true;
+  if (review && context.audience !== "bound_owner") throw new Error("result review requires the original private owner");
+  const writable = context.grant === "workspace_write" && !review;
+  const permissions = context.filesystem_scope === "workspace_only" || review ? {
     // Share authentication within this authorized workspace/owner binding,
     // never with another App or local-owner context. Source topics retain
     // separate threads without requiring a new login for every message.
-    host_store_key: [context.project_ref, ...(context.audience !== "local_owner"
-      ? [context.binding_id, context.provider_ref, context.operator_ref] : ["local"])].join("."),
+    ...(context.filesystem_scope === "workspace_only" ? {
+      host_store_key: [context.project_ref, ...(context.audience !== "local_owner"
+        ? [context.binding_id, context.provider_ref, context.operator_ref] : ["local"])].join("."),
+    } : {}),
     permissions_profile: `loopx_workspace_only_${writable ? "write" : "read"}`,
     host_config: {
       default_permissions: `loopx_workspace_only_${writable ? "write" : "read"}`,
@@ -60,6 +67,7 @@ export function projectConversationIdentity(input: Record<string, unknown>): Rec
       // Read project instructions/skills through the bounded native tools.
       skills: {include_instructions: false},
       project_doc_max_bytes: 0,
+      ...(review ? {features: {apps: false, multi_agent: false, multi_agent_v2: false}} : {}),
       permissions: {
         [`loopx_workspace_only_${writable ? "write" : "read"}`]: {
           extends: ":workspace",

@@ -27,6 +27,7 @@ from ..effect_program import (
     settlement_result_payload,
 )
 from ..goals.goal_ref_validation import exact_goal_ref
+from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_INPUT_CHOICES
 
 __all__ = [
     "SETTLEMENT_IDENTITY_SCHEMA_VERSION",
@@ -198,6 +199,7 @@ def build_turn_scoped_cli_settlement_plan(
     )
     payload = effect_runtime_result("settlement.turn_scoped_cli_plan", {
         "identity": identity.as_dict(), "delivery_boundary": delivery_boundary,
+        "delivery_batch_scale_choices": list(DELIVERY_BATCH_SCALE_INPUT_CHOICES),
         **({"goal_ref": normalized_goal_ref} if normalized_goal_ref is not None else {}),
         "command_templates": {
             "todo_completion": ordinary_completion, "durable_writeback": writeback,

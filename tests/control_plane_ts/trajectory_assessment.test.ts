@@ -34,8 +34,83 @@ const displayInput = () => {
   return x;
 };
 const displayPrepared = () => prepareTrajectoryAssessment({input: displayInput(), config: {...config, output_language: 'zh'}});
+const contextInput = () => {
+  const x = displayInput(), source = x.sources.at(-1)!, page = JSON.parse(source.text);
+  page.items[0].summary = page.items[2].summary = 'Complete24paired checks; native benefit remains unknown.';
+  source.text = JSON.stringify(page);
+  source.artifact_sha256 = createHash('sha256').update(source.text).digest('hex');
+  x.sources.push({id: 'validation', artifact: 'validation.txt', artifact_sha256: 'c'.repeat(64), first_line: 40,
+    text: 'The first record counts diagnostic calls, not independent experiments.\nThe later record counts independent input pairs, not diagnostic calls.'});
+  x.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v1';
+  x.display_snapshot!.contexts = [
+    {event_id: 'q-old', field: 'summary', citations: [{source_id: 'validation', first_line: 40, last_line: 40}]},
+    {event_id: 'q-new', field: 'summary', citations: [{source_id: 'validation', first_line: 41, last_line: 41}]},
+  ];
+  return x;
+};
 const translatedOutput = (p = displayPrepared()) => ({...output(), episode_questions: [{episode_id: 'e1', question: 'A 是否有帮助？'}, {episode_id: 'e2', question: 'B 是否有帮助？'}],
   display_translations: JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!).map((row: {field_id: string; text: string}) => ({field_id: row.field_id, text: `【译文】${row.text}`}))});
+
+test('field-bound evidence disambiguates identical notes without sharing translations or changing source authority', () => {
+  const input = contextInput(), p = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+  const rows = JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
+  const contextual = rows.filter((row: {context_citations?: unknown}) => row.context_citations);
+  assert.equal(contextual.length, 2);
+  assert.equal(contextual[0].text, contextual[1].text);
+  assert.notEqual(contextual[0].field_id, contextual[1].field_id);
+  assert.match(p.prompt, /40: The first record counts diagnostic calls/);
+  assert.match(p.prompt, /Translate the field, not the context/);
+  const raw = translatedOutput(p);
+  for (const [index, row] of contextual.entries()) {
+    raw.display_translations.find((translated: {field_id: string}) => translated.field_id === row.field_id)!.text =
+      `${index ? '完成24组独立输入对' : '完成24次配对诊断调用'}（⟪LX0⟫）；原生收益仍未知。`;
+  }
+  const result = qualifyTrajectoryAssessment({...p, output: raw});
+  const summaries = result.display!.fields.filter(row => row.field === 'summary' && row.context_citations);
+  assert.deepEqual(summaries.map(row => row.context_citations), input.display_snapshot!.contexts!.map(row => row.citations));
+  assert.match(summaries[0]!.text, /配对诊断调用/);
+  assert.match(summaries[1]!.text, /独立输入对/);
+  assert.deepEqual(result.assessments, output().assessments);
+  const events = parseExploreHistoryPage(JSON.parse(input.sources.find(s => s.id === 'history')!.text), 'goal').items;
+  assert.equal(projectTrajectoryDisplay(events, result.display, result.display!.snapshot_key, 'zh').events[0]!.summary, summaries[0]!.text);
+  assert.equal(events[0]!.summary, 'Complete24paired checks; native benefit remains unknown.');
+  // Literal integrity and provenance do not independently verify translation.
+  assert.equal(result.calibration, 'uncalibrated_model');
+});
+
+test('display context rejects absent fields, duplicate bindings and evidence outside supplied ranges', () => {
+  const mutations: Array<(x: TrajectoryInput) => void> = [
+    x => {x.display_snapshot!.contexts![0]!.event_id = 'missing';},
+    x => {x.display_snapshot!.contexts![0]!.field = 'status';},
+    x => {x.display_snapshot!.contexts!.push(x.display_snapshot!.contexts![0]!);},
+    x => {x.display_snapshot!.contexts![0]!.citations = [];},
+    x => {x.display_snapshot!.contexts![0]!.citations.push(x.display_snapshot!.contexts![0]!.citations[0]!);},
+    x => {x.display_snapshot!.contexts![0]!.citations[0]!.source_id = 'unverified';},
+    x => {x.display_snapshot!.contexts![0]!.citations[0]!.first_line = 39;},
+    x => {x.display_snapshot!.contexts![0]!.citations[0]!.last_line = 42;},
+    x => {x.display_snapshot!.contexts![0]!.citations[0]!.last_line = 39;},
+  ];
+  for (const mutate of mutations) {
+    const input = contextInput(); mutate(input);
+    assert.throws(() => prepareTrajectoryAssessment({input, config}), /display context/);
+  }
+});
+
+test('context edits, removal and source corrections invalidate reuse; old artifacts retain provenance', () => {
+  const input = contextInput(), p = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+  const previous = {...p, output: translatedOutput(p)}, saved = qualifyTrajectoryAssessment(previous);
+  for (const edit of [
+    (x: TrajectoryInput) => {x.display_snapshot!.contexts![0]!.citations[0]!.last_line = 41;},
+    (x: TrajectoryInput) => {delete x.display_snapshot!.contexts;},
+    (x: TrajectoryInput) => {x.sources.find(s => s.id === 'validation')!.text += ' Corrected uncertainty.';},
+  ]) {
+    const changed = structuredClone(input); edit(changed);
+    const next = prepareTrajectoryAssessment({input: changed, config: p.config});
+    assert.notEqual(next.analysis_key, p.analysis_key);
+    assert.equal(compareTrajectoryAssessments({...next, previous}).can_reuse, false);
+  }
+  assert.deepEqual(qualifyTrajectoryAssessment(previous), saved);
+});
 
 test('whole-history translation includes old revisions and decisions; versions, statuses and citations remain source facts', async () => {
   const p = displayPrepared(), result = qualifyTrajectoryAssessment({...p, output: translatedOutput(p)});
@@ -198,6 +273,66 @@ test('literal context exposes compact prose without relaxing exact source-token 
     assert.equal(fallback.display!.coverage.missing, 1);
     assert.equal(projectTrajectoryDisplay(original, fallback.display, fallback.display!.snapshot_key, 'zh').events[0]!.summary, original[0]!.summary);
   }
+});
+
+test('literal-value explanations keep exact source terms while making their numbers readable', () => {
+  const source = 'Trial4failed2checks; delta-0.25ms; V18; `x12`; https://example.test/r34 HTTPS://example.test/r56?part78=9 ' + '9'.repeat(64);
+  const field = maskTrajectoryDisplayText(source, {explainSourceNumbers: true});
+  const explanation = `${field.masked} 第4次尝试有2项检查未通过；变化为-0.25毫秒，版本18。`;
+  assert.equal(field.restore(explanation), source + ' 第4次尝试有2项检查未通过；变化为-0.25毫秒，版本18。');
+  assert.equal(maskTrajectoryDisplayText(source).restore(explanation), null, 'Existing encodings remain strict');
+  for (const invalid of [
+    explanation.replace('第4次', '第5次'), explanation.replace('2项', '3项'),
+    explanation.replace('-0.25毫秒', '0.25毫秒'), explanation.replace('-0.25毫秒', '-0.3毫秒'),
+    explanation + ' 4', explanation + ' 12', explanation + ' 34', explanation + ' 56', explanation + ' 78', explanation + ' 9999',
+    explanation.replace('第4次', 'HTTPS://example.test/r4 次'),
+    explanation.replace('第4次', 'mailto:x4@example.test 次'),
+    explanation.replace('2项', 'ftp://example.test/r2 项'),
+    explanation.replace('⟪LX0⟫', ''), explanation + ' ⟪LX0⟫',
+  ]) assert.equal(field.restore(invalid), null, `Reject changed or unbound source values: ${invalid}`);
+  const units = maskTrajectoryDisplayText('Budget4ms and Budget4s', {explainSourceNumbers: true});
+  assert.equal(units.restore(`${units.masked} 数值为4和4。`), 'Budget4ms and Budget4s 数值为4和4。');
+  assert.equal(units.restore(`${units.masked} 数值为4和4和4。`), null, 'Restatement multiplicity is source-bound');
+});
+
+test('explicit literal-value encoding restores source-bound numbers without changing the assessment', () => {
+  const input = displayInput(), source = input.sources.at(-1)!, page = JSON.parse(source.text);
+  page.items[0].summary = 'Trial4failed2checks; local-only evidence remains preliminary.';
+  source.text = JSON.stringify(page);
+  source.artifact_sha256 = createHash('sha256').update(source.text).digest('hex');
+  input.display_snapshot!.translation_encoding = 'source_text_aliases_with_literals_v1';
+  const prior = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+  input.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v1';
+  const p = prepareTrajectoryAssessment({input, config: prior.config});
+  assert.notEqual(p.analysis_key, prior.analysis_key, 'New translation semantics have a separate cache identity');
+  const rows = JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
+  const row = rows.find((r: {literals: string[]}) => r.literals.includes('Trial4failed2checks'));
+  assert.deepEqual(row.literals, ['Trial4failed2checks', 'local-only']);
+  assert.deepEqual(row.explanation_numbers, ['4', '2']);
+  const output = translatedOutput(p);
+  output.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!.text =
+    '第4次尝试有2项检查未通过（⟪LX0⟫）；仅限本地（⟪LX1⟫）的证据仍属初步。';
+  const result = qualifyTrajectoryAssessment({...p, output});
+  const revised = structuredClone(input);
+  revised.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v2';
+  const next = prepareTrajectoryAssessment({input: revised, config: p.config});
+  assert.notEqual(next.analysis_key, p.analysis_key, 'Quantity rendering is explicitly versioned rather than relabelling saved translations');
+  assert.deepEqual(next.display_request, p.display_request, 'The captured history and eligible fields are unchanged');
+  assert.equal(compareTrajectoryAssessments({...next, previous: {...p, output}}).can_reuse, false, 'A new display version cannot reuse the old translation');
+  const nextResult = qualifyTrajectoryAssessment({...next, output});
+  assert.deepEqual(nextResult.assessments, result.assessments, 'Display encoding does not change the assessment oracle');
+  assert.deepEqual(nextResult.display!.fields, result.display!.fields, 'Exact permitted source numbers remain readable');
+  assert.deepEqual(prepareTrajectoryAssessment({input, config: p.config}), p, 'Preparing the new encoding preserves the prior request');
+  const original = parseExploreHistoryPage(page, 'goal').items;
+  const shown = projectTrajectoryDisplay(original, result.display, result.display!.snapshot_key, 'zh');
+  assert.equal(shown.events[0]!.summary, '第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步。');
+  assert.equal(original[0]!.summary, page.items[0].summary);
+  assert.deepEqual(result.metrics, qualifyTrajectoryAssessment({...prior, output: translatedOutput(prior)}).metrics);
+  const invalid = structuredClone(output);
+  invalid.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!.text += ' 新增100%收益。';
+  const fallback = qualifyTrajectoryAssessment({...p, output: invalid});
+  assert.equal(fallback.display!.coverage.missing, 1);
+  assert.equal(projectTrajectoryDisplay(original, fallback.display, fallback.display!.snapshot_key, 'zh').events[0]!.summary, original[0]!.summary);
 });
 
 test('capture-byte and input-order changes reuse identical declared evidence, without a new scientific judgment', () => {

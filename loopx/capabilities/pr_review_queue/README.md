@@ -245,7 +245,9 @@ even when fields, commands and enums are unchanged. Changed instructions need
 clause comparisons and passed real-caller counterfactuals covering ordering,
 evidence, modality, scope, continuation and stop conditions. Missing evidence or
 semantic drift blocks approval; an intentional change needs its authorization
-basis. Unchanged text may use a reasoned `not_applicable`. This is part of the
+basis, declared as `fields_by_verdict.intentional_change_validated` in the same
+assessment contract. `equivalent` adds no authorization field; a reasoned
+`not_applicable` needs only the common fields. This is part of the
 existing evidence judgment, not a new receipt or automatic meaning detector.
 Character budgets are cost guards: a justified increase is preferable to
 discarding useful control-plane meaning. Model comprehension remains unverified
@@ -825,6 +827,16 @@ all five Chinese sections plus a line-starting `English verdict: APPROVE` or
 state transition, author-owned conclusions use `COMMENTED` plus one exact title:
 `Approval conclusion (author-owned PR; GitHub blocks formal self-approval)` or
 `Request changes conclusion (author-owned PR; GitHub blocks formal self-review)`.
+The saved-result check and published-review readback apply the same literal,
+visible title rule. A near match, the opposite verdict's title, a hidden comment
+or a fenced example cannot supply that conclusion. Independent reviews retain
+their formal-state requirements. These checks establish publication consistency,
+not evidence truth or merge authority.
+
+提交前的结果检查与发布后的读回使用同一条可见的精确标题规则。近似标题、
+相反结论的标题、隐藏注释或代码块示例均不能代替作者结论；独立评审仍遵循
+原正式状态要求。这只校验发布一致性，不证明证据真实或授予合并权限。
+
 The compact result is versioned as `pull_request_review_conclusion_v0` and
 reports a typed verdict and invalid-reason codes. Queue selection and approval
 closeout share the typed owner for each reviewer's latest submitted opinion.

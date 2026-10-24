@@ -16,6 +16,7 @@ from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
 )
 from ...extensions.codex_native_child import native_child_observer
+from .codex_input_trace import capture_codex_input_source
 from .codex_sessions import (
     CODEX_CLI_SESSION_SCHEMA_VERSION as CODEX_CLI_SESSION_SCHEMA_VERSION,
     _discard_codex_cli_session,
@@ -873,12 +874,14 @@ def run_codex_cli_host(
 
         events = HostOutputLines(observe_event)
         diagnostics = HostOutputLines(observe_stderr)
-        observed = run_host_process(command, project=project, input_text=_prompt(request),
-            timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
-            on_stdout=events.feed, on_stderr=diagnostics.feed,
-            launch_guard=lambda: launch_scope("codex_cli_host_launch"))
-        events.finish()
-        diagnostics.finish()
+        input_text = _prompt(request)
+        with capture_codex_input_source(project, input_text, lineage["goal_id"], observed_session):
+            observed = run_host_process(command, project=project, input_text=input_text,
+                timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
+                on_stdout=events.feed, on_stderr=diagnostics.feed,
+                launch_guard=lambda: launch_scope("codex_cli_host_launch"))
+            events.finish()
+            diagnostics.finish()
         returncode = observed["returncode"]
         timed_out = observed["outcome"] == "timeout"
         output_observation_incomplete = not (observed["output_complete"] and events.complete and diagnostics.complete)

@@ -179,6 +179,7 @@ def test_http_preparation_requires_current_preview_and_reads_original_binding(st
         row = next(row for row in readback["connections"] if row["binding_id"] == binding["binding_id"])
         assert row["managed_steward"] == {"available": True, "prepared": True, "scheduling_enabled": False,
             "goal_active": True, "monitor": None,
+            "report": {"available": True, "configured": False, "enabled": False},
             "goal_id": applied["actor"]["goal_id"], "agent_id": "steward", "session_id": sid}
         assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
         assert request(route, {**body, "plan_id": preview["plan"]["plan_id"]})[1]["idempotent"]

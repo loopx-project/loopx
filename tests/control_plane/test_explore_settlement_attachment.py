@@ -5,6 +5,7 @@ import json
 import pytest
 
 from loopx.capabilities.explore.result_log import explore_result_log_path
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_explore_result_writeback import fixture
 
 
@@ -49,13 +50,16 @@ def test_settlement_attachment_preserves_commands_and_off_plan(tmp_path, mode):
 
 @pytest.mark.parametrize("mode", ["evidence", "planning"])
 @pytest.mark.parametrize("profile", ["--codex-app", "generic_cli"])
-def test_real_cli_settlement_exposes_optional_attachment(tmp_path, mode, profile):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, mode, profile, provider):
     from loopx.configure_goal import configure_goal
     from tests.control_plane.test_quota_settlement_cli import (
-        _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
+        _write_fixture, _initialize_fixture_authority, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
     )
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, path = _write_fixture(tmp_path)
     configure_goal(registry_path=path, goal_id=GOAL_ID, execute=True, explore_mode=mode)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     profile_args = [profile] if profile.startswith("--") else ["--runtime-profile", profile]
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", TURN_ID]
@@ -115,15 +119,18 @@ def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path,
 
 
 @pytest.mark.parametrize("mode", ["evidence", "planning"])
-def test_ordinary_cli_settlement_without_evidence_does_not_create_graph(tmp_path, mode):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ordinary_cli_settlement_without_evidence_does_not_create_graph(tmp_path, monkeypatch, mode, provider):
     from loopx.configure_goal import configure_goal
     from tests.control_plane.test_quota_settlement_cli import (
-        _write_fixture, _configure_read_only_todo, _run_cli, _run_generated_cli,
+        _write_fixture, _configure_read_only_todo, _initialize_fixture_authority, _run_cli, _run_generated_cli,
         _spend_run_count, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
     )
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, path = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
     configure_goal(registry_path=path, goal_id=GOAL_ID, execute=True, explore_mode=mode)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     rc, guard = _run_cli(path, runtime, "quota", "should-run", "--codex-app",
                          "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                          "--turn-instance-id", TURN_ID, )

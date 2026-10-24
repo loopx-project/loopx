@@ -14,11 +14,12 @@ export function withReportScheduleTimezone(
   return result;
 }
 
-export function PeriodicReportScheduleField({ id, value, timezone, onChange }: Readonly<{
+export function PeriodicReportScheduleField({ id, value, timezone, onChange, calendarRequired = false }: Readonly<{
   id: string;
   value: unknown;
   timezone: string;
   onChange?: (value: Schedule | null) => void;
+  calendarRequired?: boolean;
 }>) {
   const { locale } = useWorkspaceI18n();
   const zh = locale === "zh-CN";
@@ -53,11 +54,11 @@ export function PeriodicReportScheduleField({ id, value, timezone, onChange }: R
   }
   return <div className="personal-report-schedule">
     <label className="is-boolean" htmlFor={id}>
-      <span>{zh ? "按日历汇报" : "Calendar reports"}</span>
-      <input id={id} type="checkbox" role="switch" checked={Boolean(schedule)} disabled={!onChange}
+      <span>{calendarRequired ? (zh ? "按日历汇报（必选）" : "Calendar reports (required)") : (zh ? "按日历汇报" : "Calendar reports")}</span>
+      <input id={id} type="checkbox" role="switch" checked={Boolean(schedule)} disabled={!onChange || calendarRequired}
         onChange={(event) => event.target.checked ? change({}) : onChange?.(null)} />
     </label>
-    {!schedule ? <p>{zh ? "未设置日历计划；保持阶段结束时汇报。" : "No calendar schedule; report at validated stage boundaries."}</p> : <>
+    {!schedule ? <p>{calendarRequired ? (zh ? "请配置必选的汇报日历。" : "Configure the required report calendar.") : (zh ? "未设置日历计划；保持阶段结束时汇报。" : "No calendar schedule; report at validated stage boundaries.")}</p> : <>
       {!supported ? <p role="alert">{zh ? "此计划需在 JSON 模式中编辑；当前内容已保留。" : "Edit this schedule in JSON mode; its current value is preserved."}</p> : <>
         <label htmlFor={`${id}-frequency`}><span>{zh ? "频率" : "Frequency"}</span>
           <select id={`${id}-frequency`} value={rule.FREQ} disabled={!onChange} onChange={(event) => change({ FREQ: event.target.value })}>

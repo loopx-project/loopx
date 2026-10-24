@@ -21,6 +21,11 @@ from .benchmark_experiment_board import (
     handle_benchmark_experiment_board_command,
     register_benchmark_experiment_board_commands,
 )
+from .benchmark_rebalance import (
+    BENCHMARK_REBALANCE_COMMANDS,
+    handle_benchmark_rebalance_command,
+    register_benchmark_rebalance_commands,
+)
 from .benchmark_continuation import (
     BENCHMARK_CONTINUATION_COMMANDS,
     handle_benchmark_continuation_command,
@@ -88,6 +93,8 @@ def _resolve_benchmark_project(
 def _benchmark_project_parser(args: argparse.Namespace) -> argparse.ArgumentParser:
     if args.benchmark_command in BENCHMARK_CONTINUATION_COMMANDS:
         return args.benchmark_continuation_parser
+    if args.benchmark_command in BENCHMARK_REBALANCE_COMMANDS:
+        return args.benchmark_rebalance_parser
     if args.benchmark_command in BENCHMARK_CONCURRENCY_COMMANDS:
         return args.benchmark_concurrency_parser
     return args.benchmark_experiment_board_parser
@@ -108,6 +115,7 @@ def register_benchmark_command_group(
     register_benchmark_boundary_commands(benchmark_sub, add_subcommand_format)
     register_benchmark_continuation_commands(benchmark_sub, add_subcommand_format)
     register_benchmark_concurrency_commands(benchmark_sub, add_subcommand_format)
+    register_benchmark_rebalance_commands(benchmark_sub, add_subcommand_format)
     register_benchmark_experiment_board_commands(
         benchmark_sub,
         add_subcommand_format,
@@ -131,6 +139,13 @@ def handle_benchmark_command(
     if handled is not None:
         return handled
     handled = handle_benchmark_continuation_command(
+        args,
+        print_payload=print_payload,
+        output_format=output_format,
+    )
+    if handled is not None:
+        return handled
+    handled = handle_benchmark_rebalance_command(
         args,
         print_payload=print_payload,
         output_format=output_format,

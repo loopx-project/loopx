@@ -4,13 +4,18 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
+from .review_body import (
+    AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
+    AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
+    REQUIRED_FINAL_SECTIONS,
+    review_body_requirements,
+)
 from .approval_closeout import approval_closeout_contract
 from .architecture_assessment import ARCHITECTURE_ASSESSMENT
 from .visual_assessment import VISUAL_ASSESSMENT
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 23
+REVIEW_POLICY_REVISION = 24
 
 # Agent-consumed prose is observable behavior even when JSON shape is stable.
 # Reuse the existing semantic verdicts; this is evidence within the same review.
@@ -19,6 +24,7 @@ DECISION_TEXT_ASSESSMENT = {
                        "not_yet_proven", "not_applicable"],
     "fields": ["verdict", "checked_scope", "reason"],
     "applicable_fields": ["consumer", "clause_comparisons", "counterfactuals", "evidence_refs"],
+    "fields_by_verdict": {"intentional_change_validated": ["authorization_basis"]},
     "clause_fields": ["baseline_clause", "head_clause", "obligation_or_condition", "assessment"],
     "counterfactual_fields": ["triggering_state", "expected_obligation", "observed_result", "evidence_ref", "status"],
     "blocking_verdicts": ["unintended_drift", "not_yet_proven"],
@@ -1414,12 +1420,10 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             "open_pr_non_blocking_finding": "APPROVE",
             "open_pr_no_finding": "APPROVE",
             "author_owned_no_blocker_fallback": (
-                "COMMENTED review titled 'Approval conclusion (author-owned PR; "
-                "GitHub blocks formal self-approval)'"
+                f"COMMENTED review titled '{AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE}'"
             ),
             "author_owned_blocker_fallback": (
-                "COMMENTED review titled 'Request changes conclusion (author-owned "
-                "PR; GitHub blocks formal self-review)'"
+                f"COMMENTED review titled '{AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE}'"
             ),
             "merged_pr": "POST_MERGE_AUDIT_COMMENT when a new actionable finding exists",
             "publication_exceptions": [

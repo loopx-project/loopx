@@ -68,16 +68,26 @@ class ChatExternalConversations:
             selected_binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
         reservation = row.get("context_recovery") or {}
         admitted = (store.turn_for_client(session["session_id"], reservation["client_turn_id"])
-            if (reservation.get("routing_attempt") or reservation.get("quota_attempt"))
+            if (reservation.get("routing_attempt") or reservation.get("quota_attempt") or reservation.get("read_only_review"))
             and reservation.get("failed_turn_id") == row["turn_id"] else None)
+        events = store.events_after(session["session_id"], turn["turn_id"], None)
+        # Collect local control evidence only for the interrupted-effects path.
+        # The source fence makes this inventory consistent with admission.
+        stop = any(event.get("kind") in {"turn.interrupt_requested", "turn.interrupted"} for event in events)
+        if turn.get("error_code") == "server_restarted":
+            stop = stop or any(item.get("binding_id") == row["binding_id"]
+                and item.get("source") == row["source"] and item.get("command") in {"stop", "new"}
+                and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
+                for item in self.pending())
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
             "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "admitted_turn": admitted,
-                "steering_observed": any(event.get("kind") == "turn.steered"
-                    for event in store.events_after(session["session_id"], turn["turn_id"], None)),
+                "attachments_present": bool(row.get("attachments")),
+                "steering_observed": any(event.get("kind") == "turn.steered" for event in events),
+                "stop_observed": stop,
                 "native_observation": observation, "source_verified": source_verified},
         })
 
@@ -128,6 +138,7 @@ class ChatExternalConversations:
                 proof = None if plan.get("admitted_turn_id") else CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
                     model_auth_home=model_auth_home,
+                    **({"read_only_review": True} if plan.get("read_only_review") else {}),
                     thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                 selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
                 source = source_observation(selected)
@@ -142,6 +153,8 @@ class ChatExternalConversations:
                         "native_observation": proof, "source_observation": source,
                         "client_turn_id": plan["client_turn_id"],
                         "failure_notice_delivery_verified": row["delivery_verified"]}
+                    if plan.get("read_only_review"):
+                        recovery.update(read_only_review=True, presentation_key=f"{MANAGER_CONTEXT_VERSION}.review.1")
                     for kind in ("routing", "quota"):
                         if plan.get(f"{kind}_attempt") is not None:
                             recovery.update({f"{kind}_attempt": plan[f"{kind}_attempt"],
@@ -166,15 +179,26 @@ class ChatExternalConversations:
             return row
 
     def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
-        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-(?:routing|quota)-[1-3])?", str(turn.get("client_turn_id") or ""))
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-((?:routing|quota)-[1-3]|review-1))?", str(turn.get("client_turn_id") or ""))
         if match is None:
             return None
         row = self.read_request(match[1])
         recovery = row.get("context_recovery")
         if (row.get("session_id") == session["session_id"] and recovery
                 and recovery["client_turn_id"] == turn["client_turn_id"]):
+            if (match[2] == "review-1") != (recovery.get("read_only_review") is True):
+                raise ValueError("reserved result review policy changed")
             return {"request_ref": row["request_ref"], **recovery}
+        if match[2] == "review-1":
+            raise ValueError("reserved result review correlation unavailable")
         return None
+
+    def queued_recovery_context(self, session: dict[str, Any], turn: dict[str, Any] | None,
+                                accepted_turn_id: str | None) -> dict[str, Any]:
+        """Local policy correlation for an admitted, still-unstarted Turn."""
+        if turn and turn.get("status") == "queued" and turn.get("turn_id") == accepted_turn_id:
+            return self.recovery_context(session, turn) or {}
+        return {}
 
     def _automation_cadence_observation(
         self, target: Mapping[str, Any]

@@ -136,6 +136,45 @@ def test_latest_marker_interrupts_pending_historical_recovery(store, kind, expec
     assert result.last_event_at == T2
 
 
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize(
+    "kind, expected",
+    [
+        ("task_started", HostThreadState.TURN_OPEN),
+        ("task_complete", HostThreadState.IDLE),
+        ("turn_aborted", HostThreadState.IDLE),
+    ],
+)
+def test_a_cached_old_turn_does_not_delay_a_new_tail_marker(store, restart, kind, expected):
+    path = store[1]
+    write(path, encode(event("task_started")))
+    assert observe(store, cached=True).state is HostThreadState.TURN_OPEN
+    with path.open("ab") as stream:
+        stream.write(encode(item("intervening history" * 40)) * 120)
+        stream.write(encode(event(kind, T2)))
+    if restart:
+        observer._rollout_cache.clear()
+
+    result = observe(store, cached=True)
+    assert result.state is expected
+    assert result.last_event_at == T2
+    observer._rollout_cache.clear()
+    assert observe(store, cached=True) == result
+
+
+def test_incomplete_catchup_does_not_replace_a_verified_cache_checkpoint(store):
+    path = store[1]
+    write(path, encode(event("task_started")))
+    assert observe(store, cached=True).state is HostThreadState.TURN_OPEN
+    checkpoint = {p: p.read_bytes() for p in store[2].glob("*.json")}
+    with path.open("ab") as stream:
+        stream.write(encode(item("unread history" * 40)) * 120)
+
+    assert observe(store, cached=True).state is HostThreadState.UNKNOWN
+    assert {p: p.read_bytes() for p in checkpoint} == checkpoint
+    assert converge(store, cached=True).state is HostThreadState.TURN_OPEN
+
+
 def test_busy_cursor_does_not_delay_or_hide_another_thread(store):
     root, path, _cache = store
     write(path, encode(event("task_started")))

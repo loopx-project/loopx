@@ -116,7 +116,20 @@ authoring error. A genuinely new declaration still needs its actual provenance.
 For changed requirements or reviews, add this envelope to the **existing**
 `refresh-state` writeback using `--goal-outcome-update-json update.json`. Retain
 its ordinary routing, Turn, checkpoint and delivery arguments. This does not
-replace them. Reuse the revision from inline context when still current:
+replace them.
+
+The batched response's `goal_outcome_update` acknowledges the operation with its
+status and canonical revision; it does not echo the complete acceptance contract.
+The same receipt remains present if the later ordinary writeback fails. Retry the
+identical operation to recover it without applying the refinement twice. Complete
+requirements and evidence remain in `goal-acceptance inspect` and admitted work
+context; the compact receipt cannot substitute for reading that basis before a
+new refinement. Standalone `goal-acceptance refine` and conversation outcome tools
+retain their full readback.
+
+Do not add an immediate inspection solely to acknowledge this receipt. Reuse the
+complete admitted context while current; inspect only when that basis is absent
+or stale. Reuse its revision when still current:
 
 ```json
 {

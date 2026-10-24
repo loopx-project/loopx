@@ -187,6 +187,7 @@ class RunIndexSnapshot:
     records: list[dict[str, Any]]
     raw_count: int
     digest: str | None
+    invalid_count: int = 0
 
 
 def now_local() -> str:
@@ -331,6 +332,7 @@ def load_index_snapshot(
     records: list[dict[str, Any]] = []
     positions: dict[tuple[str, str, str], int] = {}
     raw_count = 0
+    invalid_count = 0
     digest = hashlib.sha256()
 
     with stream:
@@ -343,8 +345,10 @@ def load_index_snapshot(
             try:
                 item = json.loads(line)
             except json.JSONDecodeError:
+                invalid_count += 1
                 continue
             if not isinstance(item, dict):
+                invalid_count += 1
                 continue
 
             key = (
@@ -367,6 +371,7 @@ def load_index_snapshot(
         records=records,
         raw_count=raw_count,
         digest=f"sha256:{digest.hexdigest()}",
+        invalid_count=invalid_count,
     )
 
 

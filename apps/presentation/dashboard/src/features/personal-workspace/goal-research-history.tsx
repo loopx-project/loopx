@@ -295,6 +295,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const readingSelection = Boolean(selected || selectedMembers?.length);
   const selectedFinding = selected?.findings.find(finding => finding.result_id === selection.finding)
     ?? (!selection.finding ? selected?.findings.at(-1) : undefined);
+  const selectedEdges = selected ? value?.edges.filter(edge => edge.from_node === selected.id || edge.to_node === selected.id) ?? [] : [];
+  const selectedContextCitations = [...new Map((originalDisplay ? [] : currentDisplay?.fields ?? [])
+    .filter(field => field.event_id === selected?.latest.event_id || field.event_id === selectedFinding?.event_id)
+    .flatMap(field => field.context_citations ?? []).map(citation => [JSON.stringify(citation), citation])).values()];
   const findingExceptions = selected ? [...new Set(selected.findings.map(finding => finding.status))]
     .filter(status => status !== "confirmed").map(status => `${stateLabel(status)} ${selected.findings.filter(finding => finding.status === status).length}`).join(" · ") : "";
   // Pin the first displayed finding to its stable identity. New source records
@@ -365,9 +369,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       {lens === "graph" ? <p>{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。未关联问题按首次记录 UTC 日期收纳。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress. Unlinked questions are collected by first-record UTC date."}</p> : null}
       <p>{zh ? "合拢仅为避免遮挡，不表示关联或因果；选择一次可读全部原始记录与依据。" : "Nearby points group to avoid overlap, without implying a relationship or causality. Select once to read every original record and source."}</p>
     </ContextHelp></div>
-      <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
-        : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-          : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p></div>
+      </div>
       <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
         <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {
           setRecordsOpen(true);
@@ -380,9 +382,17 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <div className="research-analysis-scoped-action"><ResearchAnalysisButton analysis={analysis}/>
           {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}
         </div>
-        <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => setRevision(n => n + 1)}><RefreshCw size={15} aria-hidden/></button>
+        <button type="button" aria-label={copy.refresh} disabled={busy} onClick={() => {
+          setRevision(n => n + 1);
+          void analysis.read().catch(() => undefined);
+        }}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
-    {!readingSelection ? displayControl : null}
+    <div className="research-history-meta">
+      <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
+        : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
+          : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p>
+      {!readingSelection ? displayControl : null}
+    </div>
     {error || history.error ? <p role="alert" className="research-history-error">{copy.failure} <small>{error || history.error}</small></p> : null}
     {!busy && !error && read.total === 0 ? <p className="research-history-empty" role="status">{zh ? "这个 Goal 尚无已记录的研究历程。" : "This Goal has no recorded research history yet."}</p> : null}
     <ResearchAnalysisStatus analysis={analysis}/>
@@ -423,10 +433,15 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
           {selectedFinding ? findingElement(selectedFinding, selected.latest.title) : <p role="status">{zh ? "此记录中找不到所选结论；可从列表选择其他结论。" : "The selected finding is absent from this snapshot. Other findings remain available."}</p>}
         </> : <>{selected.latest.summary ? <p>{selected.latest.summary}</p> : null}<p className="research-history-note">{zh ? "此节点没有附属结论记录。" : "No finding is attached to this node."}</p></>}
         <details className="research-node-provenance" key={selected.id}><summary>{zh ? "来源与历史" : "Sources and history"}</summary>
+        {selectedContextCitations.length ? <><h4>{zh ? "译文依据" : "Translation context"}</h4>
+          <div className="analysis-citations">{selectedContextCitations.map(citation => <button type="button" key={JSON.stringify(citation)}
+            onClick={event => {void analysis.readCitation(citation, event.currentTarget);}}>
+            {citation.source_id} · {zh ? "行" : "lines"} {citation.first_line}–{citation.last_line}
+          </button>)}</div></> : null}
         {selected.findings.length && selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
         {measurementSummary(selected.id)}
         <h4>{copy.versions}</h4>{selected.latest.evidence_refs.length ? selected.latest.evidence_refs.map(ref => <code key={ref}>{ref}</code>) : <p>{zh ? "产物版本与来源引用未记录。" : "Artifact version and source references were not recorded."}</p>}
-        <h4>{copy.links}</h4><ul>{value.edges.filter(edge => edge.from_node === selected.id || edge.to_node === selected.id).map(edge => <li key={edge.event_id}>{positions.get(edge.from_node)?.node.latest.title ?? (zh ? "来源节点未记录" : "Source node not recorded")} → {relationLabel(edge.edge_type)} → {positions.get(edge.to_node)?.node.latest.title ?? (zh ? "目标节点未记录" : "Target node not recorded")}{edge.summary ? ` — ${edge.summary}` : ""}</li>)}</ul>
+        {selectedEdges.length ? <><h4>{copy.links}</h4><ul>{selectedEdges.map(edge => <li key={edge.event_id}>{positions.get(edge.from_node)?.node.latest.title ?? (zh ? "来源节点未记录" : "Source node not recorded")} → {relationLabel(edge.edge_type)} → {positions.get(edge.to_node)?.node.latest.title ?? (zh ? "目标节点未记录" : "Target node not recorded")}{edge.summary ? ` — ${edge.summary}` : ""}</li>)}</ul></> : null}
         {selected.latest.parent_id ? <p>{copy.group} · {positions.get(selected.latest.parent_id)?.node.latest.title ?? "—"}</p> : null}
         <h4>{copy.updates}</h4>{updateRecords(selected.revisions)}
         </details>

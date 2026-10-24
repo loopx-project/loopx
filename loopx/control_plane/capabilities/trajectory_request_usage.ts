@@ -1,5 +1,5 @@
 /** Reconcile persisted request counters without changing session-counter accounting. */
-import type {TrajectoryRequestCoverage, TrajectoryRequestTokens} from './trajectory_assessment_types.ts';
+import type {TrajectoryLoopXInput, TrajectoryRequestCoverage, TrajectoryRequestTokens} from './trajectory_assessment_types.ts';
 
 const keys = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
   'output_tokens', 'reasoning_output_tokens', 'total_tokens'] as const;
@@ -99,6 +99,56 @@ export function reconcileTrajectoryRequests(rows: Array<{type?: unknown; payload
   } catch (error) {
     // A supplementary source failure does not rewrite or invalidate the
     // independently validated historical session counters.
+    if (!(error instanceof ReconciliationError)) throw error;
+    return {method, status: 'unavailable', reason: error.message};
+  }
+}
+
+/** A producer's counted attribution is a separate observation. It cannot repair
+ * native counters or turn unknown historical packet contents into token counts. */
+export function summarizeTrajectoryLoopXInput(rows: Array<{type?: unknown; payload?: unknown}>,
+  session: string, coverage: TrajectoryRequestCoverage | undefined): TrajectoryLoopXInput | undefined {
+  const annotations = rows.filter(e => e.type === 'loopx_input_token_attribution');
+  if (!annotations.length) return undefined;
+  const method = 'provider_input_token_attribution_v1';
+  try {
+    if (coverage?.status !== 'verified') return invalid('Request coverage must reconcile before input attribution.');
+    const requests = new Map(rows.filter(e => e.type === 'token_usage_record').map(e => {
+      const r = record(e.payload, session); return [r.response_id, r] as const;
+    }));
+    const counted = new Map<string, {input: number; loopx: number; cached: number | null}>();
+    const count = (v: unknown): number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+      ? v : invalid('Missing or invalid attributed token count.');
+    for (const annotation of annotations) {
+      const p = object(annotation.payload), request = requests.get(p.response_id as string);
+      if (!request || p.method !== method || p.thread_id !== session || p.session_id !== session
+        || p.turn_id !== request.turn_id || p.root_turn_id !== request.root_turn_id) return invalid('Input attribution method or request identity mismatch.');
+      const input = count(p.input_tokens), loopx = count(p.loopx_input_tokens);
+      const cached = !Object.hasOwn(p, 'loopx_cached_input_tokens')
+        ? (request.usage.cached_input_tokens === 0 ? 0 : null) : count(p.loopx_cached_input_tokens);
+      if (input !== request.usage.input_tokens || loopx > input || (cached !== null
+        && (cached > loopx || cached > request.usage.cached_input_tokens
+          || loopx - cached > input - request.usage.cached_input_tokens))) return invalid('Attributed tokens do not fit their request counters.');
+      const old = counted.get(request.response_id);
+      if (old && (old.input !== input || old.loopx !== loopx || old.cached !== cached)) return invalid('Conflicting input attribution for one response.');
+      counted.set(request.response_id, {input, loopx, cached});
+    }
+    let input = 0, loopx = 0, cached = 0, cacheKnown = true;
+    for (const row of counted.values()) {
+      input = count(input + row.input); loopx = count(loopx + row.loopx);
+      if (row.cached === null) cacheKnown = false;
+      else cached = count(cached + row.cached);
+    }
+    const total = coverage.all_requests.input_tokens;
+    const uncached = total - coverage.all_requests.cached_input_tokens;
+    const complete = counted.size === requests.size;
+    return {method, status: complete ? 'complete' : 'partial', attributed_requests: counted.size,
+      total_requests: requests.size, attributed_input_tokens: input, total_input_tokens: total,
+      loopx_input_tokens: loopx, loopx_cached_input_tokens: cacheKnown ? cached : null,
+      input_fraction: complete && total > 0 ? loopx / total : null,
+      uncached_input_fraction: complete && cacheKnown && uncached > 0 ? (loopx - cached) / uncached : null,
+      input_fraction_bounds: total > 0 ? [loopx / total, (loopx + (total - input)) / total] : null};
+  } catch (error) {
     if (!(error instanceof ReconciliationError)) throw error;
     return {method, status: 'unavailable', reason: error.message};
   }

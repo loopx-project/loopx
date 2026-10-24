@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -51,9 +52,15 @@ MUST_HAVE = (
     "--bootstrap",
     "--codex-app",
     "Do not spend quota for a setup-only turn",
-    "python3 -m pip install --upgrade loopx",
-    "workflow-skills --install",
-    "loopx-project.github.io/loopx/install.sh",
+    *(
+        ("loopx doctor",)
+        if os.name == "nt"
+        else (
+            "python3 -m pip install --upgrade loopx",
+            "workflow-skills --install",
+            "loopx-project.github.io/loopx/install.sh",
+        )
+    ),
 )
 
 
@@ -63,9 +70,17 @@ def assert_message_contract(payload: dict[str, object]) -> None:
     assert payload["invocation_mode"] == "codex_cli_setup_then_goal_mode", payload
     assert payload["goal_id"] == GOAL_ID, payload
     assert payload["agent_id"] == AGENT_ID, payload
-    assert "python3 -m pip install --upgrade loopx" in str(payload["install_repair_command"]), payload
-    assert "workflow-skills --install" in str(payload["install_repair_command"]), payload
-    assert "loopx-project.github.io/loopx/install.sh" in str(payload["install_repair_command"]), payload
+    repair = str(payload["install_repair_command"])
+    assert "loopx doctor" in repair, payload
+    if os.name == "nt":
+        # Native Windows has no python3 or Bash; the owner prints the checkout
+        # installer or the running interpreter's pip repair instead.
+        assert "| bash" not in repair, payload
+        assert "install-windows.ps1" in repair or "-m pip install --upgrade loopx" in repair, payload
+    else:
+        assert "python3 -m pip install --upgrade loopx" in repair, payload
+        assert "workflow-skills --install" in repair, payload
+        assert "loopx-project.github.io/loopx/install.sh" in repair, payload
     assert payload["existing_goal_probe_command"] == payload["quota_guard_command"], payload
     assert "heartbeat-prompt --thin" in str(payload["heartbeat_prompt_command"]), payload
     assert "heartbeat-prompt --thin" in str(payload["heartbeat_prompt_json_command"]), payload
@@ -229,8 +244,12 @@ def main() -> int:
     assert "Fresh Repo Install Repair" in cli_markdown, cli_markdown
     assert "Post-Bootstrap Loop Loader" in cli_markdown, cli_markdown
     assert "Transcript-Free Validation Checklist" in cli_markdown, cli_markdown
-    assert "loopx-project.github.io/loopx/install.sh" in cli_markdown, cli_markdown
-    assert "python3 -m pip install --upgrade loopx" in cli_markdown, cli_markdown
+    if os.name == "nt":
+        assert "loopx doctor" in cli_markdown, cli_markdown
+        assert "| bash" not in cli_markdown, cli_markdown
+    else:
+        assert "loopx-project.github.io/loopx/install.sh" in cli_markdown, cli_markdown
+        assert "python3 -m pip install --upgrade loopx" in cli_markdown, cli_markdown
 
     cli_message_only = run_cli(
         "codex-cli-bootstrap-message",
