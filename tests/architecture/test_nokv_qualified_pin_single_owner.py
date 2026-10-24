@@ -1,14 +1,9 @@
 """Guard the single owner of the qualified NoKV SDK and API versions.  Refs #4447 Track A.
 
-Which NoKV release LoopX admits as qualified is one decision, and the base
-revision stated it twice as literals: ``control_plane/coordination/nokv_jsonl_helper.py``
-admits an installed SDK by comparing both names, while
-``control_plane/testing/authority_e2e_ladder.py`` restated the same two values to
-judge the live-qualification report.  The ladder drives the helper as a *file
-path* (``NOKV_HELPER`` / ``NOKV_QUALIFICATION_SCRIPT``) and never imported it, so
-a bump landing in one of the two left the other behind with no import to follow.
-The one test between them compared values, which is exactly why the drift stayed
-invisible: an equality assertion cannot record which module decided.
+Which NoKV release LoopX admits as qualified is one decision. Admission and
+the stage ladder import the same qualification contract; metadata readers
+must not load the optional SDK transport or its CLI dependencies. The helper
+keeps its exported names for file-launched and import-based consumers.
 
 The TypeScript probe at ``examples/nokv-authority-store/live-qualification.ts``
 keeps its own spelling.  It is a second runtime and cannot import a Python
@@ -26,7 +21,9 @@ owner would delete the very values under test.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
+import subprocess
 import sys
 import types
 from types import ModuleType
@@ -34,7 +31,7 @@ from types import ModuleType
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-OWNER_MODULE = "loopx/control_plane/coordination/nokv_jsonl_helper.py"
+OWNER_MODULE = "loopx/control_plane/coordination/nokv_qualification.py"
 OWNED_NAMES = ("QUALIFIED_NOKV_SDK_VERSION", "QUALIFIED_NOKV_API_VERSION")
 DECLARED_CROSS_RUNTIME_SITES: dict[str, int] = {
     "examples/nokv-authority-store/live-qualification.ts": 2,
@@ -209,6 +206,28 @@ def test_ladder_readbacks_are_the_owner_objects(
         assert getattr(ladder, name) is getattr(helper, name), (
             f"{name} reached the ladder as a copy, not as the owner's object"
         )
+
+
+def test_qualification_read_does_not_import_the_optional_transport(helper: ModuleType) -> None:
+    program = """
+import json
+import sys
+from loopx.control_plane.testing.authority_e2e_ladder import (
+    QUALIFIED_NOKV_API_VERSION, QUALIFIED_NOKV_SDK_VERSION,
+)
+assert 'loopx.control_plane.coordination.nokv_jsonl_helper' not in sys.modules
+assert 'loopx.entrypoint' not in sys.modules
+print(json.dumps({'sdk': QUALIFIED_NOKV_SDK_VERSION, 'api': QUALIFIED_NOKV_API_VERSION}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", program], cwd=REPO_ROOT,
+        capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "sdk": helper.QUALIFIED_NOKV_SDK_VERSION,
+        "api": helper.QUALIFIED_NOKV_API_VERSION,
+    }
 
 
 def test_admission_names_the_owner_value_when_the_sdk_differs(

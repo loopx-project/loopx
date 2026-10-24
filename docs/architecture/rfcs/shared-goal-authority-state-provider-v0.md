@@ -147,6 +147,15 @@ shadow lineage, still default-off and subject to explicit bootstrap.
 
 ## Current implementation facts
 
+The qualified NoKV SDK contract has one dependency-free Python definition in
+`loopx/control_plane/coordination/nokv_qualification.py`. SDK admission and the
+stage ladder import that definition; the bridge keeps its existing exported
+version names. A qualification-data read does not load the optional SDK transport or its CLI
+imports. This preserves the single-owner constraint while allowing the typed
+contract targets to be checked independently. Version values, SDK capability
+and incarnation-fence checks, file-launched helper behavior, provider activation
+and qualification gates retain their existing contracts.
+
 Long-history closeout reuse retains only re-verifiable parsed prefixes; it adds
 no durable authority and relaxes no writer fence or D2 gate. This runtime repair
 does not mechanically subtract one of the three remaining implementation packages.
