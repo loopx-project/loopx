@@ -5,10 +5,11 @@ import "./goal-research-synthesis.css";
 
 type Props = {synthesis: TrajectoryResearchSynthesis; zh: boolean; detail?: boolean;
   onExpand?: (origin: HTMLButtonElement) => void;
+  onReviewEpisodes?: (ids: string[], origin: HTMLButtonElement) => void;
   onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void};
 
 /** One saved result, progressively disclosed. Never a new inference or executor. */
-export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, onCitation}: Props) {
+export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, onReviewEpisodes, onCitation}: Props) {
   const id = useId();
   const [experiments, setExperiments] = useState(false);
   const citations = (rows: AssessmentCitation[]) => <div className="research-synthesis-citations">{rows.map((c, i) =>
@@ -16,6 +17,8 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
       aria-label={`${zh ? "证据" : "Evidence"} ${i + 1}: ${c.source_id} · ${c.first_line}–${c.last_line}`}
       onClick={event => onCitation(c, event.currentTarget)}>[{i + 1}]<ArrowUpRight size={12} aria-hidden/></button>)}</div>;
   const alternatives = (items: string[]) => items.length ? <><h6>{zh ? "竞争解释" : "Competing explanations"}</h6><ul>{items.map((text, n) => <li key={n}>{text}</li>)}</ul></> : null;
+  const episodeLink = (ids: string[]) => onReviewEpisodes && ids.length ? <button type="button" className="research-review-episodes"
+    onClick={event => onReviewEpisodes(ids, event.currentTarget)}>{zh ? "复核相关片段" : "Review related episodes"} · {ids.length}<ArrowUpRight size={14} aria-hidden/></button> : null;
   const controls = (experiment: TrajectoryResearchSynthesis["next_experiments"][number]) => <dl>
     <dt>{zh ? "最小干预" : "Smallest intervention"}</dt><dd>{experiment.intervention}</dd>
     <dt>{zh ? "固定条件" : "Controls"}</dt><dd>{experiment.controls}</dd>
@@ -51,6 +54,7 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
             <header><h5><span>{i + 1}.</span> {experiment.question}</h5><p>{experiment.why_priority}</p></header>
             <div className="research-report-comparison">{controls(experiment)}{predictions(experiment)}</div>
             {citations(experiment.citations)}
+            {episodeLink(experiment.episode_ids)}
           </article>)}
         </div> : <div className="research-report-matrix">
           {!!s.findings.length && <div className="research-report-columns" aria-hidden><span>{zh ? "观察与依据" : "Observation and evidence"}</span><span>{zh ? "解释与竞争解释" : "Interpretation and alternatives"}</span></div>}
@@ -59,6 +63,7 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
             <h5><span>{i + 1}.</span> {finding.title}</h5>
             <div className="research-report-comparison"><div><p>{finding.observation}</p>{citations(finding.citations)}</div>
               <div><p>{finding.interpretation}</p>{alternatives(finding.alternative_explanations)}</div></div>
+            {episodeLink(finding.episode_ids)}
           </article>)}
         </div>}
       </div>

@@ -19,6 +19,7 @@
 .research-synthesis-citations { display: flex; flex-wrap: wrap; gap: 0 4px; }
 .research-synthesis .research-synthesis-citations button { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; min-width: 36px; border: 0; background: none; color: var(--pw-muted); font: inherit; font-size: var(--text-body); padding: 4px; cursor: pointer; }
 .research-synthesis button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.research-synthesis .research-review-episodes { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 4px 0; border: 0; background: none; color: var(--pw-text); font: inherit; font-size: var(--text-body); cursor: pointer; }
 .research-synthesis button:focus-visible, .research-synthesis summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .research-synthesis-detail { max-width: none; }
 .research-report-tabs { display: flex; gap: 24px; border-block-end: 1px solid var(--pw-line); margin-block: 16px; }

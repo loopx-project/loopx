@@ -229,8 +229,49 @@ export const researchHistoryScenario = {
       await analysis.getByRole('tab', {name: /结论与解释/}).click();
       await analysis.evaluate(e => e.scrollIntoView({block: 'start'}));
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-deep-desktop.png'), animations: 'disabled'});
+      // The report already declares its episode lineage. Follow those exact
+      // identities, not the whole Goal's history or a title/time heuristic.
+      const review = analysis.locator('.analysis-method').first();
+      const related = analysis.locator('.research-report-finding .research-review-episodes').first();
+      await related.click();
+      assert.deepEqual(await review.locator('[data-analysis-episode]').evaluateAll(rows => rows.map(row => row.dataset.analysisEpisode)), ['search-episode', 'control-episode']);
+      assert.equal(await review.locator('.analysis-episode[open]').getAttribute('data-analysis-episode'), 'search-episode');
+      await synthesisPage.waitForFunction(() => document.activeElement?.closest('[data-analysis-episode]')?.dataset.analysisEpisode === 'search-episode');
+      assert.match(await review.innerText(), /证据不足/);
+      await review.locator('.analysis-episode[open] .analysis-citations button').first().click();
+      await source.getByText(/Synthetic baseline: candidate-one/).waitFor();
+      await source.press('Escape');
+      await synthesisPage.waitForFunction(() => document.activeElement?.closest('[data-analysis-episode]')?.dataset.analysisEpisode === 'search-episode');
+      await review.getByRole('button', {name: '返回汇报', exact: true}).click();
+      assert.equal(await review.evaluate(e => e.open), false);
+      assert(await related.evaluate(e => e === document.activeElement));
+
+      const retention = analysis.locator('.research-report-finding .research-review-episodes').nth(1);
+      await retention.click();
+      assert.deepEqual(await review.locator('[data-analysis-episode]').evaluateAll(rows => rows.map(row => row.dataset.analysisEpisode)), ['retention-episode']);
+      assert.match(await review.locator('.analysis-episode[open]').innerText(), /证据不足/);
+      await review.getByRole('button', {name: '显示全部片段', exact: true}).click();
+      assert.deepEqual(await review.locator('[data-analysis-episode]').evaluateAll(rows => rows.map(row => row.dataset.analysisEpisode)), ['search-episode', 'control-episode', 'retention-episode']);
+      await review.getByRole('button', {name: '返回汇报', exact: true}).click();
+      assert(await retention.evaluate(e => e === document.activeElement));
+
+      await analysis.getByRole('tab', {name: /下一步实验/}).click();
+      const experiment = analysis.locator('.research-report-experiment .research-review-episodes').first();
+      await experiment.click();
+      assert.deepEqual(await review.locator('[data-analysis-episode]').evaluateAll(rows => rows.map(row => row.dataset.analysisEpisode)), ['control-episode']);
+      await synthesisPage.setViewportSize({width: 390, height: 844});
+      assert(await synthesisPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      assert(await review.locator('.analysis-episode[open] > summary').evaluate(row => {
+        const name = row.querySelector('.analysis-episode-name').getBoundingClientRect();
+        const verdict = row.querySelector('.analysis-episode-verdict').getBoundingClientRect();
+        return verdict.top >= name.bottom;
+      }), 'Narrow episode verdicts reflow below the full selected question');
+      await review.getByRole('button', {name: '返回汇报', exact: true}).click();
+      assert(await experiment.evaluate(e => e === document.activeElement));
+      assert.equal(await analysis.getByRole('tab', {name: /下一步实验/}).getAttribute('aria-selected'), 'true');
+      await synthesisPage.setViewportSize({width: 1280, height: 900});
       const packBeforeHistory = new URL(synthesisPage.url()).searchParams.get('research_pack');
-      await analysis.getByRole('button', {name: '查看研究历程', exact: true}).click();
+      await analysis.getByRole('button', {name: 'Goal 研究历程', exact: true}).click();
       assert.equal(await analysis.count(), 0);
       assert.equal(new URL(synthesisPage.url()).searchParams.get('research_pack'), packBeforeHistory);
       await synthesisPage.waitForFunction(() => document.activeElement?.classList.contains('research-history-heading'));

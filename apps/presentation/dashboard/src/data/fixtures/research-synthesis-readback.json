@@ -91,6 +91,26 @@
             "eligible_metrics": [
               "benefit_test"
             ]
+          },
+          {
+            "id": "control-episode",
+            "question": "Does a matched control distinguish the proposed mechanism from variation?",
+            "source_ids": [
+              "facts"
+            ],
+            "eligible_metrics": [
+              "discrimination"
+            ]
+          },
+          {
+            "id": "retention-episode",
+            "question": "Is the later candidate recorded as actually retained?",
+            "source_ids": [
+              "facts"
+            ],
+            "eligible_metrics": [
+              "evidence_adoption"
+            ]
           }
         ]
       },
@@ -109,6 +129,32 @@
                   "last_line": 3
                 }
               ]
+            },
+            {
+              "episode_id": "control-episode",
+              "metric": "discrimination",
+              "verdict": "unknown",
+              "reason": "没有记录匹配对照；改动效应与随机波动尚不能区分。",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 1,
+                  "last_line": 3
+                }
+              ]
+            },
+            {
+              "episode_id": "retention-episode",
+              "metric": "evidence_adoption",
+              "verdict": "unknown",
+              "reason": "原始记录没有保留信息；最佳值不能替代实际采用记录。",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 4,
+                  "last_line": 4
+                }
+              ]
             }
           ],
           "limitations": [
@@ -118,6 +164,14 @@
             {
               "episode_id": "search-episode",
               "question": "后续搜索是否检验了实际任务进展？"
+            },
+            {
+              "episode_id": "control-episode",
+              "question": "匹配对照是否区分了改动机制与随机波动？"
+            },
+            {
+              "episode_id": "retention-episode",
+              "question": "后续候选是否记录为实际保留？"
             }
           ],
           "synthesis": {
@@ -143,6 +197,7 @@
                   "随机波动可能解释部分差值；当前材料无法排除。"
                 ],
                 "episode_ids": [
+                  "control-episode",
                   "search-episode"
                 ],
                 "citations": [
@@ -159,7 +214,7 @@
                 "interpretation": "保留结果未知；这不抹去已观测的改善。",
                 "alternative_explanations": [],
                 "episode_ids": [
-                  "search-episode"
+                  "retention-episode"
                 ],
                 "citations": [
                   {
@@ -179,7 +234,7 @@
                 "prediction": "若改动有效，配对差值应持续改善，而非只出现单次最好值。",
                 "disconfirming_result": "若配对重复后差值消失或反向，应放弃该机制解释。",
                 "episode_ids": [
-                  "search-episode"
+                  "control-episode"
                 ],
                 "citations": [
                   {
@@ -206,6 +261,32 @@
                   "last_line": 3
                 }
               ]
+            },
+            {
+              "episode_id": "control-episode",
+              "metric": "discrimination",
+              "verdict": "unknown",
+              "reason": "No matched control is recorded; the intervention and random variation remain unresolved.",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 1,
+                  "last_line": 3
+                }
+              ]
+            },
+            {
+              "episode_id": "retention-episode",
+              "metric": "evidence_adoption",
+              "verdict": "unknown",
+              "reason": "The source records no retention; the best value cannot establish actual adoption.",
+              "citations": [
+                {
+                  "source_id": "facts",
+                  "first_line": 4,
+                  "last_line": 4
+                }
+              ]
             }
           ],
           "limitations": [
@@ -215,6 +296,14 @@
             {
               "episode_id": "search-episode",
               "question": "Did later search test useful task progress?"
+            },
+            {
+              "episode_id": "control-episode",
+              "question": "Did a matched control distinguish the intervention from variation?"
+            },
+            {
+              "episode_id": "retention-episode",
+              "question": "Was the later candidate recorded as actually retained?"
             }
           ],
           "synthesis": {
@@ -240,6 +329,7 @@
                   "Random variation could explain some of the difference; these records cannot exclude it."
                 ],
                 "episode_ids": [
+                  "control-episode",
                   "search-episode"
                 ],
                 "citations": [
@@ -256,7 +346,7 @@
                 "interpretation": "Retention is unknown without erasing observed improvement.",
                 "alternative_explanations": [],
                 "episode_ids": [
-                  "search-episode"
+                  "retention-episode"
                 ],
                 "citations": [
                   {
@@ -276,7 +366,7 @@
                 "prediction": "An effective change produces consistent paired gains rather than a single best value.",
                 "disconfirming_result": "Disappearing or reversed paired differences would disconfirm the mechanism.",
                 "episode_ids": [
-                  "search-episode"
+                  "control-episode"
                 ],
                 "citations": [
                   {

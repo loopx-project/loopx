@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import {ArrowUpRight, ChevronDown, LoaderCircle, RefreshCw, Sparkles, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryAssessment, TrajectoryEpisode, TrajectoryOutputLanguage, TrajectoryContinuation} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, episodeQuestionGroups, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
@@ -301,9 +301,10 @@ export function ResearchCitationPanel({analysis: a}: {analysis: Controller}) {
   </section>;
 }
 
-function AnalysisEpisodes({pack, result, zh, onCitation}: {pack: Pack; result: TrajectoryAssessment; zh: boolean; onCitation: Controller["readCitation"]}) {
-  const [active, setActive] = useState<string | null>(null);
-  const groups = episodeQuestionGroups(result, (pack.episodes ?? []).map(episode => ({episode_id: episode.id, episode})), pack.episodes);
+function AnalysisEpisodes({pack, result, zh, onCitation, selectedIds}: {pack: Pack; result: TrajectoryAssessment; zh: boolean; onCitation: Controller["readCitation"]; selectedIds?: string[]}) {
+  const episodes = (pack.episodes ?? []).filter(episode => !selectedIds || selectedIds.includes(episode.id));
+  const [active, setActive] = useState<string | null>(() => selectedIds ? episodes[0]?.id ?? null : null);
+  const groups = episodeQuestionGroups(result, episodes.map(episode => ({episode_id: episode.id, episode})), pack.episodes);
   const citationButtons = (citations: AssessmentCitation[]) => <div className="analysis-citations">{citations.map(c => <button type="button" key={`${c.source_id}:${c.first_line}:${c.last_line}`} onClick={event => {void onCitation(c, event.currentTarget);}}><ArrowUpRight size={13} aria-hidden/>{c.source_id} · {zh ? "行" : "lines"} {c.first_line}–{c.last_line}</button>)}</div>;
   return <div className="analysis-episodes">
     <div className="analysis-episode-columns" aria-hidden><span>{zh ? "研究片段" : "Episode"}</span><span>{metricCopy.benefit_test[zh ? 0 : 1]}</span><span>{metricCopy.evidence_adoption[zh ? 0 : 1]}</span><span>{zh ? "需留意" : "Exceptions"}</span></div>
@@ -334,7 +335,7 @@ function AnalysisEpisodes({pack, result, zh, onCitation}: {pack: Pack; result: T
         }
         const isPrimary = (group: typeof rows) => group.some(row => row.metric === "benefit_test" || row.metric === "evidence_adoption");
         const judgments = (group: typeof rows) => <div className="analysis-reason-judgments">{group.map(row => <span key={row.metric} data-analysis-judgment={row.metric}><strong>{metricCopy[row.metric][zh ? 0 : 1]}</strong><span>{verdictLabel(row.metric, row.verdict, zh)}</span></span>)}</div>;
-        return <details className="analysis-episode" key={episode.id} open={active === episode.id}>
+        return <details className="analysis-episode" key={episode.id} data-analysis-episode={episode.id} open={active === episode.id}>
           <summary onClick={event => {event.preventDefault(); setActive(previous => previous === episode.id ? null : episode.id);}}
             aria-label={[question, ...primary.map((row, i) => `${row.label} · ${primaryText[i]}`), unknownText, ...exceptionText].filter(Boolean).join(" · ")}>
             <span className="analysis-episode-name">{group.shared ? episode.id : question}</span>
@@ -358,6 +359,38 @@ function AnalysisEpisodes({pack, result, zh, onCitation}: {pack: Pack; result: T
   </div>;
 }
 
+/** Follow the synthesis owner's explicit episode references, never a prose or
+ * time-window match against the current Goal's broader Explore history. */
+function AnalysisReport({pack, result, zh, onCitation}: {pack: Pack; result: TrajectoryAssessment; zh: boolean; onCitation: Controller["readCitation"]}) {
+  const reader = useRef<HTMLDetailsElement>(null);
+  const origin = useRef<HTMLButtonElement | null>(null);
+  const [review, setReview] = useState<{ids: string[]; sequence: number} | null>(null);
+  const [all, setAll] = useState(false);
+  useLayoutEffect(() => {
+    if (!review || !reader.current) return;
+    reader.current.open = true;
+    const target = reader.current.querySelector<HTMLElement>(".analysis-episode > summary") ?? reader.current.querySelector("summary");
+    target?.focus({preventScroll: true});
+    reader.current.scrollIntoView({block: "start"});
+  }, [review]);
+  return <>
+    <ResearchSynthesis synthesis={result.synthesis!} zh={zh} detail onCitation={onCitation}
+      onReviewEpisodes={pack.episodes?.length ? (ids, trigger) => {
+        origin.current = trigger;
+        setAll(false);
+        setReview(previous => ({ids, sequence: (previous?.sequence ?? 0) + 1}));
+      } : undefined}/>
+    <details className="analysis-method" ref={reader}><summary>{zh ? "逐片段复核" : "Review individual episodes"}</summary>
+      {review ? <div className="analysis-episode-reading">
+        <button type="button" onClick={() => {reader.current!.open = false; origin.current?.focus();}}>{zh ? "返回汇报" : "Back to report"}</button>
+        <span>{zh ? "相关片段" : "Related episodes"} · {review.ids.length} / {pack.episode_count}</span>
+        {!all ? <button type="button" onClick={() => {setAll(true); requestAnimationFrame(() => reader.current?.querySelector("summary")?.focus());}}>{zh ? "显示全部片段" : "Show all episodes"}</button> : null}
+      </div> : null}
+      <AnalysisEpisodes key={`${review?.sequence ?? 0}:${all}`} pack={pack} result={result} zh={zh} onCitation={onCitation} selectedIds={review && !all ? review.ids : undefined}/>
+    </details>
+  </>;
+}
+
 export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Controller; onHistory?: () => void}) {
   if (!a.location.open) return null;
   const zh = a.zh, p = a.pack, result = p?.result;
@@ -370,7 +403,7 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
       : benefit?.yes ? (zh ? "模型记录了收益检验；这不等于收益为正" : "The model identified a utility test; this does not imply positive utility")
         : (zh ? "此方法未覆盖原目标收益检验" : "This method does not cover original-objective utility testing");
   return <div className={`research-analysis${result?.synthesis ? " has-synthesis" : ""}`} ref={a.panel} tabIndex={-1} role="region" aria-label={zh ? "轨迹深度分析" : "Trajectory analysis"} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); a.close();}}}>
-    <header><div><h3>{result?.synthesis ? (zh ? "研究汇报" : "Research report") : (zh ? "轨迹深度分析" : "Trajectory analysis")}</h3><p>{p?.title ?? (zh ? "只分析已授权的固定轨迹，不改变研究历史。" : "Analyze an authorized fixed trajectory without changing its history.")}</p></div><div className="analysis-header-actions">{result?.synthesis && onHistory ? <button type="button" onClick={onHistory}>{zh ? "查看研究历程" : "Explore research history"}</button> : null}{result ? <button type="button" onClick={() => void a.read().catch(() => undefined)} aria-label={zh ? "刷新分析结果" : "Refresh analysis result"}><RefreshCw size={15} aria-hidden/></button> : null}<button type="button" onClick={a.close} aria-label={zh ? "关闭分析" : "Close analysis"}><X size={16} aria-hidden/></button></div></header>
+    <header><div><h3>{result?.synthesis ? (zh ? "研究汇报" : "Research report") : (zh ? "轨迹深度分析" : "Trajectory analysis")}</h3><p>{p?.title ?? (zh ? "只分析已授权的固定轨迹，不改变研究历史。" : "Analyze an authorized fixed trajectory without changing its history.")}</p></div><div className="analysis-header-actions">{result?.synthesis && onHistory ? <button type="button" onClick={onHistory}>{zh ? "Goal 研究历程" : "Goal research history"}</button> : null}{result ? <button type="button" onClick={() => void a.read().catch(() => undefined)} aria-label={zh ? "刷新分析结果" : "Refresh analysis result"}><RefreshCw size={15} aria-hidden/></button> : null}<button type="button" onClick={a.close} aria-label={zh ? "关闭分析" : "Close analysis"}><X size={16} aria-hidden/></button></div></header>
     {a.error ? <div className="analysis-error" role="alert">{zh ? "分析请求未完成，已保存结果保留。" : "The analysis request did not complete; saved results are preserved."} <button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "重试读取" : "Retry reading"}</button><ContextHelp label={zh ? "失败详情" : "Failure details"}><p>{a.error}</p></ContextHelp></div> : null}
     {a.snapshot?.catalog.unreadable_pack_ids?.length && !p?.continuation_unavailable ? <p className="analysis-warning">{zh ? "部分历史分析暂不可读" : "Some historical analyses cannot be read"} · {a.snapshot.catalog.unreadable_pack_ids.length}</p> : null}
     <AnalysisReadState analysis={a}/>
@@ -399,8 +432,7 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
         {zh ? "本次尝试" : "This attempt"} · {p.job?.analysis_wall_seconds == null ? (zh ? "耗时未知" : "Time unknown") : `${p.job.analysis_wall_seconds.toFixed(1)}s`} · {zh ? "输入" : "input"} {p.job?.usage?.input_tokens?.toLocaleString() ?? "—"} / {zh ? "输出" : "output"} {p.job?.usage?.output_tokens?.toLocaleString() ?? "—"} tokens
       </p> : null}
       {result ? <>
-        {result.synthesis ? <><ResearchSynthesis key={result.analysis_key} synthesis={result.synthesis} zh={zh} detail onCitation={a.readCitation}/>
-          <details className="analysis-method"><summary>{zh ? "逐片段复核" : "Review individual episodes"}</summary><AnalysisEpisodes key={`${p.pack_id}:${p.analysis_key}:${zh}`} pack={p} result={result} zh={zh} onCitation={a.readCitation}/></details></>
+        {result.synthesis ? <AnalysisReport key={`${p.pack_id}:${result.analysis_key}:${zh}`} pack={p} result={result} zh={zh} onCitation={a.readCitation}/>
           : <><div className="analysis-finding"><span>{zh ? "Agent 判断 · 未校准" : "Agent interpretation · uncalibrated"}{p.applicability === "historical" ? (zh ? " · 历史结果" : " · Historical result") : ""}</span><h4>{headline}</h4></div>
             <AnalysisEpisodes key={`${p.pack_id}:${p.analysis_key}:${zh}`} pack={p} result={result} zh={zh} onCitation={a.readCitation}/></>}
         <details className="analysis-method"><summary>{zh ? "来源、方法、覆盖与分析成本" : "Sources, method, coverage and analysis cost"}</summary><p>{p.objective}</p><dl><dt>{zh ? "来源范围" : "Source scope"}</dt><dd>{p.scope.case_id} · {p.scope.run_id}<br/>{p.scope.window}</dd><dt>{zh ? "方法" : "Method"}</dt><dd>{result.method_version} · {zh ? "模型判断未校准" : "Uncalibrated model judgment"}</dd><dt>{zh ? "模型设置" : "Requested model"}</dt><dd>{p.config.model} / {p.config.effort} / {p.config.service_tier} · {zh ? "实际服务档位" : "Served tier"}: {resultJob?.served_service_tier ?? (zh ? "未知" : "unknown")}</dd><dt>{zh ? "分析用量" : "Analysis usage"}</dt><dd>{resultJob?.reused_from_analysis_key ? (zh ? "复用上一版判读，无新增模型调用；原用量保留在上一版。" : "Reused previous judgments without a new model call; original usage stays with the previous version.") : <>{resultJob?.analysis_wall_seconds == null ? "—" : `${resultJob.analysis_wall_seconds.toFixed(1)}s`} · {zh ? "输入" : "input"} {resultJob?.usage?.input_tokens?.toLocaleString() ?? "—"} / {zh ? "输出" : "output"} {resultJob?.usage?.output_tokens?.toLocaleString() ?? "—"} tokens · {zh ? "金额未采集，推理 token 已包含于输出" : "Dollar cost unmeasured; reasoning tokens are included in output"}</>}</dd><dt>{zh ? "覆盖" : "Coverage"}</dt><dd>{p.episode_count} {zh ? "个固定片段" : "fixed episodes"} · {p.source_count} {zh ? "份来源" : "sources"} · {zh ? "总体片段数" : "Population"}: {p.selection.population_episodes ?? (zh ? "未知" : "unknown")}</dd><dt>{zh ? "取样规则" : "Selection"}</dt><dd>{p.selection.rule}</dd><dt>{zh ? "版本" : "Revision"}</dt><dd>{p.scope.revision}</dd></dl><ul>{result.limitations.map((text, i) => <li key={i}>{text}</li>)}</ul><p>{zh ? "引用行存在不等于解释正确；本页不提供独立科学校准结论。" : "A valid citation range does not establish entailment or independent scientific calibration."}</p></details>
