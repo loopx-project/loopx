@@ -77,6 +77,7 @@ def execute_turn_run_once(
     native_host_runner: Callable[..., dict[str, Any]] | None = None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
+    native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
@@ -112,6 +113,9 @@ def execute_turn_run_once(
             if args.host_command_json:
                 raise ValueError(f"{args.host} does not accept --host-command-json")
             raw_argv = None
+        if native_task_validator is not None and args.host != "codex-app-server":
+            raise ValueError("a native task validator cannot replace a selected CLI validator")
+        task_validator = native_task_validator
         if args.validation_command_json:
             raw_validation_argv = json.loads(args.validation_command_json)
             if not isinstance(raw_validation_argv, list) or not all(
@@ -120,14 +124,13 @@ def execute_turn_run_once(
                 raise ValueError(
                     "--validation-command-json must be a JSON string array"
                 )
-            task_validator = build_loopx_turn_command_validator(
-                raw_validation_argv,
-                project=project,
-                timeout_seconds=args.validation_timeout_seconds,
-                failure_recovery_kind=args.validation_failure_kind,
-            )
-        else:
-            task_validator = None
+            if task_validator is None:
+                task_validator = build_loopx_turn_command_validator(
+                    raw_validation_argv,
+                    project=project,
+                    timeout_seconds=args.validation_timeout_seconds,
+                    failure_recovery_kind=args.validation_failure_kind,
+                )
         envelope = (
             payload.get("turn_envelope")
             if isinstance(payload.get("turn_envelope"), dict)

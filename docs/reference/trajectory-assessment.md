@@ -59,6 +59,26 @@ Fields use content-bound opaque identities. Literal code, links, numeric tokens
 and technical identifiers are protected; missing, duplicate or corrupt rows fall
 back to the original with explicit partial/invalid coverage. This mechanical
 check does not verify linguistic quality, causal meaning or model calibration.
+
+For ambiguous compact notes, the curator can add `display_snapshot.contexts`
+rows with `event_id`, `field` and `citations` (existing `source_id`, absolute
+inclusive `first_line`/`last_line`). Bind only a narrative field in that captured
+snapshot and verified source ranges. Empty evidence, duplicate bindings, missing
+fields/sources and out-of-range lines are rejected. The same explicit analysis
+reads those numbered ranges to resolve terms, units and referents; it must not
+import later outcomes, new measurements or stronger certainty into the original
+field. Context evidence is supplied once through the existing source pack.
+The versioned display field retains `context_citations`; equal text with different
+context does not share a translation identity. Context additions, corrections or
+removal invalidate reuse. Omission preserves existing prompts and identities.
+The original source reader and existing job budget, cancellation and retry remain
+the entrypoints; neither a context binding nor an ordinary read launches a model.
+
+压缩记录有歧义时，可由原输入整理者把准确事件/字段关联到已有证据的具体行。
+同一次明确分析据此解释术语、单位和指代，不能把上下文的新结果补写成原记录结论。
+关联随展示产物保存并参与版本隔离；不同上下文不共用同一译文。没有关联时沿用原路径，
+字面校验和来源关联仍不等于译文已获独立语义验证。
+
 For a large capture, the curator can set the optional
 `display_snapshot.translation_encoding: "source_text_aliases_v1"`. The same
 owner requests one translation per exactly equal original string using compact

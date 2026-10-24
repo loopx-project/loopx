@@ -30,7 +30,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
 `, path], {cwd: repoRoot});
   const capture = JSON.parse(await readFile(path, "utf8"));
   const history = JSON.stringify({ok: true, goal_id: capture.goal_id, items: capture.events, total: capture.events.length, next_cursor: null});
-  const evidence = "No native improvement was observed.\nThe initialization record does not identify the original bottleneck.\nThe radius comparison lacks a repair mechanism and complete controls.\nThe restart result does not identify the later adopted revision.\n";
+  const evidence = "No native improvement was observed.\nThe initialization record does not identify the original bottleneck.\nThe radius comparison lacks a repair mechanism and complete controls.\nThe restart result does not identify the later adopted revision.\nTrial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.\n";
   const names = ["variant-alpha", "variant-beta", "variant-gamma", "variant-delta", "variant-epsilon", "independent-control", "paired-alpha", "paired-beta"];
   const question = (id, language) => id === "independent-control"
     ? (language === "zh" ? "独立对照是否支持 V18 的收益？尚无依据。" : "Does the independent control support a benefit for V18? It is not established.")
@@ -62,7 +62,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       sources: [source("evidence", "evidence.txt", evidence), source("history", "history.json", history)],
       episodes: names.map(id => ({id, question: question(id, "en"), source_ids: ["evidence"], eligible_metrics: [...TRAJECTORY_METRICS]})),
       display_snapshot: {schema_version: "research_display_snapshot_v1", source_id: "history", source_namespace: variant === "other-source" ? "other-source" : "local",
-        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literal_values_v1"} : {})}};
+        ...(variant === "complete" ? {translation_encoding: "source_text_aliases_with_literal_values_v1",
+          contexts: capture.events.filter(event => event.event_kind === "finding").map(event => ({event_id: event.event_id, field: "observation",
+            citations: [{source_id: "evidence", first_line: 5, last_line: 5}]}))} : {})}};
     const outputs = Object.fromEntries(["zh", "en"].map(language => {
       const p = prepareTrajectoryAssessment({input, config: {model: "gpt-6.1-sol", effort: "max", service_tier: "fast", output_language: language}});
       let rows = JSON.parse(p.prompt.split("\n\ndisplay_fields:\n")[1]).map(row => ({field_id: row.field_id, text: language === "zh" ? translate(row) : row.text}));
@@ -134,6 +136,20 @@ export const researchDisplayLanguageScenario = {
         assert.match(await reader.innerText(), /第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步/);
         assert.match(await reader.innerText(), /已反驳/);
         assert(!await reader.locator(".research-finding-sections").first().innerText().then(text => text.includes("Input revision:")));
+        const provenance = reader.locator('.research-node-provenance');
+        await provenance.locator(':scope > summary').click();
+        await provenance.getByRole('heading', {name: '译文依据', exact: true}).waitFor();
+        assert.equal(await provenance.getByRole('heading', {name: '显式关联', exact: true}).count(), 0, 'An empty relationship section adds no heading');
+        const contextCitation = provenance.getByRole('button', {name: 'evidence · 行 5–5', exact: true});
+        await contextCitation.focus(); await page.keyboard.press('Enter');
+        const sourceReader = history.getByRole('region', {name: '引用原文', exact: true});
+        await sourceReader.getByText('Trial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.', {exact: true}).waitFor();
+        await sourceReader.press('Escape');
+        await page.waitForFunction(element => element === document.activeElement, await contextCitation.elementHandle());
+        assert.equal(await contextCitation.evaluate(element => element === document.activeElement), true);
+        assert.equal(await history.getByRole('region', {name: '轨迹深度分析', exact: true}).count(), 0, 'A context citation preserves closed analysis');
+        await page.screenshot({path: resolve(outputDir, `research-display-context-reader-${width}.png`), animations: 'disabled'});
+        await provenance.locator(':scope > summary').click();
         await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
         await page.screenshot({path: resolve(outputDir, `research-display-language-reader-${width}.png`), animations: "disabled"});
         await original.click();
@@ -185,6 +201,19 @@ export const researchDisplayLanguageScenario = {
         await page.reload({waitUntil: "domcontentloaded"});
         await history.getByRole("button", {name: "Show originals", exact: true}).waitFor();
         assert.match(await history.locator(".research-route-caption").first().innerText(), /Does V18/);
+        await history.locator('.research-route-caption button').first().click(); await reader.waitFor();
+        const englishProvenance = reader.locator('.research-node-provenance');
+        await englishProvenance.locator(':scope > summary').click();
+        await englishProvenance.getByRole('heading', {name: 'Translation context', exact: true}).waitFor();
+        const englishCitation = englishProvenance.getByRole('button', {name: 'evidence · lines 5–5', exact: true});
+        await englishCitation.click();
+        const englishSource = history.getByRole('region', {name: 'Cited original', exact: true});
+        await englishSource.getByText('Trial4failed2checks refers to trial 4 with 2 failed checks, not 4 independent experiments.', {exact: true}).waitFor();
+        await englishSource.press('Escape');
+        await page.waitForFunction(element => element === document.activeElement, await englishCitation.elementHandle());
+        assert.equal(await englishCitation.evaluate(element => element === document.activeElement), true);
+        await page.screenshot({path: resolve(outputDir, `research-display-context-reader-en-${width}.png`), animations: 'disabled'});
+        await reader.focus(); await reader.press('Escape');
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "No page-level narrow overflow");
         await page.addInitScript(() => Object.defineProperty(globalThis.crypto, "subtle", {value: undefined}));
         await page.reload({waitUntil: "domcontentloaded"});
