@@ -2593,13 +2593,15 @@ def test_todo_complete_composition_passes_effective_runtime_root_to_hooks(
     assert captured["runtime_root"] == runtime_override
 
 
+@pytest.mark.parametrize("entrypoint", ["loopx.cli", "loopx.entrypoint"])
 def test_refresh_state_composition_passes_effective_runtime_root_to_hooks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    entrypoint: str,
 ) -> None:
     """The refresh-state hook composition reads machine defaults under the override."""
 
-    from loopx import cli as cli_module
+    from importlib import import_module
 
     registry_path, _runtime_registry, runtime_override = _split_root_registry(tmp_path)
     captured: dict[str, object] = {}
@@ -2611,17 +2613,15 @@ def test_refresh_state_composition_passes_effective_runtime_root_to_hooks(
         return ()
 
     monkeypatch.setattr(
-        cli_module,
-        "periodic_report_post_writeback_hooks_for_goal",
+        "loopx.capabilities.periodic_report.post_writeback_hook.periodic_report_post_writeback_hooks_for_goal",
         capture_hooks,
     )
     monkeypatch.setattr(
-        cli_module,
-        "handle_project_lifecycle_command",
+        "loopx.cli_commands.project_lifecycle.handle_project_lifecycle_command",
         lambda *_args, **_kwargs: 7,
     )
 
-    exit_code = cli_module.main(
+    exit_code = import_module(entrypoint).main(
         [
             "--registry",
             str(registry_path),

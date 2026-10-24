@@ -50,6 +50,16 @@ guard 和输出。Dispatcher 复用既有 executable-revision 请求作用域；
 capability 观察仍实时读取。这不新增 module、桥接、语义 owner 或状态缓存。
 这是有界调用者接入，不证明 peer 执行、模型结果或完整原生 CLI 已通过资格验证。
 
+### Lifecycle CLI 调用者接入
+
+`refresh-state`、`checkpoint-context`、`read-only-map`、`reward` 和
+`operator-gate` 复用按命令 parser 和共享 dispatcher。两个 CLI 入口使用既有
+lifecycle 注册、handler 和 writeback-hook 组合；旧的完整 CLI 分发分支已删除。
+命令集合由路由持有，lifecycle module 的旧 import 仍可使用它。Help、诊断、
+registry/runtime 选择和 native-controller guard 保持既有路径。这不新增领域规则、
+桥接操作或状态缓存。完整命令成本及真实写入／恢复行为与 import 计时分别验证；
+安装后行为和真实 provider 行为仍需各自的证据。
+
 ### 产品对话与通用异步 inbox
 
 **Chat HTTP POST 作用域。** `ChatRequestHandler.do_POST` 现在为每次完整 HTTP

@@ -289,6 +289,8 @@ assert payload["groups"]
 		(["global-risks", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["turn", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 		(["turn", "run-once", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
+		*[( [command, "--help"], "loopx.cli_commands.project_lifecycle", "loopx.cli_commands.project_lifecycle")
+		  for command in ("refresh-state", "checkpoint-context", "read-only-map", "reward", "operator-gate")],
 	],
 )
 def test_common_command_help_loads_only_its_owner(
@@ -416,6 +418,12 @@ else:
 
 def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	argv_cases = [
+		*[[command, flag] for command in
+		  ("refresh-state", "checkpoint-context", "read-only-map", "reward", "operator-gate")
+		  for flag in ("--help", "--unknown-option")],
+		["refresh-state", "--goal-id", "goal", "--delivery-outcome", "invalid"],
+		["checkpoint-context", "--goal-id", "goal", "--agent-id", "agent", "--turn-instance-id", "turn",
+		 "--todo-id", "todo_work", "--replan-obligation-id", "replan"],
 		["commands", "--help"],
 		["commands", "--format", "json"],
 		["commands", "--format", "markdown"],
@@ -542,6 +550,48 @@ def test_selected_manager_inbox_refusals_match_without_loading_full_cli(tmp_path
 	assert selected.stdout == full.stdout
 	assert selected.stderr == full.stderr
 	assert json.loads(selected.stdout)["ok"] is False
+
+
+@pytest.mark.parametrize("arguments", [
+	["refresh-state", "--dry-run"],
+	["checkpoint-context", "--agent-id", "perf-agent", "--turn-instance-id", "missing", "--todo-id", "todo_missing"],
+	["read-only-map"],
+	["reward", "--decision", "continue_route", "--reward", "positive", "--reason-summary", "Checked evidence", "--dry-run"],
+	["operator-gate", "--decision", "approve", "--reason-summary", "Checked evidence", "--dry-run"],
+])
+def test_selected_lifecycle_refusals_match_without_full_cli(tmp_path, arguments):
+	registry, runtime = write_command_fixture(tmp_path)
+	before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		*arguments, "--goal-id", "missing-goal"]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert json.loads(selected.stdout)["ok"] is False
+	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_selected_refresh_preview_keeps_canonical_state_without_full_cli(tmp_path, monkeypatch, provider):
+	from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
+	from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+	isolate_sqlite_runtime(tmp_path, monkeypatch)
+	registry, runtime = write_command_fixture(tmp_path)
+	state = registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md"
+	initialize_canonical_source_fixture(runtime, "perf-goal", state_path=state, provider=provider)
+	before = state.read_bytes(), read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="perf-goal")
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"refresh-state", "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+		"--next-action", "Continue bounded fixture work.", "--no-global-sync", "--dry-run"]
+	for module in ("loopx.entrypoint", "loopx.cli"):
+		result = run_cli_main(module, argv, forbidden_modules=("loopx.cli",) if module == "loopx.entrypoint" else ())
+		assert result.returncode == 0, result.stderr
+		payload = json.loads(result.stdout)
+		assert payload["ok"] and payload["dry_run"]
+		assert (state.read_bytes(), read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="perf-goal")) == before
 
 
 def test_selected_manager_result_matches_full_replay_without_loading_full_cli(tmp_path):

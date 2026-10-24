@@ -343,13 +343,27 @@ class RolloutCursor:
                 return HostThreadActivity.unknown(
                     HostThreadUnknownReason.RECORD_UNRECOGNIZED
                 )
-        if not self.loaded:
+        loading = not self.loaded
+        if loading:
             self.load(cache_root, reader, stat)
             # Cache load/reset cannot certify or erase the independently read header.
             self.header_valid = self.loaded = True
         # Also verify retained marker/event bytes; append metadata is not a clock.
         if self.back is not None and self.back.done and not self._verify_facts(reader):
             self.reset(stat)
+        if (
+            self.back is not None
+            and self.back.done
+            and self.forward is not None
+            and stat.st_size - self.forward.pos > reader.remaining
+            and (loading or stat.st_size - self.size > reader.remaining)
+        ):
+            # A cached old turn must not make current liveness wait for a
+            # large intervening transcript. Search the current tail with the
+            # same bounded reader. Do this once per load/large append so an
+            # unfinished giant record can still converge on later reads.
+            self.back = Backward(stat.st_size)
+            self.forward = None
         result = self.advance(reader, stat)
         self.size, self.mtime = stat.st_size, stat.st_mtime_ns
         self.ctime = stat.st_ctime_ns
@@ -382,6 +396,7 @@ class RolloutCursor:
             or not self.back.done
             or self.back.marker is None
             or self.back.latest is None
+            or (self.forward is not None and self.forward.pos < self.size)
         ):
             return
         latest = (self.forward.latest if self.forward else None) or self.back.latest

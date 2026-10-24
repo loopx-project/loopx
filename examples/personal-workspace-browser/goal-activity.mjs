@@ -250,7 +250,7 @@ export const goalActivityScenario = {
       assert.equal(new URL(page.url()).searchParams.get("goalId"), selectedBeforeHelp, "Help never navigates or starts work");
       const unavailable = await goalRow(page, "Research Monitor");
       const unknownState = unavailable.locator("small");
-      assert.equal(await unknownState.innerText(), "状态不可读");
+      assert.equal(await unknownState.innerText(), "执行状态未知");
       assert.equal(await unavailable.locator(".personal-goal-window-badge").count(), 0, "An all-unknown status is stated once");
       assert.equal(await unknownState.evaluate(element => {
         const probe = document.createElement("span"); probe.style.color = "var(--pw-muted)"; element.append(probe);
@@ -265,7 +265,7 @@ export const goalActivityScenario = {
       assert.match(await unknownHelp.innerText(), /无法读取宿主的本机记录/);
       assert.match(await unknownHelp.innerText(), /无法识别宿主记录格式/);
       await page.keyboard.press("Escape");
-      assert.doesNotMatch(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /执行中|观测缺口|状态不可读/,
+      assert.doesNotMatch(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /执行中|观测缺口|执行状态未知/,
         "Another Goal's completed activity stays isolated");
       await page.screenshot({path: resolve(outputDir, "goal-activity-observation-desktop.png"), animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});
@@ -289,7 +289,7 @@ export const goalActivityScenario = {
       await page.reload({waitUntil: "networkidle"});
       const recovered = await goalRow(page, "Product Release");
       await recovered.locator(".personal-goal-window-badge").waitFor({state: "hidden"});
-      assert.doesNotMatch(await recovered.locator("small").innerText(), /Running|state unavailable|gaps/);
+      assert.doesNotMatch(await recovered.locator("small").innerText(), /Running|execution state unknown|gaps/);
       assert.equal(await recovered.locator(".personal-goal-window-badge, .personal-goal-mark.is-live").count(), 0,
         "A refreshed complete ended-turn observation clears the old gap without inventing execution");
     } finally {
@@ -310,7 +310,7 @@ export const goalActivityScenario = {
       try {
         const { api, page } = partial;
         const queued = await goalRow(page, "Multi Agent Projection");
-        await queued.locator("small", { hasText: "状态不可读" }).waitFor({ timeout: 15_000 });
+        await queued.locator("small", { hasText: "执行状态未知" }).waitFor({ timeout: 15_000 });
         assert.doesNotMatch(await queued.locator("small").innerText(), /线程空闲|执行中/, "A partial or legacy sample cannot prove every bound thread idle");
         assert.match(await (await goalRow(page, "Product Release")).locator("small").innerText(), /^执行中/, "A positive open-turn observation remains usable with partial coverage");
         assert.doesNotMatch(await (await goalRow(page, "Research Monitor")).locator("small").innerText(), /线程空闲|执行中/, "An unrecognized record never becomes idle or running");
