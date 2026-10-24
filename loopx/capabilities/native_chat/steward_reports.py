@@ -83,9 +83,27 @@ class StewardReports:
         request = (turn or {}).get("loopx_request") or {}
         native = ((turn or {}).get("response") or {}).get("native_loopx") or {}
         if (turn and turn.get("status") == "completed" and native.get("status") == "failed"
-                and request.get("actor") == actor and request.get("report_window_id") == window["window_id"]):
+                and request.get("actor") == actor and request.get("work_kind") == "report"
+                and request.get("report_window_id") == window["window_id"]
+                and request.get("report_subscription_revision") == window["subscription_revision"]):
             return {"turn_id": turn["turn_id"], "todo_id": request["todo_id"]}
         return None
+
+    def _cancel_failed_window(self, actor: dict[str, Any], window: dict[str, Any],
+                              failure: dict[str, str], *, cadence_locked: bool = False) -> None:
+        from ..periodic_report.cadence_journal import (
+            _retire_failed_cadence_window_locked, retire_failed_cadence_window,
+        )
+        if self._known_generation_failure(actor, window) != failure:
+            raise ValueError("the original failed report changed before cancellation")
+        native_command(self.controller, ["todo", "update", "--goal-id", actor["goal_id"],
+            "--todo-id", failure["todo_id"], "--agent-id", actor["agent_id"],
+            "--update-operation-id", "cancel.report." + window["window_id"], "--status", "blocked",
+            "--clear-resume-when", "--reason",
+            "Owner cancelled a known failed report window; retain the failed task, costs and evidence, not completed or delivered.", "--execute"])
+        retire = _retire_failed_cadence_window_locked if cadence_locked else retire_failed_cadence_window
+        retire(runtime_root=self.root, goal_id=actor["goal_id"],
+            expected_window_id=window["window_id"], source_receipt_id=failure["turn_id"])
 
     def configure(self, binding_id: str, *, operation: str, schedule: dict[str, Any] | None = None,
                   expected_plan_id: str | None = None, execute: bool = False) -> dict[str, Any]:
@@ -140,14 +158,7 @@ class StewardReports:
             if configuration_summary(load_goal_from_registry(self.controller.registry_path, actor["goal_id"])) != proposed:
                 raise ValueError("native report configuration readback changed")
             if plan["retires_failed_window"]:
-                from ..periodic_report.cadence_journal import retire_failed_cadence_window
-                key = "cancel.report." + journal["window"]["window_id"]
-                native_command(self.controller, ["todo", "update", "--goal-id", actor["goal_id"],
-                    "--todo-id", failure["todo_id"], "--agent-id", actor["agent_id"],
-                    "--update-operation-id", key, "--status", "blocked", "--clear-resume-when", "--reason",
-                    "Owner cancelled a known failed report window; retain the failed task, costs and evidence, not completed or delivered.", "--execute"])
-                retire_failed_cadence_window(runtime_root=self.root, goal_id=actor["goal_id"],
-                    expected_window_id=journal["window"]["window_id"], source_receipt_id=failure["turn_id"])
+                self._cancel_failed_window(actor, journal["window"], failure)
             getattr(self.controller, "_steward_monitor_next_check", {}).pop(binding_id, None)
             receipt = {"ok": True, "applied": True, "plan": plan, "report": self.health(binding_id),
                 "model_invoked": False, "external_writes_performed": False}
@@ -344,13 +355,15 @@ def session_report_configuration_guard(controller: Any, goal_id: str, proposed: 
     """Keep the existing settings transaction and native window in one ordering.
 
     Preparing source artifacts takes the same Goal-local calendar lock. A
-    changed plan cannot strand a frozen undelivered report; pause and restoring
-    that same plan remain possible. Other destinations keep their old path.
+    changed plan cannot strand a frozen undelivered report. Clearing a known
+    failed generation retires only that attempt after a verified settings apply;
+    previews and pauses retain it. Other destinations keep their old path.
     """
     from ..periodic_report.goal_configuration import managed_session_report_destination
     from ..periodic_report.cadence_journal import cadence_journal_path
     current = configuration_summary(load_goal_from_registry(controller.registry_path, goal_id) or {}) or {}
-    if not managed_session_report_destination(current) and not managed_session_report_destination(proposed or {}):
+    if (not managed_session_report_destination(current) and not managed_session_report_destination(proposed or {})
+            and (current or proposed is not None)):
         yield
         return
     with exclusive_file_lock(cadence_journal_path(controller.coordination_runtime_root, goal_id),
@@ -362,6 +375,7 @@ def session_report_configuration_guard(controller: Any, goal_id: str, proposed: 
             if actor["goal_id"] != goal_id:
                 raise ValueError("select the original managed Agent Session in this Goal")
         journal = read_cadence_journal(runtime_root=controller.coordination_runtime_root, goal_id=goal_id)
+        cancellation = None
         if journal and journal["publication"] is None and not journal.get("retirement"):
             window = journal["window"]
             reports = ManagedSessionReports(controller)
@@ -369,9 +383,20 @@ def session_report_configuration_guard(controller: Any, goal_id: str, proposed: 
             if folder.exists() and not reports._published_window(window):
                 before = {k: v for k, v in current.items() if k != "enabled"}
                 after = {k: v for k, v in (proposed or {}).items() if k != "enabled"}
-                if before != after:
-                    raise PendingStewardReportError("The original frozen report still requires verified delivery. Pause or restore the same plan; change its schedule or conversation after delivery.")
-        yield
+                if before != after or not current and proposed is None:
+                    actor = reports._frozen_actor(window)
+                    failure = reports._known_generation_failure(actor, window) if actor else None
+                    if (proposed is not None or not failure) and (current or proposed is not None):
+                        raise PendingStewardReportError("The original frozen report still requires verified delivery. Pause or restore the same plan; clear a known failed generation before changing its schedule or conversation.")
+                    if failure:
+                        cancellation = actor, window, failure
+        def after_verified_apply():
+            if configuration_summary(load_goal_from_registry(controller.registry_path, goal_id)) is not None:
+                raise ValueError("the original report configuration was not cleared")
+            if reports._frozen_actor(cancellation[1]) != cancellation[0]:
+                raise ValueError("the original failed report actor changed before cancellation")
+            reports._cancel_failed_window(*cancellation, cadence_locked=True)
+        yield after_verified_apply if cancellation else None
 
 
 class ManagedSessionReports(StewardReports):
@@ -458,16 +483,23 @@ class ManagedSessionReports(StewardReports):
             frozen = prepare_session_report(root=self.root, window=window, actor=actor, read=read, reporting=reporting)
         return report_prompt(frozen, attempt_directory(self.root, window))
 
-    def delivery_current(self, session_id: str, window: dict[str, Any]) -> bool:
+    def _frozen_actor(self, window: dict[str, Any]) -> dict[str, Any] | None:
         from ..periodic_report.pending_intent import _canonical_digest
-        if self.subscription(session_id, expected_revision=window["subscription_revision"]) is None:
-            return False
-        actor = self.selected(session_id)["actor"]
-        frozen = json.loads((attempt_directory(self.root, window) / "editorial-request.json").read_text(encoding="utf-8"))
-        return (actor == frozen.get("managed_session_actor")
-            and frozen.get("window") == window and actor["goal_id"] == window["goal_id"]
-            and actor["agent_id"] == window["agent_id"]
-            and frozen.get("request_digest") == _canonical_digest({k: v for k, v in frozen.items() if k != "request_digest"}))
+        path = attempt_directory(self.root, window) / "editorial-request.json"
+        if not path.is_file():
+            return None
+        frozen = json.loads(path.read_text(encoding="utf-8"))
+        saved = frozen.get("managed_session_actor")
+        if not isinstance(saved, dict):
+            return None
+        actor = self.selected(saved.get("session_id"))["actor"]
+        return actor if (actor == saved and frozen.get("window") == window
+            and actor["goal_id"] == window["goal_id"] and actor["agent_id"] == window["agent_id"]
+            and frozen.get("request_digest") == _canonical_digest({k: v for k, v in frozen.items() if k != "request_digest"})) else None
+
+    def delivery_current(self, session_id: str, window: dict[str, Any]) -> bool:
+        return (self.subscription(session_id, expected_revision=window["subscription_revision"]) is not None
+            and self._frozen_actor(window) == self.selected(session_id)["actor"])
 
     def publish(self, session_id: str, window: dict[str, Any]) -> bool:
         """Read the original native commit, then publish/read back one Core message.

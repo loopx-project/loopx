@@ -255,6 +255,143 @@ def test_local_report_configuration_retains_frozen_window_and_original_agent_ele
         goal_id=session["goal_id"], agent_id=session["managed_agent_id"], execute=True)["status"] == "original_conversation_required"
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("interruption", [None, "settings_cleared", "task_blocked"])
+def test_local_cancel_retires_only_a_known_failed_window_after_verified_apply(steward, tmp_path, monkeypatch, provider, interruption):
+    from datetime import timezone
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat.steward_reports import session_report_configuration_guard
+    from loopx.capabilities.periodic_report import cadence_runtime
+    from loopx.configure_goal import configure_goal
+    import loopx.capabilities.native_chat.steward_reports as report_host
+    session, reports, config, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, _, _, capture, _ = steward
+    sid, goal_id = session["session_id"], session["goal_id"]
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    install_model(steward, tmp_path, sid)
+    model = tmp_path / "report_model.py"
+    valid = model.read_text()
+    model.write_text(valid.replace('"request_digest": request["request_digest"]', '"request_digest": "known-invalid"'))
+    failed = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert failed["response"]["native_loopx"]["status"] == "failed"
+    journal = read_cadence_journal(runtime_root=reports.root, goal_id=goal_id)
+    folder = attempt_directory(reports.root, journal["window"])
+    artifacts = {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()}
+    calls, writes, registry = capture.read_bytes(), list(bot.writes), runtime.registry_path.read_bytes()
+    assert not (folder / "private-generation.json").exists()
+    # Preview and an apply that fails before verified readback cannot cancel.
+    with session_report_configuration_guard(runtime, goal_id, None) as after_apply:
+        assert callable(after_apply)
+        with pytest.raises(ValueError, match="not cleared"):
+            after_apply()
+    with pytest.raises(OSError, match="write unavailable"):
+        with session_report_configuration_guard(runtime, goal_id, None):
+            raise OSError("Synthetic settings write unavailable")
+    assert read_cadence_journal(runtime_root=reports.root, goal_id=goal_id) == journal
+    assert runtime.registry_path.read_bytes() == registry
+    # Existing generation/unknown-delivery evidence must still prevent clear.
+    for name in ["private-generation.json", "private-delivery.json"]:
+        retained = folder / name
+        retained.write_text("{}")
+        with pytest.raises(ValueError, match="requires verified delivery"):
+            with session_report_configuration_guard(runtime, goal_id, None):
+                pytest.fail("an existing effect must not be cancelled as a generation failure")
+        retained.unlink()
+    if interruption:
+        from loopx.capabilities.periodic_report import cadence_journal
+        def unavailable_retirement(**_kwargs):
+            raise OSError("Synthetic cancellation receipt unavailable")
+        with pytest.raises(OSError, match="cancellation receipt unavailable"), monkeypatch.context() as interrupted:
+            if interruption == "task_blocked":
+                interrupted.setattr(cadence_journal, "_retire_failed_cadence_window_locked", unavailable_retirement)
+            with session_report_configuration_guard(runtime, goal_id, None) as after_apply:
+                assert configure_goal(registry_path=runtime.registry_path, goal_id=goal_id,
+                    clear_periodic_report_configuration=True, execute=True)["ok"]
+                if interruption == "settings_cleared":
+                    raise OSError("Synthetic cancellation receipt unavailable")
+                after_apply()
+        assert read_cadence_journal(runtime_root=reports.root, goal_id=goal_id) == journal
+        assert capture.read_bytes() == calls and bot.writes == writes
+    # A retry uses the original frozen actor even after configuration cleared.
+    with session_report_configuration_guard(runtime, goal_id, None) as after_apply:
+        assert callable(after_apply)
+        assert configure_goal(registry_path=runtime.registry_path, goal_id=goal_id,
+            clear_periodic_report_configuration=True, execute=True)["ok"]
+        after_apply()
+    retired = read_cadence_journal(runtime_root=reports.root, goal_id=goal_id)
+    assert retired["retirement"]["source_receipt_id"] == failed["turn_id"]
+    assert retired["publication"] is None
+    task = next(row for row in StewardMonitor(runtime).todos(failed["loopx_request"]["actor"])
+        if row["todo_id"] == failed["loopx_request"]["todo_id"])
+    assert task["status"] == "blocked" and not task.get("done")
+    assert capture.read_bytes() == calls and bot.writes == writes
+    assert store.load_turn(sid, failed["turn_id"]) == failed
+    assert {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()} == artifacts
+    assert read_periodic_report_publication_cursor(runtime_root=reports.root, goal_id=goal_id,
+        agent_id=session["managed_agent_id"]) is None
+    with session_report_configuration_guard(runtime, goal_id, None) as after_apply:
+        assert after_apply is None
+    # The old failed attempt stays retired; a new independent period works.
+    with session_report_configuration_guard(runtime, goal_id, config) as after_apply:
+        assert after_apply is None
+        assert configure_goal(registry_path=runtime.registry_path, goal_id=goal_id,
+            periodic_report_configuration=config, execute=True)["ok"]
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert capture.read_bytes() == calls
+    model.write_text(valid)
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    completed = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert completed["turn_id"] != failed["turn_id"]
+    assert completed["response"]["native_loopx"]["status"] == "committed"
+    assert reports.health(sid)["publication_verified"]
+    assert store.load_turn(sid, failed["turn_id"]) == failed
+    assert bot.writes == writes
+
+
+@pytest.mark.parametrize("phase,expected_status", [
+    ("preview", 201), ("stale", 409), ("write_failure", 500), ("readback_failure", 500), ("applied", 200),
+])
+def test_settings_retirement_runs_after_verified_apply_before_the_http_receipt(monkeypatch, phase, expected_status):
+    from contextlib import contextmanager
+    from test_chat_goal_configuration_api import _PeriodicClearHandler
+    import loopx.capabilities.native_chat.steward_reports as report_host
+    body = {"goal_id": "goal-example", "capability_id": "periodic_report", "configuration": None}
+    preview = _PeriodicClearHandler(body)
+    preview._goal_configuration_update(execute=False)
+    revision = preview.responses[0]["plan_revision"]
+    handler = _PeriodicClearHandler(body if phase == "preview" else
+        {**body, "expected_plan_revision": "stale" if phase == "stale" else revision})
+    handler.server.runtime_controller = object()
+    calls = []
+
+    @contextmanager
+    def guarded_clear(_controller, goal_id, proposed):
+        assert goal_id == "goal-example" and proposed is None
+        def retire():
+            assert not handler.override_present and not handler.responses
+            calls.append("retired")
+        yield retire
+    monkeypatch.setattr(report_host, "session_report_configuration_guard", guarded_clear)
+    if phase == "write_failure":
+        writer = handler._goal_configuration_writer()
+        monkeypatch.setattr(handler, "_goal_configuration_writer", lambda: lambda **kwargs:
+            {**writer(**kwargs), **({"ok": False} if kwargs["execute"] else {})})
+    if phase == "readback_failure":
+        monkeypatch.setattr(handler, "_goal_configuration_readback_matches", lambda *_: False)
+    handler._goal_configuration_update(execute=phase != "preview")
+    assert handler.responses[0]["status_code"] == expected_status
+    assert calls == (["retired"] if phase == "applied" else [])
+
+
 def configured(steward, tmp_path, monkeypatch, provider="sqlite", start_date="2001-01-01"):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     store, runtime, _, transport, binding, capture, _ = steward

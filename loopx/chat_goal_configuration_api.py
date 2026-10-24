@@ -617,6 +617,7 @@ class GoalConfigurationRequestMixin:
         desired_public: Mapping[str, Any],
         goal_id: str,
         plan: Mapping[str, Any],
+        after_verified_apply: Callable[[], None] | None = None,
     ) -> None:
         try:
             readback_public = self._read_public_goal_configuration(goal_id)
@@ -644,6 +645,8 @@ class GoalConfigurationRequestMixin:
                 )
                 return
             raise RuntimeError("Goal configuration readback did not verify")
+        if after_verified_apply is not None:
+            after_verified_apply()
         self._send_json(
             {
                 "ok": True,
@@ -674,7 +677,7 @@ class GoalConfigurationRequestMixin:
             controller = getattr(self.server, "runtime_controller", None)
             guard = (session_report_configuration_guard(controller, goal_id, configuration)
                 if capability_id == "periodic_report" and controller is not None else nullcontext())
-            with guard:
+            with guard as after_verified_apply:
                 current_public, desired_public, plan, desired_configuration = (
                     self._prepare_goal_configuration_plan(
                         goal_id=goal_id,
@@ -728,6 +731,7 @@ class GoalConfigurationRequestMixin:
                     desired_public=desired_public,
                     goal_id=goal_id,
                     plan=plan,
+                    after_verified_apply=after_verified_apply,
                 )
         except (TypeError, ValueError) as exc:
             stale = "preview again" in str(exc)

@@ -107,21 +107,28 @@ def retire_failed_cadence_window(*, runtime_root: Path, goal_id: str,
     This retires admission only; it neither retries a model nor drops evidence.
     """
     path = cadence_journal_path(runtime_root, goal_id)
-    if not isinstance(source_receipt_id, str) or not source_receipt_id:
-        raise ValueError("failed cadence retirement requires its original receipt")
     with exclusive_file_lock(path, policy=LockAcquisitionPolicy.MUTATION,
                              operation="retire_failed_report_window"):
-        current = read_cadence_journal(runtime_root=runtime_root, goal_id=goal_id)
-        if not current or current["window"]["window_id"] != expected_window_id or current["publication"] is not None:
-            raise ValueError("the unpublished failed report window changed")
-        if current.get("retirement"):
-            if current["retirement"]["source_receipt_id"] != source_receipt_id:
-                raise ValueError("the failed window retirement changed its source")
-            return current
-        current["retirement"] = {"reason": "owner_cancelled_failed_generation",
-            "source_receipt_id": source_receipt_id, "retired_at": datetime.now(timezone.utc).isoformat()}
-        atomic_write_json(path, current)
+        return _retire_failed_cadence_window_locked(runtime_root=runtime_root, goal_id=goal_id,
+            expected_window_id=expected_window_id, source_receipt_id=source_receipt_id)
+
+
+def _retire_failed_cadence_window_locked(*, runtime_root: Path, goal_id: str,
+                                       expected_window_id: str, source_receipt_id: str) -> dict[str, Any]:
+    """Reuse the transition while the settings owner holds the cadence lock."""
+    if not isinstance(source_receipt_id, str) or not source_receipt_id:
+        raise ValueError("failed cadence retirement requires its original receipt")
+    current = read_cadence_journal(runtime_root=runtime_root, goal_id=goal_id)
+    if not current or current["window"]["window_id"] != expected_window_id or current["publication"] is not None:
+        raise ValueError("the unpublished failed report window changed")
+    if current.get("retirement"):
+        if current["retirement"]["source_receipt_id"] != source_receipt_id:
+            raise ValueError("the failed window retirement changed its source")
         return current
+    current["retirement"] = {"reason": "owner_cancelled_failed_generation",
+        "source_receipt_id": source_receipt_id, "retired_at": datetime.now(timezone.utc).isoformat()}
+    atomic_write_json(cadence_journal_path(runtime_root, goal_id), current)
+    return current
 
 
 def _archive_predecessor(path: Path, previous: dict[str, Any]) -> str:

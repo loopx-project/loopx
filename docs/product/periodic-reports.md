@@ -581,15 +581,36 @@ window, failure and message history remain. Re-enable that exact plan to
 continue eligible native recovery. An unpublished frozen window prevents a
 schedule/destination change from stranding it. Failed/unknown generation is
 retained for repair by its original execution owner; toggling the setting does
-not replay it. This slice does not add cancellation of an invalid authored
-window, natural-language schedule authoring or arbitrary task profiles. Those
-remain part of the existing general recurring-task work.
+not replay it. After a known terminal generation failure, with no generated
+report or delivery attempt, **Restore device defaults** can clear this Goal's
+subscription through the existing preview/apply transaction. Verified apply
+blocks the original failed Task and retires its window without changing its
+artifacts, costs, Turn or publication cursor. Preview alone does not cancel.
+If cancellation is interrupted after the configuration clears, retry the same
+clear request: the original frozen Session identity and failure recover the
+remaining retirement, without a model call or replay. Re-enabling the same
+calendar does not retry that failed period; the next independent period can run.
+Existing reports and unknown or partial delivery retain the original protection.
+Natural-language schedule authoring and arbitrary task profiles remain part of
+the existing general recurring-task work.
 
 The packaged journey uses disposable Core/SQLite state and synthetic model
 and provider transports. It checks future-date inactivity, preview/apply/reload,
 one automatic full-body return, retained failure and pause. The 390×844 view is
 viewport emulation; this evidence does not establish real-model report quality,
 production backlog completion or a natural production deadline.
+
+The cancellation check also uses that packaged UI and real disposable SQLite
+state: a synthetic invalid editorial result remains failed, clear preview leaves
+it intact, and applied clear retires it without another model call, message or
+provider send. File/SQLite regressions separately cover interrupted cancellation,
+unchanged artifacts and history, unknown effects and the next independent period.
+
+| Retained failed period | Cleared Goal override, failure retained |
+| --- | --- |
+| ![Failed Session report before clear](../assets/personal-workspace/steward-reports/session-failed-cancel-before.png) | ![Cleared report subscription](../assets/personal-workspace/steward-reports/session-failed-cancel-cleared.png) |
+
+![Cleared subscription in a narrow viewport](../assets/personal-workspace/steward-reports/session-failed-cancel-narrow.png)
 
 | Before: raw route | After: original Agent conversation and verified return |
 | --- | --- |
