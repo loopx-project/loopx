@@ -68,16 +68,25 @@ def _prepared(record: dict, output_language: str | None = None) -> dict:
 
 
 def _verify_sources(record: dict) -> None:
+    # One byte observation per declared artifact in this verification only.
+    # Check every digest/excerpt; later calls still read and verify fresh bytes.
+    artifacts: dict[str, list[dict]] = {}
     for source in record["input"]["sources"]:
-        path = _source_path(Path(record["source_root"]), source["artifact"])
+        artifacts.setdefault(source["artifact"], []).append(source)
+    for artifact, sources in artifacts.items():
+        path = _source_path(Path(record["source_root"]), artifact)
         data = path.read_bytes()
-        if hashlib.sha256(data).hexdigest() != source["artifact_sha256"]:
-            raise PackUnavailable("source_changed")
-        lines = data.decode("utf-8").split("\n")
-        start = source["first_line"] - 1
-        count = len(source["text"].split("\n"))
-        if "\n".join(lines[start : start + count]) != source["text"]:
-            raise PackUnavailable("excerpt_mismatch")
+        digest = hashlib.sha256(data).hexdigest()
+        lines = None
+        for source in sources:
+            if digest != source["artifact_sha256"]:
+                raise PackUnavailable("source_changed")
+            if lines is None:
+                lines = data.decode("utf-8").split("\n")
+            start = source["first_line"] - 1
+            count = len(source["text"].split("\n"))
+            if "\n".join(lines[start : start + count]) != source["text"]:
+                raise PackUnavailable("excerpt_mismatch")
 
 
 def _source_path(source_root: Path, artifact: str) -> Path:

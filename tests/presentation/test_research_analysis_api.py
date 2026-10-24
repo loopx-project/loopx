@@ -97,6 +97,38 @@ print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_t
         server.server_close()
 
 
+def test_shared_excerpts_reverify_through_http_without_dispatch(workspace, monkeypatch):
+    w = workspace
+    path = w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    data["sources"].append({**data["sources"][0], "id": "prior", "first_line": 1, "text": "Prior question"})
+    data["episodes"][0]["source_ids"].append("prior")
+    path.write_text(json.dumps(data))
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+        input_path=path, source_root=w["sources"], title="Two excerpts of one artifact")
+    original = type(path).read_bytes
+    reads = []
+
+    def observed(source):
+        if source == w["sources"] / "facts.txt":
+            reads.append(source)
+        return original(source)
+
+    monkeypatch.setattr(type(path), "read_bytes", observed)
+    view = w["request"](pack_id=registered["pack_id"])
+    assert view["pack"]["availability"] == "available"
+    # Two catalog entries plus the selected pack; each verification reads once.
+    assert len(reads) == 3 and not w["count"].exists()
+    source = w["sources"] / "facts.txt"
+    stat = source.stat()
+    source.write_bytes(original(source).replace(b"Prior", b"Other"))
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    reads.clear()
+    changed = w["request"](pack_id=registered["pack_id"])
+    assert changed["pack"]["reason_code"] == "source_changed"
+    assert len(reads) == 3 and not w["count"].exists()
+
+
 def test_display_context_uses_registered_sources_and_the_existing_http_reader(workspace):
     w, read = workspace, workspace["request"]
     path = w["tmp_path"] / "input.json"

@@ -151,6 +151,52 @@ def test_scope_discovery_execute_read_citation_and_changed_source_history(pack):
     )
 
 
+def test_repeated_artifact_excerpts_share_one_fresh_read(pack, monkeypatch):
+    scope, _, _, input_path, sources, _ = pack
+    data = json.loads(input_path.read_text())
+    data["sources"].append({**data["sources"][0], "id": "prior", "first_line": 1, "text": "Prior question"})
+    data["episodes"][0]["source_ids"].append("prior")
+    input_path.write_text(json.dumps(data))
+    calls = []
+    original = type(input_path).read_bytes
+
+    def observed(path):
+        if path == sources / "result.txt":
+            calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(type(input_path), "read_bytes", observed)
+    registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Multiple excerpts")
+    assert len(calls) == 1
+    calls.clear()
+    before = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert before["availability"] == "available" and len(calls) == 1
+    # No cross-request cache: same-length replacement with restored timestamps
+    # must still invalidate the pack, rather than trusting path/size/mtime.
+    path = sources / "result.txt"
+    stat = path.stat()
+    original_bytes = original(path)
+    path.write_bytes(original_bytes.replace(b"Prior", b"Other"))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    calls.clear()
+    after = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert after["reason_code"] == "source_changed" and len(calls) == 1
+
+
+@pytest.mark.parametrize("correction,reason", [
+    ({"artifact_sha256": "0" * 64}, "source_changed"),
+    ({"text": "An unsupported second excerpt"}, "excerpt_mismatch"),
+])
+def test_shared_artifact_does_not_skip_later_digest_or_excerpt(pack, correction, reason):
+    scope, _, _, input_path, sources, _ = pack
+    data = json.loads(input_path.read_text())
+    data["sources"].append({**data["sources"][0], "id": "later", **correction})
+    data["episodes"][0]["source_ids"].append("later")
+    input_path.write_text(json.dumps(data))
+    with pytest.raises(PackUnavailable, match=reason):
+        register_pack(**scope, input_path=input_path, source_root=sources, title="Invalid later excerpt")
+
+
 def test_continuation_reuses_identical_excerpts_despite_other_capture_bytes(pack):
     scope, operation, registered, path, sources, provider = pack
     assert execute_pack(**operation, codex=provider)["status"] == "succeeded"
