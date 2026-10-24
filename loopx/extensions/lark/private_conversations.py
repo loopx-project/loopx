@@ -814,9 +814,13 @@ class LarkPrivateConversations:
         _atomic_write_json(path, record)
 
     def _deliver(self, path: Path, record: dict[str, Any], phase: str, text: str, *, inbox: Callable[[], Path],
-                 edit_only: bool = False, authorization_check: Callable[[], bool] | None = None) -> bool:
+                 edit_only: bool = False, authorization_check: Callable[[], bool] | None = None,
+                 reply_placement: str | None = None) -> bool:
         if not text:
             return False
+        if reply_placement is not None and (record["event"].get("chat_type") != "p2p"
+                or record["source"].get("group_ref")):
+            raise ValueError("a new private result requires its captured private source")
         if authorization_check is not None and not authorization_check():
             return False
         kind = phase.split(".", 1)[0]
@@ -836,6 +840,7 @@ class LarkPrivateConversations:
         record_event_timing(record["profile"], record["event"]["message_id"], "delivery_inbox_ready")
         kwargs = dict(project=self.runtime_root, config_path=config,
             message_id=record["event"]["message_id"], text=text, runner=self._reply_runner,
+            **({"reply_placement": reply_placement} if reply_placement is not None else {}),
             finalize_reactions=not edit_only and kind not in {"admission", "progress", "periodic_report"} and not (kind == "terminal" and record.get("commission_resources")),
             source_authority_verifier=lambda profile, chat, message: (
                 self._source_authority(record, profile, chat, message)
@@ -851,6 +856,8 @@ class LarkPrivateConversations:
             phase_state["edit_from"] = edit
         if edit_only and not edit:
             return False
+        if edit and reply_placement is not None:
+            raise ValueError("a new private message cannot replace an existing source reply")
         if edit:
             def before_edit(_intent: str) -> dict[str, bool]:
                 phase_state.update(text=text, started=True)
