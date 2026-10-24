@@ -76,6 +76,7 @@ try {
       await dialogFor(page).getByRole('combobox').fill('map legacy');
       await page.keyboard.press('Enter');
       await dialogFor(page).waitFor({state: 'hidden'});
+      await page.waitForURL(/todo=showcase-map-columns/);
       await page.locator('[data-context-drawer]').waitFor({state: 'visible'});
       assert.match(page.url(), /todo=showcase-map-columns/);
       // The palette on top of an inspector must not close that inspector on Escape.
