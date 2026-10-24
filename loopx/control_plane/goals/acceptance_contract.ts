@@ -588,10 +588,10 @@ export class GoalAcceptanceRead {
         contract_digest: receipt.contract_digest, todo_id: receipt.todo_id, results: receipt.results} : null};
   }
 
-  contract(): JsonObject {
+  contract(registeredAgents?: unknown): JsonObject {
     const checks = structuredClone(this.checks());
     const outcomes = projectGoalOutcomes(this.head, this.goalId, checks);
-    const objective = projectGoalObjective(this.head);
+    const objective = projectGoalObjective(this.head, registeredAgents);
     return {...checks, ...(outcomes === null ? {} : {outcome_requirements: outcomes}),
       ...(objective === null ? {} : {goal_objective: objective})};
   }
@@ -619,8 +619,8 @@ export class GoalAcceptanceRead {
 
 /** Outcomes extend the existing acceptance read, even before checks are configured.
  * No declaration preserves the original projection byte-for-byte. */
-export function projectGoalAcceptance(head: JsonObject, goalId: string): JsonObject {
-  return new GoalAcceptanceRead(head, goalId).contract();
+export function projectGoalAcceptance(head: JsonObject, goalId: string, registeredAgents?: unknown): JsonObject {
+  return new GoalAcceptanceRead(head, goalId).contract(registeredAgents);
 }
 
 /** Explicit selection and confirmed bindings survive mutable work fields.

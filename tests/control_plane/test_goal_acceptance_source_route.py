@@ -70,6 +70,32 @@ def source_app(acceptance_goal):
         server.server_close()
 
 
+def test_objective_inspection_projects_later_source_peer_through_global_app(source_app):
+    project, _, source, global_cli, request, source_registry, _ = source_app
+    document = project / "objective.json"
+    document.write_text(json.dumps({"objective": "Maintain the original export and recovery",
+        "reason": "The export is now maintained", "source_ref": "message:owner"}))
+    code, revised = source("revise-objective", "--document", str(document),
+        "--operation-id", "source-objective", "--expected-provider-revision",
+        source("inspect")[1]["provider_revision"], "--execute")
+    assert code == 0, revised
+    payload = json.loads(source_registry.read_text())
+    payload["goals"][0]["coordination"]["registered_agents"].append("later-source-peer")
+    source_registry.write_text(json.dumps(payload))
+    global_before = (project.parent / "global.json").read_bytes()
+
+    code, inspected = global_cli("inspect")
+    assert code == 0, inspected
+    status, app = request("GET", f"/api/chat/goal-acceptance?goal_id={GOAL}")
+    assert status == 200, app
+    assert app["provider_revision"] == inspected["provider_revision"] == revised["provider_revision"]
+    objective = app["goal_acceptance_contract"]["goal_objective"]
+    assert objective == inspected["goal_acceptance_contract"]["goal_objective"]
+    assert {"agent_id": "later-source-peer", "revision": None, "current": False} in objective["peer_adoption"]
+    assert source("inspect", "--agent-id", "later-source-peer")[1]["goal_objective_guard"]["allowed"] is False
+    assert (project.parent / "global.json").read_bytes() == global_before
+
+
 def test_source_read_configure_verify_and_explicit_cli_override(source_app):
     project, document, source, global_cli, request, _, shared = source_app
     before = global_cli("inspect", override=shared)[1]

@@ -199,10 +199,10 @@ def inspect_goal_acceptance(
     validation_workspace_path: Path | None = None,
 ) -> dict[str, Any]:
     """Read one canonical basis; command declarations stay inside the host."""
-    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     basis = _result(
         _INSPECT_METHOD,
-        {**route,
+        {**route, "registered_agents": registered_agent_ids_for_goal(goal),
          **({"agent_id": agent_id} if agent_id is not None else {}),
          **({"todo_id": todo_id} if todo_id is not None else {}),
          **({"include_work_details": False} if not include_work_details else {})},

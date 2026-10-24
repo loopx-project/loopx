@@ -127,6 +127,17 @@ cannot acknowledge a later revision. Old configured verification becomes stale
 against a changed objective. A successor lifetime cannot inherit its
 predecessor's objective implicitly.
 
+`goal-acceptance inspect` and the Goal settings acceptance read include current
+Agent registration from the resolved source registry. The existing TS objective
+projector joins those observations with the retained revision cohort and adoption
+records. A later registered peer appears pending before it adopts. Inspection
+does not persist registration or adoption, change the objective digest/provider
+revision, or authorize execution. Provider-only reads without current registration
+facts retain their historical projection.
+Registered `@` aliases use the same pending/adopted lifecycle. Once an objective
+record contains such an alias, a code rollback must retain a compatible ID reader;
+do not delete revision or adoption history to make an older reader accept it.
+
 Revisions are exceptional direction changes, not per-Turn maintenance. Ordinary
 progress, Todo/route changes, diagnostic feedback and wording polish do not
 justify a new shared objective. Agents reuse a pending proposal for the same

@@ -7,7 +7,7 @@ import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_au
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 import {updateGoalObjective, inspectGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_authority.ts";
-import {goalObjectiveWorkGuard, goalObjectiveWorkDigest, readGoalObjective, reviseGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
+import {goalObjectiveWorkGuard, goalObjectiveWorkDigest, readGoalObjective, reviseGoalObjective, projectGoalObjective, adoptGoalObjective} from "../../loopx/control_plane/goals/goal_objective.ts";
 import {projectCoreGoal} from "../../loopx/control_plane/work_items/replan_context.ts";
 import {projectGoalAcceptance, goalAcceptanceWorkDigest} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -18,6 +18,44 @@ const fixture = () => authorityProjectionFixture(goal, [{todo_id: "todo_a", role
 const document = {objective: "Deliver a reliable maintained service", reason: "The bootstrap milestone is complete", source_ref: "message:owner-direction"};
 const request = {goal_id: goal, actor_agent_id: null, operation: "revise-objective", operation_id: "revision-1", document,
   source_objective: {registry_objective: "Bootstrap the project"}, registered_agents: ["agent-a", "agent-b"]};
+
+test("current membership is read-only evidence and preserves historical peers and adoption", () => {
+  const head = fixture();
+  head.goal_objective = reviseGoalObjective(head, null, "Bootstrap the project", request.registered_agents, document);
+  const revision = readGoalObjective(head)!.revisions.at(-1)!;
+  head.goal_objective = adoptGoalObjective(head, "agent-a", {revision: revision.revision, digest: revision.digest,
+    work_digest: goalObjectiveWorkDigest(head, "agent-a"), review_summary: "Reviewed the existing work."});
+  const before = structuredClone(head), retained = projectGoalObjective(head);
+  const current = projectGoalObjective(head, ["later-peer"])!;
+  assert.deepEqual(current.peer_adoption, [
+    {agent_id: "agent-a", revision: 1, current: true},
+    {agent_id: "agent-b", revision: null, current: false},
+    {agent_id: "later-peer", revision: null, current: false},
+  ]);
+  assert.deepEqual(projectGoalObjective(head, []), retained);
+  assert.deepEqual(projectGoalObjective(head), retained, "callers without live membership keep the retained projection");
+  assert.equal(goalObjectiveWorkGuard(head, "later-peer")?.allowed, false);
+  const roster = Array.from({length: 130}, (_, index) => `peer-${index}`);
+  assert.equal((projectGoalObjective(head, roster)!.peer_adoption as unknown[]).length, 132);
+  assert.deepEqual(head, before, "reads cannot create revisions, membership or adoption");
+});
+
+test("current registration does not normalize or erase historical objective IDs", () => {
+  const head = fixture();
+  head.goal_objective = reviseGoalObjective(head, null, "Bootstrap the project", ["1Legacy", "Legacy.Owner"], document);
+  const projected = projectGoalObjective(head, ["agent-a"])!;
+  assert.deepEqual((projected.peer_adoption as JsonObject[]).map(peer => peer.agent_id),
+    ["1Legacy", "Legacy.Owner", "agent-a"]);
+  assert.deepEqual(readGoalObjective(head)!.registered_agents, ["1Legacy", "Legacy.Owner"]);
+});
+
+for (const roster of [null, "agent-a", [1], ["invalid/peer"], ["agent-a", "agent-a"]]) {
+  test(`objective membership rejects malformed source facts: ${JSON.stringify(roster)}`, () => {
+    const head = fixture();
+    head.goal_objective = reviseGoalObjective(head, null, "Bootstrap the project", request.registered_agents, document);
+    assert.throws(() => projectGoalObjective(head, roster), /registered_agents|public-safe agent/);
+  });
+}
 
 for (const provider of ["file", "sqlite"] as const) test(`${provider}: shared revisions, competing writers, peer adoption and restart`, async t => {
   const root = await mkdtemp(join(tmpdir(), "goal-objective-")); t.after(() => rm(root, {recursive: true, force: true}));
