@@ -132,14 +132,21 @@ def test_managed_identity_rejections_do_not_create_or_resume_a_host(steward, tmp
     elif fault in {"revoked", "stopped", "lifetime"}:
         registry = json.loads(runtime.registry_path.read_text())
         goal = next(row for row in registry["goals"] if row["id"] == actor["goal_id"])
-        if fault == "revoked": goal["coordination"]["registered_agents"] = ["peer"]
-        elif fault == "stopped": goal["status"] = "stopped"
-        else: goal["goal_instance_id"] = "replaced-lifetime"
+        if fault == "revoked":
+            goal["coordination"]["registered_agents"] = ["peer"]
+        elif fault == "stopped":
+            goal["status"] = "stopped"
+        else:
+            goal["goal_instance_id"] = "replaced-lifetime"
         runtime.registry_path.write_text(json.dumps(registry))
-    elif fault == "workspace": args["work_dir"] = tmp_path
-    elif fault == "project": args["project_ref"] = "0" * 24
-    elif fault == "channel": args["channel_id"] = "manager.external.other"
-    elif fault == "executor": args["agent_id"] = "other-executor"
+    elif fault == "workspace":
+        args["work_dir"] = tmp_path
+    elif fault == "project":
+        args["project_ref"] = "0" * 24
+    elif fault == "channel":
+        args["channel_id"] = "manager.external.other"
+    elif fault == "executor":
+        args["agent_id"] = "other-executor"
     before_calls, before_sessions = capture.read_bytes(), store.list_sessions()
     # A changed Goal lifetime starts a fresh registered conversation only on
     # an explicit new/resume request; the old Session cannot execute again.
@@ -147,7 +154,8 @@ def test_managed_identity_rejections_do_not_create_or_resume_a_host(steward, tmp
         with pytest.raises(ValueError, match="identity changed"):
             runtime._ensure_adapter_locked(store.load_session(session["session_id"]), work_dir=workspace, objective="old")
     else:
-        with pytest.raises(ValueError): runtime.open_session(**args)
+        with pytest.raises(ValueError):
+            runtime.open_session(**args)
     if fault in {"revoked", "stopped", "lifetime"}:
         with pytest.raises(ValueError):
             runtime.submit_turn(session_id=session["session_id"], client_turn_id="revoked-request",
