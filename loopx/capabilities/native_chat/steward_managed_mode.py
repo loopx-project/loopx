@@ -177,6 +177,16 @@ class ManagedTaskValidationUnavailable(ValueError):
     """A native selection has no usable caller-declared independent validator."""
 
 
+def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, workspace: Path) -> dict[str, Any]:
+    """Observe existing registration; the typed owner admits the exact binding."""
+    from .conversation_bindings import ChatConversationBindings
+    native_goal = load_goal_from_registry(controller.registry_path, goal_id)
+    return ChatConversationBindings._core("collaboration.session.managed_identity", {
+        "goal": StewardManagedMode(controller, None)._goal(goal_id),
+        "goal_active": bool(native_goal and native_goal.get("status") == "active" and not goal_is_stopped(native_goal)),
+        "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve())})
+
+
 class ManagedSessionTurn:
     """Thin local-owner entry to the existing Turn worker and task validator.
 
@@ -227,14 +237,14 @@ class ManagedSessionTurn:
         goal = StewardManagedMode(self.controller, None)._goal(session.get("goal_id"))
         agents = goal["registered_agents"] if goal else []
         result: dict[str, Any] = {"ok": True, "session_id": session_id, "registered_agents": agents,
-            "available": False, "turn": None}
+            "managed_agent_id": session.get("managed_agent_id"), "available": False, "turn": None}
         if operation_id is not None:
             if not re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", operation_id):
                 raise ValueError("invalid operation identity")
             # Readback of an accepted/unknown request is not another execution.
             result["turn"] = self.store.turn_for_client(session_id, "managed." + operation_id)
         try:
-            self.admit(self._request(session_id, agent_id or next(iter(agents), ""), "preview"))
+            self.admit(self._request(session_id, agent_id or session.get("managed_agent_id") or "", "preview"))
             result["available"] = True
         except ValueError as exc:
             result["reason"] = str(exc)

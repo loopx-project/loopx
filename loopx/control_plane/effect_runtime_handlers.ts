@@ -629,6 +629,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.steward.managed_mode.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardManagedMode}) => planStewardManagedMode)],
     ["collaboration.steward.managed_turn.admit", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({admitStewardManagedTurn}) => admitStewardManagedTurn)],
     ["collaboration.session.managed_turn.admit", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({admitManagedSessionTurn}) => admitManagedSessionTurn)],
+    ["collaboration.session.managed_identity", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({admitManagedSessionIdentity}) => admitManagedSessionIdentity)],
     ["collaboration.steward.monitor.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardMonitor}) => planStewardMonitor)],
     ["collaboration.steward.report.plan", lazyHandler(() => import("./collaboration/steward_reports.ts"), ({planStewardReport}) => planStewardReport)],
     ["collaboration.steward.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardPortfolio}) => observeStewardPortfolio)],

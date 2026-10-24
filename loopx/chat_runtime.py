@@ -562,6 +562,7 @@ class ChatRuntimeController:
         channel_id: str | None = None,
         agent_goal_id: str | None = None,
         goal_instance_id: str | None = None,
+        managed_agent_id: str | None = None,
         manager_executor_allocation: Mapping[str, Any] | None = None,
         project_ref: str | None = None,
         conversation_binding_id: str | None = None,
@@ -608,6 +609,20 @@ class ChatRuntimeController:
             work_dir, objective = context["project"], context["objective"]
         elif goal_id is None:
             raise ValueError("goal_id or an authorized project_ref is required")
+        managed_identity = None
+        if managed_agent_id is not None:
+            if self.closed.is_set() or project_context is not None or steward_context is not None or is_manager_channel(selected_channel) or agent_id != "codex":
+                raise ValueError("registered managed Agents require the local Goal's managed Codex host")
+            from .capabilities.native_chat.steward_managed_mode import managed_session_identity
+            managed_identity = managed_session_identity(self, goal_id=goal_id, agent_id=managed_agent_id, workspace=work_dir)
+            if channel_id not in (None, f"goal.{goal_id}", managed_identity["channel_id"]):
+                raise ValueError("the managed Agent channel cannot be substituted")
+            if goal_instance_id is not None and goal_instance_id != managed_identity["goal_instance_id"]:
+                raise ValueError("the original managed Agent Goal lifetime changed")
+            selected_channel = managed_identity["channel_id"]
+            goal_instance_id = managed_identity["goal_instance_id"]
+        selected_scope = {"channel_id": selected_channel, "goal_id": goal_id,
+            **({"managed_agent_id": managed_agent_id, "session_mode": "managed_runtime"} if managed_identity else {})}
         if project_context is not None:
             project_context_policy.validate_project_executor_scope(agent_id, project_context, self.capabilities, capability)
         manager_runtime = (
@@ -667,6 +682,9 @@ class ChatRuntimeController:
                     latest = None
                 if latest is not None and goal_instance_id is not None and latest.get("goal_instance_id") != goal_instance_id:
                     latest = None
+                if latest is not None and managed_identity and (latest.get("managed_agent_id") != managed_agent_id
+                        or latest.get("goal_instance_id") != goal_instance_id):
+                    latest = None
                 if latest is not None and (latest.get("active_turn_id") or latest.get("upstream_mode") == CODEX_GOAL_CHAT_MODE or latest.get("session_mode") == CHAT_SESSION_MODE_ATTACHED):
                     if ((agent_reasoning_effort and latest.get("agent_reasoning_effort") != agent_reasoning_effort)
                         or (agent_model_id and latest.get("agent_model_id") != agent_model_id)):
@@ -684,7 +702,7 @@ class ChatRuntimeController:
             codex_defaults = {}
             selected_codex_home = self.codex_home
             if (agent_id == "codex" and goal_id != MANAGER_AGENT_GOAL_ID
-                and conversation_scope({"channel_id": selected_channel, "goal_id": goal_id})["kind"] == "owner_goal"
+                and conversation_scope(selected_scope)["kind"] == "owner_goal"
                 and not (latest and (latest.get("active_turn_id") or latest.get("upstream_mode") == CODEX_GOAL_CHAT_MODE))):
                 codex_defaults = load_codex_chat_defaults(self.coordination_runtime_root)
                 selected_codex_home = codex_profile_home(self.codex_home, codex_defaults)
@@ -709,7 +727,7 @@ class ChatRuntimeController:
                 goal_id=agent_goal_id or goal_id,
                 objective=objective,
                 execution_mode=selected_channel.startswith("task."),
-                project_coordination=conversation_scope({"channel_id": selected_channel, "goal_id": goal_id})["kind"] == "owner_goal",
+                project_coordination=conversation_scope(selected_scope)["kind"] == "owner_goal",
                 manager_runtime=manager_runtime,
                 project_context=project_context,
                 executor_model=alloc.manager_executor_model(manager_executor_allocation),
@@ -719,10 +737,13 @@ class ChatRuntimeController:
                 codex_home_override=selected_codex_home,
             )
             try:
+                if managed_identity and managed_session_identity(self, goal_id=goal_id, agent_id=managed_agent_id, workspace=work_dir) != managed_identity:
+                    raise ValueError("the managed Agent identity changed while opening its host")
                 observed_settings = self._observed_model_settings(adapter, agent_reasoning_effort, agent_model_id)
                 persisted = self.store.create_session(
                     goal_id=goal_id,
                     goal_instance_id=goal_instance_id,
+                    **({"managed_agent_id": managed_agent_id, "managed_workspace_path": str(work_dir.resolve())} if managed_identity else {}),
                     agent_id=agent_id,
                     executor_endpoint_id=agent_id,
                     adapter_kind=str(capability["adapter_kind"]),
@@ -760,6 +781,18 @@ class ChatRuntimeController:
     def _session_adapter_lock(self, session_id: str) -> threading.Lock:
         with self.lock:
             return self.session_adapter_locks.setdefault(session_id, threading.Lock())
+
+    def _require_managed_agent_session(self, session: dict[str, Any], work_dir: Path) -> None:
+        if session.get("managed_agent_id") is None:
+            return
+        from .capabilities.native_chat.steward_managed_mode import managed_session_identity
+        if session.get("managed_workspace_path") != str(work_dir.resolve()):
+            raise ValueError("the original managed Agent workspace changed")
+        identity = managed_session_identity(self, goal_id=session["goal_id"], agent_id=session["managed_agent_id"], workspace=work_dir)
+        if (identity["goal_instance_id"] != session.get("goal_instance_id")
+                or identity["channel_id"] != session.get("channel_id")
+                or conversation_scope(session)["kind"] != "owner_goal"):
+            raise ValueError("the original registered Agent Session identity changed")
 
     def _check_codex_home(self, session: dict[str, Any]) -> Path:
         if session.get("agent_id") != "codex" or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
@@ -799,6 +832,7 @@ class ChatRuntimeController:
         if current_session is None or current_session.get("status") == "closed":
             raise KeyError("chat session was not found")
         session = current_session
+        self._require_managed_agent_session(session, work_dir)
         if session.get("steward_context") is not None:
             self.project_contexts.session_context(session)
         if session.get("project_context") is not None:
@@ -1111,6 +1145,7 @@ class ChatRuntimeController:
             session = self.store.load_session(session_id)
             if session is None or session.get("status") == "closed":
                 raise KeyError("chat session was not found")
+            self._require_managed_agent_session(session, work_dir)
             self._check_codex_home(session)
             try:
                 with commit():
@@ -1229,6 +1264,8 @@ class ChatRuntimeController:
         session = self.store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
+        if session.get("managed_agent_id") is not None:
+            self._require_managed_agent_session(session, Path(session["managed_workspace_path"]))
         if session.get("steward_context") is not None:
             raise ValueError("bound steward Chat requires its external source admission")
         if session.get("project_context") is not None:
@@ -2253,6 +2290,7 @@ class ChatRuntimeController:
             session = self.store.load_session(session_id)
             if session is None or session.get("status") == "closed":
                 raise KeyError("chat session was not found")
+            self._require_managed_agent_session(session, work_dir)
             self._check_codex_home(session)
             if session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED:
                 return resume_attached_agent_session(

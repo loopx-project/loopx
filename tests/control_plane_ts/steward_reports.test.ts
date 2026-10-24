@@ -1,7 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {planStewardReport} from "../../loopx/control_plane/collaboration/steward_reports.ts";
-import {admitStewardManagedTurn, bindStewardManagedActor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+import {admitManagedSessionIdentity, admitManagedSessionTurn, admitStewardManagedTurn, bindStewardManagedActor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+import {resolveConversationScope} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+
+test("a managed work identity is registration-bound and never chosen from the executor or legacy history", () => {
+  const goal = {goal_id: "project", goal_instance_id: "original", registered_agents: ["writer", "reviewer"], workspace_path: "/workspace"};
+  const input = {goal, goal_active: true, workspace_path: "/workspace", managed_agent_id: "writer"};
+  const identity = admitManagedSessionIdentity(input);
+  assert.deepEqual(identity, {managed_agent_id: "writer", channel_id: "agent.writer", goal_instance_id: "original"});
+  assert.notDeepEqual(admitManagedSessionIdentity({...input, managed_agent_id: "reviewer"}), identity);
+  for (const changed of [{managed_agent_id: "codex"}, {managed_agent_id: ["writer"]}, {goal_active: false},
+    {workspace_path: "/other"}, {goal: {...goal, goal_instance_id: {unverified: true}}}]) {
+    assert.throws(() => admitManagedSessionIdentity({...input, ...changed}));
+  }
+  const session = {...identity, goal_id: goal.goal_id, session_id: "a".repeat(32), session_mode: "managed_runtime",
+    agent_id: "codex", executor_endpoint_id: "codex", adapter_kind: "codex_app_server", managed_workspace_path: "/workspace"};
+  assert.equal(resolveConversationScope(session).kind, "owner_goal");
+  assert.equal(resolveConversationScope({...session, channel_id: "goal.project"}).kind, "unavailable");
+  assert.equal(resolveConversationScope({...session, origin: "lark"}).kind, "unavailable");
+  const request = {operation: "native_turn", host: "codex-app-server", work_kind: "native_turn",
+    turn_instance_id: "one-operation", todo_id: null, validation_command: null,
+    actor: {schema_version: "loopx_managed_session_actor_v0", goal_id: goal.goal_id, goal_instance_id: "original",
+      agent_id: "writer", session_id: session.session_id, workspace_path: "/workspace"}};
+  const params = {goal, goal_active: true, session, request, queued_turn_count: 0};
+  assert.deepEqual(admitManagedSessionTurn(params).actor, request.actor);
+  for (const changed of [{managed_agent_id: "reviewer"}, {managed_agent_id: undefined, channel_id: "goal.project"},
+    {goal_instance_id: "replaced"}, {managed_workspace_path: "/other"}, {executor_endpoint_id: "other"}]) {
+    assert.throws(() => admitManagedSessionTurn({...params, session: {...session, ...changed}}));
+  }
+});
 
 function original() {
   const binding = {binding_id: "b".repeat(24), transport_ref: "private-steward", provider_ref: "c".repeat(24),

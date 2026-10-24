@@ -20,7 +20,7 @@ def conversation_scope(session: dict[str, Any], *, origin: str | None = None) ->
     # Core distinguishes an absent legacy Goal field from an explicit project null.
     return effect_runtime_result("collaboration.conversation.scope", {
         **{key: session[key] for key in (
-            "channel_id", "goal_id", "project_context", "steward_context",
+            "channel_id", "goal_id", "project_context", "steward_context", "managed_agent_id", "session_mode",
         ) if key in session},
         **({"origin": origin} if origin is not None else {}),
     })

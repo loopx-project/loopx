@@ -257,6 +257,8 @@ class ChatSessionStore(ChatIngressStore):
         *,
         goal_id: str | None,
         goal_instance_id: str | None = None,
+        managed_agent_id: str | None = None,
+        managed_workspace_path: str | None = None,
         agent_id: str,
         adapter_kind: str,
         upstream_thread_id: str,
@@ -338,6 +340,14 @@ class ChatSessionStore(ChatIngressStore):
             channel_id or f"goal.{goal_id}",
             field="channel_id",
         )
+        if managed_agent_id is not None:
+            from .control_plane.collaboration import conversation_scope
+            if not managed_workspace_path or not Path(managed_workspace_path).is_absolute() or conversation_scope({"goal_id": normalized_goal_id, "managed_agent_id": managed_agent_id,
+                    "channel_id": normalized_channel_id, "session_mode": normalized_mode,
+                    "project_context": project_context, "steward_context": steward_context})["kind"] != "owner_goal":
+                raise ValueError("managed Agent identity requires its exact local Core channel")
+        elif managed_workspace_path is not None:
+            raise ValueError("a managed workspace requires its registered Agent identity")
         session_dir = self._session_dir(token)
         session_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
         (session_dir / "turns").mkdir(mode=0o700)
@@ -345,6 +355,7 @@ class ChatSessionStore(ChatIngressStore):
             "schema_version": CHAT_SESSION_SCHEMA_VERSION,
             "session_id": token,
             "goal_id": normalized_goal_id,
+            **({"managed_agent_id": managed_agent_id, "managed_workspace_path": managed_workspace_path} if managed_agent_id is not None else {}),
             **({"project_context": project_context} if project_context is not None else {}),
             **({"steward_context": steward_context} if steward_context is not None else {}),
             **(
@@ -434,6 +445,8 @@ class ChatSessionStore(ChatIngressStore):
                 payload = self.load_session(session_id)
                 if payload is None:
                     raise KeyError("chat session was not found")
+                if payload.get("managed_agent_id") is not None and "goal_id" in changes and changes["goal_id"] != payload["goal_id"]:
+                    raise ValueError("a registered Agent Session cannot change its original Goal")
                 allowed = {
                     "status",
                     "active_turn_id",
@@ -1897,6 +1910,8 @@ class ChatSessionStore(ChatIngressStore):
                 "active_turn_id", "last_error_code", "created_at", "updated_at", "last_activity_at",
             )
         } | {
+            **({"managed_agent_id": payload["managed_agent_id"], "goal_instance_id": payload.get("goal_instance_id")}
+               if payload.get("managed_agent_id") is not None else {}),
             "transcript_revision": (
                 hashlib.sha256(str(revision).encode("ascii")).hexdigest()
                 if revision is not None else None

@@ -1,5 +1,18 @@
 /** Pure identity contract shared with presentation. Host grant observation and
  * filesystem IO remain outside this classifier. */
+export function goalAgentConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
+  const goal = input.goal_id, agent = input.managed_agent_id;
+  if (typeof goal !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(goal)
+      || goal === "loopx-manager" || typeof agent !== "string"
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(agent)) {
+    throw new Error("select an exact registered Goal and Agent");
+  }
+  // Core's route key also contains goal_id. The separate Agent channel keeps
+  // legacy Goal conversations unassigned, without conflating an executor id
+  // with the registered work identity or encoding ambiguous Goal/Agent pairs.
+  return {managed_agent_id: agent, channel_id: `agent.${agent}`};
+}
+
 export function normalizeProjectContext(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid project conversation context");
   const context = value as Record<string, unknown>;
@@ -150,6 +163,16 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
   // Declared context must match a typed identity above; a legacy channel cannot
   // turn inconsistent recovered project metadata into broader authority.
   if (input.project_context != null) {
+    return {kind: "unavailable", goal_ids: [], private_conversation: false};
+  }
+  if (input.managed_agent_id != null) {
+    try {
+      const identity = goalAgentConversationIdentity(input);
+      if (channel === identity.channel_id && input.session_mode === "managed_runtime"
+          && input.steward_context == null && (input.origin === undefined || input.origin === "web")) {
+        return {kind: "owner_goal", goal_ids: [String(goal)], private_conversation: true};
+      }
+    } catch { /* Inconsistent recovered identity grants no context. */ }
     return {kind: "unavailable", goal_ids: [], private_conversation: false};
   }
   if (channel === "manager") {

@@ -9,7 +9,22 @@ import type { JsonObject } from "../runtime_decode.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
-import {resolveConversationScope} from "./conversation_scope.ts";
+import {goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
+
+/** Registration and current Goal lifetime are observed by the host, never by
+ * a message or the selected executor/model. This creates no scheduling grant. */
+export function admitManagedSessionIdentity(params: JsonObject): JsonObject {
+  const goal = requireJsonObject(params.goal, "original registered Goal");
+  const identity = goalAgentConversationIdentity({goal_id: goal.goal_id, managed_agent_id: params.managed_agent_id});
+  if (params.goal_active !== true || !Array.isArray(goal.registered_agents)
+      || !goal.registered_agents.includes(identity.managed_agent_id)
+      || goal.goal_instance_id != null && (typeof goal.goal_instance_id !== "string"
+        || !/^[A-Za-z0-9._-]{1,160}$/.test(goal.goal_instance_id))
+      || params.workspace_path !== goal.workspace_path) {
+    throw new EffectRuntimeRequestError("the managed Agent must belong to the active local Goal and workspace");
+  }
+  return {...identity, goal_instance_id: goal.goal_instance_id ?? null};
+}
 
 /** Local owner Sessions reuse the same governed Turn host. Registration is a
  * selection, not a grant: the native Turn owner still admits the actual work.
@@ -23,11 +38,13 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   const turn = params.turn == null ? null : requireJsonObject(params.turn, "current Chat Turn");
   if (resolveConversationScope(session).kind !== "owner_goal"
       || session.project_context != null || session.steward_context != null
-      || session.session_mode !== "managed_runtime" || session.agent_id !== "codex"
+      || session.session_mode !== "managed_runtime" || session.agent_id !== "codex" || session.executor_endpoint_id !== "codex"
       || session.adapter_kind !== "codex_app_server" || session.upstream_mode === "goal"
       || session.status === "closed" || params.goal_active !== true
       || goal.goal_id !== session.goal_id || goal.goal_instance_id !== (session.goal_instance_id ?? null)
       || !Array.isArray(goal.registered_agents) || !goal.registered_agents.includes(actor.agent_id)
+      || session.managed_agent_id !== actor.agent_id
+      || session.managed_workspace_path !== goal.workspace_path
       || typeof goal.workspace_path !== "string" || !goal.workspace_path) {
     throw new EffectRuntimeRequestError("select an active local Goal's managed Codex conversation and a registered Agent");
   }

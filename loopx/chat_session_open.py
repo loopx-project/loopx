@@ -41,8 +41,12 @@ def open_chat_session(
     agent_model_id: str | None = "",
     agent_reasoning_effort: str | None = None,
     project_ref: str | None = None,
+    managed_agent_id: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Return ``(session, resumed)`` for one entry-point request."""
+
+    if managed_agent_id is not None and context_kind != "goal":
+        raise ValueError("a registered managed Agent requires its local Goal conversation")
 
     if context_kind == "manager":
         return open_manager_session(
@@ -73,6 +77,7 @@ def open_chat_session(
         mode=mode,
         channel_id=f"goal.{goal_id}",
         agent_goal_id=goal_id,
+        **({"managed_agent_id": managed_agent_id} if managed_agent_id is not None else {}),
         agent_model_id=agent_model_id or None,
         **({"agent_reasoning_effort": agent_reasoning_effort} if agent_reasoning_effort is not None else {}),
     )

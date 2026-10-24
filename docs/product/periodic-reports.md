@@ -454,10 +454,21 @@ postcondition cannot complete the Task or spend a delivery slot. The low-level
 request accepts no runtime profile or caller validation command. Stable Core
 operation identity retains failed or unknown requests without replay.
 
-This groundwork does **not** create an Agent-owned managed conversation or a
-finished user entry. The logical registered Agent must be bound to its actual
-managed Session independently of the executor endpoint before exposing that
-entry alongside attached sources. Reuse existing Session, native Turn,
+The existing session creation API now accepts `managed_agent_id` for a local
+Goal. It binds the registered work identity separately from the executor
+(`agent_id`) and model. Core persists that immutable identity, Goal lifetime
+and original thread, with a distinct Agent channel. Resume selects only that
+Goal/Agent/executor channel; another Agent cannot execute its native work.
+Old Goal-wide conversations remain readable and unassigned, and cannot gain a
+native work identity through a request-time selector. Existing project,
+steward and attached entrypoints retain their original identities and workers.
+Registration removal, Goal stop, a changed lifetime or a mismatched workspace
+refuses continued execution rather than transferring the conversation.
+
+This is an API/host lifecycle slice, **not** the finished Agent workspace
+entry or general periodic journey. The Agent view still needs to expose this
+binding alongside attached sources, including all original history and honest
+unavailable states. Reuse existing Session, native Turn,
 monitor/calendar and periodic-report owners; do not add a second scheduler,
 task store or model worker. General writable execution, natural-language
 configuration and recurring task composition remain unfinished.
