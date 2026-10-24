@@ -220,7 +220,6 @@ def main() -> None:
         "PROJECT_LIFECYCLE_COMMANDS",
         "register_project_lifecycle_commands",
         "handle_project_lifecycle_command",
-        "refresh-state",
         "read-only-map",
         "reward",
         "operator-gate",
@@ -240,7 +239,9 @@ def main() -> None:
     ):
         require(marker in sink_source, f"project lifecycle sink module missing {marker}")
     require("register_project_lifecycle_commands" in cli_source, "cli.py did not register project lifecycle commands")
-    require("handle_project_lifecycle_command" in cli_source, "cli.py did not dispatch project lifecycle commands")
+    runtime_source = (CLI.parent / "cli_runtime.py").read_text(encoding="utf-8")
+    require("dispatch_common_command" in cli_source and "handle_project_lifecycle_command" in runtime_source,
+            "CLI entrypoints did not share project lifecycle dispatch")
     require("register_project_lifecycle_commands" in init_source, "__init__ did not export project lifecycle registration")
     require("handle_project_lifecycle_command" in init_source, "__init__ did not export project lifecycle handler")
 
