@@ -1081,6 +1081,28 @@ admitted heartbeat receipt; failed basis reads do not dispatch work or spend.
 Native Todo read/write and lease operations keep their existing authority.
 No automatic reconstruction of missing Goal narrative is claimed.
 
+Protected reads also bind separately registered `authority_sources` of kind
+`goal_doc`, using the existing primary-document declaration. Their current text
+is returned as `basis.goal.prose`, with paths and normalized-text digests in
+`basis.goal.primary_documents`. The previous state prose remains available as
+`basis.goal.state_prose`; it does not replace the primary requirements. All three
+participate in Goal freshness, without duplicating primary document bodies.
+Rewriting the Agent state file cannot remove that independent requirement basis;
+an unavailable primary document blocks the read without reconstructing it from
+old plans. With no separate document, the existing state-file basis is unchanged.
+Plans and Todos remain derived records. A changed requirement alone is not
+projection corruption or permission to restore older requirements. This is not
+shell write isolation: hosts needing that guarantee must keep owner documents
+outside Agent-writable files **and directories**, while leaving Todo state writable.
+
+受保护读取同时绑定已登记的独立 `goal_doc` 原始目标文档，内容随
+`basis.goal.prose` 返回，路径与规范化文本摘要放在 `basis.goal.primary_documents`，
+原状态正文保留在 `basis.goal.state_prose`，三者均参与新鲜度校验。修改 Agent 状态文件不能
+替换这份独立依据；原始文档不可用时拒绝读取，不从旧计划重建。未登记独立文档时
+保留原状态文件依据。计划和 Todo 是派生记录，需求变化不构成投影损坏或回滚授权。
+这不是 shell 写权限隔离；需要硬保护的 Host 必须同时保护 owner 文件及其父目录，
+并让 Todo 状态保持可写。
+
 The initial default quota JSON packet grew because it carries the work basis
 consumed by the Agent. Matched fixed-fixture measurements against the pre-adoption
 checkpoint branch were 18,096 to 22,993 characters (small), 34,553 to 37,912

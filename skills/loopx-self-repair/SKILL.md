@@ -34,6 +34,12 @@ not only an apology or a one-off explanation.
    - active-state authoring gap;
    - benchmark harness mismatch;
    - docs/process hygiene gap.
+   A changed owner requirement is not evidence of projection corruption.
+   Compare the current primary document with the derived Todo before choosing
+   repair: update the plan or implementation to follow current requirements.
+   Never overwrite an existing owner document from an old plan, Todo or read
+   context. Restore missing source only from a verified current owner source;
+   conflicting owner sources require resolution, not an inferred rollback.
 5. **Repair at the lowest durable layer.**
    - If it is a one-off agent mistake, write back the correct state/todo and
      size the next scoped effort to its verifiable result, evidence and risk.
