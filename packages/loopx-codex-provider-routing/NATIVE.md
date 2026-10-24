@@ -61,6 +61,19 @@ Launch Services uses the inspected PID and executable instead. Missing fields,
 invalid types and non-finite timestamps cannot authorize force quit. A successful
 normal quit never escalates. Other CLI/file owners remain holds. Force quit can interrupt
 work in that instance; it does not authorize replay of submitted jobs.
+Version 0.12.4 also records the inspected App's descendants before quitting.
+Only those helpers, with unchanged kernel executable and microsecond start
+identity, can be retired after the App exits. An older orphan with no observed
+parentage, a standalone CLI using the same bundled binary, or a later App launch
+remains a hold. Bundle paths alone never authorize termination.
+With client restart enabled, the known LoopX Chat launch agent can also be
+paused when its observed process tree actually holds this home. Its restoration
+intent is saved privately before unloading, and restoration is checked even
+after a partial failure. A failed restore is reported as `chat_resume_failed`;
+the next native request reconciles that intent without repeating the account
+transaction. A changed service definition is preserved and requires local
+repair rather than bootstrapping unchecked bytes. Installation does not enable
+client restart or start a new Chat service.
 An operator-owned service independent of the App can run the same observer:
 
 ```sh

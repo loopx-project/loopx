@@ -43,6 +43,7 @@ jobs:
         run: |
           python -m compileall -q packages/loopx-codex-provider-routing/src
           python packages/loopx-codex-provider-routing/smoke/native_host_smoke.py
+          python packages/loopx-codex-provider-routing/smoke/native_host_clients_smoke.py
           python packages/loopx-codex-provider-routing/smoke/codex_provider_routing_smoke.py
           python packages/loopx-codex-provider-routing/smoke/recovery_contracts_smoke.py
           python packages/loopx-codex-provider-routing/smoke/operator_smoke.py
