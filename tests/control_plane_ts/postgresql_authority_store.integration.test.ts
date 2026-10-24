@@ -1,10 +1,21 @@
+import {spawnSync} from "node:child_process";
+import {readFileSync} from "node:fs";
+import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {legacyCoordinationWriterFencePath} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
+import {localAuthorityProviderPaths} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
+import {createEffectRuntimeHandlers, dispatchEffectRuntimeMethod} from "../../loopx/control_plane/effect_runtime_handlers.ts";
+import {settlementIdentity, settlementIdentityPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {acquireFileMutationLock, releaseFileMutationLock} from "../../loopx/control_plane/effect_runtime_io.ts";
+import {shadowMaintenanceLockPath} from "../../loopx/control_plane/coordination/shadow_management.ts";
+import {legacyCoordinationTodoLockPath} from "../../loopx/control_plane/coordination/legacy_writer_lock_paths.ts";
+import {refreshRecovery, decodeRefreshRetry} from "../../loopx/control_plane/quota/refresh_recovery.ts";
 import {executeCoordinationTodoUpdate} from "../../loopx/control_plane/coordination/todo_update.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {TODO_DOMAIN_READ_RECORD_SCHEMA, TODO_DOMAIN_RECORD_CONTRACT} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import {dirname, join} from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { Pool, type PoolClient } from "pg";
@@ -670,3 +681,123 @@ test("PostgreSQL provider evicts and awaits cleanup-uncertain read connections",
   });
   assert.equal(queries.filter((query) => query === "ROLLBACK").length, 1);
 });
+
+
+if (database && installed) {
+  test("PostgreSQL checkpoint holds Goal and incarnation locks through external save", async t => {
+    await installed;
+    const tenant = `checkpoint-${randomUUID()}`, goal = "checkpoint-lock";
+    const store = new PostgreSqlAuthorityStore(database, {tenant_id: tenant, goal_id: goal});
+    t.after(() => cleanScope(tenant, goal));
+    assert.equal((await store.commitAuthority(commit(null, "seed", 1, 1))).status, "applied");
+    const before = await store.loadAuthority();
+    assert.equal(before.status, "loaded");
+    if (before.status !== "loaded") return;
+    const probe = `import {Pool} from 'pg';
+      const p=new Pool({connectionString:process.env.LOOPX_TEST_POSTGRES_URL});
+      const c=await p.connect(); await c.query('BEGIN');
+      const lock=await c.query('SELECT pg_try_advisory_xact_lock($1::bigint) AS acquired',['5522768808912313929']);
+      if(lock.rows[0].acquired) process.exitCode=2;
+      try {await c.query('SELECT head FROM loopx_control_plane.authority_heads WHERE tenant_id=$1 AND goal_id=$2 FOR UPDATE NOWAIT', process.argv.slice(1)); process.exitCode=3;}
+      catch(e){if(e.code!=='55P03') throw e;}
+      await c.query('ROLLBACK'); c.release(); await p.end();`;
+    const result = await store.withCheckpointHead((head, identity) => {
+      assert.equal(head.provider_revision, before.provider_revision);
+      assert.equal(identity, STORE_IDENTITY);
+      // Separate process: a timer in this event loop cannot observe the lock
+      // during the synchronous save callback. NOWAIT is the semantic oracle.
+      const peer = spawnSync(process.execPath, ["--input-type=module", "-e", probe, tenant, goal],
+        {encoding: "utf8", timeout: 10000});
+      assert.equal(peer.status, 0, peer.stderr);
+      return {ok: true};
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(await store.loadAuthority(), before);
+    await assert.rejects(store.withCheckpointHead(() => {throw new Error("save failed");}), /save failed/);
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.commitAuthority(commit(before.provider_revision, "after-save", 2, 2))).status, "applied");
+    const missing = new PostgreSqlAuthorityStore(database, {tenant_id: tenant, goal_id: "absent"});
+    await assert.rejects(missing.withCheckpointHead(() => {throw new Error("must not save");}), /head is missing/);
+  });
+
+  test("PostgreSQL production checkpoint effects protect each Turn and preserve original work reads", async t => {
+    await installed;
+    const root = await mkdtemp(join(tmpdir(), "checkpoint-pg-turns-"));
+    const tenant = `checkpoint-${randomUUID()}`, goal = "checkpoint-turns", agent = "agent", todo = "todo_task";
+    t.after(async () => {await cleanScope(tenant, goal); await rm(root, {recursive: true, force: true});});
+    const store = new PostgreSqlAuthorityStore(database, {tenant_id: tenant, goal_id: goal});
+    const projection = (text: string) => authorityProjectionFixture(goal, [{todo_id: todo, role: "agent",
+      status: "open", done: false, claimed_by: agent, archive_state: "active", text}]);
+    const seeded = await store.commitAuthority({expected_provider_revision: null, operation_id: "seed",
+      next_projection: projection("Requirement A"), events: [], receipts: []});
+    assert.equal(seeded.status, "applied");
+    const marker = localAuthorityProviderPaths(root, goal).marker;
+    const fence = legacyCoordinationWriterFencePath(root, goal);
+    await mkdir(dirname(marker), {recursive: true}); await mkdir(dirname(fence), {recursive: true});
+    await writeFile(marker, JSON.stringify({schema_version: "loopx_local_authority_provider_v0", provider: "postgresql",
+      goal_id: goal, tenant_id: tenant, store_identity: STORE_IDENTITY}));
+    await writeFile(fence, JSON.stringify({schema_version: "loopx_legacy_coordination_writer_fence_v0", state: "engaged",
+      goal_id: goal, fence_id: "checkpoint", source_version: "synthetic", source_projection_sha256: "fixture",
+      expected_shadow_provider_revision: "fixture"}));
+    const handlers = createEffectRuntimeHandlers({fingerprint: "pg-checkpoint-test", requestShutdown() {},
+      authorityProvider: {openPostgresqlStore: () => store}});
+    const effect = (method: string, request: JsonObject) => dispatchEffectRuntimeMethod(handlers, method, request) as Promise<JsonObject>;
+    const goalDir = join(root, "goals", goal), runs = join(goalDir, "runs"), contexts = join(goalDir, "checkpoint-contexts");
+    await mkdir(runs, {recursive: true}); await mkdir(contexts);
+    const state = join(root, "state.md"), registry = join(root, "registry.json"), index = join(runs, "index.jsonl");
+    await writeFile(state, "Requirement A"); await writeFile(registry, "{}"); await writeFile(index, "");
+    const facts = {source: {state_file: state, runtime_root: root}, frontmatter: {objective: "deliver"},
+      goal_prose: "Deliver the owner requirement", agent_vision: null, acceptance: null, todos: []};
+    const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+    const log = join(goalDir, "rollout-event-log.jsonl");
+    let logText = "";
+    for (const turn of ["one", "two"]) {
+      const identity = settlementIdentityPayload(settlementIdentity({goal_id: goal, agent_id: agent, todo_id: todo, turn_instance_id: turn}));
+      logText += JSON.stringify({schema_version: "loopx_rollout_event_v0", event_id: turn, event_kind: "quota_should_run",
+        goal_id: goal, agent_id: agent, run_id: turn, details: {todo_id: todo, settlement_effect_id: identity.effect_id,
+          result_freshness: "turn_result_freshness_required_v1"}}) + "\n";
+      await writeFile(log, logText);
+      const read = async (key: string): Promise<JsonObject> => ({...await effect("goal.checkpoint_read_context.resolve", {runtime_root: root,
+        phase: "read", purpose: "delivery_result", result_only: true, identity, admitted_turn: true,
+        read_context_id: key, facts}), read_context_id: key});
+      let context = await read(`work-${turn}`);
+      const receiptPath = join(contexts, `${createHash("sha256").update(identity.effect_id + ":delivery_result").digest("hex")}.json`);
+      await writeFile(receiptPath, JSON.stringify(context.receipt));
+      const retry = {vision: null, unchanged_reason: null, merge_patch: false, workspace_requested: false, mutation: {},
+        delivery_outcome: "outcome_progress", delivery_batch_scale: "implementation", delivery_boundary: "in_flight_continuation",
+        progress_observation: null};
+      const recovery = refreshRecovery(decodeRefreshRetry(retry)!, null, false, undefined, false);
+      const row: JsonObject = {goal_id: goal, agent_id: agent, todo_id: todo, turn_instance_id: turn,
+        classification: "validated_progress", generated_at: "2026-01-01T00:00:00Z", settlement_identity: identity,
+        delivery_outcome: "outcome_progress", delivery_batch_scale: "implementation", refresh_recovery: recovery,
+        vision_checkpoint: {required: false, satisfied: true, decision: "not_required", delivery_boundary: "in_flight_continuation"},
+        json_path: join(runs, `${turn}.json`), markdown_path: join(runs, `${turn}.md`)};
+      const submit = async () => {
+        const targets = [index, registry, shadowMaintenanceLockPath(root, goal), legacyCoordinationTodoLockPath(root, goal), state];
+        const locks = [];
+        for (const target of targets) locks.push(await acquireFileMutationLock(target, process.pid));
+        try {
+          return await effect("goal.checkpoint_read_context.commit", {runtime_root: root, state_file: state,
+            registry_path: registry, registry_sha256: hash(registry), state_sha256: hash(state), index_sha256: hash(index),
+            identity, purpose: "delivery_result", read_context_id: context.read_context_id, facts, refresh_retry: retry,
+            record: {...row}, index_record: {...row}, markdown: "Validated progress",
+            locks: locks.map((lock, i) => ({target: targets[i], pid: process.pid, token: lock.token}))});
+        } finally {for (const [i, lock] of locks.entries()) await releaseFileMutationLock(targets[i]!, lock.token);}
+      };
+      if (turn === "two") {
+        const head = await store.loadAuthority(); assert.equal(head.status, "loaded");
+        if (head.status !== "loaded") return;
+        assert.equal((await store.commitAuthority({expected_provider_revision: head.provider_revision, operation_id: "change",
+          next_projection: projection("Requirement B"), events: [], receipts: []})).status, "applied");
+        const before = readFileSync(index, "utf8");
+        assert.equal((await submit()).error_code, "checkpoint_read_context_stale");
+        assert.equal(readFileSync(index, "utf8"), before);
+        context = await read("work-two-reread"); await writeFile(receiptPath, JSON.stringify(context.receipt));
+      }
+      const saved = await submit(); assert.equal(saved.ok, true, JSON.stringify(saved)); assert.equal(saved.replayed, false);
+      assert.equal((saved.context as JsonObject).read_context_id, context.read_context_id);
+      assert.equal((await submit()).replayed, true);
+    }
+    assert.equal(readFileSync(index, "utf8").trim().split("\n").length, 2);
+  });
+}

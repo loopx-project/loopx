@@ -36,6 +36,7 @@ import {
 } from "./runtime_decode.ts";
 
 
+import type {LocalAuthorityProviderDependencies} from "./coordination/local_authority_provider.ts";
 import type {TurnJournalInspectionRequest} from "./turn_driver/turn_journal.ts";
 
 type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
@@ -55,6 +56,8 @@ function lazyHandler<Module>(
 
 export interface EffectRuntimeHandlerContext {
   fingerprint: string;
+  /** Embedding-service provider hooks; never supplied in Agent RPC params. */
+  readonly authorityProvider?: LocalAuthorityProviderDependencies;
   /** Physical publication path observed by the managed server, not its caller. */
   readonly infoPath?: string;
   requestShutdown: () => void;
@@ -364,8 +367,8 @@ export function createEffectRuntimeHandlers(
     ["work_item.delivery_response.project", lazyHandler(() => import("./work_items/delivery_history.ts"), ({projectDeliveryResponse}) => projectDeliveryResponse)],
     ["work_item.delivery_claim.validate", lazyHandler(() => import("./work_items/delivery_outcome.ts"), ({validateDeliveryClaim}) => validateDeliveryClaim)],
     ["goal.vision_checkpoint.evaluate", lazyHandler(() => import("./goals/vision_checkpoint.ts"), ({buildVisionCheckpoint}) => buildVisionCheckpoint)],
-    ["goal.checkpoint_read_context.resolve", lazyHandler(() => import("./goals/checkpoint_authority.ts"), ({resolveCheckpointReadContext}) => resolveCheckpointReadContext)],
-    ["goal.checkpoint_read_context.commit", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({commitCheckpoint}) => commitCheckpoint)],
+    ["goal.checkpoint_read_context.resolve", lazyHandler(() => import("./goals/checkpoint_authority.ts"), ({resolveCheckpointReadContext}) => params => resolveCheckpointReadContext(params, context.authorityProvider))],
+    ["goal.checkpoint_read_context.commit", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({commitCheckpoint}) => params => commitCheckpoint(params, context.authorityProvider))],
     ["goal.checkpoint_read_context.inspect_replay", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointReplay}) => inspectCheckpointReplay)],
     ["goal.checkpoint_read_context.inspect_attempt", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointAttempt}) => inspectCheckpointAttempt)],
     ["goal.vision_wait.coverage", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectVisionWaitCoverage}) => projectVisionWaitCoverage)],

@@ -1,11 +1,13 @@
-/** Same-head checkpoint facts and the two shipped local provider fences.
- * Not an AuthorityStore extension contract or a checkpoint authority migration. */
+/** Same-head checkpoint facts and provider-owned writer fences.
+ * Credentials and provider construction remain with the embedding service. */
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {authorityStoreSourceAuthority} from "../coordination/authority_store.ts";
 import {goalPathSegment} from "../rollout_receipt_log.ts";
 import {FileAuthorityStore} from "../coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../coordination/sqlite_authority_store.ts";
+import {PostgreSqlAuthorityStore} from "../coordination/postgresql_authority_store.ts";
+import type {LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
 import {openRuntimeAuthorityStore, requireLocalAuthorityRuntimeRoot} from "../coordination/local_authority_provider.ts";
 import {loadLegacyCoordinationWriterFence} from "../coordination/legacy_writer_fence.ts";
 import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "../coordination/coordination_projection.ts";
@@ -42,16 +44,18 @@ export async function withCheckpointAuthority(
   requireCanonical = false,
   resultOnly = false,
   completeTodoSource = false,
+  dependencies: LocalAuthorityProviderDependencies = {},
 ): Promise<JsonObject> {
   const fence = await loadLegacyCoordinationWriterFence(root, goalId);
   if (fence.status === "failed") throw new Error(fence.reason);
   const source = requireJsonObject(facts.source, "checkpoint source");
   if (fence.status === "missing") {
-    if (requireCanonical) throw new Error("first delivery freshness requires File or SQLite canonical authority");
+    if (requireCanonical) throw new Error("first delivery freshness requires canonical authority");
     return save({...facts, source: {...source, authority: "legacy_markdown", store_identity: null}});
   }
-  const store = await openRuntimeAuthorityStore(root, goalId, {});
-  if (!(store instanceof FileAuthorityStore) && !(store instanceof SqliteAuthorityStore)) {
+  const store = await openRuntimeAuthorityStore(root, goalId, dependencies);
+  if (!(store instanceof FileAuthorityStore) && !(store instanceof SqliteAuthorityStore) &&
+      !(store instanceof PostgreSqlAuthorityStore)) {
     if (resultOnly && authorityStoreSourceAuthority(store) === "postgresql_v0") {
       const [head, identity] = await Promise.all([store.loadAuthority(), store.storeIdentity()]);
       if (head.status !== "loaded" || identity.status !== "available") {
@@ -59,7 +63,7 @@ export async function withCheckpointAuthority(
       }
       return save(checkpointProviderFacts(goalId, facts, head, identity.store_identity, "postgresql_v0", true));
     }
-    throw new Error("checkpoint supplement requires a supported local provider fence");
+    throw new Error("checkpoint requires a supported provider fence");
   }
   return await store.withCheckpointHead((head, identity) => {
     return save(checkpointProviderFacts(goalId, facts, head, identity, authorityStoreSourceAuthority(store), requireCanonical || resultOnly || completeTodoSource));
@@ -68,7 +72,9 @@ export async function withCheckpointAuthority(
 
 /** Called while the Python adapter holds the local source locks. Optimistic
  * receipts are allowed to go stale after this operation returns. */
-export async function resolveCheckpointReadContext(value: unknown): Promise<JsonObject> {
+export async function resolveCheckpointReadContext(value: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {},
+): Promise<JsonObject> {
   const request = requireJsonObject(value, "checkpoint read context request");
   const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
   const identity = requireJsonObject(request.identity, "identity");
@@ -79,7 +85,7 @@ export async function resolveCheckpointReadContext(value: unknown): Promise<Json
     request.purpose === "first_delivery" && request.checkpoint_continuation !== true || (request.purpose === "delivery_result" &&
       request.result_only !== true && jsonObject(request.receipt)?.result_only !== true),
     request.purpose === "delivery_result" && (request.result_only === true || jsonObject(request.receipt)?.result_only === true),
-    request.purpose === "first_delivery" || request.full_frontier === true || jsonObject(request.receipt)?.full_frontier === true);
+    request.purpose === "first_delivery" || request.full_frontier === true || jsonObject(request.receipt)?.full_frontier === true, dependencies);
   // Reduce the captured snapshot after releasing the read fence, as before.
   // Only commitCheckpoint holds the provider fence through its final check/save.
   return evaluateCheckpointReadContext({...request, facts: current});

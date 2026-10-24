@@ -936,7 +936,7 @@ projected boundary and identity flags; reconstructing a generic
 For a Turn admitted with result freshness, this exemption applies only to
 requiring a new direction judgment. An in-flight writeback still restores the
 original `delivery_result` read token and compares its basis under the same
-source locks and File/SQLite provider fence as its durable append (or the
+source locks and supported provider fence as its durable append (or the
 legacy source locks for an admitted legacy Turn). A changed basis rejects the
 writeback with `checkpoint_read_context_stale` before history or Vision is
 committed; no quota is spent. This also covers an optional Vision patch.
@@ -946,13 +946,13 @@ issues a replacement read. Successful historical replay precedes a later
 basis change. `result_work_context` records this work check separately from
 the direction checkpoint, so it cannot certify Todo completion or direction
 adoption. Historical admissions without result freshness retain their path;
-this local append does not expand PostgreSQL checkpoint-fence support.
+PostgreSQL uses the service-owned fence described below, without adding a credential factory to local callers.
 
 中途继续只豁免强制重新判断方向，不豁免已启用的工作依据检查。进展写回与可选
 Vision patch 都必须沿用原 Turn 的 `delivery_result` 依据；过期时先拒绝，不写入
 历史或 Vision，也不记账。显式重读并复核已有进展后才能重试。工作检查记录与方向
 判断分开，成功提交的历史重放不因后续需求变化而失效；未启用策略的历史准入保持
-兼容。本地 append 不扩展 PostgreSQL checkpoint fence 的支持范围。
+兼容。PostgreSQL 使用下述服务持有的提交保护，本地调用方不增加凭据工厂。
 
 If the work actually replanned or completed the Todo, explicitly choose
 `semantic_closeout` and provide its required vision checkpoint. Do not simply
@@ -1428,12 +1428,45 @@ transaction. Model reasoning and projection sync remain outside it. The provider
 revision is returned for diagnostics, but only relevant component changes or a
 different store identity invalidate the basis. Old v0 receipts require a new read.
 
+Every newly protected Turn checks its original work basis before a new result
+append, including in-flight progress, semantic closeout with pending direction,
+and typed blocked results. Direction cadence exemptions do not exempt result
+freshness. A new Turn owns a distinct receipt; another Turn's successful replay
+cannot satisfy it. Historical committed results remain replayable, and completing
+missing direction or workspace settlement does not re-author that result.
+
+The service-owned PostgreSQL checkpoint path holds the existing shared database
+incarnation lock, then a `FOR SHARE` lock on the exact tenant/Goal head. It reads
+and compares the original basis and saves external checkpoint artifacts before
+releasing either lock. Writers use the same head with `FOR UPDATE`; identity
+rotation requires the exclusive incarnation lock. Rejection does not advance
+provider revision or append result history. The synchronous save callback must
+not await model, network or projection work. Like SQLite, PostgreSQL rollback
+cannot undo external files; the existing attempt marker and exact indexed
+readback recover a crash or lost response. Provider hooks are supplied only by
+the embedding service through the existing authority-provider dependencies, never
+by Agent RPC parameters. The ordinary local CLI/MCP runtime still has no database
+credential factory and fails closed for an unavailable PostgreSQL binding.
+
+每个新准入且受保护的 Turn 在追加结果前都校验自己的原始工作依据，包括中途进展、
+方向尚未补齐的语义关闭以及类型化阻塞结果。方向判断的节奏豁免不豁免结果新鲜度；
+新 Turn 的独立依据不能由其他 Turn 的成功重放替代。历史成功结果仍可重放，补齐方向
+或工作区结算也不能改写该结果。
+
+服务持有的 PostgreSQL 提交路径先取得数据库身份的共享锁，再对精确租户/Goal 的
+head 行取得 `FOR SHARE` 锁；在锁内读取、比较原始依据并保存外部 checkpoint 文件。
+写入方使用同一 head 的 `FOR UPDATE`，身份轮换需要排他身份锁。拒绝不推进 provider
+版本，也不追加结果历史。同步保存回调不能等待模型、网络或投影；SQL 回滚不能撤销
+外部文件，崩溃和丢失响应仍由原有尝试标记与精确索引读回恢复。provider 由服务通过
+既有依赖接口注入，Agent RPC 参数不能提供凭据或选择工厂。普通本地 CLI/MCP 尚未
+提供数据库凭据工厂，PostgreSQL 绑定不可用时继续拒绝执行。
+
 The ordinary local Todo command wrapper already takes the maintenance lock
 before committing. The provider fence additionally covers transactions through
 the exported provider boundary that do not take that outer lock; these are
-distinct concurrency tests. Provider failures stay closed. This adds no
-PostgreSQL or cross-Goal transaction support and does not move checkpoint
-authority into the Todo provider. SQLite cannot roll back the external run files.
+distinct concurrency tests. Provider failures stay closed. The PostgreSQL fence above does not add a
+cross-Goal transaction or move checkpoint authority into the Todo provider.
+Neither SQL provider can roll back the external run files.
 
 Index lock order is kernel then mutation marker for Python writers; existing
 quota adapters retain their kernel lock around the native marker owner. Native

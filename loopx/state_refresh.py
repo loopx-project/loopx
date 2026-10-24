@@ -946,8 +946,7 @@ def refresh_state_run(
             )
             default_checkpoint = checkpoint_continuation_required(settlement_readback)
             result_work_checkpoint = (
-                not checkpoint_supplement and not first_delivery_checkpoint
-                and normalized_delivery_boundary == "in_flight_continuation"
+                refresh_recovery["decision"] == "append" and not first_delivery_checkpoint
                 and result_work_required(settlement_readback)
             )
             if result_work_checkpoint:

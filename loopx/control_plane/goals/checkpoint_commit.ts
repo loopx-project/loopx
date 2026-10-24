@@ -9,7 +9,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {appendJsonLineSync, claimFileMutationLock, mutationLockOwner, releaseFileMutationLock,
   releaseFileMutationLockClaim, withFileMutationLock, type FileMutationLockClaim} from "../effect_runtime_io.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
-import {requireLocalAuthorityRuntimeRoot} from "../coordination/local_authority_provider.ts";
+import {requireLocalAuthorityRuntimeRoot, type LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {legacyCoordinationTodoLockPath} from "../coordination/legacy_writer_lock_paths.ts";
 import {shadowMaintenanceLockPath, requireShadowPrimaryWriteAllowed} from "../coordination/shadow_management.ts";
@@ -59,11 +59,14 @@ function indexBytes(path: string): Buffer {
       const row = requireJsonObject(JSON.parse(line), "run index row");
       const checkpoint = jsonObject(row.vision_checkpoint);
       const effect = jsonObject(row.settlement_identity)?.effect_id;
-      if (checkpoint?.satisfied === true && (checkpoint.read_context || row.result_work_context) && typeof effect === "string") {
+      if ((row.result_work_context || checkpoint?.satisfied === true && checkpoint.read_context) && typeof effect === "string") {
         const version = canonicalAuthoritySha256({checkpoint, result_work_context: row.result_work_context ?? null, recovery: row.refresh_recovery,
           json_path: row.json_path, markdown_path: row.markdown_path});
-        if (checkpoints.has(effect) && checkpoints.get(effect) !== version) unknown("checkpoint index has conflicting decisions");
-        checkpoints.set(effect, version);
+        // A retained result and its later direction settlement share a Turn,
+        // but are distinct effects. Only competing proofs of the same purpose conflict.
+        const key = `${effect}:${row.result_work_context ? "delivery_result" : "first_delivery"}`;
+        if (checkpoints.has(key) && checkpoints.get(key) !== version) unknown("checkpoint index has conflicting decisions");
+        checkpoints.set(key, version);
       }
     }
     catch { unknown("checkpoint index is malformed"); }
@@ -137,8 +140,8 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
     .filter(line => line.trim()).map(line => requireJsonObject(JSON.parse(line), "run index row"));
   const work = request.purpose === "delivery_result";
   const matching = rows.filter(row => jsonObject(row.settlement_identity)?.effect_id === identity.effect_id &&
-    jsonObject(row.vision_checkpoint)?.satisfied === true &&
-    (work ? row.result_work_context != null : jsonObject(row.vision_checkpoint)?.read_context != null));
+    (work ? row.result_work_context != null : jsonObject(row.vision_checkpoint)?.satisfied === true &&
+      jsonObject(row.vision_checkpoint)?.read_context != null));
   const path = join(root, "goals", goalPathSegment(identity.goal_id), "checkpoint-contexts",
     `${createHash("sha256").update(requireNonEmptyString(identity.effect_id, "effect_id") + (work ? ":delivery_result" : "")).digest("hex")}.json`);
   let receipt: JsonObject | null = null;
@@ -205,7 +208,9 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
   return {ok: true, status: "absent", read_context_id: receipt.read_context_id, receipt: unstarted};
 }
 
-export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
+export async function commitCheckpoint(value: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {},
+): Promise<JsonObject> {
   const request = requireJsonObject(value, "checkpoint commit");
   const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
   const binding = requireJsonObject(request.identity, "settlement identity");
@@ -252,7 +257,8 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
     const recovery = requireJsonObject(readback.refresh_recovery, "refresh recovery");
     if (recovery.decision !== "replay" && recovery.decision !== "repair_receipt") return null;
     const prior = requireJsonObject(readback.writeback_run, "committed checkpoint");
-    if (jsonObject(prior.vision_checkpoint)?.satisfied !== true ||
+    if ((!resultWork && jsonObject(prior.vision_checkpoint)?.satisfied !== true) ||
+        (resultWork && prior.result_work_context == null) ||
         jsonObject(prior.refresh_recovery)?.vision_request_digest !== recovery.vision_request_digest) {
       unknown("checkpoint replay does not identify a committed decision");
     }
@@ -377,13 +383,13 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
       for (const projected of [record, row]) {
         if (canonicalAuthoritySha256(projected.settlement_identity) !== canonicalAuthoritySha256(binding) ||
             canonicalAuthoritySha256(projected.refresh_recovery) !== canonicalAuthoritySha256(recovery) ||
-            jsonObject(projected.vision_checkpoint)?.satisfied !== true) {
+            (!resultWork && jsonObject(projected.vision_checkpoint)?.satisfied !== true)) {
           throw new EffectRuntimeRequestError("checkpoint projection does not match typed admission");
         }
         if (resultWork) {
-          if (projected.delivery_outcome !== "outcome_progress" ||
-              jsonObject(projected.vision_checkpoint)?.delivery_boundary !== "in_flight_continuation") {
-            throw new EffectRuntimeRequestError("Work-basis append requires an in-flight progress writeback");
+          if (projected.delivery_outcome !== retry.delivery_outcome ||
+              jsonObject(projected.vision_checkpoint)?.delivery_boundary !== retry.delivery_boundary) {
+            throw new EffectRuntimeRequestError("Work-basis append must match the admitted result writeback");
           }
           projected.result_work_context = context;
         } else projected.vision_checkpoint = {...requireJsonObject(projected.vision_checkpoint, "vision checkpoint"), read_context: context};
@@ -405,7 +411,7 @@ export async function commitCheckpoint(value: unknown): Promise<JsonObject> {
       } catch { unknown("checkpoint append outcome is uncertain"); }
       return {ok: true, replayed: false, context, json_path: jsonPath, markdown_path: markdownPath};
     }, firstDelivery && !checkpointContinuationRequired(jsonObject(readback.heartbeat_receipt)), false,
-      firstDelivery || resultWork || checkpointContinuationRequired(jsonObject(readback.heartbeat_receipt)));
+      firstDelivery || resultWork || checkpointContinuationRequired(jsonObject(readback.heartbeat_receipt)), dependencies);
   } finally {
     // The effect owns the end of the handed-off critical section. Releasing the
     // markers here also handles a caller that timed out but is still alive.

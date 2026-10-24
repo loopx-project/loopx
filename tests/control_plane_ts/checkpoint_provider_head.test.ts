@@ -1,5 +1,6 @@
+import {inspectCheckpointAttempt} from "../../loopx/control_plane/goals/checkpoint_commit.ts";
 import assert from "node:assert/strict";
-import {mkdtemp, rm} from "node:fs/promises";
+import {mkdir, mkdtemp, rm} from "node:fs/promises";
 import {writeFileSync, readFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -65,3 +66,24 @@ test("SQLite concurrent requests in one runtime do not busy-wait on an awaiting 
   assert.equal(JSON.parse(readFileSync(join(directory, "checkpoint.json"), "utf8")).head.value, 1);
   assert.ok(performance.now() - started < 4000, "must not incur the SQLite 5000ms busy timeout");
 });
+
+
+for (const work of [true, false]) {
+  test(`checkpoint rejects competing ${work ? "work" : "direction"} proofs on one Turn`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "checkpoint-conflict-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const runs = join(root, "goals", "goal", "runs");
+    await mkdir(runs, {recursive: true});
+    const identity = {goal_id: "goal", agent_id: "agent", todo_id: "todo", turn_instance_id: "turn", effect_id: "effect"};
+    const rows = ["read-one", "read-two"].map(read_context_id => ({settlement_identity: identity,
+      refresh_recovery: {}, json_path: join(runs, "result.json"), markdown_path: join(runs, "result.md"),
+      vision_checkpoint: work ? {decision: "missing_required", satisfied: false} :
+        {satisfied: true, read_context: {read_context_id}},
+      ...(work ? {result_work_context: {read_context_id}} : {})}));
+    writeFileSync(join(runs, "index.jsonl"), JSON.stringify(rows[0]) + "\n");
+    assert.equal(inspectCheckpointAttempt({runtime_root: root, identity: {...identity, effect_id: "another-turn"}}).status, "absent");
+    writeFileSync(join(runs, "index.jsonl"), rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    assert.throws(() => inspectCheckpointAttempt({runtime_root: root, identity,
+      purpose: work ? "delivery_result" : "first_delivery"}), (error: unknown) => (error as {code: string}).code === "checkpoint_commit_unknown");
+  });
+}

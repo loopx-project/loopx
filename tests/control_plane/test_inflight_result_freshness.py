@@ -41,7 +41,7 @@ def test_inflight_rejects_changed_basis_then_revalidates_same_turn(provider, vis
     contexts = {p: p.read_bytes() for p in (runtime / 'goals' / GOAL_ID / 'checkpoint-contexts').glob('*.json')}
     original_state = state.read_bytes()
     rc, rejected = _run_cli(registry, runtime, *args, cwd=project)
-    assert rc == 1 and rejected.get('error_code') == 'checkpoint_read_context_stale', rejected
+    assert rc == 1 and rejected.get('error_code') == 'checkpoint_read_context_stale', json.dumps(rejected, ensure_ascii=False)
     assert _runs(runtime) == before
     assert state.read_bytes() == original_state
     assert all(p.read_bytes() == data for p, data in contexts.items())
@@ -195,3 +195,79 @@ def test_inflight_native_append_rechecks_captured_goal_bytes(provider, tmp_path,
     # Reserving empty paths is not a committed run; the index must stay unchanged.
     assert _runs(runtime).get('index.jsonl') == before.get('index.jsonl')
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('outcome', ['outcome_progress', 'outcome_gap'])
+def test_semantic_writeback_also_checks_original_work_basis(provider, outcome, tmp_path, monkeypatch):
+    project, runtime, registry, state, context, args = _admit(provider, tmp_path, monkeypatch)
+    args = tuple('semantic_closeout' if arg == 'in_flight_continuation' else
+                 outcome if arg == 'outcome_progress' else arg for arg in args)
+    if outcome == 'outcome_gap':
+        args += ('--progress-result-class', 'blocked', '--progress-work-item-id', TODO_ID,
+                 '--progress-blocker-id', 'blocker_fixture', '--progress-evidence-id', 'evidence_fixture')
+    state.write_text(state.read_text(encoding='utf-8') + '\n## Requirement B\nUse the revised contract.\n', encoding='utf-8')
+    before = _runs(runtime)
+    rc, rejected = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 1 and rejected.get('error_code') == 'checkpoint_read_context_stale', json.dumps(rejected, ensure_ascii=False)
+    assert _runs(runtime) == before
+    rc, reread = _run_cli(registry, runtime, 'checkpoint-context', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--todo-id', TODO_ID,
+        '--turn-instance-id', context['settlement_identity']['turn_instance_id'], '--purpose', 'delivery_result', cwd=project)
+    assert rc == 0, reread
+    rc, saved = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0 and saved['result_work_context']['read_context_id'] == reread['read_context_id'], saved
+    # The original blocked-retry cadence stays exempt from direction review,
+    # while its result still passes the work-basis check.
+    assert saved['vision_checkpoint']['satisfied'] is (outcome == 'outcome_gap')
+    assert saved['vision_checkpoint']['decision'] == ('not_required' if outcome == 'outcome_gap' else 'missing_required')
+    committed = _runs(runtime)
+    rc, denied = _run_cli(registry, runtime, 'checkpoint-context', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--todo-id', TODO_ID,
+        '--turn-instance-id', context['settlement_identity']['turn_instance_id'], '--purpose', 'delivery_result', cwd=project)
+    assert rc == 1 and denied['error_code'] == 'delivery_result_already_committed', denied
+    rc, replay = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0 and replay['idempotent_replay'], replay
+    assert _runs(runtime) == committed
+    assert _spend_run_count(runtime) == 0
+    if outcome == 'outcome_progress':
+        # Work protection must coexist with a later direction decision on the
+        # same Turn; these two indexed effects are not conflicting writes.
+        rc, direction = _run_cli(registry, runtime, 'checkpoint-context', '--goal-id', GOAL_ID,
+            '--agent-id', AGENT_ID, '--todo-id', TODO_ID,
+            '--turn-instance-id', context['settlement_identity']['turn_instance_id'], cwd=project)
+        assert rc == 0, direction
+        supplement = (*args, '--checkpoint-read-context', direction['read_context_id'],
+            '--vision-summary', 'Deliver the revised owner contract.',
+            '--vision-acceptance', 'The retained result matches the revised contract.')
+        rc, settled = _run_cli(registry, runtime, *supplement, cwd=project)
+        assert rc == 0 and settled['vision_checkpoint']['satisfied'], settled
+        rc, replay = _run_cli(registry, runtime, *supplement, cwd=project)
+        assert rc == 0 and replay['idempotent_replay'], replay
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_each_new_turn_retains_its_own_work_basis(provider, tmp_path, monkeypatch):
+    project, runtime, registry, state, context, args = _admit(provider, tmp_path, monkeypatch)
+    first_turn = context['settlement_identity']['turn_instance_id']
+    rc, first = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0, first
+    rc, spent = _run_cli(registry, runtime, 'quota', 'spend-slot', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--todo-id', TODO_ID, '--turn-instance-id', first_turn,
+        '--slots', '1', '--source', 'heartbeat', '--execute', cwd=project)
+    assert rc == 0, spent
+    rc, guard = _run_cli(registry, runtime, 'quota', 'should-run', '--codex-app', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--todo-id', TODO_ID, '--turn-instance-id', 'next-protected-turn', cwd=project)
+    assert rc == 0, guard
+    second = guard['delivery_result_context']
+    assert second['read_context_id'] != context['read_context_id']
+    state.write_text(state.read_text(encoding='utf-8') + '\n## Requirement B\nUse the revised contract for Turn two.\n', encoding='utf-8')
+    before = _runs(runtime)
+    second_args = tuple('next-protected-turn' if arg == first_turn else arg for arg in args)
+    rc, rejected = _run_cli(registry, runtime, *second_args, cwd=project)
+    assert rc == 1 and rejected.get('error_code') == 'checkpoint_read_context_stale', json.dumps(rejected, ensure_ascii=False)
+    assert _runs(runtime) == before
+    # A historical success is still replayable, but never satisfies Turn two.
+    rc, replay = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0 and replay['idempotent_replay'], replay
+    assert _runs(runtime) == before
