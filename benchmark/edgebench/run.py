@@ -24,7 +24,7 @@ if __name__ == "__main__":
     bootstrap()  # Select SForge before any provider or adapter imports.
 
 from sforge.harness.benchmark import load_benchmark
-from sforge.harness.config import SForgeConfig
+from sforge.harness.config import load_config
 from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
@@ -288,7 +288,10 @@ def main(argv=None):
             # task remains the separately owned Goal objective.
             feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
         task_objective = task.work.agent_query
-    config = SForgeConfig(
+    config = replace(
+        load_config(),
+        # This runner owns the OpenAI route selection.  Explicitly clearing the
+        # route must also clear any ambient SFORGE_AGENT_API_* fallback.
         agent_api_base_url=api_base_url, agent_api_key=api_key,
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
