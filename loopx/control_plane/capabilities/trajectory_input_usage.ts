@@ -2,6 +2,7 @@
  * This estimates only explicitly recorded LoopX Turn packets. It never labels
  * arbitrary prose, a quoted packet, tool output or all compaction as LoopX. */
 import type {TrajectoryLoopXInput, TrajectoryRequestCoverage} from './trajectory_assessment_types.ts';
+import {BARE_SHA256_PATTERN} from '../content_digest.ts';
 
 const method = 'tiktoken_o200k_base_input_estimate_v1';
 class InputObservationError extends Error {}
@@ -21,7 +22,7 @@ function count(value: unknown): number {
     ? value : fail('Invalid input token estimate.');
 }
 function digest(value: unknown): string {
-  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : fail('Missing input source digest.');
+  return typeof value === 'string' && BARE_SHA256_PATTERN.test(value) ? value : fail('Missing input source digest.');
 }
 
 export function estimateTrajectoryLoopXInput(value: unknown, session: string, goal: unknown,
