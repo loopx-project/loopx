@@ -122,6 +122,8 @@ def deliver_post_parts(*, receipt, intent_digest, template, reply_text, argument
                     "source_membership_verifier"
                 ),
                 "source_authority_verifier": arguments.get("source_authority_verifier"),
+                **({"reply_placement": arguments["reply_placement"]}
+                   if arguments.get("reply_placement") is not None else {}),
                 "before_send": (lambda _part_intent: outer_hook(intent_digest))
                 if outer_hook
                 else None,
@@ -245,6 +247,8 @@ def verify_post_parts(*, receipt, intent_digest, attempt, arguments, resume=Fals
             runner=arguments["runner"],
             source_membership_verifier=arguments.get("source_membership_verifier"),
             source_authority_verifier=arguments.get("source_authority_verifier"),
+            **({"reply_placement": arguments["reply_placement"]}
+               if arguments.get("reply_placement") is not None else {}),
             finalize_reactions=False,
             attachment_keys=arguments.get("attachment_keys", ()) if final else (),
             attachment_names=arguments.get("attachment_names", ()) if final else (),

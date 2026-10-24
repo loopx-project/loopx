@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,6 +17,7 @@ from .core import (
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from ...control_plane.digest_envelope import sha256_envelope
 from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
+from .field_shapes import REPORT_LANGUAGE_PATTERN, SUPPORTING_CONTENT_KINDS
 
 
 SOURCE_RESULT_SCHEMA = "periodic_report_source_result_v0"
@@ -39,9 +39,7 @@ _ITEM_CONTENT_KINDS = {
     "runtime",
 }
 _ITEM_VISIBILITIES = {"primary", "supporting"}
-_SUPPORTING_CONTENT_KINDS = {"coverage", "delivery_receipt", "runtime"}
 _HIGHLIGHT_TONES = {"attention", "neutral", "positive"}
-_LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
 SourceCollector = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 ArtifactRenderer = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 ArtifactSink = Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]]
@@ -226,7 +224,7 @@ def _normalize_item(raw: object, *, label: str) -> dict[str, Any]:
         if visibility not in _ITEM_VISIBILITIES:
             raise ValueError(f"{label}.visibility is invalid")
         normalized["visibility"] = visibility
-    if content_kind in _SUPPORTING_CONTENT_KINDS and visibility != "supporting":
+    if content_kind in SUPPORTING_CONTENT_KINDS and visibility != "supporting":
         raise ValueError(
             f"{label}.visibility must be supporting for {content_kind} content"
         )
@@ -268,7 +266,7 @@ def _normalize_editorial(raw: object) -> dict[str, Any] | None:
         editorial.get("language"), "editorial.language", maximum=64
     )
     if language:
-        if not _LANGUAGE_RE.fullmatch(language):
+        if not REPORT_LANGUAGE_PATTERN.fullmatch(language):
             raise ValueError("editorial.language must be a BCP-47-like language tag")
         normalized["language"] = language
 

@@ -37,6 +37,17 @@ covers the preceding full interval. Leaving the date empty retains the existing
 calendar behavior. This setting does not enable the steward's daily portfolio
 report integration by itself.
 
+New scheduled reports appear as independent full-body messages in the original
+owner's private conversation. The retained source message verifies the original
+App, chat and read grant; an unrelated historical question does not become the
+new report's reply parent. Rich parts use the same frozen placement and delivery
+journal, and readback verifies the private chat and main-conversation position.
+An existing delivery record without explicit placement retains its original
+source-context behavior, including pending or unknown sends. Upgrading neither
+retargets those attempts nor republishes a report already verified as delivered.
+Ordinary replies keep their existing source-context/thread behavior; this does
+not enable chat-root delivery for group conversations.
+
 The synthetic packaged settings journey below uses real preview/apply/readback
 over local HTTP. It preserves the date across frequency, time and timezone
 edits and reload. The narrow view is a 390×844 viewport emulation.
@@ -339,6 +350,20 @@ Goal. Removing a frozen Goal, replacing its identity, revoking the original
 grant or changing frozen artifacts still blocks delivery, including after a
 partial or uncertain send. Existing provider readback decides which original
 parts remain unsent; scope growth never authorizes another model run or resend.
+
+Read coverage and authorization are separate. A partial source may omit an
+unreadable or oversized Goal without revoking the original report grant. New
+private editorial requests freeze the complete authorized Goal identities
+alongside their existing authorization digest. Delivery checks this immutable
+witness, including unread Goals; it never upgrades partial coverage to complete.
+Later authorized additions belong to a future report, while removal or identity
+replacement of an original authorized Goal still blocks publication.
+
+Older frozen requests remain immutable. When their readable Goal list does not
+reconstruct the original authorization digest, recovery requires the complete
+current authorized scope to match that original digest exactly. An absent
+identity witness never permits guessing which Goals were originally authorized;
+an ambiguous later scope change remains retained, without another model run.
 
 The existing idle Chat wake producer admits one calendar window and creates
 one native finite generation Todo for it. The original Chat worker and native

@@ -68,24 +68,24 @@ export const episodeQuestion = (result: TrajectoryAssessment, id: string, episod
 
 // Factor only an exact, single occurrence of the declared episode identity.
 // This is lossless presentation, not a short-title generator or prose classifier.
-function assessmentGroups(result: TrajectoryAssessment, assessments: TrajectoryAssessment["assessments"], episodes: TrajectoryEpisode[] | undefined) {
-  const groups: Array<{before: string; after: string; exact: boolean; items: Array<{assessment: typeof assessments[number]; question: string}>}> = [];
-  for (const assessment of assessments) {
-    const id = assessment.episode_id;
+export function episodeQuestionGroups<T extends {episode_id: string}>(result: TrajectoryAssessment, records: T[], episodes: TrajectoryEpisode[] | undefined) {
+  const groups: Array<{before: string; after: string; exact: boolean; items: Array<{record: T; question: string}>}> = [];
+  for (const record of records) {
+    const id = record.episode_id;
     const question = episodeQuestion(result, id, episodes?.find(episode => episode.id === id));
     const index = question.indexOf(id);
     const exact = index >= 0 && question.lastIndexOf(id) === index
       && !/[\w./-]/u.test(question[index - 1] ?? "") && !/[\w./-]/u.test(question[index + id.length] ?? "");
     const before = exact ? question.slice(0, index) : question, after = exact ? question.slice(index + id.length) : "";
     const prior = groups.at(-1);
-    if (exact && prior?.exact && prior.before === before && prior.after === after) prior.items.push({assessment, question});
-    else groups.push({before, after, exact, items: [{assessment, question}]});
+    if (exact && prior?.exact && prior.before === before && prior.after === after) prior.items.push({record, question});
+    else groups.push({before, after, exact, items: [{record, question}]});
   }
   // Factor repeated prose only when it outweighs the identities. This also
   // serves a pair of long questions; preserve source order and every verdict.
   return groups.flatMap(group => {
     const shared = group.before.length + group.after.length;
-    const identities = group.items.reduce((sum, item) => sum + item.assessment.episode_id.length, 0);
+    const identities = group.items.reduce((sum, item) => sum + item.record.episode_id.length, 0);
     return group.items.length >= 2 && shared * (group.items.length - 1) > identities
       ? [{...group, shared: true}]
       : group.items.map(item => ({before: "", after: "", items: [item], shared: false}));
@@ -194,9 +194,9 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
                   {row?.assessed_fraction != null ? <p>{zh ? "已得到明确判读的覆盖" : "Coverage with a decisive judgment"} {percent(row.assessed_fraction)}{row.unknown && row.missing_data_bounds ? <> · {zh ? "未知分别全为否/全为是时，“是”占比" : "Yes share if unknowns are all no / all yes"} {percent(row.missing_data_bounds[0])}–{percent(row.missing_data_bounds[1])} ({zh ? "不是置信区间" : "not a confidence interval"})</> : null}</p> : null}
                 </ContextHelp></div><button type="button" onClick={close} aria-label={zh ? "收起指标详情" : "Close metric details"}><X size={16} aria-hidden/></button></header>
                 {excluded.length ? <div className="research-effect-excluded"><h4>{zh ? "未列入此指标的片段" : "Episodes excluded from this metric"}</h4><ul>{excluded.map(episode => <li key={episode.id}>{episodeQuestion(result, episode.id, episode)}</li>)}</ul></div> : null}
-                <div className="research-assessments">{assessmentGroups(result, assessments, p.episodes).map(group => <div className="research-assessment-group" key={group.items[0]!.assessment.episode_id}>
+                <div className="research-assessments">{episodeQuestionGroups(result, assessments, p.episodes).map(group => <div className="research-assessment-group" key={group.items[0]!.record.episode_id}>
                   {group.shared ? <p className="research-assessment-shared-question">{group.before}<span>{zh ? "〔研究片段〕" : "[episode]"}</span>{group.after}</p> : null}
-                  {group.items.map(({assessment, question}) => {
+                  {group.items.map(({record: assessment, question}) => {
                   const episode = p.episodes?.find(item => item.id === assessment.episode_id);
                   return <details className="research-assessment" key={assessment.episode_id}>
                     <summary aria-label={`${question} · ${verdictLabel(metric, assessment.verdict, zh)}`}><span className="research-assessment-name">{group.shared ? assessment.episode_id : question}</span><span className="research-assessment-verdict">{verdictLabel(metric, assessment.verdict, zh)}</span><ChevronDown size={14} aria-hidden/></summary>

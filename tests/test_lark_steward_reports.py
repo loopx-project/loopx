@@ -14,6 +14,65 @@ from loopx.extensions.lark.steward_reports import LarkStewardReports
 steward = steward_fixture
 
 
+@pytest.mark.parametrize("provider_kind", ["file", "sqlite"])
+@pytest.mark.parametrize("legacy", [False, True], ids=["new-report", "retained-attempt"])
+def test_periodic_result_has_its_own_private_message_without_retargeting_history(
+    steward, tmp_path, monkeypatch, provider_kind, legacy,
+):
+    _, _, provider, transport, _, capture, _ = steward
+
+    def threaded_original(fixture):
+        from loopx.extensions.lark.conversation_identity import identity_ref
+        _, runtime, source, adapter, binding, _, _ = fixture
+        parent = source.event("steward-app", "earlier-question", "An unrelated earlier question")
+        event = source.event("steward-app", "original", "Retain the original private conversation")
+        thread = dict(root_id=parent["message_id"], parent_id=parent["message_id"], thread_id="omt_earlier")
+        event.update(thread)
+        source.messages[event["message_id"]].update(thread)
+        adapter.admit("steward-app", event)
+        # Referenced-source context changes the admitted text, not its identity.
+        row = adapter.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+        assert finish(runtime, row)["status"] == "completed"
+        return row["session_id"], adapter.managed_steward
+
+    monkeypatch.setattr("test_native_steward_reports.original", threaded_original)
+    actor, reports, window, folder, _ = generated(steward, tmp_path, monkeypatch, provider_kind)
+    calls = capture.read_bytes()
+    frozen = tuple((folder / name).read_bytes() for name in ["report.md", "editorial-request.json", "source.json"])
+    path = folder / "private-delivery.json"
+    if legacy:
+        # Seed the previous persisted representation before any provider write.
+        # Its absent placement keeps the original source-context intent on upgrade.
+        with monkeypatch.context() as pending:
+            pending.setattr(transport, "_deliver", lambda *_a, **_kw: False)
+            assert transport.steward_reports.reconcile() == 0
+        record = json.loads(path.read_text())
+        record.pop("reply_placement", None)
+        path.write_text(json.dumps(record))
+    before = len(provider.writes), len(provider.topic_writes)
+    provider.verify_replies = False
+    assert transport.steward_reports.reconcile() == 0
+    assert len(provider.writes) == before[0] + 1
+    first = list(provider.writes)
+    provider.verify_replies = True
+    assert LarkStewardReports(transport).reconcile() == 1
+    assert provider.writes[:len(first)] == first
+    assert len(provider.writes) > len(first)  # Full report resumes its unsent rich parts.
+    sent = provider.writes[before[0]:]
+    assert bool(provider.topic_writes[before[1]:]) is legacy
+    for index, (_, body) in enumerate(sent, before[0]):
+        message = provider.messages[f"om_out_{index}"]
+        assert message["chat_id"] == "oc_steward_app"
+        assert bool(message.get("parent_id")) is legacy
+        assert body in json.loads(message["body"]["content"])["zh_cn"]["content"][0][0]["text"]
+    writes = list(provider.writes)
+    assert LarkStewardReports(transport).reconcile() == 0 and provider.writes == writes
+    assert capture.read_bytes() == calls
+    assert frozen == tuple((folder / name).read_bytes() for name in ["report.md", "editorial-request.json", "source.json"])
+    assert read_periodic_report_publication_cursor(runtime_root=reports.root,
+        goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == window["due_at"]
+
+
 def generated(steward, tmp_path, monkeypatch, provider="sqlite"):
     _, runtime, _, _, binding, _, _ = steward
     sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
@@ -24,6 +83,60 @@ def generated(steward, tmp_path, monkeypatch, provider="sqlite"):
     assert done["status"] == "completed" and done["response"]["native_loopx"]["status"] == "committed", done
     window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
     return actor, reports, window, attempt_directory(reports.root, window), binding
+
+
+@pytest.mark.parametrize("fault", [None, "missing-chat", "foreign-chat", "thread", "group"])
+def test_private_result_verifies_placement_and_keeps_the_source_authority(steward, tmp_path, fault):
+    from tests.extensions.test_lark_inbox_reactions import _fixture
+    from loopx.extensions.lark.inbox_reply import reply_lark_event_inbox, verify_lark_inbox_reply
+
+    _, _, provider, transport, _, _, _ = steward
+    config, inbox, project = _fixture(tmp_path / "private-result", lifecycle=False)
+    settings = json.loads(config.read_text())
+    settings["reply"].update(sender_profile="steward-app", bot_display_name="steward-app", chat_id="oc_steward_app")
+    config.write_text(json.dumps(settings))
+    source = inbox / "om_reaction_fixture.json"
+    event = json.loads(source.read_text())
+    event.update(chat_type="group" if fault == "group" else "p2p",
+        parent_id="om_earlier_question", root_id="om_earlier_question")
+    source.write_text(json.dumps(event))
+    attempts = []
+
+    def runner(args):
+        result = provider(args)
+        if "+messages-send" in args and "--dry-run" not in args:
+            ref = json.loads(result["stdout"])["data"]["message_id"]
+            message = provider.messages[ref]
+            if fault == "missing-chat":
+                message.pop("chat_id")
+            elif fault == "foreign-chat":
+                message["chat_id"] = "oc_another_audience"
+            elif fault == "thread":
+                message.update(parent_id="om_earlier_question", root_id="om_earlier_question")
+        return result
+
+    args = dict(project=project, config_path=config, message_id=event["message_id"],
+        text="# Complete result\n\n" + "完整正文与来源边界。" * 300,
+        reply_placement="chat_root", runner=runner, finalize_reactions=False,
+        source_authority_verifier=lambda *_: ("steward-app", True))
+    if fault == "group":
+        with pytest.raises(ValueError, match="captured private source"):
+            transport._deliver(tmp_path / "group-result.json", {"event": event, "source": {}},
+                "periodic_report.fixture", args["text"], reply_placement="chat_root",
+                inbox=lambda: pytest.fail("group override reached delivery"))
+        assert not provider.writes
+        return
+    sent = reply_lark_event_inbox(**args, content_format="markdown", execute=True,
+        delivery_attempt_recorder=lambda value: attempts.append(dict(value)))
+    assert len(provider.writes) == 1 and provider.writes[0][1] == args["text"]
+    assert sent["reply_verified"] is (fault is None)
+    assert len(attempts) == 1
+    retained = list(provider.writes)
+    assert verify_lark_inbox_reply(**args, attempt=attempts[0])["reply_verified"] is (fault is None)
+    # Visibility correction only: the original locator is read, never resent.
+    provider.messages[attempts[0]["message_ref"]].update(chat_id="oc_steward_app", parent_id=None, root_id=None)
+    assert verify_lark_inbox_reply(**args, attempt=attempts[0])["reply_verified"]
+    assert provider.writes == retained
 
 
 @pytest.mark.parametrize("provider_kind", ["file", "sqlite"])

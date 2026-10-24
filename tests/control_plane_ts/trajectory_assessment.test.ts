@@ -313,6 +313,16 @@ test('explicit literal-value encoding restores source-bound numbers without chan
   output.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!.text =
     '第4次尝试有2项检查未通过（⟪LX0⟫）；仅限本地（⟪LX1⟫）的证据仍属初步。';
   const result = qualifyTrajectoryAssessment({...p, output});
+  const revised = structuredClone(input);
+  revised.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v2';
+  const next = prepareTrajectoryAssessment({input: revised, config: p.config});
+  assert.notEqual(next.analysis_key, p.analysis_key, 'Quantity rendering is explicitly versioned rather than relabelling saved translations');
+  assert.deepEqual(next.display_request, p.display_request, 'The captured history and eligible fields are unchanged');
+  assert.equal(compareTrajectoryAssessments({...next, previous: {...p, output}}).can_reuse, false, 'A new display version cannot reuse the old translation');
+  const nextResult = qualifyTrajectoryAssessment({...next, output});
+  assert.deepEqual(nextResult.assessments, result.assessments, 'Display encoding does not change the assessment oracle');
+  assert.deepEqual(nextResult.display!.fields, result.display!.fields, 'Exact permitted source numbers remain readable');
+  assert.deepEqual(prepareTrajectoryAssessment({input, config: p.config}), p, 'Preparing the new encoding preserves the prior request');
   const original = parseExploreHistoryPage(page, 'goal').items;
   const shown = projectTrajectoryDisplay(original, result.display, result.display!.snapshot_key, 'zh');
   assert.equal(shown.events[0]!.summary, '第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步。');

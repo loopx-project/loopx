@@ -109,16 +109,24 @@ class LarkStewardReports:
                         record = {k: deepcopy(v) for k, v in original.items()
                             if k not in {"deliveries", "stream", "recovery_streams", "context_recovery"}}
                         record.update(deliveries={}, original_route=route, report_window_id=window["window_id"],
-                            report_generation_id=generation["generation_id"], delivery_status="pending")
+                            report_generation_id=generation["generation_id"], delivery_status="pending",
+                            reply_placement="chat_root")
                         atomic_write_json(path, record)
                     if (record["report_window_id"] != window["window_id"]
                             or record["report_generation_id"] != generation["generation_id"]
                             or record["original_route"] != route):
                         raise ValueError("the frozen report return changed its original audience")
                     body = (folder / "report.md").read_text(encoding="utf-8")
+                    # A route's captured message proves the original audience;
+                    # it is not the parent of a newly scheduled result. Missing
+                    # placement denotes a retained pre-upgrade delivery intent.
+                    placement = record.get("reply_placement")
+                    if placement not in (None, "chat_root"):
+                        raise ValueError("the frozen private report placement changed")
                     phase = "periodic_report." + window["window_id"]
                     delivered = self.transport._deliver(path, record, phase, body,
-                        inbox=lambda: self.transport._inbox(record), authorization_check=current)
+                        inbox=lambda: self.transport._inbox(record), authorization_check=current,
+                        reply_placement=placement)
                     record["delivery_status"] = "delivered" if delivered else "unconfirmed"
                     atomic_write_json(path, record)
                     if not delivered or not current():

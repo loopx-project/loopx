@@ -186,6 +186,120 @@ def test_original_frozen_report_recovers_validation_without_repeating_model_or_b
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("change", ["none", "growth", "remove_unread", "replace_unread"])
+def test_partial_read_coverage_is_not_the_original_report_authorization(steward, tmp_path, monkeypatch, provider, legacy, change):
+    from loopx.bootstrap import bootstrap_project
+    from loopx.capabilities.manager_context import report_source
+    from loopx.capabilities.native_chat import steward_reports as report_module
+    from loopx.cli_commands import turn as turn_command
+    from loopx.control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity, turn_journal_path
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+
+    def add_goal(gid):
+        project = tmp_path / gid
+        project.mkdir()
+        assert bootstrap_project(project=project, registry_path=runtime.registry_path,
+            runtime_root=runtime.coordination_runtime_root, goal_id=gid,
+            objective="Retain this independently authorized synthetic work.", domain="test", role="primary",
+            parent_goal_id=None, state_file=None, goal_doc=None, adapter_kind="generic_project_goal_v0",
+            adapter_status="connected", next_probe=None, spawn_allowed=False, max_children=0,
+            allowed_domains=[], write_scope=[], preserve_todos=True, force=False, dry_run=False,
+            sync_global=False)["ok"]
+
+    unread = "unread-authorized-goal"
+    add_goal(unread)
+    collect = report_source.collect_manager_report_source
+
+    def partial(read, query):
+        def source_io(arguments):
+            page = read(arguments)
+            if arguments["view"] == "portfolio":
+                # The actual scoped reader remains authoritative; simulate an
+                # oversized/unreadable row, not an authorization or success.
+                return {**page, "rows": [r for r in page["rows"] if r.get("goal_id") != unread], "unknown": True}
+            return page
+        return collect(source_io, query)
+
+    monkeypatch.setattr(report_source, "collect_manager_report_source", partial)
+    install_model(steward, tmp_path, sid)
+    prepare, command = report_module.prepare_private_report, turn_command.handle_turn_command
+
+    def old_prepare(**kwargs):
+        from loopx.capabilities.periodic_report.pending_intent import _canonical_digest
+        from loopx.registry import atomic_write_json
+        request = dict(prepare(**kwargs))
+        # Seed only the historical input format, before any model or generation.
+        # The real worker, validator, journal and sender still own the outcome.
+        folder = attempt_directory(kwargs["root"], kwargs["window"])
+        assert not (folder / "private-generation.json").exists()
+        request.pop("authorization_goal_ids", None)
+        request["request_digest"] = _canonical_digest({k: v for k, v in request.items() if k != "request_digest"})
+        atomic_write_json(folder / "editorial-request.json", request)
+        return request
+
+    def old_validator(*args, **kwargs):
+        kwargs.pop("native_task_validator", None)
+        return command(*args, **kwargs)
+
+    with monkeypatch.context() as old:
+        if legacy:
+            embedded_report_python(tmp_path, old)
+            old.setattr(report_module, "prepare_private_report", old_prepare)
+            old.setattr(turn_command, "handle_turn_command", old_validator)
+        original = pump_steward_monitors(runtime)[0]
+        done = finish(runtime, original)
+    assert done["status"] == "completed"
+    if legacy:
+        assert done["response"]["native_loopx"]["result_kind"] == "validation_failed"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    source = json.loads((folder / "source.json").read_text())
+    request = json.loads((folder / "editorial-request.json").read_text())
+    assert unread not in source["goal_ids"] and not source["coverage"]["complete"]
+    if legacy:
+        assert "authorization_goal_ids" not in request
+    frozen = [(folder / name).read_bytes() for name in ["report.md", "source.json", "editorial-request.json"]]
+    key = find_loopx_turn_key_by_settlement_identity(reports.root, goal_id=actor["goal_id"],
+        agent_id=actor["agent_id"], todo_id=original["loopx_request"]["todo_id"],
+        turn_instance_id=original["loopx_request"]["turn_instance_id"])
+    path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key)
+    journal, history, calls, writes = path.read_bytes(), store.load_turn(sid, original["turn_id"]), capture.read_bytes(), list(bot.writes)
+    if change == "growth":
+        add_goal("later-authorized-goal")
+    elif change in {"remove_unread", "replace_unread"}:
+        registry = json.loads(runtime.registry_path.read_text())
+        if change == "remove_unread":
+            registry["goals"] = [row for row in registry["goals"] if row["id"] != unread]
+        else:
+            next(row for row in registry["goals"] if row["id"] == unread)["creation_operation_id"] += ".replacement"
+        runtime.registry_path.write_text(json.dumps(registry))
+    allowed = change == "none" or change == "growth" and not legacy
+    assert reports.delivery_current(binding["binding_id"], window) is allowed
+    if not legacy and allowed:
+        assert request["authorization_goal_ids"] == sorted([actor["goal_id"], unread])
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert capture.read_bytes() == calls and store.load_turn(sid, original["turn_id"]) == history
+    assert [(folder / name).read_bytes() for name in ["report.md", "source.json", "editorial-request.json"]] == frozen
+    if not allowed:
+        assert path.read_bytes() == journal
+        assert transport.steward_reports.reconcile() == 0 and bot.writes == writes
+        assert not (folder / "private-delivery.json").exists()
+        return
+    recovered = json.loads(path.read_text())
+    assert recovered["status"] == "committed" and recovered["turn_key"] == key
+    if legacy:
+        assert recovered["host_attempt_count"] == json.loads(journal)["host_attempt_count"]
+        assert recovered["recovery_audit"]["actual"]["host_invoked"] is False
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(binding["binding_id"])["publication_verified"]
+    sent = list(bot.writes)
+    assert transport.steward_reports.reconcile() == 0 and bot.writes == sent and capture.read_bytes() == calls
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("result_kind", ["validated_progress", "validated_completion"])
 def test_original_due_report_freezes_once_and_returns_full_body_after_native_settlement(steward, tmp_path, monkeypatch, provider, result_kind):
     store, runtime, bot, transport, binding, capture, _ = steward
