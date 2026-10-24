@@ -32,7 +32,8 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def prepare_private_report(*, root: Path, window: dict[str, Any], read,
-                           authorization_scope_id: str, reporting: str) -> dict[str, Any]:
+                           authorization_scope_id: str, authorization_goal_ids: list[str],
+                           reporting: str) -> dict[str, Any]:
     """Freeze permitted evidence once; full records stay beside bounded fact headings."""
     from ..manager_context.report_source import collect_manager_report_source
 
@@ -50,6 +51,10 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
             return request
         source = collect_manager_report_source(read, {
             "window_start": window["start_at"], "window_end": window["due_at"]})
+        if (not isinstance(authorization_goal_ids, list)
+                or any(not isinstance(value, str) or not value for value in authorization_goal_ids)
+                or not set(source["goal_ids"]).issubset(authorization_goal_ids)):
+            raise ValueError("report evidence is outside its frozen authorization")
         folder.mkdir(parents=True, exist_ok=True)
         atomic_write_json(folder / "source.json", source)
         facts = [{"fact_id": "portfolio_coverage", "title": "本期来源覆盖",
@@ -70,6 +75,9 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
             source_artifact=str(folder / "source.json"), source_revision=source["source_revision"],
             source_artifact_sha256=_canonical_digest(source), window=window,
             coverage=source["coverage"], destination="original_owner_private_chat_full_body")
+        # A partial portfolio read is not the authorization universe. Keep
+        # this original identity witness inside the existing frozen digest.
+        request["authorization_goal_ids"] = sorted(set(authorization_goal_ids))
         request["narrative_contract"]["requirements"] += [
             "Follow REPORTING and cover every authorized Goal, including stopped and unreadable Goals.",
             "Read full frozen source records for substantive claims; excerpts and Agent claims are not independent verification.",
