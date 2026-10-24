@@ -23,13 +23,17 @@ export function GoalAcceptanceObservationCard({ goal, overview = false }: { goal
   const label = (key: string) => labels[key as keyof typeof labels] ?? t("acceptance.unknown");
   const projection = goal.acceptanceObservation;
   const unavailable = goal.loadState || !projection || projection.goal_id !== goal.goalId || projection.coverage === "unavailable";
+  const coverageDetail = projection?.missing_sources.length ? t("acceptance.incompleteSources")
+    : projection?.truncated ? t("acceptance.partialRecords") : null;
   const content = <section className="personal-detail-card personal-goal-acceptance" aria-label={t("acceptance.title")}>
     {!overview ? <div className="personal-detail-card-title"><h3>{t("acceptance.title")}</h3><em>{t("common.readOnly")}</em></div> : null}
-    <div className="personal-acceptance-coverage"><p role="status">{t(unavailable ? "acceptance.unavailable" : "acceptance.partialShort")}</p>
-      {!unavailable ? <ContextHelp label={t("acceptance.title")}><p>{t("acceptance.partial")}</p></ContextHelp> : null}</div>
+    <div className="personal-acceptance-coverage"><p role="status">{t(unavailable ? "acceptance.unavailable" : "acceptance.partialShort")}{!unavailable && coverageDetail ? ` · ${coverageDetail}` : ""}</p>
+      {!unavailable ? <ContextHelp label={t("acceptance.title")}>
+        <p>{t("acceptance.partial")}</p>
+        {projection?.missing_sources.length ? <p>{t("acceptance.missing")} {projection.missing_sources.map(label).join(", ")}</p> : null}
+        {projection?.truncated ? <p>{t("acceptance.truncated")}</p> : null}
+      </ContextHelp> : null}</div>
     {!unavailable && projection ? <>
-      {projection.missing_sources.length ? <p>{t("acceptance.missing")} {projection.missing_sources.map(label).join(", ")}</p> : null}
-      {projection.truncated ? <p>{t("acceptance.truncated")}</p> : null}
       <div className="personal-acceptance-next"><h4>{t("acceptance.next")}</h4><p>{projection.next_action ?? t("acceptance.unknown")}</p></div>
       <h4>{t("acceptance.gaps")}</h4>
       {projection.acceptance_gaps.length ? projection.acceptance_gaps.map((gap, index) => <div className="personal-acceptance-observation" key={`${gap.kind}:${gap.owner}:${index}`}>

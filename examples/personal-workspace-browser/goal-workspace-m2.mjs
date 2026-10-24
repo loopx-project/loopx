@@ -292,6 +292,8 @@ async function verifyGoalDetails(page, snapshot) {
   const acceptance = drawer.locator('.personal-goal-acceptance');
   const usage = drawer.locator('.personal-goal-detail-usage');
   await acceptance.getByText(reason,{exact:true}).waitFor();
+  await acceptance.getByRole('status').getByText('待核验 · 来源不全',{exact:true}).waitFor();
+  assert.equal(await acceptance.getByText('仅展示前 12 条观测。',{exact:true}).isVisible(),false,'Display-limit explanation is optional help, not a second status paragraph');
   assert.equal(await drawer.getByText(title,{exact:true}).count(),1,'The Goal title is not repeated in its header and body');
   assert.equal(await usage.getByText('未采集',{exact:true}).count(),1,'An entirely unknown usage section has one status, not six identical missing values');
   await acceptance.getByText(next,{exact:true}).waitFor();
@@ -309,6 +311,9 @@ async function verifyGoalDetails(page, snapshot) {
   const help = acceptance.locator('.personal-acceptance-coverage .context-help-trigger');
   await help.focus();
   await page.getByRole('tooltip').getByText('当前仅有部分观测。任务完成或缺口列表为空，都不能证明 Goal 已通过验收。',{exact:true}).waitFor();
+  await page.getByRole('tooltip').getByText('仅展示前 12 条观测。',{exact:true}).waitFor();
+  await page.getByRole('tooltip').getByText('未获取的来源： 最新执行证据',{exact:true}).waitFor();
+  await page.screenshot({path:resolve(outputDir,'goal-detail-help.png'),animations:'disabled'});
   await page.keyboard.press('Escape');
   assert.equal(await drawer.isVisible(),true,'Closing optional help keeps the Goal reader open');
   await page.screenshot({path:resolve(outputDir,'goal-detail-desktop.png'),animations:'disabled'});
@@ -355,6 +360,17 @@ async function verifyGoalDetails(page, snapshot) {
   await page.screenshot({path:resolve(outputDir,'goal-detail-en-phone.png'),animations:'disabled'});
   await page.keyboard.press('Escape');
   await page.evaluate(()=>localStorage.setItem('loopx-pw-locale','zh-CN'));
+  source.acceptance_observation.missing_sources = [];
+  await page.reload({waitUntil:'networkidle'});
+  await page.getByRole('button',{name:'Goal 信息',exact:true}).click();
+  await acceptance.getByRole('status').getByText('待核验 · 部分记录',{exact:true}).waitFor();
+  assert.equal(await acceptance.getByText('来源不全',{exact:true}).count(),0,'A display limit does not imply an unavailable source');
+  await page.keyboard.press('Escape');
+  source.acceptance_observation.truncated = false;
+  await page.reload({waitUntil:'networkidle'});
+  await page.getByRole('button',{name:'Goal 信息',exact:true}).click();
+  await acceptance.getByRole('status').getByText('待核验',{exact:true}).waitFor();
+  await page.keyboard.press('Escape');
   source.acceptance_observation = original;
   await page.setViewportSize({width:1512,height:982});
   await page.reload({waitUntil:'networkidle'});
