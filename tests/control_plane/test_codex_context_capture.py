@@ -485,7 +485,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     captured = (list((workspace / "wakes").glob("*/decisions/*/decision.json"))
                 if host == "benchmark" else list(root.glob("*/decision.json")))
     assert len(captured) == 2
-    assert wire_paths["warm"].stat().st_size < wire_paths["cold"].stat().st_size
+    # Compare complete presentation bytes, not two similarly sized first-page descriptors.
+    # Whole CLI/model costs remain a separate benchmark measurement.
+    assert len(json.dumps(wires["warm"]).encode()) < len(json.dumps(wires["cold"]).encode())
     assert len(calls) == len(observed) and stages["baseline_confirmed"]
     if native_read_batch > 2:
         visible_batches = []
