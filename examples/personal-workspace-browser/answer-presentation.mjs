@@ -2,6 +2,7 @@
 // steward and Goal Chat, without turning a short factual answer into a report.
 
 import { resolve } from "node:path";
+import { writeFile } from "node:fs/promises";
 
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
@@ -57,6 +58,24 @@ async function assertAnswerTypography(answer) {
   }
 }
 
+// Compare the actual rendered foreground/background, not a particular theme hex.
+async function codePresentation(answer) {
+  return answer.evaluate(node => {
+    const luminance = color => color.match(/[\d.]+/g).slice(0, 3)
+      .map(value => Number(value) / 255)
+      .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
+      .reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+    return ['.personal-md-pre code', '.personal-md-code'].map(selector => {
+      const code = node.querySelector(selector), style = getComputedStyle(code);
+      const background = getComputedStyle(code.closest('pre') ?? code).backgroundColor;
+      const levels = [luminance(style.color), luminance(background)].sort((a, b) => a - b);
+      return {selector, foreground: style.color, background,
+        contrast: (levels[1] + .05) / (levels[0] + .05),
+        fontSize: parseFloat(style.fontSize), selectable: style.userSelect !== 'none'};
+    });
+  });
+}
+
 async function assertConversationFits(page) {
   const layout = await page.locator(".personal-channel-scroll").evaluate(node => ({
     width: node.clientWidth, scrollWidth: node.scrollWidth,
@@ -99,7 +118,7 @@ export const answerPresentationScenario = {
         throw new Error("Steward answer lost its ending or executed model HTML");
       }
       await answer.getByRole("link", { name: "单独阅读完整答复" }).waitFor({ state: "visible", timeout: 15_000 });
-      await answer.scrollIntoViewIfNeeded();
+      await answer.locator(".personal-md-pre").scrollIntoViewIfNeeded();
       await page.screenshot({ path: resolve(outputDir, "answer-presentation-desktop.png"), fullPage: false, animations: "disabled" });
 
       await page.setViewportSize({ width: 390, height: 844 });
@@ -116,7 +135,38 @@ export const answerPresentationScenario = {
       if (overflow.card || !overflow.table) {
         throw new Error(`The mobile card must fit while the wide table scrolls: ${JSON.stringify(overflow)}`);
       }
+      await code.scrollIntoViewIfNeeded();
       await page.screenshot({ path: resolve(outputDir, "answer-presentation-mobile.png"), fullPage: false, animations: "disabled" });
+      const measurements = [];
+      for (const theme of ["loopx", "paper", "brutal"]) {
+        await page.evaluate(value => localStorage.setItem("loopx-pw-theme", value), theme);
+        await page.reload({ waitUntil: "networkidle" });
+        await page.getByRole("navigation", {name:"管家视图"})
+          .getByRole("button", {name:/^(Chat|对话)$/, exact:true}).click();
+        const themed = page.locator(".personal-channel-timeline .personal-message.is-assistant", {
+          hasText:"建议先验证方案 A",
+        });
+        await themed.locator(".personal-md-pre code").waitFor();
+        for (const width of [1512, 390]) {
+          await page.setViewportSize({width, height:width === 390 ? 844 : 982});
+          await assertConversationFits(page);
+          const colors = await codePresentation(themed);
+          measurements.push({theme, width, colors});
+          await writeFile(resolve(outputDir, "code-contrast-measurements.json"), JSON.stringify(measurements, null, 2));
+          if (colors.some(value => value.contrast < 4.5 || value.fontSize < 14 || !value.selectable)) {
+            throw new Error(`Code must meet AA contrast without shrinking or disabling selection: ${JSON.stringify({theme, width, colors})}`);
+          }
+          const block = themed.locator(".personal-md-pre");
+          if (!await block.evaluate(node => node.scrollWidth > node.clientWidth)
+            || await block.innerText() !== `unwrapped-command ${"exact-argument-".repeat(80)}`) {
+            throw new Error("Theme switching must preserve complete code and its own horizontal scroll");
+          }
+          await block.scrollIntoViewIfNeeded();
+          await page.evaluate(async () => {await document.fonts.ready; await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));});
+          await page.screenshot({path:resolve(outputDir, `code-contrast-${theme}-${width}.png`), animations:"disabled"});
+        }
+      }
+      await page.evaluate(() => localStorage.setItem("loopx-pw-theme", "loopx"));
       await page.setViewportSize({ width: 1512, height: 982 });
 
       await page.reload({ waitUntil: "networkidle" });

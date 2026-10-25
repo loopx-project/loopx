@@ -551,8 +551,6 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-md-list { display: grid; gap: 3px; margin: 0; padding-left: 20px; }
 .personal-md-list li::marker { color: var(--pw-faint); }
 .personal-md-code { padding: 1px 5px; border-radius: 5px; background: #f0efe9; color: #4d5361; font-family: var(--font-mono); font-size: var(--text-caption); line-height: var(--leading-caption); }
-.personal-md-pre { margin: 0; padding: 12px 14px; border-radius: 10px; background: #23262e; color: #e8ecf3; font: var(--text-body)/var(--leading-body) var(--font-mono); overflow-x: auto; white-space: pre; }
-.personal-md-pre code { font: inherit; }
 .personal-md-link { color: var(--pw-blue-ink); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
 
 /* Agent persona card */
@@ -1483,8 +1481,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-md-list li { padding-left: 2px; overflow-wrap: anywhere; }
 .personal-md-list li::marker { color: var(--pw-faint); }
 .personal-md-code { padding: 1px 5px; border: 1px solid var(--pw-line); border-radius: 6px; background: #f5f4f1; font: var(--text-body)/var(--leading-body) var(--font-mono); overflow-wrap: anywhere; }
-.personal-md-pre { margin: 0; padding: 12px 14px; border: 1px solid var(--pw-line); border-radius: 11px; background: #f7f6f3; overflow-x: auto; }
-.personal-md-pre code { font: var(--text-body)/var(--leading-body) var(--font-mono); color: #333943; white-space: pre; }
+.personal-md-pre { margin: 0; padding: 12px 14px; border: 1px solid var(--pw-line); border-radius: 11px; background: #f7f6f3; color: var(--pw-text); font: var(--text-body)/var(--leading-body) var(--font-mono); overflow-x: auto; white-space: pre; }
+.personal-md-pre code { font: var(--text-body)/var(--leading-body) var(--font-mono); color: inherit; white-space: pre; }
 .personal-md-link { color: var(--pw-blue-ink); text-decoration: none; border-bottom: 1px solid #c3d3f9; }
 .personal-md-link:hover { border-bottom-color: var(--pw-blue-ink); }
 
