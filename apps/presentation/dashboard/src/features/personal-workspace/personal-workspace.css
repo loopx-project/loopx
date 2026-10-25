@@ -1240,14 +1240,12 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-quick-prompts button:disabled { opacity: .45; cursor: default; }
 .personal-goal-draft-status { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; padding: 8px 11px; border: 1px solid #cfd9f5; border-radius: 10px; background: #f5f7ff; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-goal-draft-status strong { color: var(--pw-text); }
-.personal-channel-composer { display: grid; grid-template-columns: 36px minmax(0, 1fr) 40px; align-items: center; min-height: 56px; padding: 7px 7px 7px 14px; border: 1px solid var(--pw-line-strong); border-radius: 16px; background: #fff; box-shadow: 0 2px 10px rgb(30 28 20 / 7%); transition: border-color .15s ease, box-shadow .15s ease; }
+.personal-channel-composer { position: relative; display: grid; gap: 4px; min-height: 92px; padding: 8px; border: 1px solid var(--pw-line-strong); border-radius: 16px; background: #fff; box-shadow: 0 2px 10px rgb(30 28 20 / 7%); transition: border-color .15s ease, box-shadow .15s ease; }
 .personal-channel-composer:focus-within { border-color: var(--pw-blue); box-shadow: 0 0 0 3px rgb(47 102 233 / 13%), 0 2px 10px rgb(30 28 20 / 7%); }
-.personal-channel-composer textarea { width: 100%; max-height: 120px; padding: 9px 12px; resize: none; border: 0; border-left: 1px solid var(--pw-line); outline: 0; background: transparent; color: inherit; font: inherit; line-height: var(--leading-body); }
-.personal-channel-composer > button, .personal-correction-composer button { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 12px; background: var(--pw-blue); color: #fff; cursor: pointer; box-shadow: 0 2px 6px rgb(47 102 233 / 32%); }
-.personal-channel-composer > button:hover { background: var(--pw-blue-ink); }
-.personal-channel-composer > button:disabled, .personal-correction-composer button:disabled { opacity: .4; cursor: default; box-shadow: none; }
-.personal-channel-composer > .personal-composer-attach { width: 34px; height: 34px; border-radius: 9px; background: transparent; color: var(--pw-muted); box-shadow: none; }
-.personal-channel-composer > .personal-composer-attach:hover { background: var(--pw-blue-soft); color: var(--pw-blue-ink); }
+.personal-channel-composer textarea { width: 100%; max-height: 120px; padding: 8px; resize: none; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; line-height: var(--leading-body); }
+.personal-channel-composer .personal-composer-send, .personal-correction-composer button { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 12px; background: var(--pw-blue); color: #fff; cursor: pointer; box-shadow: 0 2px 6px rgb(47 102 233 / 32%); }
+.personal-channel-composer .personal-composer-send:hover { background: var(--pw-blue-ink); }
+.personal-channel-composer .personal-composer-send:disabled, .personal-correction-composer button:disabled { opacity: .4; cursor: default; box-shadow: none; }
 .personal-composer-images { display: flex; gap: 8px; margin: 0 0 8px; overflow-x: auto; }
 .personal-composer-images figure { position: relative; flex: 0 0 74px; height: 58px; margin: 0; }
 .personal-composer-images img { width: 100%; height: 100%; object-fit: cover; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; }
@@ -1819,11 +1817,10 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-goal-draft-status strong { color: #171717; }
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-channel-composer { border-radius: 6px; box-shadow: none; }
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-channel-composer:focus-within { border-color: #0070f3; box-shadow: 0 0 0 2px rgb(0 112 243 / 12%); }
-.personal-workspace-shell[data-pw-theme="loopx"] .personal-channel-composer > button,
+.personal-workspace-shell[data-pw-theme="loopx"] .personal-channel-composer .personal-composer-send,
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-correction-composer button { border-radius: 6px; background: #171717; box-shadow: none; }
-.personal-workspace-shell[data-pw-theme="loopx"] .personal-channel-composer > button:hover,
+.personal-workspace-shell[data-pw-theme="loopx"] .personal-channel-composer .personal-composer-send:hover,
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-correction-composer button:hover { background: #333333; }
-.personal-workspace-shell[data-pw-theme="loopx"] .personal-channel-composer > .personal-composer-attach { background: transparent; color: #6b6b6b; }
 .personal-settings-theme-swatch.is-loopx { background: linear-gradient(135deg, #171717 0 48%, #fafafa 48% 78%, #ffffff 78%); }
 .personal-settings-page[data-pw-theme="loopx"] .personal-settings-header small,
 .personal-settings-page[data-pw-theme="loopx"] .personal-lark-header small,
@@ -1963,9 +1960,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-first-goal-examples button { border-top: 1.5px solid #141414; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer { border: 2px solid #141414; border-radius: 6px; box-shadow: 3px 3px 0 #141414; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer:focus-within { border-color: #141414; box-shadow: 5px 5px 0 #141414; }
-.personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer textarea { border-left: 2px solid #141414; }
-.personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer > button, .personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer > .personal-composer-attach, .personal-workspace-shell[data-pw-theme="brutal"] .personal-correction-composer button { border: 2px solid #141414; border-radius: 4px; background: #ffe23f; color: #141414; box-shadow: 2px 2px 0 #141414; }
-.personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer > button:hover { background: #ffd91a; transform: translate(1px, 1px); box-shadow: 1px 1px 0 #141414; }
+.personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer textarea { border: 0; }
+.personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer .personal-composer-send, .personal-workspace-shell[data-pw-theme="brutal"] .personal-correction-composer button { border: 2px solid #141414; border-radius: 4px; background: #ffe23f; color: #141414; box-shadow: 2px 2px 0 #141414; }
+.personal-workspace-shell[data-pw-theme="brutal"] .personal-channel-composer .personal-composer-send:hover { background: #ffd91a; transform: translate(1px, 1px); box-shadow: 1px 1px 0 #141414; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-correction-composer { border: 2px solid #141414; border-radius: 4px; }
 .personal-workspace-shell[data-pw-theme="brutal"] .personal-correction-composer:focus-within { border-color: #141414; }
 
@@ -2119,7 +2116,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   .personal-channel-header[data-goal-selected="true"] .personal-channel-actions { grid-row: 1; grid-column: 3; justify-self: end; }
   .personal-channel-header[data-goal-selected="true"] .personal-goal-navigation { grid-row: 2; }
   .personal-goal-navigation { gap: 8px; flex-wrap: wrap; justify-content: flex-start; }
-  .personal-goal-navigation > .personal-goal-tabs { flex-basis: 100%; }
+  .personal-goal-navigation > .personal-goal-tabs { flex: 1 1 auto; }
   .personal-goal-navigation > .personal-agent-select { flex: 1 1 110px; max-width: none; width: auto; }
   .personal-goal-navigation .personal-chat-model-menu { flex: 1 1 120px; max-width: none; }
   .personal-goal-navigation > .personal-agent-select .personal-select-value > small { display: none; }
@@ -2197,3 +2194,45 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-history-search input { flex: 1 1 120px; min-width: 0; width: 100%; }
 .personal-history-search input, .personal-history-search button { min-height: 36px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); padding: 6px 8px; font: inherit; }
 .personal-history-search button { cursor: pointer; }
+
+/* Send choices share one input frame; reading tabs retain the folded entry. */
+.personal-composer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.personal-composer-toolbar > .personal-composer-tool-start { display: flex; align-items: center; flex: none; gap: 0; margin: 0; }
+.personal-composer-runtime { display: flex; align-items: center; justify-content: flex-end; flex: 1; gap: 4px; min-width: 0; margin-left: auto; }
+.personal-composer-runtime > .personal-composer-executor { flex: 0 1 auto; min-width: 0; max-width: 120px; }
+.personal-composer-runtime > span.personal-composer-executor { display: flex; align-items: center; gap: 5px; color: var(--pw-muted); overflow-wrap: anywhere; }
+.personal-composer-runtime .personal-select-trigger { min-height: 36px; padding: 4px 6px; border-color: transparent; background: transparent; box-shadow: none; }
+.personal-composer-runtime .personal-select-value { min-width: 0; }
+.personal-composer-runtime .personal-select-value > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.personal-composer-runtime .personal-select-listbox { top: auto; bottom: calc(100% + 8px); }
+.personal-composer-runtime .personal-chat-model-menu { position: static; flex: 0 1 auto; max-width: 260px; }
+.personal-composer-runtime .personal-chat-model-menu > summary { min-height: 36px; padding: 4px 6px; border-color: transparent; background: transparent; }
+.personal-composer-runtime .personal-chat-model-menu > summary > span { display: flex; align-items: baseline; gap: 6px; }
+.personal-composer-runtime .personal-chat-model-menu > summary small { flex: none; }
+.personal-composer-runtime .personal-chat-model-menu > summary .personal-model-current { font-size: var(--text-caption); }
+.personal-composer-runtime .personal-chat-model-panel { top: auto; bottom: calc(100% + 12px); }
+.personal-composer-runtime .personal-chat-model-panel .personal-select-listbox { bottom: auto; }
+.personal-composer-actions { position: relative; flex: none; margin: 0; }
+.personal-channel-composer .personal-composer-actions { position: static; }
+.personal-composer-actions > summary { display: grid; place-items: center; width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 6px; color: var(--pw-muted); cursor: pointer; list-style: none; }
+.personal-composer-actions > summary::-webkit-details-marker { display: none; }
+.personal-composer-actions > summary:hover, .personal-composer-runtime .personal-select-trigger:hover, .personal-composer-runtime .personal-chat-model-menu > summary:hover { background: var(--pw-line); color: var(--pw-text); }
+.personal-composer-actions > summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+.personal-composer-actions-panel { position: absolute; z-index: 50; bottom: calc(100% + 10px); left: 0; display: grid; gap: 8px; width: min(300px, calc(100vw - 44px)); max-height: min(420px, 65vh); overflow: auto; padding: 8px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-card); box-shadow: 0 8px 24px rgb(0 0 0 / 9%); }
+.personal-composer-actions:not([open]) > .personal-composer-actions-panel { display: none; }
+.personal-composer-actions-panel button { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px; border: 0; border-radius: 4px; background: transparent; color: var(--pw-text); font: inherit; text-align: left; cursor: pointer; }
+.personal-composer-actions-panel button:hover { background: var(--pw-line); }
+.personal-composer-actions-panel button:disabled { opacity: .45; cursor: default; }
+.personal-composer-actions-panel .personal-quick-prompts, .personal-composer-actions-panel .personal-goal-suggestions { display: grid; gap: 0; margin: 0; padding: 0; border: 0; overflow: visible; }
+.personal-composer-actions-panel .personal-goal-suggestions { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--pw-line); }
+.personal-composer-toolbar .goal-loopx-message-mode { margin: 0; min-width: 0; }
+.personal-composer-toolbar .goal-loopx-message-mode select { max-width: 140px; min-height: 36px; border: 0; background: transparent; color: var(--pw-text); }
+.personal-composer-toolbar > .personal-composer-send { flex: none; margin-left: auto; }
+@media (max-width: 760px) {
+  .personal-composer-runtime .personal-chat-model-menu { position: static; max-width: min(140px, 36vw); }
+  .personal-composer-runtime .personal-chat-model-panel { left: 0; right: 0; width: auto; bottom: calc(100% + 8px); }
+  .personal-composer-runtime .personal-composer-executor { flex-shrink: 0; max-width: 100px; }
+  .personal-composer-runtime .personal-select-icon { display: none; }
+  .personal-composer-runtime .personal-select-trigger { gap: 3px; padding-inline: 4px; }
+  .personal-composer-toolbar > .goal-loopx-message-mode { flex: 1 0 calc(100% - 66px); }
+}

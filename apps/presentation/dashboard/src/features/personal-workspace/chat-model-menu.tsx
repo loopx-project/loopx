@@ -31,8 +31,8 @@ export function ChatModelMenu({ agentId, goalId, ordinary, model = "", effort, r
     return () => controller.abort();
   }, [open, ordinary, agentId, goalId, model, retry, zh]);
   useEffect(() => {
-    if (!open) return;
     const close = (event: PointerEvent | KeyboardEvent) => {
+      if (!root.current?.open) return;
       if (event instanceof KeyboardEvent) {
         if (event.key !== "Escape" || event.defaultPrevented) return;
         root.current?.querySelector("summary")?.focus();
@@ -42,7 +42,7 @@ export function ChatModelMenu({ agentId, goalId, ordinary, model = "", effort, r
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", close);
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", close); };
-  }, [open]);
+  }, []);
   const controls = chatModelControls(discovery, model, effort, readback);
   const observed = controls.observedModel ?? (zh ? "模型设置" : "Model settings");
   const observedSettings = controls.observedModel ? [controls.observedEffort,

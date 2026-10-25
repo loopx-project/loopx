@@ -46,6 +46,7 @@ import {
 import { useTypedActionReadback, useTypedActionProposalReadback } from "../../data/use-typed-action-readback";
 
 import { ChannelHeader } from "./channel-header";
+import { ComposerActions, ComposerRuntimeControls } from "./composer-controls";
 import { GoalLoopXMode } from "./goal-loopx-mode";
 import { GoalTeamResults } from "./goal-team-results";
 import { GoalManagedResults } from "./goal-managed-results";
@@ -2633,15 +2634,7 @@ export function PersonalWorkspacePage({
     }
   }, [attentionKeySignature, attentionNotificationsActive, attentionNotificationSupportState, t]);
 
-  const composerSuggestions = (!originalConversation || !managerChatOpen) && !selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <details className="personal-composer-tools" key={conversationKey} onKeyDown={(event) => {
-    if (event.key !== "Escape") return;
-    event.currentTarget.open = false;
-    event.currentTarget.querySelector("summary")?.focus();
-  }}>
-              <summary>{selectedGoal && goalSuggestions.length
-                ? t("suggestions.summary", { first: goalSuggestionLabel(goalSuggestions[0]) })
-                : locale === "zh-CN" ? "快捷提问" : "Suggestions"}</summary>
-            <div className="personal-composer-tools-panel">
+  const composerSuggestions = (!originalConversation || !managerChatOpen) && !selectedWorkspaceRef && (!conversationOpen || !conversationMessages.length) ? <div className="personal-composer-tools-panel">
             {selectedGoal && goalSuggestions.length ? (
               <div aria-label={t("suggestions.row")} className="personal-goal-suggestions" data-testid="goal-suggestions" role="group">
                 {goalSuggestions.map((suggestion) => (
@@ -2666,7 +2659,7 @@ export function PersonalWorkspacePage({
               </div>
             )}
             </div>
-            </details> : null;
+             : null;
   const taskBoard = (active: boolean) => selectedGoal ? (<GoalTasksView digest={workspaceDigest}
                     historyEnabled={!readOnly} historyActive={active}
                     historyRefreshRevision={historyRefreshRevision}
@@ -2775,7 +2768,6 @@ export function PersonalWorkspacePage({
             onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
-            onOpenConversationSettings={!readOnly && !originalConversation ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
             onRefresh={callbacks.onRefresh && !runtimeSourceUnavailable ? () => void refreshWorkspace() : undefined}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
             onOpenManagerChat={() => {
@@ -2787,8 +2779,6 @@ export function PersonalWorkspacePage({
               else setSelectedGoalTab(tab);
             }}
             onSelectAgent={selectAgent}
-            onSelectAgentModel={(modelId) => callbacks.onSelectAgentModel?.(selectedAgentId, modelId)}
-            onSelectAgentReasoningEffort={(effort) => callbacks.onSelectAgentReasoningEffort?.(selectedAgentId, effort)}
             onReturnManagerHome={() => {
               if (selectedWorkspaceRef || originalConversation) workspaceConversations?.onSelect(null);
               setSelectedGoalTab("overview");
@@ -2796,9 +2786,6 @@ export function PersonalWorkspacePage({
               window.requestAnimationFrame(() => channelScrollRef.current?.scrollTo({ behavior: "smooth", top: 0 }));
             }}
             selectedAgentId={selectedAgentId}
-            selectedAgentModelId={selectedAgentModelId}
-            selectedAgentModelReadback={selectedAgentModelReadback}
-            selectedAgentReasoningEffort={selectedAgentReasoningEffort}
             refreshState={refreshState}
             readOnlySourceLabel={readOnly ? sourceGoal?.sourceAccess?.label ?? statusSourceControl?.activeSource.label : undefined}
             selectedGoal={runtimeSourceUnavailable ? null : selectedGoal}
@@ -2962,7 +2949,8 @@ export function PersonalWorkspacePage({
                 </button> : null}
               </div>
             ) : null}
-            {loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id ? <label className="goal-loopx-message-mode">{locale === "zh-CN" ? "消息处理" : "Message delivery"}<select aria-label={locale === "zh-CN" ? "消息处理方式" : "Message delivery mode"} value={loopxDelivery} onChange={event => setLoopxDelivery(event.target.value as typeof loopxDelivery)}><option value="queue">{locale === "zh-CN" ? "下一轮处理" : "Next turn"}</option><option value="inbox">{locale === "zh-CN" ? "放入收件箱" : "Inbox"}</option><option value="steer">{locale === "zh-CN" ? "立即纠偏" : "Steer now"}</option></select><span role="status">{loopxMessageReceipt}</span></label> : null}
+
+            {loopxMessageReceipt ? <p className="personal-composer-status" role="status">{loopxMessageReceipt}</p> : null}
             {readOnly ? (
               sourceGoal?.sourceAccess ? null : <div className="personal-read-only-notice"><strong>{t("source.readOnlyNoticeTitle")}</strong><span>{t("source.readOnlyNoticeDescription")}</span></div>
             ) : <>
@@ -3010,7 +2998,7 @@ export function PersonalWorkspacePage({
                 <MessageCircleQuestion aria-hidden size={15} /><span>{t("composer.goalPrompt")}</span>
               </button>
             </> : null}
-            {composerSuggestions}
+            {composerCollapsed && composerSuggestions ? <ComposerActions>{composerSuggestions}</ComposerActions> : null}
             </div>
             {!composerCollapsed ? <>
             {actionDraft ? <WorkspaceActionForm draft={actionDraft} workspaceGoals={workspaceGoals} workspaceProjects={workspaceConversations?.projects ?? []} onClose={() => setActionDraft(null)} onPreview={async (request) => {
@@ -3068,16 +3056,6 @@ export function PersonalWorkspacePage({
                 void selectImages(images);
               }}
             >
-              <button
-                aria-label={t("composer.addImage")}
-                className="personal-composer-attach"
-                disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount}
-                onClick={() => imageInputRef.current?.click()}
-                title={t("composer.attachImageHint")}
-                type="button"
-              >
-                <Paperclip size={17} />
-              </button>
               <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
               <textarea
                 disabled={Boolean(workspaceConversations?.entryGate)}
@@ -3101,14 +3079,41 @@ export function PersonalWorkspacePage({
                 rows={1}
                 value={composer}
               />
-              <button aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
-            </div>
-            {conversationOpen ? <div className="personal-composer-hint">{steering
+              <div className="personal-composer-toolbar">
+                <div className="personal-composer-tool-start">
+                  <ComposerActions>
+              <button
+                aria-label={t("composer.addImage")}
+                className="personal-composer-attach"
+                disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount}
+                onClick={() => imageInputRef.current?.click()}
+                title={t("composer.attachImageHint")}
+                type="button"
+              >
+                <Paperclip size={17} /><span>{t("composer.addImage")}</span>
+              </button>
+                    {composerSuggestions}
+                  </ComposerActions>
+            <ContextHelp label={locale === "zh-CN" ? "消息快捷键" : "Message shortcuts"} icon={CircleHelp}><p>{steering
               ? (locale === "zh-CN" ? "正在发送…" : "Sending…")
               : queueTurnId ? (locale === "zh-CN" ? `Enter 排队 · Shift+Enter 换行${steeringTurnId ? " · Command+Enter 调整本轮" : ""}` : `Enter to queue · Shift+Enter for a new line${steeringTurnId ? " · Command+Enter to steer" : ""}`)
               : sending && !steeringTurnId
               ? (locale === "zh-CN" ? "正在回复 · 可以先保留后续消息草稿" : "Reply in progress · you can draft a follow-up message")
-              : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</div> : null}
+              : (locale === "zh-CN" ? "Enter 发送 · Shift+Enter 换行" : "Enter to send · Shift+Enter for a new line")}</p></ContextHelp>
+                </div>
+            {loopxMode?.session_id === conversationSessionId && loopxMode?.enabled && loopxMode.active_turn_id ? <label className="goal-loopx-message-mode"><select aria-label={locale === "zh-CN" ? "消息处理方式" : "Message delivery mode"} value={loopxDelivery} onChange={event => setLoopxDelivery(event.target.value as typeof loopxDelivery)}><option value="queue">{locale === "zh-CN" ? "下一轮处理" : "Next turn"}</option><option value="inbox">{locale === "zh-CN" ? "放入收件箱" : "Inbox"}</option><option value="steer">{locale === "zh-CN" ? "立即纠偏" : "Steer now"}</option></select></label> : null}
+                {(selectedGoal || selectedWorkspaceRef || originalConversation) ? <ComposerRuntimeControls
+                  key={`${conversationKey}:${selectedAgentId}`} agents={agents} agentId={selectedAgentId}
+                  goalId={selectedGoal?.goalId} original={Boolean(originalConversation || managedWorkActive)}
+                  model={selectedAgentModelId} effort={selectedAgentReasoningEffort} readback={selectedAgentModelReadback}
+                  onAgent={selectAgent} onModel={model => callbacks.onSelectAgentModel?.(selectedAgentId, model)}
+                  onEffort={effort => callbacks.onSelectAgentReasoningEffort?.(selectedAgentId, effort)}
+                  onDefaults={selectedGoal && !originalConversation ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
+                /> : null}
+              <button className="personal-composer-send" aria-label={t("composer.send")} disabled={(!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
+              </div>
+            </div>
+
             </> : null}
             </>}
           </div> : null}

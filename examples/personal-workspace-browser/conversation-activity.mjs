@@ -168,7 +168,7 @@ export const conversationActivityScenario = {
       assert.ok(await scroller.evaluate(node => node.scrollTop < 10), "new output preserves upward reading position");
       await page.getByRole("button", { name: "回到最新消息 ↓", exact: true }).click();
       assert.ok(await scroller.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 64));
-      assert.equal(await page.locator(".personal-composer-tools").count(), 0, "conversation removes redundant suggestion strip");
+      assert.equal(await page.locator(".personal-composer-tools-panel").count(), 0, "conversation removes redundant suggestion strip");
 
       let interrupts = 0;
       const rejectThenMismatch = async route => {

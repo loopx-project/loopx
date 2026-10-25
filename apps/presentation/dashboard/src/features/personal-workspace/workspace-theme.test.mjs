@@ -30,7 +30,7 @@ assert.ok(styles.includes('.personal-home-lanes { gap: 0; border-block: 1px soli
 assert.ok(styles.includes('[data-pw-theme="loopx"] .personal-goal-mark { border: 1px solid #ebebeb; border-radius: 8px; background: #fff; color: #171717; }'), "LoopX standard removes decorative Goal tile colors");
 assert.match(styles, /personal-home-goal-card { border-radius: 12px/, "LoopX standard uses the card radius for Goal cards");
 assert.match(styles, /personal-channel-composer { border-radius: 6px/, "LoopX standard uses the control radius for the composer");
-assert.match(styles, /personal-channel-composer > button,[\s\S]*background: #171717/, "LoopX standard uses an ink command button");
+assert.match(styles, /personal-channel-composer \.personal-composer-send,[\s\S]*background: #171717/, "LoopX standard uses an ink command button");
 assert.match(styles, /personal-quick-prompts button {[^}]*background: #fff/, "Shortcut actions keep one neutral chip style");
 assert.match(styles, /personal-goal-draft-status { border-color: #dedede; border-radius: 6px; background: #f2f2f2/, "LoopX standard keeps Goal draft guidance neutral");
 assert.ok(!styles.includes("personal-prompt-badge"), "Shortcut actions carry no draft/immediate badge");
@@ -55,8 +55,6 @@ assert.match(select, /event.key === "ArrowDown"/, "Workspace select supports arr
 assert.match(select, /event.key === "Escape"/, "Workspace select supports keyboard dismissal");
 assert.doesNotMatch(header, /<select/, "The chat runtime selector is not browser-native");
 assert.doesNotMatch(statusSource, /<select/, "The primary control-plane selector is not browser-native");
-assert.match(header, /<WorkspaceSelect/, "The Agent selector uses the shared menu");
-assert.match(header, /prefixLabel={selectedGoal \? \(locale === "zh-CN" \? "执行器" : "Executor"\) : t\("header.chatRuntime"\)}/, "Goal Chat names its executor; the steward retains its Chat runtime label, distinct from work-Agent lanes");
 assert.match(statusSource, /<WorkspaceSelect/, "The control-plane selector uses the shared menu");
 assert.match(i18n, /"settings.themeLoopx": "LoopX standard"/, "English theme label is present");
 assert.match(i18n, /"settings.themeLoopx": "LoopX 标准"/, "Chinese theme label is present");

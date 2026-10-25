@@ -2592,6 +2592,10 @@ function PersonalGoalHome({
       const gateSummary = gate && typeof gate === "object"
         ? String((gate as { summary?: unknown }).summary ?? "")
         : "";
+      // This controller is retired immediately before Turn dispatch. A failed
+      // Session/configuration read cannot have delivered the user's message;
+      // an unacknowledged dispatch after that boundary remains uncertain.
+      const preparationFailed = preparationControllers.current.get(targetContextId) === preparationController;
       const failureMessage = {
         agentLabel: answerIdentityLabel(targetContextId, selectedRoute.label),
         lines: gateSummary ? [gateSummary] : [],
@@ -2604,7 +2608,7 @@ function PersonalGoalHome({
           ? `原 ${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话无法恢复。本地历史已经保留，请在运行详情里选择“重试恢复”或“开始新 Session”。`
           : payloadError?.delivery_state === "not_delivered" && payloadError.turn_replay_safe === true && !submittedTurnId
             ? `${locale === "zh-CN" ? "请求未提交；草稿和图片已保留，可以修改后重新发送。" : "Request not submitted. Draft and images retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`
-          : preparationControllers.current.has(targetContextId)
+          : preparationFailed
             ? `${locale === "zh-CN" ? "尚未提交请求。连接执行器失败，可以重新发送。" : "Request not submitted. Could not connect to the executor; you can send again."}\n\n${error instanceof Error ? error.message : ""}`
           : error instanceof Error
             ? error.message
@@ -2614,8 +2618,8 @@ function PersonalGoalHome({
       if (route?.queue && !queueAccepted) throw error;
       // Only confirmed pre-admission rejection restores the composer. An
       // uncertain delivery must never invite an automatic duplicate request.
-      if (!submittedTurnId && payloadError?.delivery_state === "not_delivered"
-        && payloadError.turn_replay_safe === true) throw error;
+      if (preparationFailed || (!submittedTurnId && payloadError?.delivery_state === "not_delivered"
+        && payloadError.turn_replay_safe === true)) throw error;
     } finally {
       streamEnded = true;
       // A handed-off Turn is still running: its ownership stays for the

@@ -56,7 +56,9 @@ export const goalSuggestionsLiveScenario = {
       assert.equal((await cli("add", "--goal-id", goalId, "--role", "user", "--task-class", "user_action", "--text", optionalText)).ok, true);
       await openConversation();
       await page.waitForTimeout(1_000);
-      const before = (await summary.innerText()).trim();
+      await summary.click();
+      const before = (await page.getByTestId("goal-suggestions").innerText().catch(() => "")).trim();
+      await summary.click();
       assert.doesNotMatch(before, /等你决定/, `an optional user action is not a decision suggestion: ${before}`);
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();
       const vitals = (await page.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ");
@@ -67,8 +69,11 @@ export const goalSuggestionsLiveScenario = {
       assert.equal((await cli("add", "--goal-id", goalId, "--role", "user", "--task-class", "user_gate", "--text", gateText)).ok, true);
       await refresh();
       await openConversation();
-      await summary.filter({ hasText: /等你决定/ }).waitFor({ state: "visible", timeout: 20_000 });
-      const after = (await summary.innerText()).trim();
+      await summary.click();
+      const firstSuggestion = page.getByTestId("goal-suggestions").locator("button").first();
+      await firstSuggestion.filter({hasText: /等你决定/}).waitFor({state: "visible", timeout: 20_000});
+      const after = (await firstSuggestion.innerText()).trim();
+      await summary.click();
       const count = after.match(/先处理 (\d+) 项等你决定的事项/);
       assert.ok(count, `the first suggestion is the decision: ${after}`);
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();

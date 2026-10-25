@@ -67,7 +67,7 @@ export const goalSuggestionsScenario = {
       const summary = tools.locator("> summary");
       await summary.waitFor({ state: "visible", timeout: 15_000 });
       await page.screenshot({ path: resolve(outputDir, "goal-suggestions-collapsed.png"), animations: "disabled" });
-      assert.match(await summary.innerText(), /快捷提问 · 先处理 \d+ 项等你决定的事项/, "The collapsed summary carries the first suggestion");
+      assert.equal(await summary.getAttribute("aria-label"), "添加附件与快捷操作", "One compact entry contains the Goal actions");
       await summary.click();
       const row = page.getByTestId("goal-suggestions");
       await row.waitFor({ state: "visible" });
@@ -114,7 +114,7 @@ export const goalSuggestionsScenario = {
         await stopped.locator(".personal-goal-link").click();
         await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
         await summary.waitFor({ state: "visible" });
-        assert.equal((await summary.innerText()).trim(), "快捷提问", "A stopped Goal shows no derived suggestion");
+        assert.equal(await summary.getAttribute("aria-label"), "添加附件与快捷操作");
         await summary.click();
         assert.equal(await page.getByTestId("goal-suggestions").count(), 0);
         await page.locator(".personal-quick-prompts").first().waitFor({ state: "visible" });

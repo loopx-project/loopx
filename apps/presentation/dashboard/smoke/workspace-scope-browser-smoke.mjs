@@ -3,7 +3,7 @@
 // fake Codex app-server stand in for the host; no model, registry or Goal is used.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, rename, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
@@ -18,11 +18,15 @@ const workspace = join(root, "notes");
 await mkdir(workspace);
 await mkdir(join(root, "home"));
 const codex = join(root, "codex");
+const packetLog = join(root, "native-packets.jsonl");
 const written = spawnSync(python, ["-c", [
   "import pathlib, runpy, sys",
   "source = runpy.run_path('examples/loopx-chat-runtime-smoke.py')['FAKE_CODEX']",
+  "source = source.replace('active_turn = None', 'if sys.argv[1:] == [\"debug\", \"models\"]:\\n    print(json.dumps({\\'models\\': [{\\'slug\\': \\'trial-native-model\\', \\'display_name\\': \\'Trial native model\\', \\'supported_reasoning_levels\\': [{\\'effort\\': \\'low\\'}, {\\'effort\\': \\'high\\'}]}, {\\'slug\\': \\'rejected-model\\', \\'display_name\\': \\'Rejected model\\', \\'supported_reasoning_levels\\': [{\\'effort\\': \\'high\\'}]}]}))\\n    sys.exit(0)\\nactive_turn = None', 1)",
+  "source = source.replace('    method = request.get(\"method\")', f'    with open({sys.argv[2]!r}, \"a\") as output:\\n        output.write(json.dumps(request) + \"\\\\n\")\\n    method = request.get(\"method\")')",
+  "source = source.replace('        result = {\"thread\": {\"id\": \"durable-thread\"}}', '        result = {\"thread\": {\"id\": \"durable-thread\"}, \"model\": \"rejected-readback\" if request[\"params\"].get(\"model\") == \"rejected-model\" else request[\"params\"].get(\"model\", \"old-model\"), \"reasoningEffort\": request[\"params\"].get(\"config\", {}).get(\"model_reasoning_effort\", \"xhigh\")}')",
   "path = pathlib.Path(sys.argv[1]); path.write_text(source); path.chmod(0o700)",
-].join("\n"), codex], { cwd: repoRoot, encoding: "utf8" });
+].join("\n"), codex, packetLog], { cwd: repoRoot, encoding: "utf8" });
 assert.equal(written.status, 0, written.stderr);
 
 let serverError = "";
@@ -116,7 +120,61 @@ try {
   assert.equal(await page.getByRole("button", { name: "发送", exact: true }).isDisabled(), true,
     "A revoked grant keeps history and blocks new messages");
   await capture(page, "ordinary-workspace-grant-rejection.png");
-  console.log("workspace scope browser smoke ok");
+  // Recover the same grant, then use the production HTTP/store/native path.
+  // The provider is deterministic: no model or live workspace is involved.
+  await rename(`${workspace}.moved`, workspace);
+  await page.reload({waitUntil: "networkidle"});
+  const composer = page.getByLabel("发送消息");
+  await composer.waitFor();
+  assert.equal(await page.locator(".personal-channel-header .personal-chat-model-menu").count(), 0);
+  const menu = page.locator(".personal-channel-composer .personal-chat-model-menu");
+  const actions = page.getByLabel("添加附件与快捷操作", {exact: true});
+  await composer.fill("保留草稿，先核对配置。");
+  const beforeActions = sessionRequests.length;
+  await actions.click();
+  await page.getByRole("button", {name: "添加图片", exact: true}).waitFor();
+  await page.keyboard.press("Escape");
+  assert.equal(await actions.evaluate(node => node === document.activeElement), true);
+  assert.equal(await composer.inputValue(), "保留草稿，先核对配置。");
+  assert.equal(sessionRequests.length, beforeActions, "Menu open/dismiss is read-only");
+  await menu.locator("summary").click();
+  await page.getByRole("combobox", {name: "选择模型", exact: true}).click();
+  await page.getByRole("option", {name: "Trial native model", exact: true}).click();
+  await page.getByRole("combobox", {name: "选择思考深度", exact: true}).click();
+  await page.getByRole("option", {name: "high", exact: true}).click();
+  await page.keyboard.press("Escape");
+  await composer.press("Enter");
+  await menu.locator(".personal-model-current").filter({hasText: "trial-native-model"}).waitFor();
+  assert.equal(sessionRequests.at(-1).agent_model_id, "trial-native-model");
+  assert.equal(sessionRequests.at(-1).agent_reasoning_effort, "high");
+  const packets = (await readFile(packetLog, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  assert.ok(packets.some(row => row.method === "thread/start" && row.params.model === "trial-native-model"
+    && row.params.config.model_reasoning_effort === "high"));
+  await page.locator(".personal-message-pending").waitFor({state: "hidden"});
+  const completedPackets = (await readFile(packetLog, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  assert.ok(completedPackets.some(row => row.method === "turn/start" && row.params.effort === "high"));
+  // This configuration owner still creates a new Session; layout must not
+  // claim the separately requested same-Session configuration is implemented.
+  await menu.locator("summary").click();
+  await page.getByText("新对话配置", {exact: true}).waitFor();
+  await page.getByRole("combobox", {name: "选择模型", exact: true}).click();
+  await page.getByRole("option", {name: "Rejected model", exact: true}).click();
+  await page.keyboard.press("Escape");
+  await composer.fill("配置被拒绝时保留这条消息。");
+  const rejection = page.waitForResponse(response => new URL(response.url()).pathname === "/api/chat/sessions" && response.status() === 424);
+  await composer.press("Enter");
+  assert.equal((await rejection).status(), 424);
+  await page.waitForFunction(() => document.querySelector("textarea")?.value === "配置被拒绝时保留这条消息。");
+  await page.locator(".personal-message-pending").waitFor({state: "hidden"});
+  assert.equal(await composer.inputValue(), "配置被拒绝时保留这条消息。");
+  assert.equal(await menu.locator(".personal-model-current").innerText(), "trial-native-model",
+    "A rejected selection cannot replace actual model readback");
+  const refusedPackets = (await readFile(packetLog, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  assert.equal(refusedPackets.filter(row => row.method === "turn/start").length,
+    completedPackets.filter(row => row.method === "turn/start").length,
+    "Rejected Session configuration cannot dispatch or replay the message");
+  await capture(page, "composer-configuration-rejected.png");
+  console.log("workspace scope browser smoke ok; composer actions, actual native model/effort and rejection retained");
 } finally {
   await browser?.close();
   await stopServer();

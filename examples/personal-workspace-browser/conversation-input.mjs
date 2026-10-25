@@ -92,6 +92,7 @@ export const conversationInputScenario = {
       assert.equal(api.durableWriteCount, writes);
       await page.getByRole("button", {name: "关闭", exact: true}).click();
       await page.setViewportSize({width: 390, height: 844});
+      await page.getByLabel("添加附件与快捷操作", {exact: true}).click();
       await page.getByRole("button", {name: "创建新 Goal", exact: true}).last().click();
       const mobileForm = page.getByRole("dialog", {name: "创建新 Goal", exact: true});
       const bounds = await mobileForm.boundingBox();

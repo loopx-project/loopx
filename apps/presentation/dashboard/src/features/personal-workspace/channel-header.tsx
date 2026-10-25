@@ -5,7 +5,6 @@ import { useWorkspaceI18n } from "./i18n";
 import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
-import { ChatModelMenu } from "./chat-model-menu";
 import type {ReactNode} from "react";
 
 export function ChannelHeader({
@@ -23,23 +22,17 @@ export function ChannelHeader({
   allWorkOpen,
   onOpenManagerChat,
   onOpenManagerSettings,
-  onOpenConversationSettings,
   onOpenWorkspace,
   onRefresh,
   onRequestGoalLifecycle,
   onOpenNavigation,
   onSelectGoalTab,
   onSelectAgent,
-  onSelectAgentModel,
-  onSelectAgentReasoningEffort,
   onReturnManagerHome,
   refreshState,
   readOnlySourceLabel,
   resumeReviewed,
   selectedAgentId,
-  selectedAgentModelId,
-  selectedAgentModelReadback,
-  selectedAgentReasoningEffort,
   selectedGoal,
   selectedGoalTab,
   scopeUnavailable = false,
@@ -70,7 +63,6 @@ export function ChannelHeader({
   allWorkOpen?: boolean;
   onOpenManagerChat?: () => void;
   onOpenManagerSettings?: () => void;
-  onOpenConversationSettings?: () => void;
   onOpenWorkspace?: () => void;
   onRefresh?: () => void;
   /** Absent when the selected source does not authorize Goal lifecycle changes. */
@@ -78,17 +70,12 @@ export function ChannelHeader({
   onOpenNavigation?: () => void;
   onSelectGoalTab: (tab: WorkspaceGoalTab) => void;
   onSelectAgent: (agentId: string) => void;
-  onSelectAgentModel?: (modelId: string) => void;
-  onSelectAgentReasoningEffort?: (effort: string) => void;
   onReturnManagerHome?: () => void;
   refreshState?: "idle" | "loading" | "done" | "error";
   readOnlySourceLabel?: string;
   /** Resume opens the owner's reviewed preview instead of a local confirmation. */
   resumeReviewed?: boolean;
   selectedAgentId: string;
-  selectedAgentModelId?: string;
-  selectedAgentModelReadback?: import("../../data/chat").ChatSessionSummary;
-  selectedAgentReasoningEffort?: string;
   selectedGoal: WorkspaceGoal | null;
   selectedGoalTab: WorkspaceGoalTab;
   /** A requested Goal scope failed; do not present the steward as its fallback. */
@@ -169,21 +156,6 @@ export function ChannelHeader({
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
     <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{selectedGoal?.title === readOnlySourceLabel ? null : readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
   ) : selectedGoal && !composerVisible ? null : <>
-    {ordinaryConversation ? <WorkspaceSelect
-            ariaLabel={t("header.selectChatRuntime")}
-            className="personal-agent-select"
-            icon={<Bot size={16} />}
-            onChange={onSelectAgent}
-            options={[
-              ...(statusOnly ? [{ value: "", label: locale === "zh-CN" ? "选择执行器" : "Choose executor", disabled: true }] : []),
-              ...agents.filter((agent) => agent.agentId !== "status-only").map((agent) => ({
-              disabled: !agent.available,
-              label: `${agent.label}${agent.available ? "" : ` · ${t("header.agentUnavailable")}`}`,
-              value: agent.agentId,
-            }))]}
-            prefixLabel={selectedGoal ? (locale === "zh-CN" ? "执行器" : "Executor") : t("header.chatRuntime")}
-            value={statusOnly ? "" : selectedAgentId}
-    /> : null}
     {agents.some((agent) => agent.agentId === "status-only") ? <button type="button" className="personal-icon-button personal-status-mode"
       aria-pressed={statusOnly} aria-label={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`} title={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`}
       onClick={() => statusOnly ? onSelectAgent(!ordinaryConversation && managerChannelBinding
@@ -191,12 +163,6 @@ export function ChannelHeader({
         : agents.find((agent) => agent.agentId !== "status-only" && agent.available)?.agentId ?? "status-only") : onSelectAgent("status-only")}>
       <Eye size={16} />{statusOnly ? t("header.statusOnlyAgent") : null}
     </button> : null}
-    {/* The steward's machine binding owns its model; Goal defaults cannot label it. */}
-    {!statusOnly && ordinaryConversation ? <ChatModelMenu key={`${selectedGoal?.goalId ?? workspaceGrantLabel ?? "steward"}:${selectedAgentId}`}
-      agentId={selectedAgentId} goalId={selectedGoal?.goalId} ordinary={ordinaryConversation}
-      model={selectedAgentModelId} effort={selectedAgentReasoningEffort} readback={selectedAgentModelReadback}
-      onModel={onSelectAgentModel} onEffort={onSelectAgentReasoningEffort}
-      onOpenDefaults={selectedGoal ? onOpenConversationSettings : undefined}/> : null}
   </>;
 
   const executionChipClass = managerExecutionUnavailable
@@ -229,8 +195,6 @@ export function ChannelHeader({
   const sourceRuntimeControl = !originalConversationTitle || scopeUnavailable || agentWorkActive || readOnlySourceLabel
     ? runtimeControl : <>
       <span className="personal-read-only-source"><Bot size={15} />{selectedAgentId}</span>
-      <ChatModelMenu agentId={selectedAgentId} ordinary={false} readback={selectedAgentModelReadback}
-        model={selectedAgentModelId} effort={selectedAgentReasoningEffort} />
     </>;
 
   return (
