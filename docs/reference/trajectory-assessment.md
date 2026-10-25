@@ -27,6 +27,14 @@ the history action returns to the complete loaded research history without
 changing the selected evidence pack. Reading either layer, switching report
 tabs or opening an original never executes an analysis or experiment.
 
+The source reader displays saved completed-command output and text-only
+`function_call_output` / `custom_tool_call_output` records in source order.
+Direct shell-result envelopes show their literal output and observed exit code;
+a missing exit code remains unknown. Command arguments and the complete original
+record stay available on demand. Mixed, malformed or unsupported content falls
+back to the complete literal citation. Unknown nested transport stays text;
+reading never recursively interprets it or turns an exit code into acceptance.
+
 The presentation draws on composable inspection in
 [Distill's interpretability article](https://distill.pub/2018/building-blocks/)
 and responsive comparison layouts in the

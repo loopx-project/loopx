@@ -289,34 +289,75 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
 }
 
+function CitedToolText({text, zh}: {text: string; zh: boolean}) {
+  // Decode only the saved direct shell-result envelope, never recursively
+  // reinterpret arbitrary JSON or infer successful work from its text.
+  try {
+    const value: unknown = JSON.parse(text);
+    if (value && typeof value === "object" && !Array.isArray(value)
+      && "chunk_id" in value && typeof value.chunk_id === "string"
+      && "wall_time_seconds" in value && typeof value.wall_time_seconds === "number"
+      && Number.isFinite(value.wall_time_seconds) && value.wall_time_seconds >= 0
+      && "exit_code" in value && (value.exit_code === null || (typeof value.exit_code === "number" && Number.isSafeInteger(value.exit_code)))
+      && "output" in value && typeof value.output === "string") {
+      return <div className="analysis-source-tool-text">
+        <div className="analysis-source-command-meta">
+          <span>{value.exit_code === null ? (zh ? "尚无退出码" : "No exit code yet") : `${zh ? "退出码" : "Exit code"} ${value.exit_code}`}</span>
+          <span>{value.wall_time_seconds} s</span>
+        </div>
+        <CitedOutput text={value.output} zh={zh}/>
+      </div>;
+    }
+  } catch { /* Plain text and unknown envelopes stay literal. */ }
+  return <CitedOutput text={text} zh={zh}/>;
+}
+
+function CitedOutput({text, zh}: {text: string; zh: boolean}) {
+  return text ? <pre className="analysis-source-output">{text}</pre>
+    : <p className="analysis-source-empty">{zh ? "输出为空" : "Empty output"}</p>;
+}
+
 function CitationContent({citation, zh}: {citation: Citation; zh: boolean}) {
-  // A reading projection of the native completed-command envelope, not a
-  // source verifier. Unknown or mixed formats retain the complete literal.
-  const commands: {output: string; argv: string[]; exitCode: number; status: string}[] = [];
+  // Display projections of explicitly typed records only. Unknown, mixed or
+  // malformed records retain the complete citation, including neighboring lines.
+  const records: ({output: string; argv: string[]; exitCode: number; status: string} | {texts: string[]})[] = [];
   try {
     for (const line of citation.text.split("\n")) {
-      const event: {type?: unknown; payload?: {type?: unknown; item?: Record<string, unknown>}} | null = JSON.parse(line);
+      const event: {type?: unknown; payload?: {type?: unknown; output?: unknown; item?: Record<string, unknown>}} | null = JSON.parse(line);
       const item = event?.payload?.item;
-      if (event?.type !== "event_msg" || event.payload?.type !== "item_completed"
-        || item?.type !== "CommandExecution" || typeof item.aggregated_output !== "string"
-        || !Array.isArray(item.command) || !item.command.every((arg: unknown) => typeof arg === "string")
-        || typeof item.exit_code !== "number" || !Number.isSafeInteger(item.exit_code) || typeof item.status !== "string") {
+      if (event?.type === "event_msg" && event.payload?.type === "item_completed"
+        && item?.type === "CommandExecution" && typeof item.aggregated_output === "string"
+        && Array.isArray(item.command) && item.command.every((arg: unknown) => typeof arg === "string")
+        && typeof item.exit_code === "number" && Number.isSafeInteger(item.exit_code) && typeof item.status === "string") {
+        records.push({output: item.aggregated_output, argv: item.command, exitCode: item.exit_code, status: item.status});
+      } else if (event?.type === "response_item"
+        && (event.payload?.type === "custom_tool_call_output" || event.payload?.type === "function_call_output")) {
+        const output = event.payload.output;
+        if (typeof output === "string") records.push({texts: [output]});
+        else if (Array.isArray(output) && output.length > 0 && output.every(part => part && typeof part === "object"
+          && !Array.isArray(part) && part.type === "input_text" && typeof part.text === "string")) {
+          records.push({texts: output.map(part => part.text as string)});
+        } else return <pre>{citation.text}</pre>;
+      } else {
         return <pre>{citation.text}</pre>;
       }
-      commands.push({output: item.aggregated_output, argv: item.command, exitCode: item.exit_code, status: item.status});
     }
   } catch {
     return <pre>{citation.text}</pre>;
   }
   return <div className="analysis-source-content">
-    {commands.map((command, index) => <div className="analysis-source-command" key={index}>
-      <div className="analysis-source-command-meta">
-        {commands.length > 1 ? <span>{zh ? "行" : "Line"} {citation.first_line + index}</span> : null}
-        <span>{zh ? "退出码" : "Exit code"} {command.exitCode}</span><span>{command.status}</span>
-      </div>
-      {command.output ? <pre className="analysis-source-output">{command.output}</pre>
-        : <p className="analysis-source-empty">{zh ? "输出为空" : "Empty output"}</p>}
-      <details><summary>{zh ? "命令参数" : "Command arguments"}</summary><pre>{JSON.stringify(command.argv, null, 2)}</pre></details>
+    {records.map((record, index) => <div className="analysis-source-command" key={index}>
+      {"texts" in record ? <>
+        {records.length > 1 ? <div className="analysis-source-command-meta">{zh ? "行" : "Line"} {citation.first_line + index}</div> : null}
+        {record.texts.map((text, part) => <CitedToolText key={part} text={text} zh={zh}/>)}
+      </> : <>
+        <div className="analysis-source-command-meta">
+          {records.length > 1 ? <span>{zh ? "行" : "Line"} {citation.first_line + index}</span> : null}
+          <span>{zh ? "退出码" : "Exit code"} {record.exitCode}</span><span>{record.status}</span>
+        </div>
+        <CitedOutput text={record.output} zh={zh}/>
+        <details><summary>{zh ? "命令参数" : "Command arguments"}</summary><pre>{JSON.stringify(record.argv, null, 2)}</pre></details>
+      </>}
     </div>)}
     <details className="analysis-source-raw"><summary>{zh ? "完整原始记录" : "Complete raw record"}</summary><pre>{citation.text}</pre></details>
   </div>;
