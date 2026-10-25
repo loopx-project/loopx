@@ -11,7 +11,7 @@ from pathlib import Path
 import signal
 import tempfile
 import sys
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from loopx.capabilities.explore.result_log import validate_explore_result_event
 from loopx.chat_action_store import ChatActionStore
@@ -106,8 +106,25 @@ def main():
         metrics = {"history_reads": 0, "mutation_attempts": 0}
 
         class Handler(ChatRequestHandler):
+            def _send_json(self, payload, *, status=200):
+                parsed = urlparse(self.path)
+                if status == 200 and parsed.path == "/status.json" and "run_history" in payload:
+                    goal = parse_qs(parsed.query).get("goal_id", [""])[0]
+                    query = "?" + urlencode({"goal_id": goal}) if goal else ""
+                    payload = {**payload, "local_dashboard_api": {
+                        **(payload.get("local_dashboard_api") or {}),
+                        "read_only_sources": [{"id": "research-preview", "label": "Research preview",
+                            "status_url": f"http://127.0.0.1:{self.server.server_port}/status.json{query}"}],
+                    }}
+                return super()._send_json(payload, status=status)
+
             def do_GET(self):
-                path = urlparse(self.path).path
+                parsed = urlparse(self.path)
+                path = parsed.path
+                if path == "/status.json" and parse_qs(parsed.query).get("view") == ["workspace-directory"]:
+                    # Like the runtime workspace reader, use the full-status
+                    # fallback: directory-only hydration omits source identity.
+                    return self._send_error("Use the captured source's full status read.", status=404)
                 if path == "/fixture/readback":
                     return self._send_json({"ok": True, **metrics,
                         "source_unchanged": all(path.read_bytes() == value for path, value in original.items()),

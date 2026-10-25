@@ -132,10 +132,24 @@ export const researchHistoryScenario = {
     const nativePage = await browser.newPage({viewport: {width: 1280, height: 900}});
     try {
       await nativePage.addInitScript(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
+      // A captured research reader has no execution services. Its home must
+      // identify the read-only source, rather than diagnose the owner's machine.
+      await nativePage.goto(`${nativeOwner.base}/chat/?view=overview&statusUrl=%2Fstatus.json`, {waitUntil: 'domcontentloaded'});
+      await nativePage.locator('.personal-home-goal-card').filter({hasText: 'Synthetic research'}).waitFor();
+      await nativePage.locator('.personal-status-source-meta .is-connected').waitFor();
+      assert.match(await nativePage.locator('.personal-status-source').innerText(), /Research preview/);
+      assert.equal(await nativePage.getByTestId('runtime-readiness').count(), 0, 'Reading captured research must not ask the owner to install an Agent runtime');
+      assert.equal(await nativePage.locator('.personal-channel-composer').count(), 0, 'The read-only source offers no execution composer');
+      await nativePage.screenshot({path: resolve(outputDir, 'research-readonly-home-desktop.png'), animations: 'disabled'});
+      await nativePage.setViewportSize({width: 390, height: 844});
+      assert(await nativePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await nativePage.screenshot({path: resolve(outputDir, 'research-readonly-home-mobile.png'), animations: 'disabled'});
+      await nativePage.setViewportSize({width: 1280, height: 900});
       const query = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research', statusUrl: '/status.json?goal_id=synthetic-research-readback'});
       await nativePage.goto(`${nativeOwner.base}/chat/?${query}`, {waitUntil: 'domcontentloaded'});
       const native = nativePage.getByRole('region', {name: '原生测量', exact: true});
       await native.waitFor();
+      assert.match(await nativePage.locator('.personal-status-source').innerText(), /Research preview/, 'Goal-scoped reads preserve the read-only source');
       assert.match(await native.innerText(), /2 \/ 3.*项有效结果/s);
       assert.equal(await native.locator('[data-native-point="best_valid"] strong').textContent(), '3');
       assert.equal(await native.locator('[data-native-point="initial"] strong').textContent(), '7');
@@ -164,6 +178,13 @@ export const researchHistoryScenario = {
       const readback = await (await nativePage.request.get(`${nativeOwner.base}/fixture/readback`)).json();
       assert.equal(readback.source_unchanged, true);
       assert.equal(readback.mutation_attempts, 0);
+      for (const method of ['POST', 'PUT', 'DELETE']) {
+        const refused = await nativePage.request.fetch(`${nativeOwner.base}/api/chat/turns`, {method, data: {agent_id: 'codex', text: 'Synthetic request'}});
+        assert.equal(refused.status(), 405, 'Source presentation never grants execution writes');
+      }
+      const fenced = await (await nativePage.request.get(`${nativeOwner.base}/fixture/readback`)).json();
+      assert.equal(fenced.source_unchanged, true);
+      assert.equal(fenced.mutation_attempts, 3);
     } finally {
       await nativePage.close();
       await nativeOwner.close();
@@ -405,6 +426,10 @@ export const researchHistoryScenario = {
         // the status endpoint; navigation must reach the frontend server.
         await page.route(url => url.pathname === "/status.json", async route => {
           const response = await fetchWorkspaceBackend(route, owner.base);
+          if (new URL(route.request().url()).searchParams.get('view') === 'workspace-directory') {
+            assert.equal(response.status(), 404, 'Captured readers use the full-status fallback with source identity');
+            return route.fulfill({response});
+          }
           assert.equal(response.status(), 200);
           await route.fulfill({response});
         });
