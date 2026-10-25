@@ -129,7 +129,19 @@ export const loopxModeScenario = {
       await page.waitForResponse(response => response.url().endsWith("/loopx") && response.request().method() === "GET");
       await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
       await team.getByRole("heading", {name: "已绑定成员 · 4", exact: true}).waitFor();
-      await team.getByText(/本页 6 条委派记录/).waitFor();
+      await team.getByText("6 条委派", {exact: true}).waitFor();
+      const scopeHelp = team.getByRole("button", {name: "委派记录范围", exact: true});
+      const turnsBeforeScope = api.turnRequests.length;
+      await scopeHelp.click();
+      const scopeBubble = team.getByRole("tooltip").filter({hasText: "委派记录范围"});
+      await scopeBubble.waitFor({state: "visible"});
+      await scopeBubble.getByText("本页 6 条委派记录，仅限当前协调身份；分页不是团队快照。", {exact: true}).waitFor();
+      await page.keyboard.press("Escape");
+      await scopeBubble.waitFor({state: "hidden"});
+      if (!await scopeHelp.evaluate(el => el === document.activeElement)) {
+        throw new Error("Closing delegation scope help lost its originating focus");
+      }
+      if (api.turnRequests.length !== turnsBeforeScope) throw new Error("Reading delegation scope started a model turn");
       const taskCard = todoId => team.locator(".goal-team-bindings > li").filter({has: page.getByText(todoId, {exact: true})});
       for (const [todoId, operationId] of [["todo_analysis", "accepted-analysis"], ["todo_followup", "followup-work"]]) {
         const card = taskCard(todoId);
