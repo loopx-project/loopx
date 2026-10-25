@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.goals.goal_vision import normalize_goal_vision_packet
+from loopx.control_plane.goals import goal_vision_wait
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
@@ -19,6 +21,7 @@ from loopx.control_plane.work_items.semantic_replan_writeback import (
     enforce_open_replan_writeback,
 )
 from loopx.quota import build_quota_should_run
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
 GOAL = "fallback-wait-fixture"
 AGENT = "worker"
@@ -98,6 +101,20 @@ def fallback_state(metadata: str) -> str:
     )
 
 
+def test_vision_wait_composition_uses_one_runtime_crossing(monkeypatch) -> None:
+    methods = []
+    original = goal_vision_wait.effect_runtime_result
+
+    def counted(method, request):
+        methods.append(method)
+        return original(method, request)
+
+    monkeypatch.setattr(goal_vision_wait, "effect_runtime_result", counted)
+    decision()
+
+    assert methods == ["goal.vision_wait.project"]
+
+
 @pytest.mark.parametrize(
     "extra_count,reverse", [(0, False), (8, False), (40, False), (40, True)]
 )
@@ -146,6 +163,7 @@ def test_cli_wait_coverage_is_independent_of_display_size(
     runtime = tmp_path / "runtime"
     runs = runtime / "goals" / GOAL / "runs"
     runs.mkdir(parents=True)
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state_file)
     if not declared:
         assert (
             cli_main(
@@ -218,13 +236,26 @@ def test_cli_wait_coverage_is_independent_of_display_size(
     assert cli_main(args) == 0
     missing = json.loads(capsys.readouterr().out)
     assert missing["effective_action"] == "autonomous_replan_required"
+    runtime_revision = 0
+
+    def reload_source_authority() -> None:
+        nonlocal runtime, runtime_revision
+        next_runtime = tmp_path / f"runtime-source-{runtime_revision}"
+        shutil.copytree(runtime / "goals" / GOAL / "runs", next_runtime / "goals" / GOAL / "runs")
+        runtime = next_runtime
+        runtime_revision += 1
+        initialize_canonical_source_fixture(runtime, GOAL, state_path=state_file)
+        args[args.index("--runtime-root") + 1] = str(runtime)
+
     state_file.write_text(state("status=open claimed_by=worker"))
+    reload_source_authority()
     assert cli_main(args) == 0
     continued = json.loads(capsys.readouterr().out)
     assert continued["selected_todo"]["todo_id"] == "todo_source_b"
     state_file.write_text(
         state("status=deferred claimed_by=worker resume_when=todo_done:todo_recovery")
     )
+    reload_source_authority()
     assert cli_main(args) == 0
     waiting = json.loads(capsys.readouterr().out)
     assert waiting["execution_obligation"]["must_attempt_work"] is False

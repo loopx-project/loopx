@@ -185,7 +185,10 @@ Host fence 和真实 provider IO。有界扫描只提供读取提示，写入锁
 依赖与闭合判断仍使用完整源。
 Python 保留 registry、文档／材料 IO、独立的 Vision-wait 消费者及兼容导出。
 被替代的摘要、筛选与结果协调已退役。持久化 completion 拼写使用共享 token 数据与兼容 codec，
-不再逐标量调用 RPC；实际生产调用者退出后，退役 `todo.summary.project`、
+不再逐标量调用 RPC；
+Vision-wait 状态投影现在由一次 TypeScript effect 组合类型化 resume planning、当前 Agent blocker
+资格、因果血缘覆盖和结果组装。Python 保留源快照编码、结果校验、历史等待态解码及独立消费者。
+实际生产调用者退出后，退役 `todo.summary.project`、
 `todo.completion_state.normalize` 与 `todo.completion_state.require_metadata`。
 事务在进程内执行既有语义 owner。
 

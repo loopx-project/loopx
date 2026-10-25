@@ -596,28 +596,27 @@ def test_current_agent_blocker_outranks_exact_blocked_successor() -> None:
     ] == WAITING_ID
 
 
-@pytest.mark.parametrize(
-    ("claimed_by", "reason"),
-    [
-        (PRIMARY_AGENT, "Peer-owned blocker."),
-        (AGENT_ID, None),
-    ],
-    ids=["other-agent", "missing-reason"],
-)
-def test_unscoped_or_malformed_blocker_does_not_defer_open_vision_gap(
-    claimed_by: str,
-    reason: str | None,
-) -> None:
+def test_peer_owned_blocker_does_not_defer_open_vision_gap() -> None:
     guard = _quota(
         _current_agent_blocker_status_payload(
-            claimed_by=claimed_by,
-            reason=reason,
+            claimed_by=PRIMARY_AGENT,
+            reason="Peer-owned blocker.",
         )
     )
 
     assert guard["decision"] == "autonomous_replan_required"
     assert "vision_wait_state" not in guard["goal_frontier_projection"]
     assert guard["goal_frontier_projection"]["replan_required"] is True
+
+
+@pytest.mark.parametrize("reason", [None, "", "Waiting for assignment."])
+def test_blocker_reason_text_does_not_change_wait_eligibility(reason: str | None) -> None:
+    guard = _quota(_current_agent_blocker_status_payload(reason=reason))
+
+    wait = guard["goal_frontier_projection"].get("vision_wait_state")
+    assert wait is not None
+    assert wait["reason_code"] == "current_agent_blocker"
+    assert wait["selected_todo_id"] == PROJECTED_BLOCKER_ID
 
 
 def test_unbound_legacy_blocker_ack_cannot_clear_vision_replan_obligation() -> None:

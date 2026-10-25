@@ -226,6 +226,10 @@ Python retains registry, document/material IO, independent Vision-wait consumers
 and compatibility exports. Its replaced summary, filter and result coordination
 is retired. Persisted completion spellings use shared token data and compatibility codecs
 without scalar RPCs;
+Vision-wait state projection now composes typed resume planning, current-agent
+blocker eligibility, causal lineage coverage and result assembly in one TypeScript
+effect. Python retains source-snapshot encoding, result validation, historical
+wait-state decoding and independent consumers.
 `todo.summary.project`, `todo.completion_state.normalize` and
 `todo.completion_state.require_metadata` are retired after their production
 callers exit. Existing semantic owners execute in process inside the transaction.
