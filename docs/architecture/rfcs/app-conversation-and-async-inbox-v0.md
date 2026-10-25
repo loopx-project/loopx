@@ -186,6 +186,15 @@ listener/recovery diagnostics. The client requires the exact binding echo,
 owner audience, available workspace and matching executor; missing or stale
 descriptors fail closed without a catalog fallback or replacement Session. The
 existing five-second read bound and fresh input admission remain unchanged.
+Unsent input for an original conversation belongs to its fixed binding/Session,
+not the executor's loading or unavailable display state. Source denial and
+recovery retain the editable text and in-memory images without enabling Send.
+Ordinary multi-executor conversations keep separate drafts. A unique retained
+executor-keyed draft is recovered into the same original conversation; conflicting
+drafts remain separately recoverable without overwriting current input. Retained
+uncertain sends keep their original request/Turn identity and require normal
+source admission before an explicit retry. Text retains the existing tab-session
+storage lifetime; this does not add image persistence across reloads.
 This qualifies a source-read boundary, not complete history/media synchronization
 or an installed provider roundtrip.
 The original-conversation request inventory pins one qualified code revision per

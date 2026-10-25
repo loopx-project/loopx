@@ -7,7 +7,7 @@ import {useGoalWorkspaceDigest} from "./goal-masthead";
 import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request";
 import { todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, legacySteeringRequests, restoreLegacySteeringRequest } from "./steering-recovery";
-import { useConversationInputState } from "./use-conversation-input-state";
+import { conversationInputKey, useConversationInputState } from "./use-conversation-input-state";
 import { composerKeyAction } from "./composer-keyboard";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
@@ -1114,17 +1114,29 @@ export function PersonalWorkspacePage({
   const conversationKey = workspaceConversations?.managed ? conversationContextKey({kind: "managed", ...workspaceConversations.managed.target}) : originalConversation ? conversationContextKey({ kind: "bound", ...originalConversation.target }) : selectedWorkspaceRef
     ? conversationContextKey({ kind: "project", projectRef: selectedWorkspaceRef })
     : selectedGoalId ?? "manager";
-  const composerDraftKey = managedWorkActive ? conversationKey : `${conversationKey}:${selectedAgentId}`;
+  const composerDraftKey = conversationInputKey(conversationKey, selectedAgentId, managedWorkActive || Boolean(originalConversation));
   const { composer, setComposer, restoreFailedSubmission,
     sending, setSending, steering, setSteering, actionFeedback, setActionFeedback,
     imageAttachments, setImageAttachments, imageAttachmentError, setImageAttachmentError,
     loopxMessageReceipt, setLoopxMessageReceipt, isCurrentConversation,
-  } = useConversationInputState(composerDraftKey);
+    retainedDrafts, restoreRetainedDraft,
+  } = useConversationInputState(composerDraftKey, Boolean(originalConversation));
   useEffect(() => {
     const input = composerRef.current;
     if (!input) return;
-    input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    const resize = () => {
+      input.style.height = "auto";
+      input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+    };
+    resize();
+    let width = input.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (input.clientWidth === width) return;
+      width = input.clientWidth;
+      resize();
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
   }, [composer, selectedGoalId, managerChatOpen]);
   async function reviewGoalDraft(draft: GoalDraft, edit = false, draftId = "") {
     // Source message + reviewed contents survive retry without merging distinct requests.
@@ -1334,11 +1346,14 @@ export function PersonalWorkspacePage({
     && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
   const queueTurnId = conversationTurnRunning && !readOnly && callbacks.onQueueConversationTurn
     ? runningMessage?.sourceTurnId : undefined;
-  const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId) : [];
+  const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId, composerDraftKey) : [];
   function restoreLegacyDraft(key: string) {
     if (composer.trim() || !conversationSessionId) return;
     const restored = restoreLegacySteeringRequest(composerDraftKey, key, conversationSessionId);
-    if (restored) setComposer(restored.text);
+    if (restored) {
+      setComposer(restored.text);
+      if (restored.delivery === "queue" && !imageAttachments.length) setImageAttachments(restored.attachments ?? []);
+    }
   }
   useEffect(() => {
     if (!conversationSessionId) return;
@@ -2331,6 +2346,18 @@ export function PersonalWorkspacePage({
     const pendingImages = messageOverride ? [] : imageAttachments;
     const message = (messageOverride ?? composer).trim() || (pendingImages.length ? t("composer.imageAnalysisPrompt") : "");
     if (!message || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || conversationHistoryState?.sendBlocked) return;
+    // A retained uncertain request must be durably recovered before any new
+    // dispatch. Restoring its text alone cannot turn it into a fresh send.
+    if (conversationSessionId && !readSteeringRequest(composerDraftKey)) {
+      const legacy = legacySteeringRequests(conversationSessionId, composerDraftKey)[0];
+      if (legacy) {
+        restoreLegacySteeringRequest(composerDraftKey, legacy[0], conversationSessionId);
+        if (!readSteeringRequest(composerDraftKey)) {
+          setActionFeedback(t("feedback.steeringStorageUnavailable"));
+          return;
+        }
+      }
+    }
     const previousSteering = readSteeringRequest(composerDraftKey);
     const retry = previousSteering && previousSteering.sessionId === conversationSessionId && previousSteering.text.trim() === message
       ? previousSteering : undefined;
@@ -3024,13 +3051,20 @@ export function PersonalWorkspacePage({
                 <a href={runtimeSetupGuideUrl} rel="noreferrer" target="_blank">{t("readiness.guide")}</a>
               </p>
             ) : null}
+            {retainedDrafts.length ? <details className="personal-legacy-steering-drafts">
+              <summary>{locale === "zh-CN" ? `保留的草稿 · ${retainedDrafts.length}` : `Retained message drafts · ${retainedDrafts.length}`}</summary>
+              {retainedDrafts.map(([key, draft]) => <div key={key}><p>{draft.composer}</p>
+                <button type="button" disabled={Boolean(composer) || Boolean(imageAttachments.length) || sending || steering || Boolean(retainedSteering)} onClick={() => restoreRetainedDraft(key)}>
+                  {locale === "zh-CN" ? "恢复到输入框" : "Restore to composer"}
+                </button></div>)}
+            </details> : null}
             {legacyDrafts.length ? <details className="personal-legacy-steering-drafts">
-            <summary>{locale === "zh-CN" ? `旧版保留的调整草稿 · ${legacyDrafts.length}` : `Retained drafts · ${legacyDrafts.length}`}</summary>
+            <summary>{locale === "zh-CN" ? `待确认的投递 · ${legacyDrafts.length}` : `Unconfirmed deliveries · ${legacyDrafts.length}`}</summary>
             {legacyDrafts.map(([key, request]) => <div key={key}><p>{request.text}</p>
               <button type="button" disabled={Boolean(composer.trim()) || Boolean(retainedSteering && retainedSteering.id !== request.id)} onClick={() => restoreLegacyDraft(key)}>
                 {locale === "zh-CN" ? "恢复到输入框" : "Restore to composer"}
               </button></div>)}
-            <small>{locale === "zh-CN" ? "先处理待确认指令并清空输入框后恢复；重试仍发往原回合。" : "Resolve pending instructions and clear the composer to restore. Retries keep their original turn."}</small>
+            <small>{locale === "zh-CN" ? "清空输入框后恢复；重试保留原请求。" : "Clear the composer to restore. Retries keep the original request."}</small>
           </details> : null}
           {retainedSteering && retainedSteering.sessionId === conversationSessionId && !retryingSteering && !composer.trim() ? <button type="button"
             onClick={() => { setComposer(retainedSteering.text); if (retainedSteering.delivery === "queue") setImageAttachments(retainedSteering.attachments ?? []); }}>

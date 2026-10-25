@@ -81,7 +81,8 @@
     "smoke:bound-conversation": "vite build --ssr smoke/bound-conversation-smoke.ts --outDir node_modules/.cache/loopx-bound-conversation --emptyOutDir && node node_modules/.cache/loopx-bound-conversation/bound-conversation-smoke.js",
     "smoke:delegation-search": "LOOPX_PLAYWRIGHT_PACKAGE=\"$PWD/node_modules/playwright\" node smoke/delegation-search-browser-smoke.mjs",
     "smoke:workspace-command-palette": "node --experimental-strip-types --test src/features/personal-workspace/workspace-command-entries.test.mjs && node --experimental-strip-types smoke/workspace-command-palette-browser-smoke.mjs && node --experimental-strip-types smoke/workspace-navigation-browser-smoke.mjs",
-    "smoke:app-steward": "vite build --ssr smoke/app-steward-smoke.ts --outDir node_modules/.cache/loopx-app-steward --emptyOutDir && node node_modules/.cache/loopx-app-steward/app-steward-smoke.js"
+    "smoke:app-steward": "vite build --ssr smoke/app-steward-smoke.ts --outDir node_modules/.cache/loopx-app-steward --emptyOutDir && node node_modules/.cache/loopx-app-steward/app-steward-smoke.js",
+    "smoke:conversation-input": "node --no-warnings --experimental-strip-types --test src/features/personal-workspace/steering-recovery.test.mjs && vite build --ssr smoke/conversation-input-smoke.ts --outDir node_modules/.cache/loopx-conversation-input --emptyOutDir && node node_modules/.cache/loopx-conversation-input/conversation-input-smoke.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
