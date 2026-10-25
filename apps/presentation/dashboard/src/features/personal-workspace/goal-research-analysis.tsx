@@ -209,7 +209,7 @@ export function ResearchAnalysisButton({analysis: a}: {analysis: Controller}) {
   // explanation is optional; cached results and unavailable states are reads.
   const readOnly = unavailable || a.readError || a.pack?.result || a.pending || a.recordedRunning;
   return <div className="research-analysis-entry"><div className="research-analysis-entry-actions"><button ref={a.trigger} type="button" disabled={a.loading && !a.pack} onClick={() => readOnly ? a.show() : void a.execute(a.pack?.job?.status === "failed" || a.pack?.job?.status === "cancelled")} aria-expanded={a.location.open}>
-    <Sparkles size={14} aria-hidden/>{a.pack?.result ? (a.zh ? "查看分析" : "View analysis") : analysisActionLabel(a.pack, a.zh)}
+    <Sparkles size={14} aria-hidden/>{a.readOnly || a.pack?.result ? (a.zh ? "查看分析" : "View analysis") : analysisActionLabel(a.pack, a.zh)}
   </button><ContextHelp label={sourceUnavailable ? (a.zh ? "分析来源未就绪" : "Analysis source unavailable") : (a.zh ? "分析说明" : "About deep analysis")} icon={sourceUnavailable ? CircleHelp : undefined}>
     {sourceUnavailable ? <p>{reasonCopy(a.pack?.reason_code ?? a.snapshot?.catalog.reason_code, a.zh)}</p> : null}
     {a.pack ? <p>{a.zh ? "分析请求设置（固定）：" : "Fixed analysis request: "}{a.pack.config.model} / {a.pack.config.effort} / {a.pack.config.service_tier}</p> : null}
@@ -480,8 +480,8 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
   const zh = a.zh, p = a.pack, result = p?.result;
   const resultJob = p?.result_job ?? p?.job;
   const failed = p?.job?.status === "failed" || p?.job?.status === "cancelled";
-  const sourceAvailable = p?.availability === "available" && !a.readOnly;
-  const available = sourceAvailable && !a.readError;
+  const sourceAvailable = p?.availability === "available";
+  const available = sourceAvailable && !a.readOnly && !a.readError;
   const benefit = result?.metrics.find(m => m.metric === "benefit_test");
   const headline = !result ? null : benefit?.no ? (zh ? "仍有研究片段尚未检验原目标收益" : "Some episodes have not tested original-objective utility")
     : benefit?.unknown ? (zh ? "原目标收益的检验情况仍未知" : "Original-objective utility testing remains unknown")
@@ -507,12 +507,13 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
         <small>{zh ? "重新分析完整固定范围，产生新的分析用量；保留上一轮结果。" : "Reanalyzes the full fixed scope with new analysis usage; the previous result is preserved."}</small>
       </div> : null}
       {!result || a.pending || a.recordedRunning ? <div className="analysis-actions">
-        {a.pending || a.recordedRunning ? <><p role="status">{a.pending ? <LoaderCircle size={15} aria-hidden className="analysis-spin"/> : null}{a.pending ? (zh ? "正在处理分析请求…" : "Processing analysis request…") : (zh ? "上次记录仍待分析结果；当前执行状态尚未核验。" : "The last receipt awaits a result; current execution is unverified.")}</p><button type="button" onClick={() => void a.cancel()} disabled={a.cancelPending || p.job?.cancel_requested}>{p.job?.cancel_requested ? (zh ? "已请求取消" : "Cancellation requested") : a.cancelPending ? (zh ? "正在请求取消…" : "Requesting cancellation…") : (zh ? "取消分析" : "Cancel analysis")}</button></>
+        {a.pending || a.recordedRunning ? <><p role="status">{a.pending ? <LoaderCircle size={15} aria-hidden className="analysis-spin"/> : null}{a.pending ? (zh ? "正在处理分析请求…" : "Processing analysis request…") : (zh ? "上次记录仍待分析结果；当前执行状态尚未核验。" : "The last receipt awaits a result; current execution is unverified.")}</p><button type="button" onClick={() => void a.cancel()} disabled={a.readOnly || a.cancelPending || p.job?.cancel_requested}>{p.job?.cancel_requested ? (zh ? "已请求取消" : "Cancellation requested") : a.cancelPending ? (zh ? "正在请求取消…" : "Requesting cancellation…") : (zh ? "取消分析" : "Cancel analysis")}</button></>
           : result ? <button type="button" onClick={() => void a.read().catch(() => undefined)}><RefreshCw size={14} aria-hidden/>{zh ? "刷新结果" : "Refresh result"}</button>
+            : a.readOnly ? <><p className={sourceAvailable ? undefined : "analysis-warning"}>{sourceAvailable ? (zh ? "此来源尚无已保存的分析。" : "This source has no saved analysis yet.") : reasonCopy(p.reason_code, zh)}</p><button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "刷新结果" : "Refresh result"}</button></>
             : <button className="analysis-primary" type="button" disabled={!available} onClick={() => void a.execute(failed)}><Sparkles size={15} aria-hidden/>{failed ? (zh ? "重试分析" : "Retry analysis") : p.continuation ? analysisActionLabel(p, zh) : (zh ? "分析所选范围" : "Analyze selected scope")}</button>}
-        {!result && !a.pending && !a.recordedRunning ? <small>{p.continuation?.can_reuse ? (zh ? "复用已有判读，无需新模型调用。" : "Reuses existing judgments without a new model call.") : zh ? "使用本机 Codex 账户，单独产生分析用量；浏览不调用 Agent。" : "Uses the local Codex account with separate analysis usage. Browsing never invokes an Agent."}</small> : null}
+        {!result && !a.readOnly && !a.pending && !a.recordedRunning ? <small>{p.continuation?.can_reuse ? (zh ? "复用已有判读，无需新模型调用。" : "Reuses existing judgments without a new model call.") : zh ? "使用本机 Codex 账户，单独产生分析用量；浏览不调用 Agent。" : "Uses the local Codex account with separate analysis usage. Browsing never invokes an Agent."}</small> : null}
       </div> : null}
-      {failed && !a.pending ? <p className="analysis-warning" role="status">{p.job?.status === "cancelled" ? (zh ? "分析已取消，研究历史保持可读。" : "Analysis cancelled. Research history remains readable.") : (zh ? "上次分析未完成；可重试，原失败记录会保留。" : "The last analysis did not complete. Retry preserves its failure record.")}</p> : null}
+      {failed && !a.pending ? <p className="analysis-warning" role="status">{p.job?.status === "cancelled" ? (zh ? "分析已取消，研究历史保持可读。" : "Analysis cancelled. Research history remains readable.") : a.readOnly ? (zh ? "上次分析未完成；失败记录已保留。" : "The last analysis did not complete; its failure record is preserved.") : (zh ? "上次分析未完成；可重试，原失败记录会保留。" : "The last analysis did not complete. Retry preserves its failure record.")}</p> : null}
       {failed && !a.pending ? <p className="analysis-attempt-usage" aria-label={zh ? "本次分析用量" : "Current analysis usage"}>
         {zh ? "本次尝试" : "This attempt"} · {p.job?.analysis_wall_seconds == null ? (zh ? "耗时未知" : "Time unknown") : `${p.job.analysis_wall_seconds.toFixed(1)}s`} · {zh ? "输入" : "input"} {p.job?.usage?.input_tokens?.toLocaleString() ?? "—"} / {zh ? "输出" : "output"} {p.job?.usage?.output_tokens?.toLocaleString() ?? "—"} tokens
       </p> : null}

@@ -317,6 +317,90 @@ export const researchHistoryScenario = {
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-related-episodes-mobile-en.png'), animations: 'disabled'});
       await englishReview.getByRole('button', {name: 'Back to report', exact: true}).click();
       assert(await englishOrigin.evaluate(e => e === document.activeElement));
+
+      // Reading a remote source and executing on it are separate facts. Keep
+      // the real saved HTTP/store result, changing only source identity and
+      // explicit transport observations for the negative/recovery cases.
+      const readonlyStatus = `${synthesisOwner.base}/status.json?goal_id=synthetic-research-readback`;
+      await synthesisPage.route(target => target.pathname === '/status.json', async route => {
+        if (new URL(route.request().url()).searchParams.get('view') === 'workspace-directory') {
+          return route.fulfill({status: 404, json: {error: 'Use the complete captured status source'}});
+        }
+        const response = await route.fetch(), value = await response.json();
+        value.local_dashboard_api = {...value.local_dashboard_api, read_only_sources: [
+          {id: 'research-readonly', label: 'Read-only research', status_url: readonlyStatus},
+        ]};
+        await route.fulfill({response, json: value});
+      });
+      let readonlyState = 'saved', readonlyWrites = 0;
+      await synthesisPage.route(target => target.pathname === '/api/chat/research-analysis', async route => {
+        if (route.request().method() !== 'GET') {
+          readonlyWrites++;
+          return route.fulfill({status: 405, json: {error: 'Read-only source'}});
+        }
+        if (readonlyState === 'read-error') return route.fulfill({status: 503, json: {error: 'Synthetic read failure'}});
+        const response = await route.fetch(), value = await response.json();
+        assert.notEqual(value.execution_enabled, true, 'The isolated owner does not enable model dispatch');
+        if (readonlyState === 'empty' || readonlyState === 'failed') value.pack.result = null;
+        if (readonlyState === 'empty') value.pack.job = null;
+        if (readonlyState === 'failed') value.pack.job = {status: 'failed', attempt: 2,
+          analysis_wall_seconds: 4, usage: {input_tokens: 10, output_tokens: 5}};
+        if (readonlyState === 'running') value.pack.job = {status: 'running', attempt: 2};
+        if (readonlyState === 'changed') Object.assign(value.pack, {availability: 'unavailable', reason_code: 'source_changed'});
+        await route.fulfill({response, json: value});
+      });
+      const readonlyQuery = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research',
+        research_analysis: 'synthetic-research-readback', statusUrl: readonlyStatus});
+      const readonlyPanel = synthesisPage.locator('.research-analysis');
+      for (const [locale, unavailableText, emptyText] of [
+        ['zh-CN', '分析暂不可用，请刷新重试。', '此来源尚无已保存的分析。'],
+        ['en', 'Analysis is unavailable; refresh to retry.', 'This source has no saved analysis yet.'],
+      ]) {
+        readonlyState = 'saved';
+        await synthesisPage.evaluate(locale => localStorage.setItem('loopx-pw-locale', locale), locale);
+        await synthesisPage.goto(`${synthesisOwner.base}/chat/?${readonlyQuery}`, {waitUntil: 'networkidle'});
+        await readonlyPanel.locator('.research-report-tabs').waitFor();
+        assert.equal(await readonlyPanel.getByText(unavailableText, {exact: true}).count(), 0,
+          'A readable saved report is not unavailable merely because this source cannot execute');
+        readonlyState = 'empty';
+        await synthesisPage.reload({waitUntil: 'networkidle'});
+        await readonlyPanel.getByText(emptyText, {exact: true}).waitFor();
+        assert.equal(await readonlyPanel.locator('.analysis-primary').count(), 0,
+          'A read-only empty source offers reading recovery instead of a generation action');
+        assert.equal(await readonlyPanel.getByText(unavailableText, {exact: true}).count(), 0);
+        if (locale === 'zh-CN') {
+          await readonlyPanel.evaluate(e => e.scrollIntoView({block: 'start', behavior: 'instant'}));
+          await synthesisPage.screenshot({path: resolve(outputDir, 'readonly-analysis-empty-phone.png'), animations: 'disabled'});
+        }
+      }
+      await synthesisPage.evaluate(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
+      readonlyState = 'running';
+      await synthesisPage.reload({waitUntil: 'networkidle'});
+      assert(await readonlyPanel.getByRole('button', {name: '取消分析', exact: true}).isDisabled(),
+        'A stored running receipt cannot enable cancellation on a read-only source');
+      await readonlyPanel.evaluate(e => e.scrollIntoView({block: 'start', behavior: 'instant'}));
+      await synthesisPage.screenshot({path: resolve(outputDir, 'readonly-analysis-running-phone.png'), animations: 'disabled'});
+      readonlyState = 'failed';
+      await synthesisPage.reload({waitUntil: 'networkidle'});
+      await readonlyPanel.getByText('上次分析未完成；失败记录已保留。', {exact: true}).waitFor();
+      assert.match(await readonlyPanel.getByLabel('本次分析用量').innerText(), /4\.0s.*10.*5/s);
+      assert.equal(await readonlyPanel.getByRole('button', {name: '重试分析', exact: true}).count(), 0);
+      await readonlyPanel.evaluate(e => e.scrollIntoView({block: 'start', behavior: 'instant'}));
+      await synthesisPage.screenshot({path: resolve(outputDir, 'readonly-analysis-failed-phone.png'), animations: 'disabled'});
+      readonlyState = 'changed';
+      await synthesisPage.reload({waitUntil: 'networkidle'});
+      await readonlyPanel.getByText('原始来源已变化；保留历史分析，重新核对后才能再次分析。', {exact: true}).waitFor();
+      await readonlyPanel.locator('.research-report-tabs').waitFor();
+      readonlyState = 'saved';
+      await synthesisPage.reload({waitUntil: 'networkidle'});
+      readonlyState = 'read-error';
+      await readonlyPanel.getByRole('button', {name: '刷新分析结果', exact: true}).click();
+      await readonlyPanel.getByRole('alert').filter({hasText: '刷新失败，保留上次结果。'}).waitFor();
+      await readonlyPanel.locator('.research-report-tabs').waitFor();
+      readonlyState = 'saved';
+      await readonlyPanel.getByRole('button', {name: '重试读取', exact: true}).click();
+      await readonlyPanel.getByRole('alert').waitFor({state: 'hidden'});
+      assert.equal(readonlyWrites, 0, 'Reading, failed reads and readonly job observations never request execution');
       const readback = await (await synthesisPage.request.get(`${synthesisOwner.base}/fixture/readback`)).json();
       assert.equal(readback.source_unchanged, true);
       assert.equal(readback.mutation_attempts, 0, 'Reading either layer and citations starts no model or state write');
