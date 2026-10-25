@@ -14,7 +14,7 @@ from ..content_digest import BARE_SHA256_PATTERN
 from .goal_instance_scope import collaboration_goal_scope, decide_collaboration_lifecycle
 from .inbox import _entry, _now, _read, _receipt, _request_lock, _root, read_inbox_transaction, reply_status
 from .links import read_linked_work
-from .source_chat_observation import is_source_chat_host, original_delivery_facts
+from .source_chat_observation import is_source_chat_host, original_delivery_facts, original_turn_reader
 from .source_grant_observation import source_context_target_authority
 
 
@@ -45,7 +45,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
         raise ValueError("request search must be at most 200 characters")
     query = search.strip().casefold()
     paths = sorted((_root(root) / "entries").glob("*/*.json"))
-    rows, unreadable, cache = [], 0, {}
+    rows, unreadable, cache, turn_readers = [], 0, {}, {}
     for path in paths[:2000]:
         try:
             candidate = _read(path)
@@ -67,7 +67,10 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
             gid, aid = route["goal_id"], route["agent_id"]
             if goal_ids is not None and gid not in goal_ids:
                 continue
-            turn = store.turn_for_client(source_session["session_id"], route["client_turn_id"])
+            sid = source_session["session_id"]
+            if sid not in turn_readers:
+                turn_readers[sid] = original_turn_reader(store, sid)
+            turn = turn_readers[sid](route["client_turn_id"])
             if turn is None:
                 raise ValueError("original source Turn unavailable")
             with collaboration_goal_scope(registry, goal_id=gid, agents=(), caller_goal_ref=route.get("goal_ref")) as scope:

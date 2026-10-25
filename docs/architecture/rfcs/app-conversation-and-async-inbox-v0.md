@@ -191,6 +191,14 @@ code revision. This bounds provider IO by sources instead of historical rows,
 without caching receipt decisions or reducing scan coverage. Unreadable sources
 remain incomplete coverage rather than an empty successful inventory.
 
+Within each HTTP read, the Chat source observer locates original client Turns once per
+verified source Session, then rereads the exact Turn file for every request.
+This Python IO locator retains only store paths: it caches no content, grants
+or receipt decisions and is discarded before the next page. A missing Turn or
+changed client identity remains unreadable source coverage. This removes repeated
+full-history scans without changing the typed collaboration owner or its checks;
+provider latency and full installed cross-channel acceptance remain separate.
+
 Cold Goal links wait for the current status directory before invalidating a
 missing selection; the bundled placeholder is not proof that a valid Goal was
 removed. This keeps an initial Goal route out of default-steward discovery.
