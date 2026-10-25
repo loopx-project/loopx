@@ -26,16 +26,14 @@
 .research-report-tabs > button { min-height: 44px; border: 0; border-block-end: 2px solid transparent; padding: 10px 0; background: none; color: var(--pw-muted); font: inherit; cursor: pointer; }
 .research-report-tabs > button[aria-selected="true"] { border-block-end-color: var(--pw-text); color: var(--pw-text); }
 .research-report-tabs > button > span { margin-inline-start: 8px; color: var(--pw-muted); font-size: var(--text-body); }
-.research-report-columns, .research-report-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
-.research-report-columns { color: var(--pw-muted); font-size: var(--text-body); padding-block: 0 12px; }
+.research-report-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .research-report-finding, .research-report-experiment { border-block-start: 1px solid var(--pw-line); padding-block: 16px; }
 .research-report-finding > h5, .research-report-experiment h5 { margin-block-end: 8px; }
 .research-report-finding h5 > span, .research-report-experiment h5 > span { color: var(--pw-muted); font-weight: 400; }
 .research-report-comparison > div, .research-report-comparison > dl { min-width: 0; }
-.research-report-comparison h6 { color: var(--pw-muted); font-weight: 500; font-size: var(--text-body); }
+.research-report-account h6 { color: var(--pw-muted); font-weight: 500; font-size: var(--text-body); }
 .research-report-experiment > header > p { max-width: 90ch; }
 @container (max-width: 700px) {
-  .research-report-columns { display: none; }
   .research-report-comparison { grid-template-columns: 1fr; gap: 12px; }
 }
 @media (max-width: 640px) {
@@ -44,7 +42,6 @@
   .research-analysis.has-synthesis > header h3 { grid-column: 1; grid-row: 1; align-self: center; }
   .research-analysis.has-synthesis > header p { grid-column: 1 / -1; grid-row: 2; }
   .research-analysis.has-synthesis > header .analysis-header-actions { grid-column: 2; grid-row: 1; }
-  .research-report-columns { display: none; }
   .research-report-comparison { grid-template-columns: 1fr; gap: 12px; }
   .research-synthesis dl { grid-template-columns: 1fr; gap: 4px; }
   .research-synthesis dd { margin-block-end: 12px; }

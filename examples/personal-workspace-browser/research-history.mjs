@@ -225,6 +225,20 @@ export const researchHistoryScenario = {
       await reading.getByRole('button', {name: '指标', exact: true}).click();
       assert(await synthesisPage.evaluate(() => document.activeElement?.contains(document.querySelector('.research-progress'))));
       await synthesis.locator('.research-synthesis-finding > summary').first().click();
+      // A reader must be able to separate the observed result from its
+      // interpretation in both reading modes, including stacked narrow views.
+      const assertFindingAccount = async reader => {
+        const account = reader.locator('.research-report-account').first();
+        const observed = account.locator(':scope > div').nth(0);
+        const interpreted = account.locator(':scope > div').nth(1);
+        assert(await observed.getByRole('heading', {name: '观察与依据', exact: true}).isVisible());
+        assert.match(await observed.innerText(), /第三次候选误差为 3.*第二次候选无效/s);
+        assert.equal(await observed.getByRole('button', {name: /^证据 1: facts/}).count(), 1);
+        assert(await interpreted.getByRole('heading', {name: '解释', exact: true}).isVisible());
+        assert.match(await interpreted.innerText(), /尚不能定位机制.*随机波动/s);
+        assert.equal(await interpreted.getByRole('button', {name: /^证据/}).count(), 0, 'An observation citation must not label the interpretation as proven');
+      };
+      await assertFindingAccount(synthesis);
       await synthesis.getByRole('button', {name: /^证据 1: facts/}).first().click();
       const source = synthesisPage.getByRole('region', {name: '引用原文', exact: true});
       await source.waitFor();
@@ -233,6 +247,7 @@ export const researchHistoryScenario = {
       await source.press('Escape');
       assert.equal(await synthesisPage.getByRole('region', {name: '轨迹深度分析', exact: true}).count(), 0);
       await synthesisPage.setViewportSize({width: 390, height: 844});
+      await assertFindingAccount(synthesis);
       await synthesis.locator('.research-synthesis-finding > summary').first().click();
       await synthesisPage.evaluate(() => {for (const e of document.querySelectorAll('*')) if (e.scrollTop) e.scrollTop = 0;});
       assert(await synthesisPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
@@ -244,6 +259,10 @@ export const researchHistoryScenario = {
       await analysis.waitFor();
       assert.equal(await synthesisPage.getByRole('region', {name: '研究汇报', exact: true}).count(), 1, 'One reading focus when expanded');
       assert.match(await analysis.innerText(), /竞争解释.*随机波动/s);
+      await assertFindingAccount(analysis);
+      const unretained = analysis.locator('.research-report-account').nth(1);
+      assert.match(await unretained.innerText(), /原始记录没有保留信息.*保留结果未知/s);
+      assert.equal(await unretained.getByRole('heading', {name: '竞争解释', exact: true}).count(), 0, 'Missing alternatives are not filled with an invented explanation');
       const savedOverview = await analysis.locator('.research-synthesis-summary').innerText();
       assert(await analysis.locator('.research-report-tabs').evaluate(tabs => {
         const overview = tabs.parentElement.querySelector('.research-synthesis-summary');
@@ -261,6 +280,7 @@ export const researchHistoryScenario = {
       await synthesisPage.setViewportSize({width: 1280, height: 900});
       await analysis.getByRole('tab', {name: /结论与解释/}).click();
       assert.equal(await analysis.locator('.research-synthesis-summary').innerText(), savedOverview, 'Returning to findings restores the complete saved overview');
+      await assertFindingAccount(analysis);
       await analysis.evaluate(e => e.scrollIntoView({block: 'start'}));
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-deep-desktop.png'), animations: 'disabled'});
       // The report already declares its episode lineage. Follow those exact
@@ -331,6 +351,10 @@ export const researchHistoryScenario = {
       await synthesisPage.setViewportSize({width: 390, height: 844});
       await synthesisPage.getByRole('button', {name: 'Read deeper', exact: true}).click();
       const english = synthesisPage.locator('.research-analysis');
+      const englishAccount = english.locator('.research-report-account').first();
+      assert(await englishAccount.getByRole('heading', {name: 'Observation and evidence', exact: true}).isVisible());
+      assert(await englishAccount.getByRole('heading', {name: 'Interpretation', exact: true}).isVisible());
+      assert.match(await englishAccount.locator(':scope > div').nth(1).innerText(), /mechanism remains unresolved.*Random variation/s);
       const englishReview = english.locator('.analysis-method').first();
       const englishOrigin = english.locator('.research-report-finding .research-review-episodes').first();
       await englishOrigin.click();

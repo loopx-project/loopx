@@ -27,6 +27,12 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
     <dt>{zh ? "预期区分" : "Distinguishing prediction"}</dt><dd>{experiment.prediction}</dd>
     <dt>{zh ? "推翻解释的结果" : "Disconfirming result"}</dt><dd>{experiment.disconfirming_result}</dd>
   </dl>;
+  const findingAccount = (finding: TrajectoryResearchSynthesis["findings"][number]) => <div className={`research-report-account${detail ? " research-report-comparison" : ""}`}>
+    <div><h6>{zh ? "观察与依据" : "Observation and evidence"}</h6>
+      <p>{finding.observation}</p>{citations(finding.citations)}</div>
+    <div><h6>{zh ? "解释" : "Interpretation"}</h6>
+      <p>{finding.interpretation}</p>{alternatives(finding.alternative_explanations)}</div>
+  </div>;
   const overview = <>
     <p className="research-synthesis-summary">{s.summary.text}</p>
     <details className="research-report-summary-sources"><summary>{zh ? "概览来源" : "Summary sources"} · {s.summary.citations.length}</summary>{citations(s.summary.citations)}</details>
@@ -35,8 +41,7 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
   if (!detail) {
     body = <>
       <ol className="research-report-findings">{s.findings.map((finding, i) => <li key={i}><details className="research-synthesis-finding">
-        <summary>{finding.title}</summary><p>{finding.observation}</p><p>{finding.interpretation}</p>
-        {alternatives(finding.alternative_explanations)}{citations(finding.citations)}
+        <summary>{finding.title}</summary>{findingAccount(finding)}
       </details></li>)}</ol>
       {s.next_experiments[0] ? <p className="research-report-next"><strong>{zh ? "优先研究" : "Investigate first"}</strong> · {s.next_experiments[0].question}</p> : null}
     </>;
@@ -62,12 +67,10 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
             {episodeLink(experiment.episode_ids)}
           </article>)}
         </div> : <div className="research-report-matrix">
-          {!!s.findings.length && <div className="research-report-columns" aria-hidden><span>{zh ? "观察与依据" : "Observation and evidence"}</span><span>{zh ? "解释与竞争解释" : "Interpretation and alternatives"}</span></div>}
           {!s.findings.length ? <p>{zh ? "现有证据不足以形成进一步结论。" : "The evidence does not justify further findings."}</p> : null}
           {s.findings.map((finding, i) => <article key={i} className="research-report-finding">
             <h5><span>{i + 1}.</span> {finding.title}</h5>
-            <div className="research-report-comparison"><div><p>{finding.observation}</p>{citations(finding.citations)}</div>
-              <div><p>{finding.interpretation}</p>{alternatives(finding.alternative_explanations)}</div></div>
+            {findingAccount(finding)}
             {episodeLink(finding.episode_ids)}
           </article>)}
         </div>}
