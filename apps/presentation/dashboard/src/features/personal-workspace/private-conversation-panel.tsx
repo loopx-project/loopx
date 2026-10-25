@@ -1,3 +1,4 @@
+import {MessageSquareText, RefreshCw} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
 import {connectPrivateConversation, disconnectPrivateConversation, fetchPrivateConversations,
@@ -116,13 +117,22 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
     } else {setProjectGrant("workspace_write"); setAudience("owner");}
   }
   return <section className="personal-detail-card personal-private-conversation" aria-label={zh ? "飞书项目助手与管家" : "Lark project assistants and steward"}>
-    <h3>{zh ? "飞书 · 项目助手与管家" : "Lark · Project assistants and steward"}</h3>
-    <ContextHelp label={zh ? "会话来源与访问范围" : "Conversation source and access scope"}><p>{zh ? "每个 App 单独核验本人。项目助手默认支持工作区读写，按项目规则与 skills 执行编辑；可选只读。普通聊天不创建隐藏 Goal。本人管家默认读取本机已注册的 Goal 与 Agent；没有注册工作时显示空态。旧连接保留原范围，需明确升级授权。交办不提升执行或发布权限。" : "Verify the owner independently for each App. Project Chat defaults to workspace writes under project rules and skills; read-only remains available without hidden Goals. A personal steward defaults to the registered local Goals and Agents, including an honest empty state. Existing connections retain their scope until explicitly upgraded. Handoff does not elevate execution or publishing permissions."}</p></ContextHelp>
-    {rows.map(row => <article key={row.binding_id}>
+    <header className="personal-private-heading">
+      <h3>{zh ? "飞书 · 项目助手与管家" : "Lark · Project assistants and steward"}</h3>
+      <ContextHelp label={zh ? "会话来源与访问范围" : "Conversation source and access scope"}><p>{zh ? "每个 App 单独核验本人。项目助手默认支持工作区读写，按项目规则与 skills 执行编辑；可选只读。普通聊天不创建隐藏 Goal。本人管家默认读取本机已注册的 Goal 与 Agent；没有注册工作时显示空态。旧连接保留原范围，需明确升级授权。交办不提升执行或发布权限。" : "Verify the owner independently for each App. Project Chat defaults to workspace writes under project rules and skills; read-only remains available without hidden Goals. A personal steward defaults to the registered local Goals and Agents, including an honest empty state. Existing connections retain their scope until explicitly upgraded. Handoff does not elevate execution or publishing permissions."}</p></ContextHelp>
+      <ContextHelp label={zh ? "聊天与委托命令" : "Chat and commission commands"} icon={MessageSquareText}>
+        <p>{zh ? "发送文字、图片或图文消息开始；后续消息进入原会话队列。/status 查看工作区、角色与持久排队状态，/help 查看用法与解绑入口，/stop 停止当前聊天执行，/new 开启新会话。文件、音视频、附在控制命令或已选择 Agent 上的图片会明确提示暂不支持。" : "Send text, images or image/text posts to begin; follow-ups queue in the same Session. /status shows the workspace, role and durable queue, /help explains commands and where to unbind, /stop stops the current Chat Turn, /new starts a new conversation. Files, audio/video, and images sent with control commands or to a selected attached Agent receive an explicit unsupported response."}</p>
+        {audience === "owner" ? <p>{zh ? "管家新委托：/delegate --tokens N 具体目标。先读预览，再用原私聊的完整 /confirm 命令确认；15 分钟过期。原生执行保持只读，总 token 上限可能被运行中的请求超过；没有默认定时调度。回执提供 /stop-commission 停止和 /resume-commission 恢复命令；恢复保留原线程及累计用量。" : "Steward commission: /delegate --tokens N objective. Read the preview, then use its full /confirm command in the original private Chat within 15 minutes. Native execution remains read-only; in-flight requests can exceed the total token allowance. No default schedule. Receipts provide /stop-commission and /resume-commission commands; recovery retains the original thread and cumulative usage."}</p> : null}
+      </ContextHelp>
+      <button className="personal-private-refresh" disabled={busy} aria-label={zh ? "刷新状态" : "Refresh status"} onClick={() => void act(refresh)} type="button"><RefreshCw size={16} aria-hidden="true"/></button>
+    </header>
+    {rows.map(row => <article className="personal-private-connection" key={row.binding_id}>
+      <header className="personal-private-heading">
       <strong>{row.app_ref} · {row.context_available ? row.project_title : (zh ? "工作区不可用" : "Workspace unavailable")}</strong>
       {onOpenOriginal && row.audience === "owner" ? <button type="button" disabled={!row.context_available || opening !== null}
         onClick={() => void openOriginal(row.binding_id)}>{opening === row.binding_id
           ? (zh ? "正在打开…" : "Opening…") : (zh ? "继续原会话" : "Continue original conversation")}</button> : null}
+      </header>
       <p>{row.context_kind === "steward" ? (row.goal_scope === "all_registered"
         ? (zh ? `LoopX 管家 · 全部已注册工作 · ${row.goal_count} 个 Goal` : `LoopX steward · All registered work · ${row.goal_count} Goals`)
         : (zh ? `LoopX 管家 · 已选范围 · ${row.goal_count} 个 Goal` : `LoopX steward · Selected scope · ${row.goal_count} Goals`)) : (row.grant === "workspace_write" ? (zh ? "普通项目助手 · 已授权工作区读写" : "Project assistant · Workspace writes authorized") : (zh ? "普通项目助手 · 只读对话" : "Project assistant · Read-only Chat"))}</p>
@@ -168,8 +178,10 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
             onPrepare={() => void act(() => prepareManagedSteward(row.binding_id))}
             onMonitor={(operation, cadence) => void act(() => configureStewardMonitor(row.binding_id, operation, cadence))}
             onReport={(operation, schedule) => void act(() => configureStewardReport(row.binding_id, operation, schedule))}/> : null}
+      <div className="personal-detail-actions">
       {row.context_kind === "steward" && row.goal_scope !== "all_registered" ? <button disabled={busy || !row.context_available} onClick={() => void act(() => connectPrivateConversation(row.app_ref, row.project_ref, row.executor_endpoint_id, "steward"))} type="button">{zh ? "授权全部已注册工作" : "Authorize all registered work"}</button> : null}
       <button disabled={busy} onClick={() => void act(() => disconnectPrivateConversation(row.binding_id, revision))} type="button">{zh ? "解绑" : "Disconnect"}</button>
+      </div>
     </article>)}
     {recoveries.map(row => <article key={row.binding_id}>
       <strong>{row.project_title} · {zh ? "旧授权" : "Previous grant"} {row.binding_id.slice(-6)}</strong>
@@ -179,47 +191,52 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
     {rows.length === 0 ? <p>{connectionsLoading ? (zh ? "正在读取已有连接…" : "Reading existing connections…")
       : error ? (zh ? "连接读取暂不可用，请刷新重试。" : "Connections unavailable. Refresh to retry.")
       : (zh ? "尚未连接助手。" : "No assistant connected.")}</p> : null}
-    <label>App<select aria-label={zh ? "助手 App" : "Assistant App"} value={app} disabled={busy} onChange={event => selectApp(event.target.value)}>
-      <option value="">{zh ? "选择已验证 App" : "Select a verified App"}</option>
-      {apps.map(app => <option key={app.app_ref} value={app.app_ref}>{app.label} · {app.app_ref}</option>)}
-    </select></label>
-    <label>{zh ? "使用位置" : "Conversation audience"}<select aria-label={zh ? "使用位置" : "Conversation audience"} value={audience} disabled={busy} onChange={event => {
-      const value = event.target.value as "owner" | "group";
-      setAudience(value); if (value === "group") {setRole("project"); setExecutor("codex");}
-    }}>
-      <option value="owner">{zh ? "本人私聊" : "Owner private Chat"}</option>
-      <option value="group">{zh ? "指定群的话题" : "Topics in selected groups"}</option>
-    </select></label>
-    {audience === "group" ? <fieldset disabled={busy || loadingGroups} style={{display: "grid", gap: 12, border: "1px solid var(--pw-line-strong)", borderRadius: 10, padding: 16}}>
-      <legend>{zh ? "允许使用的群（最多 16 个）" : "Authorized groups (up to 16)"}</legend>
-      {loadingGroups ? <p role="status">{zh ? "正在读取此 App 的群" : "Reading this App's groups"}</p> : groups.map(chat => <label key={chat.chat_id} style={{display: "flex", alignItems: "center"}}>
-        <input type="checkbox" checked={groupIds.includes(chat.chat_id)} onChange={event => setGroupIds(ids => event.target.checked ? [...ids, chat.chat_id] : ids.filter(id => id !== chat.chat_id))}/>{chat.chat_name}
-      </label>)}
-      {!loadingGroups && !groups.length && !groupError ? <p>{zh ? "此 App 尚无可见群。先将 Bot 加入调试群，再刷新。" : "This App has no visible groups. Add the Bot to a trial group, then refresh."}</p> : null}
-      {groupError ? <p role="alert">{groupError}</p> : null}
-      <button type="button" disabled={busy || loadingGroups || !app} onClick={() => setGroupRefresh(value => value + 1)}>{zh ? "刷新群列表" : "Refresh groups"}</button>
-      <ContextHelp label={zh ? "话题使用方式" : "Topic usage"}><p>{zh ? "新话题需 @此 Bot；回复留在原话题。工作区、历史和工具保持隔离，模型认证可复用可信宿主账号。连接成功不代表已通过公开群准出。" : "Mention this Bot to start; replies stay in the original topic. Workspace, history and tools remain isolated; model authentication can use the trusted host account. Connection is not public release qualification."}</p></ContextHelp>
-    </fieldset> : null}
-    <label>{zh ? "角色" : "Role"}<select aria-label={zh ? "私聊角色" : "Private Chat role"} value={role} disabled={busy || audience === "group"} onChange={event => setRole(event.target.value as "project" | "steward")}>
-      <option value="project">{zh ? "普通项目助手" : "Project assistant"}</option><option value="steward">{zh ? "LoopX 管家（全部已注册工作）" : "LoopX steward (all registered work)"}</option>
-    </select></label>
-    <label>{zh ? "工作区" : "Workspace"}<select aria-label={zh ? "私聊工作区" : "Private Chat workspace"} value={project} disabled={busy} onChange={event => setProject(event.target.value)}>
-      <option value="">{zh ? "选择授权工作区" : "Select an authorized workspace"}</option>
-      {projects.map(project => <option key={project.project_ref} value={project.project_ref}>{project.title}</option>)}
-    </select></label>
-    <label>{zh ? "执行器" : "Executor"}<select aria-label={zh ? "私聊执行器" : "Private Chat executor"} value={executor} disabled={busy || audience === "group"} onChange={event => setExecutor(event.target.value)}>
-      {executors.map(executor => <option key={executor} value={executor}>{executor}</option>)}
-    </select></label>
-    {role === "project" ? <label>{zh ? "工作区权限" : "Workspace access"}<select aria-label={zh ? "私聊工作区权限" : "Private Chat workspace access"} value={effectiveProjectGrant} disabled={busy || executor !== "codex"} onChange={event => setProjectGrant(event.target.value as "workspace_read" | "workspace_write")}>
-      <option value="workspace_read">{zh ? "只读" : "Read-only"}</option>
-      <option value="workspace_write" disabled={projects.find(item => item.project_ref === project)?.grant === "workspace_read"}>{zh ? "工作区读写（默认）" : "Workspace writes (default)"}</option>
-    </select></label> : null}
-    {role === "project" && effectiveProjectGrant === "workspace_write" ? <p role="status">{zh ? "此 App 可按你的指令编辑选定工作区；不提高已直连 Agent 的原宿主权限。更改权限会建立新绑定和新会话，旧会话不会自动提升权限，已有 Agent 直连需重新授权。" : "This App may edit the selected workspace on your instruction; attached Agents retain their original host permissions. Changing access creates a new binding and Session. Existing Chat does not gain access and Agent targets require new authorization."}</p> : null}
-    <div className="personal-detail-actions"><button disabled={busy || !apps.some(item => item.app_ref === app && item.ready) || !project || !executor || (audience === "group" && (loadingGroups || groupIds.length === 0 || groupIds.length > 16))} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" ? effectiveProjectGrant : "workspace_read", audience === "group" ? groupIds : undefined))} type="button">
-      {busy ? (zh ? "正在核验" : "Verifying") : (audience === "group" ? (zh ? "连接指定群话题" : "Connect selected group topics") : (zh ? "连接本人私聊" : "Connect owner private Chat"))}</button>
-      <button disabled={busy} onClick={() => void act(refresh)} type="button">{zh ? "刷新状态" : "Refresh status"}</button></div>
-    <p>{zh ? "发送文字、图片或图文消息开始；后续消息进入原会话队列。/status 查看工作区、角色与持久排队状态，/help 查看用法与解绑入口，/stop 停止当前聊天执行，/new 开启新会话。文件、音视频、附在控制命令或已选择 Agent 上的图片会明确提示暂不支持。" : "Send text, images or image/text posts to begin; follow-ups queue in the same Session. /status shows the workspace, role and durable queue, /help explains commands and where to unbind, /stop stops the current Chat Turn, /new starts a new conversation. Files, audio/video, and images sent with control commands or to a selected attached Agent receive an explicit unsupported response."}</p>
-    {audience === "owner" ? <p>{zh ? "管家新委托：/delegate --tokens N 具体目标。先读预览，再用原私聊的完整 /confirm 命令确认；15 分钟过期。原生执行保持只读，总 token 上限可能被运行中的请求超过；没有默认定时调度。回执提供 /stop-commission 停止和 /resume-commission 恢复命令；恢复保留原线程及累计用量。" : "Steward commission: /delegate --tokens N objective. Read the preview, then use its full /confirm command in the original private Chat within 15 minutes. Native execution remains read-only; in-flight requests can exceed the total token allowance. No default schedule. Receipts provide /stop-commission and /resume-commission commands; recovery retains the original thread and cumulative usage."}</p> : null}
+    <details className="personal-private-setup" open={rows.length === 0}>
+      <summary>{zh ? "连接助手" : "Connect an assistant"}</summary>
+      <div className="personal-private-setup-body">
+        <div className="personal-private-fields">
+          <label>App<select aria-label={zh ? "助手 App" : "Assistant App"} value={app} disabled={busy} onChange={event => selectApp(event.target.value)}>
+            <option value="">{zh ? "选择已验证 App" : "Select a verified App"}</option>
+            {apps.map(app => <option key={app.app_ref} value={app.app_ref}>{app.label} · {app.app_ref}</option>)}
+          </select></label>
+          <label>{zh ? "使用位置" : "Conversation audience"}<select aria-label={zh ? "使用位置" : "Conversation audience"} value={audience} disabled={busy} onChange={event => {
+            const value = event.target.value as "owner" | "group";
+            setAudience(value); if (value === "group") {setRole("project"); setExecutor("codex");}
+          }}>
+            <option value="owner">{zh ? "本人私聊" : "Owner private Chat"}</option>
+            <option value="group">{zh ? "指定群的话题" : "Topics in selected groups"}</option>
+          </select></label>
+          {audience === "group" ? <fieldset className="personal-private-groups" disabled={busy || loadingGroups}>
+            <legend>{zh ? "允许使用的群（最多 16 个）" : "Authorized groups (up to 16)"}</legend>
+            {loadingGroups ? <p role="status">{zh ? "正在读取此 App 的群" : "Reading this App's groups"}</p> : groups.map(chat => <label key={chat.chat_id} style={{display: "flex", alignItems: "center"}}>
+              <input type="checkbox" checked={groupIds.includes(chat.chat_id)} onChange={event => setGroupIds(ids => event.target.checked ? [...ids, chat.chat_id] : ids.filter(id => id !== chat.chat_id))}/>{chat.chat_name}
+            </label>)}
+            {!loadingGroups && !groups.length && !groupError ? <p>{zh ? "此 App 尚无可见群。先将 Bot 加入调试群，再刷新。" : "This App has no visible groups. Add the Bot to a trial group, then refresh."}</p> : null}
+            {groupError ? <p role="alert">{groupError}</p> : null}
+            <button type="button" disabled={busy || loadingGroups || !app} onClick={() => setGroupRefresh(value => value + 1)}>{zh ? "刷新群列表" : "Refresh groups"}</button>
+            <ContextHelp label={zh ? "话题使用方式" : "Topic usage"}><p>{zh ? "新话题需 @此 Bot；回复留在原话题。工作区、历史和工具保持隔离，模型认证可复用可信宿主账号。连接成功不代表已通过公开群准出。" : "Mention this Bot to start; replies stay in the original topic. Workspace, history and tools remain isolated; model authentication can use the trusted host account. Connection is not public release qualification."}</p></ContextHelp>
+          </fieldset> : null}
+          <label>{zh ? "角色" : "Role"}<select aria-label={zh ? "私聊角色" : "Private Chat role"} value={role} disabled={busy || audience === "group"} onChange={event => setRole(event.target.value as "project" | "steward")}>
+            <option value="project">{zh ? "普通项目助手" : "Project assistant"}</option><option value="steward">{zh ? "LoopX 管家（全部已注册工作）" : "LoopX steward (all registered work)"}</option>
+          </select></label>
+          <label>{zh ? "工作区" : "Workspace"}<select aria-label={zh ? "私聊工作区" : "Private Chat workspace"} value={project} disabled={busy} onChange={event => setProject(event.target.value)}>
+            <option value="">{zh ? "选择授权工作区" : "Select an authorized workspace"}</option>
+            {projects.map(project => <option key={project.project_ref} value={project.project_ref}>{project.title}</option>)}
+          </select></label>
+          <label>{zh ? "执行器" : "Executor"}<select aria-label={zh ? "私聊执行器" : "Private Chat executor"} value={executor} disabled={busy || audience === "group"} onChange={event => setExecutor(event.target.value)}>
+            {executors.map(executor => <option key={executor} value={executor}>{executor}</option>)}
+          </select></label>
+          {role === "project" ? <label>{zh ? "工作区权限" : "Workspace access"}<select aria-label={zh ? "私聊工作区权限" : "Private Chat workspace access"} value={effectiveProjectGrant} disabled={busy || executor !== "codex"} onChange={event => setProjectGrant(event.target.value as "workspace_read" | "workspace_write")}>
+            <option value="workspace_read">{zh ? "只读" : "Read-only"}</option>
+            <option value="workspace_write" disabled={projects.find(item => item.project_ref === project)?.grant === "workspace_read"}>{zh ? "工作区读写（默认）" : "Workspace writes (default)"}</option>
+          </select></label> : null}
+        </div>
+        {role === "project" && effectiveProjectGrant === "workspace_write" ? <p role="status">{zh ? "此 App 可按你的指令编辑选定工作区；不提高已直连 Agent 的原宿主权限。更改权限会建立新绑定和新会话，旧会话不会自动提升权限，已有 Agent 直连需重新授权。" : "This App may edit the selected workspace on your instruction; attached Agents retain their original host permissions. Changing access creates a new binding and Session. Existing Chat does not gain access and Agent targets require new authorization."}</p> : null}
+        <div className="personal-detail-actions"><button disabled={busy || !apps.some(item => item.app_ref === app && item.ready) || !project || !executor || (audience === "group" && (loadingGroups || groupIds.length === 0 || groupIds.length > 16))} onClick={() => void act(() => connectPrivateConversation(app, project, executor, role, role === "project" ? effectiveProjectGrant : "workspace_read", audience === "group" ? groupIds : undefined))} type="button">
+          {busy ? (zh ? "正在核验" : "Verifying") : (audience === "group" ? (zh ? "连接指定群话题" : "Connect selected group topics") : (zh ? "连接本人私聊" : "Connect owner private Chat"))}</button>
+        </div>
+      </div>
+    </details>
     {error ? <p role="alert">{error}</p> : null}
   </section>;
 }

@@ -23,6 +23,7 @@ export const stewardGroupTriggerScenario = {
       await dialog.getByRole("button", {name: "连接", exact: true}).click();
       await dialog.waitFor({state: "hidden"});
       const row = page.locator(".personal-lark-table-row", {hasText: "Product group"});
+      if (await page.getByRole("columnheader").count() !== 5 || await row.getByRole("cell").count() !== 5) throw new Error("Populated Goal connections lack accessible table cells and headers");
       await row.getByText("群成员直接发消息，无需 @", {exact: true}).waitFor();
       await row.getByText("监听已连接，尚无新消息验证这条连接。请在群里直接发一条任务，无需 @；若没有收到事件，再检查 im.message.receive_v1 和接收群内所有消息的权限。", {exact: true}).waitFor();
       if (api.larkWrites[0]?.read_goal_scope !== "all_registered") throw new Error("Evidence scope not saved");

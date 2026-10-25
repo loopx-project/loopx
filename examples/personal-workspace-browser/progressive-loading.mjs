@@ -104,7 +104,13 @@ async function verifyLarkLoading(browser, url, collectCoverage) {
     await verifyCompactHelp(emptyExplanation);
     await page.keyboard.press("Escape");
     await page.locator(".personal-lark-tabs").getByRole("button", {name: /^连接/u}).click();
-    await page.getByRole("button", {name: "暂无 Goal 连接", exact: true}).click();
+    const emptyConnections = page.getByRole("button", {name: "暂无 Goal 连接", exact: true});
+    if (await emptyConnections.evaluate(node => Boolean(node.closest('[role="table"]')))) throw new Error("Empty connection help has no table-cell accessibility owner");
+    if (await page.getByRole("table").count()) throw new Error("An empty directory must not expose an empty data table");
+    await emptyConnections.focus();
+    await page.getByRole("tooltip").filter({hasText: "暂无 Goal 连接"}).waitFor();
+    await page.keyboard.press("Escape");
+    await emptyConnections.click();
     const connectionExplanation = page.getByRole("tooltip").filter({hasText: "暂无 Goal 连接"});
     await connectionExplanation.waitFor();
     await verifyCompactHelp(connectionExplanation);

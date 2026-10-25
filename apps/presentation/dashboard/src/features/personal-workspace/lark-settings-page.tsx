@@ -582,14 +582,15 @@ export function LarkSettingsPage({
           ) : null}
           <div className="personal-lark-toolbar">
             <label><Search size={16} /><input aria-label={t("lark.searchConnections")} onChange={(event) => setQuery(event.target.value)} placeholder={t("lark.searchPlaceholder")} type="search" value={query} /></label>
+            {filteredConnections.length === 0 ? <ContextHelp label={locale === "zh-CN" ? "暂无 Goal 连接" : "No Goal connections"} icon={CircleHelp}><p>{t("lark.noConnections")}</p></ContextHelp> : null}
             <button className="personal-primary-action" disabled={apps.length === 0 || goals.length === 0} onClick={() => openConnect()} type="button"><Plus size={16} />{t("lark.connectApp")}</button>
           </div>
-          <div className="personal-lark-table" role="table" aria-label={t("lark.goalTopicConnections")}>
-            <div className="personal-lark-table-head" role="row"><span>{t("lark.connection")}</span><span>{t("common.goal")}</span><span>{t("lark.capture")}</span><span>{t("lark.processing")}</span><span>{t("common.actions")}</span></div>
+          {filteredConnections.length > 0 ? <div className="personal-lark-table" role="table" aria-label={t("lark.goalTopicConnections")}>
+            <div className="personal-lark-table-head" role="row"><span role="columnheader">{t("lark.connection")}</span><span role="columnheader">{t("common.goal")}</span><span role="columnheader">{t("lark.capture")}</span><span role="columnheader">{t("lark.processing")}</span><span role="columnheader">{t("common.actions")}</span></div>
             {filteredConnections.map((connection) => {
               const health = larkConnectionHealth(connection, t);
               return <div className="personal-lark-table-row" key={connection.connection_id} role="row">
-                <span>
+                <span role="cell">
                   <strong>{connection.chat_name}</strong>
                   <small>{connection.app_label} · {health.label}</small>
                   <small className="personal-lark-health-detail">{health.detail}</small>
@@ -600,17 +601,16 @@ export function LarkSettingsPage({
                     <a href={larkGroupHistoryPermissionUrl(connection) ?? undefined} rel="noreferrer" target="_blank"><ExternalLink size={12} />{t("lark.historyPermission")}</a>
                   ) : null}
                 </span>
-                <span><strong>{connection.goal_title}</strong><small># {connection.topic_name}</small>{connection.conversation_kind === "manager" ? <small>{t(connection.read_goal_scope === "all_registered" ? "lark.readAllGoals" : connection.read_goal_scope === null ? "lark.readScopeUnavailable" : "lark.readSelectedGoals")}</small> : null}</span>
-                <span>{connection.conversation_kind === "manager" ? t(connection.turn_trigger === "human_messages" ? "lark.triggerHuman" : "lark.triggerAddressed") : connection.capture_scope === "addressed_only" ? t("lark.mentionsOnly") : t("lark.allTopicMessages")}</span>
-                <span><strong>{connection.conversation_kind === "manager" ? t("lark.managerConversation") : ingressPresentation(connection.ingress_mode, t).label}</strong><small>{connection.conversation_kind === "manager" ? t("lark.managerConversationDescription") : connection.agent_id ?? ingressPresentation(connection.ingress_mode, t).detail}</small></span>
-                <span className="personal-lark-row-actions">
+                <span role="cell"><strong>{connection.goal_title}</strong><small># {connection.topic_name}</small>{connection.conversation_kind === "manager" ? <small>{t(connection.read_goal_scope === "all_registered" ? "lark.readAllGoals" : connection.read_goal_scope === null ? "lark.readScopeUnavailable" : "lark.readSelectedGoals")}</small> : null}</span>
+                <span role="cell">{connection.conversation_kind === "manager" ? t(connection.turn_trigger === "human_messages" ? "lark.triggerHuman" : "lark.triggerAddressed") : connection.capture_scope === "addressed_only" ? t("lark.mentionsOnly") : t("lark.allTopicMessages")}</span>
+                <span role="cell"><strong>{connection.conversation_kind === "manager" ? t("lark.managerConversation") : ingressPresentation(connection.ingress_mode, t).label}</strong><small>{connection.conversation_kind === "manager" ? t("lark.managerConversationDescription") : connection.agent_id ?? ingressPresentation(connection.ingress_mode, t).detail}</small></span>
+                <span className="personal-lark-row-actions" role="cell">
                   <button aria-label={t("lark.settingsConfigure", { goal: connection.goal_title })} onClick={() => openConnectionEditor(connection)} type="button"><Settings2 size={15} /></button>
                   <button aria-label={t("lark.settingsDisconnect", { goal: connection.goal_title })} className={disconnectConnectionId === connection.connection_id ? "is-confirm" : ""} onClick={() => void disconnect(connection.goal_id, connection.connection_id)} type="button"><Unlink size={15} />{disconnectConnectionId === connection.connection_id ? t("common.confirm") : null}</button>
                 </span>
               </div>;
             })}
-            {filteredConnections.length === 0 ? <ContextHelp label={locale === "zh-CN" ? "暂无 Goal 连接" : "No Goal connections"} icon={CircleHelp}><p>{t("lark.noConnections")}</p></ContextHelp> : null}
-          </div>
+          </div> : null}
         </div>
       ) : null}
 
