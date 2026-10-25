@@ -38,7 +38,9 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
 
 
 def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
-    from loopx.control_plane.turn_driver.codex_context import codex_context_configuration
+    from loopx.control_plane.turn_driver.codex_context import (
+        codex_context_configuration, codex_context_transport_configuration,
+    )
     from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
 
     root = home / "loopx-context"
@@ -79,6 +81,8 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
             native.request("initialize", {"clientInfo": {"name": "loopx_context_transport", "version": "0.1.0"},
                                           "capabilities": {"experimentalApi": True}})
             native.notify("initialized", {})
+            effective = native.request("config/read", {"cwd": env["LOOPX_PROJECT"], "includeLayers": False})
+            transport = codex_context_transport_configuration(effective["config"])
             listed = native.request("hooks/list", {"cwds": [env["LOOPX_PROJECT"]]})
     hooks = [hook for entry in listed["data"] for hook in entry["hooks"]
              if hook.get("sourcePath") == str(path.resolve())]
@@ -94,5 +98,11 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
     # Carry the entire table as TOML so native keys remain literal strings.
     # This isolated trial's native developer instructions survive compaction;
     # a failed SessionStart handler cannot erase the read-only recovery route.
-    env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = json.dumps(["-c", "hooks.state={" + ",".join(entries) + "}",
-        "-c", "developer_instructions=" + json.dumps(configuration["developer_instructions"])])
+    native_args = ["-c", "hooks.state={" + ",".join(entries) + "}",
+        "-c", "developer_instructions=" + json.dumps(configuration["developer_instructions"])]
+    if transport:
+        provider = transport["model_provider"]
+        native_args += ["-c", "model_provider=" + json.dumps(provider)]
+        for key, value in transport["model_providers"][provider].items():
+            native_args += ["-c", f"model_providers.{provider}.{key}=" + json.dumps(value)]
+    env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = json.dumps(native_args)

@@ -420,7 +420,9 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 cli_argv=cli_argv, scenario=activation["scenario"], session_root=bool(getattr(args, "codex_context_root", None)),
                 inherit_machine=bool(machine_runtime))
             payload = {"ok": True, "context_delivery": activation, "native_config": config,
-                "activation": "Merge hooks and append developer_instructions to the existing native configuration; "
+                "activation": "For the default OpenAI provider, merge the rendered native HTTP provider to make complete inputs observable; "
+                    "preserve an explicit operator provider and verify its actual input separately. "
+                    "Merge hooks and append developer_instructions to the existing native configuration; "
                     "review and trust only these exact hooks in Codex. Restart/resume with the resulting configuration. "
                     + ("Machine defaults are re-read on each invocation; generated hooks inherit the same machine runtime. "
                        "Omit per-command activation and location flags to retain that inheritance. " if machine_runtime else

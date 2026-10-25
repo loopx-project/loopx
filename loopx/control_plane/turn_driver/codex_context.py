@@ -7,7 +7,7 @@ No hook grants execution authority or acknowledges model understanding.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any
 import json
 import os
@@ -218,6 +218,25 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
     )
 
 
+def codex_context_transport_configuration(native_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the default OpenAI request observable without changing its login.
+
+    Native WebSocket requests may carry only previous_response_id and new
+    items. The input observer deliberately cannot certify that implicit history.
+    A separate native HTTP provider retains Codex's OpenAI routing and auth;
+    explicit operator providers are left alone. This config grants no authority
+    and does not assert that any particular input was complete.
+    """
+    if native_config.get("model_provider", "openai") != "openai":
+        return {}
+    provider = "loopx_context_http"
+    if provider in native_config.get("model_providers", {}):
+        raise ValueError("context HTTP provider conflicts with existing native configuration")
+    return {"model_provider": provider, "model_providers": {provider: {
+        "name": "OpenAI", "wire_api": "responses", "requires_openai_auth": True,
+        "supports_websockets": False}}}
+
+
 def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
                                  cli_argv: list[str], scenario: str, session_root: bool = False,
                                  inherit_machine: bool = False) -> dict[str, Any]:
@@ -225,6 +244,8 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
 
     This renders no trust hashes and writes no host configuration. The native
     host remains responsible for reviewing/trusting the exact discovered hook.
+    This manual template assumes the default OpenAI provider. Automatic callers
+    resolve the effective provider with codex_context_transport_configuration.
     """
     import shlex
 
@@ -240,7 +261,8 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
           ["--runtime-profile", "generic_cli"]),
         option, directory]), "timeout": 10}
-    return {"hooks": {event: [{"hooks": [handler]}] for event in ("SessionStart", "PreToolUse")},
+    return {**codex_context_transport_configuration({}),
+        "hooks": {event: [{"hooks": [handler]}] for event in ("SessionStart", "PreToolUse")},
         "developer_instructions": codex_context_recovery_instructions(directory, goal_id=goal_id,
             agent_id=agent_id, cli_argv=cli_argv, session_root=session_root)}
 

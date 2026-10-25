@@ -215,7 +215,17 @@ existing hooks and recovery instructions. It does not install or trust hooks,
 change host configuration or enable diagnostics in a running parent. The native
 process still needs its exact reviewed hooks and `CODEX_ROLLOUT_TRACE_ROOT`
 configured before startup. Without current-input retention proof, delivery stays
-full. Generated machine-inherited hooks reload the same machine runtime, so off
+full. Native implicit-history requests with `previous_response_id` are not retention
+proof for this observer. The rendered default OpenAI configuration therefore uses
+a native HTTP provider, keeping Codex authentication and routing
+without an endpoint or credential override. Benchmark preparation reads effective
+native configuration before applying it; explicit operator providers are preserved,
+and a conflicting provider id is rejected. A manual App setup must also preserve
+an explicit provider and verify its actual input. HTTP transport and diagnostics
+have costs which remain part of the comparison; selecting them does not prove a
+delta or a performance gain. Benchmark overrides are per native invocation; a manual
+App setup restores its previous provider when removing this configuration.
+Generated machine-inherited hooks reload the same machine runtime, so off
 or removal stops their journal writes. Explicit manual on options remain explicit.
 
 Generate a persistent entrypoint with `heartbeat-prompt --bootstrap`. It retains
@@ -319,6 +329,12 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 
 机器开启后，`quota context-config --codex-app --goal-id GOAL --agent-id AGENT` 只准备
 私有传输末级目录并生成已有 hook 和恢复指令，不安装或信任 hook，也不更改宿主配置。
+带 `previous_response_id` 的原生隐式历史请求不能给当前观察器提供完整保留证明。
+默认 OpenAI 配置模板因此使用进程内的原生 HTTP provider，保留 Codex 登录和路由，
+不改端点或凭证。Benchmark 准备会读取实际原生配置；显式自定义 provider 保持原样，
+名称冲突则拒绝。手工配置 App 也须保留显式 provider，并验证实际输入。HTTP 与诊断
+成本仍须计入比较，选择它们不代表已经产生差分或性能收益。Benchmark 覆盖只作用于
+本次原生调用；手工 App 配置撤回时也须恢复此前的 provider。
 原生进程启动前仍须配置已审阅的精确 hook 与 `CODEX_ROLLOUT_TRACE_ROOT`；无法证明当前
 输入保留时返回完整捕获。由机器继承生成的 hook 每次重读同一个 runtime，关闭或移除
 配置后停止 journal 写入；手工显式 on 保留其显式优先级。
