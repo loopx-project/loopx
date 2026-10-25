@@ -31,6 +31,7 @@ from ..capabilities.periodic_report.pending_intent import (
     periodic_report_pending_intent_interaction_hook,
 )
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.turn_envelope import build_turn_envelope
 from ..control_plane.quota.settlement import SettlementIdentity, build_turn_scoped_cli_settlement_plan
 from ..control_plane.quota.heartbeat_receipt import (
@@ -68,8 +69,7 @@ def _attach_original_replan_settlement(
         return decision
     agent = (decision.get("interaction_contract") or {}).get("agent_channel") or {}
     if (agent.get("must_attempt") is True and agent.get("delivery_allowed") is False
-            and decision.get("effective_action") in {
-                "autonomous_replan", "autonomous_replan_required", "successor_replan_required"}):
+            and decision.get("effective_action") == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value):
         # A fallback business Todo is context, not the selected owner of a
         # required semantic replan. Bind the existing obligation so launch,
         # writeback and spend all retain that same governance identity.
