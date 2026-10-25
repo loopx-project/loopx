@@ -118,12 +118,17 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
 
 
 def read_pages(root, wire, *, size=3072):
-    import argparse
-    from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
+    from loopx.cli_commands.quota_capture import native_context_capture_view
 
     view = native_context_capture_view(wire, Path(wire["recovery"]["path"]).parent,
                                       context_directory=str(root))
-    path, digest = view["path"], view["sha256"]
+    return capture_pages(view["path"], view["sha256"], size=size)
+
+
+def capture_pages(path, digest, *, size=3072):
+    import argparse
+    from loopx.cli_commands.quota_capture import read_context_capture
+
     pages = []
     offset = 0
     while True:
@@ -193,6 +198,142 @@ def test_known_incomplete_delivery_cannot_establish_baseline(tmp_path, monkeypat
     assert json.loads(Path(first["recovery"]["path"]).read_bytes()) == payload
 
 
+@pytest.mark.parametrize("mode", ["full", "delta"])
+@pytest.mark.parametrize("damage", ["changed_bytes", "missing_file", "changed_file", "symlink"])
+def test_hook_cli_rejects_changed_page_bytes_and_recovers_original(tmp_path, monkeypatch, mode, damage):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
+    _, wire = project(tmp_path, payload=payload)
+    if mode == "delta":
+        deliver(tmp_path, event, read_pages(tmp_path, wire))
+        _, wire = project(tmp_path, "two", payload=payload)
+    assert wire["mode"] == mode
+    pages = read_pages(tmp_path, wire, size=8192)
+    before = context._state(tmp_path)
+    recovery = before["recovery"]
+    raw = Path(recovery["path"]).read_bytes()
+    source = Path(before["pending"]["path"])
+    source_raw = source.read_bytes()
+    changed = [dict(page) for page in pages]
+    # Keep valid JSON, every byte offset and the self-reported digest unchanged.
+    # Page coverage and byte length alone cannot distinguish this wrong body.
+    first = changed[0]["content"]
+    index = next(i for i, char in enumerate(first) if char.isascii() and char.isalpha())
+    if damage == "changed_bytes":
+        changed[0]["content"] = first[:index] + ("X" if first[index] != "X" else "Y") + first[index + 1:]
+        assert len(changed[0]["content"].encode()) == len(first.encode())
+        assert json.loads("".join(page["content"] for page in changed))
+    elif damage == "changed_file":
+        source.write_bytes(source_raw + b" ")  # valid JSON, different pinned digest
+    else:
+        source.unlink()
+        if damage == "symlink":
+            alias_target = tmp_path / "same-bytes.json"
+            alias_target.write_bytes(source_raw)
+            source.symlink_to(alias_target)
+    repo = Path(__file__).resolve().parents[2]
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    cmd = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "quota", "context-hook", "--context-delivery", "on", "--codex-app",
+        "--codex-context-dir", str(tmp_path)]
+
+    def hook(values):
+        response = {"content": [{"type": "text", "text": json.dumps(page)} for page in values]}
+        result = subprocess.run(cmd, input=json.dumps({**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": "capture-read", "tool_response": response}), capture_output=True, text=True,
+            cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(repo)}, timeout=20)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {}
+
+    hook(changed)
+    assert "candidate" not in context._state(tmp_path)
+    assert context._state(tmp_path)["recovery"] == recovery
+    if damage != "changed_bytes":
+        source.unlink(missing_ok=True)
+        source.write_bytes(source_raw)
+        source.chmod(0o600)
+    assert Path(recovery["path"]).read_bytes() == raw
+    # Recover the same full capture, including after a damaged delta. Never
+    # reuse the incomplete wire or collect/admit another business decision.
+    hook(capture_pages(recovery["path"], recovery["sha256"], size=8192))
+    assert context._state(tmp_path)["candidate"]["capture_sha256"] == recovery["sha256"]
+    _, after = project(tmp_path, "three", payload=payload)
+    assert after["mode"] == "delta"
+    assert not registry.exists() and not runtime.exists()
+
+
+def test_legacy_delta_without_pinned_path_recovers_only_from_known_full_capture(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
+    _, full = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, full))
+    _, delta = project(tmp_path, "two", payload=payload)
+    assert delta["mode"] == "delta"
+    pages = read_pages(tmp_path, delta)
+    state = context._state(tmp_path)
+    # An older/incomplete journal has no trusted path for this wire. A path
+    # supplied by the tool output cannot repair that missing local reference.
+    path = state["pending"].pop("path")
+    recovery = state["recovery"]
+    context._save(tmp_path, state)
+    deliver(tmp_path, event, [{**page, "path": path} for page in pages])
+    assert "candidate" not in context._state(tmp_path)
+    assert context._state(tmp_path)["recovery"] == recovery
+    deliver(tmp_path, event, capture_pages(recovery["path"], recovery["sha256"]))
+    assert context._state(tmp_path)["candidate"]["capture_sha256"] == recovery["sha256"]
+
+
+def test_unverified_page_facts_cannot_promote_through_the_shared_owner(tmp_path, monkeypatch):
+    from loopx.control_plane.quota.turn_envelope import update_native_context_lifecycle
+
+    event = setup(tmp_path, monkeypatch)
+    _, wire = project(tmp_path)
+    pages = read_pages(tmp_path, wire)
+    before = context._state(tmp_path)
+    updated = update_native_context_lifecycle(before, {**event, "hook_event_name": "PostToolUse"},
+        new_epoch="unverified-pages", pages=pages)
+    assert "candidate" not in updated and "pending" not in updated
+    assert updated["recovery"] == before["recovery"]
+
+
+@pytest.mark.parametrize("route", ["resume", "projection"])
+def test_metadata_only_baselines_require_a_new_verified_read(tmp_path, monkeypatch, route):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
+    _, wire = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, wire)
+    deliver(tmp_path, event, pages)
+    before = context._state(tmp_path)
+    assert before["candidate"].pop("capture_bytes_verified") is True
+    context._save(tmp_path, before)
+    if route == "projection":
+        _, next_wire = project(tmp_path, "two", payload=payload)
+        assert next_wire["mode"] == "full" and next_wire["reason"] == "baseline_unavailable"
+    else:
+        context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+        assert "candidate" not in context._state(tmp_path)
+        assert context._state(tmp_path)["recovery"] == before["recovery"]
+        deliver(tmp_path, event, pages)
+        assert context._state(tmp_path)["candidate"]["capture_bytes_verified"] is True
+
+
+@pytest.mark.parametrize("damage", ["whitespace", "public_mode"])
+def test_verified_candidate_requires_unchanged_private_capture(tmp_path, monkeypatch, damage):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
+    _, wire = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, wire))
+    candidate = context._state(tmp_path)["candidate"]
+    assert candidate["capture_bytes_verified"] is True
+    path = Path(candidate["capture_file"])
+    if damage == "whitespace":
+        path.write_bytes(path.read_bytes() + b" ")  # identical decoded context, different original bytes
+    else:
+        path.chmod(0o644)
+    _, next_wire = project(tmp_path, "two", payload=payload)
+    assert next_wire["mode"] == "full" and next_wire["reason"] == "baseline_unavailable"
+
+
 def test_parallel_and_duplicate_pages_are_idempotent_and_cannot_borrow_other_scope(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
 
@@ -249,7 +390,6 @@ def test_configuration_round_trip_requires_a_new_full_baseline(tmp_path, monkeyp
 def test_primary_write_failure_preserves_small_recovery_and_does_not_create_ack(tmp_path, monkeypatch):
     event = setup(tmp_path, monkeypatch)
     _, wire = project(tmp_path)
-    before = (tmp_path / "session.json").read_bytes()
     def unavailable(*args, **kwargs):
         raise OSError("synthetic journal unavailable")
     monkeypatch.setattr(context, "_save", unavailable)

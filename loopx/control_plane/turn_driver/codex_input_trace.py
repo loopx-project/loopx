@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from .decision_capture import capture_page_range as _capture_page_range
+
 
 def read_native_trace_file(path: Path, *, tail: bool = False) -> bytes:
     from ..effect_runtime import MAX_REQUEST_BYTES
@@ -120,24 +122,6 @@ def _read_bundle_payload(bundle: Path, ref: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("native payload must be an object")
     return value
-
-
-def _capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tuple[int, int] | None:
-    if page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
-        return None
-    start, content = page.get("offset"), page.get("content")
-    if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
-        return None
-    data = content.encode("utf-8")
-    end = start + len(data)
-    if (page.get("total_bytes") != len(raw) or end > len(raw) or not data
-            or page.get("eof") is not (end == len(raw))
-            or page.get("next_offset") != (None if end == len(raw) else end)
-            or raw[start:end] != data):
-        # A host preview can remain valid JSON while shortening content
-        # and retaining the original cursor. It proves no bytes.
-        return None
-    return start, end
 
 
 def codex_context_in_active_input(observation: dict[str, Any], *, baseline: dict[str, Any], session_id: str) -> bool:

@@ -137,10 +137,11 @@ def prepare_context_delivery(
 
 
 def update_native_context_lifecycle(state: Mapping[str, Any], event: Mapping[str, Any], *,
-                                    new_epoch: str, pages: list[dict[str, Any]]) -> dict[str, Any]:
+                                    new_epoch: str, pages: list[dict[str, Any]],
+                                    pages_verified: bool = False) -> dict[str, Any]:
     """Native IO adapter; the shared typed owner reduces continuity assumptions."""
     return _turn_envelope_result("native_context_lifecycle", state=dict(state),
-        event=dict(event), new_epoch=new_epoch, pages=pages)
+        event=dict(event), new_epoch=new_epoch, pages=pages, pages_verified=pages_verified)
 
 
 def restore_context_delivery(

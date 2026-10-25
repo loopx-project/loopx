@@ -8,16 +8,17 @@ import os
 import socket
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from ..quota.turn_envelope import bind_turn_decision_capture
 from ..quota.error_codes import QuotaCommandValidationError
+from ..content_digest import BARE_SHA256_PATTERN
 
 
 def write_decision_capture(
-    path: Path, payload: Mapping[str, Any], *, publish=os.link,
+    path: Path, payload: Mapping[str, Any], *, publish: Callable[[str, Path], None] = os.link,
 ) -> None:
     """Publish complete private JSON once; never replace an earlier observation."""
     descriptor, temporary = tempfile.mkstemp(prefix=".decision-", dir=path.parent)
@@ -121,6 +122,52 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, pa
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
         "--capture-file", str(path), "--capture-sha256", digest,
         "--offset", str(offset), "--page-bytes", str(page_bytes)])
+
+
+def read_context_capture_file(value: str, digest: str, *, private: bool = False) -> tuple[Path, bytes, dict[str, Any]]:
+    """One bounded physical-file/hash check for readers and native observations."""
+    from ..effect_runtime import MAX_REQUEST_BYTES
+
+    if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
+        raise ValueError("context-read requires the original capture file and its exact SHA-256")
+    path = Path(value).expanduser().absolute()
+    # Parent aliases such as macOS /tmp are normal capture locations.
+    # Resolve those once, but never follow a substituted final file.
+    path = path.parent.resolve(strict=True) / path.name
+    if path.is_symlink():
+        raise ValueError("context-read requires the physical original capture path, not a symlink")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
+            raise ValueError("capture must be a regular JSON file within the existing transport size limit")
+        if private and (metadata.st_uid != os.getuid() or metadata.st_mode & 0o077):
+            raise ValueError("native context requires a private capture owned by this user")
+        raw = stream.read(MAX_REQUEST_BYTES + 1)
+    if len(raw) > MAX_REQUEST_BYTES or hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("capture must contain a complete JSON object")
+    return path, raw, payload
+
+
+def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tuple[int, int] | None:
+    """Verify reported page bytes, independently of a host's retention claim."""
+    if page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
+        return None
+    start, content = page.get("offset"), page.get("content")
+    if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
+        return None
+    data = content.encode("utf-8")
+    end = start + len(data)
+    if (page.get("total_bytes") != len(raw) or end > len(raw) or not data
+            or page.get("eof") is not (end == len(raw))
+            or page.get("next_offset") != (None if end == len(raw) else end)
+            or raw[start:end] != data):
+        # Valid page JSON and a correct cursor can still carry the wrong body.
+        return None
+    return start, end
 
 
 def capture_context_projection(payload: dict[str, Any], *, directory: Path) -> dict[str, Any]:

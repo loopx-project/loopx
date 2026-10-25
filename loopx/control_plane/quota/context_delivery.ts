@@ -384,6 +384,7 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
   const binding = jsonObject(baseline?.target), prior = jsonObject(baseline?.context);
   const confirmed = !continuity && retained?.complete === true && equal(retained.target, binding);
   const assumed = !retained && continuity?.basis === "native_hook_assumption"
+    && continuity.capture_bytes_verified === true
     && equal(continuity.target, binding);
   if (!binding || !prior || (!confirmed && !assumed) || !compatible(binding, target)
       || binding.context_digest !== digest(prior)) return full("baseline_unavailable");

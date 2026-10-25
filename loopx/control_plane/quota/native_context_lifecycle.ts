@@ -47,7 +47,8 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   };
   if (name === "SessionStart") {
     const resumable = same && event.source === "resume" && state.context_epoch
-      && !state.pending && jsonObject(state.candidate)?.basis === NATIVE_CONTEXT_BASIS;
+      && !state.pending && jsonObject(state.candidate)?.basis === NATIVE_CONTEXT_BASIS
+      && jsonObject(state.candidate)?.capture_bytes_verified === true;
     if (!resumable) invalidate();
     return state;
   }
@@ -63,11 +64,19 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   const recovery = jsonObject(state.recovery), pending = jsonObject(state.pending);
   if (!recovery || !jsonObject(recovery.target)) return state;
   const pages = Array.isArray(request.pages) ? request.pages : [];
+  // The IO adapter authenticates bodies against journal-pinned capture bytes.
+  // Self-reported lengths/digests are not that observation. Older callers and
+  // metadata-only journals must establish a new verified full read.
+  if (pages.length && request.pages_verified !== true) {
+    invalidate();
+    return state;
+  }
   for (const value of pages) {
     const page = jsonObject(value);
     if (!page || page.schema_version !== "context_capture_page_v1") continue;
     const candidate = jsonObject(state.candidate);
     if (!state.pending && candidate?.capture_sha256 === recovery.sha256
+        && candidate?.capture_bytes_verified === true
         && candidate?.target && page.ok === true) continue; // completed-page replay
     if (page.ok !== true) {
       if (pending) invalidate();
@@ -98,7 +107,7 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     state.pending = reads;
     if (ranges.length !== 1 || ranges[0][0] !== 0 || ranges[0][1] !== total) continue;
     const target = {...requireJsonObject(recovery.target, "capture target"), context_epoch: state.context_epoch};
-    state.candidate = {basis: NATIVE_CONTEXT_BASIS, target,
+    state.candidate = {basis: NATIVE_CONTEXT_BASIS, capture_bytes_verified: true, target,
       capture_file: recovery.path, capture_sha256: recovery.sha256,
       ancestry: original ? 0 : pending?.ancestry ?? 0};
     delete state.pending;

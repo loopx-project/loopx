@@ -216,6 +216,15 @@ read, reducing output-wrapper truncation; consume the inline page before followi
 next_command. Forward exec stdout directly in code mode. Repeating the packet in
 a hashing tool call does not establish that its original bytes were retained.
 The reader verifies the immutable capture digest. Native lifecycle delivery uses
+the same byte-range validator as explicit input observations: before merging
+reader ranges, the post-tool adapter checks actual UTF-8 content against the
+trusted journal's digest-pinned physical capture. A changed body, missing or
+replaced file, symlink or digest failure cannot advance the baseline. It keeps
+the original recovery reference; it does not collect another decision. This
+checks output observed at the hook boundary, not downstream model retention.
+Older metadata-only candidates require a new complete verified read before
+resume or the codec can reuse them; page metadata alone cannot mark them verified.
+Native lifecycle continuity still uses
 an explicit engineering assumption: a normally completed full read was read and
 remains available until invalidated. This is not a retained-input observation or
 a model ACK. The shared codec still validates the exact baseline digest, scope,
@@ -357,7 +366,13 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 固定摘要的后续读取与完整恢复，不另行准入。该原生读取链的页大小保持 3 KiB，以减少
 输出包装造成的截断；先消费已附带页，再跟随 next_command。Code Mode 直接转发
 exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
-读取器校验不可变 capture 的摘要。原生路径明确采用工程假设：正常完整交付的首包已读，
+读取器校验不可变 capture 的摘要。Post-tool 适配层复用显式输入观察的字节范围校验，
+先将实际 UTF-8 正文与可信 journal 指向的物理捕获及固定摘要核对，再合并读取范围。
+正文改变、文件丢失或替换、符号链接及摘要失败均不得晋升基线；保留原始恢复引用，
+不重新收集决策。这只验证 hook 边界观察到的输出，不证明下游模型输入保留。
+旧版仅凭页元数据建立的候选须先完整读取并通过字节校验，才能在 resume 或 codec 中复用；
+页元数据本身不能写入已校验标记。
+原生连续性仍明确采用工程假设：正常完整交付的首包已读，
 在失效事件发生前仍可用；这不是实际输入保留证明或模型 ACK。共享 codec 仍校验精确基线
 摘要、作用域、本轮控制与完整重建。显式 final-input Host 客户端保留独立的确认输入契约。
 

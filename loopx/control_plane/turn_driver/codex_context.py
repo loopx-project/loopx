@@ -17,6 +17,7 @@ import uuid
 
 from .decision_capture import (
     write_decision_capture, capture_context_projection, project_captured_context, CONTEXT_CAPTURE_READ_GUIDANCE,
+    capture_page_range, read_context_capture_file,
 )
 
 # Native adapter activation reuses scheduler-owned host declarations. These
@@ -275,9 +276,11 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
             same = state.get("session_id") == session and state.get("cwd") == event.get("cwd")
             if same:
                 recovery = state.get("recovery")
+                if name == "PostToolUse":
+                    pages = _verified_context_pages(state, pages)
             try:
                 updated = update_native_context_lifecycle(state, event,
-                    new_epoch=uuid.uuid4().hex, pages=pages)
+                    new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True)
             except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
                 _discard_recovery(root)
                 raise
@@ -329,6 +332,34 @@ def _context_pages(value: object) -> list[dict[str, Any]]:
     return []
 
 
+def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compare observed output with trusted journal references before reduction.
+
+    Cache each bounded immutable file only within this hook. Neither output
+    paths nor its self-reported digest can introduce another capture source.
+    This verifies tool-output bytes, not downstream model-input retention.
+    """
+    references = [value for key in ("recovery", "pending")
+                  if isinstance(value := state.get(key), dict)]
+    files: dict[str, bytes] = {}
+    result = []
+    for page in pages:
+        reference = next((value for value in references if value.get("sha256") == page.get("sha256")), None)
+        if reference is None or page.get("ok") is not True:
+            result.append(page)  # the typed owner handles failures and unrelated reads
+            continue
+        try:
+            digest = reference["sha256"]
+            if digest not in files:
+                _, files[digest], _ = read_context_capture_file(reference["path"], digest, private=True)
+            if capture_page_range(page, raw=files[digest], digest=digest) is None:
+                raise ValueError("observed context page differs from the immutable capture")
+            result.append(page)
+        except (OSError, ValueError, KeyError, TypeError, RecursionError):
+            return [{**page, "ok": False}]
+    return result
+
+
 def _discard_recovery(root: Path) -> None:
     """Invalidate only this adapter's journal while its private root is locked."""
     path = root / "session.json"
@@ -350,13 +381,14 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
             and not state.get("pending")):
         try:
             path = Path(candidate["capture_file"])
-            payload = _read(path)
+            _, _, payload = read_context_capture_file(str(path), candidate["capture_sha256"], private=True)
             # The shared codec independently validates the complete context
             # digest and scope. No second read or full native-history scan.
             baseline = dict(schema_version="context_delivery_v1", mode="full",
                 target=candidate["target"], ancestry=candidate.get("ancestry", 0), context=payload)
             request.update(baseline=baseline,
-                continuity={"basis": "native_hook_assumption", "target": candidate["target"]})
+                continuity={"basis": "native_hook_assumption", "target": candidate["target"],
+                    "capture_bytes_verified": candidate.get("capture_bytes_verified", False)})
         except (OSError, ValueError, KeyError, TypeError, RecursionError):
             pass  # Missing candidate affects reuse, never the current recovery reference.
     return request
@@ -372,7 +404,7 @@ def register_native_context_view(directory: str | None, view: dict[str, Any]) ->
         if (not isinstance(pending, dict) or pending.get("target") != view["target"]
                 or state.get("session_id") != os.environ.get("CODEX_THREAD_ID")):
             raise ValueError("native page view does not match the current pending capture")
-        pending.update(sha256=view["sha256"], total_bytes=view["total_bytes"],
+        pending.update(path=view["path"], sha256=view["sha256"], total_bytes=view["total_bytes"],
             ancestry=view.get("ancestry", 0))
         _save(root, state)
 
@@ -417,7 +449,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     "total_bytes": Path(recovery["path"]).stat().st_size}
                 # Block reuse before optional wire IO, not after a first page
                 # or EOF. A codec/read interruption keeps this incomplete.
-                state["pending"] = {"sha256": recovery["sha256"],
+                state["pending"] = {"path": recovery["path"], "sha256": recovery["sha256"],
                     "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
                 _save(root, state)
                 recovery_committed = True

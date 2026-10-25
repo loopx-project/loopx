@@ -18,6 +18,7 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, context_capture_read_command,
+    read_context_capture_file as _read_capture,
 )
 
 
@@ -28,32 +29,6 @@ def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
         return context_delivery_for_arguments(args)
     except ValueError as exc:
         raise QuotaCommandValidationError(str(exc)) from exc
-
-
-def _read_capture(value: str, digest: str) -> tuple[Path, bytes, dict[str, Any]]:
-    """One bounded physical-file/hash check for recovery and saved projection."""
-    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-
-    if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
-        raise ValueError("context-read requires the original capture file and its exact SHA-256")
-    path = Path(value).expanduser().absolute()
-    # Parent aliases such as macOS /tmp are normal capture locations.
-    # Resolve those once, but never follow a substituted final file.
-    path = path.parent.resolve(strict=True) / path.name
-    if path.is_symlink():
-        raise ValueError("context-read requires the physical original capture path, not a symlink")
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-    with os.fdopen(descriptor, "rb") as stream:
-        metadata = os.fstat(stream.fileno())
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
-            raise ValueError("capture must be a regular JSON file within the existing transport size limit")
-        raw = stream.read(MAX_REQUEST_BYTES + 1)
-    if len(raw) > MAX_REQUEST_BYTES or hashlib.sha256(raw).hexdigest() != digest:
-        raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
-    payload = json.loads(raw.decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("capture must contain a complete JSON object")
-    return path, raw, payload
 
 
 def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
@@ -483,7 +458,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     return None
 
 
-def read_replan_view(args: argparse.Namespace) -> dict:
+def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
     """Read a captured observation only; no registry, provider, guard or receipts."""
     from ..control_plane.quota.turn_envelope import _turn_envelope_result
     from ..command_invocation import current_loopx_cli_argv
