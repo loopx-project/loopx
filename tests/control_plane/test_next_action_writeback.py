@@ -14,7 +14,6 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.work_items.recommendation_source_io import RecommendationWritebackRejected
 from loopx.status import collect_status
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
-from loopx.control_plane.todos.next_action_runtime import settle_completed_todo_next_action
 from tests.control_plane import test_todo_projection_concurrency as projection_fixtures
 
 canonical_projection = projection_fixtures.canonical_projection
@@ -216,9 +215,6 @@ def test_step_does_not_destroy_binding_or_block_completion_projection(tmp_path):
     state.write_text(bound)
     write(registry, runtime)
     assert state.read_text() == bound
-    completed = bound.replace("todo_parser status=open", "todo_parser status=done").splitlines()
-    assert settle_completed_todo_next_action(completed, completed_todo_id="todo_parser")
-    assert "todo_id=todo_evaluate" in "\n".join(completed)
     run_json_cli("todo", "complete", "--goal-id", "next-action-goal",
         "--todo-id", "todo_parser", "--agent-id", "agent-a", "--evidence", "fixture completion",
         registry_path=registry, runtime_root=runtime)

@@ -321,8 +321,6 @@ export function createEffectRuntimeHandlers(
     ["todo.archive.select", lazyHandler(() => import("./coordination/todo_archive_selection.ts"), ({evaluateCoordinationTodoArchiveSelection}) => evaluateCoordinationTodoArchiveSelection)],
     ["todo.successor.derive", lazyHandler(() => import("./coordination/todo_successor_derivation.ts"), ({evaluateCoordinationTodoSuccessorDerivation}) => evaluateCoordinationTodoSuccessorDerivation)],
     ["todo.completion.reduce", lazyHandler(() => import("./todos/completion_transaction.ts"), ({reduceTodoCompletionTransaction}) => reduceTodoCompletionTransaction)],
-    ["todo.next_action.transition", lazyHandler(() => import("./todos/next_action.ts"), ({transitionTodoNextAction}) => transitionTodoNextAction)],
-    ["todo.next_action.binding", lazyHandler(() => import("./todos/next_action.ts"), ({projectNextActionBinding}) => projectNextActionBinding)],
     ["todo.resume_condition.normalize", lazyHandler(() => import("./todos/resume_condition.ts"), ({normalizeTodoResumeWhen}) => normalizeTodoResumeWhen)],
     ["todo.resume_condition.evaluate", lazyHandler(() => import("./todos/resume_condition.ts"), ({evaluateTodoResumeConditionsFromSource}) => evaluateTodoResumeConditionsFromSource)],
     ["goal.fallback_disposition.project", lazyHandler(() => import("./goals/goal_frontier/fallback_disposition.ts"), ({projectFallbackDisposition}) => projectFallbackDisposition)],
