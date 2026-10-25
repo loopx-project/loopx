@@ -77,7 +77,8 @@ def _input_text(request):
     return "\n".join(text)
 
 
-def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only", resume=None):
+def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only", resume=None,
+                turn_timeout_sec=30):
     with (home / "stderr.txt").open("w") as stderr, StdioNativeGoalTransport.spawn(
         [binary, "app-server", "--listen", "stdio://"], cwd=str(workspace), env=env,
         stderr=stderr, response_timeout_sec=20,
@@ -106,7 +107,7 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None, 
         if additional_context is not None:
             turn_params["additionalContext"] = additional_context
         turn = native.request("turn/start", turn_params)["turn"]["id"]
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + turn_timeout_sec
         while time.monotonic() < deadline:
             event = native.next_event(timeout_sec=1)
             if event and event.get("method") == "turn/completed":

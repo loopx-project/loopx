@@ -477,10 +477,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 assert all(path.read_bytes() == raw for path, raw in held_captures)
                 assert result["checkpoint"]["captured"] is False  # no replan was requested
         else:
-            session_id = _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
+            # This large semantic fixture reads full, delta and recovery pages.
+            # Allow their native hook/CLI IO; this is not a latency qualification.
+            session_id = _app_server(binary, env, workspace, home, True, sandbox="workspace-write", turn_timeout_sec=60)
             if resumed:
                 assert _app_server(binary, env, workspace, home, True, sandbox="workspace-write",
-                                   resume=session_id) == session_id
+                                   resume=session_id, turn_timeout_sec=60) == session_id
     assert not errors, errors
 
     assert stages["phase"] == "done"
