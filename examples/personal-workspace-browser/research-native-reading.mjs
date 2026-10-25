@@ -103,6 +103,13 @@ export const researchNativeReadingScenario = {
         assert.match(await native.locator(".research-native-best .research-native-unit").textContent(), new RegExp(c.unit ?? "points"), "The raw unit remains visible even when no valid measurement exists");
         assert.match(await native.locator(".research-native-scope").innerText(), new RegExp(`${c.values.filter(v => v !== null).length} / ${c.values.length}.*有效结果`));
         if (c.partial) assert.match(await native.innerText(), /部分窗口 · 起点未知/);
+        if (c.id === "invalid-first") {
+          const best = await native.locator('[data-native-point="best_valid"]').boundingBox();
+          const retained = await native.locator('[data-native-point="retained"]').boundingBox();
+          assert(best.width > retained.width + 8, "An unknown retained result must not reserve an equal primary column beside the best valid measurement");
+          await native.evaluate(e => e.scrollIntoView({block: "start"}));
+          await page.screenshot({path: resolve(outputDir, "research-native-unknown-desktop.png"), animations: "disabled"});
+        }
         await page.setViewportSize({width: 390, height: 844});
         const details = native.locator(".research-native-basis");
         if (await details.evaluate(e => e.open)) await details.locator(":scope > summary").click();
@@ -122,6 +129,7 @@ export const researchNativeReadingScenario = {
           await page.screenshot({path: resolve(outputDir, "research-native-source-tail-phone.png"), animations: "disabled"});
         }
         await details.locator(":scope > summary").tap();
+        if (c.id === "invalid-first") await page.screenshot({path: resolve(outputDir, "research-native-unknown-phone.png"), animations: "disabled"});
         if (c.id === "lower-negative") {
           const retained = native.getByRole("button", {name: /原生保留结果.*查看原始证据/});
           await retained.focus(); await retained.press("Enter");
