@@ -176,7 +176,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         page_digests[name] = digest
         # Plan only read offsets. Every actual model-facing page must
         # come from the public CLI, including digest verification.
-        page_size = 4096 if adaptive or host == "code_mode" else 5000
+        page_size = 3072 if adaptive or host == "code_mode" else 5000
         offsets, start, count = [0], 0, 0
         for character in raw.decode():
             size = len(character.encode())
