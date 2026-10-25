@@ -288,3 +288,43 @@ test("a retained pre-publication launch refusal can resume only its original nat
     {...input, queued_turn_count: 1},
   ]) assert.throws(() => admitStewardManagedTurn(invalid));
 });
+
+test("only a proven original pre-execution replan refusal admits one correlated report continuation", () => {
+  const p = original();
+  const request = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: "report.cadence_original", todo_id: "todo_report", validation_command: ["python", "validate.py"],
+    work_kind: "report", report_window_id: "cadence_original", report_subscription_revision: "sha256:original"};
+  const refusal = {schema_version: "loopx_turn_selection_rejection_v0", source: "quota.should-run",
+    requested_todo_id: request.todo_id, state: "deferred", reason_code: "autonomous_replan",
+    recovery_action: "reenter_guard_without_selection", delivery_preemptions: ["autonomous_replan", "delivery_not_allowed"],
+    status_health_ok: true, contract_error_count: 0};
+  const effects = {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    error_code: "turn_todo_selection_deferred", effects_scope: "current_invocation", effects, selection_rejection: refusal};
+  const source = {session_id: p.session.session_id, status: "completed", origin: "native_loopx", loopx_execution: true,
+    delta_count: 0, upstream_turn_id: null, loopx_request: request, response: {native_loopx: result}};
+  const proof = {original: source, generation_present: false};
+  const input = {...p, request, report_selection_recovery: proof,
+    report_window: {window_id: request.report_window_id, subscription_revision: request.report_subscription_revision,
+      goal_id: p.actor.goal_id, agent_id: p.actor.agent_id},
+    report_subscription: {enabled: true, profile_preset: "portfolio-progress",
+      route_ref: `steward-private:${p.binding.binding_id}:${p.source}`, effective_revision: request.report_subscription_revision},
+    report_todo: {todo_id: request.todo_id, target_key: request.report_window_id,
+      claimed_by: "steward", action_kind: "generate_periodic_report", status: "open"}};
+  assert.equal(admitStewardManagedTurn(input).observation_only, false);
+  for (const original of [
+    {...source, status: "failed"}, {...source, delta_count: 1}, {...source, upstream_turn_id: "actual-model"},
+    {...source, session_id: "other"}, {...source, loopx_request: {...request, todo_id: "todo_other"}},
+    ...["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"].flatMap(key => [true, null].map(value =>
+      ({...source, response: {native_loopx: {...result, effects: {...effects, [key]: value}}}}))),
+    ...[{state: "unavailable"}, {reason_code: "control_repair"}, {status_health_ok: false}, {contract_error_count: 1},
+      {recovery_action: "inspect_original"}, {requested_todo_id: "todo_other"}].map(changed =>
+      ({...source, response: {native_loopx: {...result, selection_rejection: {...refusal, ...changed}}}})),
+    {...source, response: {native_loopx: {...result, resume_turn_key: "sha256:" + "a".repeat(64)}}},
+  ]) assert.throws(() => admitStewardManagedTurn({...input, report_selection_recovery: {...proof, original}}));
+  for (const changed of [
+    {report_selection_recovery: {...proof, generation_present: true}},
+    {report_subscription: {...input.report_subscription, enabled: false}}, {queued_turn_count: 1}, {goal_active: false},
+    {request: {...request, work_kind: "native_turn"}},
+  ]) assert.throws(() => admitStewardManagedTurn({...input, ...changed}));
+});

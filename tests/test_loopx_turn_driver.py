@@ -1292,6 +1292,35 @@ def test_turn_plan_keeps_todoless_replan_for_controller(effective_action: str) -
     assert payload["turn_envelope"] == envelope
 
 
+@pytest.mark.parametrize("hold", [None, "should_run", "must_attempt", "signature", "obligation", "business"])
+def test_signed_governance_can_run_while_normal_delivery_remains_withheld(hold):
+    from loopx.control_plane.quota.settlement import build_turn_scoped_cli_settlement_plan
+    obligation = "replan-" + "a" * 16
+    settlement = build_turn_scoped_cli_settlement_plan(goal_id="fixture-goal", agent_id="codex-fixture",
+        replan_obligation_id=obligation, turn_instance_id="fixture.replan", command_prefix="loopx",
+        scoped_cli_args="", lifecycle_actor_args="").as_dict()
+    decision = {"ok": True, "goal_id": "fixture-goal", "agent_id": "codex-fixture", "decision": "run",
+        "should_run": hold != "should_run", "effective_action": "normal_run" if hold == "business" else "autonomous_replan_required",
+        "replan_action_packet": {"schema_version": "replan_action_packet_v0", "decision": "replan_required", "obligation_id": obligation},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0", "mode": "autonomous_replan",
+            "user_channel": {"action_required": False, "notify": "DONT_NOTIFY"},
+            "agent_channel": {"must_attempt": hold != "must_attempt", "delivery_allowed": False, "quiet_noop_allowed": False},
+            "cli_channel": {"spend_after_validation": True, "settlement_plan": settlement}}}
+    envelope = build_turn_envelope(decision)
+    if hold == "signature":
+        envelope["action_signature"]["matches"] = False
+    if hold == "obligation":
+        envelope["replan_action_packet"]["obligation_id"] = "replan-" + "b" * 16
+    plan = build_loopx_turn_plan(envelope, host="codex-app-server", execution_mode="isolated-headless",
+        session_scope="agent", turn_instance_id="fixture.replan")
+    assert plan["route"]["would_invoke_host"] is (hold is None)
+    assert plan["route"]["selected_todo"] is None
+    assert not any(plan["effects"].values())
+    if hold is None:
+        assert plan["route"]["kind"] == "replan_required"
+        assert plan["transaction"]["settlement_plan"]["identity"]["replan_obligation_id"] == obligation
+
+
 @pytest.mark.parametrize("invalid_signature", [False, True])
 def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
     invalid_signature: bool,

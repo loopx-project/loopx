@@ -462,6 +462,147 @@ def install_model(steward, tmp_path, sid, *, result_kind="validated_completion")
     runtime.adapters.pop(sid).close_session()  # Resume the same native thread with the synthetic response.
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+@pytest.mark.parametrize("replan_outcome", ["settled", "wait", "invalid_semantic"])
+def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(steward, tmp_path, monkeypatch, provider, local_session, replan_outcome):
+    from datetime import timezone
+    from loopx.capabilities.periodic_report import cadence_runtime
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    import loopx.capabilities.native_chat.steward_reports as report_host
+    store, runtime, bot, transport, binding, capture, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    if local_session:
+        session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
+        sid = owner = session["session_id"]
+        actor = reports.selected(sid)["actor"]
+    else:
+        sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+        owner = binding["binding_id"]
+    from loopx.configure_goal import configure_goal
+    assert configure_goal(registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True)["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == (0 if local_session else 1)
+    assert reports.health(owner)["publication_verified"]
+    _, first_window = reports.current_window(owner)
+    first_folder = attempt_directory(reports.root, first_window)
+    first_body = (first_folder / "report.md").read_bytes()
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    refusal = rejected["response"]["native_loopx"]
+    assert refusal["error_code"] == "turn_todo_selection_deferred", refusal
+    assert refusal["selection_rejection"]["reason_code"] == "autonomous_replan"
+    assert refusal["effects"] == {"host_invoked": False, "state_written": False,
+        "quota_spent": False, "scheduler_acknowledged": False}
+    original_bytes = store._turn_path(sid, rejected["turn_id"]).read_bytes()
+    _, second_window = reports.current_window(owner)
+    assert second_window["window_id"] != first_window["window_id"]
+    # The model is a transport oracle only. Native admission, the persisted
+    # missing-baseline trigger, semantic validation and settlement stay real.
+    vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "active",
+        "vision_patch": {"vision_summary": "Maintain the original monitoring and reporting work.",
+            "acceptance_summary": "Independently validate each report and its full original private delivery; retain source gaps."},
+        "path_delta": {"outcome": "replan", "prior_assumption": "The first report could keep an absent Agent vision unchanged.",
+            "observed_reality": "The first report was independently validated and delivered; native governance now requires a persisted baseline.",
+            "retained": ["The same subscriptions, report window, original actor and all native tasks."],
+            "changed": ["Record the original Agent's evidence-linked continuation before resuming the retained report."],
+            "evidence_refs": ["fixture:validated-original-report-and-provider-delivery"]}}
+    replan = {"result_kind": "replan_required", "classification": "original_report_native_replan",
+        "summary": "The original reporting route remains active with an evidence-linked baseline.",
+        "next_action": "Resume the retained native report task under a fresh exact selection.",
+        "delivery_batch_scale": "implementation", "delivery_outcome": "outcome_progress",
+        "work_evidence": ["The original report generation and independently read original private delivery."],
+        "validation_evidence": ["Native semantic validation checks the persisted baseline and current obligation."],
+        "path_delta_mode": "material_replan", "agent_vision_json": json.dumps(vision)}
+    if replan_outcome == "wait":
+        replan = {"result_kind": "wait", "classification": "fixture_missing_context",
+            "next_action": "Retain the original report until its required context is available."}
+    elif replan_outcome == "invalid_semantic":
+        vision["path_delta"]["evidence_refs"] = []
+        replan["agent_vision_json"] = json.dumps(vision)
+    helper = tmp_path / "report_model.py"
+    helper.write_text(_REPORT_MODEL_SOURCE.replace("def fake_report_model(", "def report_only(") +
+        "\ndef fake_report_model(params):\n"
+        "    import json\n"
+        "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
+        "    authority = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:', 1)[1].lstrip())[0]\n"
+        "    if authority.get('replan_action_packet'):\n"
+        "        return " + repr(json.dumps(replan)) + "\n"
+        "    return report_only(params)\n")
+    calls, writes = capture.read_bytes(), list(bot.writes)
+    runtime._steward_monitor_next_check.clear()
+    resumed = pump_steward_monitors(runtime)
+    assert len(resumed) == 1, "The original idle producer must recover its proven pre-execution refusal"
+    done = finish(runtime, resumed[0])
+    replans = [row["payload"] for row in store.events_after(sid, done["turn_id"], None)
+        if row["kind"] == "native_loopx.replan_result"]
+    assert len(replans) == 1
+    if replan_outcome != "settled":
+        assert replans[0].get("status") != "committed"
+        assert replans[0]["effects"]["state_written"] is False and replans[0]["effects"]["quota_spent"] is False
+        assert not (attempt_directory(reports.root, second_window) / "private-generation.json").exists()
+        assert bot.writes == writes and transport.steward_reports.reconcile() == 0
+        tail = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
+        assert sum(row.get("method") == "turn/start" for row in tail) == 1
+        held = capture.read_bytes(), store.load_turn(sid, rejected["turn_id"])
+        for _ in range(2):
+            runtime._steward_monitor_next_check.clear()
+            assert not pump_steward_monitors(runtime)
+        assert (capture.read_bytes(), store.load_turn(sid, rejected["turn_id"])) == held
+        assert next(row for row in StewardMonitor(runtime).todos(actor)
+            if row["todo_id"] == rejected["loopx_request"]["todo_id"])["status"] == "open"
+        assert reports.current_window(owner)[1] == second_window
+        return
+    assert done.get("response") and done["response"]["native_loopx"].get("status") == "committed", {
+        "turn": done, "replan": [row["payload"] for row in store.events_after(sid, done["turn_id"], None)
+            if row["kind"] == "native_loopx.replan_result"]}
+    assert done["loopx_request"] == rejected["loopx_request"]
+    assert done["turn_id"] != rejected["turn_id"]
+    assert store._turn_path(sid, rejected["turn_id"]).read_bytes() == original_bytes
+    assert reports.current_window(owner)[1] == second_window
+    assert replans[0]["result_kind"] == "replan_required" and replans[0]["status"] == "committed"
+    assert replans[0]["validation"]["summary"] == "independent native semantic replan preview passed"
+    assert replans[0]["receipt"]["lineage"]["todo_id"] == ""
+    assert replans[0]["receipt"]["lineage"]["replan_obligation_id"]
+    task = next(row for row in StewardMonitor(runtime).todos(actor)
+        if row["todo_id"] == done["loopx_request"]["todo_id"])
+    assert task["status"] == "done"
+    # The existing no-model recovery owner attaches the native commit to the
+    # original return reader; the refused outer Chat request stays immutable.
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == (0 if local_session else 1)
+    assert reports.health(owner)["publication_verified"]
+    assert (first_folder / "report.md").read_bytes() == first_body
+    folder = attempt_directory(reports.root, second_window)
+    body = (folder / "report.md").read_text()
+    if local_session:
+        assert bot.writes == writes
+        assert len([row for row in store.messages(sid) if row["role"] == "agent" and row["text"] == body]) == 1
+    else:
+        proof = json.loads((folder / "private-delivery.json").read_text())["deliveries"]["periodic_report." + second_window["window_id"]]
+        assert proof["verified"] and proof["text"] == body.strip()
+        assert len(bot.writes) > len(writes)  # The original sender may split a full report.
+    tail = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in tail) == 2
+    assert not any(row.get("method") == "thread/start" for row in tail)
+    after = capture.read_bytes(), list(bot.writes)
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 0
+    assert (capture.read_bytes(), bot.writes) == after
+
+
 def embedded_report_python(tmp_path, monkeypatch):
     """A real child interpreter without the embedding host's LoopX bootstrap."""
     import subprocess

@@ -10,6 +10,37 @@ import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
+import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
+
+/** A native refusal before execution can owe governance, never a business replay. */
+function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, sessionId: unknown): void {
+  if (params.report_selection_recovery == null) return;
+  if (request.work_kind !== "report")
+    throw new EffectRuntimeRequestError("selection recovery belongs only to its original report");
+  const proof = requireJsonObject(params.report_selection_recovery, "original selection refusal");
+  const original = requireJsonObject(proof.original, "original refused Chat Turn");
+  const prior = requireJsonObject(original.loopx_request, "original refused request");
+  const result = requireJsonObject(requireJsonObject(original.response, "original response").native_loopx, "native refusal");
+  const refusal = readTurnSelectionRejection(result.selection_rejection, request.todo_id);
+  const effects = requireJsonObject(result.effects, "original invocation effects");
+  if (original.session_id !== sessionId || original.origin !== "native_loopx"
+      || original.loopx_execution !== true || original.status !== "completed"
+      || original.delta_count !== 0 || original.upstream_turn_id !== null
+      || Object.keys(prior).length !== Object.keys(request).length
+      || Object.keys(request).some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
+      || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
+      || result.mode !== "run_once" || result.effects_scope !== "current_invocation"
+      || result.error_code !== "turn_todo_selection_deferred" || result.resume_turn_key != null
+      || refusal.state !== "deferred" || refusal.reason_code !== "autonomous_replan"
+      || refusal.recovery_action !== "reenter_guard_without_selection"
+      || refusal.status_health_ok !== true || refusal.contract_error_count !== 0
+      || !(refusal.delivery_preemptions as unknown[]).includes("autonomous_replan")
+      || Object.keys(effects).length !== 4
+      || ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"].some(key => effects[key] !== false)
+      || proof.generation_present !== false) {
+    throw new EffectRuntimeRequestError("report selection recovery requires the original proven pre-execution replan refusal");
+  }
+}
 
 /** Registration and current Goal lifetime are observed by the host, never by
  * a message or the selected executor/model. This creates no scheduling grant. */
@@ -152,6 +183,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
     : session.active_turn_id || params.queued_turn_count !== 0) {
     throw new EffectRuntimeRequestError("the original conversation is busy or no longer owns this Turn; retain its current work");
   }
+  admitReportSelectionRecovery(params, request, session.session_id);
   return {actor, workspace_path: goal.workspace_path, host: "codex-app-server", observation_only: observationOnly};
 }
 
@@ -269,6 +301,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
       || request.validation_command.some(value => typeof value !== "string" || !value || value.includes("\0") || value.length > 10000))) {
     throw new EffectRuntimeRequestError("the host's native validator must be a bounded argv");
   }
+  admitReportSelectionRecovery(params, request, current.sessionId);
   if (turn && (turn.session_id !== current.sessionId || turn.turn_id !== current.session.active_turn_id
       || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
       || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request))) {

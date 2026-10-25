@@ -160,7 +160,18 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
     must_attempt = action.get("must_attempt") is True
 
     if should_run:
-        if not delivery_allowed or not must_attempt:
+        try:
+            governance_allowed = (
+                effective_action in REPLAN_ACTIONS
+                and not delivery_allowed
+                and turn_envelope_replan_settlement_identity(envelope, turn_instance_id=None) is not None
+            )
+        except (ValueError, RuntimeError):
+            return LoopXTurnRoute.CONTRACT_ERROR
+        # Quota can require a semantic replan while withholding ordinary
+        # delivery. Honor that signed governance duty, without making any
+        # normal business route executable or replacing its original gates.
+        if not must_attempt or not (delivery_allowed or governance_allowed):
             return LoopXTurnRoute.BLOCKED
         try:
             registered_action = EffectiveAction(effective_action)

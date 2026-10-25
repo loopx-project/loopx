@@ -252,7 +252,8 @@ class ManagedSessionTurn:
             "work_kind": "native_turn", "validation_command": None}
 
     def admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
-              settlement_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
+              settlement_recovery: dict[str, Any] | None = None,
+              selection_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         from .conversation_bindings import ChatConversationBindings
         if self.controller.closed.is_set():
             raise ValueError("the original Chat host is stopped")
@@ -282,6 +283,7 @@ class ManagedSessionTurn:
             "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
             "monitor_todo": monitor, **report,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
+            **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
@@ -339,6 +341,8 @@ class ManagedSessionTurn:
                 request.update(work_kind="monitor", monitor_deadline=monitor_deadline,
                     monitor_lease_version=retained["version"] if retained else 0)
             existing = self.store.turn_for_client(session_id, "managed." + operation_id)
+            selection_recovery = None
+            client_id = "managed." + operation_id
             if existing is not None:
                 frozen = dict(existing.get("loopx_request") or {})
                 if monitor_deadline is not None:
@@ -346,12 +350,19 @@ class ManagedSessionTurn:
                     request["monitor_lease_version"] = frozen.get("monitor_lease_version")
                 if frozen != request:
                     raise ValueError("managed Turn request identity conflict; inspect the original operation")
-                return existing, False  # Failed/unknown work is never replayed.
+                from .steward_turn import StewardTurnHost
+                selection_recovery = StewardTurnHost(controller).report_selection_recovery(existing) if report_window is not None else None
+                if selection_recovery is None:
+                    return existing, False  # Failed/unknown work is never replayed.
+                client_id += ".admission-retry"
+                retry = self.store.turn_for_client(session_id, client_id)
+                if retry is not None:
+                    return retry, False
             commit = managed_session_goal_commit(store=self.store,
                 registry_path=controller.registry_path, session_id=session_id)
             with commit():
-                admitted = self.admit(request)
-                accepted = self.store.accept_managed_turn(session_id, client_turn_id="managed." + operation_id,
+                admitted = self.admit(request, selection_recovery=selection_recovery)
+                accepted = self.store.accept_managed_turn(session_id, client_turn_id=client_id,
                     message="Advance the currently admitted native LoopX work.",
                     display_message="生成本期定时报告。" if report_window is not None else
                         "执行本期定时任务。" if scheduled_window is not None else

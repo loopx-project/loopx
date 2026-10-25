@@ -64,8 +64,17 @@ def _attach_original_replan_settlement(
     to the same shared settlement owner, not to a made-up Todo or Host session.
     """
     obligation = replan_obligation_id_from_packet(decision.get("replan_action_packet"))
-    if (not turn_instance_id or not obligation or decision.get("selected_todo")
-            or decision.get("should_run") is not True):
+    if not turn_instance_id or not obligation or decision.get("should_run") is not True:
+        return decision
+    agent = (decision.get("interaction_contract") or {}).get("agent_channel") or {}
+    if (agent.get("must_attempt") is True and agent.get("delivery_allowed") is False
+            and decision.get("effective_action") in {
+                "autonomous_replan", "autonomous_replan_required", "successor_replan_required"}):
+        # A fallback business Todo is context, not the selected owner of a
+        # required semantic replan. Bind the existing obligation so launch,
+        # writeback and spend all retain that same governance identity.
+        decision.pop("selected_todo", None)
+    if decision.get("selected_todo"):
         return decision
     cli = (decision.get("interaction_contract") or {}).get("cli_channel")
     if not isinstance(cli, dict) or cli.get("settlement_plan"):

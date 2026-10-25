@@ -250,7 +250,7 @@ def execute_turn_run_once(
             project
             if isinstance(
                 writeback_contract.get("delivery_workspace_causality"), dict
-            )
+            ) and not (settlement_identity.replan_obligation_id and not selected_todo)
             else None
         )
         completion_delivery_workspace = (
@@ -265,14 +265,13 @@ def execute_turn_run_once(
             else None
         )
 
-        def writeback(
+        def refresh_candidate(
             result: dict[str, object],
             *,
             completion_todo_id: str | None = None,
             completion_turn_key: str | None = None,
-            effect_ref: str,
+            dry_run: bool = False,
         ) -> dict[str, object]:
-            require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
             # The host workspace is execution context, not state authority.
             state_project = None
             result_kind = str(result.get("result_kind") or "")
@@ -285,7 +284,7 @@ def execute_turn_run_once(
             # Diagnostics already live in the journal's typed host_result.
             # Do not overwrite task context before refresh can reject a result.
             progress_observation = result.get("progress_observation")
-            refresh = refresh_state_run(
+            return refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
                 goal_id=args.goal_id,
@@ -320,10 +319,34 @@ def execute_turn_run_once(
                 ),
                 completion_todo_id=completion_todo_id,
                 completion_turn_key=completion_turn_key,
-                dry_run=False,
+                dry_run=dry_run,
                 sync_global=not bool(args.no_global_sync),
                 goal_ref=goal_ref,
             )
+
+        # A Todo-less native governance Turn has no business artifact/argv.
+        # Its independent validator is the canonical semantic writeback preview,
+        # with the same captured obligation and fresh authority as the commit.
+        # Never treat a model's progress/completion assertion as that validation.
+        if task_validator is None and settlement_identity.replan_obligation_id and not selected_todo:
+            def validate_replan(_plan: Mapping[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
+                passed = (result.get("result_kind") == "replan_required"
+                    and refresh_candidate(dict(result), dry_run=True).get("ok") is True)
+                return {"status": "passed" if passed else "failed", "validator_kind": "callback",
+                    "summary": "independent native semantic replan preview " + ("passed" if passed else "failed"),
+                    **({"recovery_kind": "repair_required"} if not passed else {})}
+            task_validator = validate_replan
+
+        def writeback(
+            result: dict[str, object],
+            *,
+            completion_todo_id: str | None = None,
+            completion_turn_key: str | None = None,
+            effect_ref: str,
+        ) -> dict[str, object]:
+            require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            refresh = refresh_candidate(result, completion_todo_id=completion_todo_id,
+                completion_turn_key=completion_turn_key)
             if refresh.get("ok") and (
                 refresh.get("appended")
                 or refresh.get("idempotent_replay")
