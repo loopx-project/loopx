@@ -215,6 +215,9 @@ recovery without another admission. Native pages stay at 3 KiB throughout that
 read, reducing output-wrapper truncation; consume the inline page before following
 next_command. Forward exec stdout directly in code mode. Repeating the packet in
 a hashing tool call does not establish that its original bytes were retained.
+The reader verifies the immutable capture digest; the native observer verifies
+complete current-input bytes before reuse. With streaming tools, the final
+model output must bind the announced call before its live runtime starts.
 
 For native setup, `quota context-config --codex-app --goal-id GOAL --agent-id AGENT`
 under machine on prepares only that private transport leaf and renders the
@@ -340,6 +343,8 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 固定摘要的后续读取与完整恢复，不另行准入。该原生读取链的页大小保持 3 KiB，以减少
 输出包装造成的截断；先消费已附带页，再跟随 next_command。Code Mode 直接转发
 exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
+读取器校验不可变 capture 的摘要；原生观察器在复用前校验当前输入中的完整字节。
+流式工具可先公布调用，但完整模型输出必须在该调用的实际 runtime 启动前完成绑定。
 
 带 `previous_response_id` 的原生隐式历史请求不能给当前观察器提供完整保留证明。
 默认 OpenAI 配置模板因此使用进程内的原生 HTTP provider，保留 Codex 登录和路由，
@@ -371,9 +376,9 @@ exact digest and Turn receipt; they never rerun admission or spend quota.
 
 With delivery on, a successful saved projection also returns page zero using
 the existing `context_capture_page_v1` fields. Its content is bounded to 3 KiB
-to leave room for projection metadata; subsequent pages retain the normal 4 KiB
-size. Consume `content`, then follow
-`next_command` through `eof`; verify full byte coverage and the digest. The
+to leave room for projection metadata; subsequent native pages also use 3 KiB.
+Consume `content`, then follow `next_command` through `eof` for full byte coverage.
+The reader verifies the original digest; do not retype or hash the content. The
 existing `command` still restarts at zero for older readers or incomplete inline
 output. If the optional first-page read fails, that same command remains usable.
 Off responses do not add a page. No new flag, admission or retention receipt is
@@ -387,8 +392,9 @@ introduced; an inline page alone cannot prove complete input retention.
 原始摘要和 Turn 回执，不重新准入或扣减额度。
 
 开启时，成功的已保存投影同时用现有 `context_capture_page_v1` 字段返回第一页。
-该页内容最多 3 KiB，为投影元数据留出输出空间；后续仍按正常 4 KiB 读取。
-先读取 `content`，再沿 `next_command` 读至 `eof`，核验完整字节覆盖与摘要。
+该页内容最多 3 KiB，为投影元数据留出输出空间；后续原生页也按 3 KiB 读取。
+先读取 `content`，再沿 `next_command` 读至 `eof`，确保完整字节覆盖。
+读取器校验原始摘要；无需重抄正文或计算哈希。
 原有 `command` 仍从零开始，供旧读取方或内联输出不完整时重读；可选的首屏读取
 失败时也保留该命令。关闭态不增加分页数据，不新增开关、准入或保留回执；
 单页内联内容不证明完整输入仍被保留。

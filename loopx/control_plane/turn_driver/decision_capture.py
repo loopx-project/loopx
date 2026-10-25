@@ -103,11 +103,13 @@ def validate_handoff_socket(value: str) -> Path:
 CONTEXT_CAPTURE_READ_GUIDANCE = (
     "Follow next_command through eof and combine content in byte-offset order. "
     "In code-mode, forward successful exec stdout directly with text(result.output); "
-    "retain errors. Do not retype the packet into a hashing command; that is not current-input retention proof. "
+    "retain errors. The reader verifies the original capture SHA-256; keep its returned digest and byte cursors. "
+    "Do not hash or retype the packet. Native input observation independently verifies complete model-visible "
+    "bytes before delta reuse; neither a retyped hash nor a disk hash proves that input. "
     "Small batches can save model round trips; start with at most two default pages "
     "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
-    "Check each model-visible content's UTF-8 byte length against next_offset (total_bytes at eof), "
-    "complete coverage and the original SHA-256. If incomplete, reread the affected range "
+    "Consume all model-visible content in UTF-8 byte-offset order with complete coverage through total_bytes. "
+    "If a range or output is missing, truncated or uncertain, reread the affected range "
     "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
     "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
 )
