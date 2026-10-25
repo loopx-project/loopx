@@ -193,11 +193,39 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     recovery = wire["recovery"]
     raw = Path(recovery["path"]).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == recovery["sha256"]
-    assert json.loads(raw) == wire["context"]
+    assert json.loads(raw)["goal_id"] == GOAL_ID
+
+    def complete_reader(view):
+        page = view
+        while True:
+            subprocess.run(shlex.split(hook), input=json.dumps({**event,
+                "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)}),
+                text=True, cwd=project, capture_output=True, check=True)
+            if page["eof"]:
+                break
+            code, page = _run_cli(registry, runtime, "quota", "context-read",
+                "--capture-file", view["path"], "--capture-sha256", view["sha256"],
+                "--offset", str(page["next_offset"]), "--page-bytes", "3072", cwd=project)
+            assert code == 0 and page["ok"], page
+
+    complete_reader(wire)
+    code, warm = _run_cli(registry, runtime, *args, cwd=project)
+    assert code == 0 and warm["mode"] == "delta", warm
+    complete_reader(warm)
+    old_generation = warm["target"]["continuity_generation"]
+    old_configuration = (runtime / "machine/configuration.json").read_bytes()
+    assert configure(registry, runtime, tmp_path, "off")[0] == 0
+    assert configure(registry, runtime, tmp_path, "on")[0] == 0
+    assert (runtime / "machine/configuration.json").read_bytes() == old_configuration
+    code, fresh = _run_cli(registry, runtime, *args, cwd=project)
+    assert code == 0 and fresh["mode"] == "full", fresh
+    assert fresh["target"]["continuity_generation"] != old_generation
     code, page = _run_cli(registry, runtime, "quota", "context-read", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, cwd=project)
-    assert code == 0 and page["sha256"] == recovery["sha256"], page
-    assert page["content"].encode() == raw[:page.get("next_offset") or len(raw)]
+    latest_raw = Path(fresh["recovery"]["path"]).read_bytes()
+    assert code == 0 and page["sha256"] == fresh["recovery"]["sha256"], page
+    assert page["content"].encode() == latest_raw[:page.get("next_offset") or len(latest_raw)]
+    assert Path(recovery["path"]).read_bytes() == raw
     assert _heartbeat_receipt_count(runtime, "machine-original-turn") == 1
     assert _spend_run_count(runtime) == 0 and state.read_bytes() == original_state
     # Explicit off wins over machine on, including old ordinary full output.

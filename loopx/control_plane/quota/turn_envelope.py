@@ -119,19 +119,28 @@ def prepare_context_delivery(
     context: Mapping[str, Any], *, scope: Mapping[str, str], capture_id: str,
     baseline: Mapping[str, Any] | None = None,
     retained: Mapping[str, Any] | None = None,
+    continuity: Mapping[str, Any] | None = None,
     surface: str = "work_context",
 ) -> dict[str, Any]:
-    """Prepare at a Host's final input boundary, never from CLI self-attestation.
+    """Prepare under the Host's explicit continuity basis, not a model assertion.
 
     Quota and Turn hosts pass their complete immutable projection (or the shared
     work_context) and its capture id. Surface binding prevents cross-projection reuse.
     Unsupported hosts omit retention and keep complete delivery. A candidate is
-    not an ACK: only intact final model-input assembly may confirm its target.
+    not an ACK. Confirmed input and native delivery assumptions stay distinct.
     """
     return _turn_envelope_result("context_delivery", context=dict(context),
         scope=dict(scope), capture_id=capture_id, surface=surface,
         baseline=dict(baseline) if baseline is not None else None,
-        retained=dict(retained) if retained is not None else None)
+        retained=dict(retained) if retained is not None else None,
+        continuity=dict(continuity) if continuity is not None else None)
+
+
+def update_native_context_lifecycle(state: Mapping[str, Any], event: Mapping[str, Any], *,
+                                    new_epoch: str, pages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Native IO adapter; the shared typed owner reduces continuity assumptions."""
+    return _turn_envelope_result("native_context_lifecycle", state=dict(state),
+        event=dict(event), new_epoch=new_epoch, pages=pages)
 
 
 def restore_context_delivery(

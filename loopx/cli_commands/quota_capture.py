@@ -104,7 +104,8 @@ def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
 
 
-def native_context_capture_view(projected: dict[str, Any], directory: Path) -> dict[str, Any]:
+def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
+                                context_directory: str | None = None) -> dict[str, Any]:
     """One paged presentation for ordinary and already-captured native calls.
 
     The guard/projector already ran. Only serialize its wire and prefetch the
@@ -126,14 +127,18 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path) -> d
         capture_sha256=reference["sha256"], offset=0, page_bytes=3072))
     if page["ok"]:
         result.update(page)
+        from ..control_plane.turn_driver.codex_context import register_native_context_view
+
+        register_native_context_view(context_directory,
+            {**result, "ancestry": projected.get("ancestry", 0)})
     return result
 
 
 def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
-    Publication is delayed until this native tool runs, so the same actual-input
-    observer can qualify a resumed baseline. Optional codec failure returns the
+    Publication is delayed until this native tool runs, so the lifecycle owner
+    can select its current continuity basis. Optional codec failure returns the
     original full read reference. An unsafe recovery selector fails explicitly
     with that same reference, never a replacement guard.
     Invalid run-mode opt-ins fail before that optional transport path.
@@ -185,9 +190,10 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         cache = Path(tempfile.mkdtemp(prefix="context-", dir=root))
         projected = project_codex_context(payload, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
-            capture_id=hashlib.sha256(raw).hexdigest())
+            capture_id=hashlib.sha256(raw).hexdigest(),
+            continuity_generation=getattr(args, "_context_delivery_generation", None))
         native_prepared = True
-        native_view = native_context_capture_view(projected, cache)
+        native_view = native_context_capture_view(projected, cache, context_directory=directory)
         reference = {key: native_view[key] for key in ("path", "sha256", "command")}
         mode, target = native_view["mode"], native_view.get("target")
     except (QuotaDecisionTransportError, OSError, ValueError, TypeError, RecursionError) as exc:
@@ -426,16 +432,14 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 cli_argv=cli_argv, scenario=activation["scenario"], session_root=bool(getattr(args, "codex_context_root", None)),
                 inherit_machine=bool(machine_runtime))
             payload = {"ok": True, "context_delivery": activation, "native_config": config,
-                "activation": "For the default OpenAI provider, merge the rendered native HTTP provider to make complete inputs observable; "
-                    "preserve an explicit operator provider and verify its actual input separately. "
-                    "Merge hooks and append developer_instructions to the existing native configuration; "
+                "activation": "Merge hooks and append developer_instructions to the existing native configuration; "
                     "review and trust only these exact hooks in Codex. Restart/resume with the resulting configuration. "
                     + ("Machine defaults are re-read on each invocation; generated hooks inherit the same machine runtime. "
                        "Omit per-command activation and location flags to retain that inheritance. " if machine_runtime else
                        "Pass --context-delivery on with the same declared host mode, context location and a decision-output-root to heartbeat-prompt/should-run. ")
                     +
-                    "For delta, the native process must already have CODEX_ROLLOUT_TRACE_ROOT pointing to private diagnostics; "
-                    "unavailable diagnostics preserve full delivery. Set --context-delivery off and remove context options to restore ordinary output. "
+                    "Normal completed full reads establish an explicit continuity assumption; no input diagnostics or provider change is required. "
+                    "Known invalidation or incomplete reads keep full recovery. Set --context-delivery off and remove context options to restore ordinary output. "
                     "This command installs nothing and grants no execution authority."}
         except (OSError, ValueError, TypeError) as exc:
             payload = {"ok": False, "reason": str(exc)}
@@ -444,7 +448,9 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     if args.quota_command == "context-hook":
         import sys
         from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-        from ..control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
+        from ..control_plane.turn_driver.codex_context import (
+            CONTEXT_LIFECYCLE_HOOKS, codex_context_directory, codex_context_hook,
+        )
 
         # Native transport only: no registry discovery, guard or quota effects.
         try:
@@ -454,7 +460,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
             event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
             if (isinstance(event, dict) and isinstance(event.get("session_id"), str) and event["session_id"]
-                    and event.get("hook_event_name") in ("SessionStart", "PreCompact", "PreToolUse")):
+                    and event.get("hook_event_name") in CONTEXT_LIFECYCLE_HOOKS):
                 directory = codex_context_directory(directory=args.codex_context_dir,
                     root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
                 payload = codex_context_hook(directory, event)

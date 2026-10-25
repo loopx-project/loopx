@@ -140,7 +140,7 @@ transport flag does not restore the old exact Todo schema.
 ## Opt-in native reuse
 
 The existing [native context delivery option](../heartbeat-automation-prompt.md#opt-in-native-context-delivery)
-uses one TypeScript codec for ordinary quota and TurnEnvelope. Within a confirmed
+uses one TypeScript codec for ordinary quota and TurnEnvelope. Within a usable
 baseline, both representations repeat `planning_horizon.core_goal`'s original
 objective, provenance and availability, including a changed or missing objective.
 The complete `acceptance_contract` and registered planning trees use exact
@@ -163,7 +163,7 @@ codec compares this encoding with ordinary edits and full replacement before
 choosing. A reader that does not recognize the edit recovers the full capture.
 
 These are presentation rules within the existing default-off option, not a new
-configuration or admission policy. Missing retention, a changed epoch, a damaged
+configuration or admission policy. A missing continuity basis, a changed epoch, a damaged
 patch or an incompatible reader automatically recovers the same original full
 capture. Recovery never reruns the guard, asks the owner, spends quota or grants
 execution. Wire reduction alone does not establish actual model costs or outcomes.
@@ -215,28 +215,42 @@ recovery without another admission. Native pages stay at 3 KiB throughout that
 read, reducing output-wrapper truncation; consume the inline page before following
 next_command. Forward exec stdout directly in code mode. Repeating the packet in
 a hashing tool call does not establish that its original bytes were retained.
-The reader verifies the immutable capture digest; the native observer verifies
-complete current-input bytes before reuse. With streaming tools, the final
-model output must bind the announced call before its live runtime starts.
+The reader verifies the immutable capture digest. Native lifecycle delivery uses
+an explicit engineering assumption: a normally completed full read was read and
+remains available until invalidated. This is not a retained-input observation or
+a model ACK. The shared codec still validates the exact baseline digest, scope,
+current controls and reconstruction. Explicit final-input Host clients retain
+their separate confirmed-input contract.
 
 For native setup, `quota context-config --codex-app --goal-id GOAL --agent-id AGENT`
 under machine on prepares only that private transport leaf and renders the
 existing hooks and recovery instructions. It does not install or trust hooks,
-change host configuration or enable diagnostics in a running parent. The native
-process still needs its exact reviewed hooks and `CODEX_ROLLOUT_TRACE_ROOT`
-configured before startup. Without current-input retention proof, delivery stays
-full. Native implicit-history requests with `previous_response_id` are not retention
-proof for this observer. The rendered default OpenAI configuration therefore uses
-a native HTTP provider, keeping Codex authentication and routing
-without an endpoint or credential override. Benchmark preparation reads effective
-native configuration before applying it; explicit operator providers are preserved,
-and a conflicting provider id is rejected. A manual App setup must also preserve
-an explicit provider and verify its actual input. HTTP transport and diagnostics
-have costs which remain part of the comparison; selecting them does not prove a
-delta or a performance gain. Benchmark overrides are per native invocation; a manual
-App setup restores its previous provider when removing this configuration.
+change host configuration or restart the running App. Configure and trust its
+exact hooks for the next native session. The native path preserves authentication,
+endpoints, provider selection and connection mode, including implicit history via
+`previous_response_id`. It neither enables input diagnostics nor scans model-input
+history. Benchmark preparation stages those same hooks in its isolated trial home.
+
+`PostToolUse` records complete digest-bound reader ranges in the existing session
+journal; EOF without preceding pages, a known malformed/truncated page or a reader
+error cannot establish a baseline. Concurrent and repeated pages coalesce.
+`PreCompact`, `PostCompact`, clear, fork, a changed session/workspace and an
+unresumable restore invalidate it. Same-session resume preserves a complete
+baseline; ordinary tools and turn endings do not invalidate it. An interrupted
+pending delivery requires full recovery. Repeated reset events are idempotent.
+Recovery reads the same immutable capture without re-admission or spend.
+
+This deliberately replaces per-request complete-input proof with lifecycle
+assumptions. Downstream output loss or truncation not exposed to the hook, a
+missed invalidation, or hooks silently disabled outside the declared setting may
+escape detection. These limits are not certified retention and do not add an
+approval gate. Explicit off keeps ordinary full delivery; known journal failures
+remove the reusable baseline and retain the original explicit recovery reference.
 Generated machine-inherited hooks reload the same machine runtime, so off
 or removal stops their journal writes. Explicit manual on options remain explicit.
+Replacing the machine configuration invalidates reuse, including off/on round
+trips with identical final contents. Unrelated configuration edits may therefore
+cause one conservative full delivery.
 
 Generate a persistent entrypoint with `heartbeat-prompt --bootstrap`. It retains
 caller-supplied options, including an explicit off, but never freezes resolved
@@ -293,7 +307,7 @@ Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修�
 也不证明模型已采用或获得质量收益。回滚需恢复旧版本并重新生成提示。
 
 既有默认关闭的原生 context delivery 由同一 TypeScript codec 处理普通 quota 与
-TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizon.core_goal` 的
+TurnEnvelope。在基线连续性成立的口径内，两入口仍逐轮发送 `planning_horizon.core_goal` 的
 原始目标、来源和可用性，包括目标改变或缺失。完整 `acceptance_contract` 与已登记
 规划树按精确复用、子树变化或全量交付；累计验收树不等于原始目标句。未知 horizon
 字段仍作为本轮输入。quota 通道与 Turn 契约摘要复用完整静态收口指导，当前收口判断、
@@ -304,7 +318,7 @@ TurnEnvelope。确认基线保留后，两入口仍逐轮发送 `planning_horizo
 `removed`；数组的 `items` 与 `values` 使用精确索引，`length` 调整长度。
 字段仍在本轮输入中，只减少重复 wrapper；codec 比较普通编辑、合并字段
 与完整替换后选择，无法识别该编辑的读者恢复完整 capture。
-这些只改变既有选项内的展示，不新增配置或准入。保留不明、epoch 改变、patch 损坏
+这些只改变既有选项内的展示，不新增配置或准入。缺少可用连续性依据、epoch 改变、patch 损坏
 或读者不兼容时，自动恢复同一原始 full capture，不重跑 guard、不问询、不扣额，
 也不授予执行权限。传输减少本身不证明实际模型费用或结果改善。
 
@@ -343,18 +357,27 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 固定摘要的后续读取与完整恢复，不另行准入。该原生读取链的页大小保持 3 KiB，以减少
 输出包装造成的截断；先消费已附带页，再跟随 next_command。Code Mode 直接转发
 exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
-读取器校验不可变 capture 的摘要；原生观察器在复用前校验当前输入中的完整字节。
-流式工具可先公布调用，但完整模型输出必须在该调用的实际 runtime 启动前完成绑定。
+读取器校验不可变 capture 的摘要。原生路径明确采用工程假设：正常完整交付的首包已读，
+在失效事件发生前仍可用；这不是实际输入保留证明或模型 ACK。共享 codec 仍校验精确基线
+摘要、作用域、本轮控制与完整重建。显式 final-input Host 客户端保留独立的确认输入契约。
 
-带 `previous_response_id` 的原生隐式历史请求不能给当前观察器提供完整保留证明。
-默认 OpenAI 配置模板因此使用进程内的原生 HTTP provider，保留 Codex 登录和路由，
-不改端点或凭证。Benchmark 准备会读取实际原生配置；显式自定义 provider 保持原样，
-名称冲突则拒绝。手工配置 App 也须保留显式 provider，并验证实际输入。HTTP 与诊断
-成本仍须计入比较，选择它们不代表已经产生差分或性能收益。Benchmark 覆盖只作用于
-本次原生调用；手工 App 配置撤回时也须恢复此前的 provider。
-原生进程启动前仍须配置已审阅的精确 hook 与 `CODEX_ROLLOUT_TRACE_ROOT`；无法证明当前
-输入保留时返回完整捕获。由机器继承生成的 hook 每次重读同一个 runtime，关闭或移除
+为下次原生会话配置并信任精确 hooks，不重启当前 App。原生路径保留认证、端点、provider
+和连接方式，包括带 `previous_response_id` 的隐式历史；不启用输入诊断，也不逐轮扫描
+模型完整输入。Benchmark 在各自隔离的 trial home 内自动准备同一组 hooks。
+
+`PostToolUse` 在现有 session journal 中合并摘要固定的完整读取范围；缺少前页的 EOF、
+已知的格式损坏／截断或读取失败不能建立基线。并发、重复页幂等合并。`PreCompact`、
+`PostCompact`、清空、分叉、会话／工作区切换及无法接续的恢复使基线失效；同会话的完整
+基线可在 resume 后继续使用，普通工具和正常轮次结束不无条件失效。尚未完成的交付被中断
+后须完整恢复。重复重置事件幂等；恢复读取同一不可变捕获，不重新准入或扣额。
+
+这是以生命周期假设替换逐轮完整输入证明。Hook 未暴露的下游丢失／截断、漏掉失效事件，
+或在声明开关之外静默禁用 hooks，仍可能漏检；不把这些假设称为实测保留，也不新增审批门。
+显式关闭继续普通全量投递；已知 journal 失败移除可复用基线，保留原始显式恢复引用。
+由机器继承生成的 hook 每次重读同一个 runtime，关闭或移除
 配置后停止 journal 写入；手工显式 on 保留其显式优先级。
+机器配置被替换后重新全量，包括最终内容相同的 off/on 往返；其他机器配置编辑也可能
+触发一次保守的全量投递。
 
 通过 `heartbeat-prompt --bootstrap` 生成持久入口，仅保留调用者显式参数（包括 off），
 不固化当前机器默认值或自动生成路径。已有 v2 loader 每次唤醒重读设置；旧展开式提示须

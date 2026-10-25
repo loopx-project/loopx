@@ -10,14 +10,13 @@ import os
 import stat
 import shlex
 from pathlib import Path
-import tempfile
 
 
 def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, turn_id: str) -> str:
     """Delay presentation of the original preflight until its native tool call.
 
-    No model input exists at host preflight time. Keep the original source/hash
-    and let the product's current-input observer choose full/delta later.
+    Keep the original source/hash. The product's lifecycle owner chooses the
+    full/delta view when the native tool actually presents it.
     """
     from loopx.command_invocation import loopx_cli_argv
 
@@ -31,7 +30,8 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
         + "\n```\nConsume any returned page content, then follow next_command through eof. "
         "If no page content is returned, run command and follow all next_command pages. Reconstruct any delta against "
         "its exact retained baseline before following the original interaction_contract. "
-        "If projection is unavailable, the baseline is absent/uncertain, or a response is incomplete, "
+        "Normal completed reads use the explicit native-hook continuity assumption. "
+        "If projection is unavailable, the baseline was invalidated, or a response is incomplete, "
         "follow its full recovery reference. If the projection command itself fails, read the original "
         "complete packet with:\n```sh\n" + shlex.join(full) + "\n```\nFollow every next_command. "
         "Neither presentation nor recovery renews this decision's authority or freshness. ")
@@ -39,23 +39,15 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
 
 def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
     from loopx.control_plane.turn_driver.codex_context import (
-        codex_context_configuration, codex_context_transport_configuration,
+        CONTEXT_LIFECYCLE_HOOKS, codex_context_configuration,
     )
     from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
 
     root = home / "loopx-context"
-    traces = home / "context-traces"
-    for directory in (root, traces):
-        directory.mkdir(mode=0o700, exist_ok=True)
-        info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise ValueError("context diagnostics require private, physical trial directories")
-    # Opt-in diagnostics are private to this trial, never global or a retention
-    # assertion. Include all IO/model-input costs when comparing this treatment.
-    # Keep candidate references across resumed wakes, but inspect only this
-    # native invocation's diagnostics. Older traces are evidence, not a growing
-    # hot-path scan or a reason to distrust intact current model input.
-    env["CODEX_ROLLOUT_TRACE_ROOT"] = tempfile.mkdtemp(prefix="wake-", dir=traces)
+    root.mkdir(mode=0o700, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("context delivery requires a private, physical trial directory")
     env["LOOPX_CODEX_CONTEXT_DIR"] = str(root)
     configuration = codex_context_configuration(str(root), goal_id=env["LOOPX_GOAL_ID"],
         agent_id=env["LOOPX_AGENT_ID"], scenario="codex_benchmark_heartbeat", cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]])
@@ -81,12 +73,10 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
             native.request("initialize", {"clientInfo": {"name": "loopx_context_transport", "version": "0.1.0"},
                                           "capabilities": {"experimentalApi": True}})
             native.notify("initialized", {})
-            effective = native.request("config/read", {"cwd": env["LOOPX_PROJECT"], "includeLayers": False})
-            transport = codex_context_transport_configuration(effective["config"])
             listed = native.request("hooks/list", {"cwds": [env["LOOPX_PROJECT"]]})
     hooks = [hook for entry in listed["data"] for hook in entry["hooks"]
              if hook.get("sourcePath") == str(path.resolve())]
-    if len(hooks) != 2 or path.read_text() != content:
+    if len(hooks) != len(CONTEXT_LIFECYCLE_HOOKS) or path.read_text() != content:
         raise ValueError("native host did not discover the exact trial context hooks")
     entries = []
     for hook in hooks:
@@ -100,9 +90,4 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
     # a failed SessionStart handler cannot erase the read-only recovery route.
     native_args = ["-c", "hooks.state={" + ",".join(entries) + "}",
         "-c", "developer_instructions=" + json.dumps(configuration["developer_instructions"])]
-    if transport:
-        provider = transport["model_provider"]
-        native_args += ["-c", "model_provider=" + json.dumps(provider)]
-        for key, value in transport["model_providers"][provider].items():
-            native_args += ["-c", f"model_providers.{provider}.{key}=" + json.dumps(value)]
     env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = json.dumps(native_args)

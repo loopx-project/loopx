@@ -1151,7 +1151,7 @@ def test_context_setup_preserves_unsafe_or_unowned_inputs(tmp_path, kind):
         protected = home / "hooks.json"
         protected.write_text('{"operator": "unchanged"}')
     else:
-        protected = home / "context-traces"
+        protected = home / "loopx-context"
         if kind == "public_directory":
             protected.mkdir(mode=0o755)
             protected.chmod(0o755)
@@ -1175,7 +1175,8 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
     home = tmp_path / "home"
     home.mkdir()
     config = home / "config.toml"
-    original_config = b"[features]\nplugins=true\nremote_plugin=true\nplugin_sharing=true\n"
+    original_config = (f'model_provider={json.dumps(provider)}\n'
+        + '[features]\nplugins=true\nremote_plugin=true\nplugin_sharing=true\n').encode()
     config.write_bytes(original_config)
     methods, commands = [], []
 
@@ -1186,11 +1187,9 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
             methods.append(method)
             if method == "initialize":
                 return {}
-            if method == "config/read":
-                return {"config": {"model_provider": provider}}
             assert method == "hooks/list", "discovery must not start model work"
             own = [{"sourcePath": str((home / "hooks.json").resolve()),
-                    "key": f"own-{i}", "currentHash": f"native-hash-{i}"} for i in range(2)]
+                    "key": f"own-{i}", "currentHash": f"native-hash-{i}"} for i in range(5)]
             return {"data": [{"hooks": [*own, {"sourcePath": str(tmp_path / "other-hooks.json"),
                 "key": "unrelated", "currentHash": "never-trust-this"}]}]}
         yield SimpleNamespace(request=request, notify=lambda *args: None)
@@ -1199,7 +1198,7 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
     env = {"LOOPX_CLI": "fixture-loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "agent",
            "CODEX_BIN": "native-codex", "LOOPX_PROJECT": str(tmp_path)}
     prepare_context_delivery(env, home)
-    assert methods == ["initialize", "config/read", "hooks/list"]
+    assert methods == ["initialize", "hooks/list"]
     assignments = {commands[0][i + 1] for i, value in enumerate(commands[0]) if value == "-c"}
     assert assignments == {"features.plugins=false", "features.remote_plugin=false", "features.plugin_sharing=false"}
     trusted = json.loads(env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"])
@@ -1210,13 +1209,9 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
     assert config.read_bytes() == original_config
     overrides = {trusted[i + 1].split("=", 1)[0]: trusted[i + 1].split("=", 1)[1]
                  for i, value in enumerate(trusted) if value == "-c"}
-    if provider == "openai":
-        selected = json.loads(overrides["model_provider"])
-        assert json.loads(overrides[f"model_providers.{selected}.supports_websockets"]) is False
-        assert json.loads(overrides[f"model_providers.{selected}.requires_openai_auth"]) is True
-        assert not any(key.endswith(("base_url", "env_key")) for key in overrides)
-    else:
-        assert not any(key.startswith("model_provider") for key in overrides)
+    assert not any(key.startswith("model_provider") for key in overrides)
+    assert "CODEX_ROLLOUT_TRACE_ROOT" not in env
+    assert not (home / "context-traces").exists()
 
 
 @pytest.mark.parametrize("value", [True, False, "1", "codex_benchmark_heartbeat", "codex_app_heartbeat", "all"])

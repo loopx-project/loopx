@@ -297,7 +297,7 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
 @pytest.mark.parametrize("host", ["app_server", "benchmark", "app_machine", "app_code_mode"])
-def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path, monkeypatch, host):
+def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
@@ -308,7 +308,8 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
-    env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0", CODEX_ROLLOUT_TRACE_ROOT=str(workspace / "traces"))
+    env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
+    env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
     project, runtime, registry = _write_fixture(workspace)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todos = read_fixture_todos(state)
@@ -375,7 +376,7 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
                 descriptor = json.loads(output.split("\nOutput:\n", 1)[-1])
                 assert descriptor["ok"] and descriptor["mode"] == ("full" if name == "cold" else "delta")
-                wire = json.loads((Path(descriptor["path"]).parent / "presentation.json").read_text()) if name == "cold" else json.loads(Path(descriptor["path"]).read_text())
+                wire = json.loads((Path(descriptor["path"]).parent / "delivery.json").read_text())
                 assert descriptor["target"] == wire["target"]
                 observed[name] = (wire, descriptor)
                 data = Path(descriptor["path"]).read_bytes()

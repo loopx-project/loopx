@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
+import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
 
 import {
   interpretQuotaShouldRunPacket,
@@ -1276,6 +1277,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   }
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
+  if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "replan_settlement_identity") return {identity: turnEnvelopeReplanSettlementIdentity(

@@ -145,8 +145,8 @@ def project_captured_context(
     """Adapt an admitted capture to the shared TS presentation owner.
 
     The caller-owned rendezvous may supply a continuity observation. It must
-    still recheck the candidate at final model-input assembly and ACK only intact
-    delivery. Unsupported ordinary CLI clients never supply this request. Every
+    either confirm intact final input or explicitly select native lifecycle
+    assumptions. Unsupported ordinary CLI clients never supply this request. Every
     opt-in attempt saves the complete projected JSON for same-capture recovery;
     neither malformed requests nor optimization failures rerun the guard.
     A native caller may pass its already-published recovery reference, never a
@@ -164,6 +164,7 @@ def project_captured_context(
         if not isinstance(scope, dict) or scope.get("goal_id") != goal_id or scope.get("agent_id") != agent_id:
             return payload
         retained = request.get("retained")
+        continuity = request.get("continuity")
         if "native_input" in request:
             from .codex_input_trace import codex_context_in_active_input
 
@@ -177,9 +178,10 @@ def project_captured_context(
                     or not codex_context_in_active_input(observation, baseline=baseline,
                         session_id=native_session)):
                 retained = None
+                continuity = None
         delivery = prepare_context_delivery(payload, scope=scope,
             capture_id=capture_id, surface=surface,
-            baseline=request.get("baseline"), retained=retained)
+            baseline=request.get("baseline"), retained=retained, continuity=continuity)
         delivery["recovery"] = recovery
         return delivery
     except (OSError, ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):

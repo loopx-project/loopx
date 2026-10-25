@@ -438,7 +438,7 @@ is only one field. With `on`, missing, incomplete, contradictory or unsupported
 run-mode declarations are configuration errors: the CLI exits nonzero with a
 reason before admission or transport writes, including in native hooks. Correct
 the declaration or select `off`; there is no owner question or new approval.
-In a supported run mode, missing or invalid retained-input evidence still
+In a supported run mode, a missing or invalid continuity basis still
 delivers the same original full capture. The current recovery reference is saved
 before optional delta computation, so an oversized warm request or failed
 candidate update cannot select an older capture after compaction or resume.
@@ -449,8 +449,9 @@ can be established, or invalidation also fails, the CLI reports
 rerun admission to recover a presentation failure.
 `off` creates no native journal, hook configuration or input
 observation; directories alone never turn it on. This declaration check is not
-host authentication, execution authority or proof of retained input. Every warm
-delta still needs independently verified complete current-input evidence.
+host authentication, execution authority or proof of retained input. Native
+delivery uses the explicit lifecycle assumption described below; final-input
+Host clients keep their independent retained-input confirmation contract.
 Generic CLI, visible native Goals, Claude and other hosts remain outside this
 opt-in. Harbor/container and installed desktop adoption retain their separate
 unqualified boundaries; listing an entry does not certify live adoption.
@@ -480,20 +481,28 @@ these options without freezing a Turn ID. Each wake loads current instructions
 and binds the existing `LOOPX_TURN` before its generated guard. Selection keeps
 the same transport. An unset wake identity fails in the shell before admission.
 
-Warm delta additionally needs the native host process to have
-`CODEX_ROLLOUT_TRACE_ROOT` set to private native trace-v1 diagnostics before it
-starts. A hook cannot set its parent process environment. If that host cannot
-provide the required actual-input observation, ordinary full delivery continues;
-do not use a file, session ID or successful setup as a retention acknowledgement.
-Scope diagnostics to the authorized host and include their IO/retention cost.
+Native reuse assumes a normally completed full read was read and remains
+available until a lifecycle invalidation. `PostToolUse` merges complete reader
+ranges in the existing private session journal. EOF alone, known read failures,
+malformed/truncated pages and interrupted paging cannot establish a baseline.
+Compaction, clear, fork, session/workspace change and an unresumable restore
+invalidate it; ordinary tools and turn endings do not. Same-session resume can
+reuse a completed baseline. Repeated events and parallel pages are idempotent.
+This replaces per-request input-history proof, not the capture integrity check.
+It preserves native providers, authentication, endpoints and connection mode,
+including implicit history. No input diagnostics or forced HTTP is required.
+Unreported downstream output loss or missed/externally disabled hooks can escape
+detection; this is an engineering assumption, not measured retention or a model ACK.
 
 Read back native hook discovery/trust and the generated guard options, then
-verify cold full, warm delta only after complete current-input evidence,
+verify cold full, warm delta after completed reader delivery,
 resume and compaction recovery on the actual host. The persistent instruction
 names `quota context-read --codex-context-root ...` when an entire hook is lost;
 lookup is read-only and subsequent pages pin the original file/hash. It never
 readmits or spends. Normal native trust/settings UI remains the activation and
-error surface; unsupported diagnostics keep the same full path.
+error surface; failed setup keeps the full path. Explicit off stops projection.
+Replacing machine configuration also invalidates reuse, so an off/on round trip
+cannot reuse a baseline that missed lifecycle events while disabled.
 An existing decision-handoff socket may use this same capture. Handoff validates
 and releases the immutable original first; native projection follows release.
 It does not create a second checkpoint or change the handoff's failure/recovery
@@ -511,8 +520,8 @@ loopx --format json quota context-project --context-delivery on --codex-app \
 
 The JSON response supplies `mode`, the digest-pinned read `command`, the target
 when available, and an original full `recovery` reference. Cold mode delivers
-complete context plus its target; a warm delta still requires actual current-input
-proof. Follow every page and reconstruct before dependent work. Optional codec
+complete context plus its target; a warm delta names its native-hook continuity
+basis. Follow every page and reconstruct before dependent work. Optional codec
 or delivery-cache failure after recovery publication falls back to that same
 full capture. Enabled native preparation or unsafe recovery publication fails
 with `ok: false`, `quota_decision_transport_failed`, and the original `recovery`
@@ -523,8 +532,8 @@ admission or accounting. The original file stays unchanged; generated caches
 remain private. A missing projection command can use `quota context-read` with
 the original file/hash. Set `--context-delivery off` and remove context options from generated host
 configuration to restore ordinary full-read instructions. Remove only these generated hook entries and
-appended recovery instruction from native configuration, and disable their
-owned diagnostics if enabled. Preserve unrelated hooks/settings; the CLI does
+appended recovery instruction from native configuration. Preserve unrelated
+diagnostics, providers, hooks and settings; the CLI does
 not edit host configuration. No stored decision or receipt is rewritten.
 To roll back, remove the context/capture options from this bootstrap and remove
 only the generated hooks/recovery instruction from the native configuration.

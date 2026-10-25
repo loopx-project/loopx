@@ -1,6 +1,6 @@
 /** Presentation of immutable quota, Turn and work-context captures. No admission or state writes.
- * A candidate delta is usable only at a host's final model-input assembly boundary;
- * a previous CLI output or a successful capture handoff is not retention proof. */
+ * Confirmed final input and explicit native-hook continuity assumptions remain
+ * distinct; successful capture handoff alone is never retained-input proof. */
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthorityJson, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
@@ -356,13 +356,15 @@ function targetBinding(request: JsonObject, context: JsonObject, surface: Surfac
   for (const key of ["goal_id", "agent_id", "session_id", "context_epoch"]) {
     binding[key] = requireNonEmptyString(scope[key], `scope.${key}`);
   }
+  if (scope.continuity_generation !== undefined)
+    binding.continuity_generation = requireNonEmptyString(scope.continuity_generation, "scope.continuity_generation");
   binding.capture_id = requireNonEmptyString(request.capture_id, "capture_id");
   binding.context_digest = digest(context);
   return binding;
 }
 
 function compatible(base: JsonObject, target: JsonObject): boolean {
-  return ["goal_id", "agent_id", "session_id", "context_epoch", "projection_version", "surface"]
+  return ["goal_id", "agent_id", "session_id", "context_epoch", "projection_version", "surface", "continuity_generation"]
     .every(key => base[key] === target[key]);
 }
 function surfaceOf(value: unknown): Surface {
@@ -370,17 +372,20 @@ function surfaceOf(value: unknown): Surface {
   return value as Surface;
 }
 
-/** Final-input host boundary only. Unsupported/uncertain retention returns full;
- * the host ACKs intact delivery, never file creation or an Agent assertion. */
+/** Hosts may confirm final-input retention, or explicitly select the native
+ * hook delivery assumption. These bases are distinct; neither grants authority. */
 export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[] = []): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
   const surface = surfaceOf(request.surface ?? "work_context"), target = targetBinding(request, context, surface);
   const full = (reason: string): JsonObject => ({schema_version: VERSION, mode: "full", target,
     ancestry: 0, reason, context: clone(context)});
   const baseline = jsonObject(request.baseline), retained = jsonObject(request.retained);
+  const continuity = jsonObject(request.continuity);
   const binding = jsonObject(baseline?.target), prior = jsonObject(baseline?.context);
-  if (!binding || !prior || !retained || retained.complete !== true
-      || !equal(retained.target, binding) || !compatible(binding, target)
+  const confirmed = !continuity && retained?.complete === true && equal(retained.target, binding);
+  const assumed = !retained && continuity?.basis === "native_hook_assumption"
+    && equal(continuity.target, binding);
+  if (!binding || !prior || (!confirmed && !assumed) || !compatible(binding, target)
       || binding.context_digest !== digest(prior)) return full("baseline_unavailable");
   const depth = baseline?.ancestry;
   if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return full("full_refresh_due");
@@ -389,7 +394,10 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
   const changes = changeTree(prior, context, after.paths);
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,
     ancestry: Number(depth) + 1, changes,
-    instruction: "Current controls are inline even when unchanged. Other fields inherit the confirmed baseline; all requirements remain binding. A value replaces its subtree; values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
+    ...(assumed ? {continuity_basis: "native_hook_assumption"} : {}),
+    instruction: "Current controls are inline even when unchanged. Other fields inherit the "
+      + (assumed ? "exact baseline under the native-hook continuity assumption" : "confirmed baseline")
+      + "; all requirements remain binding. A value replaces its subtree; values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
   return delta;

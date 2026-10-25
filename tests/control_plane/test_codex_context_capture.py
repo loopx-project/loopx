@@ -72,7 +72,7 @@ def _delivered(request, digest):
 def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
-    env["CODEX_ROLLOUT_TRACE_ROOT"] = str(workspace / "traces")
+    env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
     env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
     project, runtime, registry = _write_fixture(workspace)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -134,8 +134,11 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         hook_command = shlex.join([str(wrapper), "quota", "context-hook", "--context-delivery", "on", "--codex-app", context_option, str(lifecycle)])
     handler = {"type": "command", "command": hook_command, "timeout": 10}
     if host != "benchmark":
+        from loopx.control_plane.turn_driver.codex_context import CONTEXT_LIFECYCLE_HOOKS
+
         (home / "hooks.json").write_text(json.dumps({"hooks": {
-            event: [{"hooks": [handler]}] for event in ("SessionStart", "PreToolUse")}}))
+            event: [{**({"matcher": "^Bash$"} if event == "PostToolUse" else {}),
+                     "hooks": [handler]}] for event in CONTEXT_LIFECYCLE_HOOKS}}))
     errors, snapshots = [], []
     stages = {"phase": "start", "pages": [], "baseline_confirmed": False, "compact_response": None}
     wires, page_digests, read_paths = {}, {}, {}
