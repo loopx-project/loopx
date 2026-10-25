@@ -143,23 +143,21 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
     ...(new Date(outcomes.start).getUTCFullYear() !== new Date(outcomes.end).getUTCFullYear() ? {year: "numeric"} : {})});
   const value = ([key, cn, en]: typeof points[number]) => {
     const point = outcomes[key];
-    return <div key={key} data-native-point={key}><dt>{zh ? cn : en}</dt><dd>{point ?
+    return <div key={key} className={key === "best_valid" ? "research-native-best" : undefined} data-native-point={key}><dt>{zh ? cn : en}</dt><dd>{point ?
       <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)} aria-label={`${zh ? cn : en}: ${String(point.value)} ${outcomes.metric.unit} · ${zh ? "查看原始证据" : "Read original evidence"}`}>
         <strong>{formatNativeMeasurement(point.value, zh)}</strong>{key === "best_valid" ? <span className="research-native-unit">{outcomes.metric.unit}</span> : null}<FileText size={14} aria-hidden/>
       </button> : <span className="research-native-unknown">{zh ? "未知" : "Unknown"}{key === "best_valid" ? <span className="research-native-unit"> · {outcomes.metric.unit}</span> : null}</span>}</dd></div>;
   };
   return <section className="research-native-results" aria-label={zh ? "原生测量" : "Native measurements"}>
-    <div className="research-progress-title"><h4>{historical ? (zh ? "历史原生测量" : "Historical native measurements") : (zh ? "原生测量" : "Native measurements")}</h4><ContextHelp
+    <div className="research-progress-title research-native-heading"><div className="research-progress-title"><h4>{historical ? (zh ? "历史原生测量" : "Historical native measurements") : (zh ? "原生测量" : "Native measurements")}</h4><ContextHelp
       icon={historical ? TriangleAlert : undefined} label={historical ? (zh ? "当前来源未核验" : "Current source unverified") : (zh ? "测量说明" : "About native measurements")}>
       {historical ? <p>{zh ? "来源已变化或不可读；以下仅为历史捕获，当前结果未核验。" : "The source changed or is unavailable. These are historical captures; current results are unverified."}</p> : null}
       <p>{zh ? "最佳只限本次捕获窗口；原生保留与最后提交可能不同。未采集的值保留未知，不记零。" : "Best is limited to this capture; retained and final submissions can differ. Uncaptured values remain unknown, not zero."}</p>
       <p>{zh ? "检验过收益、采用了证据及原目标达成各需各自证据，不能由这些数值推断。" : "Utility testing, evidence adoption and original-objective success each need their own evidence; these values cannot establish them."}</p>
     </ContextHelp></div>
-    <div className="research-native-reading">
-      <div className="research-native-best"><dl>{value(points[0])}</dl><p>{outcomes.metric.name} · {outcomes.metric.higher_is_better ? (zh ? "越高越好" : "higher is better") : (zh ? "越低越好" : "lower is better")}</p></div>
-      <dl className="research-native-context">{points.slice(1).map(value)}</dl>
-    </div>
-    <div className="research-native-scope"><span>{outcomes.valid_count} / {outcomes.sample_count} {zh ? "项有效结果" : "valid results"}</span>
+    <p className="research-native-metric">{outcomes.metric.name} · {outcomes.metric.higher_is_better ? (zh ? "越高越好" : "higher is better") : (zh ? "越低越好" : "lower is better")}</p></div>
+    <dl className="research-native-reading">{points.map(value)}</dl>
+    <div className="research-native-footer"><div className="research-native-scope"><span>{outcomes.valid_count} / {outcomes.sample_count} {zh ? "项有效结果" : "valid results"}</span>
       <span>{period.formatRange(new Date(outcomes.start), new Date(outcomes.end))} UTC</span>
       {!outcomes.complete ? <span>{zh ? "部分窗口 · 起点未知" : "Partial window · initial unknown"}</span> : null}
     </div>
@@ -173,7 +171,7 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
         return point ? <div key={key}><dt>{zh ? cn : en}</dt><dd>{String(point.value)} {outcomes.metric.unit}<br/><code>{point.candidate_ref}</code><br/>{zh ? "提交" : "Submission"} {point.submission_index} · {zh ? "提交时间" : "Submitted at"}: {point.submitted_at ?? (zh ? "未知" : "Unknown")}<br/>{zh ? "收到结果" : "Result received"}: {point.observed_at}</dd></div> : null;
       })}</dl>
       <ul>{outcomes.limitations.map((line, i) => <li key={i}>{line}</li>)}</ul>
-    </details>
+    </details></div>
   </section>;
 }
 
