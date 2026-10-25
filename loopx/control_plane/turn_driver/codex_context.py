@@ -227,10 +227,11 @@ def codex_context_transport_configuration(native_config: Mapping[str, Any]) -> d
     explicit operator providers are left alone. This config grants no authority
     and does not assert that any particular input was complete.
     """
-    if native_config.get("model_provider", "openai") != "openai":
+    # Native config/read serializes an unset default as null.
+    if native_config.get("model_provider") not in (None, "openai"):
         return {}
     provider = "loopx_context_http"
-    if provider in native_config.get("model_providers", {}):
+    if provider in (native_config.get("model_providers") or {}):
         raise ValueError("context HTTP provider conflicts with existing native configuration")
     return {"model_provider": provider, "model_providers": {provider: {
         "name": "OpenAI", "wire_api": "responses", "requires_openai_auth": True,

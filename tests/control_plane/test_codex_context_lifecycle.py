@@ -73,12 +73,14 @@ def test_native_configuration_cli_is_read_only_and_usable_without_registry(tmp_p
     assert missing_identity.returncode == 1 and not json.loads(missing_identity.stdout)["ok"]
 
 
-def test_context_transport_retains_native_auth_and_explicit_provider_ownership():
+@pytest.mark.parametrize("native_config", [{}, {"model_provider": None, "model_providers": None},
+                                          {"model_provider": "openai"}])
+def test_context_transport_retains_native_auth_and_explicit_provider_ownership(native_config):
     original = {"model_provider": "operator", "model_providers": {"operator": {
         "base_url": "https://example.invalid", "supports_websockets": True}}}
     assert context.codex_context_transport_configuration(original) == {}
     assert original["model_providers"]["operator"]["supports_websockets"] is True
-    native = context.codex_context_transport_configuration({"model_provider": "openai"})
+    native = context.codex_context_transport_configuration(native_config)
     selected = native["model_provider"]
     assert native["model_providers"][selected] == {
         "name": "OpenAI", "wire_api": "responses", "requires_openai_auth": True,
