@@ -92,7 +92,9 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None, 
             # bypass flag as app-server trust propagation.
             listed = native.request("hooks/list", {"cwds": [str(workspace)]})
             handlers = [h for entry in listed["data"] for h in entry["hooks"]]
-            assert len(handlers) == 2
+            fixture_hooks = json.loads((home / "hooks.json").read_text())["hooks"]
+            expected_handlers = sum(len(group["hooks"]) for groups in fixture_hooks.values() for group in groups)
+            assert expected_handlers > 0 and len(handlers) == expected_handlers
             assert all(h["sourcePath"] == str((home / "hooks.json").resolve()) for h in handlers)
             params["config"] = {"hooks.state": {
                 h["key"]: {"trusted_hash": h["currentHash"]} for h in handlers}}

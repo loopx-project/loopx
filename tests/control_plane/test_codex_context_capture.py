@@ -507,12 +507,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                     pages_in_output += isinstance(page, dict) and page.get("schema_version") == "context_capture_page_v1"
                 visible_batches.append(pages_in_output)
         assert max(visible_batches, default=0) > 2  # complete bytes were independently checked above
-    if host == "benchmark":
-        trace_roots = list((home / "context-traces").glob("wake-*"))
-        assert len(trace_roots) == (2 if resumed else 1)
-        assert all(path.stat().st_mode & 0o077 == 0 for path in trace_roots)
-    elif resumed:
-        assert len(list((workspace / "traces").glob("trace-*/manifest.json"))) >= 2
+    cache_root = home / "loopx-context" if host == "benchmark" else lifecycle
+    assert cache_root.is_dir() and cache_root.stat().st_mode & 0o077 == 0
+    assert not (home / "context-traces").exists()
+    assert not (workspace / "traces").exists()
     projection = Path(wires["warm"]["recovery"]["path"])
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
     current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
