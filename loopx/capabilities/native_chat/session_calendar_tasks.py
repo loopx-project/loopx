@@ -13,7 +13,7 @@ import re
 
 from ...agent_registry import load_goal_from_registry
 from ...control_plane.digest_envelope import sha256_envelope
-from ...control_plane.todos.contract import compact_todo_text
+from ...control_plane.todos.contract import compact_todo_text, decision_scope_metadata_value
 from ...control_plane.todos.completion_validation_store import read_completion_validation_declaration
 from ...file_lock import exclusive_file_lock
 from ...registry import atomic_write_json
@@ -236,10 +236,12 @@ class SessionCalendarTasks(ManagedSessionReports):
                     if source_task.get(key):
                         argv += [flag, source_task[key]]
                 for key, flag in {"required_write_scopes": "--required-write-scope", "required_capabilities": "--required-capability",
-                        "target_capabilities": "--target-capability", "required_decision_scopes": "--required-decision-scope",
+                        "target_capabilities": "--target-capability",
                         "excluded_agents": "--excluded-agent"}.items():
                     for item in source_task.get(key, []):
                         argv += [flag, item]
+                for scope in source_task.get("required_decision_scopes", []):
+                    argv += ["--required-decision-scope", decision_scope_metadata_value(scope)]
                 for key, flag in {"validation_label": "--validation-label", "validation_timeout_seconds": "--validation-timeout-seconds"}.items():
                     if validation.get(key) is not None:
                         argv += [flag, str(validation[key])]

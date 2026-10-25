@@ -70,7 +70,7 @@ def apply_configuration(request, goal_id, config):
     return applied
 
 
-def setup_task(steward, tmp_path, monkeypatch, provider):
+def setup_task(steward, tmp_path, monkeypatch, provider, *, decision_scopes=()):
     _, session, actor, unrelated, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
     _, runtime, *_ = steward
     workspace = Path(load_goal_from_registry(runtime.registry_path, actor["goal_id"])["repo"])
@@ -99,10 +99,18 @@ def respond():
     fake.write_text(source)
     runtime.adapters.pop(session["session_id"], None)
     validator = [sys.executable, "-c", "import json; from pathlib import Path; assert json.loads(Path('total.json').read_text()) == {'total': 42}"]
+    for scope in decision_scopes:
+        gate = cli(runtime, "todo", "add", "--goal-id", actor["goal_id"], "--role", "user",
+            "--text", "Approve this synthetic task's recurring direction.", "--task-class", "user_gate",
+            "--blocks-agent", actor["agent_id"], "--decision-scope", scope, "--execute")
+        cli(runtime, "todo", "complete", "--goal-id", actor["goal_id"], "--role", "user",
+            "--todo-id", gate["todo_id"], "--agent-id", actor["agent_id"], "--decision-outcome", "approve",
+            "--evidence", "Synthetic owner standing approval for this exact task scope.")
     source_task = cli(runtime, "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
         "--text", "Read numbers.json, compute its sum, and save total.json. Return the result here.",
         "--claimed-by", actor["agent_id"], "--task-class", "advancement_task", "--action-kind", "calculate_total",
-        "--validation-command-json", json.dumps(validator), "--execute")
+        "--validation-command-json", json.dumps(validator),
+        *(value for scope in decision_scopes for value in ("--required-decision-scope", scope)), "--execute")
     # The user is scheduling a repeat of an existing completed native task.
     # Calendar configuration cannot create a new host validator or silently
     # resume unrelated deferred/blocked work.
@@ -129,6 +137,47 @@ def fixed_clock(monkeypatch):
             return point[0].astimezone(tz)
     monkeypatch.setattr(module, "datetime", Clock)
     return point
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_calendar_preserves_canonical_decision_scopes_through_original_return(steward, tmp_path, monkeypatch, provider):
+    from loopx.control_plane.todos.contract import normalize_todo_required_decision_scopes
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.periodic_report.private_generation import attempt_directory
+
+    scopes = ("direction:goal:repeat_task", "other:goal:review_total")
+    expected = normalize_todo_required_decision_scopes(scopes)
+    session, actor, unrelated, capture, _, config = setup_task(
+        steward, tmp_path, monkeypatch, provider, decision_scopes=scopes)
+    store, runtime, *_ = steward
+    sid = session["session_id"]
+    service = SessionCalendarTasks(runtime)
+    source, _ = service.source_task(actor, config["task"])
+    assert source["status"] == "done" and source["required_decision_scopes"] == expected
+    history = store.messages(sid)
+    fixed_clock(monkeypatch)
+    with settings_server(steward) as request:
+        apply_configuration(request, actor["goal_id"], config)
+        turns = pump_steward_monitors(runtime)
+        assert len(turns) == 1, service.health(sid)
+        completed = finish(runtime, turns[0])
+        assert completed["status"] == "completed", completed
+        assert completed["response"]["native_loopx"]["status"] == "committed", completed
+        rows = StewardMonitor(runtime).todos(completed["loopx_request"]["actor"])
+        child = next(row for row in rows if row["todo_id"] == completed["loopx_request"]["todo_id"])
+        assert child["status"] == "done" and child["required_decision_scopes"] == expected
+        assert next(row for row in rows if row["todo_id"] == unrelated)["status"] == "open"
+        returned = [row for row in store.messages(sid) if row.get("turn_id") == completed["turn_id"] and row["role"] == "agent"]
+        assert len(returned) == 1 and returned[0]["text"] == completed["response"]["message"]
+        assert "42" in returned[0]["text"] and store.messages(sid)[:len(history)] == history
+        after = capture.read_bytes()
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        assert capture.read_bytes() == after
+        journal = read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"])
+        assert journal["task_completion"]["message_id"] == returned[0]["message_id"]
+        frozen = json.loads((attempt_directory(runtime.coordination_runtime_root, journal["window"]) / "task.json").read_text())
+        assert frozen["source_task"]["required_decision_scopes"] == expected
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
