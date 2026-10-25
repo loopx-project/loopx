@@ -48,11 +48,13 @@
 .agent-work-unavailable {padding-block: 24px; color: var(--pw-muted); line-height: var(--leading-prose);}
 .goal-agent-work-page .attached-conversation-content {flex: 1; display: flex; flex-direction: column; padding: 0 0 16px; overflow: auto;}
 .goal-agent-work-page .attached-conversation-content > p {margin-block: 8px;}
-.goal-agent-work-page .attached-conversation-source {font-size: var(--text-caption); color: var(--pw-muted);}
+.goal-agent-work-page .attached-conversation-source {display: flex; align-items: center; gap: 8px; font-size: var(--text-caption); color: var(--pw-muted);}
 .goal-agent-work-page .attached-conversation-messages {flex: 1; min-height: 160px; max-height: none; margin-block: 12px;}
 .goal-agent-work-page .attached-conversation-content > button {align-self: flex-start; min-height: 44px;}
 .goal-agent-work-page form {flex-shrink: 0; display: flex; gap: 12px; align-items: flex-end; border-top: 1px solid var(--pw-line); padding-top: 8px;}
-.goal-agent-work-page form label {margin: 0; flex: 1; min-width: 0;}
+.goal-agent-work-page form .attached-composer-input {display: grid; gap: 8px; flex: 1; min-width: 0;}
+.attached-composer-label {display: flex; align-items: center; gap: 8px;}
+.goal-agent-work-page form label {display: inline; margin: 0;}
 .goal-agent-work-page form textarea {min-height: 64px; max-height: 160px;}
 .goal-agent-work-page form button[type="submit"] {background: var(--pw-text); color: var(--pw-card); min-height: 44px;}
 @media (max-width: 640px) {.agent-work-navigation {width: 100%;} .agent-work-navigation select {flex: 1; min-width: 0;} .goal-agent-work-page .attached-conversation-messages {min-height: 120px;}}
@@ -74,7 +76,7 @@
 @media (prefers-reduced-motion: reduce) {.attached-activity-mark[data-active]::after {animation: none;}}
 @media (max-width: 640px) {
   .goal-agent-work-page form {flex-wrap: wrap;}
-  .goal-agent-work-page form label {flex-basis: 100%;}
+  .goal-agent-work-page form .attached-composer-input {flex-basis: 100%;}
   .goal-agent-work-page form button[type="submit"] {margin-left: auto;}
 }
 
