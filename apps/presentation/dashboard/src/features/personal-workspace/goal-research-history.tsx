@@ -518,7 +518,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
     </ContextHelp> : null}
     {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
-      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} events={history.canonical?.events ?? []}
+      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={goalId} events={history.canonical?.events ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         renderBody={currentDisplay && !originalDisplay ? findingBody : undefined}
         complete={read.complete} stale={Boolean(error || history.error)} busy={busy} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/> : null}

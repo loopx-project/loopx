@@ -3,9 +3,12 @@ import {ContextHelp} from "./context-help";
 import {useMemo, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import {searchResearchRecords} from "./research-record-search";
+import {exportResearchRecords} from "./research-record-export";
+import {downloadReport} from "./report-download";
 
 /** Local read controls over the existing validated history snapshot. */
-export function ResearchRecordSearch({events, displayEvents, renderBody, complete, stale, busy, zh, stateLabel, timeLabel}: {
+export function ResearchRecordSearch({goalId, events, displayEvents, renderBody, complete, stale, busy, zh, stateLabel, timeLabel}: {
+  goalId: string;
   displayEvents?: readonly ExploreHistoryEvent[]; renderBody?: (event: ExploreHistoryEvent) => ReactNode;
   events: readonly ExploreHistoryEvent[]; complete: boolean; stale: boolean; busy: boolean; zh: boolean;
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
@@ -13,6 +16,7 @@ export function ResearchRecordSearch({events, displayEvents, renderBody, complet
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
   const [limit, setLimit] = useState(50);
+  const [downloadFailed, setDownloadFailed] = useState(false);
   const matches = useMemo(() => searchResearchRecords(events, query, status), [events, query, status]);
   const displayed = useMemo(() => new Map(displayEvents?.map(event => [event.event_id, event])), [displayEvents]);
   const statuses = [...new Set(events.map(event => event.status).filter(Boolean))].sort();
@@ -28,7 +32,15 @@ export function ResearchRecordSearch({events, displayEvents, renderBody, complet
         {[...new Set([...statuses, ...(status ? [status] : [])])].map(item => <option key={item} value={item}>{stateLabel(item)}</option>)}
       </select>
       {query || status ? <button type="button" onClick={reset}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
+      <button type="button" disabled={busy || !matches.length} onClick={() => {
+        setDownloadFailed(false);
+        try {
+          const text = exportResearchRecords({goalId, events, query, status, complete, stale, exportedAt: new Date().toISOString()});
+          downloadReport(`research-${goalId}.json`, "", text);
+        } catch {setDownloadFailed(true);}
+      }}>{zh ? "下载匹配记录（JSON）" : "Download matches (JSON)"}</button>
     </div>
+    {downloadFailed ? <p role="alert">{zh ? "无法开始下载，记录未改变。请重试下载。" : "Could not start the download. Records are unchanged; try downloading again."}</p> : null}
     <p role="status">{zh ? `匹配 ${matches.length} / ${events.length} 条已读记录` : `${matches.length} matches in ${events.length} loaded records`}
       {!complete ? (zh ? " · 历史不完整" : " · History incomplete") : ""}
       {busy ? (zh ? " · 正在读取历史" : " · Reading history") : stale ? (zh ? " · 刷新失败，显示上次读取的记录" : " · Refresh failed; showing previously read records")

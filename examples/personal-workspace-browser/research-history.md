@@ -121,12 +121,26 @@ historical revisions. Search covers the loaded snapshot before display paginatio
 incomplete reads and failed refreshes stay visible. Clear filters to browse again.
 Queries are local to this open reader and reset when it closes or the Goal changes.
 
+Choose **Download matches (JSON)** to keep all matching original records, including
+those not yet expanded on screen. The file includes the Goal, export time, literal
+filters and loaded/exported counts. `history_complete` and `refresh_failed` preserve
+the reading limits: a partial or stale snapshot is not current complete evidence.
+Translations and generated analysis do not replace original text. Source references,
+revisions and native measurements stay with each record; no source endpoint or
+credentials are added. Treat downloaded content with the same privacy as the
+original research. The file is a reading snapshot, not an import or acceptance
+receipt. Downloads do not launch research or change source state. While history is
+loading or no records match, downloading is unavailable; retry after a download
+failure or refresh the history after a read failure.
+
 The synthetic packaged regression exercises native paged history, an old negative
-revision after 75 other findings, status filtering, interrupted reads and retry,
-Goal isolation and desktop/narrow layouts without dispatching an Agent:
+revision after 75 other findings, status filtering, full/filtered JSON downloads,
+partial/stale coverage, interrupted reads/downloads and retry, Goal isolation and
+desktop/narrow layouts without dispatching an Agent:
 
 ```sh
 node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-search.test.mjs
+node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-export.test.mjs
 LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-record-search node examples/personal-workspace-browser-smoke.mjs
 ```
 
