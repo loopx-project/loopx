@@ -20,7 +20,7 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
   const episodeLink = (ids: string[]) => onReviewEpisodes && ids.length ? <button type="button" className="research-review-episodes"
     onClick={event => onReviewEpisodes(ids, event.currentTarget)}>{zh ? "查看片段" : "View episodes"} · {ids.length}<ArrowDownRight size={14} aria-hidden/></button> : null;
   const controls = (experiment: TrajectoryResearchSynthesis["next_experiments"][number]) => <dl>
-    <dt>{zh ? "最小干预" : "Smallest intervention"}</dt><dd>{experiment.intervention}</dd>
+    <dt>{zh ? "拟议干预" : "Proposed intervention"}</dt><dd>{experiment.intervention}</dd>
     <dt>{zh ? "固定条件" : "Controls"}</dt><dd>{experiment.controls}</dd>
   </dl>;
   const predictions = (experiment: TrajectoryResearchSynthesis["next_experiments"][number]) => <dl>

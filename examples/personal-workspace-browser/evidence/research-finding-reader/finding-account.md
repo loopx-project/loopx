@@ -38,3 +38,25 @@ whole-page results → report → history journey, experiment tab and source
 reader remain available. This establishes the display distinction and author
 visual inspection, not independent scientific validity or measured user
 comprehension improvement.
+
+## Proposed interventions
+
+The saved field is an intervention proposal. Its previous “Smallest
+intervention” label could suggest that minimality had already been established.
+The reader now says “Proposed intervention” / “拟议干预”; all saved text, controls,
+predictions and original citations remain unchanged. This presentation does not
+validate a design, authorize execution or change any observer instructions.
+
+The same synthetic saved report and real disposable SQLite/HTTP reader were used
+at 1280×900 and 390×844. Before uses packaged UI at
+`1f805941a297ca28d53ff093e566fa7df5263160`; after is the same component on the
+updated target baseline with the two localized label strings changed. No body
+text, layout or configuration changed. The compact label fits both viewports;
+body text stays 16px and the full control/prediction detail remains available.
+These are author source-build checks, not installed-product or comprehension
+qualification.
+
+| View | Before | After |
+| --- | --- | --- |
+| Proposed experiment, desktop | [Desktop](proposal-label-before-desktop.png) | [Desktop](proposal-label-after-desktop.png) |
+| Proposed experiment, phone | [Phone](proposal-label-before-phone.png) | [Phone](proposal-label-after-phone.png) |
