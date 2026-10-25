@@ -209,6 +209,13 @@ projection path and does not acquire a second native journal.
 Unrelated quota commands and digest-bound recovery pages do not activate this
 setting. Ordinary machine validation still applies to business operations.
 
+Native `quota should-run` and the saved `context-project` entry share the same
+paged presentation. Each returns page zero, a digest-pinned continuation and full
+recovery without another admission. Native pages stay at 3 KiB throughout that
+read, reducing output-wrapper truncation; consume the inline page before following
+next_command. Forward exec stdout directly in code mode. Repeating the packet in
+a hashing tool call does not establish that its original bytes were retained.
+
 For native setup, `quota context-config --codex-app --goal-id GOAL --agent-id AGENT`
 under machine on prepares only that private transport leaf and renders the
 existing hooks and recovery instructions. It does not install or trust hooks,
@@ -329,6 +336,11 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 
 机器开启后，`quota context-config --codex-app --goal-id GOAL --agent-id AGENT` 只准备
 私有传输末级目录并生成已有 hook 和恢复指令，不安装或信任 hook，也不更改宿主配置。
+原生 `quota should-run` 与已保存捕获的 `context-project` 共用分页呈现，直接返回第零页、
+固定摘要的后续读取与完整恢复，不另行准入。该原生读取链的页大小保持 3 KiB，以减少
+输出包装造成的截断；先消费已附带页，再跟随 next_command。Code Mode 直接转发
+exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
+
 带 `previous_response_id` 的原生隐式历史请求不能给当前观察器提供完整保留证明。
 默认 OpenAI 配置模板因此使用进程内的原生 HTTP provider，保留 Codex 登录和路由，
 不改端点或凭证。Benchmark 准备会读取实际原生配置；显式自定义 provider 保持原样，

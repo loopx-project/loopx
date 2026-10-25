@@ -5,6 +5,7 @@ These tests qualify the CLI and RPC, not native Host retention observation.
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -248,7 +249,23 @@ def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(t
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-full",
             "--decision-output-root", str(captures), "--context-delivery", "on", "--codex-context-dir", str(root), cwd=project)
         assert rc == 0 and wire["mode"] == "full", wire
-        assert json.loads(Path(wire["recovery"]["path"]).read_text()) == wire["context"]
+        # Consume the advertised first page and continuation, not another guard.
+        from loopx.cli import build_parser
+        from loopx.cli_commands.quota_capture import read_context_capture
+        import shlex
+        page, observed = wire, b""
+        while True:
+            assert page["offset"] == len(observed)
+            observed += page["content"].encode()
+            if page["eof"]:
+                break
+            args = build_parser().parse_args(shlex.split(page["next_command"])[1:])
+            page = read_context_capture(args)
+            assert page["ok"]
+        assert hashlib.sha256(observed).hexdigest() == wire["sha256"]
+        assert json.loads(observed) == json.loads(Path(wire["recovery"]["path"]).read_text())
+        assert json.loads(observed)["heartbeat_receipt"]["turn_instance_id"] == "native-full"
+        assert len(wire["content"].encode()) <= 3072 and "context" not in wire
     assert _heartbeat_receipt_count(runtime, "native-full") == 1
     assert _spend_run_count(runtime) == 0 and state.read_bytes() == original
 
@@ -294,7 +311,8 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         assert printed[0]["heartbeat_receipt"] == original["heartbeat_receipt"]
         assert printed[0]["captured_decision"] == {"path": str(tmp_path / "decision.json")}
     else:
-        assert printed == [{"native_projection": original}]
+        assert len(printed) == 1 and printed[0]["eof"] is True
+        assert json.loads(printed[0]["content"]) == {"native_projection": original}
     assert json.loads((tmp_path / "decision.json").read_text()) == original
 
 

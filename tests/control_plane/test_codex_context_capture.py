@@ -239,11 +239,15 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             cmd = invoke(name)
         elif phase in {"cold_ready", "warm_ready"}:
             name = phase.split("_")[0]
-            wires[name] = json.loads(wire_paths[name].read_text())
-            assert wires[name]["mode"] == ("full" if name == "cold" else "delta")
+            descriptor = json.loads(wire_paths[name].read_text())
+            # The public native CLI now shares context-project's paged reader.
+            # Keep the independent full-wire oracle separate from its page view.
+            wire_file = Path(descriptor["path"]).parent / "delivery.json"
+            wires[name] = json.loads(wire_file.read_text())
+            assert descriptor["mode"] == wires[name]["mode"] == ("full" if name == "cold" else "delta")
             capture = Path(wires[name]["recovery"]["path"]).parent / "decision.json"
             snapshots.append((capture, capture.read_bytes()))
-            read_paths[name] = Path(wires[name]["recovery"]["path"]) if name == "cold" else wire_paths[name]
+            read_paths[name] = Path(wires[name]["recovery"]["path"]) if name == "cold" else wire_file
             stages["pages"] = pages(name, read_paths[name])
             stages["phase"] = name + "_read"
             cmd = stages["pages"].pop(0)
@@ -258,7 +262,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             cmd = invoke("warm")
         elif phase == "warm_read":
             assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
-            assert delivered(request, "warm") == wire_paths["warm"].read_text().rstrip("\n")
+            assert delivered(request, "warm") == read_paths["warm"].read_text().rstrip("\n")
             stages.update(phase="compact", compact_response=number)
             if hook_loss:
                 loss_marker.touch()

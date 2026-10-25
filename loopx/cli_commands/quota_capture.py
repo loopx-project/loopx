@@ -104,6 +104,31 @@ def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
 
 
+def native_context_capture_view(projected: dict[str, Any], directory: Path) -> dict[str, Any]:
+    """One paged presentation for ordinary and already-captured native calls.
+
+    The guard/projector already ran. Only serialize its wire and prefetch the
+    existing digest-checked reader; never collect or admit another decision.
+    """
+    from ..control_plane.turn_driver.decision_capture import write_decision_capture
+
+    wire = directory / "delivery.json"
+    write_decision_capture(wire, projected)
+    reference = {"path": str(wire), "sha256": hashlib.sha256(wire.read_bytes()).hexdigest()}
+    mode, target = "full", None
+    if projected.get("schema_version") == "context_delivery_v1":
+        mode, target = projected["mode"], projected["target"]
+        if mode == "full":
+            reference = {key: projected["recovery"][key] for key in ("path", "sha256")}
+    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"], page_bytes=3072)
+    result = {"mode": mode, **reference, **({"target": target} if target else {})}
+    page = read_context_capture(argparse.Namespace(capture_file=reference["path"],
+        capture_sha256=reference["sha256"], offset=0, page_bytes=3072))
+    if page["ok"]:
+        result.update(page)
+    return result
+
+
 def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
@@ -137,9 +162,9 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     mode = "full"
     target = None
     native_prepared = False
+    native_view = None
     try:
         from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context
-        from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
@@ -162,18 +187,9 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest())
         native_prepared = True
-        wire = cache / "delivery.json"
-        write_decision_capture(wire, projected)
-        digest = hashlib.sha256(wire.read_bytes()).hexdigest()
-        reference = {"path": str(wire), "sha256": digest, "command": context_capture_read_command(wire, digest)}
-        if projected.get("schema_version") == "context_delivery_v1":
-            mode = projected["mode"]
-            target = projected["target"]
-            if mode == "full":
-                # The native observer verifies paged complete context bytes.
-                # Deliver that exact full body plus its target in this small
-                # descriptor, rather than paging another wrapper around it.
-                reference = {key: projected["recovery"][key] for key in ("path", "sha256", "command")}
+        native_view = native_context_capture_view(projected, cache)
+        reference = {key: native_view[key] for key in ("path", "sha256", "command")}
+        mode, target = native_view["mode"], native_view.get("target")
     except (QuotaDecisionTransportError, OSError, ValueError, TypeError, RecursionError) as exc:
         if isinstance(exc, QuotaDecisionTransportError) or (activation["enabled"] and not native_prepared):
             if not isinstance(exc, QuotaDecisionTransportError):
@@ -196,19 +212,9 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         **({"context_delivery": activation} if activation["enabled"] else {}),
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + CONTEXT_CAPTURE_READ_GUIDANCE}
-    if activation["enabled"] and native_prepared:
-        # Reuse the public page protocol and its physical-file/digest/UTF-8
-        # checks. Older callers can still restart with command; current callers
-        # consume this page and avoid a descriptor-only model round trip.
-        # Reserve room for the descriptor in the same tool response; subsequent
-        # reads retain the ordinary page size and exact UTF-8 cursor.
-        page = read_context_capture(argparse.Namespace(capture_file=reference["path"],
-            capture_sha256=reference["sha256"], offset=0, page_bytes=3072))
-        if page["ok"]:
-            if not page["eof"]:
-                page["next_command"] = context_capture_read_command(Path(reference["path"]),
-                    reference["sha256"], offset=page["next_offset"])
-            result.update(page)
+    if native_view is not None:
+        result.update(native_view)
+        if "content" in native_view:
             result["instruction"] = ("This result includes page zero. Consume its content, then follow "
                 "next_command through eof. command restarts at zero if the inline page is incomplete "
                 "or unsupported. " + result["instruction"])
