@@ -243,9 +243,11 @@ history. Benchmark preparation stages those same hooks in its isolated trial hom
 `PostToolUse` records complete digest-bound reader ranges in the existing session
 journal; EOF without preceding pages, a known malformed/truncated page or a reader
 error cannot establish a baseline. Concurrent and repeated pages coalesce.
-`PreCompact`, `PostCompact`, clear, fork, a changed session/workspace and an
-unresumable restore invalidate it. Same-session resume preserves a complete
-baseline; ordinary tools and turn endings do not invalidate it. An interrupted
+`PreCompact`, `PostCompact`, clear, fork, a changed session/workspace and resume
+invalidate it. A resume may supply different history under the same session ID;
+the [native event contract](https://learn.chatgpt.com/docs/hooks#sessionstart)
+does not attest retention. Read the pinned original completely before establishing
+a new differential chain. Ordinary tools and turn endings do not invalidate it. An interrupted
 pending delivery requires full recovery. Repeated reset events are idempotent.
 Recovery reads the same immutable capture without re-admission or spend.
 
@@ -382,8 +384,10 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 
 `PostToolUse` 在现有 session journal 中合并摘要固定的完整读取范围；缺少前页的 EOF、
 已知的格式损坏／截断或读取失败不能建立基线。并发、重复页幂等合并。`PreCompact`、
-`PostCompact`、清空、分叉、会话／工作区切换及无法接续的恢复使基线失效；同会话的完整
-基线可在 resume 后继续使用，普通工具和正常轮次结束不无条件失效。尚未完成的交付被中断
+`PostCompact`、清空、分叉、会话／工作区切换及 resume 使基线失效；同一会话 ID 的 resume
+也可能使用不同历史，[原生事件契约](https://learn.chatgpt.com/docs/hooks#sessionstart)本身不证明保留。
+须完整读取固定的原捕获后再建立差分链。
+普通工具和正常轮次结束不无条件失效。尚未完成的交付被中断
 后须完整恢复。重复重置事件幂等；恢复读取同一不可变捕获，不重新准入或扣额。
 
 这是以生命周期假设替换逐轮完整输入证明。Hook 未暴露的下游丢失／截断、漏掉失效事件，

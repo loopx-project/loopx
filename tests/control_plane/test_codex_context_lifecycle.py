@@ -157,7 +157,6 @@ def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_pa
     state = context._state(tmp_path)
     assert state["candidate"]["basis"] == "native_hook_assumption" and "pending" not in state
     assert "retained" not in state and "active_call" not in state
-    assert context.codex_context_hook(str(tmp_path), {**event, "source": "resume"}) == {}
     # Ordinary tools and normal turn endings preserve the completed baseline.
     for name in ("PreToolUse", "PostToolUse", "Stop", "SessionEnd"):
         context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": name,
@@ -199,6 +198,38 @@ def test_native_page_zero_exposes_current_continuity_and_preserves_full_recovery
     pages = capture_pages(second["recovery"]["path"], page["sha256"])
     assert json.loads("".join(p["content"] for p in pages)) == payload
     assert (tmp_path / "session.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("mode", ["full", "delta"])
+def test_resume_requires_complete_original_read_before_reusing_baseline(tmp_path, monkeypatch, mode):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
+    _, wire = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, wire))
+    if mode == "delta":
+        _, wire = project(tmp_path, "two", payload=payload)
+        deliver(tmp_path, event, read_pages(tmp_path, wire))
+    before = context._state(tmp_path)
+    recovery = before["recovery"]
+    original = Path(recovery["path"]).read_bytes()
+    resumed = {**event, "source": "resume"}
+    result = context.codex_context_hook(str(tmp_path), resumed)
+    after = context._state(tmp_path)
+    assert "candidate" not in after and after["context_epoch"] != before["context_epoch"]
+    assert after["recovery"] == recovery
+    assert recovery["command"] in result["hookSpecificOutput"]["additionalContext"]
+    # Repeated notifications do not rotate the epoch or replace the recovery.
+    context.codex_context_hook(str(tmp_path), resumed)
+    assert context._state(tmp_path) == after
+    pages = capture_pages(recovery["path"], recovery["sha256"])
+    assert len(pages) > 1
+    deliver(tmp_path, event, pages[:1])
+    assert "candidate" not in context._state(tmp_path)
+    deliver(tmp_path, event, pages[1:])
+    assert Path(recovery["path"]).read_bytes() == original
+    assert context._state(tmp_path)["candidate"]["target"]["context_epoch"] == after["context_epoch"]
+    _, next_wire = project(tmp_path, "post-resume", payload=payload)
+    assert next_wire["mode"] == "delta"
 
 
 @pytest.mark.parametrize("failure", ["tail_only", "gap", "truncated", "interrupted", "reader_error", "failed_tool"])

@@ -239,7 +239,19 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             stages["phase"] = name + "_ready"
             if phase == "resuming":
                 assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
-            cmd = invoke(name)
+                assert "LoopX context baseline invalidated." in _input_text(request)
+                assert wires["cold"]["recovery"]["command"] in _input_text(request)
+                # Resume itself does not attest history retention. Read the
+                # same original through the real CLI before the next guard.
+                stages["phase"] = "resume_read"
+                stages["pages"] = pages("cold", read_paths["cold"])
+                cmd = stages["pages"].pop(0)
+            else:
+                cmd = invoke(name)
+        elif phase == "resume_read":
+            assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
+            stages["phase"] = "warm_ready"
+            cmd = invoke("warm")
         elif phase in {"cold_ready", "warm_ready"}:
             name = phase.split("_")[0]
             descriptor = json.loads(wire_paths[name].read_text())

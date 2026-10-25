@@ -46,10 +46,10 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     delete state.active_call; // retire legacy diagnostic-call binding
   };
   if (name === "SessionStart") {
-    const resumable = same && event.source === "resume" && state.context_epoch
-      && !state.pending && jsonObject(state.candidate)?.basis === NATIVE_CONTEXT_BASIS
-      && jsonObject(state.candidate)?.capture_bytes_verified === true;
-    if (!resumable) invalidate();
+    // A resume may supply different history under the same session id. The
+    // event carries no retained-context proof, so recover the pinned original
+    // before establishing a new chain; ordinary tools/turn endings stay warm.
+    invalidate();
     return state;
   }
   if (name === "PreCompact" || name === "PostCompact") {
