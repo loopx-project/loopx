@@ -45,9 +45,9 @@ Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升�
      not news. Keep both languages aligned, newest first, using verified publication
      dates (UTC). -->
 
+- **2026-10-25 · 🤝 [长程 Agent 研究：欢迎学术与企业合作者](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/)** — 欢迎学术与企业团队围绕 EdgeBench 和真实长程任务，合作研究反馈、重规划与可复现评测，在可比预算下评估效果与完整成本。[交流合作](https://github.com/loopx-project/loopx/discussions)。
 - **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — 共享 TypeScript 控制面与长程研究工作台。[迁移指南](docs/product/releases/v2.0.0.md#中文指南) · [重构历程](https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/)。
 - **2026-10-14 · 🤖 [Agentic Software](https://loopx-project.github.io/loopx/blog/zh/semantic-software-development/)** — 连接目标、证据、人的反馈与工程交付。
-- **2026-10-05 · 📊 [EdgeBench：证据驱动的长程研究](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/)** — 研究反馈、持续执行、重规划与上下文成本，区分观察到的系统进展与尚待验证的机制收益。
 - **2026-10-02 · 🧠 [长程自举与 RSI](https://loopx-project.github.io/loopx/blog/zh/long-horizon-rsi/)** — 回顾用 LoopX 开发 LoopX 的四个月公开历史，讨论长程连续性如何支撑系统级自我改进。
 - **2026-09-18 · 🧪 [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/?lang=zh)** — 46 个长程任务的 Agent 对照研究：比较 Plain Codex、原生 Goal 与 LoopX Heartbeat，公开逐任务结果、方法与适用边界。
 - **2026-09-06 · 🎉 [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — 个人 Agent 工作区：跨会话跟进 Agent 工作、处理待决事项、核对交付结果。[工作区指南](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md)。
