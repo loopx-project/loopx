@@ -249,6 +249,8 @@ def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(t
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-full",
             "--decision-output-root", str(captures), "--context-delivery", "on", "--codex-context-dir", str(root), cwd=project)
         assert rc == 0 and wire["mode"] == "full", wire
+        assert "Native input observation independently verifies" not in wire["instruction"]
+        assert "Native input observation independently verifies" not in wire["recovery"]["instruction"]
         # Consume the advertised first page and continuation, not another guard.
         from loopx.cli import build_parser
         from loopx.cli_commands.quota_capture import read_context_capture

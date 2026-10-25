@@ -16,7 +16,7 @@ import stat
 import uuid
 
 from .decision_capture import (
-    write_decision_capture, capture_context_projection, project_captured_context, CONTEXT_CAPTURE_READ_GUIDANCE,
+    write_decision_capture, capture_context_projection, project_captured_context, CONTEXT_CAPTURE_PAGE_GUIDANCE,
     capture_page_range, read_context_capture_file,
 )
 
@@ -300,7 +300,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
             "LoopX context baseline invalidated. Before dependent work, read this original full capture. "
             "Capture recovery does not renew authority or source freshness. "
-            + CONTEXT_CAPTURE_READ_GUIDANCE + " "
+            + CONTEXT_CAPTURE_PAGE_GUIDANCE + " "
             + recovery["command"]}}
     return {}
 
@@ -443,7 +443,8 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 if continuity_generation is not None:
                     scope["continuity_generation"] = continuity_generation
                 request = _native_context_request(state, scope)
-                recovery = capture_context_projection(payload, directory=capture_directory)
+                recovery = capture_context_projection(payload, directory=capture_directory,
+                    read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 state["recovery"] = {**{key: recovery[key] for key in ("path", "sha256", "command")},
                     "goal_id": goal_id, "agent_id": agent_id,
                     "total_bytes": Path(recovery["path"]).stat().st_size}

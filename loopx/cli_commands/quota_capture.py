@@ -17,7 +17,7 @@ from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
-    validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, context_capture_read_command,
+    validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
     read_context_capture_file as _read_capture,
 )
 
@@ -67,7 +67,7 @@ def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             "offset": offset, "next_offset": end if end < len(raw) else None,
             "total_bytes": len(raw), "eof": end == len(raw), "content": raw[offset:end].decode("utf-8")}
         if context_dir:
-            result["read_instruction"] = CONTEXT_CAPTURE_READ_GUIDANCE
+            result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
         if end < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=end, page_bytes=size)
         return result
@@ -106,6 +106,18 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
         register_native_context_view(context_directory,
             {**result, "ancestry": projected.get("ancestry", 0)})
+    # The codec puts native continuity semantics before its change tree. Keep
+    # this shared transport frame neutral instead of copying that instruction
+    # or replacing an assumption with a claim of confirmed final input.
+    presentation = ("This is the full current capture; after complete reading, continue from it."
+        if mode == "full" else "Read the current continuity basis and instruction before its change tree.")
+    result["instruction"] = (
+        "Presentation of the original decision only; authority and freshness are unchanged. "
+        + presentation + " "
+        + ("This result includes page zero; consume it before next_command. command restarts "
+           "at zero if the inline page is incomplete or unsupported. " if page["ok"] else "")
+        + CONTEXT_CAPTURE_PAGE_GUIDANCE
+    )
     return result
 
 
@@ -195,10 +207,6 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             + CONTEXT_CAPTURE_READ_GUIDANCE}
     if native_view is not None:
         result.update(native_view)
-        if "content" in native_view:
-            result["instruction"] = ("This result includes page zero. Consume its content, then follow "
-                "next_command through eof. command restarts at zero if the inline page is incomplete "
-                "or unsupported. " + result["instruction"])
     return result
 
 

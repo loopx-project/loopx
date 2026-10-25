@@ -401,7 +401,11 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
       + "; all requirements remain binding. A value replaces its subtree; values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
-  return delta;
+  // Native consumers page the wire before they can use its baseline. Deliver
+  // the existing basis and interpretation before the potentially large tree;
+  // do not duplicate them in a second host instruction or change strict IO.
+  return assumed ? {schema_version: VERSION, mode: "delta",
+    continuity_basis: delta.continuity_basis, instruction: delta.instruction, ...delta} : delta;
 }
 
 /** Validate the exact change tree against the immutable CURRENT capture before

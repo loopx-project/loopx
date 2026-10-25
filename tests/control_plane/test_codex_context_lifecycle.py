@@ -171,6 +171,36 @@ def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_pa
     assert third["mode"] == "delta"
 
 
+def test_native_page_zero_exposes_current_continuity_and_preserves_full_recovery(tmp_path, monkeypatch):
+    from argparse import Namespace
+    from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
+
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep all requirements. " * 1000},
+        "current_control": {"status": "Current controls remain inline. " * 240}}
+    _, first = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, first))
+    _, second = project(tmp_path, "two", payload=payload)
+    assert second["mode"] == "delta" and second["continuity_basis"] == "native_hook_assumption"
+    view = native_context_capture_view(second, tmp_path / "two", context_directory=str(tmp_path))
+    # The consumer must see the codec's actual basis before a long change tree,
+    # rather than a second transport layer claiming strict final-input proof.
+    assert json.dumps(second["instruction"]).encode() in view["content"].encode()
+    assert b'"continuity_basis":"native_hook_assumption"' in view["content"].encode()
+    for instruction in (view["instruction"], second["recovery"]["instruction"]):
+        assert "Native input observation independently verifies" not in instruction
+    deliver(tmp_path, event, capture_pages(view["path"], view["sha256"]))
+    before = (tmp_path / "session.json").read_bytes()
+    # Explicit loss recovery stays available even after a complete delta. Do
+    # not turn the engineering assumption into a denial of a full original read.
+    page = read_context_capture(Namespace(codex_context_dir=str(tmp_path),
+        goal_id="fixture", agent_id="agent", offset=0, page_bytes=3072))
+    assert page["ok"] and page["sha256"] == second["recovery"]["sha256"]
+    pages = capture_pages(second["recovery"]["path"], page["sha256"])
+    assert json.loads("".join(p["content"] for p in pages)) == payload
+    assert (tmp_path / "session.json").read_bytes() == before
+
+
 @pytest.mark.parametrize("failure", ["tail_only", "gap", "truncated", "interrupted", "reader_error", "failed_tool"])
 def test_known_incomplete_delivery_cannot_establish_baseline(tmp_path, monkeypatch, failure):
     event = setup(tmp_path, monkeypatch)

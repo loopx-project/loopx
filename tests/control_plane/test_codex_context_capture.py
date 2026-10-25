@@ -248,6 +248,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             wire_file = Path(descriptor["path"]).parent / "delivery.json"
             wires[name] = json.loads(wire_file.read_text())
             assert descriptor["mode"] == wires[name]["mode"] == ("full" if name == "cold" else "delta")
+            assert "Native input observation independently verifies" not in descriptor["instruction"]
+            if name == "warm":
+                assert json.dumps(wires[name]["instruction"]).encode() in descriptor["content"].encode()
             capture = Path(wires[name]["recovery"]["path"]).parent / "decision.json"
             snapshots.append((capture, capture.read_bytes()))
             read_paths[name] = Path(wires[name]["recovery"]["path"]) if name == "cold" else wire_file

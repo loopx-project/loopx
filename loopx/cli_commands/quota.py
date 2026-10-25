@@ -539,15 +539,10 @@ def _emit_quota_result(
                 capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
                 surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
                 capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None))
-            from ..control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_READ_GUIDANCE
-
             recovery = payload.get("recovery")
             view = native_context_capture_view(payload, capture_directory, context_directory=directory)
             payload = {"ok": True, **view, "capture_sha256": capture_id,
-                **({"recovery": recovery} if recovery else {}),
-                "instruction": "Presentation of this original decision only; authority and freshness are unchanged. "
-                    + ("This result includes page zero; consume it before next_command. " if "content" in view else "")
-                    + CONTEXT_CAPTURE_READ_GUIDANCE}
+                **({"recovery": recovery} if recovery else {})}
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(

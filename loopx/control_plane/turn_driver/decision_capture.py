@@ -101,18 +101,28 @@ def validate_handoff_socket(value: str) -> Path:
     return path
 
 
-CONTEXT_CAPTURE_READ_GUIDANCE = (
+_CONTEXT_CAPTURE_PAGE_START = (
     "Follow next_command through eof and combine content in byte-offset order. "
     "In code-mode, forward successful exec stdout directly with text(result.output); "
     "retain errors. The reader verifies the original capture SHA-256; keep its returned digest and byte cursors. "
-    "Do not hash or retype the packet. Native input observation independently verifies complete model-visible "
-    "bytes before delta reuse; neither a retyped hash nor a disk hash proves that input. "
+    "Do not hash or retype the packet. "
+)
+_CONTEXT_CAPTURE_PAGE_END = (
     "Small batches can save model round trips; start with at most two default pages "
     "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
     "Consume all model-visible content in UTF-8 byte-offset order with complete coverage through total_bytes. "
     "If a range or output is missing, truncated or uncertain, reread the affected range "
     "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
     "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
+)
+# Native paging verifies capture bytes; the existing codec separately declares
+# its continuity basis. Keep the strict caller's original guidance unchanged.
+CONTEXT_CAPTURE_PAGE_GUIDANCE = _CONTEXT_CAPTURE_PAGE_START + _CONTEXT_CAPTURE_PAGE_END
+CONTEXT_CAPTURE_READ_GUIDANCE = (
+    _CONTEXT_CAPTURE_PAGE_START
+    + "Native input observation independently verifies complete model-visible "
+      "bytes before delta reuse; neither a retyped hash nor a disk hash proves that input. "
+    + _CONTEXT_CAPTURE_PAGE_END
 )
 
 
@@ -170,7 +180,8 @@ def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tupl
     return start, end
 
 
-def capture_context_projection(payload: dict[str, Any], *, directory: Path) -> dict[str, Any]:
+def capture_context_projection(payload: dict[str, Any], *, directory: Path,
+                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE) -> dict[str, Any]:
     """Save the full projection independently of the optional presentation codec."""
     projection = directory / "projection.json"
     write_decision_capture(projection, payload)
@@ -179,7 +190,7 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path) -> d
         "path": str(projection), "sha256": digest,
         "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
             "truncated or uncertain, use this full projection before dependent work. "
-            + CONTEXT_CAPTURE_READ_GUIDANCE,
+            + read_guidance,
         "command": context_capture_read_command(projection, digest),
     }
 
