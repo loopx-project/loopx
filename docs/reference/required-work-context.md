@@ -246,8 +246,12 @@ error cannot establish a baseline. Concurrent and repeated pages coalesce.
 `PreCompact`, `PostCompact`, clear, fork, a changed session/workspace and resume
 invalidate it. A resume may supply different history under the same session ID;
 the [native event contract](https://learn.chatgpt.com/docs/hooks#sessionstart)
-does not attest retention. Read the pinned original completely before establishing
-a new differential chain. Ordinary tools and turn endings do not invalidate it. An interrupted
+does not attest retention. A new independent decision uses its normal guarded
+context command and reads the resulting current full capture; it need not first
+read an older capture to seed a delta. Continuing a captured decision after context
+loss still requires complete recovery of that exact original, never a new guard
+as a substitute. Both paths establish a new chain only after a complete verified
+full read. Ordinary tools and turn endings do not invalidate it. An interrupted
 pending delivery requires full recovery. Repeated reset events are idempotent.
 Recovery reads the same immutable capture without re-admission or spend.
 
@@ -390,7 +394,9 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 已知的格式损坏／截断或读取失败不能建立基线。并发、重复页幂等合并。`PreCompact`、
 `PostCompact`、清空、分叉、会话／工作区切换及 resume 使基线失效；同一会话 ID 的 resume
 也可能使用不同历史，[原生事件契约](https://learn.chatgpt.com/docs/hooks#sessionstart)本身不证明保留。
-须完整读取固定的原捕获后再建立差分链。
+新的独立决定走正常准入与上下文命令，完整读取其返回的当前全量捕获；不必为了建立差分
+基线而先读旧捕获。若丢失上下文后继续某个已捕获决定的依赖工作，仍须完整恢复那份精确
+原捕获，不能用新 guard 替代。两条路径都只在完整且已校验的全量读取后建立新差分链。
 普通工具和正常轮次结束不无条件失效。尚未完成的交付被中断
 后须完整恢复。重复重置事件幂等；恢复读取同一不可变捕获，不重新准入或扣额。
 

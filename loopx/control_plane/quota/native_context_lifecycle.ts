@@ -47,8 +47,9 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   };
   if (name === "SessionStart") {
     // A resume may supply different history under the same session id. The
-    // event carries no retained-context proof, so recover the pinned original
-    // before establishing a new chain; ordinary tools/turn endings stay warm.
+    // event carries no retained-context proof. A fresh decision starts with a
+    // current full capture; dependent continuation recovers its pinned original
+    // before establishing a new chain. Ordinary tools/turn endings stay warm.
     invalidate();
     return state;
   }

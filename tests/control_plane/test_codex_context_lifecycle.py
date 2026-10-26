@@ -232,6 +232,42 @@ def test_resume_requires_complete_original_read_before_reusing_baseline(tmp_path
     assert next_wire["mode"] == "delta"
 
 
+@pytest.mark.parametrize("mode", ["full", "delta"])
+def test_fresh_capture_after_resume_does_not_require_reading_old_original(tmp_path, monkeypatch, mode):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
+    _, wire = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, wire))
+    if mode == "delta":
+        _, wire = project(tmp_path, "two", payload=payload)
+        deliver(tmp_path, event, read_pages(tmp_path, wire))
+    original = wire["recovery"]
+    before = Path(original["path"]).read_bytes()
+    resumed = context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    guidance = resumed["hookSpecificOutput"]["additionalContext"]
+    assert guidance.index("new independent decision") < guidance.index(original["command"])
+    assert "A fresh guard cannot replace recovery" in guidance
+    assert "candidate" not in context._state(tmp_path)
+
+    # A fresh authoritative input must be full. No old reader pages are
+    # delivered to seed this chain, and the changed requirement remains whole.
+    current = {**payload, "current_requirement": "Stop before publishing this new result."}
+    _, fresh = project(tmp_path, "fresh", payload=current)
+    assert fresh["mode"] == "full" and fresh["context"] == current
+    pages = read_pages(tmp_path, fresh)
+    deliver(tmp_path, event, pages[:1])
+    assert "candidate" not in context._state(tmp_path)
+    deliver(tmp_path, event, pages[1:])
+    candidate = context._state(tmp_path)["candidate"]
+    assert candidate["target"] == fresh["target"]
+    assert candidate["capture_sha256"] == fresh["recovery"]["sha256"]
+    _, next_wire = project(tmp_path, "after-fresh", payload=current)
+    assert next_wire["mode"] == "delta" and next_wire["base"] == fresh["target"]
+    assert Path(original["path"]).read_bytes() == before
+    assert json.loads("".join(p["content"] for p in capture_pages(
+        original["path"], original["sha256"]))) == payload
+
+
 @pytest.mark.parametrize("failure", ["tail_only", "gap", "truncated", "interrupted", "reader_error", "failed_tool"])
 def test_known_incomplete_delivery_cannot_establish_baseline(tmp_path, monkeypatch, failure):
     event = setup(tmp_path, monkeypatch)

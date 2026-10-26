@@ -198,6 +198,20 @@ def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_i
     return path, digest
 
 
+def _context_continuation_instructions(command: str) -> str:
+    """Distinguish fresh full delivery from recovery of a dependent decision."""
+    return (
+        "For a new independent decision, run its normal guarded context command first. "
+        "Without a usable baseline it returns the current full capture; read it completely before dependent work. "
+        "Do not read an older capture merely to seed a delta. "
+        "If continuing a captured LoopX decision after context loss (including compaction or a failed hook), "
+        "first recover that exact original capture with: " + command + ". "
+        "A fresh guard cannot replace recovery of that decision. "
+        "If recovery fails, restore the original capture/reference; do not guess or ask the owner. "
+        "Recovery never renews authority/freshness or proves retention. Independent authorized work can continue. "
+    )
+
+
 def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_id: str,
                                          cli_argv: list[str], session_root: bool = False) -> str:
     """Host-owned persistent instructions, independent of event-hook delivery."""
@@ -207,11 +221,8 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
         "--codex-context-root" if session_root else "--codex-context-dir", directory,
         "--goal-id", goal_id, "--agent-id", agent_id])
     return (
-        "If continuing a captured LoopX decision and its complete context or recovery reference was lost "
-        "(including compaction or a failed hook), recover before dependent work with: " + command + ". "
+        _context_continuation_instructions(command) +
         "Follow the returned next_command through eof; verify complete bytes and digest. "
-        "If lookup fails, restore the original capture/reference; do not guess, readmit or ask the owner. "
-        "Recovery never renews authority/freshness or proves retention. Independent authorized work can continue. "
         "For code-mode reads, size batches against both direct-result and retained-history output limits; "
         "max_output_tokens alone does not establish the latter. Start with at most two default pages when "
         "the effective history limit is unknown. With a known sufficient limit, larger batches can reduce "
@@ -296,10 +307,9 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     if (name == "SessionStart" and recovery_needed
             and isinstance(recovery, dict) and recovery.get("command")):
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
-            "LoopX context baseline invalidated. Before dependent work, read this original full capture. "
-            "Capture recovery does not renew authority or source freshness. "
-            + CONTEXT_CAPTURE_PAGE_GUIDANCE + " "
-            + recovery["command"]}}
+            "LoopX context baseline invalidated. "
+            + _context_continuation_instructions(recovery["command"])
+            + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
     return {}
 
 
