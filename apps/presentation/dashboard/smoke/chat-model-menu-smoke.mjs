@@ -101,7 +101,6 @@ try {
     assert.doesNotMatch(badge, /Historical run/, "The read-only source badge does not repeat the visible Goal title");
     const distinct = header("idle", { readOnlySourceLabel: "Remote build", selectedGoal: { goalId: "source-case", title: "Public Goal", agentLanes: [] } });
     assert.match(distinct, /class="personal-read-only-source-label"[^>]*>Remote build</, "A source the Goal title does not name stays visible in the badge");
-    assertions += 40;
   }
   console.log("Chat model/header/composer: bilingual model, defaults and accessible refresh assertions passed (SSR only)");
 } finally { globalThis.window = originalWindow; }
