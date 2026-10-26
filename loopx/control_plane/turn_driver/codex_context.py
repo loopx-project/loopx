@@ -272,27 +272,25 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     recovery = None
     try:
         with _locked(directory) as root:
-            state = _state(root)
-            same = state.get("session_id") == session and state.get("cwd") == event.get("cwd")
-            if same:
-                recovery = state.get("recovery")
-                if name == "PostToolUse":
-                    pages = _verified_context_pages(state, pages)
             try:
+                state = _state(root)
+                same = state.get("session_id") == session and state.get("cwd") == event.get("cwd")
+                if same:
+                    recovery = state.get("recovery")
+                    if name == "PostToolUse":
+                        pages = _verified_context_pages(state, pages)
                 updated = update_native_context_lifecycle(state, event,
                     new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True)
-            except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+                if updated != state:
+                    _save(root, updated)
+                recovery_needed = same and not updated.get("candidate")
+            except (OSError, ValueError, TypeError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
+                # A transient read/reduction failure can miss invalidation just
+                # as a failed write can. While holding the same lock, retire
+                # this journal before IO recovery can revive its old candidate.
+                # Immutable full captures and explicit references stay intact.
                 _discard_recovery(root)
                 raise
-            if updated != state:
-                try:
-                    _save(root, updated)
-                except (OSError, ValueError):
-                    # The explicit recovery reference remains readable, but a
-                    # failed invalidation must not leave the old candidate live.
-                    _discard_recovery(root)
-                    raise
-            recovery_needed = same and not updated.get("candidate")
     except (OSError, ValueError, TypeError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         recovery_needed = True
     if (name == "SessionStart" and recovery_needed

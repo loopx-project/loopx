@@ -255,8 +255,12 @@ This deliberately replaces per-request complete-input proof with lifecycle
 assumptions. Downstream output loss or truncation not exposed to the hook, a
 missed invalidation, or hooks silently disabled outside the declared setting may
 escape detection. These limits are not certified retention and do not add an
-approval gate. Explicit off keeps ordinary full delivery; known journal failures
-remove the reusable baseline and retain the original explicit recovery reference.
+approval gate. Explicit off keeps ordinary full delivery. A journal read, lifecycle
+reduction or write failure after acquiring its lock retires that journal before
+transient IO recovery can revive the old baseline. The immutable capture and its
+already-delivered explicit recovery reference remain available; if the journal
+could not be read, session lookup is unavailable. Failure to reach or retire the
+journal at all remains part of the missed-hook limitation above.
 Generated machine-inherited hooks reload the same machine runtime, so off
 or removal stops their journal writes. Explicit manual on options remain explicit.
 Replacing the machine configuration invalidates reuse, including off/on round
@@ -392,7 +396,10 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 
 这是以生命周期假设替换逐轮完整输入证明。Hook 未暴露的下游丢失／截断、漏掉失效事件，
 或在声明开关之外静默禁用 hooks，仍可能漏检；不把这些假设称为实测保留，也不新增审批门。
-显式关闭继续普通全量投递；已知 journal 失败移除可复用基线，保留原始显式恢复引用。
+显式关闭继续普通全量投递。持锁后的 journal 读取、生命周期归约或写入失败会移除该
+journal，防止短暂 IO 故障恢复后复活旧基线。不可变 capture 与先前交付的显式恢复引用
+仍可读取；无法读取 journal 时，会话查找不可用。完全无法访问或移除 journal 的情况
+仍属于上述 hook 漏报限制。
 由机器继承生成的 hook 每次重读同一个 runtime，关闭或移除
 配置后停止 journal 写入；手工显式 on 保留其显式优先级。
 机器配置被替换后重新全量，包括最终内容相同的 off/on 往返；其他机器配置编辑也可能

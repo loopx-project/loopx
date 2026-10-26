@@ -460,6 +460,48 @@ def test_primary_write_failure_preserves_small_recovery_and_does_not_create_ack(
     assert Path(wire["recovery"]["path"]).exists()
 
 
+@pytest.mark.parametrize("event_name", ["SessionStart", "PreCompact", "PostCompact"])
+@pytest.mark.parametrize("failure", ["read", "reduction"])
+def test_hook_failure_under_lock_cannot_resurrect_a_completed_baseline(tmp_path, monkeypatch, event_name, failure):
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from argparse import Namespace
+
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, first))
+    assert context._state(tmp_path)["candidate"]["capture_bytes_verified"] is True
+    recovery = first["recovery"]
+    original = Path(recovery["path"]).read_bytes()
+
+    def unavailable(*args, **kwargs):
+        raise OSError("synthetic journal read unavailable") if failure == "read" else ValueError("invalid lifecycle result")
+
+    with monkeypatch.context() as failed:
+        if failure == "read":
+            failed.setattr(context, "_state", unavailable)
+        else:
+            failed.setattr("loopx.control_plane.quota.turn_envelope.update_native_context_lifecycle", unavailable)
+        result = context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": event_name, "source": "compact"})
+    if event_name == "SessionStart" and failure == "reduction":
+        assert recovery["command"] in result["hookSpecificOutput"]["additionalContext"]
+    else:
+        assert result == {}
+
+    # The read/reducer can recover on the very next call. That must not revive
+    # the candidate that missed this known invalidation. The immutable original
+    # remains available through the already-delivered explicit reference.
+    page = read_context_capture(Namespace(capture_file=recovery["path"], capture_sha256=recovery["sha256"],
+                                         offset=0, page_bytes=8192))
+    assert page["ok"] and original.startswith(page["content"].encode())
+    assert Path(recovery["path"]).read_bytes() == original
+    _, fallback = project(tmp_path, "after-failure", payload=payload)
+    assert fallback.get("mode", "full") == "full" and fallback.get("context", fallback) == payload
+    context.codex_context_hook(str(tmp_path), event)
+    _, next_wire = project(tmp_path, "after-restart", payload=payload)
+    assert next_wire["mode"] == "full"
+
+
 def _assert_recovery_after_fallback(root, event, source, capture):
     import argparse
     import hashlib
@@ -631,6 +673,30 @@ def test_real_hook_cli_is_transport_only_without_registry_or_installation(tmp_pa
         cwd=Path(__file__).resolve().parents[2])
     assert result.returncode == 0 and json.loads(result.stdout) == {}, result.stderr
     assert context._state(directory)["session_id"] == "session"
+    assert not registry.exists() and not runtime.exists()
+
+
+def test_real_hook_cli_retires_unreadable_journal_before_io_recovers(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, first))
+    journal = tmp_path / "session.json"
+    original = Path(first["recovery"]["path"]).read_bytes()
+    journal.chmod(0o644)  # The real reader must reject a non-private journal.
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    installed_cli = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI")
+    cli = [installed_cli] if installed_cli else [sys.executable, "-m", "loopx.entrypoint"]
+    result = subprocess.run([*cli, "--registry", str(registry),
+        "--runtime-root", str(runtime), "quota", "context-hook", "--context-delivery", "on", "--codex-app",
+        "--codex-context-dir", str(tmp_path)], input=json.dumps({**event, "hook_event_name": "PreCompact"}),
+        capture_output=True, text=True, timeout=20, cwd=Path(__file__).resolve().parents[2])
+    assert result.returncode == 0 and json.loads(result.stdout) == {}, result.stderr
+    if journal.exists():
+        journal.chmod(0o600)  # Simulate IO recovery; never rewrite the candidate.
+    _, fallback = project(tmp_path, "after-cli-failure", payload=payload)
+    assert fallback.get("mode", "full") == "full" and fallback.get("context", fallback) == payload
+    assert Path(first["recovery"]["path"]).read_bytes() == original
     assert not registry.exists() and not runtime.exists()
 
 

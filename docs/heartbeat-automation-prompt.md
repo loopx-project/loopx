@@ -485,9 +485,10 @@ Native reuse assumes a normally completed full read was read and remains
 available until a lifecycle invalidation. `PostToolUse` merges complete reader
 ranges in the existing private session journal. EOF alone, known read failures,
 malformed/truncated pages and interrupted paging cannot establish a baseline.
-Compaction, clear, fork, session/workspace change and an unresumable restore
-invalidate it; ordinary tools and turn endings do not. Same-session resume can
-reuse a completed baseline. Repeated events and parallel pages are idempotent.
+Compaction, clear, fork, session/workspace change and every SessionStart, including
+same-session resume, invalidate it; ordinary tools and turn endings do not.
+Read the pinned original completely before establishing a new differential chain.
+Repeated events and parallel pages are idempotent.
 This replaces per-request input-history proof, not the capture integrity check.
 It preserves native providers, authentication, endpoints and connection mode,
 including implicit history. No input diagnostics or forced HTTP is required.
