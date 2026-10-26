@@ -31,6 +31,20 @@ def configure(registry, runtime, root, mode):
         "--expected-plan-revision", preview["plan_revision"], "--execute")
 
 
+def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    code, catalog = _run_cli(registry, runtime, "machine-config", "describe")
+    assert code == 0 and catalog["schema_version"] == "machine_configuration_catalog_v0", catalog
+    contexts = [item for item in catalog["namespaces"] if item["namespace"] == "context_delivery"]
+    assert len(contexts) == 1
+    assert contexts[0]["schema_versions"] == [CONTEXT_DELIVERY_MACHINE_SCHEMA]
+    assert contexts[0]["configuration_template"] == {
+        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "off",
+    }
+    assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
+    assert not (runtime / "context-delivery").exists()
+
+
 @pytest.mark.parametrize("invalid", [True, False, None, 1, "auto", "codex_app_heartbeat"])
 def test_invalid_machine_mode_never_writes(tmp_path, invalid):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
