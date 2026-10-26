@@ -5,6 +5,7 @@ import { useWorkspaceI18n } from "./i18n";
 import type { ManagerChannelBinding, ManagerRuntimeSessionReadback } from "../../data/chat";
 import type { WorkspaceAgentOption, WorkspaceGoal, WorkspaceGoalTab } from "./personal-workspace-model";
 import { WorkspaceSelect } from "./workspace-select";
+import { ContextHelp } from "./context-help";
 import type {ReactNode} from "react";
 
 export function ChannelHeader({
@@ -154,7 +155,11 @@ export function ChannelHeader({
     : null;
 
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
-    <span className="personal-read-only-source" title={t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}><Eye size={15} />{selectedGoal?.title === readOnlySourceLabel ? null : readOnlySourceLabel}<small>{t("common.readOnly")}</small></span>
+    <div className="personal-read-only-source">
+      <ContextHelp icon={Eye} label={`${readOnlySourceLabel} · ${t("common.readOnly")}`}><p>{t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}</p></ContextHelp>
+      {selectedGoal?.title === readOnlySourceLabel ? null : <span className="personal-read-only-source-label">{readOnlySourceLabel}</span>}
+      <small>{t("common.readOnly")}</small>
+    </div>
   ) : selectedGoal && !composerVisible ? null : <>
     {agents.some((agent) => agent.agentId === "status-only") ? <button type="button" className="personal-icon-button personal-status-mode"
       aria-pressed={statusOnly} aria-label={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`} title={`${t("header.statusOnlyAgent")} · ${t("header.statusOnlyDescription")}`}

@@ -150,6 +150,17 @@ export const researchHistoryScenario = {
       await nativePage.screenshot({path: resolve(outputDir, 'research-readonly-home-desktop.png'), animations: 'disabled'});
       await nativePage.setViewportSize({width: 390, height: 844});
       assert(await nativePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      const sourceBadge = nativePage.locator('.personal-channel-header .personal-read-only-source');
+      assert(await sourceBadge.locator('small').evaluate(e => {
+        const range = document.createRange(); range.selectNodeContents(e);
+        const text = range.getBoundingClientRect(), badge = e.parentElement.getBoundingClientRect();
+        return text.left >= badge.left && text.right <= badge.right;
+      }), 'The source name must not clip the visible read-only restriction');
+      const sourceHelp = sourceBadge.getByRole('button', {name: 'Research preview · 只读', exact: true});
+      await sourceHelp.focus();
+      assert.match(await nativePage.getByRole('tooltip').innerText(), /执行控制在原运行环境/);
+      await nativePage.keyboard.press('Escape');
+      assert(await sourceHelp.evaluate(e => e === document.activeElement));
       await nativePage.screenshot({path: resolve(outputDir, 'research-readonly-home-mobile.png'), animations: 'disabled'});
       await nativePage.setViewportSize({width: 1280, height: 900});
       await nativePage.getByRole('button', {name: '对话', exact: true}).click();
@@ -161,6 +172,9 @@ export const researchHistoryScenario = {
       await nativePage.evaluate(() => localStorage.setItem('loopx-pw-locale', 'en'));
       await nativePage.reload({waitUntil: 'domcontentloaded'});
       await nativePage.getByText('No conversation records', {exact: true}).waitFor();
+      await sourceBadge.getByRole('button', {name: 'Research preview · Read only', exact: true}).focus();
+      assert.match(await nativePage.getByRole('tooltip').innerText(), /execution remains on its source/);
+      await nativePage.keyboard.press('Escape');
       assert.equal(await emptyConversation.locator('p, button, a').count(), 0);
       await nativePage.evaluate(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
       const query = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research', statusUrl: '/status.json?goal_id=synthetic-research-readback'});

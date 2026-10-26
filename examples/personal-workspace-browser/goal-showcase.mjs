@@ -94,8 +94,9 @@ export const goalShowcaseScenario = {
       assert.equal(liveAnimation, "none", "Reduced motion stops the live arc; the ring and core still mark it live");
       await page.emulateMedia({ reducedMotion: null });
 
+      const refreshDelivery = page.locator(".delivery-review-toolbar").getByRole("button", {name: "刷新快照", exact: true});
       state.deliveryFails = true;
-      await page.locator(".delivery-review-toolbar button").first().click();
+      await refreshDelivery.click();
       const failure = overview.getByRole("alert").filter({ hasText: "刷新失败" });
       await failure.waitFor();
       // Resolve and measure the current error node in one browser action:
@@ -116,7 +117,7 @@ export const goalShowcaseScenario = {
       state.acceptanceFails = false;
       await checks.getByRole("button", {name: "刷新结果", exact: true}).last().click();
       state.deliveryFails = false;
-      await page.locator(".delivery-review-toolbar button").first().click();
+      await refreshDelivery.click();
       await page.locator(".goal-overview-progress").filter({ hasText: "2/4 项条件当前通过" }).waitFor();
       await failure.waitFor({ state: "detached" });
 
@@ -130,6 +131,8 @@ export const goalShowcaseScenario = {
       await suggestions.click();
       const phoneMonitor = page.getByRole("button", { name: "配置定时检查" });
       await phoneMonitor.waitFor({ state: "visible" });
+      await phoneMonitor.click({trial: true});
+      await page.screenshot({ path: resolve(outputDir, "goal-showcase-actions-phone.png"), animations: "disabled" });
       assert.ok(await phoneMonitor.evaluate((node) => {
         const rect = node.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);

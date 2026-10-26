@@ -329,9 +329,10 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-select-option[disabled] { color: var(--pw-faint); cursor: not-allowed; }
 .personal-select-option > svg { justify-self: end; color: var(--pw-text); }
 .personal-agent-select { width: 188px; }
-.personal-read-only-source { display: inline-flex; align-items: center; gap: 7px; max-width: 190px; height: 38px; padding: 0 10px; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; color: var(--pw-text); font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; white-space: nowrap; overflow: hidden; }
+.personal-read-only-source { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: min(320px, 100%); min-height: 38px; padding: 0 10px; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: var(--pw-card); color: var(--pw-text); font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; }
 .personal-read-only-source > svg { flex: 0 0 auto; color: var(--pw-muted); }
-.personal-read-only-source > small { padding: 2px 6px; border-radius: 99px; background: #f2f1ed; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 600; }
+.personal-read-only-source-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.personal-read-only-source > small { flex: 0 0 auto; padding: 2px 6px; border-radius: 99px; background: var(--pw-hover); color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 600; white-space: nowrap; }
 .personal-composer-attach { position: relative; display: grid; place-items: center; flex: 0 0 auto; overflow: hidden; border: 0; cursor: pointer; }
 .personal-composer-attach:disabled { cursor: not-allowed; opacity: .45; }
 .personal-composer-file-input { position: fixed; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
@@ -2122,7 +2123,6 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   .personal-goal-navigation > .personal-agent-select .personal-select-value > small { display: none; }
   .personal-channel-header[data-goal-selected="true"] .personal-goal-tabs { gap: 8px; }
   .personal-goal-navigation .personal-goal-tabs button { min-width: 44px; padding-inline: 0; }
-  .personal-goal-navigation .personal-read-only-source { max-width: 132px; }
   .personal-channel-scroll[data-active-goal-view="overview"], .personal-channel-scroll[data-active-goal-view="research"], .personal-channel-scroll[data-active-goal-view="files"] { padding-inline: 14px; }
 }
 
