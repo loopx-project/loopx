@@ -1741,3 +1741,221 @@ test("file-backed Core pause survives a new loop instance and resume rechecks ad
     second.loop.dispose()
   } finally { await fs.rm(root, { recursive: true, force: true }) }
 })
+
+
+test("explicit owner input ignores text equality and duplicate starts do not re-pause", async () => {
+  const f = harness({ should_run: true })
+  f.loop.bind("owner", f.services)
+  await f.activate("owner")
+  await f.loop.settle("owner")
+  const before = await f.store.read("owner")
+  await Promise.all([f.loop.ownerInput("owner"), f.loop.ownerInput("owner")])
+  await f.loop.ownerInput("owner")
+  await f.loop.userPrompt("owner", before.lastInjectedPrompt)
+  await f.loop.userPrompt("owner", "expanded input")
+  const paused = await f.store.read("owner")
+  assert.equal(paused.autoResume, false)
+  assert.equal(paused.generation, before.generation + 1)
+  assert.equal(paused.pauseReason, "user_prompt")
+  assert.equal(f.calls.notify, 2) // activation + one pause
+  await f.loop.settle("owner")
+  assert.equal(f.calls.send, 1)
+})
+
+for (const failure of ["read", "write", "cas"]) {
+  test("input pause " + failure + " failure keeps dispatch revoked until successful resume", async () => {
+    const f = harness(backoffDecision())
+    const notices = []
+    const inner = f.store
+    let fail = false, failResume = false
+    const store = {
+      read: key => {
+        if (fail && failure === "read") throw new Error("synthetic read failure")
+        return inner.read(key)
+      },
+      write: (key, changes, expected) => {
+        if (fail && changes.autoResume === false) {
+          if (failure === "write") throw new Error("synthetic write failure")
+          if (failure === "cas") return null
+        }
+        if (failResume && changes.autoResume === true) throw new Error("synthetic resume failure")
+        return inner.write(key, changes, expected)
+      },
+    }
+    f.loop.bind("fault", {...f.services, store, notify: (message, kind) => notices.push({message, kind})})
+    await f.activate("fault")
+    await f.loop.settle("fault")
+    const timer = f.scheduled.at(-1)
+    fail = true
+    await f.loop.ownerInput("fault")
+    fail = false
+    assert.equal((await inner.read("fault")).autoResume, true, "persistence did not succeed")
+    assert.equal(notices.at(-1).kind, "error")
+    assert.match(notices.at(-1).message, /could not be saved/)
+    assert.equal(timer.cleared, true)
+    f.setDecision({ should_run: true })
+    await timer.callback()
+    await f.loop.settle("fault")
+    assert.equal(f.calls.quota, 1)
+    assert.equal(f.calls.send, 0)
+    failResume = true
+    await assert.rejects(f.loop.resume("fault"), /resume failure/)
+    await f.loop.settle("fault")
+    assert.equal(f.calls.send, 0)
+    failResume = false
+    await f.loop.resume("fault")
+    await f.loop.settle("fault")
+    assert.equal(f.calls.quota, 2)
+    assert.equal(f.calls.send, 1)
+  })
+}
+
+test("owner input fences a committed dispatch while its pause cannot be persisted", async () => {
+  const f = harness({ should_run: true })
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let failPause = false
+  const store = {
+    read: key => f.store.read(key),
+    async write(key, changes, expected) {
+      if (failPause && changes.autoResume === false) throw new Error("synthetic pause failure")
+      const result = await f.store.write(key, changes, expected)
+      if (changes.lastInjectedPrompt) {
+        entered.resolve()
+        await release.promise
+      }
+      return result
+    },
+  }
+  f.loop.bind("dispatch", {...f.services, store})
+  await f.activate("dispatch")
+  const pending = f.loop.settle("dispatch")
+  await entered.promise
+  failPause = true
+  await f.loop.ownerInput("dispatch")
+  release.resolve()
+  await pending
+  assert.equal(f.calls.send, 0)
+  assert.equal(f.scheduled.length, 0)
+})
+
+test("input revokes synchronously while its state read is pending", async () => {
+  const probe = Promise.withResolvers(), probeStarted = Promise.withResolvers()
+  const readStarted = Promise.withResolvers(), releaseRead = Promise.withResolvers()
+  const f = harness(() => { probeStarted.resolve(); return probe.promise })
+  let blockRead = false
+  const store = {
+    async read(key) {
+      if (blockRead) {
+        blockRead = false
+        readStarted.resolve()
+        await releaseRead.promise
+      }
+      return f.store.read(key)
+    },
+    write: (...args) => f.store.write(...args),
+  }
+  f.loop.bind("pending", {...f.services, store})
+  await f.activate("pending")
+  const evaluation = f.loop.settle("pending")
+  await probeStarted.promise
+  blockRead = true
+  const pause = f.loop.ownerInput("pending")
+  await readStarted.promise
+  probe.resolve({ should_run: true })
+  await evaluation
+  assert.equal(f.calls.send, 0)
+  releaseRead.resolve()
+  await pause
+  assert.equal((await f.store.read("pending")).autoResume, false)
+})
+
+test("a newer activation fences a delayed owner-input read", async () => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const f = harness({ should_run: true })
+  let blockRead = false
+  const store = {
+    async read(key) {
+      if (blockRead) {
+        blockRead = false
+        entered.resolve()
+        await release.promise
+      }
+      return f.store.read(key)
+    },
+    write: (...args) => f.store.write(...args),
+  }
+  f.loop.bind("replacement", {...f.services, store})
+  await f.activate("replacement")
+  blockRead = true
+  const pause = f.loop.ownerInput("replacement")
+  await entered.promise
+  await f.activate("replacement", {taskBody: "new task"})
+  release.resolve()
+  await pause
+  await f.loop.settle("replacement")
+  assert.equal((await f.store.read("replacement")).autoResume, true)
+  assert.deepEqual(f.calls.messages, ["new task"])
+})
+
+test("input revocation is scoped to its session and survives a runtime restart on disk", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-input-pause-"))
+  t.after(() => fs.rm(root, {recursive: true, force: true}))
+  const store = createBindingStore(root)
+  const f = harness({ should_run: true })
+  for (const key of ["a", "b"]) {
+    f.loop.bind(key, {...f.services, store})
+    await f.activate(key)
+  }
+  await f.loop.ownerInput("a")
+  await f.loop.settle("a")
+  await f.loop.settle("b")
+  assert.equal(f.calls.send, 1)
+  f.loop.dispose()
+  const restarted = harness({ should_run: true })
+  restarted.loop.bind("a", {...restarted.services, store: createBindingStore(root)})
+  await restarted.loop.settle("a")
+  assert.equal(restarted.calls.quota, 0)
+  assert.equal(restarted.calls.send, 0)
+  await restarted.loop.resume("a")
+  await restarted.loop.settle("a")
+  assert.equal(restarted.calls.quota, 1)
+  assert.equal(restarted.calls.send, 1)
+  restarted.loop.dispose()
+})
+
+test("new input during resume does not coalesce into the pre-resume pause", async () => {
+  const f = harness({ should_run: true })
+  const firstPause = Promise.withResolvers(), releasePause = Promise.withResolvers()
+  const resuming = Promise.withResolvers(), releaseResume = Promise.withResolvers()
+  let gatePause = true, gateResume = false
+  const store = {
+    read: key => f.store.read(key),
+    async write(key, changes, expected) {
+      if (changes.autoResume === false && gatePause) {
+        gatePause = false
+        firstPause.resolve()
+        await releasePause.promise
+      }
+      if (changes.autoResume === true && gateResume) {
+        resuming.resolve()
+        await releaseResume.promise
+      }
+      return f.store.write(key, changes, expected)
+    },
+  }
+  f.loop.bind("overlap", {...f.services, store})
+  await f.activate("overlap")
+  const oldPause = f.loop.ownerInput("overlap")
+  await firstPause.promise
+  gateResume = true
+  const resume = f.loop.resume("overlap")
+  await resuming.promise
+  const newPause = f.loop.ownerInput("overlap")
+  releaseResume.resolve()
+  await resume
+  releasePause.resolve()
+  await Promise.all([oldPause, newPause])
+  assert.equal((await f.store.read("overlap")).autoResume, false)
+  await f.loop.settle("overlap")
+  assert.equal(f.calls.send, 0)
+})

@@ -810,6 +810,9 @@ export function createGoalLoop(options) {
   const evaluations = new Map()
   const contexts = new Map()
   const authorities = new Map()
+  // A local revocation fence also covers a pending/failed pause write. It can
+  // only deny continuation; durable binding + fresh quota still grant it.
+  const inputFences = new Map()
   let disposed = false
   let epoch = 0
 
@@ -826,7 +829,7 @@ export function createGoalLoop(options) {
   }
 
   const scheduleEvaluation = (key, minutes) => {
-    if (disposed) return
+    if (disposed || inputFences.get(key)?.blocked) return
     cancelScheduled(key)
     const scheduledEpoch = epoch
     const timer = setTimer(async () => {
@@ -846,6 +849,10 @@ export function createGoalLoop(options) {
   const evaluateIdleOnce = async (key) => {
     if (disposed) return
     const instanceEpoch = epoch
+    const inputFence = inputFences.get(key)
+    const isCurrent = () => !disposed && epoch === instanceEpoch &&
+      inputFences.get(key) === inputFence && !inputFence?.blocked
+    if (!isCurrent()) return
     const services = contexts.get(key)
     if (!services) {
       cancelScheduled(key)
@@ -861,10 +868,11 @@ export function createGoalLoop(options) {
     try {
       binding = await store.read(key)
     } catch {
+      if (!isCurrent()) return
       cancelScheduled(key)
       return
     }
-    if (disposed || epoch !== instanceEpoch) return
+    if (!isCurrent()) return
     if (!binding || binding.terminal) {
       cancelScheduled(key)
       return
@@ -885,15 +893,15 @@ export function createGoalLoop(options) {
     try {
       decision = await quotaProbe(binding)
     } catch {
-      if (disposed || epoch !== instanceEpoch) return
+      if (!isCurrent()) return
       // Fail closed: never continue without LoopX authority. Bounded retry.
       scheduleEvaluation(key, DEFAULT_RETRY_MINUTES)
       return
     }
-    if (disposed || epoch !== instanceEpoch) return
+    if (!isCurrent()) return
 
     const current = await store.read(key)
-    if (disposed || epoch !== instanceEpoch) return
+    if (!isCurrent()) return
     if (
       !current ||
       current.terminal ||
@@ -908,7 +916,7 @@ export function createGoalLoop(options) {
     const applyDecision = async (nextDecision, allowFinalCheck = true) => {
       if (nextDecision?.scheduler_hint?.action === "stop_until_explicit_resume" && !isTerminalNoFollowup(nextDecision)) {
         const committed = await store.write(key, { autoResume: false }, expected)
-        if (!committed || disposed || epoch !== instanceEpoch) return
+        if (!committed || !isCurrent()) return
         cancelScheduled(key)
         services.notify(`LoopX goal ${current.goalId} paused; resolve its Core stop condition, then run /loopx resume.`, "info")
         return
@@ -918,11 +926,11 @@ export function createGoalLoop(options) {
         // activated a new goal while this write was in-flight, the commit is
         // rejected and the new binding stays alive.
         const committed = await store.write(key, { terminal: true, autoResume: false }, expected)
+        if (!isCurrent()) return
         if (!committed) {
           cancelScheduled(key)
           return
         }
-        if (disposed || epoch !== instanceEpoch) return
         cancelScheduled(key)
         services.notify(
           `LoopX goal ${current.goalId} reached validated terminal no-follow-up; loop stopped.`,
@@ -938,18 +946,18 @@ export function createGoalLoop(options) {
           { schedulerToken: "", unchangedPolls: 0 },
           expected,
         )
+        if (!isCurrent()) return
         if (!schedulerCommit) {
           cancelScheduled(key)
           return
         }
-        if (disposed || epoch !== instanceEpoch) return
         const prompt = current.taskBody || current.goalId
         const promptCommit = await store.write(key, { lastInjectedPrompt: prompt }, expected)
+        if (!isCurrent()) return
         if (!promptCommit) {
           cancelScheduled(key)
           return
         }
-        if (disposed || epoch !== instanceEpoch) return
         sendMessage(prompt)
         return
       }
@@ -962,13 +970,13 @@ export function createGoalLoop(options) {
         try {
           finalDecision = await quotaProbe(current)
         } catch {
-          if (disposed || epoch !== instanceEpoch) return
+          if (!isCurrent()) return
           scheduleEvaluation(key, DEFAULT_RETRY_MINUTES)
           return
         }
-        if (disposed || epoch !== instanceEpoch) return
+        if (!isCurrent()) return
         const latest = await store.read(key)
-        if (disposed || epoch !== instanceEpoch) return
+        if (!isCurrent()) return
         if (
           !latest ||
           latest.terminal ||
@@ -992,11 +1000,11 @@ export function createGoalLoop(options) {
         },
         expected,
       )
+      if (!isCurrent()) return
       if (!waitCommit) {
         cancelScheduled(key)
         return
       }
-      if (disposed || epoch !== instanceEpoch) return
       scheduleEvaluation(key, wait.minutes)
     }
 
@@ -1004,13 +1012,14 @@ export function createGoalLoop(options) {
     } catch {
       // Fail closed with bounded retry: any unhandled error (store write
       // failure, etc.) must not break the evaluation chain permanently.
+      if (!isCurrent()) return
       cancelScheduled(key)
       scheduleEvaluation(key, DEFAULT_RETRY_MINUTES)
     }
   }
 
   const evaluateIdle = (key) => {
-    if (disposed) return Promise.resolve()
+    if (disposed || inputFences.get(key)?.blocked) return Promise.resolve()
     const existing = evaluations.get(key)
     if (existing) return existing
     const evaluation = evaluateIdleOnce(key).finally(() => {
@@ -1018,6 +1027,50 @@ export function createGoalLoop(options) {
     })
     evaluations.set(key, evaluation)
     return evaluation
+  }
+
+  // Undefined prompt means the adapter observed external input, independently
+  // of its text. A string retains the legacy before_agent_start fallback.
+  const pauseForInput = async (key, prompt) => {
+    if (disposed) return
+    const instanceEpoch = epoch
+    const services = contexts.get(key)
+    if (!services) return
+    let fence = inputFences.get(key)
+    const isCurrent = () => !disposed && epoch === instanceEpoch && inputFences.get(key) === fence
+    const revoke = () => {
+      fence = { blocked: true }
+      inputFences.set(key, fence)
+      cancelScheduled(key)
+    }
+    // Revoke synchronously, before storage can yield to an in-flight quota
+    // evaluation. Pi catches input-handler errors, so throwing is not a gate.
+    if (prompt === undefined) revoke()
+    try {
+      const binding = await services.store.read(key)
+      if (!isCurrent()) return
+      if (!binding || binding.terminal || binding.autoResume === false) return
+      if (prompt !== undefined && prompt === binding.lastInjectedPrompt) return
+      if (prompt !== undefined) revoke()
+      const committed = await services.store.write(key, {
+        autoResume: false,
+        generation: (binding.generation || 0) + 1,
+        pauseReason: "user_prompt",
+      }, { generation: binding.generation || 0, goalId: binding.goalId, autoResume: true })
+      if (!isCurrent()) return
+      if (!committed) throw new Error("binding changed while saving the pause")
+      services.notify(
+        `LoopX goal ${committed.goalId} auto-continuation paused by user input; run /loopx resume to continue.`,
+        "info",
+      )
+    } catch {
+      if (!isCurrent()) return
+      if (!fence?.blocked) revoke()
+      services.notify(
+        "LoopX auto-continuation stopped for this session, but the input pause could not be saved. Restore state storage, then run /loopx resume; the pause may not survive a restart.",
+        "error",
+      )
+    }
   }
 
   return {
@@ -1062,6 +1115,9 @@ export function createGoalLoop(options) {
       if (!services) throw new Error("loopx_goal_activate requires a bound session context")
       const authority = authorities.get(key) || services.authority
       const verified = assertActivationAuthority(authority, fields)
+      const inputFence = { blocked: true }
+      inputFences.set(key, inputFence)
+      cancelScheduled(key)
       // Increment the persisted generation so every in-flight evaluation for
       // this key is rejected at its next compare-and-swap commit.
       const current = await services.store.read(key)
@@ -1079,6 +1135,8 @@ export function createGoalLoop(options) {
         throw authorityError("authority_mismatch", "Pi session binding changed during activation")
       }
       if (disposed) return null
+      if (inputFences.get(key) !== inputFence) return null
+      inputFences.set(key, { blocked: false })
       cancelScheduled(key)
       services.notify(
         `LoopX goal ${binding.goalId} activated; continuation gated by LoopX quota.`,
@@ -1101,44 +1159,26 @@ export function createGoalLoop(options) {
       if (!binding || binding.terminal || binding.autoResume === false) return
       await evaluateIdle(key)
     },
-    // Every prompt that is not this loop's own injected task body is treated as
-    // the owner taking the wheel, and the pause records why it happened. The
-    // loop's own turns are recognized through lastInjectedPrompt; no other event
-    // is used to infer a prompt's origin, because Pi compacts before it emits
-    // before_agent_start for a submitted prompt, so a preceding session_compact
-    // says nothing about who submitted that prompt.
-    async userPrompt(key, prompt) {
-      if (disposed) return
-      const instanceEpoch = epoch
-      const services = contexts.get(key)
-      if (!services) return
-      let binding = null
-      try {
-        binding = await services.store.read(key)
-      } catch {
-        return
+    // Host-observed interactive/RPC input always revokes automatic dispatch,
+    // including queued, image-only and text-identical input. This does not
+    // abort Pi, consume its input or remove messages already handed to Pi.
+    ownerInput(key) {
+      const pending = inputFences.get(key)?.pending
+      if (pending) return pending
+      const pause = pauseForInput(key)
+      const fence = inputFences.get(key)
+      if (fence?.blocked) {
+        // Concurrent RPC input shares the same pause commit and notification.
+        fence.pending = pause
+        const clearPending = () => { delete fence.pending }
+        pause.then(clearPending, clearPending)
       }
-      if (disposed || epoch !== instanceEpoch) return
-      if (!binding || binding.terminal) return
-      if (String(prompt || "") !== binding.lastInjectedPrompt) {
-        const expected = { generation: binding.generation || 0, goalId: binding.goalId }
-        const committed = await services.store.write(
-          key,
-          {
-            autoResume: false,
-            generation: (binding.generation || 0) + 1,
-            pauseReason: "user_prompt",
-          },
-          expected,
-        )
-        if (!committed) return
-        if (disposed || epoch !== instanceEpoch) return
-        cancelScheduled(key)
-        services.notify(
-          `LoopX goal ${committed.goalId} auto-continuation paused by user input; run /loopx resume to continue.`,
-          "info",
-        )
-      }
+      return pause
+    },
+    // Unknown-source starts retain the text fallback; compaction is never
+    // evidence of origin. Neither this fallback nor input can re-arm a pause.
+    userPrompt(key, prompt) {
+      return pauseForInput(key, String(prompt || ""))
     },
     async interrupt(key) {
       if (disposed) return null
@@ -1171,6 +1211,11 @@ export function createGoalLoop(options) {
       if (disposed) return null
       const services = contexts.get(key)
       if (!services) return null
+      // Separate this explicit re-arm from an older pending input pause. A new
+      // input must revoke this attempt, not coalesce into that older pause.
+      const inputFence = { blocked: true }
+      inputFences.set(key, inputFence)
+      cancelScheduled(key)
       const current = await services.store.read(key)
       if (!current || disposed) return null
       const binding = await services.store.write(key,
@@ -1183,6 +1228,8 @@ export function createGoalLoop(options) {
         { generation: current.generation || 0, goalId: current.goalId })
       if (!binding) return null
       if (disposed) return null
+      if (inputFences.get(key) !== inputFence) return null
+      inputFences.set(key, { blocked: false })
       cancelScheduled(key)
       services.notify(`LoopX goal ${binding.goalId} auto-continuation resumed.`, "info")
       return binding

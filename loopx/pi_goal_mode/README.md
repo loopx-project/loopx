@@ -47,15 +47,25 @@ into a LoopX-governed visible goal loop.
   and fences an in-flight quota probe. For persistent sessions, the loop stays
   paused across Pi restarts until `/loopx resume` or a fresh goal activation
   explicitly re-arms it.
-- **Pause reasons** — every pause records why it happened in the binding:
-  `pauseReason: "user_prompt"` when a `before_agent_start` prompt was not the
-  loop's own injected task body, `"aborted"` after Escape, and `""` again once
-  `/loopx resume` re-arms the loop. Both pause paths report the pause in the UI
-  and the recorded reason is diagnostic only: it never decides continuation, and
-  the canonical `autoResume` flag stays the single authority. Prompt origin is not
-  inferred from another event: Pi compacts before it emits `before_agent_start`
-  for a submitted prompt, so a preceding `session_compact` does not prove that
-  the next prompt came from the host.
+- **Input boundary** — observed Pi `input` events with source `interactive` or
+  `rpc` pause automatic continuation, including queued `steer` / `followUp`,
+  image-only input and text identical to the last injected task. Pi still
+  processes the input and can compact/recover within that run; LoopX stops
+  submitting subsequent tasks. Already-submitted messages and running tools
+  are not cancelled. Use `/loopx resume` to re-arm with fresh quota admission.
+- **Pause reasons** — a saved input pause records `pauseReason: "user_prompt"`,
+  Escape records `"aborted"`, and explicit resume clears the reason. Input and
+  run-start events for the same pause notify once and preserve an existing pause
+  reason. The reason is diagnostic; durable `autoResume` and LoopX quota still
+  authorize continuation. While saving an input pause, a session-local fence
+  also denies dispatch. If saving fails, that instance stays stopped and reports
+  that the pause may not survive restart; restore storage before explicit resume.
+- **Origin limits** — `extension` does not identify which extension sent input.
+  Unknown-source user starts retain the injected-text fallback; custom starts
+  pause because LoopX only injects user messages. Earlier Pi input handlers can
+  consume an event before this extension sees it. This is not complete prompt
+  provenance: compaction never exempts a prompt or re-arms a pause, and its
+  occurrence does not establish the next prompt's producer.
 
 ## Install / uninstall
 
