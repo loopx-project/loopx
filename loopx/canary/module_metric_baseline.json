@@ -30,17 +30,24 @@
       "any_count": 52,
       "dict_any_count": 0
     },
+    "loopx/chat_agent.py": {
+      "lines": 2005
+    },
     "loopx/chat_runtime.py": {
       "any_count": 37,
       "dict_any_count": 0,
-      "lines": 2312
+      "lines": 2313
     },
     "loopx/chat_server.py": {
       "any_count": 25,
-      "dict_any_count": 0
+      "dict_any_count": 0,
+      "lines": 2020
+    },
+    "loopx/chat_store.py": {
+      "lines": 2003
     },
     "loopx/collaboration_mcp.py": {
-      "lines": 2039
+      "lines": 2058
     },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,

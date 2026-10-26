@@ -83,6 +83,7 @@ class ChatIngressStore:
         ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
         origin: str = "external",
         external_agent_target: dict[str, Any] | None = None,
+        collaboration_request: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Persist one bounded follow-up without replacing the active Turn."""
 
@@ -110,6 +111,7 @@ class ChatIngressStore:
                             "attachments": normalized_attachments,
                             "origin": _opaque_id(origin, field="origin"),
                             "external_agent_target": external_agent_target,
+                            **({"collaboration_request": collaboration_request} if collaboration_request is not None else {}),
                         },
                     )
                     # Managed acceptance retains its own message identity and
@@ -148,6 +150,7 @@ class ChatIngressStore:
                     "client_turn_id": client_id,
                     "status": "queued",
                     **({"external_agent_target": external_agent_target} if external_agent_target is not None else {}),
+                    **({"collaboration_request": collaboration_request} if collaboration_request is not None else {}),
                     "message": str(message),
                     **({"attachments": normalized_attachments} if normalized_attachments else {}),
                     "origin": _opaque_id(origin, field="origin"),

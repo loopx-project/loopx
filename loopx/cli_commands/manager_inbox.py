@@ -35,9 +35,14 @@ def register_manager_inbox(subparsers, add_format):
             "configure-ssh-read-scope",
             "grant-delivery-target",
             "revoke-delivery-target",
+            "original-conversation",
         ),
     )
     parser.add_argument("--peer-agent-id", help="For request: a registered peer of the same Goal.")
+    parser.add_argument("--conversation-operation", choices=("discover", "request", "control"),
+                        help="For original-conversation: discover an explicit recipient, request help, or control the retained request.")
+    parser.add_argument("--conversation-file", help="For original-conversation: bounded JSON parameters; source identity comes from --goal-id/--agent-id.")
+    parser.add_argument("--chat-url", help="For original-conversation: intended local Chat service URL (default http://127.0.0.1:8767).")
     parser.add_argument(
         "--require-host-route", action="store_true",
         help="For request: require an observed exact host task before recording a peer request.",
@@ -90,6 +95,23 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        if args.manager_inbox_action == "original-conversation":
+            from ..control_plane.collaboration.peers import original_conversation_request
+            if not args.conversation_operation or not args.conversation_file:
+                raise ValueError("--conversation-operation and --conversation-file are required")
+            with Path(args.conversation_file).open("rb") as stream:
+                raw = stream.read(128001)
+            if len(raw) > 128000:
+                raise ValueError("original conversation parameters are too large")
+            parameters = json.loads(raw)
+            if not isinstance(parameters, dict) or any(key in parameters for key in ("operation", "requester", "coordination_runtime_root")):
+                raise ValueError("conversation parameters cannot assert source identity or routing")
+            result = original_conversation_request(runtime_root, registry_path, args.goal_id, args.agent_id,
+                operation=args.conversation_operation, parameters=parameters, **({"chat_url": args.chat_url} if args.chat_url else {}))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if any(getattr(args, key, None) is not None for key in ("conversation_operation", "conversation_file", "chat_url")):
+            raise ValueError("original conversation options require manager-inbox original-conversation")
         if getattr(args, "read_goal_scope", None) is not None and args.manager_inbox_action != "configure-read-scope":
             raise ValueError("--read-goal-scope is only supported for configure-read-scope")
         if args.manager_inbox_action != "control" and any(getattr(args, key, None) is not None for key in ("control_operation", "control_file", "goal_instance_id")):

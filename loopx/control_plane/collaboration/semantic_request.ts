@@ -5,9 +5,40 @@ import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { isDeepStrictEqual } from "node:util";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 
-export type ReceiverDecision = "adopt" | "defer" | "reject" | "no_change";
+export const RECEIVER_DECISIONS = ["adopt", "defer", "reject", "no_change"] as const;
+export type ReceiverDecision = typeof RECEIVER_DECISIONS[number];
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
+
+export const ORIGINAL_CONVERSATION_RECIPIENT_SCHEMA = "collaboration_original_conversation_recipient_v0";
+export const CONVERSATION_ENTRY_SCHEMA = "loopx_collaboration_conversation_entry_v0";
+
+/** An explicit original Session address, never a synthetic Goal or Agent. */
+export function normalizeOriginalConversationRecipient(value: unknown): JsonObject {
+  const recipient = requireJsonObject(value, "original conversation recipient");
+  exactKeys(recipient, ["schema_version", "binding_id", "session_id", "identity_sha256"],
+    ["schema_version", "binding_id", "session_id", "identity_sha256"]);
+  if (recipient.schema_version !== ORIGINAL_CONVERSATION_RECIPIENT_SCHEMA
+      || typeof recipient.binding_id !== "string" || !/^[a-f0-9]{24}$/.test(recipient.binding_id)
+      || typeof recipient.session_id !== "string" || !ID.test(recipient.session_id)
+      || typeof recipient.identity_sha256 !== "string" || !BARE_SHA256_PATTERN.test(recipient.identity_sha256)) {
+    throw new EffectRuntimeRequestError("invalid original conversation recipient");
+  }
+  return {...recipient};
+}
+
+export function originalConversationReturnRoute(entry: JsonObject): JsonObject {
+  if (entry.schema_version !== CONVERSATION_ENTRY_SCHEMA) throw new EffectRuntimeRequestError("original conversation return profile is required");
+  normalizeOriginalConversationRecipient(entry.recipient);
+  return {kind: "peer", channel_id: "peer", ...Object.fromEntries([
+    "request_id", "source_id", "source_agent_id", "requester", "recipient"].map(key => [key, entry[key]]))};
+}
+
+export function verifyOriginalConversationReturnRoute(params: JsonObject): JsonObject {
+  const expected = originalConversationReturnRoute(requireJsonObject(params.entry, "original conversation request"));
+  if (!isDeepStrictEqual(expected, params.route)) throw new EffectRuntimeRequestError("original requester return route identity changed");
+  return {verified: true};
+}
 
 function text(value: unknown, label: string, limit: number): string {
   const result = requireNonEmptyString(value, label).trim();
@@ -90,6 +121,11 @@ export function normalizeCollaborationBrief(value: unknown): JsonObject {
 
 export function normalizeCollaborationRequest(value: unknown): JsonObject {
   const request = requireJsonObject(value, "request");
+  if (Object.hasOwn(request, "recipient")) {
+    exactKeys(request, ["recipient", "brief"], ["recipient", "brief"]);
+    return {recipient: normalizeOriginalConversationRecipient(request.recipient),
+      brief: normalizeCollaborationBrief(request.brief)};
+  }
   exactKeys(request, ["goal_id", "agent_id", "brief", "execution_binding_id"], ["goal_id", "agent_id"]);
   const result: JsonObject = {};
   for (const key of ["goal_id", "agent_id"]) {
@@ -165,6 +201,13 @@ function sameGoalRef(left: unknown, right: unknown): boolean {
 }
 
 export function sameRequest(receipt: JsonObject | null, request: JsonObject, source: boolean): receipt is JsonObject {
+  if (Object.hasOwn(request, "recipient") || receipt && Object.hasOwn(receipt, "recipient")) {
+    return receipt !== null && request.schema_version === CONVERSATION_ENTRY_SCHEMA
+      && receipt.request_id === request.request_id
+      && isDeepStrictEqual(receipt.recipient, request.recipient)
+      && isDeepStrictEqual(receipt.requester, request.requester)
+      && (!source || receipt.source_id === request.source_id);
+  }
   return receipt !== null && ["request_id", "goal_id", "agent_id"].every((key) => receipt[key] === request[key])
     && sameGoalRef(receipt.goal_ref, request.goal_ref)
     && (!source || receipt.source_id === request.source_id);

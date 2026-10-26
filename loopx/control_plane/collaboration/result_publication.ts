@@ -3,7 +3,7 @@ import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireStringLiteral } from "../runtime_decode.ts";
-import { receiverDecision, sameRequest, workspaceRef } from "./semantic_request.ts";
+import { CONVERSATION_ENTRY_SCHEMA, receiverDecision, sameRequest, workspaceRef } from "./semantic_request.ts";
 import {requestRevisionReceiptContext} from "./request_control.ts";
 
 // Local storage keys, not task status or authority. Updates keep the existing
@@ -117,7 +117,7 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   if (legacyOriginal && params.request_revision != null && params.request_revision !== 1) {
     throw new EffectRuntimeRequestError("legacy requests only support original result revision 1");
   }
-  const controlled = !legacyOriginal && (request.request_control !== undefined || params.request_revision != null);
+  const controlled = !legacyOriginal && (request.schema_version === CONVERSATION_ENTRY_SCHEMA || request.request_control !== undefined || params.request_revision != null);
   // Old commands always name original revision 1. They never inherit the new
   // head merely because a correction arrived while their result was in flight.
   const context = controlled ? requestRevisionReceiptContext(request, params.request_revision, params.legacy_assessment ?? null) : null;
@@ -145,7 +145,7 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   }
   const initialKey = phase === "decision" ? decisionKey(Number(revision)) : phase;
   const old = isUpdate ? updates.find((r) => r.value.update_id === updateId) : results.find((r) => r.key === initialKey);
-  const value: JsonObject = Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref"]
+  const value: JsonObject = Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "recipient", "requester"]
     .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
   Object.assign(value, { phase, decision, text: params.text.trim() });
   if (context !== null) Object.assign(value, {request_revision: context.revision, request_revision_digest: context.revision_digest});

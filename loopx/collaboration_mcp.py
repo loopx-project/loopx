@@ -399,6 +399,25 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
                 operation=operation, parameters=parameters, execute=execute)
 
     @server.tool()
+    def original_conversation_collaboration(
+        operation: Literal["discover", "request", "control"], parameters: dict,
+        chat_url: str = "http://127.0.0.1:8767",
+    ) -> dict:
+        """Discover an explicitly granted original project conversation or request its help.
+
+        Discover parameters: parent_request_id. Request: the discovered recipient,
+        parent_request_id, stable operation_id and collaboration_brief_v0 brief.
+        Control: recipient, request_id, control (inspect/revise/cancel), parameters
+        with the current revision/digest and stable operation id for mutations.
+        The existing Session FIFO and original requester result inbox are used.
+        No permission, Goal, Session or executor is created by discovery.
+        """
+        from .control_plane.collaboration.peers import original_conversation_request
+        check_scope()
+        return original_conversation_request(root, registry, goal_id, agent_id,
+            operation=operation, parameters=parameters, chat_url=chat_url, caller_goal_ref=caller_goal_ref)
+
+    @server.tool()
     def consume_peer_result(request_id: str, result_key: str = "conclusion") -> dict:
         """Acknowledge a read peer result, using its result_key for a later update.
         This consumes only that result and never changes work state.

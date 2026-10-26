@@ -132,10 +132,11 @@ def _request_lock(
     request_id: str,
     scope: CollaborationGoalScope | None,
     legacy_path: Path,
+    *, force_exact: bool = False,
 ):
     lock = (
         _root(root) / "request-locks" / request_id
-        if scope is not None and scope.exact
+        if force_exact or scope is not None and scope.exact
         else legacy_path
     )
     with exclusive_cross_runtime_file_lock(lock):
@@ -324,12 +325,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _entry(root: Path, goal_id: str, agent_id: str, request_id: str, *,
-           scope: CollaborationGoalScope | None = None) -> dict[str, Any]:
+def _entry(root: Path, goal_id: str | None, agent_id: str | None, request_id: str, *,
+           scope: CollaborationGoalScope | None = None, recipient: dict | None = None) -> dict[str, Any]:
     if not isinstance(request_id, str) or not BARE_SHA256_PATTERN.fullmatch(request_id):
         raise ValueError("invalid context request id")
-    target = _target(goal_id, agent_id, scope)
-    identity = _record_identity(goal_id, agent_id, scope)
+    if recipient is None and (not isinstance(goal_id, str) or not isinstance(agent_id, str)):
+        raise ValueError("a Goal receiver needs its original Goal and Agent identity")
+    target = {"recipient": recipient} if recipient is not None else _target(goal_id, agent_id, scope)
+    identity = {"recipient": recipient} if recipient is not None else _record_identity(goal_id, agent_id, scope)
     row = _read(_root(root) / "entries" / _hash(target) / (request_id + ".json"))
     if any(
         row.get(k) != v
@@ -435,8 +438,8 @@ def record_result(
     from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
     folder = _root(root) / "replies" / request_id
-    with _request_lock(root, request_id, scope, folder / "report.lock"):
-        row = _entry(root, row["goal_id"], row["agent_id"], request_id, scope=scope)
+    with _request_lock(root, request_id, scope, folder / "report.lock", force_exact="recipient" in row):
+        row = _entry(root, row.get("goal_id"), row.get("agent_id"), request_id, scope=scope, recipient=row.get("recipient"))
         decision, error = _receipt(root, "decisions", row)
         if "request_control" not in row and (error or not decision):
             raise ValueError("record the receiver decision before returning a reply")
@@ -506,7 +509,7 @@ def _result_observation(key, value):
         "value": {field: value[field] for field in (
             "request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
             "decision", "result_key", "previous_result_key", "update_id", "attachments",
-            "request_revision", "request_revision_digest",
+            "request_revision", "request_revision_digest", "recipient", "requester",
         ) if field in value},
         "text_chars": len(text),
         "text_sha256": hashlib.sha256(text.encode()).hexdigest(),

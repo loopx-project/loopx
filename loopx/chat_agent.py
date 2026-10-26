@@ -1690,6 +1690,7 @@ class CodexChatAgentSession:
         attachments: list[dict[str, Any]] | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         output_schema: dict[str, Any] | None = None,
+        project_collaboration: bool = False,
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> dict[str, Any]:
@@ -1706,7 +1707,13 @@ class CodexChatAgentSession:
                 "If verification is incomplete, report the concrete limitation; do not claim completion. "
                 "Original request: " + text
             )
-        if output_schema is not None and not self.execution_mode:
+        if project_collaboration:
+            if (self.execution_mode or self.read_only_review or output_schema is not None
+                    or not self.project_context or self.project_context.get("audience") != "bound_owner"):
+                raise ValueError("original project collaboration requires its existing bound project session")
+            from .control_plane.effect_runtime import effect_runtime_result
+            output_schema = effect_runtime_result("collaboration.project.response_schema", {})
+        if output_schema is not None and not self.execution_mode and not project_collaboration:
             raise ValueError("structured Turn output requires an execution session")
         with self._request_id_lock:
             request_id = self.next_request_id
