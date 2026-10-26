@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx-codex-provider-routing"
-version = "0.12.8"
+version = "0.12.9"
 description = "Native Codex account slots and exhausted-account handoff for LoopX"
 readme = "README.md"
 requires-python = ">=3.11"

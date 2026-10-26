@@ -1185,7 +1185,11 @@ def test_context_setup_preserves_unsafe_or_unowned_inputs(tmp_path, kind):
 
 
 @pytest.mark.parametrize("provider", ["openai", "operator-provider"])
-def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("mutation", [None, "additional_generated_handler", "missing", "extra",
+    "duplicate_handler", "duplicate_key", "event", "command", "matcher", "timeout", "async",
+    "async_number", "type", "disabled", "missing_enabled", "source", "missing_key", "missing_hash",
+    "malformed_key", "malformed_hash", "changed_file"])
+def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_path, monkeypatch, provider, mutation):
     from contextlib import contextmanager
     from benchmark.runtime.context_delivery import prepare_context_delivery
     from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
@@ -1196,7 +1200,16 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
     original_config = (f'model_provider={json.dumps(provider)}\n'
         + '[features]\nplugins=true\nremote_plugin=true\nplugin_sharing=true\n').encode()
     config.write_bytes(original_config)
-    methods, commands = [], []
+    methods, commands, discovered = [], [], []
+    if mutation == "additional_generated_handler":
+        from loopx.control_plane.turn_driver import codex_context
+        original = codex_context.codex_context_configuration
+        def extended(*args, **kwargs):
+            configuration = original(*args, **kwargs)
+            configuration["hooks"]["PostToolUse"][0]["hooks"].append(
+                {"type": "command", "command": "fixture-other-handler", "timeout": 15, "async": True})
+            return configuration
+        monkeypatch.setattr(codex_context, "codex_context_configuration", extended)
 
     @contextmanager
     def discovery(argv, **kwargs):
@@ -1206,21 +1219,60 @@ def test_context_discovery_keeps_solver_configuration_and_unrelated_hooks(tmp_pa
             if method == "initialize":
                 return {}
             assert method == "hooks/list", "discovery must not start model work"
-            own = [{"sourcePath": str((home / "hooks.json").resolve()),
-                    "key": f"own-{i}", "currentHash": f"native-hash-{i}"} for i in range(5)]
-            return {"data": [{"hooks": [*own, {"sourcePath": str(tmp_path / "other-hooks.json"),
+            path = home / "hooks.json"
+            configured = json.loads(path.read_text())["hooks"]
+            events = {"SessionStart": "sessionStart", "PreCompact": "preCompact", "PostCompact": "postCompact",
+                      "PostToolUse": "postToolUse", "Interrupt": "interrupt"}
+            assert set(configured) == set(events)
+            own = [{"sourcePath": str(path.resolve()), "eventName": events[event],
+                    "handlerType": handler["type"], "command": handler["command"],
+                    "timeoutSec": handler["timeout"], "matcher": group.get("matcher"),
+                    "async": handler.get("async", False), "enabled": True}
+                   for event, groups in configured.items() for group in groups for handler in group["hooks"]]
+            for i, hook in enumerate(own):
+                hook.update(key=f"own-{i}", currentHash=f"native-hash-{i}")
+            discovered.extend(dict(hook) for hook in own)
+            if mutation == "missing":
+                own.pop()
+            elif mutation == "extra":
+                own.append(own[-1] | {"key": "extra"})
+            elif mutation == "duplicate_handler":
+                own[-1] = own[0] | {"key": own[-1]["key"]}
+            elif mutation == "duplicate_key":
+                own[-1]["key"] = own[0]["key"]
+            elif mutation == "changed_file":
+                path.write_text('{}')
+            else:
+                changes = {"event": ("eventName", "preToolUse"), "command": ("command", "other"),
+                    "matcher": ("matcher", "Bash"), "timeout": ("timeoutSec", 999), "async": ("async", True),
+                    "async_number": ("async", 0), "type": ("handlerType", "prompt"), "disabled": ("enabled", False),
+                    "missing_enabled": ("enabled", None), "source": ("sourcePath", str(tmp_path / "wrong.json")),
+                    "missing_key": ("key", None), "missing_hash": ("currentHash", None),
+                    "malformed_key": ("key", 1), "malformed_hash": ("currentHash", [])}
+                if mutation in changes:
+                    field, value = changes[mutation]
+                    own[0][field] = value
+            # Native discovery has its own ordering, unrelated to config order.
+            return {"data": [{"hooks": [*reversed(own), {"sourcePath": str(tmp_path / "other-hooks.json"),
                 "key": "unrelated", "currentHash": "never-trust-this"}]}]}
         yield SimpleNamespace(request=request, notify=lambda *args: None)
 
     monkeypatch.setattr(StdioNativeGoalTransport, "spawn", discovery)
     env = {"LOOPX_CLI": "fixture-loopx", "LOOPX_GOAL_ID": "fixture", "LOOPX_AGENT_ID": "agent",
            "CODEX_BIN": "native-codex", "LOOPX_PROJECT": str(tmp_path)}
-    prepare_context_delivery(env, home)
+    if mutation in {None, "additional_generated_handler"}:
+        prepare_context_delivery(env, home)
+    else:
+        with pytest.raises(ValueError, match="exact trial context hooks|trust identity"):
+            prepare_context_delivery(env, home)
+        assert "LOOPX_CODEX_CONTEXT_TRUST_ARGS" not in env
+        assert config.read_bytes() == original_config
+        return
     assert methods == ["initialize", "hooks/list"]
     assignments = {commands[0][i + 1] for i, value in enumerate(commands[0]) if value == "-c"}
     assert assignments == {"features.plugins=false", "features.remote_plugin=false", "features.plugin_sharing=false"}
     trusted = json.loads(env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"])
-    assert "native-hash-0" in trusted[1] and "native-hash-1" in trusted[1]
+    assert all(hook["key"] in trusted[1] and hook["currentHash"] in trusted[1] for hook in discovered)
     assert "unrelated" not in trusted[1] and "never-trust-this" not in trusted[1]
     assert all("features.plugins" not in value and "features.remote_plugin" not in value
                and "features.plugin_sharing" not in value for value in trusted)

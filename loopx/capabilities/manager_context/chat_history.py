@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any
 
-from .control_plane.content_digest import BARE_SHA256_PATTERN
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 
 def page_chat_messages(session_id: str, messages: list[dict[str, Any]], *,

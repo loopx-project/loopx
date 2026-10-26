@@ -6,6 +6,60 @@ Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
 readback evidence. Preparing an identity enables neither monitoring nor reports.
 
+Markdown, the HTML report and its copied full text use the same source-link
+rule. An unchanged, well-formed HTTP(S) address is a link. Opaque evidence
+digests, native Task/artifact references and private relative paths stay source
+references; they are never presented as working web links. Malformed addresses,
+credentials in an address, control characters and non-web schemes remain inert.
+Markdown escapes destination punctuation without inventing a different source.
+This is presentation validation, not a claim that a URL is reachable, public or
+authorized for another audience. Source collection, frozen evidence, redaction
+and delivery authorization retain those responsibilities.
+
+An already frozen report retains its original bytes and generation identity.
+Validation can reconstruct the exact previous source-link presentation without
+rewriting its artifacts, invoking generation or acknowledging publication.
+The full frozen source, authored response, bundle, candidate and body must still
+match; an unsupported or altered presentation remains unavailable. New reports
+always use the shared source-link rule above.
+
+A report refused because its model allowance was exhausted can receive one
+new, correlated Turn when the original host independently reads a stable native
+failure containing only its original user input and observes usable allowance
+for the current authentication. A reset time or successful authentication RPC
+alone does not qualify. The shared typed conversation owner also checks the
+original failed kernel receipt, unchanged actor, subscription, window and Task,
+and the absence of any authored response, generation or delivery attempt.
+The original Chat Turn and failed kernel journal remain unchanged. The new Turn
+uses ordinary admission, lease, quota, validation and original-route publication;
+user work retains priority. A second failure is retained, never chained into
+another automatic attempt. Unknown effects, unavailable native metadata,
+revocation, cancellation and an unavailable allowance retain the existing hold.
+The admitted continuation refreshes only its own native adapter to reload
+current authentication while retaining its native thread. This applies to
+original steward reports and ordinary managed Session reports; authentication
+selection and unrelated clients retain their existing owners.
+
+The following synthetic reports use the production formatters. Text views use
+the compiled App Markdown component and its stylesheet; HTML views use the
+standalone report artifact. The same normalized records retain their outcomes,
+counterevidence, next actions and source identities. These captures qualify
+format rendering, separately from the full packaged App, installed scheduling,
+live-model content and provider delivery. Desktop is 1440×1000; narrow views
+are 390×844 viewport emulations.
+
+| Text report before | Text report after |
+| --- | --- |
+| ![Opaque sources appeared as Markdown link syntax](../assets/personal-workspace/steward-reports/citations/before-desktop.png) | ![Opaque sources remain readable references](../assets/personal-workspace/steward-reports/citations/after-desktop.png) |
+
+| Narrow text before | Narrow text after |
+| --- | --- |
+| ![Previous text report at a narrow viewport](../assets/personal-workspace/steward-reports/citations/before-narrow.png) | ![Source references wrap without horizontal overflow](../assets/personal-workspace/steward-reports/citations/after-narrow.png) |
+
+| HTML report | Narrow HTML report |
+| --- | --- |
+| ![HTML retains the same source references and substantive report](../assets/personal-workspace/steward-reports/citations/html-desktop.png) | ![The standalone HTML report at a narrow viewport](../assets/personal-workspace/steward-reports/citations/html-narrow.png) |
+
 The same local calendar can explicitly repeat an already completed native Task
 in its original managed Session. This backend/configuration slice is described
 below; arbitrary new tasks from natural language and the unified Agent UI
@@ -141,6 +195,18 @@ or accepted work. Removing that Goal remains an explicit native Goal lifecycle
 operation. Monitoring requires the separate explicit setting below.
 
 ### Native status monitoring
+
+If the host restarts before a native watch observes anything, the original
+idle pump can create one separately correlated Chat continuation. It preserves
+the failed request and uses the same native observation identity and deadline.
+The shared typed admission requires an untouched observation-only request, an
+available original worker lock, complete event/history reads and no pending or
+committed native poll receipt. It rechecks current authority, lease generation
+and user work; it never starts a model, repeats business or spends execution
+quota. Unknown effects, unreadable history, an active old worker, revoked or
+paused watches and another failed continuation remain held for reconciliation.
+This bounded recovery applies to both local managed Sessions and the prepared
+steward through the existing host, without another scheduler or consumer.
 
 After preparation, choose **Enable monitoring** in the same connection panel.
 The native continuous-monitor Todo owns enable/pause, the 30–1440 minute cadence,

@@ -87,7 +87,7 @@ def _last_page(request):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None, recovery_resume=False):
     # Real worker qualification follows returned cursors; output budgets can
     # shrink a page, so precomputed fixed offsets are not its production path.
     bounded_pages = bounded_pages or host == "benchmark"
@@ -399,11 +399,27 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 return tool(page["next_command"], number)
             stages["phase"] = "recovered"
             return response(request, number, message)
+        elif phase == "recovery_resuming":
+            # The actual host has exited and reconstructed history again. Its
+            # model input must retain the recovered full body, and SessionStart
+            # must preserve that new baseline without another recovery read.
+            from loopx.control_plane.turn_driver.codex_context import _state
+
+            assert delivered(request, "recovery") == Path(wires["warm"]["recovery"]["path"]).read_text().rstrip("\n")
+            journal = _state(lifecycle)
+            assert journal["candidate"]["target"]["context_epoch"] == stages["recovered_epoch"]
+            assert journal["candidate"]["capture_sha256"] == page_digests["recovery"]
+            stages["phase"] = "done"
+            return message
         else:
             assert phase == "recovered"
             recovered = delivered(request, "recovery")
             assert recovered == Path(wires["warm"]["recovery"]["path"]).read_text().rstrip("\n")
-            stages["phase"] = "done"
+            if recovery_resume:
+                from loopx.control_plane.turn_driver.codex_context import _state
+
+                stages["recovered_epoch"] = _state(lifecycle)["context_epoch"]
+            stages["phase"] = "recovery_resuming" if recovery_resume else "done"
             return message
         return tool(cmd, number)
 
@@ -600,6 +616,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                     assert hashlib.sha256(history[start:end]).hexdigest() == checkpoint["reader_sha256"]
                 assert _app_server(binary, env, workspace, home, True, sandbox=sandbox,
                                    resume=session_id, turn_timeout_sec=60) == session_id
+            if recovery_resume:
+                assert _app_server(binary, env, workspace, home, True, sandbox=sandbox,
+                                   resume=session_id, turn_timeout_sec=60) == session_id
     assert not errors, errors
 
     assert stages["phase"] == "done"
@@ -689,6 +708,12 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
     if bounded_pages:
         assert bounded_sizes and max(bounded_sizes) > 3072
+
+
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_compact_recovery_survives_process_resume(tmp_path, monkeypatch, surface):
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "code_mode", surface, False, True, True, bounded_pages=True, recovery_resume=True)
 
 
 @pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])

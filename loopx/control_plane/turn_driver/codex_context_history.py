@@ -236,8 +236,22 @@ def observe_native_read(state: dict[str, Any], event: dict[str, Any],
     """Collect content-free IO facts alongside the existing pending byte ranges."""
     pending = state.get("pending")
     call = event.get("tool_use_id")
-    if (not isinstance(pending, dict) or not isinstance(call, str) or not call
+    if (not isinstance(call, str) or not call
             or not pages or any(page.get("ok") is not True for page in pages)):
+        return state
+    if pending is None:
+        recovery, candidate = state.get("recovery"), state.get("candidate") or {}
+        if (not isinstance(recovery, dict) or not isinstance(candidate, dict)
+                or any(page.get("sha256") != recovery.get("sha256") for page in pages)
+                or (candidate.get("capture_sha256") == recovery.get("sha256")
+                    and candidate.get("capture_bytes_verified") is True)):
+            return state
+        # Invalidation clears pending reads. Record the first original-capture
+        # recovery read too, including a full capture delivered in one page.
+        # These are IO annotations only: the typed lifecycle still authenticates
+        # coverage and decides whether a complete baseline can be established.
+        pending = {}
+    if not isinstance(pending, dict):
         return state
     read = {"call_id": call, "pages_sha256": _digest(pages)}
     reads = pending.get("native_reads", [])

@@ -5,7 +5,6 @@ import json
 from collections.abc import Mapping, Sequence
 from html import escape
 from typing import Any
-from urllib.parse import urlparse
 
 from ...capabilities.periodic_report.adapters import (
     ARTIFACT_SCHEMA,
@@ -16,6 +15,7 @@ from ...capabilities.periodic_report.adapters import (
 from ..public_safety import redact_public_text
 from .periodic_report_markdown import (
     periodic_report_labels,
+    periodic_report_source_url,
     render_periodic_report_markdown,
 )
 
@@ -38,12 +38,9 @@ def _safe_attr(value: object, *, maximum: int) -> str:
     return escape(str(redact_public_text(value, limit=maximum)), quote=True)
 
 
-def _safe_http_url(value: object) -> str | None:
-    raw = str(redact_public_text(value, limit=500))
-    parsed = urlparse(raw)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    return escape(raw, quote=True)
+def _safe_http_url(value: object, *, _legacy_source_links: bool = False) -> str | None:
+    url = periodic_report_source_url(value, _legacy_source_links=_legacy_source_links)
+    return escape(url, quote=True) if url else None
 
 
 def _document_digest(document: Mapping[str, Any]) -> str:
@@ -207,13 +204,14 @@ def _render_item(
     *,
     index: int,
     labels: Mapping[str, str],
+    _legacy_source_links: bool = False,
 ) -> str:
     title = _safe_text(item.get("title"), maximum=240)
     summary = _safe_text(item.get("summary"), maximum=1000)
     status = _safe_text(item.get("status"), maximum=80)
     next_action = _safe_text(item.get("next_action"), maximum=500)
     source_ref = item.get("source_ref")
-    source_url = _safe_http_url(source_ref)
+    source_url = _safe_http_url(source_ref, _legacy_source_links=_legacy_source_links)
     content_kind = _safe_attr(item.get("content_kind") or "unspecified", maximum=128)
     search_text = " ".join(
         str(item.get(field) or "")
@@ -271,12 +269,14 @@ def _render_section(
     section_index: int,
     item_start: int,
     labels: Mapping[str, str],
+    _legacy_source_links: bool = False,
 ) -> tuple[str, int]:
     section_id = _safe_attr(section.get("section_id"), maximum=128)
     title = _safe_text(section.get("title"), maximum=160)
     items = _primary_items(section)
     rows = "".join(
-        _render_item(item, index=item_start + offset, labels=labels)
+        _render_item(item, index=item_start + offset, labels=labels,
+                     _legacy_source_links=_legacy_source_links)
         for offset, item in enumerate(items)
     )
     if not rows:
@@ -297,6 +297,7 @@ def _render_supporting_sections(
     sections: Sequence[Mapping[str, Any]],
     *,
     labels: Mapping[str, str],
+    _legacy_source_links: bool = False,
 ) -> str:
     groups = []
     for section in sections:
@@ -313,7 +314,7 @@ def _render_supporting_sections(
             )
             label = " · ".join(value for value in (kind, status) if value)
             next_action = _safe_text(item.get("next_action"), maximum=500)
-            source_url = _safe_http_url(item.get("source_ref"))
+            source_url = _safe_http_url(item.get("source_ref"), _legacy_source_links=_legacy_source_links)
             source = (
                 f'<a href="{source_url}" target="_blank" '
                 'rel="noopener noreferrer">Source ↗</a>'
@@ -602,7 +603,7 @@ _SCRIPT = """
 """
 
 
-def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
+def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_links: bool = False) -> dict[str, Any]:
     """Render one dense, self-contained report without changing its semantics."""
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
@@ -624,7 +625,7 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
     item_count = sum(len(_primary_items(section)) for section in sections)
     supporting_item_count = sum(len(_supporting_items(section)) for section in sections)
     document_digest = _document_digest(document)
-    markdown_artifact = render_periodic_report_markdown(document)
+    markdown_artifact = render_periodic_report_markdown(document, _legacy_source_links=_legacy_source_links)
 
     filters = [
         '<a class="section-filter" href="#report-top" data-section-filter="all" '
@@ -645,6 +646,7 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
             section_index=section_index,
             item_start=next_item_index,
             labels=labels,
+            _legacy_source_links=_legacy_source_links,
         )
         rendered_sections.append(section_html)
 
@@ -680,7 +682,8 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
             f'<div class="fact"><strong>{len(sources)}</strong><span>{labels["sources"]}</span></div>'
             "</div>"
         )
-    supporting_sections = _render_supporting_sections(sections, labels=labels)
+    supporting_sections = _render_supporting_sections(sections, labels=labels,
+        _legacy_source_links=_legacy_source_links)
     content = (
         "<!doctype html>\n"
         f'<html lang="{language}"><head><meta charset="utf-8">'

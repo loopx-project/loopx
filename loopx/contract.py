@@ -30,6 +30,8 @@ from .control_plane.runtime.run_index_duplicates import (
     index_identity,
 )
 from .control_plane.runtime.file_reads import iter_utf8_file_reads
+from .control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+from .control_plane.projects.registry_codec import load_registry
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
 from .control_plane.todos.active_state_todo_parser import active_state_incomplete_warning
 from .control_plane.todos.authoring_scope import todo_contract_diagnostics
@@ -37,7 +39,6 @@ from .history import (
     RunHistoryAudit,
     build_run_history_audit,
     collect_history,
-    load_registry,
 )
 from .paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT, rel_or_abs, resolve_runtime_root
 from .registry import inspect_registry, inspect_registry_boundary, registry_goals, resolve_state_file
@@ -467,13 +468,15 @@ def _index_duplicate_warning(
 def _todo_contract_diagnostics(
     registry: dict[str, Any],
     *,
-    runtime_root: Path,
+    registry_path: Path,
+    runtime_root_override: str | None,
     goal_id_filter: str | None = None,
     activation_state_filter: GoalActivationState | str | None = None,
     todo_snapshot: CanonicalTodoSnapshot | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     diagnostics: list[dict[str, Any]] = []
     checked = 0
+    source_snapshots: dict[Path, bytes | None] = {}
     for goal in registry_goals(registry):
         goal_id = str(goal.get("id") or "")
         if goal_id_filter and goal_id != goal_id_filter:
@@ -494,13 +497,33 @@ def _todo_contract_diagnostics(
                 )
             )
 
+        try:
+            route = resolve_goal_source_runtime_route(
+                registry_path=registry_path, goal_id=goal_id, registry=registry,
+                runtime_root_override=runtime_root_override,
+                source_snapshots=source_snapshots,
+            )
+            if route["routed_to_source_registry"]:
+                source_registry = load_registry(
+                    Path(route["source_registry"]), source_snapshots=source_snapshots,
+                )
+                goal = next(item for item in registry_goals(source_registry)
+                            if str(item.get("id") or "") == goal_id)
+            goal_runtime = Path(route["source_runtime_root"])
+        except (OSError, ValueError, StopIteration) as exc:
+            add_error(
+                "canonical_todo_contract_diagnostics_unavailable",
+                f"{goal_id}: canonical Todo source route unavailable: {exc}",
+            )
+            continue
+
         # The durable fence selects the authority for diagnostics as well as
         # Todo display. Reuse the TS read-model/record validator: the Markdown
         # copy cannot invalidate or rescue a promoted collection.
         try:
             canonical_reader = todo_snapshot.read if todo_snapshot is not None else read_canonical_todos_if_promoted
             canonical = canonical_reader(
-                runtime_root=runtime_root, goal_id=goal_id,
+                runtime_root=goal_runtime, goal_id=goal_id,
             )
         except LocalCoordinationAuthorityUnavailable as exc:
             add_error(exc.code, f"{goal_id}: canonical Todo contract unavailable: {exc}")
@@ -1265,7 +1288,8 @@ def check_contract(
         _todo_contract_diagnostics(
             registry,
             todo_snapshot=todo_snapshot,
-            runtime_root=runtime_root,
+            registry_path=registry_path,
+            runtime_root_override=runtime_root_override,
             goal_id_filter=goal_id_filter,
             activation_state_filter=activation_state_filter,
         )

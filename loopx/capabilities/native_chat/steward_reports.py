@@ -73,13 +73,12 @@ class StewardReports:
         return bool(cursor and trigger["selected_trigger_id"] in cursor["covered_trigger_ids"])
 
     def _known_generation_failure(self, actor: dict[str, Any], window: dict[str, Any]) -> dict[str, str] | None:
-        from .steward_turn import native_steward_client_id
+        from .steward_turn import report_turn
         folder = attempt_directory(self.root, window)
         if (not (folder / "editorial-response.json").is_file()
                 or (folder / "private-generation.json").exists() or (folder / "private-delivery.json").exists()):
             return None
-        turn = self.controller.store.turn_for_client(actor["session_id"],
-            native_steward_client_id(actor, "report." + window["window_id"]))
+        turn = report_turn(self.controller.store, actor, window)
         request = (turn or {}).get("loopx_request") or {}
         native = ((turn or {}).get("response") or {}).get("native_loopx") or {}
         if (turn and turn.get("status") == "completed" and native.get("status") == "failed"
@@ -519,9 +518,9 @@ class ManagedSessionReports(StewardReports):
         import hashlib
         from ..periodic_report.private_generation import validate_private_generation
         from ..periodic_report.incremental import commit_periodic_report_publication_cursor
-        from .steward_turn import native_steward_client_id
+        from .steward_turn import report_turn
         actor = self.selected(session_id)["actor"]
-        turn = self.controller.store.turn_for_client(session_id, native_steward_client_id(actor, "report." + window["window_id"]))
+        turn = report_turn(self.controller.store, actor, window)
         if not turn:
             return False
         request = turn.get("loopx_request") or {}
@@ -574,9 +573,8 @@ class ManagedSessionReports(StewardReports):
             journal = read_cadence_journal(runtime_root=self.root, goal_id=actor["goal_id"])
             window = journal["window"] if journal else None
             folder = attempt_directory(self.root, window) if window else None
-            from .steward_turn import native_steward_client_id
-            turn = self.controller.store.turn_for_client(session_id,
-                native_steward_client_id(actor, "report." + window["window_id"])) if window else None
+            from .steward_turn import report_turn
+            turn = report_turn(self.controller.store, actor, window) if window else None
             native = ((turn or {}).get("response") or {}).get("native_loopx") or {}
             failed = bool(turn and (turn["status"] in {"failed", "interrupted", "timed_out"}
                 or native.get("status") == "failed"))

@@ -50,6 +50,7 @@ import { parseTodoResumeCondition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
 import { parseTodoCompletionProof } from "./todo-completion-feedback";
+import { useDrawerOverlay } from "./workspace-shell";
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
   if (!include) return {};
@@ -168,6 +169,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const drawerRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const taskInspectorOverlay = useDrawerOverlay(drawerRef, selection.kind === "todo");
+  const taskInspectorModal = selection.kind === "todo" && taskInspectorOverlay;
   const selectionIdentity = selection.kind === "run" ? `run:${selection.item.runId}`
     : selection.kind === "proposal" ? `proposal:${selection.item.previewId}`
       : selection.kind === "todo" ? `todo:${selection.item.goalId}:${selection.item.todoId}`
@@ -270,29 +273,57 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     return () => window.cancelAnimationFrame(frame);
   }, [selectionIdentity]);
 
+  useEffect(() => {
+    if (!taskInspectorModal || drawerRef.current?.contains(document.activeElement)) return;
+    titleRef.current?.focus();
+  }, [taskInspectorModal]);
+
   const closeDrawer = useCallback(() => {
     const returnFocus = returnFocusRef.current;
     onClose();
-    window.requestAnimationFrame(() => returnFocus?.focus());
+    window.requestAnimationFrame(() => {
+      if (returnFocus && returnFocus !== document.body) {
+        returnFocus.focus();
+        if (document.activeElement === returnFocus) return;
+      }
+      const fallback = document.querySelector<HTMLElement>('[data-active-goal-view="tasks"] .personal-task-board')
+        ?? document.querySelector<HTMLElement>('.personal-goal-tabs button[aria-current="page"]');
+      fallback?.focus();
+    });
   }, [onClose]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
+        if (document.querySelector("dialog[open]:modal")) return;
+        const openMenu = Array.from(drawerRef.current?.querySelectorAll<HTMLDetailsElement>(
+          ".personal-task-management[open], .personal-compact-menu[open]",
+        ) ?? []).at(-1);
+        if (openMenu) {
+          event.preventDefault();
+          openMenu.open = false;
+          openMenu.querySelector<HTMLElement>(":scope > summary")?.focus();
+          return;
+        }
         event.preventDefault();
         closeDrawer();
         return;
       }
-      if (event.key === "Tab" && selection.kind !== "todo") {
+      if (event.key === "Tab" && (selection.kind !== "todo" || taskInspectorModal)) {
         const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
           .filter((element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true" && element.checkVisibility({ visibilityProperty: true }));
         if (focusable.length === 0) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
+        const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+        if (activeIndex === -1) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && activeIndex === 0) {
           event.preventDefault();
           last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
+        } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
           event.preventDefault();
           first.focus();
         }
@@ -302,7 +333,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     return () => {
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [closeDrawer, selection.kind]);
+  }, [closeDrawer, selection.kind, taskInspectorModal]);
 
   const operationUnknown = selection.kind === "proposal"
     && selection.item.reviewPlan?.operationFrame?.kind === "result"
@@ -610,7 +641,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   return (
     <div
       aria-labelledby="personal-drawer-title"
-      aria-modal={selection.kind === "todo" ? undefined : "true"}
+      aria-modal={selection.kind === "todo" ? taskInspectorModal || undefined : true}
       className="personal-context-drawer"
       data-context-kind={selection.kind}
       ref={drawerRef}

@@ -38,9 +38,7 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
 
 
 def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
-    from loopx.control_plane.turn_driver.codex_context import (
-        CONTEXT_LIFECYCLE_HOOKS, codex_context_configuration,
-    )
+    from loopx.control_plane.turn_driver.codex_context import codex_context_configuration
     from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
 
     root = home / "loopx-context"
@@ -76,13 +74,27 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
             listed = native.request("hooks/list", {"cwds": [env["LOOPX_PROJECT"]]})
     hooks = [hook for entry in listed["data"] for hook in entry["hooks"]
              if hook.get("sourcePath") == str(path.resolve())]
-    if len(hooks) != len(CONTEXT_LIFECYCLE_HOOKS) or path.read_text() != content:
+    # Match the generated handler multiset, not just its size. Native discovery
+    # can reorder it; duplicates, disabled handlers and substitutions cannot
+    # stand in for an expected event/command/settings combination.
+    expected = [{"eventName": event[0].lower() + event[1:],
+                 "handlerType": handler["type"], "command": handler["command"],
+                 "matcher": group.get("matcher"), "timeoutSec": handler.get("timeout"),
+                 "async": handler.get("async", False)}
+                for event, groups in configuration["hooks"].items()
+                for group in groups for handler in group["hooks"]]
+    if not expected or len(hooks) != len(expected) or path.read_text() != content:
         raise ValueError("native host did not discover the exact trial context hooks")
-    entries = []
+    entries, keys = [], set()
     for hook in hooks:
+        actual = {field: hook.get(field) for field in expected[0]}
+        if hook.get("enabled") is not True or type(hook.get("async")) is not bool or actual not in expected:
+            raise ValueError("native host did not discover the exact trial context hooks")
+        expected.remove(actual)
         key, digest = hook.get("key"), hook.get("currentHash")
-        if not isinstance(key, str) or not key or not isinstance(digest, str) or not digest:
-            raise ValueError("native host returned no context-hook trust identity")
+        if not isinstance(key, str) or not key or key in keys or not isinstance(digest, str) or not digest:
+            raise ValueError("native host returned no unique context-hook trust identity")
+        keys.add(key)
         entries.append(f"{json.dumps(key)} = {{ trusted_hash = {json.dumps(digest)} }}")
     # CLI override keys are dot-separated; native keys contain paths/dots.
     # Carry the entire table as TOML so native keys remain literal strings.

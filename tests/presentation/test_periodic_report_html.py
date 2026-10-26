@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html.parser import HTMLParser
+
 import pytest
 
 from loopx.capabilities.periodic_report import (
@@ -217,6 +219,64 @@ def test_html_and_markdown_share_one_document_and_primary_content() -> None:
     assert "Artifacts share one normalized document" in markdown_artifact["content"]
     assert markdown_artifact["content_policy"]["supporting_context"] == "appendix"
     assert markdown_artifact["content_policy"]["supporting_item_count"] == 1
+
+
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+@pytest.mark.parametrize("reference, linked", [
+    ("https://example.test/releases/2.5", True),
+    ("http://example.test/notes?view=full&part=2", True),
+    ("https://example.test/notes/(recovery)?title=\"before\"", True),
+    ("sha256:" + "a" * 64, False),
+    ("todo:completed-source", False),
+    ("artifact:report/window", False),
+    ("reports/private-window.md", False),
+    ("javascript:alert(1)", False),
+    ("data:text/html,<script>alert(1)</script>", False),
+    ("//example.test/relative", False),
+    ("https:///missing-host", False),
+    ("https://example.test:broken/path", False),
+    ("https://[broken/path", False),
+    ("https://user@example.test/private", False),
+    ("https://example.test/line\nbreak", False),
+    ("https://example.test/hidden\u202eaddress", False),
+    ("https://example.test/\\different-address", False),
+    ("https://example.test/" + "x" * 500, False),
+])
+def test_report_sources_keep_link_eligibility_in_both_formats(reference, linked, language):
+    class Links(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.targets = []
+
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if tag == "a" and values.get("class") == "source-link":
+                self.targets.append(values["href"])
+
+    document = _document(language=language)
+    document["sections"][0]["items"][0]["source_ref"] = reference
+    html = periodic_report_html_renderer_adapter().render(document)
+    markdown = periodic_report_markdown_renderer_adapter().render(document)
+    links = Links()
+    links.feed(html["content"])
+    label = "来源" if language == "zh-CN" else "source"
+    assert (reference in links.targets) is linked
+    assert markdown["content"].count(f"[{label}](") == (2 if linked else 1)
+    assert html["companion_markdown_digest"] == markdown["content_digest"]
+    assert html["document_digest"] == markdown["document_digest"]
+    # Presentation does not replace substantive outcomes with citation metadata.
+    for text in ("Published & verified.", "One staged rollout completed.", "Observe adoption."):
+        assert text in markdown["content"]
+    if not linked and reference.startswith(("sha256:", "todo:", "artifact:")):
+        assert f"`{reference}`" in markdown["content"]
+
+
+def test_markdown_source_destination_does_not_end_at_literal_parentheses_or_quotes():
+    document = _document()
+    document["sections"][0]["items"][0]["source_ref"] = 'https://example.test/(before)?title="release"'
+    markdown = periodic_report_markdown_renderer_adapter().render(document)["content"]
+    assert '[source](https://example.test/%28before%29?title=%22release%22)' in markdown
+    assert '[source](https://example.test/(before)' not in markdown
 
 
 def test_source_receipts_are_supporting_context_not_visible_body_copy() -> None:

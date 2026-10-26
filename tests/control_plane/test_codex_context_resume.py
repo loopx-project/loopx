@@ -82,6 +82,63 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
     assert wire["changes"]["values"]["heartbeat_receipt"] == current["heartbeat_receipt"]
 
 
+@pytest.mark.parametrize("single_page", [False, True])
+@pytest.mark.parametrize("lose_first", [False, True])
+@pytest.mark.parametrize("code_mode", [False, True])
+def test_compact_full_recovery_becomes_next_resume_baseline(tmp_path, monkeypatch, single_page, lose_first, code_mode):
+    from argparse import Namespace
+    from loopx.cli_commands.quota_capture import read_context_capture
+
+    event, history, payload = observed_read(tmp_path, monkeypatch)
+    before = context._state(tmp_path)
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PreCompact"})
+    append(history, "compacted", {"message": "Summary without captured source bodies."})
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    recovery_instruction = context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
+    invalid = context._state(tmp_path)
+    assert "candidate" not in invalid and "pending" not in invalid
+    assert invalid["context_epoch"] != before["context_epoch"]
+    assert invalid["recovery"] == before["recovery"]
+    assert invalid["recovery"]["command"] in str(recovery_instruction)
+
+    reference = invalid["recovery"]
+    offset, index = 0, 0
+    while True:
+        page = read_context_capture(Namespace(capture_file=reference["path"], capture_sha256=reference["sha256"],
+            offset=offset, page_bytes=64000 if single_page else 4096,
+            max_page_output_bytes=64000 if single_page else None, format="json"))
+        assert page["ok"]
+        call = f"recovery-{index}"
+        if code_mode:
+            # The nested hook fires before its parent emits the retained output.
+            append(history, "response_item", {"type": "custom_tool_call", "call_id": f"parent-{call}"})
+        else:
+            append(history, "response_item", {"type": "function_call", "call_id": call})
+        retained = "truncated" if lose_first and index == 0 else json.dumps(page)
+        if not code_mode:
+            append(history, "response_item", {"type": "function_call_output", "call_id": call, "output": retained})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": call, "tool_response": json.dumps(page)})
+        if code_mode:
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": f"parent-{call}",
+                "output": [{"type": "input_text", "text": retained}]})
+        index += 1
+        if page["eof"]:
+            break
+        offset = page["next_offset"]
+    assert (index == 1) == single_page
+    recovered = context._state(tmp_path)
+    assert recovered["candidate"]["capture_sha256"] == reference["sha256"]
+    assert recovered["candidate"]["target"]["context_epoch"] == invalid["context_epoch"]
+    append(history, "event_msg", {"type": "task_complete"})
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    current = {**payload, "heartbeat_receipt": {"turn_instance_id": "after-compact"}}
+    _, wire = project(tmp_path, "after-compact", payload=current)
+    assert wire["mode"] == ("full" if lose_first else "delta")
+    if not lose_first:
+        assert wire["changes"]["values"]["heartbeat_receipt"] == current["heartbeat_receipt"]
+
+
 @pytest.mark.parametrize("change", ["compact", "rollback", "retained", "unknown", "truncate",
     "replace", "rewrite", "missing", "output", "duplicate", "model", "workspace", "session", "permission", "writable", "malformed"])
 @pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1"])

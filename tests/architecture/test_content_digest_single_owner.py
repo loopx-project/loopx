@@ -177,7 +177,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.periodic_report.machine_defaults",
     "loopx.capabilities.progress_review.receipt",
     "loopx.chat_action_normalization",
-    "loopx.chat_history",
+    "loopx.capabilities.manager_context.chat_history",
     "loopx.cli_commands.quota_capture",
     "loopx.configuration_transaction",
     "loopx.control_plane.agents.execution_facts",

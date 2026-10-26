@@ -11,6 +11,7 @@ from typing import Any
 from .presentation.public_safety import redact_public_text, scan_public_boundary_text
 from .control_plane.todos.list_readback import list_goal_todos
 from .control_plane.effect_runtime import effect_runtime_result
+from .control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 
 
 def _text(value: object, limit: int = 420) -> str:
@@ -36,10 +37,13 @@ def read_manager_goal_details(
     """Use Core's canonical-first read; never parse a private project document."""
     observed_at = datetime.now(timezone.utc).isoformat()
     try:
+        route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
         result = list_goal_todos(
-            registry_path=registry_path, runtime_root_arg=str(runtime_root),
-            goal_id=goal_id,
-            **({"todo_id": todo_id} if todo_id else {}),
+            registry_path=registry_path,
+            # The Manager service root is a default carrier, not a caller's
+            # explicit diagnostic override of a declared source registry.
+            runtime_root_arg=None if route["routed_to_source_registry"] else str(runtime_root),
+            goal_id=goal_id, todo_id=todo_id,
         )
         if result.get("ok") is not True:
             raise ValueError("Todo authority unavailable or conflicting")

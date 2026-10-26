@@ -262,8 +262,11 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
           ["--runtime-profile", "codex_app_ssh_goal" if scenario == "codex_app_ssh_goal" else "generic_cli"]),
         option, directory]), "timeout": 10}
+    # Native Interrupt handlers have a 3s ceiling. Declare the effective value
+    # rather than letting discovery silently clamp a different configuration.
     return {"hooks": {event: [{**({"matcher": "^Bash$"} if event == "PostToolUse" else {}),
-                              "hooks": [handler]}] for event in CONTEXT_LIFECYCLE_HOOKS},
+                              "hooks": [{**handler, "timeout": 3} if event == "Interrupt" else handler]}]
+                      for event in CONTEXT_LIFECYCLE_HOOKS},
         "developer_instructions": codex_context_recovery_instructions(directory, goal_id=goal_id,
             agent_id=agent_id, cli_argv=cli_argv, session_root=session_root)}
 
