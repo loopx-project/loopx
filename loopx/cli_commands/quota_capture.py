@@ -33,7 +33,9 @@ def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int,
-                  output_limit: int | None, instruction: bool) -> dict[str, Any]:
+                  output_limit: int | None, instruction: bool,
+                  presentation: dict[str, Any] | None = None,
+                  next_page_bytes: int | None = None) -> dict[str, Any]:
     end = min(offset + size, len(raw))
     while end < len(raw) and raw[end] & 0xC0 == 0x80:
         end -= 1
@@ -41,13 +43,13 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
 
     def page(text: str) -> dict[str, Any]:
         cursor = offset + len(text.encode("utf-8"))
-        result: dict[str, Any] = {"ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
+        result: dict[str, Any] = {**(presentation or {}), "ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
             "offset": offset, "next_offset": cursor if cursor < len(raw) else None,
             "total_bytes": len(raw), "eof": cursor == len(raw), "content": text}
         if instruction:
             result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
         if cursor < len(raw):
-            result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=size,
+            result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
                 max_page_output_bytes=output_limit)
         return result
 
@@ -75,7 +77,8 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     return best
 
 
-def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
+def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
+                         next_page_bytes: int | None = None) -> dict[str, Any]:
     """Bounded local IO over immutable JSON, not a new context/authority owner.
 
     Verify the complete byte digest on every page. The cursor addresses bytes
@@ -109,7 +112,8 @@ def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         return _capture_page(path, raw, digest, offset=offset, size=size,
-            output_limit=output_limit, instruction=bool(context_dir))
+            output_limit=output_limit, instruction=bool(context_dir),
+            presentation=presentation, next_page_bytes=next_page_bytes)
     except (OSError, ValueError, RecursionError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
@@ -119,7 +123,8 @@ def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
-                                context_directory: str | None = None) -> dict[str, Any]:
+                                context_directory: str | None = None,
+                                metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     """One paged presentation for ordinary and already-captured native calls.
 
     The guard/projector already ran. Only serialize its wire and prefetch the
@@ -137,31 +142,36 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             reference = {key: projected["recovery"][key] for key in ("path", "sha256")}
     reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
         page_bytes=NATIVE_CONTEXT_PAGE_BYTES, max_page_output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES)
-    result = {"mode": mode, **reference, **({"target": target} if target else {})}
-    page = read_context_capture(argparse.Namespace(capture_file=reference["path"],
-        capture_sha256=reference["sha256"], offset=0, page_bytes=3072))
-    if page["ok"]:
-        if not page["eof"]:
-            page["next_command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
-                offset=page["next_offset"], page_bytes=NATIVE_CONTEXT_PAGE_BYTES,
-                max_page_output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES)
-        result.update(page)
-        from ..control_plane.turn_driver.codex_context import register_native_context_view
-
-        register_native_context_view(context_directory,
-            {**result, "ancestry": projected.get("ancestry", 0)})
+    result = {"ok": True, **(metadata or {}), "mode": mode, **reference,
+        **({"target": target} if target else {})}
     # The codec puts native continuity semantics before its change tree. Keep
     # this shared transport frame neutral instead of copying that instruction
     # or replacing an assumption with a claim of confirmed final input.
     presentation = ("This is the full current capture; after complete reading, continue from it."
         if mode == "full" else "Read the current continuity basis and instruction before its change tree.")
-    result["instruction"] = (
+    instruction = (
         "Presentation of the original decision only; authority and freshness are unchanged. "
-        + presentation + " "
-        + ("This result includes page zero; consume it before next_command. command restarts "
-           "at zero if the inline page is incomplete or unsupported. " if page["ok"] else "")
-        + CONTEXT_CAPTURE_PAGE_GUIDANCE
-    )
+        + presentation + " ")
+    result["instruction"] = (instruction + "This result includes page zero; consume it before next_command. "
+        "command restarts at zero if the inline page is incomplete or unsupported. " + CONTEXT_CAPTURE_PAGE_GUIDANCE)
+    # Bound the complete stdout, including caller-owned recovery and activation
+    # fields. Capping only content leaves the guard itself vulnerable to native
+    # truncation before the consumer can discover its continuation command.
+    page = read_context_capture(argparse.Namespace(capture_file=reference["path"],
+        capture_sha256=reference["sha256"], offset=0, page_bytes=3072,
+        format="json", max_page_output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES),
+        presentation=result, next_page_bytes=NATIVE_CONTEXT_PAGE_BYTES)
+    if page["ok"]:
+        result = page
+        from ..control_plane.turn_driver.codex_context import register_native_context_view
+
+        register_native_context_view(context_directory,
+            {**result, "ancestry": projected.get("ancestry", 0)})
+    else:
+        result["instruction"] = instruction + CONTEXT_CAPTURE_PAGE_GUIDANCE
+        if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 > NATIVE_CONTEXT_PAGE_OUTPUT_BYTES:
+            raise QuotaDecisionTransportError("Native context metadata exceeds the output limit; "
+                "read the saved original decision and receipt without rerunning admission.")
     return result
 
 
@@ -224,7 +234,9 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None))
         native_prepared = True
-        native_view = native_context_capture_view(projected, cache, context_directory=directory)
+        native_view = native_context_capture_view(projected, cache, context_directory=directory,
+            metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
+                "context_delivery": activation})
         reference = {key: native_view[key] for key in ("path", "sha256", "command")}
         mode, target = native_view["mode"], native_view.get("target")
     except (QuotaDecisionTransportError, OSError, ValueError, TypeError, RecursionError) as exc:

@@ -144,10 +144,14 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
 
 
 @pytest.mark.parametrize("body", ["Exact requirement.\n" * 700, "完整要求与来源🙂\n" * 700], ids=["ascii", "utf8"])
-def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp_path, monkeypatch, body):
+@pytest.mark.parametrize("deep_path", [False, True], ids=["short", "deep"])
+def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp_path, monkeypatch, body, deep_path):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
     from loopx.control_plane.turn_driver.codex_input_trace import _capture_page_range
 
+    if deep_path:
+        tmp_path = tmp_path / ("capture-location-" * 9) / ("original-context-" * 9)
+        tmp_path.mkdir(parents=True)
     context = tmp_path / "native"
     context.mkdir(mode=0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "native-session")
@@ -164,6 +168,9 @@ def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp
         "--capture-sha256", digest, "--goal-id", "goal", "--agent-id", "agent", "--turn-instance-id", "turn",
         "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(context), cwd=tmp_path)
     assert code == 0 and result["mode"] == "full", result
+    # Include the final recovery, activation and instruction fields: an inline
+    # content cap alone does not bound the actual native guard stdout.
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
     delivered = Path(result["path"]).read_bytes()
     delivered_digest = hashlib.sha256(delivered).hexdigest()
     assert result["sha256"] == delivered_digest and json.loads(delivered) == json.loads(raw)
@@ -175,6 +182,7 @@ def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp
         argv = shlex.split(page["next_command"])
         code, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
         assert code == 0 and page["offset"] == len(combined)
+        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
         combined += page["content"].encode()
     assert combined == delivered and hashlib.sha256(combined).hexdigest() == delivered_digest
     argv = shlex.split(result["command"])
@@ -212,7 +220,7 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
     monkeypatch.setattr(decision_capture, "write_decision_capture", fail_optional_wire)
     if failure == "inline_read":
         from loopx.cli_commands import quota_capture
-        monkeypatch.setattr(quota_capture, "read_context_capture", lambda args: {"ok": False})
+        monkeypatch.setattr(quota_capture, "read_context_capture", lambda args, **kwargs: {"ok": False})
     digest = hashlib.sha256(raw).hexdigest()
     args = build_parser().parse_args(["--format", "json", "quota", "context-project",
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",

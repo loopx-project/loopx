@@ -540,9 +540,8 @@ def _emit_quota_result(
                 surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
                 capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None))
             recovery = payload.get("recovery")
-            view = native_context_capture_view(payload, capture_directory, context_directory=directory)
-            payload = {"ok": True, **view, "capture_sha256": capture_id,
-                **({"recovery": recovery} if recovery else {})}
+            payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
+                metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery else {})})
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(

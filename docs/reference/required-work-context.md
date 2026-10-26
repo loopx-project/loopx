@@ -231,7 +231,9 @@ setting. Ordinary machine validation still applies to business operations.
 
 Native `quota should-run` and the saved `context-project` entry share the same
 paged presentation. Each returns page zero, a digest-pinned continuation and full
-recovery without another admission. The inline page stays at 3 KiB. Continuations
+recovery without another admission. The inline page contains up to 3 KiB and shrinks
+to keep the complete guard stdout, including recovery and instruction fields,
+within 7900 UTF-8 bytes. Continuations
 request up to 8 KiB of content with `--max-page-output-bytes 7900`, which bounds
 successful JSON stdout including escaping, commands and newline. Consume the inline
 page before following next_command; when the retained-history limit is unknown,
@@ -427,7 +429,8 @@ Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Co
 SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和 thin/bootstrap 提示，
 沿用可见 Goal 的执行与结算身份；仅启用差分时接入捕获目录，不转换成自动心跳。
 原生 `quota should-run` 与已保存捕获的 `context-project` 共用分页呈现，直接返回第零页、
-固定摘要的后续读取与完整恢复，不另行准入。内联页保持 3 KiB；后续命令最多请求
+固定摘要的后续读取与完整恢复，不另行准入。内联正文最多 3 KiB，必要时缩小，使包含
+恢复字段与完整指引的 guard stdout 不超过 7900 UTF-8 字节；后续命令最多请求
 8 KiB 正文，并用 `--max-page-output-bytes 7900` 将成功 JSON stdout（含转义、
 后续命令与换行）限制为 7900 字节。先消费内联页，再跟随 next_command；保留历史
 上限未知时，每次只读一个有界输出。该上限不证明模型保留。Code Mode 直接转发
@@ -499,7 +502,8 @@ exact digest and Turn receipt; they never rerun admission or spend quota.
 
 With delivery on, a successful saved projection also returns page zero using
 the existing `context_capture_page_v1` fields. Its content is bounded to 3 KiB
-to leave room for projection metadata. Subsequent native commands request up to
+and shrinks against the final presentation's 7900-byte stdout limit, including
+recovery, activation and instruction metadata. Subsequent native commands request up to
 8 KiB of content within a 7900-byte successful JSON stdout limit. The optional
 JSON-only `--max-page-output-bytes` flag shrinks content at UTF-8 boundaries and
 preserves the limit in `next_command`. An insufficient limit returns an error
@@ -522,7 +526,8 @@ input retention.
 原始摘要和 Turn 回执，不重新准入或扣减额度。
 
 开启时，成功的已保存投影同时用现有 `context_capture_page_v1` 字段返回第一页。
-该页内容最多 3 KiB，为投影元数据留出输出空间；后续原生命令最多请求 8 KiB
+该页内容最多 3 KiB，按最终呈现的 7900 字节 stdout 上限缩小，包含恢复、启用配置与
+完整指引元数据；后续原生命令最多请求 8 KiB
 正文，成功 JSON stdout 限制为 7900 字节。可选的 JSON 专用参数
 `--max-page-output-bytes` 按 UTF-8 边界缩减正文，并在 `next_command` 中保留。
 上限不足时返回错误，不返回无进展的分页；增大上限后重读同一捕获。省略该参数

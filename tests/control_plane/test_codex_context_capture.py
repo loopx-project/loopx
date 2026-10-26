@@ -221,7 +221,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             continued += ["--turn-instance-id", original["heartbeat_receipt"]["turn_instance_id"],
                           "--todo-id", TODO_ID]
             rendered = shlex.join(continued)
-        return rendered + " > " + shlex.quote(str(wire_paths[name])) + " && printf WIRE_READY"
+        return rendered + " > " + shlex.quote(str(wire_paths[name])) + " && cat " + shlex.quote(str(wire_paths[name]))
 
     def pages(name, path):
         raw = path.read_bytes()
@@ -322,7 +322,13 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             cmd = invoke("warm")
         elif phase in {"cold_ready", "warm_ready"}:
             name = phase.split("_")[0]
-            descriptor = json.loads(wire_paths[name].read_text())
+            # The native consumer must discover the next command from its
+            # actual retained input. Disk reads below are independent expected
+            # byte/state oracles, never a substitute for a truncated guard.
+            descriptor = _last_page(request)
+            assert descriptor and descriptor["ok"], "native guard is not complete model-visible JSON"
+            assert descriptor == json.loads(wire_paths[name].read_bytes())
+            assert len(json.dumps(descriptor, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
             read_commands[name] = descriptor["command"]
             # The public native CLI now shares context-project's paged reader.
             # Keep the independent full-wire oracle separate from its page view.
@@ -335,8 +341,11 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             capture = Path(wires[name]["recovery"]["path"]).parent / "decision.json"
             snapshots.append((capture, capture.read_bytes()))
             read_paths[name] = Path(wires[name]["recovery"]["path"]) if wires[name]["mode"] == "full" else wire_file
-            stages["pages"] = pages(name, read_paths[name])
+            stages["pages"] = ([descriptor["next_command"]] if not descriptor["eof"] else []) if bounded_pages else pages(name, read_paths[name])
+            page_digests[name] = descriptor["sha256"]
             stages["phase"] = name + "_read"
+            if not stages["pages"]:
+                return response(request, number, message)
             cmd = stages["pages"].pop(0)
         elif phase == "cold_read":
             assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
@@ -511,6 +520,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                     "components": [{"id": "task", "source_path": str(state)}], "point_metadata": {}}))
                 env["LOOPX_CHECKPOINT_REQUEST"] = str(declaration)
             result = run_once(env)
+            assert not errors, errors
             assert result["ok"] and result["host_invoked"], result
             assert result["context_transport"] == {"available": True}
             assert result["session"]["session_id"]
