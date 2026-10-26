@@ -440,3 +440,34 @@ def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, tur
     if turn_envelope:
         assert "--turn-envelope" in guard
         assert "detail_ref.full_decision" in enabled["task_body"]
+
+
+@pytest.mark.parametrize("turn_envelope", [False, True])
+def test_ssh_goal_capture_fits_host_with_full_command_paths(tmp_path, turn_envelope):
+    # Fixed physical path width qualifies the shipped command workload on every
+    # OS; the native cases also retain their actual, unshortened pytest paths.
+    with stable_budget_fixture_root(tmp_path) as base:
+        root = (base / ("p" * (160 - len(str(base.resolve())) - 1))).resolve()
+        root.mkdir()
+        paths = {"registry_path": root / "project/.loopx/registry.json",
+                 "runtime_root": root / "runtime", "cli_bin": str(Path(sys.executable).with_name("loopx"))}
+        args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="codex_app_ssh_goal",
+                    thin=True, **paths)
+        ordinary = build_heartbeat_prompt(**args)
+        assert ordinary == build_heartbeat_prompt(**args, context_delivery="off")
+        enabled = build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=root,
+            codex_context_root=str(root), turn_envelope=turn_envelope)
+        body, command = enabled["task_body"], shlex.split(enabled["quota_guard_command"])
+        assert enabled["interface_budget"]["max_chars"] == 4000 and len(body) <= 4000
+        for option, value in (("--registry", paths["registry_path"]),
+                              ("--runtime-root", paths["runtime_root"]),
+                              ("--decision-output-root", root), ("--codex-context-root", root)):
+            assert command[command.index(option) + 1] == str(value)
+        assert command[0] == paths["cli_bin"]
+        assert "--begin-turn" in command and "--heartbeat-turn-receipt" not in command
+        assert "--context-delivery" in command and "LOOPX_TURN=" not in body
+        if turn_envelope:
+            assert "detail_ref.full_decision" in body
+        with pytest.raises(ValueError, match="4000-character"):
+            build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=root,
+                codex_context_root=str(root), turn_envelope=turn_envelope, agent_scopes=[c * 320 for c in "stu"])

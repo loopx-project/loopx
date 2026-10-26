@@ -426,11 +426,12 @@ loopx-canary heartbeat-prompt \
 `--context-delivery {off,on}` is experimental and defaults to `off`. It reuses
 existing scheduler-owned host declarations and the benchmark worker's explicit
 execution settings; it does not guess a host from process names or ambient native
-session variables. Only two declared run modes can activate it:
+session variables. These declared run modes can activate it:
 
 | Supported entry | Existing host declaration |
 | --- | --- |
 | Codex App heartbeat, same-session resume and recovery | `--codex-app`, equivalently `--runtime-profile codex_app_heartbeat` (or its complete explicit host tuple) |
+| Interactive Codex App SSH Goal | `--runtime-profile codex_app_ssh_goal`; retains native `--begin-turn` and visible-Goal settlement |
 | Codex benchmark heartbeat worker | Existing `generic_cli` profile plus the worker-owned `LOOPX_EXECUTION_MODE=heartbeat` and `LOOPX_CONTEXT_DELIVERY=on` declarations; its execution owner rejects other modes |
 
 `--codex-app` is a shortcut for a complete runtime profile. `--host-surface` alone
@@ -452,8 +453,8 @@ observation; directories alone never turn it on. This declaration check is not
 host authentication, execution authority or proof of retained input. Native
 delivery uses the explicit lifecycle assumption described below; final-input
 Host clients keep their independent retained-input confirmation contract.
-Generic CLI, visible native Goals, Claude and other hosts remain outside this
-opt-in. Harbor/container and installed desktop adoption retain their separate
+Other generic CLI and native Goal profiles, Claude and other hosts remain outside
+this opt-in. Harbor/container and installed desktop adoption retain their separate
 unqualified boundaries; listing an entry does not certify live adoption.
 
 For a trusted Codex host, render the native setup through the installed CLI.
@@ -473,6 +474,10 @@ trust only these exact hooks through Codex's native hook trust surface; the CLI
 does not install files, approve hashes, enable diagnostics or run a guard.
 Use one configuration for the declared Goal/Agent. A shared private root keeps
 different native sessions in separate journals, including interleaved sessions.
+For an interactive SSH Goal, use `--runtime-profile codex_app_ssh_goal` in place
+of `--codex-app` for both setup and the thin prompt. It retains the 4000-character
+native Goal limit and the full command paths, with the same live contract and
+native blocked/resume rules; it does not become a hosted heartbeat.
 
 Generate the normal bootstrap with `heartbeat-prompt --thin --codex-app
 --bootstrap`, its existing Goal/Agent/registry arguments, and

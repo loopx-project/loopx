@@ -91,6 +91,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     # Real worker qualification follows returned cursors; output budgets can
     # shrink a page, so precomputed fixed offsets are not its production path.
     bounded_pages = bounded_pages or host == "benchmark"
+    # These shapes retain complete, independently checked reader pages in the
+    # native-selected replay. Other shapes below deliberately exercise reset
+    # and exact-original recovery instead of claiming qualified reuse.
+    qualified_resume = host == "benchmark" or ssh_goal or (adaptive and bounded_pages)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
@@ -296,7 +300,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             if phase == "resuming":
                 if not resume_loss:
                     assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
-                if host == "benchmark" or ssh_goal:
+                if qualified_resume:
                     # Actual worker process exit/resume, qualified by the shared
                     # native-selected replay checkpoint. No old full prefetch.
                     assert ("LoopX context baseline invalidated." in _input_text(request)) == bool(resume_loss)
@@ -602,7 +606,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
         capture_id=wires["warm"]["target"]["capture_id"], surface=surface)
     baseline = wires["cold"]
-    if resumed and host != "benchmark" and not ssh_goal:
+    if resumed and qualified_resume and not resume_loss:
+        assert wires["warm"]["base"] == baseline["target"]
+        assert current["target"]["context_epoch"] == baseline["target"]["context_epoch"]
+    elif resumed and not qualified_resume:
         # This path independently reread every original byte after a reset.
         # Bind those verified bytes to the new native epoch, rather than letting
         # automatic full fallback conceal an obsolete pre-loss baseline.
