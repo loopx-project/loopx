@@ -851,6 +851,7 @@ def handle_refresh_state_command(
         graph_sync = sync_explore_graph_after_material_refresh(
             registry_path=registry_path,
             goal_id=args.goal_id,
+            runtime_root_override=args.runtime_root,
             agent_id=args.agent_id,
             project=Path(args.project).expanduser() if args.project else None,
             state_file=Path(args.state_file).expanduser() if args.state_file else None,

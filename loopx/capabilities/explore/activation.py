@@ -74,6 +74,7 @@ def sync_explore_graph_after_material_refresh(
     *,
     registry_path: Path,
     goal_id: str,
+    runtime_root_override: str | None = None,
     agent_id: str | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
@@ -92,7 +93,10 @@ def sync_explore_graph_after_material_refresh(
     if goal is not None:
         from .machine_defaults import resolve_explore_goal
         from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
-        route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+        route = resolve_goal_source_runtime_route(
+            registry_path=registry_path, goal_id=goal_id,
+            runtime_root_override=runtime_root_override,
+        )
         goal = resolve_explore_goal(goal, Path(route["source_runtime_root"]))
     policy = compact_explore_graph_policy(
         (goal or {}).get("explore_graph"), ((goal or {}).get("spawn_policy") or {}).get("explore_harness")

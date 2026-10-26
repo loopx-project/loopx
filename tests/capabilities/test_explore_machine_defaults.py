@@ -178,6 +178,65 @@ def test_todo_settlement_plan_uses_selected_runtime(setup, tmp_path, registry_mo
     assert str(selected) in writeback["command_template"]
 
 
+@pytest.mark.parametrize("registry_mode,selected_mode", [("off", "planning"), ("planning", "off")])
+def test_refresh_state_uses_selected_runtime_for_graph_activation(setup, tmp_path, registry_mode, selected_mode):
+    path, selected, _ = setup
+    root = tmp_path / "registry-runtime"
+    registry = json.loads(path.read_text())
+    registry["common_runtime_root"] = str(root)
+    path.write_text(json.dumps(registry))
+    configure_machine(root, registry_mode)
+    configure_machine(selected, selected_mode)
+    registry_before = path.read_bytes()
+
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.cli", "--registry", str(path),
+         "--runtime-root", str(selected), "--format", "json", "refresh-state",
+         "--goal-id", "research", "--suppress-external-sinks", "--no-global-sync"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    packet = json.loads(result.stdout)
+    assert packet["appended"] is True
+    assert Path(packet["runtime_root"]) == selected
+    activation = packet["explore_graph_sync"]
+    assert activation["enabled"] is (selected_mode == "planning")
+    assert activation["status"] == ("not_applicable" if selected_mode == "planning" else "disabled")
+    assert activation["external_sink_delivery_authorized"] is False
+    assert activation["delivery_postcondition"]["satisfied"] is True
+    assert path.read_bytes() == registry_before
+    assert not (root / "goals" / "research" / "runs" / "index.jsonl").exists()
+    assert (selected / "goals" / "research" / "runs" / "index.jsonl").is_file()
+
+
+@pytest.mark.parametrize("explicit_override", [False, True])
+def test_material_refresh_preserves_source_route_without_runtime_override(setup, tmp_path, explicit_override):
+    path, source, goal = setup
+    shared = tmp_path / "shared-runtime"
+    configure_machine(source, "planning")
+    configure_machine(shared, "off")
+    global_path = tmp_path / "registry.global.json"
+    global_path.write_text(json.dumps({
+        "schema_version": 1, "registry_role": "global-local", "common_runtime_root": str(shared),
+        "goals": [{**goal, "source_registry": str(path)}],
+    }))
+    calls = []
+
+    def syncer(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "status": "not_configured"}
+
+    result = sync_explore_graph_after_material_refresh(
+        registry_path=global_path, goal_id="research", syncer=syncer,
+        runtime_root_override=str(shared) if explicit_override else None,
+    )
+    assert result["enabled"] is not explicit_override
+    assert result["status"] == ("disabled" if explicit_override else "not_configured")
+    assert len(calls) == (0 if explicit_override else 1)
+    if calls:
+        assert calls[0]["external_sink_delivery_authorized"] is False
+
+
 @pytest.mark.parametrize("override", [
     {"profile": "adaptive-resilient"},
     {"composition_mode": "explicit_only", "composition_scope_id": "bounded-scope"},
