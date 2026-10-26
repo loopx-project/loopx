@@ -162,6 +162,10 @@ class NativeAccounts:
         native = self.transport(adapter, "status")
         return self._projection(state, native)
 
+    def clients(self) -> dict:
+        state = self._load()
+        return self.transport(state.get("adapter") or discover(), "clients")
+
     def configure(self, *, expected_revision: int, enabled: bool, slots: list[str], reconnect: bool = False,
                   restart_clients: bool | None = None, force_quit_clients: bool | None = None) -> dict:
         if type(enabled) is not bool or not isinstance(slots, list) or len(slots) > 16 or len(slots) != len(set(slots)):
@@ -414,7 +418,7 @@ class Watcher:
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="loopx-codex-accounts")
-    parser.add_argument("operation", choices=("status", "configure", "refresh", "switch", "recover", "rollback", "reopen", "watch"))
+    parser.add_argument("operation", choices=("status", "clients", "configure", "refresh", "switch", "recover", "rollback", "reopen", "watch"))
     parser.add_argument("--runtime-root", type=Path, default=Path.home() / ".loopx")
     args = parser.parse_args()
     provider = NativeAccounts(args.runtime_root)
@@ -426,9 +430,11 @@ def main() -> int:
             except KeyboardInterrupt:
                 watcher.close()
             return 0
-        request = {} if args.operation in ("status", "refresh") else json.load(sys.stdin)
+        request = {} if args.operation in ("status", "clients", "refresh") else json.load(sys.stdin)
         if args.operation == "status":
             result = provider.status()
+        elif args.operation == "clients":
+            result = provider.clients()
         elif args.operation == "configure":
             result = provider.configure(**request)
         elif args.operation in ("refresh", "switch"):
