@@ -16,6 +16,13 @@ This is presentation validation, not a claim that a URL is reachable, public or
 authorized for another audience. Source collection, frozen evidence, redaction
 and delivery authorization retain those responsibilities.
 
+An already frozen report retains its original bytes and generation identity.
+Validation can reconstruct the exact previous source-link presentation without
+rewriting its artifacts, invoking generation or acknowledging publication.
+The full frozen source, authored response, bundle, candidate and body must still
+match; an unsupported or altered presentation remains unavailable. New reports
+always use the shared source-link rule above.
+
 The following synthetic reports use the production formatters. Text views use
 the compiled App Markdown component and its stylesheet; HTML views use the
 standalone report artifact. The same normalized records retain their outcomes,

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from html import escape
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
+
+import pytest
 
 from loopx.capabilities.periodic_report.cadence_journal import (
     admit_cadence_window,
@@ -18,6 +23,7 @@ from loopx.capabilities.periodic_report.pending_intent import (
 from loopx.capabilities.periodic_report.private_generation import (
     attempt_directory,
     freeze_private_report,
+    validate_private_generation,
 )
 from loopx.registry import atomic_write_json
 
@@ -31,9 +37,7 @@ ARTIFACT_NAMES = {
 }
 
 
-def test_private_report_artifacts_use_canonical_utf8_on_windows_text_mode(
-    tmp_path: Path, monkeypatch
-) -> None:
+def _prepared_report(tmp_path: Path):
     root = tmp_path / "runtime"
     window = admit_cadence_window(
         runtime_root=root,
@@ -154,6 +158,14 @@ def test_private_report_artifacts_use_canonical_utf8_on_windows_text_mode(
         ],
         "sections": sections,
     }
+    return root, window, response
+
+
+def test_private_report_artifacts_use_canonical_utf8_on_windows_text_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, window, response = _prepared_report(tmp_path)
+    folder = attempt_directory(root, window)
 
     real_write_text = Path.write_text
     real_read_text = Path.read_text
@@ -176,3 +188,56 @@ def test_private_report_artifacts_use_canonical_utf8_on_windows_text_mode(
     report_bytes = (folder / "report.md").read_bytes()
     assert b"\r\n" not in report_bytes
     assert receipt["body_sha256"] == hashlib.sha256(report_bytes).hexdigest()
+
+
+@pytest.mark.parametrize("tamper", [None, "report", "html", "source", "response"])
+def test_frozen_report_keeps_original_source_links_across_renderer_upgrade(tmp_path, monkeypatch, tamper):
+    from loopx.presentation.renderers import periodic_report_html as html
+    from loopx.presentation.renderers import periodic_report_markdown as markdown
+
+    root, window, response = _prepared_report(tmp_path)
+    folder = attempt_directory(root, window)
+
+    def previous_html_source(value, **_):
+        raw = markdown._safe(value, maximum=500)
+        parsed = urlparse(raw)
+        return escape(raw, quote=True) if parsed.scheme in {"http", "https"} and parsed.netloc else None
+
+    # Seed through the real freezer with the previous independently specified
+    # source rules, not through the new validator's compatibility switch.
+    with monkeypatch.context() as previous:
+        previous.setattr(markdown, "_markdown_source", lambda value, labels, **_:
+            f"[{labels['source']}]({markdown._safe(value, maximum=500)})")
+        previous.setattr(html, "_safe_http_url", previous_html_source)
+        receipt = freeze_private_report(root=root, window=window, response=response)
+    original = {path.name: path.read_bytes() for path in folder.iterdir() if path.is_file()}
+    assert "[来源](sha256:" in original["report.md"].decode("utf-8")
+    assert "[来源](sha256:" not in markdown.render_periodic_report_markdown(
+        json.loads(original["generation-bundle.json"])["document"])["content"]
+
+    if tamper == "report":
+        body = original["report.md"] + b"\nA different unapproved claim.\n"
+        (folder / "report.md").write_bytes(body)
+        atomic_write_json(folder / "private-generation.json", {
+            **receipt, "body_sha256": hashlib.sha256(body).hexdigest()})
+    elif tamper == "html":
+        bundle = json.loads(original["generation-bundle.json"])
+        artifact = next(item for item in bundle["artifacts"] if item["renderer_kind"] == "html")
+        artifact["content"] += "<p>A different unapproved claim.</p>"
+        artifact["content_digest"] = "sha256:" + hashlib.sha256(artifact["content"].encode()).hexdigest()
+        atomic_write_json(folder / "generation-bundle.json", bundle)
+    elif tamper in {"source", "response"}:
+        name = "source.json" if tamper == "source" else "editorial-response.json"
+        changed = json.loads(original[name])
+        changed["rows" if tamper == "source" else "title"] = [] if tamper == "source" else "Another title"
+        if tamper == "source":
+            changed["gaps"] = ["An unapproved source change"]
+        atomic_write_json(folder / name, changed)
+    if tamper:
+        with pytest.raises(ValueError):
+            validate_private_generation(folder)
+        return
+
+    assert validate_private_generation(folder) == receipt
+    assert validate_private_generation(folder) == receipt  # Restart/readback is effect-free.
+    assert {path.name: path.read_bytes() for path in folder.iterdir() if path.is_file()} == original
