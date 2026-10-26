@@ -485,6 +485,8 @@ def complete_goal_todo(
 
 def supersede_goal_todo(
     *,
+    completion_turn_key: str | None = None,
+    completion_identity_source: str | None = None,
     registry_path: Path,
     goal_id: str,
     runtime_root_arg: str | None = None,

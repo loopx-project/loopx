@@ -1044,6 +1044,11 @@ function terminalTarget(
     // status/quota consumers do not infer an unclassified terminal record.
     next.completion_continuation = "active_goal";
     if (successorIds.length > 0) next.superseded_by = successorIds[0];
+    // Retirement is a committed result of this Turn, not deliverable acceptance.
+    // Never bind a previously unscoped terminal record to a later caller.
+    if (todo.status !== "done" && input.requested_completion_turn_key !== null) {
+      next.completion_turn_key = input.requested_completion_turn_key;
+    }
   }
   if (completion?.decision === "commit") {
     Object.assign(next, completion.metadata_updates);
@@ -1675,7 +1680,22 @@ export async function executeCoordinationTodoTerminalLifecycle(
   }
   let completion: ReturnType<typeof reduceTodoCompletionTransaction> | null = null;
   let terminalUpgradeReceipt: JsonObject | null = null;
+  if (input.command === "supersede" && input.requested_completion_turn_key !== null) {
+    if (input.requested_completion_identity_source !== "turn_settlement") {
+      return terminalFailure("invalid_todo_completion_transaction",
+        "Turn-scoped retirement requires the original turn_settlement identity");
+    }
+    if (todo.completion_turn_key != null && todo.completion_turn_key !== input.requested_completion_turn_key) {
+      return terminalFailure("invalid_todo_completion_transaction",
+        "todo is already completed under a different completion_turn_key");
+    }
+  }
   if (input.command === "complete") {
+    if (todo.status === "done" && typeof todo.completion_turn_key === "string" &&
+        !(typeof todo.completion_receipt_id === "string" && todo.completion_receipt_id.length > 0)) {
+      return terminalFailure("invalid_todo_completion_transaction",
+        "Terminal work has no accepted completion receipt; settle its original retirement instead");
+    }
     const validationRequired = todo.completion_validation_required === true;
     const validationSha256 = todo.completion_validation_sha256;
     if (normalized.operation_identity.kind === "completion_turn" && input.requested_no_followup && input.defer_no_followup !== true) {
@@ -2051,9 +2071,9 @@ export async function executeCoordinationTodoTerminalLifecycle(
     } : {}),
     completion_policy: completionPolicy,
     completion_identity_key:
-      completion === null ? null : completion.completion_identity_key,
+      completion === null ? target.todo.completion_turn_key ?? null : completion.completion_identity_key,
     completion_identity_source:
-      completion === null ? null : completion.completion_identity_source,
+      completion === null ? input.requested_completion_identity_source : completion.completion_identity_source,
     completed_at: target.todo.completed_at,
     completion_receipt_id: target.todo.completion_receipt_id ?? null,
     ...(completionResult === null ? {} : {completion_result: completionResult}),

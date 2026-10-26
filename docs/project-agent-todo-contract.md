@@ -1009,6 +1009,13 @@ the same monitor wait.
 
 Use `todo supersede` when the current open todo should be retired and replaced:
 
+For work already admitted by a heartbeat, retain its original `--agent-id` and
+`--turn-instance-id` when superseding, together with any required execution lease.
+The atomic retirement keeps that Turn identity for post-result direction review
+and settlement; it does not run or pass the retired deliverable's validation.
+Finish the original Turn before selecting the successor. A later caller cannot
+claim an unscoped historical retirement or replay it as accepted completion.
+
 ```bash
 loopx todo supersede \
   --goal-id <goal-id> \

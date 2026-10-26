@@ -326,7 +326,8 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
       (candidate.successor_todo_ids == null || (Array.isArray(candidate.successor_todo_ids) && candidate.successor_todo_ids.length === 0)) &&
       candidate.clear_claim !== true && candidate.self_merged !== true &&
       (candidate.role == null || candidate.role === todo.role);
-    if (originalReplay && unchanged) {
+    if (originalReplay && unchanged &&
+        typeof todo.completion_receipt_id === "string" && todo.completion_receipt_id.length > 0) {
       const fence = evaluateTodoCompletionFence(decodeTodoCompletionFenceRequest({
         schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA, projection_source: "materialized",
         todo, goal_id: identity.goal_id, todo_id: identity.todo_id,

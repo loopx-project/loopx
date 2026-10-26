@@ -491,6 +491,51 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
         assert.deepEqual(await store.readReceipt(request.operation_identity.operation_id), receipt);
       }
     });
+    test(`${provider}: scoped retirement binds its Turn without accepting a deliverable (${schema})`, async t => {
+      const {store, contender} = await factory(t);
+      const goal = "scoped-retirement";
+      const task: JsonObject = {todo_id: "todo_obsolete", role: "agent", status: "open", done: false,
+        text: "Implement the previous requirement", task_class: "advancement_task", claimed_by: "agent-a",
+        archive_state: "active", completion_validation_required: true,
+        completion_validation_sha256: "a".repeat(64)};
+      const successor = {...task, todo_id: "todo_replacement", text: "Implement the current requirement"};
+      await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
+        next_projection: authorityProjectionFixture(goal, [task, successor], [], schema, {handoff_mode: "soft_claim"}),
+        events: [], receipts: []});
+      const request: CoordinationTodoTerminalLifecycleInput = {
+        goal_id: goal, todo_id: String(task.todo_id), expected_role: "agent", command: "supersede",
+        actor_agent_id: "agent-a", registered_agents: ["agent-a"], lifecycle_grants: [],
+        authority_reason: null, decision_outcome: null, operation_identity: {kind: "explicit", operation_id: "retire-turn"},
+        lease_idempotency_key: null, lease_expected_version: null, allow_user_gate_auto_acquire: false,
+        requested_no_followup: false, requested_completion_turn_key: "original-turn",
+        requested_completion_identity_source: "turn_settlement", linked_successor_todo_ids: [String(successor.todo_id)],
+        successor_intents: [], note: "superseded", evidence: null, reason: "Owner requirement changed",
+        clear_claim: false, validation_declaration: null, validation_receipt: null, completion_policy_request: null,
+        dry_run: false, now: new Date("2026-09-05T23:00:00Z"),
+      };
+      const priorSuccessor = ((await loaded(store)).head.todos as JsonObject[]).find(t => t.todo_id === successor.todo_id);
+      const retired = await execute(store, request);
+      assert.equal(retired.changed, true, JSON.stringify(retired));
+      assert.equal(retired.completion_identity_key, "original-turn");
+      assert.equal(retired.validation_receipt, null);
+      assert.equal(retired.completion_receipt_id, null);
+      assert.equal(retired.completion_policy, null);
+      const after = await loaded(store);
+      const row = (after.head.todos as JsonObject[]).find(t => t.todo_id === task.todo_id)!;
+      assert.equal(row.status, "done");
+      assert.equal(row.completion_turn_key, "original-turn");
+      assert.equal(row.completion_continuation, "active_goal");
+      assert.equal(row.completion_result, undefined);
+      assert.deepEqual((after.head.todos as JsonObject[]).find(t => t.todo_id === successor.todo_id), priorSuccessor);
+      assert.equal((await execute(contender, request)).status, "replayed");
+      const foreign = await execute(store, {...request, operation_identity: {kind: "explicit", operation_id: "foreign-turn"},
+        requested_completion_turn_key: "foreign-turn"});
+      assert.equal(foreign.reason_code, "invalid_todo_completion_transaction");
+      const falseAcceptance = await execute(store, {...request, command: "complete",
+        operation_identity: {kind: "explicit", operation_id: "false-acceptance"}});
+      assert.equal(falseAcceptance.reason_code, "invalid_todo_completion_transaction");
+      assert.deepEqual(await loaded(store), after);
+    });
     test(`${provider}: supersede links existing work and retires its original lease atomically (${schema})`, async t => {
       const {store, contender} = await factory(t);
       const goal = "terminal-existing-successor";

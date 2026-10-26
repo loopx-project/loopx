@@ -774,7 +774,10 @@ def handle_todo_command(
                     goal_ref=goal_ref,
                 ) if args.turn_instance_id else None
             )
+            retirement_identity = supersede_readback.identity.value if supersede_readback is not None else None
             payload = supersede_goal_todo(
+                completion_turn_key=retirement_identity.effect_id if retirement_identity is not None else None,
+                completion_identity_source="turn_settlement" if retirement_identity is not None else None,
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id,

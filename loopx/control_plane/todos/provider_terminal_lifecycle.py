@@ -121,10 +121,8 @@ def route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any]
         completion_result_file=call.get("completion_result_file") if complete else None,
         note=call.get("note") if complete else "superseded",
         reason=None if complete else call.get("reason"),
-        completion_turn_key=call.get("completion_turn_key") if complete else None,
-        completion_identity_source=(
-            call.get("completion_identity_source") if complete else None
-        ),
+        completion_turn_key=call.get("completion_turn_key"),
+        completion_identity_source=call.get("completion_identity_source"),
         review_basis=call.get("terminal_review_basis"),
         expected_todo_text_sha256=call.get("expected_todo_text_sha256"),
         require_captured_todo_text=call.get("require_captured_todo_text") is True,

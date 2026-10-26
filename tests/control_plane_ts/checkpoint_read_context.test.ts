@@ -43,6 +43,8 @@ test("managed result replay cannot submit a different candidate, successor or cl
     {next_excluded_agents: ["other"]}, {no_followup: true}, {role: "user"}, {clear_claim: true}]) {
     assert.equal(replay({...candidate, ...changed}), null);
   }
+  assert.equal(work({phase: "completion_identity", goal_id: "goal", agent_id: "agent",
+    todo_id: "todo_original", todo: {...todo, completion_receipt_id: null}, identity: scoped, candidate}).replay, null);
 });
 const facts = {
   todos: [
