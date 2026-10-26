@@ -3,14 +3,15 @@ import {CircleHelp, TriangleAlert} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import {useMemo, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
-import {searchResearchRecords} from "./research-record-search";
+import {searchResearchRecords, type ResearchRecordDisplay} from "./research-record-search";
 import {exportResearchRecords} from "./research-record-export";
 import {downloadReport} from "./report-download";
 
 /** Local read controls over the existing validated history snapshot. */
-export function ResearchRecordSearch({goalId, events, displayEvents, renderBody, complete, stale, busy, zh, stateLabel, timeLabel}: {
+export function ResearchRecordSearch({goalId, events, displayEvents, displaySections, renderBody, complete, stale, busy, zh, stateLabel, timeLabel}: {
   goalId: string;
   displayEvents?: readonly ExploreHistoryEvent[]; renderBody?: (event: ExploreHistoryEvent) => ReactNode;
+  displaySections?: ResearchRecordDisplay["sections"];
   events: readonly ExploreHistoryEvent[]; complete: boolean; stale: boolean; busy: boolean; zh: boolean;
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
 }) {
@@ -18,8 +19,9 @@ export function ResearchRecordSearch({goalId, events, displayEvents, renderBody,
   const [status, setStatus] = useState("");
   const [limit, setLimit] = useState(50);
   const [downloadFailed, setDownloadFailed] = useState(false);
-  const matches = useMemo(() => searchResearchRecords(events, query, status), [events, query, status]);
   const displayed = useMemo(() => new Map(displayEvents?.map(event => [event.event_id, event])), [displayEvents]);
+  const display = useMemo(() => ({events: displayed, sections: displaySections}), [displayed, displaySections]);
+  const matches = useMemo(() => searchResearchRecords(events, query, status, display), [events, query, status, display]);
   const statuses = [...new Set(events.map(event => event.status).filter(Boolean))].sort();
   const countLabel = zh ? `匹配 ${matches.length} / ${events.length} 条已读记录` : `${matches.length} matches in ${events.length} loaded records`;
   const readState = busy ? (zh ? "读取中" : "Reading") : stale ? (zh ? "刷新失败" : "Refresh failed") : "";
@@ -27,7 +29,7 @@ export function ResearchRecordSearch({goalId, events, displayEvents, renderBody,
   return <div className="research-record-search">
     <div className="research-record-filters">
       <input type="search" aria-label={zh ? "搜索研究记录" : "Search research records"}
-        placeholder={zh ? "原文、来源引用或 ID" : "Original text, source reference or ID"} value={query}
+        placeholder={zh ? "正文、来源引用或 ID" : "Text, source reference or ID"} value={query}
         onChange={event => {setQuery(event.target.value); setLimit(50);}}/>
       <select aria-label={zh ? "记录状态" : "Recorded status"} value={status}
         onChange={event => {setStatus(event.target.value); setLimit(50);}}>
@@ -38,7 +40,7 @@ export function ResearchRecordSearch({goalId, events, displayEvents, renderBody,
       <button type="button" disabled={busy || !matches.length} onClick={() => {
         setDownloadFailed(false);
         try {
-          const text = exportResearchRecords({goalId, events, query, status, complete, stale, exportedAt: new Date().toISOString()});
+          const text = exportResearchRecords({goalId, events, query, status, complete, stale, display, exportedAt: new Date().toISOString()});
           downloadReport(`research-${goalId}.json`, "", text);
         } catch {setDownloadFailed(true);}
       }}>{zh ? "下载匹配记录（JSON）" : "Download matches (JSON)"}</button>

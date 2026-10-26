@@ -40,3 +40,13 @@ test("rejects a mismatched Goal even when its records would be filtered out", ()
   assert.throws(() => snapshot([record({goal_id: "other"})], {query: "no match"}), /Goal mismatch/);
   assert.throws(() => snapshot([], {goalId: ""}), /Goal mismatch/);
 });
+
+test("a displayed-language match exports exactly the source revision and preserves coverage", () => {
+  const original = Object.freeze(record({title: "Negative evidence", summary: "Unknown complete cost", status: "refuted"}));
+  const display = {events: new Map([[original.event_id, {...original, title: "负向证据", summary: "完整成本未知"}]])};
+  const result = snapshot([original], {query: "完整成本未知", status: "refuted", display, complete: false, stale: true});
+  assert.deepEqual(result.records, [original]);
+  assert.deepEqual(result.filters, {query: "完整成本未知", status: "refuted"});
+  assert.deepEqual(result.coverage, {loaded_records: 1, exported_records: 1, history_complete: false, refresh_failed: true});
+  assert.doesNotMatch(JSON.stringify(result.records), /负向证据|完整成本未知/);
+});
