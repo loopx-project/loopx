@@ -268,6 +268,9 @@ profile targets Codex 0.162.1 paginated rollouts; missing, changed,
 oversized (over 64 MiB) or unqualified sources fall back to full. It retains the
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
+Opted-in benchmark native children create owner-only files automatically; the
+parent process and off-mode file creation policy stay unchanged. Group-writable
+existing replay sources cannot establish cross-process continuity.
 A new independent decision uses its normal guarded
 context command and reads the resulting current full capture; it need not first
 read an older capture to seed a delta. Continuing a captured decision after context
@@ -423,6 +426,8 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 中间没有压缩、回滚、替换或未知重放记录。此有界 IO profile 面向 Codex 0.162.1 的分页
 rollout；来源缺失、变化、超过 64 MiB 或无法资格化时回退全量。仍采用正常读取后的
 工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。
+开启后的 benchmark 原生子进程自动以仅所有者可访问的权限创建文件，父进程与关闭态
+保持原权限策略；既有可组写的重放来源不能建立跨进程连续性。
 新的独立决定走正常准入与上下文命令，完整读取其返回的当前全量捕获；不必为了建立差分
 基线而先读旧捕获。若丢失上下文后继续某个已捕获决定的依赖工作，仍须完整恢复那份精确
 原捕获，不能用新 guard 替代。两条路径都只在完整且已校验的全量读取后建立新差分链。

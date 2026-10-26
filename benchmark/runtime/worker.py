@@ -150,6 +150,9 @@ def child_process(command: list[str], *, env: dict[str, str], stdout, stderr,
                 stderr=stderr,
                 text=True,
                 start_new_session=True,
+                # Opted-in replay checkpoints require owner-only native writes.
+                # This affects the isolated child, never the parent or off mode.
+                umask=0o077 if os.name == "posix" and env.get("LOOPX_CONTEXT_DELIVERY") == "on" else -1,
             )
         yield process
     finally:

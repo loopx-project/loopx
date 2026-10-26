@@ -1134,6 +1134,24 @@ def test_context_transport_off_never_installs_or_trusts_ambient_args(tmp_path, m
     assert not (Path(env["LOOPX_CODEX_HOME"]) / "hooks.json").exists()
 
 
+@pytest.mark.parametrize("setting,mode", [("off", 0o664), ("on", 0o600)])
+@pytest.mark.skipif(os.name != "posix", reason="Native POSIX file creation permissions")
+def test_context_native_writer_is_private_without_changing_off_umask(tmp_path, setting, mode):
+    from benchmark.runtime import worker
+
+    original = os.umask(0o002)
+    try:
+        command = [sys.executable, "-c", "from pathlib import Path; Path('native-history').write_bytes(b'fixture')"]
+        with worker.child_process(command, env={**os.environ, "LOOPX_PROJECT": str(tmp_path),
+                "LOOPX_CONTEXT_DELIVERY": setting}, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            child.communicate(timeout=10)
+            assert child.returncode == 0
+        assert (tmp_path / "native-history").stat().st_mode & 0o777 == mode
+        assert os.umask(0o002) == 0o002
+    finally:
+        os.umask(original)
+
+
 def test_context_selection_is_fixed_by_trial_home(tmp_path):
     args = settings(tmp_path, execution=Execution(mode="heartbeat", context_delivery="on"))
     prepare_codex_home(**args)

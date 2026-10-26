@@ -18,6 +18,7 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False):
     history = root / "rollout.jsonl"
     append(history, "session_meta", {"id": "session", "cwd": str(root),
         "cli_version": "0.162.1", "history_mode": "paginated"})
+    history.chmod(0o600)
     event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions")
     append(history, "turn_context", {"cwd": str(root), "model": "fixture"})
     payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1000},
@@ -51,7 +52,7 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
 
 
 @pytest.mark.parametrize("change", ["compact", "rollback", "retained", "unknown", "truncate",
-    "replace", "rewrite", "missing", "output", "duplicate", "model", "workspace", "session", "permission"])
+    "replace", "rewrite", "missing", "output", "duplicate", "model", "workspace", "session", "permission", "writable"])
 def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, monkeypatch, change):
     event, history, payload = observed_read(tmp_path, monkeypatch)
     before = context._state(tmp_path)
@@ -64,11 +65,14 @@ def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, 
     elif change == "replace":
         replacement = tmp_path / "replacement.jsonl"
         replacement.write_bytes(history.read_bytes())
+        replacement.chmod(0o600)
         replacement.replace(history)
     elif change == "rewrite":
         history.write_bytes(history.read_bytes().replace(b"Keep original", b"Drop original"))
     elif change == "missing":
         history.unlink()
+    elif change == "writable":
+        history.chmod(0o664)
     elif change in {"output", "duplicate"}:
         rows = [json.loads(line) for line in history.read_text().splitlines()]
         if change == "output":
