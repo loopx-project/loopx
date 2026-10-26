@@ -196,6 +196,18 @@ operation. Monitoring requires the separate explicit setting below.
 
 ### Native status monitoring
 
+If the host restarts before a native watch observes anything, the original
+idle pump can create one separately correlated Chat continuation. It preserves
+the failed request and uses the same native observation identity and deadline.
+The shared typed admission requires an untouched observation-only request, an
+available original worker lock, complete event/history reads and no pending or
+committed native poll receipt. It rechecks current authority, lease generation
+and user work; it never starts a model, repeats business or spends execution
+quota. Unknown effects, unreadable history, an active old worker, revoked or
+paused watches and another failed continuation remain held for reconciliation.
+This bounded recovery applies to both local managed Sessions and the prepared
+steward through the existing host, without another scheduler or consumer.
+
 After preparation, choose **Enable monitoring** in the same connection panel.
 The native continuous-monitor Todo owns enable/pause, the 30–1440 minute cadence,
 last observation, result hash and next deadline. The panel's single gesture

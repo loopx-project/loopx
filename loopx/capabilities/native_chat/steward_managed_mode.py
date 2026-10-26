@@ -286,6 +286,7 @@ class ManagedSessionTurn:
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
             **StewardTurnHost(self.controller).report_quota_basis(request),
+            **StewardTurnHost(self.controller).monitor_restart_basis(request),
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
@@ -365,6 +366,14 @@ class ManagedSessionTurn:
                         client_id += ".quota-recovery"
                         existing = None
                 selection_recovery = host.report_selection_recovery(existing) if existing is not None and report_window is not None else None
+                restart_request = host.monitor_restart_request(existing) if existing is not None and monitor_deadline is not None else None
+                if restart_request is not None:
+                    client_id += ".restart-recovery"
+                    continued = self.store.turn_for_client(session_id, client_id)
+                    if continued is not None:
+                        return continued, False
+                    request, existing = restart_request, None
+                    request["monitor_lease_version"] = retained["version"] if retained else 0
             if existing is not None:
                 if selection_recovery is None:
                     return existing, False  # Failed/unknown work is never replayed.

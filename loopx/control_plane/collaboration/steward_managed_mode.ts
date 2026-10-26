@@ -13,6 +13,38 @@ import {goalAgentConversationIdentity, resolveConversationScope} from "./convers
 import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
 
+/** A stopped observation may get one new Chat carrier, never a new native
+ * observation identity. The host independently reads the old worker lock,
+ * complete journals and native poll receipts; normal admission still checks
+ * current ownership, deadline, permissions and user work on every reentry. */
+function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, session: JsonObject): void {
+  if (request.monitor_restart_recovery === undefined) {
+    if (params.monitor_restart_basis != null) throw new EffectRuntimeRequestError("watch recovery lacks its original request");
+    return;
+  }
+  const recovery = requireJsonObject(request.monitor_restart_recovery, "original watch continuation");
+  const basis = requireJsonObject(params.monitor_restart_basis, "original watch observation");
+  const original = requireJsonObject(basis.original, "original stopped watch");
+  const prior = requireJsonObject(original.loopx_request, "original watch request");
+  const keys = Object.keys(request).filter(key => key !== "monitor_restart_recovery");
+  const events = basis.event_kinds;
+  if (Object.keys(recovery).join() !== "original_turn_id"
+      || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
+      || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
+      || original.status !== "failed" || original.error_code !== "server_restarted"
+      || original.origin !== "native_loopx" || original.loopx_execution !== true
+      || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
+      || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
+      || prior.monitor_restart_recovery !== undefined || basis.old_worker_excluded !== true
+      || basis.poll_absent !== true || basis.lease_available !== true || !Array.isArray(events) || !events.includes("turn.failed")
+      || events.some(kind => !["turn.queued", "agent.phase", "manager.context", "turn.failed"].includes(String(kind)))
+      || Object.keys(prior).length !== keys.length
+      || keys.some(key => key !== "monitor_lease_version" && JSON.stringify(request[key]) !== JSON.stringify(prior[key]))
+      || Number(params.queued_turn_count) !== 0) {
+    throw new EffectRuntimeRequestError("watch restart requires independent proof before any native observation");
+  }
+}
+
 /** One new report Turn after a provider-proven untouched quota refusal.
  * This does not reopen the original Chat/kernel Turn or relax its recovery.
  * Native metadata and usable allowance are host observations, never model input.
@@ -208,7 +240,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
   const reportWork = request.work_kind === "report";
   const scheduledWork = request.work_kind === "scheduled_task";
   const requestFields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
-    ...(observationOnly ? ["monitor_deadline", "monitor_lease_version"] : []),
+    ...(observationOnly ? ["monitor_deadline", "monitor_lease_version", "monitor_restart_recovery"] : []),
     ...(reportWork ? ["report_window_id", "report_subscription_revision", "report_quota_recovery"] : []),
     ...(scheduledWork ? ["schedule_window_id", "schedule_subscription_revision"] : [])];
   if (Object.keys(request).some(key => !requestFields.includes(key))
@@ -229,6 +261,7 @@ export function admitManagedSessionTurn(params: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("a local watch must retain its original Agent, Session, Todo and deadline");
     }
   }
+  admitMonitorRestartRecovery(params, request, session);
   if (reportWork) {
     const window = requireJsonObject(params.report_window, "original report window");
     const subscription = requireJsonObject(params.report_subscription, "current report subscription");
@@ -396,7 +429,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   }
   const request = requireJsonObject(params.request, "native steward Turn request");
   const fields = ["operation", "host", "actor", "turn_instance_id", "todo_id", "validation_command", "work_kind",
-    "monitor_deadline", "monitor_lease_version", "report_window_id", "report_subscription_revision", "resume_turn_key", "report_quota_recovery"];
+    "monitor_deadline", "monitor_lease_version", "monitor_restart_recovery", "report_window_id", "report_subscription_revision", "resume_turn_key", "report_quota_recovery"];
   if (Object.keys(request).some(key => !fields.includes(key))
       || request.operation !== "native_turn" || request.host !== "codex-app-server"
       || ![undefined, "native_turn", "monitor", "report"].includes(request.work_kind as string | undefined)
@@ -412,6 +445,7 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   }
   admitReportSelectionRecovery(params, request, current.sessionId);
   admitReportQuotaRecovery(params, request, current.session);
+  admitMonitorRestartRecovery(params, request, current.session);
   if (turn && (turn.session_id !== current.sessionId || turn.turn_id !== current.session.active_turn_id
       || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
       || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request))) {
