@@ -483,7 +483,10 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 inherit_machine=bool(machine_runtime))
             payload = {"ok": True, "context_delivery": activation, "native_config": config,
                 "activation": "Merge hooks and append developer_instructions to the existing native configuration; "
-                    "review and trust only these exact hooks in Codex. Restart/resume with the resulting configuration. "
+                    "review and trust only these exact hooks in Codex. "
+                    "Existing loaded threads may retain their original hook configuration; enabled/trusted "
+                    "discovery is not session initialization or live adoption. Start/resume through the host "
+                    "with the resulting configuration after active work reaches its normal safe boundary. "
                     + ("Machine defaults are re-read on each invocation; generated hooks inherit the same machine runtime. "
                        "Omit per-command activation and location flags to retain that inheritance. " if machine_runtime else
                        "Pass --context-delivery on with the same declared host mode, context location and a decision-output-root to heartbeat-prompt/should-run. ")

@@ -267,7 +267,13 @@ with `--runtime-profile codex_app_ssh_goal` in setup and the thin/bootstrap prom
 Its generated guard keeps the native Goal identity and visible-Goal settlement;
 it does not become a hosted heartbeat. It does not install or trust hooks,
 change host configuration or restart the running App. Configure and trust its
-exact hooks for the next native session. The native path preserves authentication,
+exact hooks for the next native session. Existing loaded threads may retain
+their earlier hook configuration despite enabled/trusted `hooks/list` readback;
+discovery does not deliver `SessionStart` or initialize a context journal. Use
+the host's start/resume path after active work reaches its normal safe boundary,
+then verify lifecycle delivery. Keep full delivery and the original capture
+until then; do not fabricate events, borrow another session's journal or restart
+an active host to manufacture adoption. The native path preserves authentication,
 endpoints, provider selection and connection mode, including implicit history via
 `previous_response_id`. It neither enables input diagnostics nor scans model-input
 history. Benchmark preparation stages those same hooks in its isolated trial home.
@@ -453,7 +459,11 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 在失效事件发生前仍可用；这不是实际输入保留证明或模型 ACK。共享 codec 仍校验精确基线
 摘要、作用域、本轮控制与完整重建。显式 final-input Host 客户端保留独立的确认输入契约。
 
-为下次原生会话配置并信任精确 hooks，不重启当前 App。原生路径保留认证、端点、provider
+为下次原生会话配置并信任精确 hooks，不重启当前 App。已加载线程可能继续沿用旧 hook
+配置；`hooks/list` 的 enabled/trusted 读回不等于向该线程交付 `SessionStart` 或初始化
+context journal。当前工作到达正常安全边界后，沿宿主正常启动／恢复入口加载配置，再
+核验实际生命周期交付。此前保持全量与原捕获，不伪造事件、借用其他会话 journal 或为
+制造采用样本重启活动宿主。原生路径保留认证、端点、provider
 和连接方式，包括带 `previous_response_id` 的隐式历史；不启用输入诊断，也不逐轮扫描
 模型完整输入。Benchmark 在各自隔离的 trial home 内自动准备同一组 hooks。
 

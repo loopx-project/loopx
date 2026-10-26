@@ -78,7 +78,7 @@ def _input_text(request):
 
 
 def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only", resume=None,
-                turn_timeout_sec=30):
+                turn_timeout_sec=30, before_turn=None):
     with (home / "stderr.txt").open("w") as stderr, StdioNativeGoalTransport.spawn(
         [binary, "app-server", "--listen", "stdio://"], cwd=str(workspace), env=env,
         stderr=stderr, response_timeout_sec=20,
@@ -102,6 +102,8 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None, 
         if resume:
             params["threadId"] = resume
         source = native.request("thread/resume" if resume else "thread/start", params)["thread"]["id"]
+        if before_turn is not None:
+            before_turn(native)
         turn_params = {"threadId": source,
             "input": [{"type": "text", "text": "Synthetic context-delivery fixture."}]}
         if additional_context is not None:
@@ -142,6 +144,76 @@ def _configure_provider(home, url):
         'responses_websockets_v2=false\n'
         f'[model_providers.fixture]\nname="Synthetic local"\nbase_url="{url}"\n'
         'wire_api="responses"\nrequires_openai_auth=false\n')
+
+
+@pytest.mark.parametrize("source", ["inline", "file"])
+def test_native_late_hook_discovery_does_not_deliver_session_context(tmp_path, source):
+    """Discovery/trust after start is not SessionStart delivery to that thread.
+
+    A real process resume is the positive control. Do not freeze whether future
+    hosts hot-load tool hooks; only actual lifecycle delivery qualifies context.
+    """
+    binary, env, workspace, home = _native_fixture(tmp_path)
+    marker = "Synthetic late-config requirement: stop before publishing."
+    hook = home / "late-hook.py"
+    hook.write_text(
+        "import json,pathlib,sys\nevent=json.load(sys.stdin)\n"
+        "with pathlib.Path(__file__).with_name('events.jsonl').open('a') as f:\n"
+        "    f.write(json.dumps({'event':event['hook_event_name'],'source':event.get('source')})+'\\n')\n"
+        "print(json.dumps({'hookSpecificOutput':{'hookEventName':'SessionStart',"
+        f"'additionalContext':{marker!r}"
+        "}}) if event['hook_event_name']=='SessionStart' else '{}')\n")
+
+    def events():
+        path = home / "events.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def configure_after_start(native):
+        command = shlex.join([sys.executable, str(hook)])
+        if source == "inline":
+            with (home / "config.toml").open("a") as config:
+                for name in ("SessionStart", "PostToolUse"):
+                    config.write(f"\n[[hooks.{name}]]\n[[hooks.{name}.hooks]]\n"
+                                 f"type=\"command\"\ncommand={json.dumps(command)}\ntimeout=10\n")
+        else:
+            handler = {"type": "command", "command": command, "timeout": 10}
+            (home / "hooks.json").write_text(json.dumps({"hooks": {
+                name: [{"hooks": [handler]}] for name in ("SessionStart", "PostToolUse")}}))
+        listed = native.request("hooks/list", {"cwds": [str(workspace)]})
+        handlers = [handler for entry in listed["data"] for handler in entry["hooks"]]
+        assert len(handlers) == 2
+        expected_path = home / ("config.toml" if source == "inline" else "hooks.json")
+        assert all(handler["sourcePath"] == str(expected_path.resolve()) for handler in handlers)
+        with (home / "config.toml").open("a") as config:
+            for handler in handlers:
+                config.write(f"\n[hooks.state.{json.dumps(handler['key'])}]\n"
+                             f"trusted_hash={json.dumps(handler['currentHash'])}\n")
+        trusted = native.request("hooks/list", {"cwds": [str(workspace)]})
+        assert all(handler["enabled"] and handler["trustStatus"] == "trusted"
+                   for entry in trusted["data"] for handler in entry["hooks"])
+
+    def response(request, number, message):
+        if number % 2:
+            return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
+                    "name": "exec_command", "arguments": json.dumps({
+                        "cmd": "printf synthetic-late-hook-result", "max_output_tokens": 100})}
+        return message
+
+    with local_inference_provider(response) as (url, calls, requests):
+        _configure_provider(home, url)
+        config = home / "config.toml"
+        config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode_host=true\n"))
+        thread = _app_server(binary, env, workspace, home, False, before_turn=configure_after_start)
+        assert len(calls) == 2
+        assert all(marker not in _input_text(request) for request in requests)
+        assert not any(event["event"] == "SessionStart" for event in events())
+        configured = config.read_bytes()
+        assert _app_server(binary, env, workspace, home, False, resume=thread) == thread
+    assert len(calls) == 4
+    assert all(marker in _input_text(request) for request in requests[2:])
+    assert {"event": "SessionStart", "source": "resume"} in events()
+    assert any(event["event"] == "PostToolUse" for event in events())
+    assert config.read_bytes() == configured
 
 
 @pytest.mark.parametrize("host", ["exec", "app_server"])

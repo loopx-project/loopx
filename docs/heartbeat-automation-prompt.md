@@ -472,6 +472,14 @@ The result contains `native_config.hooks` and
 its existing developer instructions. Preserve other configuration. Review and
 trust only these exact hooks through Codex's native hook trust surface; the CLI
 does not install files, approve hashes, enable diagnostics or run a guard.
+An already loaded native thread may keep its earlier hook configuration even
+when `hooks/list` discovers the new handlers as enabled and trusted. That readback
+does not deliver `SessionStart` or initialize its context journal. After active
+work reaches its normal safe boundary, use the host's start/resume path with the
+resulting configuration and verify actual lifecycle delivery before qualifying
+live use. Do not restart an active host merely to manufacture a sample. Until
+then, preserve full delivery and the original capture; do not fabricate events
+or borrow another session's journal.
 Use one configuration for the declared Goal/Agent. A shared private root keeps
 different native sessions in separate journals, including interleaved sessions.
 For an interactive SSH Goal, use `--runtime-profile codex_app_ssh_goal` in place
