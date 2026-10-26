@@ -160,6 +160,53 @@ def test_owner_return_does_not_create_source_policy(flow, project):
     assert not list(_root(root).glob("policy*"))
 
 
+def test_cli_legacy_explicit_original_revision_returns_once(flow, capsys):
+    from loopx.cli import main
+
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked the original request")
+    text = "Checked the original request and completed its existing work."
+    argv = ["--registry", str(registry), "--runtime-root", str(root), "--format", "json",
+            "manager-inbox", "report", "--goal-id", "research", "--agent-id", "worker",
+            "--request-id", rid, "--reply-text", text]
+    assert main([*argv, "--request-revision", "1"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "queued_for_original_conversation"
+    assert main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert drain(root, registry, store, None) == 1
+    assert drain(root, registry, ChatSessionStore(root), None) == 0
+    returned = [row for row in store.messages(session["session_id"])
+                if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert returned[0]["text"].split("\n\n", 1)[1] == text
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert not list(_root(root).glob("policy*"))
+    entry = next((_root(root) / "entries").glob("*/*.json"))
+    assert "request_control" not in json.loads(entry.read_text())
+
+
+def test_legacy_original_revision_does_not_repair_mismatched_initial_delivery(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    rid = receipt["request_id"]
+    store.update_turn(session["session_id"], turn["turn_id"], response={
+        "context_handoff_receipt": {**receipt, "agent_id": "another-worker"},
+    })
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "Checked the original request.",
+           registry=registry, request_revision=1)
+    calls = []
+    drain(root, registry, store, lambda *args: calls.append(args))
+    assert calls == []
+    assert not any(row.get("origin") == "manager_followup"
+                   for row in store.messages(session["session_id"]))
+    assert reply_status(root, receipt)[0]["status"] != "delivered"
+    assert store.load_turn(session["session_id"], turn["turn_id"])["response"][
+        "context_handoff_receipt"]["agent_id"] == "another-worker"
+
+
 @pytest.mark.parametrize("audience", ["local_owner", "bound_owner"])
 @pytest.mark.parametrize("drift", ["channel", "goal", "context", "context_missing", "context_null"])
 def test_recovered_project_identity_cannot_publish_as_a_manager(flow, audience, drift):

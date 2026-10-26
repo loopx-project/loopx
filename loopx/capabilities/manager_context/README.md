@@ -605,6 +605,13 @@ evidence records; requested detail and material gaps remain in the answer.
 This is authoring guidance, not a summary service or a delivery-time rewrite,
 and does not certify the quality of a receiver's result.
 
+For a legacy v1 request, `manager-inbox report --request-revision 1` is equivalent
+to omitting the revision. It publishes the receiver's original result without
+creating request-control state or granting correction authority; other explicit
+revisions are rejected. An `--update-id` still requires an initial conclusion.
+This compatibility does not replay an earlier failed command or relax original
+delivery proof, audience, immutable-result or unknown-effect checks.
+
 For longer work, `--phase decision` optionally returns a meaningful intermediate
 update. A ready conclusion supersedes an unsent intermediate update. Do not send
 one notification per poll, quote private deliberation, or claim an implementation
