@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 import urllib.parse
 
-from .native_processes import codex_home
+from .native_processes import codex_home, lima_pidfile, responsible_pid
 
 
 class HostError(Exception):
@@ -425,6 +425,70 @@ class NativeHost:
             agents.append((label, plist, service_pid, service, helpers))
         return agents
 
+    def _lima_instance(self, pid: int, executable: str) -> dict | None:
+        """Corroborate hostagent ownership with its original manager, read-only."""
+        try:
+            binary = trusted_file(Path(executable))
+            installed = shutil.which("limactl")
+            if installed is None or binary != trusted_file(Path(installed)):
+                return None  # A matching basename is not an executable allowlist.
+            pidfile_value = lima_pidfile(pid)
+            if pidfile_value is None:
+                return None
+            pidfile = Path(pidfile_value)
+            # Only the user's normal Lima/Colima catalogs. A private argv path
+            # must not authorize arbitrary file reads or a different catalog.
+            catalogs = {(self.home / ".lima").resolve(), (self.home / ".colima/_lima").resolve()}
+            if (pidfile.name != "ha.pid" or pidfile.parent.parent not in catalogs
+                    or pidfile.resolve() != pidfile):
+                return None
+            raw = trusted_file(pidfile).read_bytes()
+            if len(raw) > 32 or raw.strip() != str(pid).encode():
+                return None
+            result = subprocess.run([str(binary), "list", "--format", "json"],
+                                    env={**os.environ, "LIMA_HOME": str(pidfile.parent.parent)},
+                                    capture_output=True, text=True, timeout=5)
+            if result.returncode or len(result.stdout) > 1048576:
+                return None
+            instances = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+            matches = [value for value in instances if isinstance(value, dict)
+                       and value.get("dir") == str(pidfile.parent)
+                       and type(value.get("hostAgentPID")) is int and value["hostAgentPID"] == pid]
+            if len(matches) != 1 or trusted_file(pidfile).read_bytes() != raw:
+                return None
+            value = matches[0]
+            name = value.get("name")
+            if (not isinstance(name, str) or name != pidfile.parent.name
+                    or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name) is None
+                    or value.get("status") != "Running"):
+                return None
+            return {"instance": name, "status": "Running"}
+        except (HostError, OSError, ValueError, subprocess.SubprocessError):
+            return None  # Missing corroboration does not invent a restart owner.
+
+    def _external_manager(self, pid: int) -> dict:
+        """Explain an unmanaged holder without granting new shutdown authority."""
+        holder = self._owner_identities[pid]
+        if process_identity(pid) != holder:
+            raise HostError("client_changed")
+        manager_pid = responsible_pid(pid)
+        manager = process_identity(manager_pid) if manager_pid else None
+        result = {"restart_blocker": "manager_unverified"}
+        if manager is not None:
+            provenance = {"pid": manager_pid, "process": Path(manager[1]).name}
+            if Path(manager[1]).name == "limactl":
+                instance = self._lima_instance(manager_pid, manager[1])
+                if instance:
+                    provenance.update(instance)
+            # Neither an inherited App coalition name nor this relationship
+            # proves guest idleness, recoverability or authority over its jobs.
+            result = {"manager": provenance, "restart_blocker": "external_workload_unverified"}
+            if process_identity(manager_pid) != manager or responsible_pid(pid) != manager_pid:
+                raise HostError("client_changed")
+        if process_identity(pid) != holder:
+            raise HostError("client_changed")
+        return result
+
     def clients(self) -> dict:
         if sys.platform != "darwin":
             raise HostError("platform_unavailable")
@@ -436,7 +500,8 @@ class NativeHost:
             {"pid": p, "kind": "app" if p in app else "service" if p in services else "unmanaged",
              "process": Path(self._owner_identities[p][1]).name,
              "restartable": p in app or p in services,
-             **({"service": services[p]} if p in services else {})} for p in owners]}
+             **({"service": services[p]} if p in services else {}),
+             **(self._external_manager(p) if p not in app and p not in services else {})} for p in owners]}
 
     def _chat_recovery(self) -> tuple[Path, dict]:
         from .native import SCHEMA, private_read
