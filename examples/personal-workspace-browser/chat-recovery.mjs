@@ -14,6 +14,19 @@ export const chatRecoveryScenario = {
     const pass = (criterion, note) => notes.push(`${criterion}: ${note}`);
     const fail = (criterion, note) => failures.push(`${criterion}: ${note}`);
     try {
+      // Suggestions belong to an empty composer; exercise the global shortcut
+      // independently from the conversation that this scenario later resumes.
+      const shortcut = await openWorkspacePage(browser, url, { collectCoverage });
+      try {
+        await shortcut.page.locator(".personal-composer-tools > summary").click();
+        await shortcut.page.getByRole("button", { name: "询问全局待办", exact: true }).click();
+        await shortcut.page.locator(".personal-message-pending").waitFor({ state: "hidden" });
+        if (!shortcut.api.turnRequests.some((turn) => turn.message.includes("有哪些 Goal 正在等我"))) {
+          throw new Error("Global priorities shortcut did not send its question to the manager");
+        }
+      } finally {
+        context.coverageEntries.push(...await shortcut.close());
+      }
       if (await page.locator(".personal-manager-conversation-tray").count()) {
         throw new Error("Historical manager messages kept a conversation receipt permanently visible before a new send");
       }
@@ -41,10 +54,7 @@ export const chatRecoveryScenario = {
       await page.locator(".personal-manager-conversation-tray").waitFor({ state: "visible" });
       if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("Manager send replaced the home lane overview");
       const managerUrlBefore = page.url();
-      await page.locator(".personal-composer-tools > summary").click();
-      await page.getByRole("button", { name: "询问全局待办", exact: true }).click();
       // This is a fresh question, not an instruction to the shortcut's active Turn.
-      await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
       await page.getByLabel("向 LoopX 发送消息").fill("我现在该做什么？只读回答，不要创建或修改任何状态。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
       await page.getByText("管家已读取当前授权范围的 Goal 证据。", { exact: true }).waitFor({ state: "visible" });
