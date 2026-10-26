@@ -49,6 +49,8 @@ def main():
     parser.add_argument("--assets-dir", type=Path, help="Frozen packaged UI for before/after inspection.")
     parser.add_argument("--fixture", type=Path, action="append",
         help="Captured-event wrapper; repeat for independently selectable Goals.")
+    parser.add_argument("--workspace-directory", action="store_true",
+        help="Serve the production directory for scoped Goal navigation tests.")
     args = parser.parse_args()
     fixtures = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures"
     sources = args.fixture or [fixtures / name for name in (
@@ -128,7 +130,7 @@ def main():
             def do_GET(self):
                 parsed = urlparse(self.path)
                 path = parsed.path
-                if path == "/status.json" and parse_qs(parsed.query).get("view") == ["workspace-directory"]:
+                if not args.workspace_directory and path == "/status.json" and parse_qs(parsed.query).get("view") == ["workspace-directory"]:
                     # Like the runtime workspace reader, use the full-status
                     # fallback: directory-only hydration omits source identity.
                     return self._send_error("Use the captured source's full status read.", status=404)
