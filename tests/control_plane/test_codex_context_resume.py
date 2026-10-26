@@ -52,7 +52,7 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
 
 
 @pytest.mark.parametrize("change", ["compact", "rollback", "retained", "unknown", "truncate",
-    "replace", "rewrite", "missing", "output", "duplicate", "model", "workspace", "session", "permission", "writable"])
+    "replace", "rewrite", "missing", "output", "duplicate", "model", "workspace", "session", "permission", "writable", "malformed"])
 def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, monkeypatch, change):
     event, history, payload = observed_read(tmp_path, monkeypatch)
     before = context._state(tmp_path)
@@ -73,6 +73,8 @@ def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, 
         history.unlink()
     elif change == "writable":
         history.chmod(0o664)
+    elif change == "malformed":
+        context._save(tmp_path, {**before, "candidate": "corrupt"})
     elif change in {"output", "duplicate"}:
         rows = [json.loads(line) for line in history.read_text().splitlines()]
         if change == "output":

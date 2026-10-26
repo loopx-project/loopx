@@ -112,6 +112,8 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], raw: bytes,
 def native_resume_verified(state: dict[str, Any], event: dict[str, Any]) -> bool:
     """Observe a qualified replay source; the shared TS owner decides reuse."""
     candidate = state.get("candidate") or {}
+    if not isinstance(candidate, dict):
+        return False
     anchor = candidate.get("native_resume")
     if (event.get("source") != "resume" or state.get("pending") or not isinstance(anchor, dict)
             or state.get("session_id") != event.get("session_id") or state.get("cwd") != event.get("cwd")):

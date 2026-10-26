@@ -573,7 +573,17 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
     current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
         capture_id=wires["warm"]["target"]["capture_id"], surface=surface)
-    restored = restore_context_delivery(wires["warm"], baseline=wires["cold"], current=current)
+    baseline = wires["cold"]
+    if resumed and host != "benchmark":
+        # This path independently reread every original byte after a reset.
+        # Bind those verified bytes to the new native epoch, rather than letting
+        # automatic full fallback conceal an obsolete pre-loss baseline.
+        assert current["target"]["context_epoch"] != baseline["target"]["context_epoch"]
+        baseline = prepare_context_delivery(baseline["context"], scope={
+            k: current["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
+            capture_id=baseline["target"]["capture_id"], surface=surface)
+        assert baseline["target"] == wires["warm"]["base"]
+    restored = restore_context_delivery(wires["warm"], baseline=baseline, current=current)
     assert restored["context"] == current["context"] and restored["mode"] == wires["warm"]["mode"]
     for document in (wires["cold"]["context"], current["context"]):
         context = (document["work_context"] if surface == "turn_envelope" else
