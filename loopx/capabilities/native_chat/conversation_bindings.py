@@ -763,7 +763,8 @@ class OriginalConversationRequests:
         for item in view["requests"]:
             results = []
             statuses = {row.get("result_key", row["phase"]): row["status"] for row in reply_status(self.root, item)}
-            turn = self.store.turn_for_client(session_id, "peer-" + item["request_id"])
+            queue = self._core("collaboration.project.continuation", {"entry": self._entry(item["request_id"], item["recipient"])})
+            turn = self.store.turn_for_client(session_id, queue["client_turn_id"])
             item["queue_status"] = turn.get("status") if turn else None
             for path in result_paths(_root(self.root) / "replies" / item["request_id"]):
                 reply = _read(path)
@@ -832,18 +833,34 @@ class OriginalConversationRequests:
                 view = self._view(row)
                 if view["control_state"] == "cancelled":
                     raise ValueError("original conversation request is cancelled")
-                prior_turn = self.store.turn_for_client(session_id, "peer-" + request_id)
-                turn, created = self.store.create_queued_turn(session_id, client_turn_id="peer-" + request_id,
-                    message=prior_turn["message"] if prior_turn else row["message"], origin="peer",
-                    collaboration_request={"request_id": request_id, "recipient": recipient})
+                turn, created = self._enqueue(row)
+        recovered = self._resume(session_id, turn, created)
+        return {"ok": True, "request_id": request_id, "recipient": recipient, "turn_id": turn["turn_id"],
+            "status": turn["status"], "replayed": not created, "goal_created": False, "recovered_result": recovered}
+
+    def _enqueue(self, row):
+        queue = self._core("collaboration.project.continuation", {"entry": row})
+        turn, created = self.store.create_queued_turn(row["recipient"]["session_id"],
+            client_turn_id=queue["client_turn_id"], message=queue["message"], origin="peer",
+            collaboration_request=queue["collaboration_request"])
+        return turn, created
+
+    def _stop_turns(self, session_id, client_ids):
+        stopped = None
+        for client_id in client_ids:
+            turn = self.store.turn_for_client(session_id, client_id)
+            if turn and turn["status"] not in TERMINAL_TURN_STATES:
+                stopped = self.controller.interrupt_turn(session_id=session_id, turn_id=turn["turn_id"])
+        return stopped
+
+    def _resume(self, session_id, turn, created):
         recovered = None
         if not created and turn.get("collaboration_answer") is not None:
             recovered = self._complete_answer(session_id, turn, turn["collaboration_answer"])["collaboration_result"]
         if turn["status"] not in TERMINAL_TURN_STATES:
             context = self.controller.project_contexts.session_context(self.store.load_session(session_id))
             self.controller.resume_session_queue(session_id=session_id, work_dir=Path(context["project"]), objective=str(context.get("objective") or context["title"]))
-        return {"ok": True, "request_id": request_id, "recipient": recipient, "turn_id": turn["turn_id"],
-            "status": turn["status"], "replayed": not created, "goal_created": False, "recovered_result": recovered}
+        return recovered
 
     def _entry(self, request_id, recipient):
         from ...control_plane.collaboration.inbox import _entry
@@ -902,11 +919,14 @@ class OriginalConversationRequests:
                     "recipient_active": operation == "revise", "observed_at": _now()}})
             if plan["changed"]:
                 _write(_root(self.root) / "entries" / _hash({"recipient": recipient}) / (row["request_id"] + ".json"), plan["entry"])
+            if operation == "revise":
+                turn, created = self._enqueue(plan["entry"])
         stop = None
-        if operation == "cancel":
-            turn = self.store.turn_for_client(recipient["session_id"], "peer-" + row["request_id"])
-            if turn and turn["status"] not in TERMINAL_TURN_STATES:
-                stop = self.controller.interrupt_turn(session_id=recipient["session_id"], turn_id=turn["turn_id"])
+        if operation == "revise":
+            self._resume(recipient["session_id"], turn, created)
+        elif operation == "cancel":
+            queue = self._core("collaboration.project.continuation", {"entry": plan["entry"]})
+            stop = self._stop_turns(recipient["session_id"], [*queue["superseded_client_turn_ids"], queue["client_turn_id"]])
         return {"ok": True, "request_control": plan["view"], "replayed": plan.get("replayed", False), "turn_stop": stop}
 
     def validate_turn(self, session_id, turn):
@@ -916,9 +936,9 @@ class OriginalConversationRequests:
         if turn.get("origin") != "peer" or not isinstance(reference, dict):
             raise ValueError("peer Turn provenance is unavailable")
         row = self._entry(reference["request_id"], reference["recipient"])
-        if (row["recipient"]["session_id"] != session_id or turn.get("session_id") != session_id
-                or turn.get("client_turn_id") != "peer-" + row["request_id"]):
+        if row["recipient"]["session_id"] != session_id:
             raise ValueError("peer Turn does not belong to this original Session")
+        self._core("collaboration.project.continuation", {"entry": row, "turn": turn})
         with self._fenced(session_id, row["requester"], row["parent_request_id"]) as (facts, _):
             self._validate_current(row, facts)
             if self._view(row)["control_state"] == "cancelled":
@@ -945,6 +965,7 @@ class OriginalConversationRequests:
                 raise ValueError("original conversation recipient changed")
             with _request_lock(self.root, row["request_id"], None, Path(), force_exact=True):
                 row = self._entry(row["request_id"], row["recipient"])
+                self._core("collaboration.project.continuation", {"entry": row, "turn": turn})
                 view = self._view(row)
                 if (view["control_state"] == "cancelled" or answer["request_revision"] != view["revision"]
                         or answer["request_digest"] != view["revision_digest"]):
@@ -970,6 +991,7 @@ class OriginalConversationRequests:
         if answer is None:
             with self._fenced(session_id, row["requester"], row["parent_request_id"]) as (facts, _):
                 self._core("collaboration.source.original_conversation_access", facts)
+                self._core("collaboration.project.continuation", {"entry": self._entry(ref["request_id"], ref["recipient"]), "turn": turn})
                 supplied = self._inbox(ref["recipient"], mark_read=True, request_id=row["request_id"])["items"][0]
                 basis = {key: supplied[key] for key in ("request_revision", "request_revision_digest")}
             @contextmanager
@@ -977,6 +999,7 @@ class OriginalConversationRequests:
                 with self._fenced(session_id, row["requester"], row["parent_request_id"]) as (facts, _):
                     self._validate_current(self._entry(ref["request_id"], ref["recipient"]), facts)
                     self._core("collaboration.source.original_conversation_access", facts)
+                    self._core("collaboration.project.continuation", {"entry": self._entry(ref["request_id"], ref["recipient"]), "turn": turn})
                     current = self._view(self._entry(ref["request_id"], ref["recipient"]))
                     if (facts["recipient"] != ref["recipient"] or current["control_state"] == "cancelled"
                             or current["revision"] != basis["request_revision"]

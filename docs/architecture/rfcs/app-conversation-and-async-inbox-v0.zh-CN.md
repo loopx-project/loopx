@@ -674,6 +674,10 @@ dynamic tools。File/SQLite 集成沿用生产来源、请求、FIFO、修订与
 [原项目会话协作契约](../../reference/original-project-collaboration.md)。
 这仍是提案行为，不代表已交付验收。
 
+已接受的纠正以修订/digest 绑定的续办进入同一 FIFO，包括原结论已被读取后的纠正。
+队列写入和已存答案的恢复复用该修订，不再次调用模型；首个 Turn 与结果保留为历史。
+面板选择当前修订的状态，不把较早结论显示为当前待读取的结果。
+
 发现、授权、请求发布、接收方读取/评估和回传应使用同一个类型化接收者身份。
 在现有 collaboration owner 内，给已注册 Goal/Agent 接收者增加显式原会话接收者。
 后者从 fresh binding 和 canonical Session 解析，保留 provider、本人、受众、项目和

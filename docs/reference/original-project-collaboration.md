@@ -18,7 +18,7 @@ this recipient kind.
 The panel shows received work, its queue state, current brief and revision,
 independent receiver decision and returned conclusions. Expand a request for
 constraints, actual input references, acceptance and return requirements.
-“Conclusion awaiting requester” means a result exists; “Read by requester” means
+“Conclusion awaiting requester” means a result for the current revision exists; “Read by requester” means
 the original requester read that result. Neither proves requester adoption.
 Peer input is labelled **Collaborator**, and its visible message is the request
 purpose; execution instructions remain outside the human transcript.
@@ -69,7 +69,7 @@ thread make the recipient unavailable.
 
 Publication persists the immutable operation, exact original return route and
 shared request record before admitting a peer Turn to the original FIFO.
-Same-operation retries recover the same request and Turn. Changed recipient,
+Same-operation retries recover the same request and its current revision's Turn. Changed recipient,
 source or content under that identity rejects; use the existing revision control
 for a correction. Grant, source lineage, cancellation, recipient identity and
 revision are rechecked before native model input and before result publication.
@@ -85,13 +85,19 @@ For `--conversation-operation control`, the file contains `recipient`,
 `request_id`, `control` (`inspect`, `revise` or `cancel`) and
 `parameters`. Inspect returns the current control view. Revision and cancellation
 use the existing stable operation ID and expected revision/digest fields;
-revision supplies the corrected brief and reason. Cancellation targets only the
-associated original Turn. A late or cancelled answer cannot become a current
-result.
+revision supplies the corrected brief and reason. Each accepted revision enters
+the same Session FIFO once, including corrections after an earlier answer was
+read. It has its own revision/digest-bound Turn; superseded Turns cannot start
+new model input or publish a current result. Original revision-one Turn keys remain
+readable. Cancellation uses the existing interrupt owner for only this request's outstanding Turns. A late or
+cancelled answer cannot become a current result. The panel shows the current
+revision's queue/result state and retains earlier conclusions as history.
 
 Publication/enqueue response loss is recovered by retrying the same operation.
+If correction persistence succeeds but queue admission fails, retry that same
+correction operation or original publication to recover the current revision.
 Actual structured model output is saved before result IO, so a lost return write
-can recover its assessment and conclusion without invoking the model again.
+can recover that revision's assessment and conclusion without invoking the model again.
 The original failed Turn remains failed; the panel separately reports a recovered
 result. A failure before saved model output remains visible and cannot be
 silently rerun as a new Turn under the same identity.

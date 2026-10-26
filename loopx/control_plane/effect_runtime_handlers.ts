@@ -624,6 +624,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.project.response_schema", lazyHandler(() => import("./collaboration/project_conversation.ts"), ({originalConversationResponseSchema}) => originalConversationResponseSchema)],
     ["collaboration.project.return_route", lazyHandler(() => import("./collaboration/semantic_request.ts"), ({verifyOriginalConversationReturnRoute}) => verifyOriginalConversationReturnRoute)],
     ["collaboration.project.request", lazyHandler(() => import("./collaboration/project_conversation.ts"), ({planOriginalConversationRequest}) => planOriginalConversationRequest)],
+    ["collaboration.project.continuation", lazyHandler(() => import("./collaboration/project_conversation.ts"), ({planOriginalConversationContinuation}) => planOriginalConversationContinuation)],
     ["collaboration.source.original_conversation_grant", lazyHandler(() => import("./collaboration/source_grants.ts"), ({configureOriginalConversationGrant}) => configureOriginalConversationGrant)],
     ["collaboration.source.original_conversation_access", lazyHandler(() => import("./collaboration/source_grants.ts"), ({requireOriginalConversationGrant}) => requireOriginalConversationGrant)],
     ["collaboration.source.original_conversation_grants", lazyHandler(() => import("./collaboration/source_grants.ts"), ({inspectOriginalConversationGrants}) => inspectOriginalConversationGrants)],

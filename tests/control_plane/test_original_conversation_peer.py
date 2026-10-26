@@ -162,8 +162,8 @@ def test_source_revision_cancel_and_receiver_defer_are_independent(project_peer,
     with pytest.raises(ValueError, match="identity conflict"):
         f["service"].control({**control, "parameters": {**control["parameters"], "reason": "Different correction"}})
     monkeypatch.setattr(f["runtime"], "resume_session_queue", original_resume)
-    f["service"].publish(f["body"])
-    result = f["runtime"].wait_for_turn(session_id=f["session"]["session_id"], turn_id=first["turn_id"], timeout_sec=15)
+    resumed = f["service"].publish(f["body"])
+    result = f["runtime"].wait_for_turn(session_id=f["session"]["session_id"], turn_id=resumed["turn_id"], timeout_sec=15)
     assert result["status"] == "completed", json.dumps(result, ensure_ascii=False)
     returned = read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])["peer_returns"]["items"][0]
     assert returned["decision"] == "defer" and returned["request_revision"] == 2
@@ -199,6 +199,103 @@ def test_saved_model_output_recovers_a_lost_return_without_reexecution(project_p
     assert read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])["peer_returns"]["items"][0]["text"] == "Verified original project result."
     with pytest.raises(ValueError, match="immutable"):
         f["store"].update_turn(f["session"]["session_id"], first["turn_id"], collaboration_answer={**terminal["collaboration_answer"], "text": "Replacement"})
+
+
+def test_completed_request_correction_survives_queue_loss_restart_and_retry(project_peer, monkeypatch):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.control_plane.collaboration import inbox
+    from loopx.control_plane.collaboration.inbox import _root, result_paths
+    f = project_peer
+    sid = f["session"]["session_id"]
+    allow(f)
+    first = f["service"].publish(f["body"])
+    original = f["runtime"].wait_for_turn(session_id=sid, turn_id=first["turn_id"], timeout_sec=15)
+    assert original["status"] == "completed"
+    assert read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])["peer_returns"]["items"][0]["request_revision"] == 1
+    assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"], caller_goal_ref=f["ref"])["consumed"]
+    retained = {path: path.read_bytes() for path in result_paths(_root(f["root"]) / "replies" / first["request_id"])}
+    view = f["service"]._view(f["service"]._entry(first["request_id"], f["body"]["recipient"]))
+    control = {"requester": f["body"]["requester"], "recipient": f["body"]["recipient"],
+        "request_id": first["request_id"], "control": "revise", "parameters": {"operation_id": "after-answer",
+            "expected_revision": view["revision"], "expected_digest": view["revision_digest"],
+            "brief": _brief("Verify corrected project evidence"), "reason": "The source changed after the first answer"}}
+    # Commit a real correction, then lose only its FIFO write. Retrying the
+    # original correction must recover that revision, not mutate its predecessor.
+    with monkeypatch.context() as patch:
+        patch.setattr(f["store"], "create_queued_turn", lambda *_, **__: (_ for _ in ()).throw(OSError("synthetic corrected queue loss")))
+        with pytest.raises(OSError, match="corrected queue loss"):
+            f["service"].control(control)
+    assert f["service"]._view(f["service"]._entry(first["request_id"], f["body"]["recipient"]))["revision"] == 2
+    monkeypatch.setattr(f["runtime"], "resume_session_queue", lambda **_: None)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: f["service"].control(control), range(4)))
+    queued = f["store"].queued_turns(sid)
+    assert len(queued) == 1 and queued[0]["turn_id"] != first["turn_id"]
+    current = f["service"].management_view(sid)["requests"][0]
+    assert current["queue_status"] == "queued"
+    assert current["request_control_view"]["assessment"] is None
+    assert [reply["request_revision"] for reply in current["returns"]] == [1]
+    f["runtime"].close()
+    restarted = ChatRuntimeController(store=f["store"], codex_bin=str(f["fake"]), project_contexts=f["runtime"].project_contexts,
+        registry_path=f["registry"])
+    restarted.coordination_runtime_root = f["root"]
+    ChatExternalConversations(restarted)
+    try:
+        service = OriginalConversationRequests(restarted)
+        write = inbox._write
+        def lose_corrected_result(path, value):
+            if path.parent.parent.name == "replies":
+                raise OSError("synthetic corrected return loss")
+            return write(path, value)
+        with monkeypatch.context() as patch:
+            patch.setattr(inbox, "_write", lose_corrected_result)
+            resumed = service.publish(f["body"])
+            assert resumed["turn_id"] == queued[0]["turn_id"]
+            done = restarted.wait_for_turn(session_id=sid, turn_id=resumed["turn_id"], timeout_sec=15)
+        assert done["status"] == "failed" and done["collaboration_answer"]["request_revision"] == 2
+        assert service.publish(f["body"])["recovered_result"]["ok"]
+        returned = read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])["peer_returns"]["items"]
+        assert [reply["request_revision"] for reply in returned] == [2]
+        assert returned[0]["decision"] == "adopt"
+        service.control(control)
+        service.publish(f["body"])
+        packets = [json.loads(line) for line in f["capture"].read_text().splitlines()]
+        assert sum(p.get("method") == "turn/start" for p in packets) == 2
+        assert f["store"].load_turn(sid, first["turn_id"])["collaboration_answer"] == original["collaboration_answer"]
+        assert all(path.read_bytes() == value for path, value in retained.items())
+        assert f["store"].load_session(sid)["goal_id"] is None
+        assert f["store"].load_session(sid)["upstream_thread_id"] == f["session"]["upstream_thread_id"]
+    finally:
+        restarted.close()
+
+
+def test_correction_at_native_write_does_not_execute_twice(project_peer, monkeypatch):
+    f = project_peer
+    allow(f)
+    sid = f["session"]["session_id"]
+    native = f["runtime"].adapters[sid].session
+    send = native.send
+    corrected = False
+    def correct_then_send(*args, **kwargs):
+        nonlocal corrected
+        if not corrected:
+            corrected = True
+            row = f["service"].management_view(sid)["requests"][0]
+            current = row["request_control_view"]
+            f["service"].control({"requester": f["body"]["requester"], "recipient": f["body"]["recipient"],
+                "request_id": row["request_id"], "control": "revise", "parameters": {"operation_id": "before-input",
+                    "expected_revision": current["revision"], "expected_digest": current["revision_digest"],
+                    "brief": _brief("Verify changed evidence"), "reason": "Changed before native input"}})
+        return send(*args, **kwargs)
+    monkeypatch.setattr(native, "send", correct_then_send)
+    first = f["service"].publish(f["body"])
+    f["runtime"].wait_for_turn(session_id=sid, turn_id=first["turn_id"], timeout_sec=15)
+    current = f["service"].publish(f["body"])
+    done = f["runtime"].wait_for_turn(session_id=sid, turn_id=current["turn_id"], timeout_sec=15)
+    assert done["status"] == "completed", json.dumps(done, ensure_ascii=False)
+    assert done["collaboration_answer"]["request_revision"] == 2
+    packets = [json.loads(line) for line in f["capture"].read_text().splitlines()]
+    assert sum(p.get("method") == "turn/start" for p in packets) == 1
 
 
 def test_loopback_http_requires_exact_runtime_and_explicit_source_selection(project_peer):

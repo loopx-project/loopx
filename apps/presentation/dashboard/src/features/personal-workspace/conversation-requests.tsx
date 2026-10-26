@@ -78,7 +78,7 @@ export function OriginalProjectRequests({sessionId, refreshKey}: {sessionId: str
           {!view.available ? <p role="alert">{zh ? "原会话当前不可接收请求，请恢复原 App、项目与执行器连接后重试。已保留的授权仍可撤销。" : "The original conversation cannot receive requests. Restore its App, project and executor connection, then retry. Retained grants can still be revoked."}</p> : null}
           <section aria-label={zh ? "收到的请求" : "Received requests"}><h3>{zh ? "收到的请求" : "Received requests"}</h3>
             {!view.available ? <p>{zh ? "请求记录暂不可核验。" : "Request records are temporarily unverifiable."}</p> : !view.requests.length ? <p>{zh ? "暂无协作请求" : "No collaboration requests"}</p> : view.requests.map(row => {
-              const control = row.request_control_view, latest = row.returns.at(-1);
+              const control = row.request_control_view, latest = row.returns.filter(result => result.request_revision === control.revision).at(-1);
               const state = control.control_state === "cancelled" ? (zh ? "已取消" : "Cancelled")
                 : latest ? (latest.delivery_status === "delivered" ? (zh ? "请求方已读" : "Read by requester") : (zh ? "结论待请求方读取" : "Conclusion awaiting requester"))
                 : row.queue_status === "failed" ? (zh ? "执行失败，记录已保留" : "Execution failed; records retained")

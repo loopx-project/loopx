@@ -39,6 +39,7 @@
 .project-peer-dialog h3 {font-size:var(--text-body);margin:20px 0 12px;}
 .project-peer-dialog h4 {font-size:var(--text-body);margin:16px 0 8px;}
 .project-peer-request {border-bottom:1px solid var(--pw-line);padding:12px 0;overflow-wrap:anywhere;}
+.project-peer-request .personal-md p,.project-peer-request .personal-md li,.project-peer-request > ul {font-size:var(--text-lead);line-height:var(--leading-prose);}
 .project-peer-request > summary {display:flex;align-items:baseline;justify-content:space-between;gap:16px;cursor:pointer;}
 .project-peer-request > summary > span {flex-shrink:0;color:var(--pw-muted);}
 .project-peer-request > summary > strong {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}

@@ -993,6 +993,12 @@ delivery and natural receiver adoption remain unqualified. See the
 [operator and recovery contract](../../reference/original-project-collaboration.md).
 This is proposed behavior, not a claim of shipped acceptance.
 
+Accepted corrections use revision/digest-bound continuations in the same FIFO,
+including after the original conclusion has been read. Queue-write recovery and
+saved-answer recovery reuse that revision without another model call; the first
+Turn and its result remain historical. The panel selects the current revision's
+state rather than presenting an older conclusion as its pending result.
+
 Keep one typed recipient identity across discovery, grants, request publication,
 receiver read/assessment and return. Extend the existing collaboration owner with
 an explicit original-conversation recipient alongside registered Goal/Agent

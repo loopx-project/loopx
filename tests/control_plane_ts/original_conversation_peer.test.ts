@@ -5,6 +5,7 @@ import {CONVERSATION_ENTRY_SCHEMA, ORIGINAL_CONVERSATION_RECIPIENT_SCHEMA, norma
 import {initializeControlledRequest, planRequestControl, requestControlView} from "../../loopx/control_plane/collaboration/request_control.ts";
 import {configureOriginalConversationGrant, requireOriginalConversationGrant, inspectOriginalConversationGrants} from "../../loopx/control_plane/collaboration/source_grants.ts";
 import {planCollaborationResult} from "../../loopx/control_plane/collaboration/result_publication.ts";
+import {planOriginalConversationContinuation} from "../../loopx/control_plane/collaboration/project_conversation.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 
 const recipient = {schema_version: ORIGINAL_CONVERSATION_RECIPIENT_SCHEMA, binding_id: "a".repeat(24),
@@ -67,4 +68,34 @@ test("independent revision-bound read and decision precede a result", () => {
   assert.throws(() => run({operation: "cancel", operation_id: "wrong-source", expected_revision: 1,
     expected_digest: view().revision_digest, reason: "Wrong source"}, {actor: "source", actor_agent_id: requester.agent_id,
       actor_requester: {...requester, goal_ref: {...requester.goal_ref, goal_instance_id: "ginst_" + "f".repeat(32)}}, observed_at: at}), /exact identity/);
+});
+
+test("a correction has its own FIFO identity and cannot reuse a historical answer", () => {
+  const initial = original(), before = requestControlView(initial);
+  const first = planOriginalConversationContinuation({entry: initial});
+  const turn = {origin: "peer", session_id: recipient.session_id,
+    client_turn_id: first.client_turn_id, collaboration_request: first.collaboration_request};
+  assert.equal(first.client_turn_id, `peer-${initial.request_id}`, "persisted original Turn keys remain readable");
+  const legacy = {...turn, collaboration_request: {request_id: initial.request_id, recipient}};
+  assert.doesNotThrow(() => planOriginalConversationContinuation({entry: initial, turn: legacy}));
+  const source = {actor: "source", actor_agent_id: requester.agent_id, actor_requester: requester,
+    recipient_active: true, observed_at: at};
+  const correction = planRequestControl({entry: initial, source, input: {operation: "revise", operation_id: "correct",
+    expected_revision: before.revision, expected_digest: before.revision_digest,
+    brief: {...brief, purpose: "Verify the corrected artifact"}, reason: "Source correction"}}).entry as JsonObject;
+  const current = planOriginalConversationContinuation({entry: correction});
+  assert.notEqual(current.client_turn_id, first.client_turn_id);
+  assert.equal(current.message, "Verify the corrected artifact");
+  assert.deepEqual(current.superseded_client_turn_ids, [first.client_turn_id]);
+  for (const old of [turn, legacy]) assert.throws(() => planOriginalConversationContinuation({entry: correction, turn: old}), /stale/);
+  const revised = {...turn, client_turn_id: current.client_turn_id, collaboration_request: current.collaboration_request};
+  assert.doesNotThrow(() => planOriginalConversationContinuation({entry: correction, turn: revised}));
+  for (const change of [{request_revision: 1}, {request_digest: "f".repeat(64)}, {recipient: {...recipient, session_id: "other"}}]) {
+    assert.throws(() => planOriginalConversationContinuation({entry: correction,
+      turn: {...revised, collaboration_request: {...current.collaboration_request as JsonObject, ...change}}}), /stale/);
+  }
+  const view = requestControlView(correction);
+  const cancelled = planRequestControl({entry: correction, source, input: {operation: "cancel", operation_id: "stop",
+    expected_revision: view.revision, expected_digest: view.revision_digest, reason: "No more work"}}).entry;
+  assert.throws(() => planOriginalConversationContinuation({entry: cancelled, turn: revised}), /cancelled/);
 });

@@ -71,6 +71,33 @@ export function originalConversationResponseSchema(): JsonObject {
   required: ["decision", "reason", "text", "request_revision", "request_digest"], additionalProperties: false};
 }
 
+/** Each accepted revision gets one place in the existing Session FIFO. Legacy
+ * revision-one Turns retain their key; their saved answers are never replaced.
+ * This plan conveys identity to host IO, not permission to start a model.
+ */
+export function planOriginalConversationContinuation(params: JsonObject): JsonObject {
+  const entry = requireJsonObject(params.entry, "original conversation request");
+  const recipient = normalizeOriginalConversationRecipient(entry.recipient);
+  const view = requestControlView(entry);
+  const key = (revision: number) => `peer-${entry.request_id}${revision === 1 ? "" : `-r${revision}`}`;
+  const reference = {request_id: entry.request_id, recipient,
+    request_revision: view.revision, request_digest: view.revision_digest};
+  if (params.turn !== undefined) {
+    const turn = requireJsonObject(params.turn, "original conversation Turn");
+    const ref = requireJsonObject(turn.collaboration_request, "original conversation Turn basis");
+    const legacy = ref.request_revision === undefined && ref.request_digest === undefined && view.revision === 1;
+    if (view.control_state === "cancelled" || turn.origin !== "peer" || turn.session_id !== recipient.session_id
+        || turn.client_turn_id !== key(Number(view.revision)) || ref.request_id !== entry.request_id
+        || canonicalAuthoritySha256(ref.recipient) !== canonicalAuthoritySha256(recipient)
+        || (!legacy && (ref.request_revision !== view.revision || ref.request_digest !== view.revision_digest))) {
+      throw new EffectRuntimeRequestError("original conversation Turn belongs to a stale, cancelled or different request");
+    }
+  }
+  return {client_turn_id: key(Number(view.revision)), collaboration_request: reference,
+    message: (view.brief as JsonObject).purpose,
+    superseded_client_turn_ids: Array.from({length: Number(view.revision) - 1}, (_, index) => key(index + 1))};
+}
+
 /** The shared request record remains the publication and revision owner.
  * The host holds source, Goal, binding and request fences through its IO.
  */
