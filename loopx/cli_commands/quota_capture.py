@@ -18,6 +18,7 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
+    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
     read_context_capture_file as _read_capture,
 )
 
@@ -31,6 +32,49 @@ def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
         raise QuotaCommandValidationError(str(exc)) from exc
 
 
+def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int,
+                  output_limit: int | None, instruction: bool) -> dict[str, Any]:
+    end = min(offset + size, len(raw))
+    while end < len(raw) and raw[end] & 0xC0 == 0x80:
+        end -= 1
+    content = raw[offset:end].decode("utf-8")
+
+    def page(text: str) -> dict[str, Any]:
+        cursor = offset + len(text.encode("utf-8"))
+        result: dict[str, Any] = {"ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
+            "offset": offset, "next_offset": cursor if cursor < len(raw) else None,
+            "total_bytes": len(raw), "eof": cursor == len(raw), "content": text}
+        if instruction:
+            result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
+        if cursor < len(raw):
+            result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=size,
+                max_page_output_bytes=output_limit)
+        return result
+
+    def fits(result: dict[str, Any]) -> bool:
+        # Match cli_runtime.print_payload exactly, including print's newline.
+        return output_limit is None or len(json.dumps(result, ensure_ascii=False,
+            separators=(",", ":")).encode("utf-8")) + 1 <= output_limit
+
+    result = page(content)
+    if fits(result):
+        return result
+    # EOF drops next_command: test it above before searching the monotone
+    # non-EOF prefix sizes. Never return a zero-progress continuation.
+    low, high = 1, len(content) - (end == len(raw))
+    best = None
+    while low <= high:
+        middle = (low + high) // 2
+        candidate = page(content[:middle])
+        if fits(candidate):
+            best, low = candidate, middle + 1
+        else:
+            high = middle - 1
+    if best is None:
+        raise ValueError("max-page-output-bytes cannot fit page metadata and one UTF-8 character; increase the limit for this same capture")
+    return best
+
+
 def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     """Bounded local IO over immutable JSON, not a new context/authority owner.
 
@@ -42,6 +86,10 @@ def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         digest = getattr(args, "capture_sha256", None)
         value = getattr(args, "capture_file", None)
         offset, size = args.offset, args.page_bytes
+        output_limit = getattr(args, "max_page_output_bytes", None)
+        if output_limit is not None and (type(output_limit) is not int or output_limit <= 0
+                or getattr(args, "format", None) != "json"):
+            raise ValueError("max-page-output-bytes requires JSON output and a positive integer")
         from ..control_plane.turn_driver.codex_context import codex_context_directory
 
         context_dir = codex_context_directory(directory=getattr(args, "codex_context_dir", None),
@@ -60,17 +108,8 @@ def read_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         path, raw, _ = _read_capture(value, digest)
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
-        end = min(offset + size, len(raw))
-        while end < len(raw) and raw[end] & 0xC0 == 0x80:
-            end -= 1
-        result = {"ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
-            "offset": offset, "next_offset": end if end < len(raw) else None,
-            "total_bytes": len(raw), "eof": end == len(raw), "content": raw[offset:end].decode("utf-8")}
-        if context_dir:
-            result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
-        if end < len(raw):
-            result["next_command"] = context_capture_read_command(path, digest, offset=end, page_bytes=size)
-        return result
+        return _capture_page(path, raw, digest, offset=offset, size=size,
+            output_limit=output_limit, instruction=bool(context_dir))
     except (OSError, ValueError, RecursionError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
@@ -96,11 +135,16 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         mode, target = projected["mode"], projected["target"]
         if mode == "full":
             reference = {key: projected["recovery"][key] for key in ("path", "sha256")}
-    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"], page_bytes=3072)
+    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
+        page_bytes=NATIVE_CONTEXT_PAGE_BYTES, max_page_output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES)
     result = {"mode": mode, **reference, **({"target": target} if target else {})}
     page = read_context_capture(argparse.Namespace(capture_file=reference["path"],
         capture_sha256=reference["sha256"], offset=0, page_bytes=3072))
     if page["ok"]:
+        if not page["eof"]:
+            page["next_command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
+                offset=page["next_offset"], page_bytes=NATIVE_CONTEXT_PAGE_BYTES,
+                max_page_output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES)
         result.update(page)
         from ..control_plane.turn_driver.codex_context import register_native_context_view
 
@@ -381,6 +425,10 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
+    if getattr(args, "max_page_output_bytes", None) is not None and args.quota_command != "context-read":
+        print_payload({"ok": False, "reason": "max-page-output-bytes is only supported by JSON context-read"},
+            args.format, lambda value: str(value["reason"]))
+        return 1
     if registry_path is not None:
         from .context_machine import apply_context_machine_options
 

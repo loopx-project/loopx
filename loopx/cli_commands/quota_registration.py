@@ -228,6 +228,9 @@ def register_quota_command(
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int, default=4096,
         help="For context-read: maximum UTF-8 content bytes per page, 256–8192 (default: 4096).")
+    quota_parser.add_argument("--max-page-output-bytes", type=int,
+        help="For JSON context-read: optional positive byte limit for successful page stdout, including JSON framing and newline. "
+             "Content shrinks at UTF-8 boundaries; next_command preserves the limit. An insufficient limit returns an error.")
     quota_parser.add_argument(
         "--turn-instance-id",
         help=(

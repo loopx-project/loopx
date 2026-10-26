@@ -108,7 +108,7 @@ _CONTEXT_CAPTURE_PAGE_START = (
     "Do not hash or retype the packet. "
 )
 _CONTEXT_CAPTURE_PAGE_END = (
-    "Small batches can save model round trips; start with at most two default pages "
+    "Legacy default pages can be batched to save round trips; start with at most two "
     "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
     "Consume all model-visible content in UTF-8 byte-offset order with complete coverage through total_bytes. "
     "If a range or output is missing, truncated or uncertain, reread the affected range "
@@ -118,7 +118,9 @@ _CONTEXT_CAPTURE_PAGE_END = (
 # Native paging verifies capture bytes; the existing codec separately declares
 # its continuity basis. Generic/off readers retain their original obligations
 # without claiming that a native input observer exists.
-CONTEXT_CAPTURE_PAGE_GUIDANCE = _CONTEXT_CAPTURE_PAGE_START + _CONTEXT_CAPTURE_PAGE_END
+CONTEXT_CAPTURE_PAGE_GUIDANCE = _CONTEXT_CAPTURE_PAGE_START + (
+    "For --max-page-output-bytes, read one output per call if retained-history limits are unknown. "
+) + _CONTEXT_CAPTURE_PAGE_END
 CONTEXT_CAPTURE_READ_GUIDANCE = (
     "Follow next_command through eof and combine content in byte-offset order. "
     "In code-mode, forward successful exec stdout directly with text(result.output); "
@@ -131,12 +133,20 @@ CONTEXT_CAPTURE_READ_GUIDANCE = (
 )
 
 
-def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, page_bytes: int = 4096) -> str:
+# Leave room below the native 2000-token exec output boundary for framing.
+# This does not establish downstream retained-history capacity or retention.
+NATIVE_CONTEXT_PAGE_BYTES = 8192
+NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 7000
+
+
+def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, page_bytes: int = 4096,
+                                 max_page_output_bytes: int | None = None) -> str:
     from ...command_invocation import loopx_cli_argv
 
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
         "--capture-file", str(path), "--capture-sha256", digest,
-        "--offset", str(offset), "--page-bytes", str(page_bytes)])
+        "--offset", str(offset), "--page-bytes", str(page_bytes),
+        *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else [])])
 
 
 def read_context_capture_file(value: str, digest: str, *, private: bool = False) -> tuple[Path, bytes, dict[str, Any]]:

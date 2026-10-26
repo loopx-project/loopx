@@ -61,6 +61,24 @@ def _delivered(request, digest):
     return raw.decode().rstrip("\n")
 
 
+def _last_page(request):
+    for item in reversed(request["input"]):
+        output = item.get("output")
+        parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
+        for part in parts:
+            if not isinstance(part, str):
+                continue
+            try:
+                value = json.loads(part.split("\nOutput:\n", 1)[-1])
+                if isinstance(value, dict) and value.get("exit_code") == 0:
+                    value = json.loads(value["output"])
+                if isinstance(value, dict) and value.get("schema_version") == "context_capture_page_v1":
+                    return value
+            except (ValueError, KeyError):
+                continue
+    return None
+
+
 @pytest.mark.parametrize("host,surface,failed_primary,resumed,adaptive", [
     (host, surface, failed, False, False) for host, surface in [("exec", "quota_packet"), ("app_server", "turn_envelope"),
                                                 ("code_mode", "quota_packet"), ("code_mode", "turn_envelope")]
@@ -69,7 +87,7 @@ def _delivered(request, digest):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, bounded_pages=False):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
@@ -78,6 +96,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     body = "\n".join(f"Requirement {i:04d}: preserve this row and its evidence." for i in range(400))
     body += "\nFINAL REQUIREMENT: stop before publication."
+    if bounded_pages:
+        body += '\nMixed UTF-8 and JSON escaping: 汉🙂"\\\t' * 100
     todos = read_fixture_todos(state)
     todos[0].update(text=body, title=body)
     initialize_canonical_authority(runtime, GOAL_ID,
@@ -166,6 +186,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         env["LOOPX_TURN"] = "native-capture-turn"
 
     checkpoint_wakes, held_captures = [], []
+    read_commands, bounded_sizes = {}, []
 
     def invoke(name):
         argv = list(command)
@@ -177,6 +198,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         raw = path.read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
         page_digests[name] = digest
+        if bounded_pages:
+            return [read_commands[name] if name != "recovery" else wires["warm"]["recovery"]["command"]]
         # Plan only read offsets. Every actual model-facing page must
         # come from the public CLI, including digest verification.
         page_size = 3072 if adaptive or host == "code_mode" else 5000
@@ -219,6 +242,14 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     def response(request, number, message):
         nonlocal command, root
         phase = stages["phase"]
+        if bounded_pages and phase in {"cold_read", "warm_read", "resume_read", "recovered"}:
+            page = _last_page(request)
+            assert page and page["ok"], page
+            bounded_sizes.append(len(page["content"].encode()))
+            assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7000
+            if not page["eof"]:
+                assert "--max-page-output-bytes 7000" in page["next_command"]
+                return tool(page["next_command"], number)
         if stages["pages"]:
             cmd = stages["pages"].pop(0)
         elif phase in {"start", "resuming"}:
@@ -255,6 +286,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         elif phase in {"cold_ready", "warm_ready"}:
             name = phase.split("_")[0]
             descriptor = json.loads(wire_paths[name].read_text())
+            read_commands[name] = descriptor["command"]
             # The public native CLI now shares context-project's paged reader.
             # Keep the independent full-wire oracle separate from its page view.
             wire_file = Path(descriptor["path"]).parent / "delivery.json"
@@ -312,24 +344,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         elif phase == "lookup_read":
             # Product lookup delivered the first page; use only its public
             # digest-pinned next command, not the private session journal.
-            page = None
-            for item in reversed(request["input"]):
-                output = item.get("output")
-                parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
-                for part in parts:
-                    if not isinstance(part, str):
-                        continue
-                    try:
-                        value = json.loads(part.split("\nOutput:\n", 1)[-1])
-                        if isinstance(value, dict) and value.get("exit_code") == 0:
-                            value = json.loads(value["output"])
-                        if isinstance(value, dict) and value.get("schema_version") == "context_capture_page_v1":
-                            page = value
-                            break
-                    except (ValueError, KeyError):
-                        continue
-                if page:
-                    break
+            page = _last_page(request)
             assert page and page["ok"], page
             assert page["sha256"] == wires["warm"]["recovery"]["sha256"]
             page_digests["recovery"] = page["sha256"]
@@ -356,7 +371,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 commands.append(stages["pages"].pop(0))
             if adaptive:
                 code = "".join("{const r=await tools.exec_command(" + json.dumps({
-                    "cmd": command, "max_output_tokens": 2400})
+                    "cmd": command, "max_output_tokens": 2000 if bounded_pages else 2400})
                     + ");text(r.exit_code === 0 ? r.output : r);}" for command in commands)
                 return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
                     "name": "exec", "input": pragma + code}
@@ -557,6 +572,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert retained["text"] == body and retained["done"] is False
     else:
         assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
+    if bounded_pages:
+        assert bounded_sizes and max(bounded_sizes) > 3072
 
 
 @pytest.mark.parametrize("host,surface,hook_loss", [
@@ -588,6 +605,15 @@ def test_native_known_history_budget_keeps_larger_batches_and_recovery(tmp_path,
 def test_native_shared_configuration_resume_and_lost_hook(tmp_path, monkeypatch, surface):
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         "code_mode", surface, False, True, True, "missing", shared_root=True)
+
+
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_bounded_command_chain_recovers_with_unknown_history_limit(tmp_path, monkeypatch, surface):
+    # Follow only public returned commands, one stdout per call, at the existing
+    # native deadline and unknown-model history budget; no larger host limit.
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "code_mode", surface, False, True, True, "missing", shared_root=True,
+        native_read_batch=1, bounded_pages=True)
 
 
 @pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])

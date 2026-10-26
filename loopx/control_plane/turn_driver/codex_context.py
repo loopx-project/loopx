@@ -18,6 +18,7 @@ import uuid
 from .decision_capture import (
     write_decision_capture, capture_context_projection, project_captured_context, CONTEXT_CAPTURE_PAGE_GUIDANCE,
     capture_page_range, read_context_capture_file,
+    context_capture_read_command, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
 )
 
 # Native adapter activation reuses scheduler-owned host declarations. These
@@ -219,13 +220,15 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
 
     command = shlex.join([*cli_argv, "--format", "json", "quota", "context-read",
         "--codex-context-root" if session_root else "--codex-context-dir", directory,
-        "--goal-id", goal_id, "--agent-id", agent_id])
+        "--goal-id", goal_id, "--agent-id", agent_id, "--page-bytes", str(NATIVE_CONTEXT_PAGE_BYTES),
+        "--max-page-output-bytes", str(NATIVE_CONTEXT_PAGE_OUTPUT_BYTES)])
     return (
         _context_continuation_instructions(command) +
         "Follow the returned next_command through eof; verify complete bytes and digest. "
         "For code-mode reads, size batches against both direct-result and retained-history output limits; "
-        "max_output_tokens alone does not establish the latter. Start with at most two default pages when "
-        "the effective history limit is unknown. With a known sufficient limit, larger batches can reduce "
+        "max_output_tokens alone does not establish the latter. Read one output at a time with "
+        "--max-page-output-bytes when the effective history limit is unknown; for legacy default pages, "
+        "start with at most two. With a known sufficient limit, larger batches can reduce "
         "round trips; emit each stdout separately and check complete model-visible bytes. This advice "
         "grants no authority to change host limits or treat complete runtime output as retention proof."
     )
@@ -453,6 +456,8 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 request = _native_context_request(state, scope)
                 recovery = capture_context_projection(payload, directory=capture_directory,
                     read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+                recovery["command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
+                    page_bytes=NATIVE_CONTEXT_PAGE_BYTES, max_page_output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES)
                 state["recovery"] = {**{key: recovery[key] for key in ("path", "sha256", "command")},
                     "goal_id": goal_id, "agent_id": agent_id,
                     "total_bytes": Path(recovery["path"]).stat().st_size}

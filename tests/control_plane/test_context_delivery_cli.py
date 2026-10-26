@@ -9,6 +9,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
+import subprocess
+import sys
 
 import pytest
 
@@ -21,6 +24,110 @@ from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID,
     _heartbeat_receipt_count, _run_cli, _spend_run_count, _write_fixture,
 )
+
+
+@pytest.mark.parametrize("body", ["plain text " * 900, '汉🙂"\\\t\n' * 700])
+@pytest.mark.parametrize("limit", [1600, 7000])
+def test_reader_bounds_actual_json_stdout_and_preserves_every_byte(tmp_path, monkeypatch, body, limit):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    capture = tmp_path / "original.json"
+    raw = (json.dumps({"requirements": body}, ensure_ascii=False) + "\n").encode()
+    capture.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota", "context-read",
+        "--capture-file", str(capture), "--capture-sha256", digest, "--page-bytes", "8192",
+        "--max-page-output-bytes", str(limit)]
+    collected, offset, sizes = bytearray(), 0, []
+    while True:
+        response = subprocess.run(command, capture_output=True, cwd=Path(__file__).resolve().parents[2], check=False)
+        assert response.returncode == 0, response.stderr or response.stdout
+        assert len(response.stdout) <= limit
+        page = json.loads(response.stdout)
+        assert page["ok"] and page["sha256"] == digest and page["offset"] == offset
+        content = page["content"].encode()
+        assert content and raw[offset:offset + len(content)] == content
+        collected.extend(content)
+        sizes.append(len(content))
+        offset += len(content)
+        assert page["total_bytes"] == len(raw)
+        assert page["next_offset"] == (None if page["eof"] else offset)
+        if page["eof"]:
+            break
+        command = shlex.split(page["next_command"])
+        assert command[command.index("--max-page-output-bytes") + 1] == str(limit)
+    assert bytes(collected) == raw and capture.read_bytes() == raw
+    if limit == 7000:
+        assert max(sizes) > 3072
+    # Page reads have no authority or settlement effects.
+    assert _heartbeat_receipt_count(runtime, "reader-budget") == 0 and _spend_run_count(runtime) == 0
+    code, rejected = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(capture),
+        "--capture-sha256", digest, "--max-page-output-bytes", "1")
+    assert code == 1 and not rejected["ok"] and "same capture" in rejected["reason"]
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("limit,fmt", [(0, "json"), (-1, "json"), (True, "json"), (1.2, "json"), (7000, "markdown")])
+def test_reader_rejects_invalid_output_budget_before_capture_io(monkeypatch, limit, fmt):
+    import argparse
+    from loopx.cli_commands import quota_capture
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid output budget must fail before capture IO")
+    monkeypatch.setattr(quota_capture, "_read_capture", unexpected)
+    result = quota_capture.read_context_capture(argparse.Namespace(capture_file="missing", capture_sha256="0" * 64,
+        offset=0, page_bytes=8192, max_page_output_bytes=limit, format=fmt))
+    assert not result["ok"] and "positive integer" in result["reason"]
+
+
+def test_reader_legacy_bytes_and_small_eof_budget(tmp_path):
+    import argparse
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
+    capture = tmp_path / "original.json"
+    raw = json.dumps({"late": "🙂" * 400}, ensure_ascii=False).encode()
+    capture.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    args = argparse.Namespace(capture_file=str(capture), capture_sha256=digest, offset=0, page_bytes=256, format="json")
+    page = read_context_capture(args)
+    end = page["next_offset"]
+    assert page == {"ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
+        "offset": 0, "next_offset": end, "total_bytes": len(raw), "eof": False,
+        "content": raw[:end].decode(), "next_command": context_capture_read_command(capture, digest, offset=end, page_bytes=256)}
+    args.offset, args.page_bytes = len(raw) - 2, 8192
+    eof = read_context_capture(args)
+    # EOF has no next_command and can fit even when any continuation cannot.
+    args.max_page_output_bytes = len(json.dumps(eof, ensure_ascii=False, separators=(",", ":")).encode()) + 1
+    assert read_context_capture(args) == eof
+
+
+def test_bounded_continuation_rechecks_original_capture_and_utf8_cursor(tmp_path):
+    import argparse
+    from loopx.cli_commands.quota_capture import read_context_capture
+    capture = tmp_path / "original.json"
+    raw = json.dumps({"requirements": "🙂" * 900}, ensure_ascii=False).encode()
+    capture.write_bytes(raw)
+    args = argparse.Namespace(capture_file=str(capture), capture_sha256=hashlib.sha256(raw).hexdigest(),
+        offset=0, page_bytes=8192, max_page_output_bytes=1600, format="json")
+    page = read_context_capture(args)
+    assert page["ok"] and not page["eof"]
+    args.offset = page["next_offset"] + 1
+    assert "UTF-8 boundary" in read_context_capture(args)["reason"]
+    args.offset = page["next_offset"]
+    capture.write_bytes(raw.replace(b"requirements", b"requirementX"))
+    result = read_context_capture(args)
+    assert not result["ok"] and "digest mismatch" in result["reason"]
+    assert "no guard, admission or spend" in result["recovery"]
+
+
+def test_page_output_budget_rejects_guard_use_without_admission(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    code, result = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "invalid-page-budget-guard",
+        "--max-page-output-bytes", "7000", cwd=project)
+    assert code == 1 and not result["ok"] and "only supported by JSON context-read" in result["reason"]
+    assert _heartbeat_receipt_count(runtime, "invalid-page-budget-guard") == 0
+    assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -221,9 +221,12 @@ setting. Ordinary machine validation still applies to business operations.
 
 Native `quota should-run` and the saved `context-project` entry share the same
 paged presentation. Each returns page zero, a digest-pinned continuation and full
-recovery without another admission. Native pages stay at 3 KiB throughout that
-read, reducing output-wrapper truncation; consume the inline page before following
-next_command. Forward exec stdout directly in code mode. Repeating the packet in
+recovery without another admission. The inline page stays at 3 KiB. Continuations
+request up to 8 KiB of content with `--max-page-output-bytes 7000`, which bounds
+successful JSON stdout including escaping, commands and newline. Consume the inline
+page before following next_command; when the retained-history limit is unknown,
+read one bounded output at a time. This is not a guarantee of model retention.
+Forward exec stdout directly in code mode. Repeating the packet in
 a hashing tool call does not establish that its original bytes were retained.
 The reader verifies the immutable capture digest. Native lifecycle delivery uses
 the same byte-range validator as explicit input observations: before merging
@@ -383,8 +386,10 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 机器开启后，`quota context-config --codex-app --goal-id GOAL --agent-id AGENT` 只准备
 私有传输末级目录并生成已有 hook 和恢复指令，不安装或信任 hook，也不更改宿主配置。
 原生 `quota should-run` 与已保存捕获的 `context-project` 共用分页呈现，直接返回第零页、
-固定摘要的后续读取与完整恢复，不另行准入。该原生读取链的页大小保持 3 KiB，以减少
-输出包装造成的截断；先消费已附带页，再跟随 next_command。Code Mode 直接转发
+固定摘要的后续读取与完整恢复，不另行准入。内联页保持 3 KiB；后续命令最多请求
+8 KiB 正文，并用 `--max-page-output-bytes 7000` 将成功 JSON stdout（含转义、
+后续命令与换行）限制为 7000 字节。先消费内联页，再跟随 next_command；保留历史
+上限未知时，每次只读一个有界输出。该上限不证明模型保留。Code Mode 直接转发
 exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
 读取器校验不可变 capture 的摘要。Post-tool 适配层复用显式输入观察的字节范围校验，
 先将实际 UTF-8 正文与可信 journal 指向的物理捕获及固定摘要核对，再合并读取范围。
@@ -441,13 +446,20 @@ exact digest and Turn receipt; they never rerun admission or spend quota.
 
 With delivery on, a successful saved projection also returns page zero using
 the existing `context_capture_page_v1` fields. Its content is bounded to 3 KiB
-to leave room for projection metadata; subsequent native pages also use 3 KiB.
+to leave room for projection metadata. Subsequent native commands request up to
+8 KiB of content within a 7000-byte successful JSON stdout limit. The optional
+JSON-only `--max-page-output-bytes` flag shrinks content at UTF-8 boundaries and
+preserves the limit in `next_command`. An insufficient limit returns an error
+without a zero-progress page; increase it for the same capture. Omitting the flag
+preserves legacy reader output. Error messages are not subject to an impossible
+page limit, and this option changes no host or retained-history budget.
 Consume `content`, then follow `next_command` through `eof` for full byte coverage.
 The reader verifies the original digest; do not retype or hash the content. The
 existing `command` still restarts at zero for older readers or incomplete inline
 output. If the optional first-page read fails, that same command remains usable.
-Off responses do not add a page. No new flag, admission or retention receipt is
-introduced; an inline page alone cannot prove complete input retention.
+Off responses do not add a page or change their existing guidance. No admission
+or retention receipt is introduced; an inline page alone cannot prove complete
+input retention.
 
 `quota context-project` 开启上下文投递后，不再要求另外手工准备缓存目录。
 省略 `--decision-output-root` 时复用原生会话的私有上下文目录；显式指定的新目录
@@ -457,9 +469,13 @@ introduced; an inline page alone cannot prove complete input retention.
 原始摘要和 Turn 回执，不重新准入或扣减额度。
 
 开启时，成功的已保存投影同时用现有 `context_capture_page_v1` 字段返回第一页。
-该页内容最多 3 KiB，为投影元数据留出输出空间；后续原生页也按 3 KiB 读取。
+该页内容最多 3 KiB，为投影元数据留出输出空间；后续原生命令最多请求 8 KiB
+正文，成功 JSON stdout 限制为 7000 字节。可选的 JSON 专用参数
+`--max-page-output-bytes` 按 UTF-8 边界缩减正文，并在 `next_command` 中保留。
+上限不足时返回错误，不返回无进展的分页；增大上限后重读同一捕获。省略该参数
+保持旧读取输出。错误消息不受无法满足的分页上限限制，也不更改宿主或历史输出预算。
 先读取 `content`，再沿 `next_command` 读至 `eof`，确保完整字节覆盖。
 读取器校验原始摘要；无需重抄正文或计算哈希。
 原有 `command` 仍从零开始，供旧读取方或内联输出不完整时重读；可选的首屏读取
-失败时也保留该命令。关闭态不增加分页数据，不新增开关、准入或保留回执；
+失败时也保留该命令。关闭态不增加分页数据，也不改变既有指引；不新增准入或保留回执；
 单页内联内容不证明完整输入仍被保留。
