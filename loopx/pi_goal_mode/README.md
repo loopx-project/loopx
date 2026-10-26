@@ -52,7 +52,10 @@ into a LoopX-governed visible goal loop.
   image-only input and text identical to the last injected task. Pi still
   processes the input and can compact/recover within that run; LoopX stops
   submitting subsequent tasks. Already-submitted messages and running tools
-  are not cancelled. Use `/loopx resume` to re-arm with fresh quota admission.
+  are not cancelled. Input arriving during a pending resume or activation
+  revokes dispatch immediately, then waits for already-started re-arm writes
+  before saving the pause, so restarting Pi cannot restore that older re-arm.
+  Use `/loopx resume` to re-arm with fresh quota admission.
 - **Pause reasons** — a saved input pause records `pauseReason: "user_prompt"`,
   Escape records `"aborted"`, and explicit resume clears the reason. Input and
   run-start events for the same pause notify once and preserve an existing pause

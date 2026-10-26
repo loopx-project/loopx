@@ -813,8 +813,22 @@ export function createGoalLoop(options) {
   // A local revocation fence also covers a pending/failed pause write. It can
   // only deny continuation; durable binding + fresh quota still grant it.
   const inputFences = new Map()
+  const pendingRearms = new Map()
   let disposed = false
   let epoch = 0
+
+  const writeRearm = (key, store, changes, expected) => {
+    const write = Promise.resolve().then(() => store.write(key, changes, expected))
+    // A newer input must persist its pause after every already-started re-arm,
+    // even if another activation/resume finishes before an older write. Failed
+    // re-arms do not prevent the input handler from trying to save its pause.
+    const pending = Promise.allSettled([pendingRearms.get(key), write])
+    pendingRearms.set(key, pending)
+    pending.then(() => {
+      if (pendingRearms.get(key) === pending) pendingRearms.delete(key)
+    })
+    return write
+  }
 
   const cancelScheduled = (key) => {
     const timer = timers.get(key)
@@ -1047,6 +1061,11 @@ export function createGoalLoop(options) {
     // evaluation. Pi catches input-handler errors, so throwing is not a gate.
     if (prompt === undefined) revoke()
     try {
+      // A paused snapshot is not final while an older resume/activation can
+      // still save autoResume=true. Revoke dispatch now, then read after those
+      // writes finish so this pause also survives a new runtime instance.
+      await pendingRearms.get(key)
+      if (!isCurrent()) return
       const binding = await services.store.read(key)
       if (!isCurrent()) return
       if (!binding || binding.terminal || binding.autoResume === false) return
@@ -1121,8 +1140,9 @@ export function createGoalLoop(options) {
       // Increment the persisted generation so every in-flight evaluation for
       // this key is rejected at its next compare-and-swap commit.
       const current = await services.store.read(key)
+      if (disposed || inputFences.get(key) !== inputFence) return null
       const generation = (current?.generation || 0) + 1
-      const binding = await services.store.write(key, {
+      const binding = await writeRearm(key, services.store, {
         ...fields,
         activationToken: verified.token,
         goalId: verified.goalId,
@@ -1217,8 +1237,8 @@ export function createGoalLoop(options) {
       inputFences.set(key, inputFence)
       cancelScheduled(key)
       const current = await services.store.read(key)
-      if (!current || disposed) return null
-      const binding = await services.store.write(key,
+      if (!current || disposed || inputFences.get(key) !== inputFence) return null
+      const binding = await writeRearm(key, services.store,
         {
           autoResume: true,
           terminal: false,
