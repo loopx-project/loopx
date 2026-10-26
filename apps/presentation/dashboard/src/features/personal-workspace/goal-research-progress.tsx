@@ -277,42 +277,51 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
         : null}
       <details className="research-progress-basis"><summary>{zh ? "来源与用量" : "Sources and usage"}<ContextHelp icon={CircleHelp} label={p.native_outcomes ? (zh ? "完整成本未知" : "Total cost unknown") : (zh ? "原生测量未采集 · 完整成本未知" : "Native measurements uncaptured · Total cost unknown")}><p>{p.native_outcomes ? "" : (zh ? "原生测量未采集。" : "Native measurements were not captured. ")}{zh ? "完整成本未知。" : "Total cost is unknown."}</p></ContextHelp></summary>
         <section className="research-usage" aria-label={zh ? "求解用量" : "Solver usage"}>
-          <div className="research-usage-heading"><h4>{zh ? "求解用量" : "Solver usage"}</h4><ContextHelp label={zh ? "用量范围与成本" : "Usage scope and cost"}>
+          <div className="research-usage-heading"><h4>{zh ? "求解用量" : "Solver usage"}</h4>
+            <span className="research-usage-scope">{usage ? <>{number(usage.completed_turns)} {zh ? "轮完整记录" : "complete Turns"}{measured?.applicability === "historical" ? (zh ? " · 历史捕获" : " · Historical capture") : ""}</> : (zh ? "未采集" : "Not captured")}</span>
+            <ContextHelp icon={measured?.applicability === "historical" ? TriangleAlert : usage ? undefined : CircleHelp} label={measured?.applicability === "historical" ? (zh ? "历史捕获 · 当前用量未核验" : "Historical capture · Current usage unverified") : usage ? (zh ? "用量范围与成本" : "Usage scope and cost") : (zh ? "求解用量未采集" : "Solver usage not captured")}>
             <p>{zh ? "只读捕获，窗口可能与判读片段及 Explore 历史不同。金额与完整研究成本未测得，不能从 token 数推算。" : "Read-only capture; its window can differ from the judgments and Explore history. Monetary and complete study costs are unmeasured, not inferred from token counts."}</p>
+            {measured?.applicability === "historical" ? <p>{zh ? "历史捕获：用量来源已变化或不可读，当前用量未核验。" : "Historical capture: the usage source changed or is unavailable; current usage is unverified."}</p> : null}
+            {!usage ? <p>{zh ? "尚无用量捕获；未测，不记零。" : "No usage capture; unmeasured, not zero."}</p> : null}
             {usage ? <p>{usage.method === "codex_observed_session_counters_v1" ? (zh ? "仅已观测计数；未记录的请求、后续用量、继承前缀、设置、评测和操作者成本未知。" : "Observed counters only. Unrecorded requests, later usage, inherited prefixes, setup, evaluation and operator costs remain unknown.") : (zh ? "仅本次完整捕获；继承前缀、设置、原生评测、操作者及后续未完成轮不包含。" : "This complete capture only; inherited prefixes, setup, native evaluation, operator work and later incomplete Turns are excluded.")}</p> : null}
           </ContextHelp></div>
-          {measured?.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史捕获：用量来源已变化或不可读，当前用量未核验。" : "Historical capture: the usage source changed or is unavailable; current usage is unverified."}</p> : null}
-          {usage ? <p className="research-usage-scope">{zh ? "会话计数" : "Session counters"} · {number(usage.completed_turns)} {zh ? "轮完整记录" : "complete Turns"}{incomplete ? (zh ? " · 末轮未完成" : " · final Turn incomplete") : ""}</p> : <p className="research-usage-scope">{zh ? "尚无用量捕获 · 未测，不记零" : "No usage capture · unmeasured, not zero"}</p>}
           <dl className="research-progress-values">
             <div><dt>{zh ? "捕获窗口跨度" : "Captured elapsed time"}</dt><dd>{usage ? duration(usage.elapsed_seconds) : "—"}</dd></div>
             <div><dt>{zh ? "未缓存输入" : "Uncached input"}</dt><dd>{usage ? number(usage.uncached_input_tokens) : "—"}<span> tokens</span></dd></div>
             <div><dt>{zh ? "输出（含推理）" : "Output (includes reasoning)"}</dt><dd>{usage ? number(usage.output_tokens) : "—"}<span> tokens</span></dd></div>
           </dl>
           {incomplete ? <div className="research-usage-tail">
-            <p>{incomplete.usage ? <>{zh ? "其中末轮" : "Of which, unfinished Turn"} · {zh ? "输入" : "input"} <strong>{number(incomplete.usage.input_tokens)}</strong> · {zh ? "输出" : "output"} <strong>{number(incomplete.usage.output_tokens)}</strong> tokens</> : (zh ? "末轮尚无计数观测，不记零" : "No counter observation for the unfinished Turn; not zero")}</p>
-            <p>{zh ? "仅含已持久化用量，不能据此判定运行已结束。" : "Persisted usage only; this does not establish termination."}</p>
+            <div className="research-usage-heading"><strong>{zh ? "末轮未完成" : "Final Turn incomplete"}</strong><ContextHelp icon={incomplete.usage ? undefined : CircleHelp} label={zh ? "末轮用量说明" : "About unfinished Turn usage"}>
+              <p>{zh ? "仅含已持久化用量，不能据此判定运行已结束。" : "Persisted usage only; this does not establish termination."}</p>
+              {!incomplete.usage ? <p>{zh ? "末轮尚无计数观测，不记零。" : "No counter observation for the unfinished Turn; not zero."}</p> : null}
+            </ContextHelp></div>
+            <p>{zh ? "其中输入" : "Of which input"} <strong>{incomplete.usage ? number(incomplete.usage.input_tokens) : "—"}</strong> · {zh ? "输出" : "output"} <strong>{incomplete.usage ? number(incomplete.usage.output_tokens) : "—"}</strong> tokens</p>
           </div> : null}
-          <LoopXInputShare usage={usage} zh={zh}/>
+          <div className="research-usage-secondary"><LoopXInputShare usage={usage} zh={zh}/>
           {usage ? <div className="research-request-coverage">
-            <div className="research-usage-heading"><h4>{zh ? "请求覆盖" : "Request coverage"}</h4><ContextHelp label={zh ? "请求计数口径" : "Request counter basis"}>
+            <div className="research-usage-heading"><h4>{zh ? "请求覆盖" : "Request coverage"}</h4>
+              {coverage?.status !== "verified" ? <span className="research-usage-scope">{coverage ? (zh ? "核对失败" : "Reconciliation failed") : (zh ? "未核对" : "Not reconciled")}</span> : null}
+              <ContextHelp icon={coverage?.status === "verified" ? undefined : coverage ? TriangleAlert : CircleHelp} label={coverage?.status === "verified" ? (zh ? "请求计数口径" : "Request counter basis") : coverage ? (zh ? "请求覆盖核对失败" : "Request reconciliation failed") : (zh ? "请求覆盖未核对" : "Request coverage not reconciled")}>
               <p>{zh ? "逐响应去重后，核对轮次与会话累计量、上下文压缩记录及会话计数。以下是独立核对口径，与上方会话计数不相加，也不改写 Goal 账本。" : "Deduplicated responses are reconciled against Turn and session totals, compaction records and session counters. This separate basis is not added to the session counters above and does not rewrite the Goal ledger."}</p>
               <p>{zh ? "仅含捕获中已记录的请求；未记录请求及完整费用仍未知。" : "Persisted requests in this capture only; unrecorded requests and complete cost remain unknown."}</p>
-            </ContextHelp></div>
-            {coverage?.status === "verified" ? <>
-              <p>{number(coverage.unique_requests)} {zh ? "次请求" : "requests"} · {number(coverage.compaction_requests)} {zh ? "次上下文压缩" : "context compactions"}</p>
-              <p>{coverage.counter_basis === "all_requests"
+              {coverage?.status === "verified" ? <p>{coverage.counter_basis === "all_requests"
                 ? (zh ? "会话计数含压缩请求" : "Session counters include compaction requests")
                 : coverage.counter_basis === "ordinary_requests"
                   ? (zh ? "会话计数不含压缩请求" : "Session counters exclude compaction requests")
                   : (zh ? "会话计数口径未确定" : "Session counter basis undetermined")}</p>
+                : <p>{coverage ? (zh ? "请求记录未通过核对；压缩用量与请求总量未知。" : "Request records could not be reconciled; compaction usage and request totals are unknown.") : (zh ? "请求覆盖未核对；上方会话计数不能代表全部请求用量。" : "Request coverage has not been checked; session counters above do not establish all-request usage.")}</p>}
+            </ContextHelp></div>
+            {coverage?.status === "verified" ? <>
+              <p>{number(coverage.unique_requests)} {zh ? "次请求" : "requests"} · {number(coverage.compaction_requests)} {zh ? "次上下文压缩" : "context compactions"}</p>
               <dl className="research-request-values">
                 <div><dt>{zh ? "全部请求 · 未缓存输入" : "All requests · uncached input"}</dt><dd>{number(coverage.all_requests.input_tokens - coverage.all_requests.cached_input_tokens)} <span>tokens</span></dd></div>
                 <div><dt>{zh ? "全部请求 · 输出" : "All requests · output"}</dt><dd>{number(coverage.all_requests.output_tokens)} <span>tokens</span></dd></div>
                 <div><dt>{zh ? "其中压缩 · 未缓存输入" : "Of which compaction · uncached input"}</dt><dd>{number(coverage.compaction.input_tokens - coverage.compaction.cached_input_tokens)} <span>tokens</span></dd></div>
                 <div><dt>{zh ? "其中压缩 · 输出" : "Of which compaction · output"}</dt><dd>{number(coverage.compaction.output_tokens)} <span>tokens</span></dd></div>
               </dl>
-            </> : <p className="research-progress-warning" role="status">{coverage ? (zh ? "请求记录未通过核对；压缩用量与请求总量未知。" : "Request records could not be reconciled; compaction usage and request totals are unknown.") : (zh ? "请求覆盖未核对；上方会话计数不能代表全部请求用量。" : "Request coverage has not been checked; session counters above do not establish all-request usage.")}</p>}
+            </> : null}
           </div> : null}
+          </div>
           {usage && measured ? <details className="research-usage-detail"><summary>{zh ? "计数明细与来源" : "Counter details and source"}</summary>
             <dl className="research-usage-basis">
               <dt>{zh ? "捕获时间（UTC）" : "Capture window (UTC)"}</dt><dd><time dateTime={usage.start}>{stamp(usage.start)}</time> — <time dateTime={usage.end}>{stamp(usage.end)}</time></dd>
@@ -329,12 +338,16 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
             </dl>
           </details> : null}
           <div className="research-analysis-cost">
-            <div className="research-usage-heading"><h4>{zh ? "分析尝试" : "Analysis attempt"}</h4><ContextHelp label={zh ? "分析开销范围" : "Analysis cost scope"}>
+            <div className="research-usage-heading"><h4>{zh ? "分析尝试" : "Analysis attempt"}</h4>
+              <span className="research-usage-scope">{p.job?.attempt != null ? (zh ? `第 ${p.job.attempt} 次` : `Attempt ${p.job.attempt}`) : (zh ? "未采集" : "Not captured")}</span><ContextHelp label={zh ? "分析开销范围" : "Analysis cost scope"}>
               <p>{zh ? "仅当前回执的本次尝试，不含更早失败、恢复、评测或操作者开销。不与求解捕获相加。" : "This attempt's receipt only; earlier failures, recovery, evaluation and operator work are excluded. Not added to solver capture."}</p>
+              {!p.job?.usage ? <p>{zh ? "未测得，不记零。" : "Unmeasured, not zero."}</p> : null}
             </ContextHelp></div>
-            <p>{p.job?.usage ? <>{zh ? "第" : "Attempt"} {p.job.attempt ?? "—"} · {zh ? "输入" : "input"} {p.job.usage.input_tokens == null ? "—" : number(p.job.usage.input_tokens)} · {zh ? "输出" : "output"} {p.job.usage.output_tokens == null ? "—" : number(p.job.usage.output_tokens)} tokens
-              {p.job.analysis_wall_seconds != null ? ` · ${duration(p.job.analysis_wall_seconds)}` : ""}
-            </> : (zh ? "未测得，不记零" : "Unmeasured, not zero")}</p>
+            {p.job?.usage || p.job?.analysis_wall_seconds != null ? <dl className="research-progress-values research-analysis-values">
+              <div><dt>{zh ? "输入" : "Input"}</dt><dd>{p.job?.usage?.input_tokens == null ? "—" : number(p.job.usage.input_tokens)}<span> tokens</span></dd></div>
+              <div><dt>{zh ? "输出" : "Output"}</dt><dd>{p.job?.usage?.output_tokens == null ? "—" : number(p.job.usage.output_tokens)}<span> tokens</span></dd></div>
+              <div><dt>{zh ? "用时" : "Elapsed time"}</dt><dd>{p.job?.analysis_wall_seconds == null ? "—" : duration(p.job.analysis_wall_seconds)}</dd></div>
+            </dl> : null}
           </div>
         </section>
         <details className="research-source-detail"><summary>{zh ? "分析范围与来源" : "Analysis scope and sources"}</summary><dl className="research-usage-basis">

@@ -101,11 +101,15 @@
 .research-progress-values dd { margin: 8px 0; font-size: var(--text-title); font-weight: 600; font-variant-numeric: tabular-nums; }
 .research-progress-values dd > span { font-size: var(--text-body); font-weight: 400; color: var(--pw-muted); }
 .research-usage { padding-block: 12px 8px; }
-.research-usage-heading { display: flex; align-items: center; gap: 4px; }
+.research-usage-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .research-progress .research-usage p, .research-progress .research-source-detail p { font-size: var(--text-body); margin-block: 8px; }
-.research-progress .research-usage-scope { margin-block: 4px 20px; }
+.research-usage-scope { color: var(--pw-muted); font-size: var(--text-body); }
 .research-usage-tail { border-inline-start: 2px solid var(--pw-caution); padding-inline-start: 16px; margin-block: 20px; }
 .research-usage-tail strong { font-weight: 500; color: var(--pw-text); }
+.research-usage-tail .research-usage-heading > strong { font-size: var(--text-body); }
+.research-usage-secondary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 24px; align-items: start; }
+.research-usage-secondary > * { min-width: 0; }
+.research-usage-secondary .research-request-coverage { margin-block: 12px; }
 .research-request-coverage { border-block-start: 1px solid var(--pw-line); padding-block-start: 16px; margin-block: 20px; }
 .research-input-share-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; }
 .research-input-share-value strong { font-size: var(--text-title); font-variant-numeric: tabular-nums; }
@@ -127,6 +131,7 @@
   .research-effect-metrics:lang(zh) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @container (max-width: 320px) { .research-effect-metrics:lang(zh) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 700px) { .research-usage-secondary { grid-template-columns: 1fr; gap: 0; } }
 @media (max-width: 640px) {
   .research-progress > header { flex-direction: column; gap: 8px; }
   .research-progress label { flex-direction: column; align-items: stretch; width: 100%; }
@@ -135,8 +140,8 @@
   .research-assessment > summary { gap: 8px; }
   .research-native-reading { gap: 12px 16px; }
   .research-native-reading > .research-native-best { flex-basis: 100%; margin-inline-end: 0; }
-  .research-progress-values { grid-template-columns: 1fr; gap: 16px; }
-  .research-request-values { grid-template-columns: 1fr; }
+  .research-progress-values { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .research-analysis-values { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .research-usage-basis { grid-template-columns: 1fr; gap: 4px; }
   .research-progress-basis dd, .research-usage-basis dd { margin-bottom: 8px; }
 }

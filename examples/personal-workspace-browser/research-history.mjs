@@ -1351,8 +1351,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
       assert.equal(await progress.locator('.research-progress-basis > summary').getByRole('button',{name:/完整成本未知/}).isVisible(),true,'The cost boundary remains discoverable with the details closed');
       await progress.locator('.research-progress-basis > summary').click();
-      assert.match(await progress.innerText(), /尚无用量捕获|No usage capture/);
-      await progress.getByRole('button', {name: '用量范围与成本', exact: true}).focus();
+      assert.match(await progress.locator('.research-usage-heading').first().innerText(), /未采集|Not captured/);
+      assert.doesNotMatch(await progress.innerText(), /未测，不记零|unmeasured, not zero/i, 'Missing counters remain a concise state, not a default explanation');
+      await progress.getByRole('button', {name: '求解用量未采集', exact: true}).focus();
+      assert.match(await progress.getByRole('tooltip').innerText(), /未测，不记零|unmeasured, not zero/i);
       assert.doesNotMatch(await progress.getByRole('tooltip').innerText(), /本次完整捕获|This complete capture/);
       await page.keyboard.press('Escape');
       await progress.locator('.research-progress-basis > summary').click();
@@ -1375,6 +1377,14 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /末轮未完成|final Turn incomplete/);
       assert.match(await progress.innerText(), /400.*8.*tokens/s, "Persisted unfinished usage is visible without declaring total cost");
+      assert.match(await progress.locator('.research-analysis-cost').innerText(), /未采集|Not captured/);
+      assert.equal(await progress.locator('.research-analysis-values').count(), 0, 'An uncaptured analysis attempt does not add invented readings');
+      assert.doesNotMatch(await progress.innerText(), /仅含已持久化用量|Persisted usage only/, 'The same unfinished-state explanation does not compete with its counters');
+      const unfinishedHelp = progress.getByRole('button', {name: '末轮用量说明', exact: true});
+      await unfinishedHelp.focus();
+      assert.match(await progress.getByRole('tooltip').innerText(), /不能据此判定运行已结束/);
+      await page.keyboard.press('Escape');
+      assert(await unfinishedHelp.evaluate(element => element === document.activeElement));
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await progress.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(),true);
       assert.equal(await nativeResults.isVisible(), true, 'An unanalysed pack still exposes its recorded outcomes with cost details closed');
