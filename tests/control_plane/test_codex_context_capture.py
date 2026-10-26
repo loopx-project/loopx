@@ -65,7 +65,7 @@ def _last_page(request):
     for item in reversed(request["input"]):
         output = item.get("output")
         parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
-        for part in parts:
+        for part in reversed(parts):
             if not isinstance(part, str):
                 continue
             try:
@@ -246,9 +246,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             page = _last_page(request)
             assert page and page["ok"], page
             bounded_sizes.append(len(page["content"].encode()))
-            assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7000
+            assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
             if not page["eof"]:
-                assert "--max-page-output-bytes 7000" in page["next_command"]
+                assert "--max-page-output-bytes 7900" in page["next_command"]
                 return tool(page["next_command"], number)
         if stages["pages"]:
             cmd = stages["pages"].pop(0)

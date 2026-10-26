@@ -136,7 +136,7 @@ CONTEXT_CAPTURE_READ_GUIDANCE = (
 # Leave room below the native 2000-token exec output boundary for framing.
 # This does not establish downstream retained-history capacity or retention.
 NATIVE_CONTEXT_PAGE_BYTES = 8192
-NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 7000
+NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 7900
 
 
 def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, page_bytes: int = 4096,

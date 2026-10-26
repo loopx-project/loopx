@@ -222,7 +222,7 @@ setting. Ordinary machine validation still applies to business operations.
 Native `quota should-run` and the saved `context-project` entry share the same
 paged presentation. Each returns page zero, a digest-pinned continuation and full
 recovery without another admission. The inline page stays at 3 KiB. Continuations
-request up to 8 KiB of content with `--max-page-output-bytes 7000`, which bounds
+request up to 8 KiB of content with `--max-page-output-bytes 7900`, which bounds
 successful JSON stdout including escaping, commands and newline. Consume the inline
 page before following next_command; when the retained-history limit is unknown,
 read one bounded output at a time. This is not a guarantee of model retention.
@@ -387,8 +387,8 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 私有传输末级目录并生成已有 hook 和恢复指令，不安装或信任 hook，也不更改宿主配置。
 原生 `quota should-run` 与已保存捕获的 `context-project` 共用分页呈现，直接返回第零页、
 固定摘要的后续读取与完整恢复，不另行准入。内联页保持 3 KiB；后续命令最多请求
-8 KiB 正文，并用 `--max-page-output-bytes 7000` 将成功 JSON stdout（含转义、
-后续命令与换行）限制为 7000 字节。先消费内联页，再跟随 next_command；保留历史
+8 KiB 正文，并用 `--max-page-output-bytes 7900` 将成功 JSON stdout（含转义、
+后续命令与换行）限制为 7900 字节。先消费内联页，再跟随 next_command；保留历史
 上限未知时，每次只读一个有界输出。该上限不证明模型保留。Code Mode 直接转发
 exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
 读取器校验不可变 capture 的摘要。Post-tool 适配层复用显式输入观察的字节范围校验，
@@ -447,7 +447,7 @@ exact digest and Turn receipt; they never rerun admission or spend quota.
 With delivery on, a successful saved projection also returns page zero using
 the existing `context_capture_page_v1` fields. Its content is bounded to 3 KiB
 to leave room for projection metadata. Subsequent native commands request up to
-8 KiB of content within a 7000-byte successful JSON stdout limit. The optional
+8 KiB of content within a 7900-byte successful JSON stdout limit. The optional
 JSON-only `--max-page-output-bytes` flag shrinks content at UTF-8 boundaries and
 preserves the limit in `next_command`. An insufficient limit returns an error
 without a zero-progress page; increase it for the same capture. Omitting the flag
@@ -470,7 +470,7 @@ input retention.
 
 开启时，成功的已保存投影同时用现有 `context_capture_page_v1` 字段返回第一页。
 该页内容最多 3 KiB，为投影元数据留出输出空间；后续原生命令最多请求 8 KiB
-正文，成功 JSON stdout 限制为 7000 字节。可选的 JSON 专用参数
+正文，成功 JSON stdout 限制为 7900 字节。可选的 JSON 专用参数
 `--max-page-output-bytes` 按 UTF-8 边界缩减正文，并在 `next_command` 中保留。
 上限不足时返回错误，不返回无进展的分页；增大上限后重读同一捕获。省略该参数
 保持旧读取输出。错误消息不受无法满足的分页上限限制，也不更改宿主或历史输出预算。
