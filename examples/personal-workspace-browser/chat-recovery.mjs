@@ -41,6 +41,7 @@ export const chatRecoveryScenario = {
       await page.locator(".personal-manager-conversation-tray").waitFor({ state: "visible" });
       if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("Manager send replaced the home lane overview");
       const managerUrlBefore = page.url();
+      await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "询问全局待办", exact: true }).click();
       // This is a fresh question, not an instruction to the shortcut's active Turn.
       await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
@@ -199,6 +200,7 @@ export const chatRecoveryScenario = {
         throw new Error("Manager conversation receipt stayed permanently visible after returning to the overview");
       }
 
+      await page.locator(".personal-composer-tools > summary").click();
       const [fileChooser] = await Promise.all([
         page.waitForEvent("filechooser"),
         page.getByRole("button", { name: "添加图片" }).click(),
