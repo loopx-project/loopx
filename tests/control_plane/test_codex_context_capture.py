@@ -91,10 +91,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     # Real worker qualification follows returned cursors; output budgets can
     # shrink a page, so precomputed fixed offsets are not its production path.
     bounded_pages = bounded_pages or host == "benchmark"
-    # These shapes retain complete, independently checked reader pages in the
-    # native-selected replay. Other shapes below deliberately exercise reset
-    # and exact-original recovery instead of claiming qualified reuse.
-    qualified_resume = host == "benchmark" or ssh_goal or (adaptive and bounded_pages)
+    # Ordinary and batched CodeMode reads now share the native checkpoint
+    # owner. Preserve a verified replay; explicit history-loss cases below
+    # must still recover the original before dependent work.
+    qualified_resume = host in {"benchmark", "code_mode"} or ssh_goal
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
     env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
@@ -585,6 +585,19 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             sandbox = "danger-full-access" if ssh_goal else "workspace-write"
             session_id = _app_server(binary, env, workspace, home, True, sandbox=sandbox, turn_timeout_sec=60)
             if resumed:
+                if not shared_root:
+                    candidate = json.loads((lifecycle / "session.json").read_text())["candidate"]
+                    assert candidate["capture_bytes_verified"] is True
+                    assert candidate["target"] == wires["cold"]["target"]
+                    checkpoint = candidate["native_resume"]
+                    assert checkpoint["read_source"] == {
+                        "path": str(read_paths["cold"]), "sha256": page_digests["cold"]}
+                    history_path = Path(checkpoint["path"])
+                    assert history_path.is_relative_to(home / "sessions")
+                    history = history_path.read_bytes()
+                    start, end = checkpoint["reader_start"], checkpoint["observed_bytes"]
+                    assert 0 < start < end <= len(history)
+                    assert hashlib.sha256(history[start:end]).hexdigest() == checkpoint["reader_sha256"]
                 assert _app_server(binary, env, workspace, home, True, sandbox=sandbox,
                                    resume=session_id, turn_timeout_sec=60) == session_id
     assert not errors, errors
