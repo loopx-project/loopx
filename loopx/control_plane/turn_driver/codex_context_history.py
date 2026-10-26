@@ -54,7 +54,8 @@ def _snapshot(event: dict[str, Any]) -> tuple[dict[str, Any], bytes] | None:
     meta = first.get("payload", {})
     if (first.get("type") != "session_meta" or meta.get("id") != event.get("session_id")
             or meta.get("cwd") != event.get("cwd") or meta.get("forked_from_id")
-            or meta.get("history_mode") != "paginated" or meta.get("cli_version") != "0.162.1"
+            or meta.get("history_mode") != "paginated"
+            or meta.get("cli_version") not in ("0.162.1", "0.163.0-alpha.11.1")
             or not event.get("model") or not event.get("permission_mode")):
         return None
     # Filesystem identities are opaque; large inode numbers must survive the

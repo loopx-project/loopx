@@ -265,7 +265,7 @@ rollout must retain its digest-bound prefix and every observed reader output,
 including complete byte coverage of the pinned capture, with
 matching session, workspace, model and permission mode, and no intervening
 compaction, rollback, replacement or unknown replay record. This bounded IO
-profile targets Codex 0.162.1 paginated rollouts; missing, changed,
+profile covers Codex 0.162.1 and 0.163.0-alpha.11.1 paginated rollouts; missing, changed,
 oversized (over 64 MiB) or unqualified sources fall back to full. It retains the
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
@@ -425,8 +425,9 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
 须保留摘要固定的前缀及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
 会话、工作区、模型和权限模式相同，
-中间没有压缩、回滚、替换或未知重放记录。此有界 IO profile 面向 Codex 0.162.1 的分页
-rollout；来源缺失、变化、超过 64 MiB 或无法资格化时回退全量。仍采用正常读取后的
+中间没有压缩、回滚、替换或未知重放记录。此有界 IO profile 覆盖 Codex 0.162.1 和
+0.163.0-alpha.11.1 的分页 rollout；来源缺失、变化、超过 64 MiB 或无法资格化时回退全量。
+仍采用正常读取后的
 工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。
 开启后的 benchmark 原生子进程自动以仅所有者可访问的权限创建文件，父进程与关闭态
 保持原权限策略；既有可组写的重放来源不能建立跨进程连续性。

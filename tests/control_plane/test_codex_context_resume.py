@@ -13,11 +13,12 @@ def append(path, kind, payload):
         stream.write(json.dumps({"type": kind, "payload": payload}) + "\n")
 
 
-def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost_prefix=False):
+def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost_prefix=False,
+                  version="0.162.1"):
     event = setup(root, monkeypatch)
     history = root / "rollout.jsonl"
     append(history, "session_meta", {"id": "session", "cwd": str(root),
-        "cli_version": "0.162.1", "history_mode": "paginated"})
+        "cli_version": version, "history_mode": "paginated"})
     history.chmod(0o600)
     event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions")
     append(history, "turn_context", {"cwd": str(root), "model": "fixture"})
@@ -41,8 +42,9 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
 
 
 @pytest.mark.parametrize("shell_wrapper", [False, True])
-def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_path, monkeypatch, shell_wrapper):
-    event, history, payload = observed_read(tmp_path, monkeypatch, shell_wrapper=shell_wrapper)
+@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1"])
+def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_path, monkeypatch, shell_wrapper, version):
+    event, history, payload = observed_read(tmp_path, monkeypatch, shell_wrapper=shell_wrapper, version=version)
     before = context._state(tmp_path)
     assert before["candidate"]["native_resume"]["inode"].isdigit()
     append(history, "event_msg", {"type": "task_complete"})
@@ -58,8 +60,9 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
 
 @pytest.mark.parametrize("change", ["compact", "rollback", "retained", "unknown", "truncate",
     "replace", "rewrite", "missing", "output", "duplicate", "model", "workspace", "session", "permission", "writable", "malformed"])
-def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, monkeypatch, change):
-    event, history, payload = observed_read(tmp_path, monkeypatch)
+@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1"])
+def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, monkeypatch, change, version):
+    event, history, payload = observed_read(tmp_path, monkeypatch, version=version)
     before = context._state(tmp_path)
     if change in {"compact", "retained", "unknown"}:
         append(history, {"compact": "compacted", "retained": "retained_context", "unknown": "future_history"}[change], {})
@@ -96,6 +99,17 @@ def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, 
         assert after["recovery"] == before["recovery"]
         _, wire = project(tmp_path, "second", payload=payload)
         assert wire["mode"] == "full" and wire["context"] == payload
+
+
+@pytest.mark.parametrize("version", ["0.163.0", "0.163.0-alpha.11.2", "unknown"])
+def test_unqualified_native_version_cannot_retain_resume_baseline(tmp_path, monkeypatch, version):
+    event, _, payload = observed_read(tmp_path, monkeypatch, version=version)
+    before = context._state(tmp_path)
+    assert "native_resume" not in before["candidate"]
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    assert context._state(tmp_path)["context_epoch"] != before["context_epoch"]
+    _, wire = project(tmp_path, "second", payload=payload)
+    assert wire["mode"] == "full" and wire["context"] == payload
 
 
 def test_incomplete_native_read_cannot_gain_resume_continuity(tmp_path, monkeypatch):
