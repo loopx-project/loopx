@@ -44,6 +44,7 @@ def ordinary(tmp_path, monkeypatch):
     monkeypatch.setattr(manager, "collect_manager_turn_context", lambda *_, **__: pytest.fail("ordinary Chat must not read portfolio"))
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller = store, runtime
+    server.runtime_root, server.registry_path = store.root.parent, runtime.registry_path
     server.selected_goal_id, server.verbose = None, False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

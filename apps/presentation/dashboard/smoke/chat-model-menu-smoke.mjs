@@ -77,10 +77,17 @@ try {
     assert.doesNotMatch(goal, /goal-only-model|Fast|personal-chat-model-menu/, "The Goal reading header leaves sending choices in the single composer");
     assert.doesNotMatch(goal, /gpt-6\.1-sol/, "Goal readback does not inherit the steward model");
     const linked = header("idle", { readOnlySourceLabel: "Historical run", selectedGoal: { goalId: "source-case", title: "Historical run", agentLanes: [] } });
-    const sourceBadge = linked.match(/class="personal-read-only-source"[^>]*>(.*?)<\/span>/)?.[1] ?? "";
-    assert.match(sourceBadge, new RegExp(locale === "zh-CN" ? "只读" : "Read only"));
-    assert.doesNotMatch(sourceBadge, /Historical run/, "The source badge does not repeat the visible Goal title");
-    assertions += 32;
+    // The persistent badge is its trigger name and visible text. Its disclosure
+    // panel is opened on demand and may explain the same source once.
+    const badgeStart = linked.indexOf('class="personal-read-only-source"');
+    const badgeEnd = linked.indexOf('class="personal-channel-actions"', badgeStart);
+    const badge = linked.slice(badgeStart, badgeEnd > badgeStart ? badgeEnd : undefined)
+      .replace(/<div [^>]*class="context-help-popover"[\s\S]*?<\/div>/, "");
+    assert.match(badge, new RegExp(locale === "zh-CN" ? "只读" : "Read only"));
+    assert.doesNotMatch(badge, /Historical run/, "The read-only source badge does not repeat the visible Goal title");
+    const distinct = header("idle", { readOnlySourceLabel: "Remote build", selectedGoal: { goalId: "source-case", title: "Public Goal", agentLanes: [] } });
+    assert.match(distinct, /class="personal-read-only-source-label"[^>]*>Remote build</, "A source the Goal title does not name stays visible in the badge");
+    assertions += 33;
   }
   console.log(`Chat model/header: ${assertions} bilingual model, defaults and accessible refresh assertions passed (SSR only)`);
 } finally { globalThis.window = originalWindow; }

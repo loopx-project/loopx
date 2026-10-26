@@ -1707,6 +1707,37 @@ native inventory reads and crashes before admission, after enqueue and before
 transport synchronization. Synthetic model/provider journeys and read-only native
 observations do not certify live model completion or the wider conversation SLA.
 
+### Explicit unfinished work after a completed Turn
+
+A terminal model Turn is distinct from completed business work. A private
+project worker can include `unfinished_work={remaining,dependency,effects_settled:true}`
+in its response envelope after verifying its settled results. This bounded
+report supplies no permission, task, scheduler or retry authority. Gates,
+protected actions, handoffs, ambiguous effects and legacy prose cannot supply it.
+This path covers source-bound ordinary private project Codex conversations;
+steward, group, attached-host and attachment-bearing requests remain outside it.
+
+The existing original-source reply worker may reserve one continuation after
+60 seconds. Core revalidates the original owner/App/source, unchanged message,
+workspace grant and stop/correction state. Native readback must independently
+show that the exact latest Turn completed, its full item inventory is stable,
+every effect item completed, no background work remains, and the same final
+answer explicitly contains that report. A later native Turn, unknown item,
+failed/declined/live effect, edited source or revoked grant remains a hold.
+
+The original Session queue and deterministic `work-1` reservation own execution;
+restart adopts an already committed Turn instead of dispatching it again. The
+native inventory is checked again immediately before dispatch, and waiting new
+input takes precedence. The worker reads prior history and artifacts and completes
+only remaining authorized work. Its new result uses a separate original-source
+delivery phase; the earlier
+Turn and partial reply remain unchanged. A failed or still-incomplete continuation
+cannot fall through to another business, routing or quota retry. There is no
+second consumer. Old untyped partial replies are retained without inferring an
+intent or rewriting their status; their remaining business is not certified by
+this capability. Disposable native/provider journeys qualify the bounded path,
+not completion of historical user requests or live model behavior.
+
 ### Lark progress-edit budget and final-result recovery
 
 Private conversations and steward commissions reuse persisted Turn events to

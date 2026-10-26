@@ -95,6 +95,65 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         return None
 
 
+def completed_work_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
+    """Read a latest, stable completed inventory with an explicit unfinished report.
+
+    This proves settled native items, not the safety of repeating their effects.
+    Core owns the original source, grant, bounded continuation and stop checks.
+    """
+    from ...chat import parse_agent_response
+
+    deadline = time.monotonic() + session.response_timeout_sec
+    try:
+        def turns():
+            return list(session._control_items("thread/turns/list", {
+                "sortDirection": "desc", "itemsView": "summary",
+            }, deadline))
+
+        inventory = turns()
+        ids = [item.get("id") for item in inventory]
+        if (not ids or ids[0] != turn_id or inventory[0].get("status") != "completed"
+                or any(not isinstance(value, str) or not value for value in ids)
+                or len(set(ids)) != len(ids)
+                or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in inventory)
+                or session._background_terminals(deadline)):
+            return None
+        items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
+        seen: set[str] = set()
+        users = 0
+        finals = []
+        for entry in items:
+            item = entry.get("item")
+            if (entry.get("turnId") != turn_id or not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str) or not item["id"] or item["id"] in seen):
+                return None
+            seen.add(item["id"])
+            kind = item.get("type")
+            if kind == "userMessage":
+                users += 1
+            elif kind == "agentMessage":
+                if item.get("phase") == "final_answer" and isinstance(item.get("text"), str):
+                    finals.append(item["text"])
+                elif item.get("phase") != "commentary":
+                    return None
+            elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
+                if item.get("status") != "completed":
+                    return None  # Declined/failed/live/unknown effects cannot request writable continuation.
+            elif kind not in {"reasoning", "webSearch", "contextCompaction"}:
+                return None
+        if (users != 1 or len(finals) != 1 or turns() != inventory
+                or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items
+                or session._background_terminals(deadline)):
+            return None
+        unfinished = parse_agent_response(finals[0], protected_paths=[session.work_dir]).get("unfinished_work")
+        if unfinished is None:
+            return None
+        return {"thread_id": session.thread_id, "turn_id": turn_id,
+                "completed_work": True, "all_effects_settled": True, "unfinished_work": unfinished}
+    except (CodexChatAgentError, OSError, TypeError, ValueError):
+        return None
+
+
 def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
     """Prove a stable interrupted inventory, not that its effects are safe to retry.
 
@@ -155,6 +214,8 @@ class CodexAppServerAdapter:
     def failed_request_observation(*, codex_bin: str, codex_home: Path,
                                    thread_ids: list[str], turn_id: str,
                                    read_only_review: bool = False,
+                                   completed_work: bool = False,
+                                   work_dir: Path | None = None,
                                    model_auth_home: Path | None = None) -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
 
@@ -169,7 +230,7 @@ class CodexAppServerAdapter:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", bufsize=1)
         native = CodexChatAgentSession(process=process, messages=queue.Queue(), thread_id="",
-            work_dir=codex_home, response_timeout_sec=5)
+            work_dir=work_dir or codex_home, response_timeout_sec=5)
         try:
             threading.Thread(target=_reader, args=(process.stdout, native.messages), daemon=True).start()
             native._request("initialize", {"clientInfo": {"name": "loopx_chat", "version": "0.1.0"},
@@ -179,7 +240,9 @@ class CodexAppServerAdapter:
             for thread_id in dict.fromkeys(thread_ids):
                 native.thread_id = thread_id
                 native.response_timeout_sec = max(.01, deadline - time.monotonic())
-                proof = (interrupted_result_readback if read_only_review else failed_request_readback)(native, turn_id)
+                reader = (completed_work_readback if completed_work else
+                          interrupted_result_readback if read_only_review else failed_request_readback)
+                proof = reader(native, turn_id)
                 if proof is not None:
                     if proof.get("codex_error_info") == "usageLimitExceeded":
                         # Reuse the optional provider's TS availability owner;

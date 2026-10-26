@@ -182,6 +182,156 @@ def connect_group(fixture):
     return store, runtime, provider, transport
 
 
+@pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
+    "background", "later-user", "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input", "private-path", "still-incomplete"])
+def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.extensions.lark.private_progress import presentation_phase
+
+    store, runtime, contexts, _, capture, fake, workspace = ordinary
+    contexts.workspace_grant = "workspace_write"
+    store, runtime, provider, transport = connect(ordinary)
+    binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+    inventory = workspace / "native-inventory.json"
+    artifact = workspace / "verified-result.txt"
+    work = {"remaining": "Append the missing verified result", "dependency": "Temporary synthetic source outage", "effects_settled": True}
+    if fault == "private-path":
+        work["remaining"] = "Append to " + str(artifact)
+    partial = "Partial result retained; remaining work is blocked.\n<loopx-review-json>" + json.dumps({
+        "message": "", "unfinished_work": work}) + "</loopx-review-json>"
+    source = fake.read_text()
+    source = source.replace("turn_count = 0", f"turn_count = len(json.load(open({str(inventory)!r}))[\"turns\"]) if __import__(\"os\").path.exists({str(inventory)!r}) else 0")
+    start = source.index("        response = 'Visible runtime response.")
+    end = source.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
+    source = source[:start] + f'''        from pathlib import Path
+        path = Path({str(inventory)!r})
+        first = not path.exists()
+        previous = json.loads(path.read_text()) if path.exists() else {{"turns": []}}
+        response = {partial!r} if first or {fault == "still-incomplete"!r} else "Verified remaining work completed."
+        artifact = Path({str(artifact)!r})
+        if "Newer follow-up" in json.dumps(request["params"]):
+            response = "Newer input processed."
+        else:
+            artifact.write_text((artifact.read_text() if artifact.exists() else "") + ("first\\n" if first else "remaining\\n"))
+        path.write_text(json.dumps({{"turns": [{{"id": active_turn, "status": "completed"}}, *previous["turns"]], "items": [
+            {{"turnId": active_turn, "item": {{"id": "user", "type": "userMessage"}}}},
+            {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
+            {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}}]}}))
+''' + source[end:]
+    start = source.index('    elif method == "thread/turns/list":')
+    end = source.index('    else:\n        result = {}', start)
+    source = source[:start] + f'''    elif method in {{"thread/turns/list", "thread/items/list"}}:
+        snapshot = json.load(open({str(inventory)!r}))
+        result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
+    elif method == "thread/backgroundTerminals/list":
+        result = {{"data": [{{"processId": "still-live"}}] if {fault == "background"!r} else []}}
+''' + source[end:]
+    fake.write_text(source)
+    event = provider.event("notes-app", "unfinished-source", "Complete this synthetic original workspace request.")
+    transport.admit("notes-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    original = transport.core.read_request(ref)
+    turn = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=10)
+    assert turn["status"] == "completed"
+    if fault == "private-path":
+        assert str(workspace) not in turn["response"]["unfinished_work"]["remaining"]
+    else:
+        assert turn["response"]["unfinished_work"] == work
+    assert transport.reconcile() == 1
+    path = transport.root / (ref + ".json")
+    original_delivery = json.loads(path.read_text())["deliveries"]["terminal"]
+    original_turn_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
+    session_before = store.load_session(original["session_id"])
+    Path(session_before["codex_home"]).mkdir(parents=True, exist_ok=True)
+    runtime.adapters.pop(original["session_id"]).close_session()
+    clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+    class AfterBackoff(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock
+    monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+    if fault == "changed-source":
+        provider.messages[event["message_id"]]["content"] = "Edited source"
+    if fault == "revoked":
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    if fault == "stop":
+        transport.admit("notes-app", provider.event("notes-app", "stop-later", "/stop"))
+    if fault in {"unknown-native", "later-user"}:
+        snapshot = json.loads(inventory.read_text())
+        if fault == "unknown-native":
+            snapshot["items"].append({"turnId": turn["upstream_turn_id"], "item": {"id": "unknown", "type": "futureEffect"}})
+        else:
+            snapshot["turns"].insert(0, {"id": "newer-user", "status": "completed"})
+        inventory.write_text(json.dumps(snapshot))
+
+    def worker():
+        return LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent, runner=provider, cli_bin="lark-cli")
+    selected = worker()
+    if fault in {"reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input"}:
+        enqueue = runtime.enqueue_turn
+        def crash(**kwargs):
+            if fault in {"post-enqueue-crash", "queued-newer", "queued-input"}:
+                enqueue(**kwargs)
+            raise OSError("synthetic continuation admission crash")
+        monkeypatch.setattr(runtime, "enqueue_turn", crash)
+        with pytest.raises(OSError, match="admission crash"):
+            selected.reconcile()
+        monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+        if fault == "queued-newer":
+            snapshot = json.loads(inventory.read_text())
+            snapshot["turns"].insert(0, {"id": "newer-after-reservation", "status": "completed"})
+            inventory.write_text(json.dumps(snapshot))
+        if fault == "queued-input":
+            resume = runtime.resume_session_queue
+            monkeypatch.setattr(runtime, "resume_session_queue", lambda **kwargs: None)
+            transport.admit("notes-app", provider.event("notes-app", "newer-input", "Newer follow-up: inspect this correction first."))
+            monkeypatch.setattr(runtime, "resume_session_queue", resume)
+        selected = worker()
+    selected.reconcile()
+    continued = selected.core.read_request(ref)
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user"}:
+        assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
+        assert artifact.read_text() == "first\n"
+    else:
+        assert continued["turn_id"] != original["turn_id"]
+        assert continued["session_id"] == original["session_id"]
+        assert continued["context_recovery"]["work_attempt"] == 1
+        interrupted = fault in {"queued-newer", "queued-input"}
+        assert runtime.wait_for_turn(session_id=continued["session_id"], turn_id=continued["turn_id"], timeout_sec=10)["status"] == ("failed" if interrupted else "completed")
+        if fault == "queued-input":
+            queued = [item for item in selected.core.pending() if item["request_ref"] != ref and item.get("command") is None]
+            assert len(queued) == 1
+            assert runtime.wait_for_turn(session_id=queued[0]["session_id"], turn_id=queued[0]["turn_id"], timeout_sec=10)["status"] == "completed"
+            worker().reconcile()
+        selected.reconcile_request(path)
+        deliveries = json.loads(path.read_text())["deliveries"]
+        assert deliveries["terminal"] == original_delivery
+        assert deliveries[presentation_phase(continued, "terminal")]["verified"]
+        assert artifact.read_text() == ("first\n" if interrupted else "first\nremaining\n")
+        assert not worker().core.context_recovery_candidate(ref)
+        writes = list(provider.writes)
+        worker().reconcile()
+        assert provider.writes == writes
+        after = store.load_session(original["session_id"])
+        assert after["project_context"] == session_before["project_context"]
+        assert after["upstream_thread_id"] == session_before["upstream_thread_id"]
+        starts = [json.loads(line)["params"] for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
+        assert len(starts) == (1 if fault == "queued-newer" else 2)
+        if not interrupted:
+            assert "Do only the remaining authorized work" in starts[-1]["input"][0]["text"]
+        if fault == "queued-input":
+            assert "Newer follow-up" in starts[-1]["input"][0]["text"]
+            assert "Core admitted one continuation" not in starts[-1]["input"][0]["text"]
+        snapshot = ordinary[3]("/api/chat/sessions/" + original["session_id"])[1]
+        bodies = [message["text"] for message in snapshot["messages"] if message["role"] == "agent"]
+        assert turn["response"]["message"] in bodies
+        if fault is None:
+            assert "Verified remaining work completed." in bodies
+    assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
+
+
 def _app_projection_journey(fixture):
     store, runtime, provider, transport = connect(fixture)
     event = provider.event("notes-app", "original-app-chat", "Original source conversation")

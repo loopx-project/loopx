@@ -773,9 +773,23 @@ def normalize_agent_response(
         protected_paths=protected,
     ).strip()
     goal_draft = _normalize_goal_draft(payload, protected_paths=protected)
+    # A worker's bounded progress report, never a grant or a retry decision.
+    # Legacy prose and incomplete/ambiguous objects cannot request continuation.
+    unfinished = payload.get("unfinished_work")
+    if (not isinstance(unfinished, dict) or set(unfinished) != {"remaining", "dependency", "effects_settled"}
+            or unfinished.get("effects_settled") is not True
+            or any(not isinstance(unfinished.get(key), str) or not 1 <= len(unfinished[key].strip()) <= 1000
+                   for key in ("remaining", "dependency"))
+            or any(payload.get(key) for key in ("gate", "protected_action", "goal_draft", "context_handoff", "proposals"))):
+        unfinished = None
+    else:
+        unfinished = {"remaining": redact_response_markdown(unfinished["remaining"].strip(), protected_paths=protected),
+                      "dependency": redact_response_markdown(unfinished["dependency"].strip(), protected_paths=protected),
+                      "effects_settled": True}
     return {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
         "message": message,
+        **({"unfinished_work": unfinished} if unfinished else {}),
         **({"goal_draft": goal_draft} if goal_draft else {}),
         **({"context_handoff": handoff} if handoff else {}),
         "proposals": _normalize_proposals(

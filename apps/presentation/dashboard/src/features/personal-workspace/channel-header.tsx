@@ -154,10 +154,13 @@ export function ChannelHeader({
                   : "header.managerAllocationConfigured")
     : null;
 
+  // The Goal title already names the source, so the persistent badge must not
+  // repeat it; only its disclosure panel explains that same source.
+  const sourceNamedByTitle = selectedGoal?.title === readOnlySourceLabel;
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
     <div className="personal-read-only-source">
-      <ContextHelp icon={Eye} label={`${readOnlySourceLabel} · ${t("common.readOnly")}`}><p>{t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}</p></ContextHelp>
-      {selectedGoal?.title === readOnlySourceLabel ? null : <span className="personal-read-only-source-label">{readOnlySourceLabel}</span>}
+      <ContextHelp icon={Eye} label={sourceNamedByTitle ? t("header.readOnlySourceHelp") : `${readOnlySourceLabel} · ${t("common.readOnly")}`}><p>{t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}</p></ContextHelp>
+      {sourceNamedByTitle ? null : <span className="personal-read-only-source-label">{readOnlySourceLabel}</span>}
       <small>{t("common.readOnly")}</small>
     </div>
   ) : selectedGoal && !composerVisible ? null : <>

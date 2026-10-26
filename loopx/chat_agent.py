@@ -507,6 +507,7 @@ def _turn_prompt(
         "goal_draft": None,
         "context_handoff": None,
         "gate": None,
+        "unfinished_work": None,
     }
     role = (
         "You are the execution agent for a confirmed LoopX Task. Work only from the project root. "
@@ -634,6 +635,12 @@ def _turn_prompt(
         +
         "For an identity, approval, or host-tool gate, stop only actions that depend on the missing authority or tool and describe the unresolved gate in gate. "
         "Continue independent authorized work while honoring explicit user and host stops. End the request only when no independent authorized work remains or such a stop applies; never claim the gated action completed. "
+        "For an ordinary private project request only, if a temporary dependency still blocks remaining authorized work after permitted recovery, "
+        "report that remaining work honestly in the visible answer and set unfinished_work={remaining,dependency,effects_settled:true}. "
+        "Both text fields are bounded public-safe facts (at most 1000 characters), not commands, grants or a new task. "
+        "Use this only after all preceding tools/effects have settled and their actual results are known; never for unknown effects, "
+        "a stop, permission/identity/confirmation gate, protected operation or delegated work. Otherwise keep unfinished_work=null. "
+        "Core may permit one source-verified continuation on the existing queue; this report does not authorize it. "
         "Reply in Chinese unless the operator asks for another language. Keep proposals bounded and reviewable. "
         "Do not expose chain-of-thought, tool narration, intended steps, or scratch work. "
         "First write the complete operator-facing answer as safe Markdown text. Give a simple question a direct sourced answer; for a complex task, lead with the judgment and then explain the material evidence, comparisons, decisions and limitations at useful depth. "

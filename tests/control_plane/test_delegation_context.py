@@ -380,3 +380,45 @@ def test_caller_supplied_delegation_observation_skips_host_reads(
     )
     facts = context["contributions"][0]["facts"]
     assert facts["delegation_context"]["configuration_state"] == "ready"
+
+
+def test_source_session_registry_blocks_delegation_context(tmp_path: Path) -> None:
+    from loopx.control_plane.projects.registry_codec import (
+        source_session_registry_transaction,
+    )
+
+    project, _, runtime = _fixture(tmp_path)
+    registry = tmp_path / "source" / "registry.json"
+    payload = {
+        "profile_id": "source_session_v1",
+        "schema_version": 1,
+        "goals": [
+            {
+                "id": "goal-a",
+                "repo": str(project),
+                "status": "active",
+                "coordination": {"registered_agents": ["coordinator", "worker"]},
+            }
+        ],
+        "session_bindings": [],
+        "session_receipts": [],
+        "lifetime_receipts": [],
+    }
+    with source_session_registry_transaction(
+        registry,
+        operation="test_source_session_delegation_context",
+        create=lambda: payload,
+    ) as transaction:
+        transaction.commit(transaction.payload_copy())
+    packet = _delegation_context(project, registry, runtime, "before_plan")
+    assert packet["configuration_state"] == "blocked"
+    assert packet["reason_code"] == "delegation_context_unavailable"
+    assert _facts(project, registry, runtime)["config_error"] == "unavailable"
+
+
+def test_registry_path_under_a_file_is_unavailable_not_empty(tmp_path: Path) -> None:
+    project, _, runtime = _fixture(tmp_path)
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    registry = blocker / "registry.json"
+    assert _facts(project, registry, runtime)["config_error"] == "unavailable"

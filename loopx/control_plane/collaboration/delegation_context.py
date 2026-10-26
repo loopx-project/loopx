@@ -12,7 +12,7 @@ from typing import Any
 from ...agent_registry import registered_agent_ids_for_goal
 from ..effect_runtime import EffectRuntimeRemoteError
 from ..operator_provider import operator_provider_environ
-from ..projects.registry_codec import load_project_registry
+from ..projects.registry_codec import load_registry
 from ..turn_driver.host_binding import managed_executor_binding_from_host_args
 from .inbox import _read
 
@@ -54,7 +54,9 @@ def read_delegation_facts(
         path = _configuration_path(project, execution_config)
         config = _read(path)
         try:
-            goals = load_project_registry(registry_path).get("goals", [])
+            # stat() raises ENOTDIR/ELOOP, which load_registry's Path.exists() hides.
+            registry_path.expanduser().stat()
+            goals = load_registry(registry_path).get("goals", [])
         except FileNotFoundError:
             goals = []  # No registry yet; zero requester rows stay observable.
         goal = next((row for row in goals if isinstance(row, dict) and row.get("id") == goal_id), None)

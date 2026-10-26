@@ -1,11 +1,62 @@
 """Migration history belongs to the native thread, not each subsequent prompt."""
 
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
 from loopx import chat_agent, chat_runtime
 from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+
+@pytest.mark.parametrize("fault", [None, "later-user", "live", "failed", "background", "unknown", "live-tool",
+    "declined", "duplicate", "foreign", "second-user", "no-final", "legacy-prose", "moving-turn", "moving-items"])
+def test_completed_work_readback_requires_latest_stable_explicit_settled_inventory(fault):
+    from loopx.chat import CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG
+    from loopx.capabilities.native_chat.codex_adapter import completed_work_readback
+    import json
+
+    work = {"remaining": "Finish the remaining verified update", "dependency": "A temporary source outage", "effects_settled": True}
+    final = "Source unavailable; work remains.\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({
+        "message": "", "unfinished_work": work}) + CHAT_REVIEW_CLOSE_TAG
+    calls = []
+    counts = {"thread/turns/list": 0, "thread/items/list": 0}
+
+    def items(method, params, deadline):
+        calls.append(method)
+        counts[method] += 1
+        if method == "thread/turns/list":
+            turns = [{"id": "original-turn", "status": "failed" if fault == "failed" else "completed"}]
+            if fault in {"later-user", "live"} or fault == "moving-turn" and counts[method] > 1:
+                turns.insert(0, {"id": "later", "status": "inProgress" if fault == "live" else "completed"})
+            return iter(turns)
+        assert params == {"turnId": "original-turn"}
+        effect = {"id": "effect", "type": "fileChange", "status": "completed"}
+        if fault == "unknown":
+            effect["type"] = "futureEffect"
+        if fault in {"live-tool", "declined"}:
+            effect["status"] = "inProgress" if fault == "live-tool" else "declined"
+        rows = [{"turnId": "original-turn", "item": {"id": "user", "type": "userMessage"}},
+                {"turnId": "foreign" if fault == "foreign" else "original-turn", "item": effect},
+                {"turnId": "original-turn", "item": {"id": "final", "type": "agentMessage",
+                    "phase": "commentary" if fault == "no-final" else "final_answer",
+                    "text": "Unfinished, retry later" if fault == "legacy-prose" else final}}]
+        if fault == "duplicate":
+            rows.append(rows[1])
+        if fault == "second-user" or fault == "moving-items" and counts[method] > 1:
+            rows.append({"turnId": "original-turn", "item": {"id": "correction", "type": "userMessage"}})
+        return iter(rows)
+
+    native = SimpleNamespace(thread_id="native", work_dir=Path("/synthetic/notes"), response_timeout_sec=.1, _control_items=items,
+        _background_terminals=lambda deadline: [{"processId": "live"}] if fault == "background" else [])
+    proof = completed_work_readback(native, "original-turn")
+    if fault is None:
+        assert proof == {"thread_id": "native", "turn_id": "original-turn", "completed_work": True,
+                         "all_effects_settled": True, "unfinished_work": work}
+        assert counts == {"thread/turns/list": 2, "thread/items/list": 2}
+    else:
+        assert proof is None
+    assert set(calls) <= {"thread/turns/list", "thread/items/list"}
 
 
 @pytest.mark.parametrize("resume", [False, True])

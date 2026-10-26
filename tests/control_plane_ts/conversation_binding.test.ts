@@ -17,6 +17,61 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("unfinished completed work requires typed intent and latest settled native/source proof, once", () => {
+  const configured = planConversationBinding(request).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const work = {remaining: "Finish the remaining work", dependency: "Temporary source outage", effects_settled: true};
+  const completed = {session_id: "original", turn_id: "partial", status: "completed", error_code: null,
+    response: {message: "An honest partial answer", proposals: [], protected_action: null, gate: null, unfinished_work: work},
+    upstream_turn_id: "native-partial", completed_at: "2026-01-01T00:00:00Z"};
+  const session = {session_id: "original", goal_id: null, agent_id: "codex", upstream_mode: "chat", status: "ready",
+    upstream_thread_id: "native", active_turn_id: null, project_context: context,
+    channel_id: `project.external.${row.binding_id}.${source.source_ref}`};
+  const native = {thread_id: "native", turn_id: "native-partial", completed_work: true,
+    all_effects_settled: true, unfinished_work: {effects_settled: true, dependency: work.dependency, remaining: work.remaining}};
+  const packet = {request: {request_ref: "f".repeat(24), command: null, status: "accepted", delivery_verified: true,
+    message: "Original request", origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "partial", source},
+    binding: row, current_session: session, context_recovery: {version: 21, failed_turn: completed,
+      observed_at: "2026-01-01T00:10:00Z", steering_observed: false, stop_observed: false, attachments_present: false,
+      source_verified: true, native_observation: native}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.work_attempt, 1);
+  assert.ok(String(plan.client_turn_id).endsWith("-work-1"));
+  for (const change of [{source_verified: false}, {steering_observed: true}, {stop_observed: true},
+    {attachments_present: true}, {observed_at: "2026-01-01T00:00:59Z"},
+    {native_observation: {...native, all_effects_settled: false}},
+    {native_observation: {...native, thread_id: "foreign"}},
+    {native_observation: {...native, unfinished_work: {...work, remaining: "Another task"}}}]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, false);
+  }
+  for (const response of [{message: "Incomplete; please retry", proposals: []},
+    {...completed.response, gate: {kind: "host_tool_gate"}},
+    {...completed.response, unfinished_work: {...work, effects_settled: false}},
+    {...completed.response, unfinished_work: {...work, grant: "write"}}]) {
+    assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+      failed_turn: {...completed, response}}}).recovery_candidate, false);
+  }
+  const reserved = {version: 21, failed_turn_id: "partial", work_attempt: 1, unfinished_work: work,
+    client_turn_id: plan.client_turn_id, not_before: plan.not_before};
+  const admitted = {session_id: "original", turn_id: "continuation", client_turn_id: plan.client_turn_id,
+    message: packet.request.message, origin: "lark", attachments: [], status: "completed"};
+  const crash = {...packet, request: {...packet.request, context_recovery: reserved},
+    current_session: {...session, status: "busy", active_turn_id: admitted.turn_id},
+    context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted}};
+  assert.equal(planBoundConversationRequest(crash).admitted_turn_id, admitted.turn_id);
+  assert.equal(planBoundConversationRequest({...crash, context_recovery: {...crash.context_recovery,
+    admitted_turn: {...admitted, message: "Changed input"}}}).recovery_eligible, false);
+  for (const status of ["completed", "failed"]) {
+    assert.equal(planBoundConversationRequest({...packet, request: {...packet.request,
+      turn_id: admitted.turn_id, context_recovery: reserved}, context_recovery: {...packet.context_recovery,
+      failed_turn: {...completed, turn_id: admitted.turn_id, status, error_code: "host_gate"}}}).recovery_candidate, false);
+  }
+});
+
 test("the App steward is an explicit source preference, never a new grant or peer fallback", () => {
   const steward = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
   const configured = planConversationBinding({...request, binding: steward}).state;

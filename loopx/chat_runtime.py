@@ -1815,6 +1815,11 @@ class ChatRuntimeController:
                             error_code="host_gate", gate=None,
                         )
                     retry_binding["sha256"] = binding
+                    if (session.get("project_context") is not None
+                            and self.project_contexts.conversation_bindings is not None):
+                        from .capabilities.native_chat.external_conversations import ChatExternalConversations
+                        message = ChatExternalConversations(self).prepare_continuation_input(
+                            session, current_turn, adapter.session, message)
                 # Manager/native/external conversations have different execution
                 # and waiting boundaries. Do not invent Goal timing for them.
                 observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""
