@@ -64,8 +64,19 @@ validated evidence can advance an evaluation Todo while leaving the broader
 stage open; it is not automatically an execution blocker. Pure reuse or setup
 does not qualify as progress. Use `blocked` only when the Todo's actual next
 step cannot execute, preserve genuine retry clocks, and replan finite answered
-questions through the existing Todo/vision. Never erase receipts or fabricate
-progress to escape a wait. See [settlement classification](../../docs/quota-allocation.md#allocation-contract).
+questions through the existing Todo/vision. Finishing one question or submitting
+its PR does not close an ongoing user objective. Use the retained requirements
+and already authorized sources to select the next useful independent slice;
+source discovery does not need a new human assignment. Missing cost,
+comprehension, adoption or review evidence limits the corresponding claim or
+dependent operation, not all research or implementation. Do not retire an
+ongoing vision merely to suppress replan. If an earlier authoring mistake did
+so, repair the original Todo/vision, keep genuine dependency waits scoped, and
+verify that the public entrypoint admits independent work before continuing it.
+Preserve actual authority, budget and stop conditions; when no useful authorized
+work remains, retain the evidenced wait rather than inventing activity. Never
+erase receipts or fabricate progress to escape a wait. See
+[settlement classification](../../docs/quota-allocation.md#allocation-contract).
 
 ## Upstream Issue Escalation
 

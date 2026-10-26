@@ -361,3 +361,51 @@ def test_stop_and_independent_work_override_the_registered_wait(public_goal):
     assert fresh["selected_todo"]["todo_id"] == independent
     assert fresh["scheduler_hint"]["action"] == "run_now"
     assert fresh["interaction_contract"]["agent_channel"]["must_attempt"] is True
+
+
+def test_reopened_work_and_restored_vision_leave_peer_dependency_pending(public_goal):
+    goal = public_goal
+    prerequisite, waiting = wait_on(goal, "todo_done")
+    ongoing = add(goal, "Continue investigating the retained objective.",
+                  "--task-class", "advancement_task", "--action-kind", "research_analysis",
+                  "--status", "blocked")
+    vision = goal.root / "continuation-vision.json"
+
+    def write_vision(state):
+        vision.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0", "state": state,
+            "todo_delta": [f"activate:{ongoing}"],
+            "vision_patch": {
+                "acceptance_summary": "Investigate the ongoing objective using available evidence.",
+                "advancement_policy": "repeat_until_closed",
+                "replan_trigger_summary": "The next independent investigation remains executable.",
+            },
+        }))
+        goal.call("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+                  "--classification", "continuation_fixture", "--agent-vision-json", str(vision),
+                  "--no-global-sync", "--suppress-external-sinks")
+
+    # A falsely retired stage plus blocked work leaves only the genuine wait.
+    write_vision("retired")
+    before = guard(goal)
+    assert before["should_run"] is False
+    assert before["effective_action"] == "agent_scope_wait"
+
+    update(goal, ongoing, "--status", "open", "--clear-resume-when")
+    write_vision("vision_patch_proposed")
+    repaired = guard(goal)
+    assert repaired["should_run"] is True
+    assert repaired["normal_delivery_allowed"] is True
+    assert repaired["selected_todo"]["todo_id"] == ongoing
+    assert repaired["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    todos = {todo["todo_id"]: todo for todo in goal.call("todo", "list", "--goal-id", GOAL)["todos"]}
+    assert todos[prerequisite]["status"] == "open"
+    assert todos[waiting]["status"] == "deferred"
+    assert todos[waiting]["resume_when"] == f"todo_done:{prerequisite}"
+
+    # Restoring continuation must still respect an actual owner stop.
+    goal.call("goal-lifecycle", "--goal-id", GOAL, "--operation", "stop", "--actor-kind", "owner",
+              "--reason", "Owner stopped this isolated test.", "--execute")
+    stopped = guard(goal)
+    assert stopped["should_run"] is False
+    assert stopped["scheduler_hint"]["action"] == "stop_until_explicit_resume"
