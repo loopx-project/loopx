@@ -73,6 +73,17 @@ def _markdown_source(value: object, labels: Mapping[str, str], *, _legacy_source
     return f"{labels['source']}{labels['label_separator']}{fence}{padding}{source}{padding}{fence}"
 
 
+def _source_references(document: Mapping[str, Any]) -> dict[str, int]:
+    """Number opaque references once, in document order, for both formats."""
+    references: dict[str, int] = {}
+    for section in _items(document.get("sections")):
+        for item in _items(section.get("items")):
+            reference = item.get("source_ref")
+            if isinstance(reference, str) and reference and not periodic_report_source_url(reference):
+                references.setdefault(reference, len(references) + 1)
+    return references
+
+
 def periodic_report_labels(language: object) -> dict[str, str]:
     """Return the small built-in report UI vocabulary for one language."""
 
@@ -82,6 +93,7 @@ def periodic_report_labels(language: object) -> dict[str, str]:
             "no_items": "暂无条目。",
             "next": "下一步",
             "source": "来源",
+            "source_references": "来源标识",
             "supporting_appendix": "附录：投递与运行信息",
             "label_separator": "：",
         }
@@ -90,6 +102,7 @@ def periodic_report_labels(language: object) -> dict[str, str]:
         "no_items": "No items.",
         "next": "Next",
         "source": "source",
+        "source_references": "Source references",
         "supporting_appendix": "Appendix: delivery and runtime context",
         "label_separator": ": ",
     }
@@ -100,6 +113,7 @@ def _render_markdown_item(
     item: Mapping[str, Any],
     *,
     labels: Mapping[str, str],
+    references: Mapping[str, int],
     _legacy_source_links: bool = False,
 ) -> None:
     item_title = _safe(item.get("title"), maximum=240)
@@ -109,7 +123,10 @@ def _render_markdown_item(
     if status:
         headline += f" · `{status}`"
     if source_ref:
-        headline += f" · {_markdown_source(source_ref, labels, _legacy_source_links=_legacy_source_links)}"
+        if isinstance(source_ref, str) and source_ref in references:
+            headline += f" · {labels['source']} {references[source_ref]}"
+        else:
+            headline += f" · {_markdown_source(source_ref, labels, _legacy_source_links=_legacy_source_links)}"
     lines.append(headline)
     lines.append(f"  - {_safe(item.get('summary'), maximum=1000)}")
     for detail in _items(item.get("details")):
@@ -129,12 +146,16 @@ def render_periodic_report_markdown(
     document: Mapping[str, Any],
     *,
     _legacy_source_links: bool = False,
+    _legacy_layout: bool = False,
 ) -> dict[str, Any]:
     """Render normalized sections without changing ordering or business meaning."""
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
         raise ValueError(f"document must use {DOCUMENT_SCHEMA}")
     validate_periodic_report_editorial(document)
+    # Read-only reconstruction of artifacts frozen before these presentation fixes.
+    _legacy_layout = _legacy_layout or _legacy_source_links
+    references = {} if _legacy_layout else _source_references(document)
     title = _safe(document.get("title"), maximum=200)
     window = _mapping(document.get("period_window"))
     editorial = _mapping(document.get("editorial"))
@@ -150,7 +171,15 @@ def render_periodic_report_markdown(
         ),
     ]
     summary = _safe(editorial.get("summary"), maximum=600)
-    if summary:
+    highlights = [] if _legacy_layout else _items(editorial.get("highlights"))
+    if highlights:
+        lines.append("")
+        for highlight in highlights:
+            label = _safe(highlight.get("label"), maximum=80)
+            value = _safe(highlight.get("value"), maximum=48)
+            detail = _safe(highlight.get("detail"), maximum=160)
+            lines.append(f"- **{label}{labels['label_separator']}{value}**" + (f" · {detail}" if detail else ""))
+    elif summary:
         lines.extend(["", summary])
     primary_item_count = 0
     supporting_item_count = 0
@@ -172,13 +201,17 @@ def render_periodic_report_markdown(
             lines.append(f"- {labels['no_items']}")
             continue
         for item in section_items:
-            _render_markdown_item(lines, item, labels=labels, _legacy_source_links=_legacy_source_links)
+            _render_markdown_item(lines, item, labels=labels, references=references, _legacy_source_links=_legacy_source_links)
     if supporting_sections:
         lines.extend(["", f"## {labels['supporting_appendix']}"])
         for section, section_items in supporting_sections:
             lines.extend(["", f"### {_safe(section.get('title'), maximum=160)}", ""])
             for item in section_items:
-                _render_markdown_item(lines, item, labels=labels, _legacy_source_links=_legacy_source_links)
+                _render_markdown_item(lines, item, labels=labels, references=references, _legacy_source_links=_legacy_source_links)
+    if references:
+        lines.extend(["", f"## {labels['source_references']}", ""])
+        for reference, number in references.items():
+            lines.append(f"{number}. {_markdown_source(reference, labels)}")
     content = "\n".join(lines).rstrip() + "\n"
     content_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     document_digest = hashlib.sha256(

@@ -191,7 +191,8 @@ def test_private_report_artifacts_use_canonical_utf8_on_windows_text_mode(
 
 
 @pytest.mark.parametrize("tamper", [None, "report", "html", "source", "response"])
-def test_frozen_report_keeps_original_source_links_across_renderer_upgrade(tmp_path, monkeypatch, tamper):
+@pytest.mark.parametrize("legacy_links", [False, True])
+def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(tmp_path, monkeypatch, tamper, legacy_links):
     from loopx.presentation.renderers import periodic_report_html as html
     from loopx.presentation.renderers import periodic_report_markdown as markdown
 
@@ -203,15 +204,31 @@ def test_frozen_report_keeps_original_source_links_across_renderer_upgrade(tmp_p
         parsed = urlparse(raw)
         return escape(raw, quote=True) if parsed.scheme in {"http", "https"} and parsed.netloc else None
 
-    # Seed through the real freezer with the previous independently specified
-    # source rules, not through the new validator's compatibility switch.
+    prior_markdown = markdown.render_periodic_report_markdown
+    prior_html = html.render_periodic_report_html
+    # Seed through the real freezer, retaining both shipped inline layouts.
+    # The old source rules remain independently specified, not inferred from
+    # the new link-eligibility helper or the validator's selected fallback.
     with monkeypatch.context() as previous:
-        previous.setattr(markdown, "_markdown_source", lambda value, labels, **_:
-            f"[{labels['source']}]({markdown._safe(value, maximum=500)})")
-        previous.setattr(html, "_safe_http_url", previous_html_source)
+        previous.setattr(markdown, "render_periodic_report_markdown", lambda document, **kwargs:
+            prior_markdown(document, **{**kwargs, "_legacy_layout": True}))
+        previous.setattr(html, "render_periodic_report_html", lambda document, **kwargs:
+            prior_html(document, **{**kwargs, "_legacy_layout": True}))
+        if legacy_links:
+            previous.setattr(markdown, "_markdown_source", lambda value, labels, **_:
+                f"[{labels['source']}]({markdown._safe(value, maximum=500)})")
+            previous.setattr(html, "_safe_http_url", previous_html_source)
         receipt = freeze_private_report(root=root, window=window, response=response)
     original = {path.name: path.read_bytes() for path in folder.iterdir() if path.is_file()}
-    assert "[来源](sha256:" in original["report.md"].decode("utf-8")
+    # Independent historical renderer oracles: parent of #7413 for old links,
+    # e20e4b684 for safe inline references. The input/window above is fixed.
+    expected_text_digest = (
+        "509ff2e53bbce2f703049f1684e1a9f2048826ebb8c386891650b52841a1ed23"
+        if legacy_links else
+        "8d97d55e80f759e7eaadb73c5df93afea4d5cfbc071301a9726cb47ff37f9755"
+    )
+    assert hashlib.sha256(original["report.md"]).hexdigest() == expected_text_digest
+    assert ("[来源](sha256:" in original["report.md"].decode("utf-8")) is legacy_links
     assert "[来源](sha256:" not in markdown.render_periodic_report_markdown(
         json.loads(original["generation-bundle.json"])["document"])["content"]
 
