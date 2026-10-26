@@ -480,6 +480,7 @@ def configure_goal(
     explore_composition_scope_id: str | None = None,
     explore_graph_enabled: bool | None = None,
     explore_mode: str | None = None,
+    clear_explore_configuration: bool = False,
     registered_agents: list[str] | None = None,
     clear_registered_agents: bool = False,
     peer_task_coordinator: str | None = None,
@@ -978,6 +979,16 @@ def configure_goal(
         control_plane["lark_kanban"] = lark_kanban
 
     apply_reward_memory_goal_configuration(goal, reward_memory_plan)
+
+    if clear_explore_configuration:
+        if any(value is not None for value in (
+            explore_mode, explore_graph_enabled, explore_harness_enabled, explore_harness_profile,
+            explore_composition_mode, explore_composition_scope_id,
+        )) or clear_explore_harness_profile:
+            raise ValueError("Clear Explore configuration or set Explore options, not both")
+        goal.pop("explore_graph", None)
+        if isinstance(goal.get("spawn_policy"), dict):
+            goal["spawn_policy"].pop("explore_harness", None)
 
     if any(value is not None for value in (explore_mode, explore_graph_enabled, explore_harness_enabled)):
         existing_harness = (goal.get("spawn_policy") or {}).get("explore_harness")

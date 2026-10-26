@@ -161,7 +161,7 @@ def _todo_settlement_plan(
 
     from ..capabilities.explore.turn_context import project_settlement_attachment
 
-    return project_settlement_attachment(plan, registry_path=registry_path)
+    return project_settlement_attachment(plan, registry_path=registry_path, runtime_root=runtime_root)
 
 
 def _validated_replan_successor_obligation(

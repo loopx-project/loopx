@@ -112,6 +112,18 @@ export function goalReplanCadenceWriteValue(
   return value;
 }
 
+/** Sparse Goal settings display live inherited fields without pinning them. */
+export function goalExploreEditorValue(current: unknown, effective: unknown): Record<string, unknown> {
+  return {...configurationObject(effective), ...configurationObject(current)};
+}
+
+/** Only a stored or deliberately edited mode becomes a Goal override. */
+export function goalExploreWriteValue(draft: Record<string, unknown>, modeOverride: boolean): Record<string, unknown> {
+  const value = {...draft};
+  if (!modeOverride) delete value.mode;
+  return value;
+}
+
 /** A v0 storage selector did not enable creation; opening Settings must not. */
 export function goalStorageEditorValue(value: unknown): unknown {
   const record = configurationObject(value);

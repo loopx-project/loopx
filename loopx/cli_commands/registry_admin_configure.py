@@ -257,6 +257,10 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         help="Clear allowed child-agent domains.",
     )
     configure_goal_parser.add_argument(
+        "--clear-explore-configuration", action="store_true",
+        help="Remove Goal Explore overrides and inherit the live machine mode.",
+    )
+    configure_goal_parser.add_argument(
         "--explore-mode", choices=("off", "evidence", "planning"),
         help="Explore Harness: off, evidence only, or evidence with read-only planning. Does not grant spawn authority.",
     )

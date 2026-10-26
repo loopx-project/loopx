@@ -342,6 +342,7 @@ def test_inspection_lists_registered_namespaces_without_local_refs(
         "change_quality_qualification",
         "codex_chat",
         "context_delivery",
+        "explore_harness",
         "goal_storage",
         "manager_runtime",
         "periodic_report",
@@ -466,6 +467,7 @@ def test_machine_catalog_discovers_goal_features_without_granting_machine_writes
             assert item["machine_namespace"] == capability_id
             assert item["configuration_editor"]["writable_scopes"] == ["machine"]
         elif capability_id not in {
+            "explore_harness",
             "periodic_report",
             "todo_replan_cadence",
             "change_quality_qualification",
@@ -862,3 +864,44 @@ def test_public_api_update_preserves_provider_private_namespace_state(
         "enabled": True,
         "secret": "keep-me",
     }
+
+
+def test_explore_machine_mode_uses_real_http_preview_apply_and_readback(tmp_path: Path) -> None:
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.runtime_root = tmp_path
+    server.verbose = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection(*server.server_address, timeout=10)
+
+    def request(method, path, body=None):
+        connection.request(method, path, body=json.dumps(body) if body is not None else None,
+                           headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+
+    try:
+        _, inspection = request("GET", CHAT_MACHINE_CONFIGURATION_PATH)
+        entry = next(c for c in inspection["capability_catalog"]["capabilities"] if c["capability_id"] == "explore_harness")
+        assert entry["available_scopes"] == ["machine", "goal"]
+        assert [f["key"] for f in entry["configuration_editor"]["fields"]] == ["mode"]
+        desired = {"namespace": "explore_harness", "namespace_configuration": {
+            "schema_version": "explore_harness_machine_defaults_v0", "mode": "planning"}}
+        status, preview = request("POST", CHAT_MACHINE_CONFIGURATION_PREVIEW_PATH, desired)
+        assert status == 201
+        _, unchanged = request("GET", CHAT_MACHINE_CONFIGURATION_PATH)
+        assert unchanged["machine_configuration"] is None
+        status, rejected = request("POST", CHAT_MACHINE_CONFIGURATION_APPLY_PATH,
+                                   {**desired, "expected_plan_revision": "stale"})
+        assert status >= 400 and rejected["ok"] is False
+        status, applied = request("POST", CHAT_MACHINE_CONFIGURATION_APPLY_PATH,
+                                  {**desired, "expected_plan_revision": preview["plan_revision"]})
+        assert status == 200 and applied["ok"] is True
+        _, inspection = request("GET", CHAT_MACHINE_CONFIGURATION_PATH)
+        assert inspection["machine_configuration"]["namespaces"]["explore_harness"] == desired["namespace_configuration"]
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

@@ -315,8 +315,8 @@ def capability_configuration_editor(
             "fields": [_field("enabled", "Enabled", "boolean")],
         },
         "explore_harness": {
-            "supported_scopes": ["goal"],
-            "writable_scopes": ["goal"],
+            "supported_scopes": ["machine", "goal"],
+            "writable_scopes": ["machine", "goal"],
             "fields": [
                 _field("mode", "Exploration mode", "select", options=("off", "evidence", "planning"),
                        description="Evidence only, or evidence with planning. Spawn authority is separate."),
@@ -573,6 +573,11 @@ def _machine_catalog_entry(
             explore_harness_profiles=explore_harness_profiles,
         ),
     }
+    if capability_id == "explore_harness":
+        # Machine preference owns only the mode; profiles and research scope
+        # stay on each Goal. Reuse the existing mode field and generic editor.
+        editor = entry["configuration_editor"]
+        editor["fields"] = [field for field in editor["fields"] if field["key"] == "mode"]
     if isinstance(namespace.get("current"), Mapping):
         entry["machine_current"] = deepcopy(namespace["current"])
     if isinstance(namespace.get("configuration_template"), Mapping):
@@ -610,10 +615,13 @@ def _merge_goal_feature(
     for field in ("default", "current", "documentation", "context_contribution"):
         if isinstance(feature.get(field), Mapping):
             entry[field] = deepcopy(feature[field])
+    previous_editor = entry.get("configuration_editor")
     entry["configuration_editor"] = capability_configuration_editor(
         capability_id,
         explore_harness_profiles=feature.get("profiles") or explore_harness_profiles,
     )
+    if capability_id == "explore_harness" and "default" not in feature and previous_editor:
+        entry["configuration_editor"] = previous_editor
     if capability_id == "reward_memory":
         for field in entry["configuration_editor"]["fields"]:
             if field["key"] == "agent_id":
@@ -669,6 +677,31 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
             "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL, **goal_override}
         machine_default = None if machine_default is None else {
             "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL, **machine_default}
+    if entry["capability_id"] == "explore_harness":
+        from .explore.machine_defaults import resolve_explore_configuration
+        from ..explore_graph import plan_explore_configuration
+
+        raw = dict(goal_override or {})
+        graph = {}
+        if "mode" in raw:
+            planned = plan_explore_configuration({}, {"mode": raw.pop("mode")})
+            graph["enabled"] = planned["evidence_enabled"]
+            raw["enabled"] = planned["planning_enabled"]
+        resolved = resolve_explore_configuration(
+            {"explore_graph": graph, "spawn_policy": {"explore_harness": raw}},
+            machine_default.get("mode") if machine_default is not None else None,
+        )
+        value = resolved["configuration"]
+        source = resolved["mode_source"]
+        entry["effective_configuration"] = {
+            "schema_version": CAPABILITY_CONFIGURATION_RESOLUTION_SCHEMA,
+            "capability_id": "explore_harness", "configuration": value,
+            "source": source, "inherited": source == "machine_default",
+            "goal_override_present": goal_override is not None,
+            "machine_default_present": machine_default is not None,
+            "effective_revision": configuration_payload_revision({"source": source, "configuration": value}),
+        }
+        return
     entry["effective_configuration"] = resolve_capability_configuration(
         str(entry["capability_id"]),
         goal_override=goal_override,

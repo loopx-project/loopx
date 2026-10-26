@@ -10,6 +10,7 @@ import type {JsonObject} from "../effect_program.ts";
 import type {TodoTerminalEvidenceGuard} from "../coordination/todo_terminal_lifecycle.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {normalizeResearchCompositionPolicy, qualifyResearchCompletion} from "./explore_research_execution.ts";
+import {resolveExploreGoalConfiguration} from "./explore_configuration.ts";
 
 export class ResearchTerminalEvidenceHost {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -37,7 +38,14 @@ export class ResearchTerminalEvidenceHost {
     if (matches.length > 1) throw new Error("ambiguous research Goal source");
     const spawnPolicy = matches[0]?.spawn_policy as JsonObject | undefined;
     const harness = spawnPolicy?.explore_harness as JsonObject | undefined;
-    if (!harness || !normalizeResearchCompositionPolicy({harness}).enabled) return {required: false, allowed: true, evidence: null};
+    const graph = matches[0]?.explore_graph as JsonObject | undefined;
+    const mode = resolveExploreGoalConfiguration({graph: graph ?? {}, harness: harness ?? {}});
+    const policy = normalizeResearchCompositionPolicy({harness: harness ?? {}});
+    // Only an explicit disabled mode can short-circuit before reading live
+    // device preferences. Composition scope itself remains Goal-local.
+    if (policy.mode === "disabled" || mode.mode_source === "goal_override" && !policy.enabled) {
+      return {required: false, allowed: true, evidence: null};
+    }
     const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON;
     if (!python || !isAbsolute(python) || python.includes("\0")) {
       return {allowed: false, reason_code: "research_evidence_host_required",
@@ -50,7 +58,7 @@ export class ResearchTerminalEvidenceHost {
     this.child.on("error", () => {}); this.child.stdin.on("error", () => {}); this.child.stderr.resume();
     const replies = createInterface({input: this.child.stdout})[Symbol.asyncIterator]();
     this.child.stdin.write(JSON.stringify({runtime_root: this.root, goal_id: this.goal,
-      harness, agent_id: context.actor_agent_id ?? context.todo.claimed_by,
+      graph: graph ?? {}, harness: harness ?? {}, agent_id: context.actor_agent_id ?? context.todo.claimed_by,
       todos: context.todos.map(todo => Object.fromEntries([
         "todo_id", "role", "status", "claimed_by", "replan_obligation_id", "task_class", "action_kind",
         "archive_state", "excluded_agents", "explore_result_node_refs", "target_key",

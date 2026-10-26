@@ -28,6 +28,7 @@ def build_builtin_machine_configuration_registry() -> MachineConfigurationRegist
         todo_replan_cadence_machine_configuration_namespace,
     )
 
+    from ..explore.machine_defaults import explore_machine_configuration_namespace
     from .goal_storage import goal_storage_machine_configuration_namespace
     from ..native_chat.machine_defaults import codex_chat_machine_configuration_namespace
     from .context_delivery import context_delivery_machine_configuration_namespace
@@ -35,6 +36,7 @@ def build_builtin_machine_configuration_registry() -> MachineConfigurationRegist
     return (
         MachineConfigurationRegistry()
         .register(context_delivery_machine_configuration_namespace())
+        .register(explore_machine_configuration_namespace())
         .register(codex_chat_machine_configuration_namespace())
         .register(goal_storage_machine_configuration_namespace())
         .register(manager_runtime_machine_configuration_namespace())
@@ -59,6 +61,9 @@ def project_goal_with_builtin_machine_configuration(
         apply_todo_replan_cadence_machine_default,
     )
 
+    from ..explore.machine_defaults import apply_explore_machine_default
+
+    goal = apply_explore_machine_default(goal, machine_configuration)
     projected = apply_todo_replan_cadence_machine_default(
         goal, machine_configuration
     )
@@ -81,7 +86,10 @@ def builtin_machine_inheritable_goal_overrides(
 
     from ..pr_review_queue.goal_configuration import configuration_summary as pr_review_summary
 
+    from ..explore.machine_defaults import configuration_summary as explore_summary
+
     summaries = {
+        "explore_harness": explore_summary(goal),
         "pull_request_review": pr_review_summary(goal),
         "change_quality_qualification": change_quality_summary(goal),
         "todo_replan_cadence": cadence_summary(goal),

@@ -295,15 +295,11 @@ def _append_event_payload(event: dict[str, object], *, runtime_root: Path, goal_
     return payload
 
 
-def _goal_orchestration_boundary(registry: dict[str, object], *, goal_id: str) -> dict[str, object] | None:
-    """Per-goal orchestration policy from the registered goal's spawn_policy.
+def _goal_orchestration_boundary(registry: dict[str, object], *, goal_id: str, runtime_root: Path | None = None) -> dict[str, object] | None:
+    """Read the Goal boundary with the same live Explore preference as quota.
 
-    spawn_policy is the single writable source that the live quota/status
-    pipeline projects into goal_boundary.orchestration (enrich_project_asset
-    derives project_asset.orchestration from it too), so the planner gate must
-    read exactly it -- honoring any other registry key would create a second
-    authorization surface invisible to `quota should-run`. An unregistered
-    goal has no boundary, which the planners treat as opt-out.
+    Machine mode enables guidance only; spawn permissions remain Goal-owned.
+    Unregistered Goals retain the disabled planner response.
     """
 
     goals = registry.get("goals")
@@ -312,6 +308,9 @@ def _goal_orchestration_boundary(registry: dict[str, object], *, goal_id: str) -
     for goal in goals:
         if not isinstance(goal, dict) or str(goal.get("id") or "") != goal_id:
             continue
+        if runtime_root is not None:
+            from ..capabilities.explore.machine_defaults import resolve_explore_goal
+            goal = resolve_explore_goal(goal, runtime_root)
         spawn_policy = goal.get("spawn_policy")
         return spawn_policy if isinstance(spawn_policy, dict) else None
     return None
@@ -678,7 +677,9 @@ def handle_explore_command(
                 args.resource_usage,
                 flag_name="--resource-usage",
             )
-            orchestration = _goal_orchestration_boundary(registry, goal_id=args.goal_id)
+            orchestration = _goal_orchestration_boundary(
+                registry if same_source else load_registry(source_registry),
+                goal_id=args.goal_id, runtime_root=runtime_root)
             gate = resolve_todo_branch_plan_gate(orchestration, requested_width=args.width)
             if gate["state"] == GATE_STATE_DISABLED:
                 # Short-circuit before goal-state projection so disabled and
@@ -729,7 +730,9 @@ def handle_explore_command(
                 args.resource_usage,
                 flag_name="--resource-usage",
             )
-            orchestration = _goal_orchestration_boundary(registry, goal_id=args.goal_id)
+            orchestration = _goal_orchestration_boundary(
+                registry if same_source else load_registry(source_registry),
+                goal_id=args.goal_id, runtime_root=runtime_root)
             gate = resolve_explore_harness_gate(orchestration, requested_width=args.worker_width)
             if gate["state"] == GATE_STATE_DISABLED:
                 # Short-circuit before goal-state projection so disabled and

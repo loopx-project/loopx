@@ -517,6 +517,7 @@ def handle_registry_admin_command(
                 explore_composition_scope_id=args.explore_composition_scope_id,
                 explore_graph_enabled=args.explore_graph_enabled,
                 explore_mode=args.explore_mode,
+                clear_explore_configuration=bool(args.clear_explore_configuration),
                 lark_kanban_heartbeat_sync=args.lark_kanban_heartbeat_sync,
                 registered_agents=args.registered_agents,
                 clear_registered_agents=bool(args.clear_registered_agents),

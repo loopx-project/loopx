@@ -32,6 +32,42 @@ def observation(node: str) -> dict:
     }
 
 
+def test_native_snapshot_holds_inherited_mode_and_graph_until_release(tmp_path):
+    from loopx.capabilities.machine_configuration.store import machine_configuration_store_path
+    from loopx.file_lock import exclusive_file_lock, LockAcquireTimeoutError
+
+    root = tmp_path / "runtime"
+    configuration = machine_configuration_store_path(root)
+    configuration.parent.mkdir(parents=True)
+    configuration.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "explore_harness": {"schema_version": "explore_harness_machine_defaults_v0", "mode": "planning"}}}))
+    request = {"runtime_root": str(root), "goal_id": "locked-research", "graph": {},
+               "harness": {"composition_mode": "explicit_only", "composition_scope_id": "scope-fixture"},
+               "todos": [], "agent_id": "fixture-agent"}
+    process = subprocess.Popen([sys.executable, "-m", "loopx.capabilities.explore.research_snapshot_host"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        process.stdin.write(json.dumps(request) + "\n")
+        process.stdin.flush()
+        snapshot = json.loads(process.stdout.readline())
+        assert snapshot["frontier"]["enabled"] is True
+        paths = [configuration, explore_result_log_path(root, "locked-research")]
+        for path in paths:
+            with pytest.raises(LockAcquireTimeoutError):
+                with exclusive_file_lock(path, timeout_seconds=0):
+                    pytest.fail("native completion released its decision source before the transaction")
+        process.stdin.write("release\n")
+        process.stdin.flush()
+        assert process.wait(timeout=10) == 0
+        for path in paths:
+            with exclusive_file_lock(path, timeout_seconds=1):
+                pass
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate(timeout=10)
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("completed_before_invalidation", [False, True])
 def test_transitive_research_eligibility_preserves_completed_history(
@@ -213,9 +249,12 @@ def test_execution_attribution_reads_promoted_provider(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("resolution", ["observed", "dismissed", "deferred"])
-@pytest.mark.parametrize("diagnostic_timing", [None, "before_activation", "after_activation"])
+@pytest.mark.parametrize("mode_source,diagnostic_timing", [
+    ("goal", None), ("goal", "before_activation"), ("goal", "after_activation"), ("machine", None),
+])
 def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, resolution: str, diagnostic_timing: str | None,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, resolution: str,
+    mode_source: str, diagnostic_timing: str | None,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     try:
@@ -224,9 +263,18 @@ def test_native_completion_refuses_missing_result_and_accepts_exact_observation(
         state.write_text("# Goal\n\n## Agent Todo\n\n")
         runtime, registry = tmp_path / "runtime", tmp_path / "registry.json"
         harness = {"enabled": True, "composition_mode": "explicit_only", "composition_scope_id": "scope-joint"}
+        stored_harness = {key: value for key, value in harness.items() if key != "enabled"} if mode_source == "machine" else harness
+        if mode_source == "machine":
+            from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+            from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+            args = dict(runtime_root=runtime, registry=build_builtin_machine_configuration_registry(), configuration={
+                "schema_version": "loopx_machine_configuration_v0", "namespaces": {"explore_harness": {
+                    "schema_version": "explore_harness_machine_defaults_v0", "mode": "planning"}}})
+            preview = configure_machine_configuration(**args)
+            configure_machine_configuration(**args, execute=True, expected_plan_revision=preview["plan_revision"])
         registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
             "id": goal, "repo": str(tmp_path), "state_file": state.name, "status": "active",
-            "spawn_policy": {"explore_harness": {"enabled": True} if diagnostic_timing == "before_activation" else harness},
+            "spawn_policy": {"explore_harness": {"enabled": True} if diagnostic_timing == "before_activation" else stored_harness},
             "coordination": {"agent_model": "peer_v1", "registered_agents": [agent]},
         }]}))
         def cli(*args: str, success: bool = True) -> dict:

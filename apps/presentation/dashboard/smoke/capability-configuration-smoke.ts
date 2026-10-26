@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 
-import { changeStewardExecutorDraft, goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../src/data/capability-configuration.js";
+import { changeStewardExecutorDraft, goalExploreEditorValue, goalExploreWriteValue, goalReplanCadenceEditorValue, goalReplanCadenceWriteValue, hasReplanCadenceOverride, goalStorageEditorValue, parseEditableCapabilityJson, projectEditableCapabilityConfiguration, replanCadenceEditorDefaults } from "../src/data/capability-configuration.js";
+
+const exploreEditor = {fields: [{key: "mode"}, {key: "profile"}, {key: "composition_mode"}, {key: "composition_scope_id", nullable: true}]};
+const exploreEffective = {mode: "planning", profile: "generic", composition_mode: "disabled", composition_scope_id: null};
+for (const current of [{profile: "adaptive-resilient"}, {composition_mode: "explicit_only", composition_scope_id: "bounded-scope"}]) {
+  const draft = projectEditableCapabilityConfiguration(exploreEditor, goalExploreEditorValue(current, exploreEffective));
+  assert.equal(draft.mode, "planning", "sparse Goal overrides display the live inherited mode");
+  assert.equal(Object.hasOwn(goalExploreWriteValue({...draft, profile: "generic"}, false), "mode"), false,
+    "saving another field must not pin the inherited mode");
+  assert.equal(goalExploreWriteValue({...draft, mode: "off"}, true).mode, "off", "an explicit off choice remains writable");
+  const json = parseEditableCapabilityJson(exploreEditor, JSON.stringify(goalExploreWriteValue(draft, false)))!;
+  assert.equal(Object.hasOwn(json, "mode"), false, "form to JSON preserves inheritance intent");
+  assert.equal(projectEditableCapabilityConfiguration(exploreEditor, json, exploreEffective).mode, "planning",
+    "sparse JSON returning to the form displays the effective mode");
+}
+assert.equal(goalExploreEditorValue({mode: "evidence"}, exploreEffective).mode, "evidence",
+  "stored explicit modes win even when device preferences change");
 
 const codexDraft = { executor_endpoint: "codex", executor_model: "gpt-fixture", executor_reasoning_effort: "high", selection_policy: "preferred" };
 const managedDraft = changeStewardExecutorDraft(codexDraft, "executor_endpoint", "dsh");

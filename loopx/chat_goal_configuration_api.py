@@ -115,9 +115,13 @@ def _explore_harness_options(config: Mapping[str, Any]) -> dict[str, Any]:
         raise TypeError("Explore composition mode and scope must be strings")
     if "mode" in config and "enabled" in config:
         raise ValueError("Use Explore mode or the legacy enabled flag, not both")
+    mode_options: dict[str, Any] = {}
+    if "mode" in config:
+        mode_options["explore_mode"] = config["mode"]
+    elif "enabled" in config:
+        mode_options["explore_harness_enabled"] = _boolean_configuration("explore_harness", config, "enabled")
     return {
-        **({"explore_mode": config["mode"]} if "mode" in config else {
-            "explore_harness_enabled": _boolean_configuration("explore_harness", config, "enabled")}),
+        **mode_options,
         "explore_harness_profile": profile,
         "clear_explore_harness_profile": profile is None,
         "explore_composition_mode": composition_mode or "disabled",
@@ -190,6 +194,8 @@ def _goal_capability_options(
     """Translate one validated UI contract into configure-goal options."""
 
     if configuration is None:
+        if capability_id == "explore_harness":
+            return {"clear_explore_configuration": True}
         if capability_id == "goal_capability_organization":
             return {"clear_capability_improvement_configuration": True}
         if capability_id == "periodic_report":

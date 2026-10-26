@@ -542,9 +542,9 @@ dependent* todo chains. It must not be used to size independent parallel
 worker lanes -- that misuse capped an early calibration run's treatment arm
 at 5 of 10 lanes; worker plans now use `schedule_independent_lanes` instead.
 
-The command is read-only and sits behind the same per-goal opt-in gate as
+The command is read-only and sits behind the same effective Goal-mode gate as
 `worker-branch-plan` (see "Per-Goal Opt-In Gate" below): without
-`explore_harness.enabled=true` on the goal's orchestration boundary it returns
+`explore_harness.enabled=true` on the Goal's effective orchestration boundary it returns
 a disabled packet, and `--width` is capped by `max_children` in addition to
 its own ceiling. It does not claim todos, acquire leases, launch agents,
 spend quota, or change the active state. Instead it emits a prediction
@@ -673,7 +673,7 @@ do not claim todos, acquire leases, launch workers, write state, or grant quota
 authority. They only constrain the predicted portfolio; execution still enters
 the normal LoopX lifecycle described below.
 
-This command is read-only and opt-in per goal. It is designed to sit on top of
+This command is read-only and requires an enabled effective Goal mode. It is designed to sit on top of
 the existing LoopX harness, not beside it and not instead of it:
 
 1. LoopX supplies the harness inputs: quota/status context outside this command,
@@ -836,11 +836,10 @@ contract does not enable Explore Harness.
 #### Explore Harness planning gate
 
 Both opt-in planners — `todo-branch-plan` and `worker-branch-plan` —
-are deny-by-default. The gate lives on the registered goal's `spawn_policy`,
-the single writable source that the quota/status pipeline projects into
-`quota should-run` as `goal_boundary.orchestration`. No other registry key is
-honored: a second source would be an authorization surface invisible to the
-quota boundary.
+are deny-by-default. The gate consumes the Goal's effective `spawn_policy`,
+composed from the explicit Goal mode or live machine preference and projected
+into `quota should-run` as `goal_boundary.orchestration`. Goal-owned spawn
+permissions are preserved; the machine preference adds no execution authority.
 
 ```yaml
 # inside the registered goal entry
@@ -1374,3 +1373,38 @@ recorded and fatal failures, concurrent groups without mutable-state aliasing,
 fatal structural preflight, record-mode malformed-item isolation with resume
 continuity, aggregate metric projection, and episode-only adapters without a
 legacy `execute` method.
+
+
+## Machine default
+
+In Settings → Device → Explore Harness, choose **Off**, **Evidence**, or
+**Planning**, preview, then apply. Planning includes the evidence graph and
+read-only branch guidance. The default is off until the owner configures it.
+
+The `explore_harness` machine namespace uses
+`{"schema_version":"explore_harness_machine_defaults_v0","mode":"planning"}`.
+It follows the same `machine-config` preview, exact-revision apply, remove and
+rollback transaction as other device preferences. Existing and new Goals with
+no explicit mode inherit live; no Goal registry is rewritten. Separate runtime
+roots retain their own settings, including isolated benchmark runtimes.
+
+Explicit Goal modes and legacy graph/harness `enabled` fields override the
+machine mode, including `false`. A profile or composition setting alone does
+not pin the mode. Goal settings show the effective mode and its source. Use
+**Restore inheritance** or `configure-goal --clear-explore-configuration` to
+remove the Goal's Explore overrides; this preserves other spawn settings.
+Set an explicit Goal mode to `off` to keep that Goal disabled.
+
+Editing a profile or composition setting in the form or JSON preserves mode
+inheritance; only an explicit mode choice creates a mode override.
+
+Turn context, planning, quota/history, Todo settlement, native completion and
+material-refresh readers use the same mode owner. Evidence does not grant external publication authority; machine
+activation retains local projection without enabling a sink. Profile, research
+scope, spawn permission, leases, quota and host continuation remain separately
+owned. Enabled configuration alone does not prove evidence adoption or better
+outcomes.
+
+Native research completion retains the graph lock and, when inheriting, the
+device-configuration lock until its transaction finishes. Inherited planning
+requires the same exact typed experiment evidence as an explicit Goal mode.
