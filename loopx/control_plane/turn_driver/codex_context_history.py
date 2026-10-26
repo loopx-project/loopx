@@ -57,7 +57,9 @@ def _snapshot(event: dict[str, Any]) -> tuple[dict[str, Any], bytes] | None:
             or meta.get("history_mode") != "paginated" or meta.get("cli_version") != "0.162.1"
             or not event.get("model") or not event.get("permission_mode")):
         return None
-    return {"path": str(path), "device": info.st_dev, "inode": info.st_ino,
+    # Filesystem identities are opaque; large inode numbers must survive the
+    # shared TypeScript JSON boundary without IEEE-754 integer rounding.
+    return {"path": str(path), "device": str(info.st_dev), "inode": str(info.st_ino),
         "prefix_bytes": len(raw), "prefix_sha256": hashlib.sha256(raw).hexdigest(),
         "model": event["model"], "permission_mode": event["permission_mode"]}, raw
 

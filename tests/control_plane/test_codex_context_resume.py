@@ -40,6 +40,7 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False):
 def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_path, monkeypatch, shell_wrapper):
     event, history, payload = observed_read(tmp_path, monkeypatch, shell_wrapper=shell_wrapper)
     before = context._state(tmp_path)
+    assert before["candidate"]["native_resume"]["inode"].isdigit()
     append(history, "event_msg", {"type": "task_complete"})
     append(history, "event_msg", {"type": "thread_settings_applied", "history_mode": "paginated"})
     result = context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
