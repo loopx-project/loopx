@@ -819,6 +819,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.replan_context.project", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContext}) => projectReplanContext)],
     ["work_item.replan_context.project_snapshot", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContextSnapshot}) => projectReplanContextSnapshot)],
     ["explore.configuration.resolve", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreConfiguration}) => resolveExploreConfiguration)],
+    ["explore.configuration.goal", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreGoalConfiguration}) => resolveExploreGoalConfiguration)],
     ["explore.configuration.plan", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({planExploreConfiguration}) => planExploreConfiguration)],
     ["explore.result.normalize", lazyHandler(() => import("./capabilities/explore_result_writeback.ts"), ({normalizeExploreResultAttachment}) => normalizeExploreResultAttachment)],
     ["explore.execution.normalize", lazyHandler(() => import("./capabilities/explore_execution_observation.ts"), ({normalizeExploreExecutionObservation}) => normalizeExploreExecutionObservation)],

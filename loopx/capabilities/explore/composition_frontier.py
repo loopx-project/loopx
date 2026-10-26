@@ -235,6 +235,8 @@ def project_live_explore_composition_frontier(
         ),
         {},
     )
+    from .machine_defaults import resolve_explore_goal
+    goal = resolve_explore_goal(goal, runtime_root)
     orchestration = compact_orchestration_policy(goal.get("spawn_policy"))
     harness = (
         orchestration.get("explore_harness")

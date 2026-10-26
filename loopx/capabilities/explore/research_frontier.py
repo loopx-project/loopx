@@ -5,6 +5,8 @@ work authority is performed while projecting research evidence.
 """
 from __future__ import annotations
 
+from .machine_defaults import resolve_explore_goal
+
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -138,7 +140,7 @@ def prepare_research_replan_evidence(
     from .composition_frontier import project_live_explore_composition_frontier
 
     goal = {**(registry_goal or {}), "id": goal_id}
-    harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+    harness = (resolve_explore_goal(goal, runtime_root).get("spawn_policy") or {}).get("explore_harness") or {}
     if not (harness.get("enabled") is True and harness.get("composition_mode") == "explicit_only") and capability_guard is None:
         return None
     frontier = project_live_explore_composition_frontier(runtime_root=runtime_root, goal_id=goal_id,
@@ -172,7 +174,7 @@ def attach_research_execution_projection(
     from ...control_plane.todos.contract import normalize_todo_claimed_by
 
     goal = find_registry_goal(registry, projection["goal_id"]) or {}
-    harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+    harness = (resolve_explore_goal(goal, runtime_root).get("spawn_policy") or {}).get("explore_harness") or {}
     if harness.get("enabled") is not True or harness.get("composition_mode") != "explicit_only":
         return
     registered = registered_agent_ids_for_goal(goal)
@@ -214,7 +216,7 @@ def hold_research_completion_evidence(
         yield None
         return
     goal = find_registry_goal(load_registry(registry_path), goal_id) or {}
-    harness = (goal.get("spawn_policy") or {}).get("explore_harness") or {}
+    harness = (resolve_explore_goal(goal, runtime_root).get("spawn_policy") or {}).get("explore_harness") or {}
     policy = _research_result("explore.research.composition_policy", {"harness": harness})
     if not policy["enabled"] or todo.get("status") == "done" or todo.get("role") == "user":
         yield None

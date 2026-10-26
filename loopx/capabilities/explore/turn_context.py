@@ -27,10 +27,16 @@ from .todo_branch_plan import (
 )
 
 
-def _policy(registry_path, goal_id):
+def _policy(registry_path, goal_id, runtime_root=None):
     goal = load_goal_from_registry(registry_path, goal_id)
     if goal is None:
         raise ValueError(f"Goal {goal_id!r} is not registered")
+    from .machine_defaults import resolve_explore_goal
+    if runtime_root is None:
+        from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+        route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+        runtime_root = Path(route["source_runtime_root"])
+    goal = resolve_explore_goal(goal, runtime_root)
     graph = compact_explore_graph_policy(
         goal.get("explore_graph"),
         (goal.get("spawn_policy") or {}).get("explore_harness"),
@@ -67,7 +73,7 @@ def explore_turn_context(
 ):
     if type(include_finding_digests) is not bool:
         raise ValueError("include_finding_digests must be an explicit boolean")
-    goal, graph, gate = _policy(registry_path, goal_id)
+    goal, graph, gate = _policy(registry_path, goal_id, runtime_root)
     require_registered_agent_id(
         registry_path=registry_path, goal_id=goal_id, agent_id=agent_id
     )
@@ -153,7 +159,7 @@ def extend_turn_start_dispatch(
 ):
     if not agent_id:
         return dispatch
-    _, graph, gate = _policy(registry_path, goal_id)
+    _, graph, gate = _policy(registry_path, goal_id, runtime_root)
     if not graph and not gate["enabled"]:
         return dispatch
 
@@ -219,7 +225,7 @@ def extend_turn_start_dispatch(
     return result
 
 
-def project_settlement_attachment(plan, *, registry_path: Path):
+def project_settlement_attachment(plan, *, registry_path: Path, runtime_root: Path | None = None):
     """Compose the existing optional result option into a Todo-bound CLI plan.
 
     Registry access and hook dispatch are adapters. The typed Explore owner
@@ -230,7 +236,7 @@ def project_settlement_attachment(plan, *, registry_path: Path):
         return plan
 
     def produce():
-        _, graph, _ = _policy(registry_path, identity["goal_id"])
+        _, graph, _ = _policy(registry_path, identity["goal_id"], runtime_root)
         return {
             "schema_version": INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION,
             "hook_id": "explore.settlement_attachment",

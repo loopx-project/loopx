@@ -88,6 +88,12 @@ def sync_explore_graph_after_material_refresh(
     """
 
     goal = load_goal_from_registry(registry_path, goal_id)
+    explicit_graph_enabled = ((goal or {}).get("explore_graph") or {}).get("enabled") is True
+    if goal is not None:
+        from .machine_defaults import resolve_explore_goal
+        from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+        route = resolve_goal_source_runtime_route(registry_path=registry_path, goal_id=goal_id)
+        goal = resolve_explore_goal(goal, Path(route["source_runtime_root"]))
     policy = compact_explore_graph_policy(
         (goal or {}).get("explore_graph"), ((goal or {}).get("spawn_policy") or {}).get("explore_harness")
     )
@@ -129,7 +135,7 @@ def sync_explore_graph_after_material_refresh(
     # reading or publishing anything. An enabled legacy Harness does not grant a
     # sink permission merely by supplying its local evidence graph.
     external_sink_delivery_authorized = external_sink_delivery_authorized and (
-        ((goal or {}).get("explore_graph") or {}).get("enabled") is True
+        explicit_graph_enabled
     )
     base["external_sink_delivery_authorized"] = external_sink_delivery_authorized
 

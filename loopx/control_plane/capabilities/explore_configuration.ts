@@ -20,6 +20,32 @@ export function resolveExploreConfiguration(params: JsonObject): JsonObject {
     evidence_enabled: evidence, planning_enabled: planning};
 }
 
+/** Resolve one mode for both live runtime policy and configuration readback.
+ * Legacy enabled fields are explicit Goal choices, including false. A profile
+ * or composition setting alone does not pin the mode. No authority is added.
+ */
+export function resolveExploreGoalConfiguration(params: JsonObject): JsonObject {
+  const graph = requireJsonObject(params.graph ?? {}, "Explore graph configuration");
+  const harness = requireJsonObject(params.harness ?? {}, "Explore harness configuration");
+  const explicit = Object.hasOwn(graph, "enabled") || Object.hasOwn(harness, "enabled");
+  const machine = params.machine_mode == null ? null : mode(params.machine_mode);
+  const selected = explicit
+    ? resolveExploreConfiguration({evidence_enabled: graph.enabled, planning_enabled: harness.enabled})
+    : planExploreConfiguration({current: {}, changes: {mode: machine ?? "off"}});
+  const override: JsonObject = {};
+  if (explicit) override.mode = selected.mode;
+  for (const key of ["profile", "composition_mode", "composition_scope_id"]) {
+    if (Object.hasOwn(harness, key)) override[key] = harness[key];
+  }
+  return {
+    ...selected,
+    mode_source: explicit ? "goal_override" : machine == null ? "capability_default" : "machine_default",
+    goal_override: Object.keys(override).length ? override : null,
+    configuration: {profile: "generic", composition_mode: "disabled", composition_scope_id: null,
+      ...override, mode: selected.mode},
+  };
+}
+
 export function planExploreConfiguration(params: JsonObject): JsonObject {
   const current = requireJsonObject(params.current, "Explore current configuration");
   const changes = requireJsonObject(params.changes, "Explore configuration changes");

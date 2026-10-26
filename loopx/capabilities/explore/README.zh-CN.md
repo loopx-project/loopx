@@ -273,7 +273,7 @@ Todo 关联保留既有可恢复边界与 claim/lease 证明；恢复旧批次�
 
 关于 DSpark 引文（arXiv:2607.05147）的准确性说明：真实 DSpark 会在每个 per-step 置信度低于固定阈值的第一个位置截断半自回归 draft 块，并且只把 per-step 置信度累乘作为校准诊断。这里的 prefix-survival theta 模型（survival product × throughput 曲线）是 LoopX 特有的、面向**串行依赖** todo 链的扩展。绝不能用它来衡量独立并行 worker lanes 的规模——早期校准运行曾因此把 treatment arm 截到 5/10 lanes；worker 规划现在使用 `schedule_independent_lanes` 代替。
 
-命令只读，并与 `worker-branch-plan` 一样受 per-goal opt-in 门控（见下文）：没有 `explore_harness.enabled=true` 时返回 disabled packet，`--width` 在自身上限之外还被 `max_children` 封顶。它不 claim todo、不 acquire lease、不 launch agent、不 spend quota、不改变 active state。它只输出预测 packet：
+命令只读，并与 `worker-branch-plan` 一样受 Goal 有效模式门控（见下文）：没有 `explore_harness.enabled=true` 时返回 disabled packet，`--width` 在自身上限之外还被 `max_children` 封顶。它不 claim todo、不 acquire lease、不 launch agent、不 spend quota、不改变 active state。它只输出预测 packet：
 
 - 选中的分支、置信度、hazards 与 reason codes；
 - 被排除的 `continuous_monitor` 诊断——仍可见，但绝不进入探索调度器或消耗分支宽度；
@@ -322,7 +322,7 @@ loopx explore worker-branch-plan --goal-id <id> --worker-width 5 \
 
 这仍是仅分析证据：`resource_portfolio.score_delta=0`、typed evidence 保持 `score_delta=0`、planner 只读。容量与占用不 claim todo、不 acquire lease、不 launch worker、不写状态、不授予 quota 权威。它们只约束预测 portfolio；执行仍进入下面描述的正常 LoopX 生命周期。
 
-该命令只读、per-goal opt-in。它设计为**叠加在现有 LoopX harness 之上**，而不是并排或取代：
+该命令只读，需要开启 Goal 有效模式。它设计为**叠加在现有 LoopX harness 之上**，而不是并排或取代：
 
 1. LoopX 提供 harness 输入：quota/status 上下文、open agent todo 投影、explore result 投影、所有权、能力、写作用域元数据。
 2. opt-in planner 把 todos 分组为 worker-lane 候选，用 DSpark 风格 confidence/prefix/load 打分选择 worker branch 前缀。
@@ -332,12 +332,12 @@ loopx explore worker-branch-plan --goal-id <id> --worker-width 5 \
 
 ### 每 Goal 独立 Opt-In 门控
 
-Explore Graph 与 Explore Harness 是相互独立的可选能力。开启一个绝不开启另一个：
+Explore Harness 统一提供 `off`、`evidence`、`planning` 三种模式；planning 包含证据图。旧配置字段仍兼容：
 
 - `explore_graph.enabled` 控制持久图投影与任何已配置的展示 sink。每次成功的 material `refresh-state` 事务后，LoopX 折叠 canonical Explore 证据并运行已配置 sink。语义 digest 让未变更的 refresh 成为零写操作。已配置行 sink 只有在 row/result-id readback 验证投影后才算完成。失败同步或 readback 不推进其 digest，下次 material refresh 会重试。视觉 sink 还会预检确定性交付标记：已有标记对先前写做对账而不重复发布；有界 readback 超时在该 stage batch 停止后续调用并留下可重试 receipt，而不是盲目重复远端写。
-- `spawn_policy.explore_harness.enabled` 只控制下面描述的只读分支规划器。它不创建、更新或发布图。
+- `spawn_policy.explore_harness.enabled` 开启只读分支规划及证据层，但不授予外部 sink 发布权限。
 
-两个门控默认缺失/false。常见模式是 Graph on、Harness off：保持 operator 面向的拓扑最新，同时不改变工作的规划方式。
+没有 Goal 显式模式时继承机器默认；两者均未配置则关闭。`evidence` 保持证据图可用，`planning` 同时提供规划建议。
 
 ```yaml
 # inside the registered goal entry
@@ -639,3 +639,25 @@ runtime smoke 与聚焦 pytest 模块还覆盖：可恢复 prefix 复用、prefi
 在解读中区分已建立的观察、仍未知的结论和下一步有用的验证。问题已回答时，
 使用已有可选 `question_update` 收束，不因整体 Goal 未完成而一直保持开放，
 也不因结论被确认就自动关闭问题。历史状态与 CLI finding 默认值保持兼容。
+
+
+## 机器默认值
+
+在「设置 → 设备 → Explore Harness」选择 **关闭**、**仅证据** 或 **证据与规划**，
+预览后应用。planning 包含证据图和只读分支规划建议；未配置时仍默认关闭。
+
+机器命名空间 `explore_harness` 使用
+`{"schema_version":"explore_harness_machine_defaults_v0","mode":"planning"}`，
+沿用 `machine-config` 的预览、精确版本应用、移除与回滚事务。已有与新建的、没有
+显式模式的 Goal 实时继承，不批量改写注册表。独立 runtime root 保留各自设置，
+包括隔离的 benchmark runtime。
+
+Goal 显式模式及旧版 graph/harness `enabled` 字段优先，包括 `false`。只有 profile
+或组合设置时不会固定模式。Goal 设置展示有效模式及来源；「恢复继承」或
+`configure-goal --clear-explore-configuration` 清除该 Goal 的 Explore 覆盖，保留
+其他 spawn 设置。若要单独关闭某个 Goal，显式设为 `off`。
+
+Turn 上下文、规划、quota/history 和交付后图更新使用同一个模式解析器。证据模式
+不授予对外发布权限；机器默认开启只保留本地图投影，不自动启用外部 sink。
+profile、研究范围、spawn 权限、lease、quota 和宿主续跑仍由各自机制管理。
+配置已开启本身不代表证据已被采纳或任务效果已提升。

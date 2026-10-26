@@ -190,6 +190,8 @@ def _goal_capability_options(
     """Translate one validated UI contract into configure-goal options."""
 
     if configuration is None:
+        if capability_id == "explore_harness":
+            return {"clear_explore_configuration": True}
         if capability_id == "goal_capability_organization":
             return {"clear_capability_improvement_configuration": True}
         if capability_id == "periodic_report":

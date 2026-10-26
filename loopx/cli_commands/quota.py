@@ -464,6 +464,7 @@ def _emit_quota_result(
     if isinstance(cli, dict) and isinstance(cli.get("settlement_plan"), Mapping):
         cli["settlement_plan"] = project_settlement_attachment(
             cli["settlement_plan"], registry_path=registry_path,
+            runtime_root=context.runtime_root if context is not None else None,
         )
     if context is not None:
         observe_quota_result(
