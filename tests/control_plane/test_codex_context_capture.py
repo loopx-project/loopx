@@ -297,7 +297,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 # the fixture may not supply a hidden saved capture path.
                 prefix = "If continuing a captured LoopX decision"
                 permanent = text[text.index(prefix):]
-                cmd = permanent.split("with: ", 1)[1].split(". Follow ", 1)[0]
+                # Read only the advertised command sentence. Subsequent
+                # recovery guidance is not part of the shell invocation.
+                cmd = permanent.split("with: ", 1)[1].split(". ", 1)[0]
                 stages["phase"] = "lookup_read"
                 assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
                 return tool(cmd, number)
