@@ -4,6 +4,28 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {compactTodoContextSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
 
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
+import {updateNativeContextLifecycle} from "../../loopx/control_plane/quota/native_context_lifecycle.ts";
+
+test("only the provider-qualified native replay can retain a complete resume baseline", () => {
+  const state = {session_id: "native", cwd: "/workspace", context_epoch: "original",
+    candidate: {basis: "native_hook_assumption", capture_bytes_verified: true}};
+  const event = {hook_event_name: "SessionStart", source: "resume", session_id: "native", cwd: "/workspace"};
+  const request = {state, event, new_epoch: "replacement", resume_verified: true};
+  assert.deepEqual(updateNativeContextLifecycle(request), state);
+  for (const invalid of [
+    {...request, resume_verified: false},
+    {...request, event: {...event, resume_verified: true}, resume_verified: false},
+    {...request, state: {...state, pending: {}}},
+    {...request, state: {...state, candidate: {...state.candidate, capture_bytes_verified: false}}},
+    {...request, event: {...event, source: "compact"}},
+    {...request, event: {...event, cwd: "/different"}},
+  ]) {
+    const result = updateNativeContextLifecycle(invalid);
+    assert.equal(result.context_epoch, "replacement");
+    assert.equal(result.candidate, undefined);
+  }
+  assert.equal(state.context_epoch, "original");
+});
 
 test("replacements and sparse edits own their values without mutating either capture", () => {
   const original = {registry: {body: "Retain every original requirement. ".repeat(400), changed: {value: 1}},

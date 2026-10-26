@@ -256,10 +256,19 @@ history. Benchmark preparation stages those same hooks in its isolated trial hom
 `PostToolUse` records complete digest-bound reader ranges in the existing session
 journal; EOF without preceding pages, a known malformed/truncated page or a reader
 error cannot establish a baseline. Concurrent and repeated pages coalesce.
-`PreCompact`, `PostCompact`, clear, fork, a changed session/workspace and resume
-invalidate it. A resume may supply different history under the same session ID;
-the [native event contract](https://learn.chatgpt.com/docs/hooks#sessionstart)
-does not attest retention. A new independent decision uses its normal guarded
+`PreCompact`, `PostCompact`, clear, fork and a changed session/workspace invalidate
+it. A resume may supply different history under the same session ID; the
+[native event contract](https://learn.chatgpt.com/docs/hooks#sessionstart) alone
+does not attest retention. The shared Codex adapter can qualify a resume against
+the complete read's native replay checkpoint: the native-selected physical
+rollout must retain its digest-bound prefix and exact last reader output, with
+matching session, workspace, model and permission mode, and no intervening
+compaction, rollback, replacement or unknown replay record. This bounded IO
+profile targets Codex 0.162.1 paginated rollouts; missing, changed,
+oversized (over 64 MiB) or unqualified sources fall back to full. It retains the
+normal-read engineering assumption rather than certifying future model input;
+it neither scans model requests nor asks the model for an ACK.
+A new independent decision uses its normal guarded
 context command and reads the resulting current full capture; it need not first
 read an older capture to seed a delta. Continuing a captured decision after context
 loss still requires complete recovery of that exact original, never a new guard
@@ -407,8 +416,13 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 
 `PostToolUse` 在现有 session journal 中合并摘要固定的完整读取范围；缺少前页的 EOF、
 已知的格式损坏／截断或读取失败不能建立基线。并发、重复页幂等合并。`PreCompact`、
-`PostCompact`、清空、分叉、会话／工作区切换及 resume 使基线失效；同一会话 ID 的 resume
+`PostCompact`、清空、分叉、会话／工作区切换使基线失效；同一会话 ID 的 resume
 也可能使用不同历史，[原生事件契约](https://learn.chatgpt.com/docs/hooks#sessionstart)本身不证明保留。
+共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
+须保留摘要固定的前缀及精确的最后一份 reader 输出；会话、工作区、模型和权限模式相同，
+中间没有压缩、回滚、替换或未知重放记录。此有界 IO profile 面向 Codex 0.162.1 的分页
+rollout；来源缺失、变化、超过 64 MiB 或无法资格化时回退全量。仍采用正常读取后的
+工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。
 新的独立决定走正常准入与上下文命令，完整读取其返回的当前全量捕获；不必为了建立差分
 基线而先读旧捕获。若丢失上下文后继续某个已捕获决定的依赖工作，仍须完整恢复那份精确
 原捕获，不能用新 guard 替代。两条路径都只在完整且已校验的全量读取后建立新差分链。

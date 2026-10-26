@@ -272,6 +272,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     """
     from ..quota.turn_envelope import update_native_context_lifecycle
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+    from .codex_context_history import checkpoint_native_read, native_resume_verified
 
     if directory is None:
         return {}
@@ -294,7 +295,10 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     if name == "PostToolUse":
                         pages = _verified_context_pages(state, pages)
                 updated = update_native_context_lifecycle(state, event,
-                    new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True)
+                    new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True,
+                    resume_verified=name == "SessionStart" and native_resume_verified(state, event))
+                if name == "PostToolUse":
+                    checkpoint_native_read(state, updated, event, pages)
                 if updated != state:
                     _save(root, updated)
                 recovery_needed = same and not updated.get("candidate")

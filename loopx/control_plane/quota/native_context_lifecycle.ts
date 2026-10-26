@@ -46,10 +46,13 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     delete state.active_call; // retire legacy diagnostic-call binding
   };
   if (name === "SessionStart") {
-    // A resume may supply different history under the same session id. The
-    // event carries no retained-context proof. A fresh decision starts with a
-    // current full capture; dependent continuation recovers its pinned original
-    // before establishing a new chain. Ordinary tools/turn endings stay warm.
+    // The provider may qualify the native-selected replay source against the
+    // completed read checkpoint. Neither an event's same ID nor a disk journal
+    // is that observation. Unknown/replaced/truncated histories still reset.
+    const candidate = jsonObject(state.candidate);
+    if (same && event.source === "resume" && request.resume_verified === true
+        && !state.pending && candidate?.basis === NATIVE_CONTEXT_BASIS
+        && candidate.capture_bytes_verified === true) return state;
     invalidate();
     return state;
   }

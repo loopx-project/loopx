@@ -270,13 +270,20 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             stages["phase"] = name + "_ready"
             if phase == "resuming":
                 assert delivered(request, "cold") == read_paths["cold"].read_text().rstrip("\n")
-                assert "LoopX context baseline invalidated." in _input_text(request)
-                assert wires["cold"]["recovery"]["command"] in _input_text(request)
-                # Resume itself does not attest history retention. Read the
-                # same original through the real CLI before the next guard.
-                stages["phase"] = "resume_read"
-                stages["pages"] = pages("cold", read_paths["cold"])
-                cmd = stages["pages"].pop(0)
+                if host == "benchmark":
+                    # Actual worker process exit/resume, qualified by the shared
+                    # native-selected replay checkpoint. No old full prefetch.
+                    assert "LoopX context baseline invalidated." not in _input_text(request)
+                    stages["phase"] = "warm_ready"
+                    cmd = invoke("warm")
+                else:
+                    assert "LoopX context baseline invalidated." in _input_text(request)
+                    assert wires["cold"]["recovery"]["command"] in _input_text(request)
+                    # Unqualified native histories still recover the exact
+                    # original before continuing its dependent decision.
+                    stages["phase"] = "resume_read"
+                    stages["pages"] = pages("cold", read_paths["cold"])
+                    cmd = stages["pages"].pop(0)
             else:
                 cmd = invoke(name)
         elif phase == "resume_read":
