@@ -6,6 +6,36 @@ Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
 readback evidence. Preparing an identity enables neither monitoring nor reports.
 
+Markdown, the HTML report and its copied full text use the same source-link
+rule. An unchanged, well-formed HTTP(S) address is a link. Opaque evidence
+digests, native Task/artifact references and private relative paths stay source
+references; they are never presented as working web links. Malformed addresses,
+credentials in an address, control characters and non-web schemes remain inert.
+Markdown escapes destination punctuation without inventing a different source.
+This is presentation validation, not a claim that a URL is reachable, public or
+authorized for another audience. Source collection, frozen evidence, redaction
+and delivery authorization retain those responsibilities.
+
+The following synthetic reports use the production formatters. Text views use
+the compiled App Markdown component and its stylesheet; HTML views use the
+standalone report artifact. The same normalized records retain their outcomes,
+counterevidence, next actions and source identities. These captures qualify
+format rendering, separately from the full packaged App, installed scheduling,
+live-model content and provider delivery. Desktop is 1440×1000; narrow views
+are 390×844 viewport emulations.
+
+| Text report before | Text report after |
+| --- | --- |
+| ![Opaque sources appeared as Markdown link syntax](../assets/personal-workspace/steward-reports/citations/before-desktop.png) | ![Opaque sources remain readable references](../assets/personal-workspace/steward-reports/citations/after-desktop.png) |
+
+| Narrow text before | Narrow text after |
+| --- | --- |
+| ![Previous text report at a narrow viewport](../assets/personal-workspace/steward-reports/citations/before-narrow.png) | ![Source references wrap without horizontal overflow](../assets/personal-workspace/steward-reports/citations/after-narrow.png) |
+
+| HTML report | Narrow HTML report |
+| --- | --- |
+| ![HTML retains the same source references and substantive report](../assets/personal-workspace/steward-reports/citations/html-desktop.png) | ![The standalone HTML report at a narrow viewport](../assets/personal-workspace/steward-reports/citations/html-narrow.png) |
+
 The same local calendar can explicitly repeat an already completed native Task
 in its original managed Session. This backend/configuration slice is described
 below; arbitrary new tasks from natural language and the unified Agent UI

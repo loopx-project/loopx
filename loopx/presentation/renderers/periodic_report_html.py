@@ -5,7 +5,6 @@ import json
 from collections.abc import Mapping, Sequence
 from html import escape
 from typing import Any
-from urllib.parse import urlparse
 
 from ...capabilities.periodic_report.adapters import (
     ARTIFACT_SCHEMA,
@@ -16,6 +15,7 @@ from ...capabilities.periodic_report.adapters import (
 from ..public_safety import redact_public_text
 from .periodic_report_markdown import (
     periodic_report_labels,
+    periodic_report_source_url,
     render_periodic_report_markdown,
 )
 
@@ -39,11 +39,8 @@ def _safe_attr(value: object, *, maximum: int) -> str:
 
 
 def _safe_http_url(value: object) -> str | None:
-    raw = str(redact_public_text(value, limit=500))
-    parsed = urlparse(raw)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    return escape(raw, quote=True)
+    url = periodic_report_source_url(value)
+    return escape(url, quote=True) if url else None
 
 
 def _document_digest(document: Mapping[str, Any]) -> str:
