@@ -116,13 +116,18 @@ _CONTEXT_CAPTURE_PAGE_END = (
     "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
 )
 # Native paging verifies capture bytes; the existing codec separately declares
-# its continuity basis. Keep the strict caller's original guidance unchanged.
+# its continuity basis. Generic/off readers retain their original obligations
+# without claiming that a native input observer exists.
 CONTEXT_CAPTURE_PAGE_GUIDANCE = _CONTEXT_CAPTURE_PAGE_START + _CONTEXT_CAPTURE_PAGE_END
 CONTEXT_CAPTURE_READ_GUIDANCE = (
-    _CONTEXT_CAPTURE_PAGE_START
-    + "Native input observation independently verifies complete model-visible "
-      "bytes before delta reuse; neither a retyped hash nor a disk hash proves that input. "
-    + _CONTEXT_CAPTURE_PAGE_END
+    "Follow next_command through eof and combine content in byte-offset order. "
+    "In code-mode, forward successful exec stdout directly with text(result.output); "
+    "retain errors. Small batches can save model round trips; start with at most two default pages "
+    "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
+    "Check each model-visible content's UTF-8 byte length against next_offset (total_bytes at eof), "
+    "complete coverage and the original SHA-256. If incomplete, reread the affected range "
+    "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
+    "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
 )
 
 
