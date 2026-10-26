@@ -27,7 +27,11 @@ No source file or canonical record is rewritten.
 
 Complete historical Monitor receipt lines are also generated data. The receipt
 codec recognizes their exact marker, schema, Goal/operation identity and encoded
-wrapper; `excluded_monitor_receipts` retains each line interval and SHA-256.
+wrapper; `excluded_monitor_receipts` retains `count` and inclusive one-based
+`line_ranges`, coalescing adjacent lines. The parent `state_file` and full-file
+`revision` bind every interval; per-line hashes add no recovery information.
+Previously captured per-line records remain readable. Invalid counts, unordered
+or overlapping intervals, and intersections with Todo regions fail closed.
 Their encoded bodies remain in the original file for operation replay, while
 the current canonical Todo reads still supply active work and obligations.
 Ordinary comments, fenced examples, malformed/unknown receipts, foreign-Goal
@@ -340,7 +344,10 @@ scoped User 读取保留。默认 Goal 必读对象改为完整非生成正文�
 内容、来源缺失及非法 UTF-8 均拒绝。不能按标题猜测或为预算截断正文；依赖交付前须读取
 全部已提供上下文与剩余必读，来源改变后重新准入，局部验收不能替代整体目标。
 完整的历史 Monitor 回执行也属于生成数据。回执 codec 核对精确标记、schema、Goal／
-operation 身份及编码外层，`excluded_monitor_receipts` 保留各行的区间和 SHA-256。
+operation 身份及编码外层，`excluded_monitor_receipts` 保留 `count` 和从 1 开始、
+首尾均包含的 `line_ranges`，合并相邻行。父级 `state_file` 与完整文件 `revision`
+绑定所有区间，不重复逐行哈希。旧捕获的逐行格式仍可读；数量不符、乱序、重叠或与
+Todo 区域相交的区间均拒绝。
 编码正文仍留在原文件供原操作恢复；当前工作和义务仍由 canonical Todo 读取提供。
 普通注释、代码块中的示例、损坏或未知回执、其他 Goal 的回执和附带其他文字的行均原样
 保留。这样首轮全文读取不再携带累积的恢复日志；不改变回执重放校验，也不据此宣称
@@ -512,6 +519,16 @@ preserves the limit in `next_command`. An insufficient limit returns an error
 without a zero-progress page; increase it for the same capture. Omitting the flag
 preserves legacy reader output. Error messages are not subject to an impossible
 page limit, and this option changes no host or retained-history budget.
+When both direct-result and retained-history budgets are known to be sufficient,
+the caller can increase both `--page-bytes` and `--max-page-output-bytes`, for
+example to `32000`, on the same digest-pinned continuation. The body may exceed
+8 KiB only with that explicit output cap, up to the existing capture size limit.
+The cap includes escaping, framing and newline; `next_command` preserves it.
+Codex 0.162.1 qualification uses a 10,000-token history setting and a 12,000-token
+code-mode result budget with one directly forwarded stdout per call. Unknown
+budgets keep the existing 7900-byte native default. A larger requested result
+alone never proves history retention; missing output still needs same-capture
+recovery. This changes no host setting automatically.
 Consume `content`, then follow `next_command` through `eof` for full byte coverage.
 The reader verifies the original digest; do not retype or hash the content. The
 existing `command` still restarts at zero for older readers or incomplete inline
@@ -534,6 +551,12 @@ input retention.
 `--max-page-output-bytes` 按 UTF-8 边界缩减正文，并在 `next_command` 中保留。
 上限不足时返回错误，不返回无进展的分页；增大上限后重读同一捕获。省略该参数
 保持旧读取输出。错误消息不受无法满足的分页上限限制，也不更改宿主或历史输出预算。
+直接输出和保留历史预算均已确认充足时，可以在同一摘要固定的续读命令上同时增大
+`--page-bytes` 和 `--max-page-output-bytes`，例如均为 `32000`。只有显式给出输出
+上限才能请求超过 8 KiB 的正文，最大仍受既有 capture 大小限制；上限包含转义、
+JSON 外层与换行，后续命令继承该值。Codex 0.162.1 定向验证采用 10,000 token 历史
+设置和 12,000 token code-mode 输出预算，每次直接转发一份 stdout。未知预算保持
+7900 字节原生默认；大输出请求不证明历史保留，缺失仍恢复同一 capture，不自动修改宿主设置。
 先读取 `content`，再沿 `next_command` 读至 `eof`，确保完整字节覆盖。
 读取器校验原始摘要；无需重抄正文或计算哈希。
 原有 `command` 仍从零开始，供旧读取方或内联输出不完整时重读；可选的首屏读取

@@ -106,8 +106,15 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 goal_id=getattr(args, "goal_id", None), agent_id=getattr(args, "agent_id", None))
         if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
             raise ValueError("context-read requires the original capture file and its exact SHA-256")
-        if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= 8192:
-            raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192")
+        from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+
+        # Unknown host budgets keep the established small-page boundary. A
+        # caller with a qualified direct AND history budget can request one
+        # larger bounded output instead of many CLI/hook/model round trips.
+        maximum = max(8192, min(output_limit or 8192, MAX_REQUEST_BYTES))
+        if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= maximum:
+            raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192; "
+                "larger pages require a sufficient max-page-output-bytes within the capture limit")
         path, raw, _ = _read_capture(value, digest)
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")

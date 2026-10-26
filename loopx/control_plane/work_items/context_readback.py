@@ -45,16 +45,24 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id):
                     "revision": "sha256:" + sha256(
                         "".join(lines[region.start:region.end]).encode("utf-8")).hexdigest()})
                 skipped.update(range(region.start, region.end))
-            receipts = []
+            receipt_ranges, receipt_count = [], 0
             for index in sorted(visible - skipped):
                 if is_monitor_receipt_line(lines[index], goal_id=goal_id):
-                    receipts.append({"start_line": index + 1, "end_line": index + 1,
-                        "revision": "sha256:" + sha256(lines[index].encode("utf-8")).hexdigest()})
+                    line = index + 1
+                    if receipt_ranges and receipt_ranges[-1][1] == line - 1:
+                        receipt_ranges[-1][1] = line
+                    else:
+                        receipt_ranges.append([line, line])
+                    receipt_count += 1
                     skipped.add(index)
             content.update(text="".join(line for index, line in enumerate(lines) if index not in skipped),
                 excluded_todo_regions=excluded)
-            if receipts:
-                content["excluded_monitor_receipts"] = receipts
+            if receipt_count:
+                # The complete source revision already binds every byte and
+                # interval. Repeating a separate hash for each historical line
+                # grows the current prompt without adding recovery information.
+                content["excluded_monitor_receipts"] = {"count": receipt_count,
+                    "line_ranges": receipt_ranges}
         return content
     if source == "goal_acceptance":
         # The typed acceptance owner scopes task-binding observations while

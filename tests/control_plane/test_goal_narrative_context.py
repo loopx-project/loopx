@@ -77,8 +77,7 @@ def test_historical_monitor_receipts_keep_recovery_without_repeating_encoded_bod
     context = next(r["content"] for r in channel["work_context"]["sources"] if r.get("source") == "goal_state")
     assert context["text"] == before + after
     assert context["revision"] == "sha256:" + sha256(document.encode()).hexdigest()
-    assert context["excluded_monitor_receipts"] == [{"start_line": 3, "end_line": 3,
-        "revision": "sha256:" + sha256(marker.encode()).hexdigest()}]
+    assert context["excluded_monitor_receipts"] == {"count": 1, "line_ranges": [[3, 3]]}
     assert len(json.dumps(context).encode()) < 1500 < len(document.encode())
     assert channel["work_context"]["complete"] and channel["delivery_allowed"]
     assert not any(r.get("source") == "goal_state" for r in channel["required_reads"])
@@ -224,3 +223,25 @@ def test_non_generated_text_is_never_shortened(tmp_path, monkeypatch):
     state.write_bytes((narrative + section("archive", "Completed Work Archive", "History.") + "TAIL\r\n").encode())
     content = source(runtime, registry)
     assert content["text"] == narrative + "TAIL\r\n"
+
+
+def test_receipt_intervals_are_bound_to_the_complete_source_revision(tmp_path, monkeypatch):
+    runtime, registry, state, _todo = fixture(tmp_path, monkeypatch, "sqlite")
+    _receipt, marker = monitor_receipt()
+    lines = ["# Goal\n", marker, marker, "Preserve this authored constraint.\n", marker]
+    document = "".join(lines) + section("archive", "Completed Work Archive", "Old work.")
+    state.write_bytes(document.encode())
+    content = source(runtime, registry)
+    assert content["text"] == lines[0] + lines[3]
+    assert content["excluded_monitor_receipts"] == {"count": 3, "line_ranges": [[2, 3], [5, 5]]}
+    assert content["revision"] == "sha256:" + sha256(document.encode()).hexdigest()
+    # The full source digest and inclusive one-based ranges recover every
+    # excluded receipt exactly, without per-line hashes or a second authority.
+    ranges = content["excluded_monitor_receipts"]["line_ranges"]
+    assert "".join("".join(lines[start - 1:end]) for start, end in ranges) == marker * 3
+    _new_receipt, changed_marker = monitor_receipt(operation="monitor:changed")
+    state.write_text(document.replace(marker, changed_marker, 1))
+    changed = source(runtime, registry)
+    assert changed["text"] == content["text"]
+    assert changed["revision"] != content["revision"]
+    assert changed["excluded_monitor_receipts"] == content["excluded_monitor_receipts"]

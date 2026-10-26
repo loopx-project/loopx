@@ -564,3 +564,36 @@ def test_unsupported_native_commands_fail_without_creating_transport_or_authorit
     assert not native.exists() and not captures.exists() and not registry.exists()
     assert _heartbeat_receipt_count(runtime, "unqualified") == 0
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("limit", [7900, 32000])
+def test_larger_pages_need_explicit_output_budget_and_preserve_every_byte(tmp_path, limit):
+    import shlex
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    raw = json.dumps({"requirements": ('汉🙂"\\\t' * 15000), "last": "Stop before publication."},
+        ensure_ascii=False).encode()
+    capture = tmp_path / "capture.json"
+    capture.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    args = build_parser().parse_args(["--format", "json", "quota", "context-read",
+        "--capture-file", str(capture), "--capture-sha256", digest,
+        "--page-bytes", str(max(8192, limit)), "--max-page-output-bytes", str(limit)])
+    observed, calls = b"", 0
+    while True:
+        page = read_context_capture(args)
+        assert page["ok"] and page["offset"] == len(observed)
+        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+        observed += page["content"].encode()
+        calls += 1
+        if page["eof"]:
+            break
+        args = build_parser().parse_args(shlex.split(page["next_command"])[1:])
+        assert args.max_page_output_bytes == limit
+    assert observed == raw and hashlib.sha256(observed).hexdigest() == digest
+    assert calls < len(raw) / (limit / 2)
+    # Raising a read size without the matching stdout budget stays fail-closed.
+    args.offset, args.page_bytes, args.max_page_output_bytes = 0, 32000, None
+    assert not read_context_capture(args)["ok"]
+    args.max_page_output_bytes = 7900
+    assert not read_context_capture(args)["ok"]

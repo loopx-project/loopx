@@ -671,9 +671,13 @@ test("Goal narrative fulfillment needs complete source and ordered region lineag
   assert.deepEqual(project({text: content.text}).required_reads, [read]);
   const receipt = {start_line: 2, end_line: 2, revision: `sha256:${"c".repeat(64)}`};
   assert.deepEqual(project({...content, excluded_monitor_receipts: [receipt]}).required_reads, []);
+  assert.deepEqual(project({...content, excluded_monitor_receipts: {count: 2, line_ranges: [[2, 3]]}}).required_reads, []);
   for (const invalid of [[], [receipt, receipt], [{...receipt, start_line: 0, end_line: 0}],
     [{...receipt, end_line: 3}], [{...receipt, start_line: 5, end_line: 5}],
-    [{...receipt, revision: "invalid"}]]) {
+    [{...receipt, revision: "invalid"}], {count: 0, line_ranges: []},
+    {count: 1, line_ranges: [[2, 3]]}, {count: 3, line_ranges: [[2, 4]]},
+    {count: 2, line_ranges: [[2, 2], [2, 2]]}, {count: 2, line_ranges: [[3, 2]]},
+    {count: 1, line_ranges: [[0, 0]]}, {count: 1, line_ranges: [[2, 2]], unknown: true}]) {
     const rejected = project({...content, excluded_monitor_receipts: invalid});
     assert.deepEqual(rejected.required_reads, [read]);
     assert.equal((rejected.work_context as JsonObject).complete, false);

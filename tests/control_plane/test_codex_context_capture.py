@@ -87,7 +87,7 @@ def _last_page(request):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None):
     # Real worker qualification follows returned cursors; output budgets can
     # shrink a page, so precomputed fixed offsets are not its production path.
     bounded_pages = bounded_pages or host == "benchmark"
@@ -275,9 +275,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             page = _last_page(request)
             assert page and page["ok"], page
             bounded_sizes.append(len(page["content"].encode()))
-            assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+            assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= (reader_output_bytes or 7900)
             if not page["eof"]:
-                assert "--max-page-output-bytes 7900" in page["next_command"]
+                assert f"--max-page-output-bytes {reader_output_bytes or 7900}" in page["next_command"]
                 return tool(page["next_command"], number)
         if stages["pages"]:
             cmd = stages["pages"].pop(0)
@@ -408,6 +408,13 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         return tool(cmd, number)
 
     def tool(cmd, number):
+        if reader_output_bytes and "context-read" in shlex.split(cmd):
+            # Exercise the existing public reader with a budget qualified by
+            # this real host fixture, retaining the original capture and cursor.
+            argv = shlex.split(cmd)
+            argv[argv.index("--page-bytes") + 1] = str(reader_output_bytes)
+            argv[argv.index("--max-page-output-bytes") + 1] = str(reader_output_bytes)
+            cmd = shlex.join(argv)
         if host == "code_mode":
             pragma = '// @exec: {"max_output_tokens":12000}\n' if native_pragma else ""
             # Exercise the shipped default page size and bounded batching for
@@ -418,7 +425,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 commands.append(stages["pages"].pop(0))
             if adaptive:
                 code = "".join("{const r=await tools.exec_command(" + json.dumps({
-                    "cmd": command, "login": False, "max_output_tokens": 2000 if bounded_pages else 2400})
+                    "cmd": command, "login": False, "max_output_tokens": 11000 if reader_output_bytes else 2000 if bounded_pages else 2400})
                     + ");text(r.exit_code === 0 ? r.output : r);}" for command in commands)
                 return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
                     "name": "exec", "input": pragma + code}
@@ -736,3 +743,11 @@ def test_native_ssh_goal_keeps_identity_delta_and_full_recovery(tmp_path, monkey
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         "code_mode", surface, False, True, True, "missing", shared_root=True,
         native_read_batch=1, bounded_pages=True, ssh_goal=True)
+
+
+@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
+def test_native_large_page_recovery(tmp_path, monkeypatch, surface):
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        "code_mode", surface, False, True, True, "missing", shared_root=True,
+        native_pragma=True, native_read_batch=1, native_history_tokens=10000,
+        bounded_pages=True, reader_output_bytes=32000, ssh_goal=True)
