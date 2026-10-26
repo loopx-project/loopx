@@ -102,6 +102,48 @@ test("fresh control with exact warm bodies; changed source revisions do not rese
   assert.deepEqual(baseline.context, original);
 });
 
+test("relocated reusable strings reference the exact base while current controls stay inline", () => {
+  const original = {registry: {authoring: long}, current_control: {instruction: long}};
+  const current = {registry: {attachment: {guidance: long}}, current_control: {instruction: long}};
+  const initial = prepareContextDelivery({context: original, scope, capture_id: "before", surface: "quota_packet"});
+  const args = {context: current, scope, capture_id: "after", surface: "quota_packet"};
+  const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.equal(delta.mode, "delta");
+  const tree = delta.changes as {changed: {registry: {changed: {attachment: {changed: {guidance: unknown}}}}}};
+  assert.deepEqual(tree.changed.registry.changed.attachment.changed.guidance, {from: ["registry", "authoring"]});
+  assert.deepEqual(inline(delta, ["current_control"]), current.current_control);
+  assert.deepEqual(restoreContextDelivery({delivery: delta, baseline: initial,
+    current: prepareContextDelivery(args)}).context, current);
+  assert.deepEqual(initial.context, original);
+  assert.deepEqual(prepareContextDelivery(args).context, current); // cold delivery remains literal
+
+  // References never read the patch being applied, inherited properties, or a
+  // different string. Any damaged reference recovers this exact current capture.
+  for (const reference of [["registry", "missing"], ["constructor", "name"], [], ["current_control"], ["registry", -1], "registry.authoring"]) {
+    const damaged = structuredClone(delta);
+    const node = (damaged.changes as typeof tree).changed.registry.changed.attachment.changed;
+    node.guidance = {from: reference};
+    const restored = restoreContextDelivery({delivery: damaged, baseline: initial, current: prepareContextDelivery(args)});
+    assert.equal(restored.mode, "full");
+    assert.deepEqual(restored.context, current);
+  }
+});
+
+test("new reusable arrays can relocate exact strings without copying current edits", () => {
+  const original = {registry: {text: long, other: long + " old"}};
+  const current = {registry: {items: [long + " old", long, long + " new"]}};
+  const initial = prepareContextDelivery({context: original, scope, capture_id: "before", surface: "quota_packet"});
+  const args = {context: current, scope, capture_id: "after", surface: "quota_packet"};
+  const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.equal(delta.mode, "delta");
+  assert.deepEqual(restoreContextDelivery({delivery: delta, baseline: initial,
+    current: prepareContextDelivery(args)}).context, current);
+  const wire = JSON.stringify(delta.changes);
+  assert.match(wire, /"from"/);
+  assert.match(wire, / new/); // changed requirements are literal, never fuzzy matches
+  assert.ok(wire.length < JSON.stringify(current).length / 2);
+});
+
 test("exact-base source and requirement reorders preserve current positions", () => {
   const initial = context();
   const outcomes = ((source(initial, 2).goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject).outcomes as JsonObject[];

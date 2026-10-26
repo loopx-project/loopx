@@ -162,6 +162,16 @@ input; grouping saves repeated wrappers rather than omitting controls. The
 codec compares this encoding with ordinary edits and full replacement before
 choosing. A reader that does not recognize the edit recovers the full capture.
 
+Eligible reusable strings may also use `from`, an array of object keys or exact
+array indices in the immutable base capture. This avoids resending identical
+authoring when task binding or source ordering moves it to another field. The
+reference copies the complete exact string, never a similar string or a value
+from the current patch. Current and unknown controls remain inline. Missing,
+malformed or incompatible references recover the same full current capture;
+the reconstructed context must still match its complete digest. Cold delivery,
+session invalidation and authority remain unchanged. This saves transport only;
+it does not establish model retention, billed-token savings or useful outcomes.
+
 These are presentation rules within the existing default-off option, not a new
 configuration or admission policy. A missing continuity basis, a changed epoch, a damaged
 patch or an incompatible reader automatically recovers the same original full
