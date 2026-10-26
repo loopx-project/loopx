@@ -177,6 +177,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.periodic_report.machine_defaults",
     "loopx.capabilities.progress_review.receipt",
     "loopx.chat_action_normalization",
+    "loopx.chat_history",
     "loopx.cli_commands.quota_capture",
     "loopx.configuration_transaction",
     "loopx.control_plane.agents.execution_facts",
@@ -195,6 +196,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.goals.deletion_service",
     "loopx.control_plane.goals.goal_amendment_proposal",
     "loopx.control_plane.projects.registry_codec",
+    "loopx.control_plane.scheduler.monitor_batch_receipts",
     "loopx.control_plane.status.goal_source",
     "loopx.control_plane.testing.cli_output_semantics",
     "loopx.control_plane.testing.release_commit_qualification",
@@ -222,6 +224,10 @@ CONSUMER_MODULES = (
 # A consumer that hands `re` a pattern this file cannot fold. Folding reads
 # every construction except the declared readers, each fenced below.
 UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {
+    "loopx.control_plane.scheduler.monitor_batch_receipts": (
+        "_read_receipt locates an escaped operation-bound HTML receipt marker, "
+        "not a whole-value digest. Its sole dynamic regex is fenced below."
+    ),
     "loopx.capabilities.benchmark_toolkit.integrity": (
         "_marker_present matches an escaped caller-supplied filename/token inside "
         "command text with explicit basename boundaries; it does not validate a "
@@ -1268,6 +1274,24 @@ def test_cli_output_dynamic_prose_pattern_is_fenced_to_its_literal_question() ->
                    and any(isinstance(target, ast.Name) and target.id == "first_delivery_guidance"
                            for target in node.targets))
     assert isinstance(literal, ast.Constant) and isinstance(literal.value, str) and literal.value
+
+
+def test_monitor_receipt_dynamic_pattern_only_locates_its_operation_marker() -> None:
+    dotted = "loopx.control_plane.scheduler.monitor_batch_receipts"
+    module = importlib.import_module(dotted)
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    reader = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_read_receipt")
+    calls = [node for node in ast.walk(reader) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and ast.unparse(node.func) == "re.findall"]
+    assert len(calls) == 1
+    unreadable = [site for site in _module_of(dotted)["constructions"] if not site["readable"]]
+    assert [site["line"] for site in unreadable] == [calls[0].lineno]
+    pattern = calls[0].args[0]
+    assert isinstance(pattern, ast.BinOp) and isinstance(pattern.op, ast.Add)
+    assert ast.unparse(pattern.left) == "re.escape(marker)"
+    assert isinstance(pattern.right, ast.Constant) and pattern.right.value == r"([A-Za-z0-9+/=]+) -->"
+    assert any(isinstance(node, ast.Assign) and ast.unparse(node) == "marker = _receipt_marker(operation_id)"
+               for node in reader.body)
 
 
 # --- layer 4: behaviour, per spelling and per surface -------------------------------------

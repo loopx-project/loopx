@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..content_digest import BARE_SHA256_PATTERN
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..todos.path_resolution import resolve_todo_state_path
 
@@ -69,7 +70,7 @@ def is_monitor_receipt_line(line: str, *, goal_id: str) -> bool:
         and isinstance(operation, str) and bool(operation)
         and hashlib.sha256(operation.encode()).hexdigest() == match[1]
         and isinstance(receipt.get("request_sha256"), str)
-        and re.fullmatch(r"[0-9a-f]{64}", receipt["request_sha256"]) is not None
+        and BARE_SHA256_PATTERN.fullmatch(receipt["request_sha256"]) is not None
         and isinstance(writeback, dict)
         and writeback.get("schema_version") == "monitor_poll_todo_writeback_v0"
         and writeback.get("goal_id") == goal_id
