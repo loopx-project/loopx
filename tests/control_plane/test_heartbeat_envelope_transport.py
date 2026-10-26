@@ -443,25 +443,34 @@ def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, tur
 
 
 @pytest.mark.parametrize("turn_envelope", [False, True])
-def test_ssh_goal_capture_fits_host_with_full_command_paths(tmp_path, turn_envelope):
+@pytest.mark.parametrize("path_width,cli_width", [(160, 140), (133, 180)])
+def test_ssh_goal_capture_fits_host_with_full_command_paths(tmp_path, turn_envelope, path_width, cli_width):
     # Fixed physical path width qualifies the shipped command workload on every
     # OS; the native cases also retain their actual, unshortened pytest paths.
     with stable_budget_fixture_root(tmp_path) as base:
-        root = (base / ("p" * (160 - len(str(base.resolve())) - 1))).resolve()
+        root = (base / ("p" * (path_width - len(str(base.resolve())) - 1))).resolve()
         root.mkdir()
+        # Fix both dimensions, rather than inheriting this checkout's path.
+        # The second profile reproduces the installed executable's width.
+        cli_root = (base / ("c" * (cli_width - len(str(base.resolve())) - 7))).resolve()
+        cli = str(cli_root / "loopx")
+        assert len(cli) == cli_width
+        captures, context = root / "captures", root / "context"
+        captures.mkdir()
+        context.mkdir()
         paths = {"registry_path": root / "project/.loopx/registry.json",
-                 "runtime_root": root / "runtime", "cli_bin": str(Path(sys.executable).with_name("loopx"))}
+                 "runtime_root": root / "runtime", "cli_bin": cli}
         args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="codex_app_ssh_goal",
                     thin=True, **paths)
         ordinary = build_heartbeat_prompt(**args)
         assert ordinary == build_heartbeat_prompt(**args, context_delivery="off")
-        enabled = build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=root,
-            codex_context_root=str(root), turn_envelope=turn_envelope)
+        enabled = build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=captures,
+            codex_context_root=str(context), turn_envelope=turn_envelope)
         body, command = enabled["task_body"], shlex.split(enabled["quota_guard_command"])
         assert enabled["interface_budget"]["max_chars"] == 4000 and len(body) <= 4000
         for option, value in (("--registry", paths["registry_path"]),
                               ("--runtime-root", paths["runtime_root"]),
-                              ("--decision-output-root", root), ("--codex-context-root", root)):
+                              ("--decision-output-root", captures), ("--codex-context-root", context)):
             assert command[command.index(option) + 1] == str(value)
         assert command[0] == paths["cli_bin"]
         assert "--begin-turn" in command and "--heartbeat-turn-receipt" not in command
@@ -469,5 +478,5 @@ def test_ssh_goal_capture_fits_host_with_full_command_paths(tmp_path, turn_envel
         if turn_envelope:
             assert "detail_ref.full_decision" in body
         with pytest.raises(ValueError, match="4000-character"):
-            build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=root,
-                codex_context_root=str(root), turn_envelope=turn_envelope, agent_scopes=[c * 320 for c in "stu"])
+            build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=captures,
+                codex_context_root=str(context), turn_envelope=turn_envelope, agent_scopes=[c * 320 for c in "stu"])
