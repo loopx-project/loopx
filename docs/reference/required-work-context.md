@@ -286,7 +286,8 @@ baseline's reader interval and subsequent records; unrelated earlier history is
 neither hashed nor decoded, and total file size does not decide reuse. The
 session metadata's creator version is not the running host version. Code-mode
 parent emissions must retain the same complete page bytes observed by nested
-reader hooks. Missing or changed evidence and unqualified replay records fall
+reader hooks. Several nested reads may share one parent call; their individual
+emission digests and full byte coverage remain required. Missing or changed evidence and unqualified replay records fall
 back to full. One decoded record remains bounded; this is not a history-size
 limit. Legacy whole-prefix checkpoints require a fresh complete read. It retains the
 normal-read engineering assumption rather than certifying future model input;
@@ -460,6 +461,7 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 rollout 上验证；流式读取当前基线对应区间及后续记录，不哈希或解码无关旧历史，
 文件总大小不决定是否差分。session metadata 的创建版本不等于当前宿主版本。
 code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部精确页字节。
+同一父调用可以包含多次嵌套读取，仍逐份核对其输出摘要和全部字节覆盖。
 证据缺失、改写或重放记录不受支持时回退全量；单条记录的解码内存仍有边界，
 不是历史文件容量限制。旧版全前缀检查点须重新完整读取后建立新检查点。仍采用正常读取后的
 工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。

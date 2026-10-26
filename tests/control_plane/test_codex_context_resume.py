@@ -14,7 +14,7 @@ def append(path, kind, payload):
 
 
 def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost_prefix=False,
-                  history_prefix_mib=0, version="0.162.1", code_mode=False):
+                  history_prefix_mib=0, version="0.162.1", code_mode=False, parent_batch=1):
     event = setup(root, monkeypatch)
     history = root / "rollout.jsonl"
     append(history, "session_meta", {"id": "session", "cwd": str(root),
@@ -32,6 +32,7 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
         "heartbeat_receipt": {"turn_instance_id": "first"}}
     _, first = project(root, payload=payload)
     pages = read_pages(root, first)
+    emissions = []
     for i, page in enumerate(pages if complete else pages[:-1]):
         call = f"reader-{i}"
         body = json.dumps(page)
@@ -40,8 +41,13 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
         if code_mode:
             # Native code-mode retains the parent emission; the nested hook
             # has a different call id. Its actual output must still cover all bytes.
-            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": f"parent-{i}",
-                "output": [{"type": "input_text", "text": output}]})
+            if parent_batch == 1:
+                append(history, "response_item", {"type": "custom_tool_call_output", "call_id": f"parent-{i}",
+                    "output": [{"type": "input_text", "text": output}]})
+            else:
+                if not emissions:
+                    append(history, "response_item", {"type": "custom_tool_call", "call_id": f"parent-{i}"})
+                emissions.append({"type": "input_text", "text": output})
         else:
             append(history, "response_item", {"type": "function_call_output", "call_id": call, "output": output})
         if lost_prefix and i == len(pages) - 1:
@@ -50,6 +56,12 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
             history.write_text("".join(json.dumps(row) + "\n" for row in rows))
         context.codex_context_hook(str(root), {**event, "hook_event_name": "PostToolUse",
             "tool_use_id": call, "tool_response": body})
+        if emissions and (len(emissions) == parent_batch or i == len(pages) - 1):
+            # Nested read hooks run before the enclosing Code Mode emits its
+            # complete result. Preserve every emission in that native parent.
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": f"parent-{i}",
+                "output": emissions})
+            emissions = []
     return event, history, payload
 
 
@@ -167,11 +179,14 @@ def test_old_version_can_resume_current_verified_reader_format(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("lose_page", [False, True])
-def test_code_mode_retained_emissions_need_complete_native_read_coverage(tmp_path, monkeypatch, lose_page):
-    event, history, payload = observed_read(tmp_path, monkeypatch, code_mode=True)
+@pytest.mark.parametrize("parent_batch", [1, 2])
+def test_code_mode_retained_emissions_need_complete_native_read_coverage(tmp_path, monkeypatch, lose_page, parent_batch):
+    event, history, payload = observed_read(tmp_path, monkeypatch, code_mode=True, parent_batch=parent_batch)
     if lose_page:
         rows = [json.loads(line) for line in history.read_text().splitlines()]
-        next(row for row in rows if row["type"] == "response_item")["payload"]["output"] = []
+        outputs = [row for row in rows if row["type"] == "response_item"
+                   and row["payload"].get("type") == "custom_tool_call_output"]
+        outputs[-1]["payload"]["output"] = outputs[-1]["payload"]["output"][1:]
         history.write_text("".join(json.dumps(row) + "\n" for row in rows))
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     _, wire = project(tmp_path, "second", payload=payload)

@@ -178,21 +178,33 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
             call = payload["call_id"]
             pages = _read_pages(payload.get("output"))
             digest = _digest(pages)
+            groups = [pages]
             if call in required:
                 if call in seen or digest != required[call]:
                     return False
                 seen.add(call)
-            elif payload.get("type") != "custom_tool_call_output" or digest not in expected_pages:
-                pages = []
-            if pages:
-                seen_pages[digest] += 1
-            for page in pages:
-                if page.get("sha256") != reference["sha256"]:
-                    continue
-                span = capture_page_range(page, raw=body, digest=reference["sha256"])
-                if span is None:
-                    return False
-                ranges.append(span)
+            elif payload.get("type") == "custom_tool_call_output":
+                output = payload.get("output")
+                # One native Code Mode parent can retain several emissions
+                # from independently observed nested reads. Preserve those
+                # emission boundaries instead of hashing their concatenation
+                # as if it were one nested read. Every exact group and byte
+                # still has to be present; duplicate groups do not help.
+                if isinstance(output, list):
+                    groups = [_read_pages(item.get("text")) for item in output
+                              if isinstance(item, dict) and item.get("type") == "input_text"]
+                groups = [group for group in groups if group and _digest(group) in expected_pages]
+            else:
+                groups = []
+            for group in groups:
+                seen_pages[_digest(group)] += 1
+                for page in group:
+                    if page.get("sha256") != reference["sha256"]:
+                        continue
+                    span = capture_page_range(page, raw=body, digest=reference["sha256"])
+                    if span is None:
+                        return False
+                    ranges.append(span)
         if not _append_only(record, event):
             return False
     cursor = 0
