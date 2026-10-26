@@ -204,6 +204,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.todos.completion_validation_store",
     "loopx.control_plane.todos.machine_section_projection",
     "loopx.control_plane.turn_driver.codex_sessions",
+    "loopx.control_plane.turn_driver.decision_capture",
     "loopx.control_plane.turn_driver.operation_requests",
     "loopx.control_plane.work_items.governed_transition_proposal",
     "loopx.control_plane.work_items.progress_review_policy",
@@ -1327,6 +1328,27 @@ def test_the_owner_is_a_leaf_and_exports_only_the_two_shapes() -> None:
         if isinstance(value, re.Pattern)
     }
     assert patterns == set(CANONICAL_EXPORTS), patterns
+
+
+def test_context_capture_reader_checks_bare_shape_and_original_bytes(tmp_path: Path) -> None:
+    from hashlib import sha256
+
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    raw = b'{"ok":true}\n'
+    capture = tmp_path / "capture.json"
+    capture.write_bytes(raw)
+    digest = sha256(raw).hexdigest()
+    path, received, payload = read_context_capture_file(str(capture), digest)
+    assert path == capture.resolve()
+    assert received == raw and payload == {"ok": True}
+
+    for invalid in (*BARE_REJECTS, f"sha256:{digest}", digest.upper(), f"{digest}\n"):
+        with pytest.raises(ValueError, match="exact SHA-256"):
+            read_context_capture_file(str(capture), invalid)
+    for wrong_bytes in BARE_ACCEPTS:
+        with pytest.raises(ValueError, match="capture digest mismatch"):
+            read_context_capture_file(str(capture), wrong_bytes)
 
 
 def test_periodic_report_generation_receipt_checks_both_digest_fields() -> None:
