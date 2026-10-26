@@ -459,7 +459,10 @@ test("array edits preserve append, removal, reorder, duplicate entries and exact
   const before = packet(), baseline = packetFull(before);
   const old = (before.planning_horizon as JsonObject).work_items as JsonObject[];
   const cases: unknown[] = [[], [old[1]], [...old, {id: "three", body: long}], [old[1], old[0]],
-    [old[0], old[0]], [null, "", false, 0], null, "", {items: old},
+    [old[0], old[0]], [null, "", false, 0],
+    ["\"\\\n\t\u0000", "完整🙂", "\ud800", "\udfff", 1e-7, 1e21],
+    [{"\"\\\n\u0000": [null, false, "完整🙂"], "\ud800": {values: [], items: {}}}],
+    null, "", {items: old},
     [{...old[0], late_constraint: "STOP now", revision: "r2"}, old[1]]];
   for (const items of cases) {
     const current = {...before, planning_horizon: {work_items: items}};

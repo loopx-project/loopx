@@ -279,7 +279,7 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
 
 /** Group complete CURRENT literals, not baseline references. Keep the cheaper
  * ordinary edit when grouping would grow metadata; both containers share this rule. */
-function groupCurrentValues(delta: Exclude<Delta, {value: unknown} | {from: Path}>): Delta {
+function groupCurrentValues(delta: Exclude<Delta, {value: unknown} | {from: Path}>, size: (value: unknown) => number): Delta {
   const children = Object.entries("items" in delta ? delta.items : delta.changed ?? {});
   const values = children.filter(([, child]) => "value" in child);
   if (values.length < 2) return delta;
@@ -289,10 +289,30 @@ function groupCurrentValues(delta: Exclude<Delta, {value: unknown} | {from: Path
     values: Object.fromEntries(values.map(([key, child]) => [key, (child as {value: unknown}).value])),
   };
   if (!("items" in grouped) && !Object.keys(nested).length) delete grouped.changed;
-  return bytes(grouped) < bytes(delta) ? grouped : delta;
+  return size(grouped) < size(delta) ? grouped : delta;
 }
 
 function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | null {
+  // Contexts have passed strict JSON digest validation; patch containers remain
+  // immutable after sizing. Reuse child sizes within this one tree calculation.
+  const sizes = new WeakMap<object, number>();
+  const size = (value: unknown): number => {
+    if (value === null || typeof value !== "object") return bytes(value);
+    const prior = sizes.get(value);
+    if (prior !== undefined) return prior;
+    let total = 2, count = 0;
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) total += (i ? 1 : 0)
+        + (value[i] === undefined ? 4 : size(value[i]));
+    } else {
+      for (const [key, item] of Object.entries(value)) {
+        if (item === undefined) continue;
+        total += (count++ ? 1 : 0) + bytes(key) + 1 + size(item);
+      }
+    }
+    sizes.set(value, total);
+    return total;
+  };
   const exact = new Set(forced.map(pathKey)), ancestors = new Set<string>();
   for (const path of forced) for (let i = 0; i < path.length; i++) ancestors.add(pathKey(path.slice(0, i)));
   // Binding or source reordering can relocate already-read authoring. Index
@@ -322,7 +342,7 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
         if (child) changed.push([field, child]);
       }
       const removed = Object.keys(old).filter(field => !Object.hasOwn(next, field));
-      delta = groupCurrentValues({changed: Object.fromEntries(changed), ...(removed.length ? {removed} : {})});
+      delta = groupCurrentValues({changed: Object.fromEntries(changed), ...(removed.length ? {removed} : {})}, size);
     } else if ((Array.isArray(a) || a === undefined) && Array.isArray(b)) {
       const old = a as unknown[] | undefined;
       const items: [string, Delta][] = [];
@@ -330,11 +350,11 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
         const child = visit(old?.[i], value, [...path, i]);
         if (child) items.push([String(i), child]);
       });
-      delta = groupCurrentValues({items: Object.fromEntries(items), ...(old?.length !== b.length ? {length: b.length} : {})});
+      delta = groupCurrentValues({items: Object.fromEntries(items), ...(old?.length !== b.length ? {length: b.length} : {})}, size);
     } else return {value: clone(b)};
     // Sizing does not publish a value. Copy only a replacement that is chosen,
     // rather than every unchanged subtree and every discarded ancestor value.
-    return bytes(delta) < bytes({value: b}) ? delta : {value: clone(b)};
+    return size(delta) < size({value: b}) ? delta : {value: clone(b)};
   };
   return visit(before, after, []);
 }
