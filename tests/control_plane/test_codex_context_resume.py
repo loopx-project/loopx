@@ -13,7 +13,7 @@ def append(path, kind, payload):
         stream.write(json.dumps({"type": kind, "payload": payload}) + "\n")
 
 
-def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False):
+def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost_prefix=False):
     event = setup(root, monkeypatch)
     history = root / "rollout.jsonl"
     append(history, "session_meta", {"id": "session", "cwd": str(root),
@@ -31,6 +31,10 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False):
         output = ("Chunk ID: fixture\nWall time: 0.01 seconds\nProcess exited with code 0\n"
             "Original token count: 1000\nOutput:\n" + body) if shell_wrapper else body
         append(history, "response_item", {"type": "function_call_output", "call_id": call, "output": output})
+        if lost_prefix and i == len(pages) - 1:
+            rows = [json.loads(line) for line in history.read_text().splitlines()]
+            next(row for row in rows if row["type"] == "response_item")["payload"]["output"] = "truncated"
+            history.write_text("".join(json.dumps(row) + "\n" for row in rows))
         context.codex_context_hook(str(root), {**event, "hook_event_name": "PostToolUse",
             "tool_use_id": call, "tool_response": body})
     return event, history, payload
@@ -96,6 +100,13 @@ def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, 
 
 def test_incomplete_native_read_cannot_gain_resume_continuity(tmp_path, monkeypatch):
     event, _, payload = observed_read(tmp_path, monkeypatch, complete=False)
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    _, wire = project(tmp_path, "second", payload=payload)
+    assert wire["mode"] == "full" and wire["context"] == payload
+
+
+def test_complete_eof_cannot_hide_a_prior_page_missing_from_native_replay(tmp_path, monkeypatch):
+    event, _, payload = observed_read(tmp_path, monkeypatch, lost_prefix=True)
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     _, wire = project(tmp_path, "second", payload=payload)
     assert wire["mode"] == "full" and wire["context"] == payload

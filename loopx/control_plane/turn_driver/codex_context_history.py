@@ -75,6 +75,8 @@ def _read_pages(output: object) -> list[dict[str, Any]]:
 
 def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], raw: bytes,
              event: dict[str, Any]) -> bool:
+    from .decision_capture import capture_page_range, read_context_capture_file
+
     if any(anchor.get(k) != snapshot.get(k) for k in
            ("path", "device", "inode", "model", "permission_mode")):
         return False
@@ -82,18 +84,40 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], raw: bytes,
     if (type(end) is not int or not 0 < end <= len(raw) or raw[end - 1:end] != b"\n"
             or hashlib.sha256(raw[:end]).hexdigest() != anchor.get("prefix_sha256")):
         return False
-    # A native writer may persist the last output before or after PostToolUse.
-    # Require its exact page bytes once in the selected history in either case.
-    matches = 0
+    reads, reference = anchor.get("reads"), anchor.get("read_source")
+    if not isinstance(reads, list) or not reads or not isinstance(reference, dict):
+        return False
+    required = {read["call_id"]: read["pages_sha256"] for read in reads}
+    if len(required) != len(reads):
+        return False
+    _, body, _ = read_context_capture_file(reference["path"], reference["sha256"], private=True)
+    # Verify every observed read, not just EOF. A complete last page must never
+    # hide an earlier output that the native replay dropped or truncated.
+    seen: set[str] = set()
+    ranges = []
     for line in raw.splitlines():
         record = json.loads(line)
         payload = record.get("payload", {})
         if (record.get("type") == "response_item" and payload.get("type") == "function_call_output"
-                and payload.get("call_id") == anchor.get("read_call_id")):
-            if _digest(_read_pages(payload.get("output"))) != anchor.get("read_pages_sha256"):
+                and payload.get("call_id") in required):
+            call = payload["call_id"]
+            pages = _read_pages(payload.get("output"))
+            if call in seen or _digest(pages) != required[call]:
                 return False
-            matches += 1
-    if matches != 1:
+            seen.add(call)
+            for page in pages:
+                if page.get("sha256") != reference["sha256"]:
+                    continue
+                span = capture_page_range(page, raw=body, digest=reference["sha256"])
+                if span is None:
+                    return False
+                ranges.append(span)
+    cursor = 0
+    for start, stop in sorted(ranges):
+        if start > cursor:
+            return False
+        cursor = max(cursor, stop)
+    if seen != set(required) or cursor != len(body):
         return False
     for line in raw[end:].splitlines():
         record = json.loads(line)
@@ -109,6 +133,23 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], raw: bytes,
         if kind == "turn_context" and (payload.get("cwd") != event["cwd"] or payload.get("model") != event["model"]):
             return False
     return True
+
+
+def observe_native_read(state: dict[str, Any], event: dict[str, Any],
+                        pages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collect content-free IO facts alongside the existing pending byte ranges."""
+    pending = state.get("pending")
+    call = event.get("tool_use_id")
+    if (not isinstance(pending, dict) or not isinstance(call, str) or not call
+            or not pages or any(page.get("ok") is not True for page in pages)):
+        return state
+    read = {"call_id": call, "pages_sha256": _digest(pages)}
+    reads = pending.get("native_reads", [])
+    if not isinstance(reads, list):
+        reads = []
+    if read not in reads:
+        reads = [*reads, read]
+    return {**state, "pending": {**pending, "native_reads": reads}}
 
 
 def native_resume_verified(state: dict[str, Any], event: dict[str, Any]) -> bool:
@@ -147,7 +188,12 @@ def checkpoint_native_read(state: dict[str, Any], updated: dict[str, Any],
             anchor = (state.get("candidate") or {}).get("native_resume")
             if not isinstance(anchor, dict) or not _matches(anchor, facts, raw, event):
                 return
-        candidate["native_resume"] = {**facts, "read_call_id": event["tool_use_id"],
-            "read_pages_sha256": _digest(pages)}
+        pending = state.get("pending") or {}
+        reference = pending if candidate.get("ancestry", 0) else state.get("recovery")
+        reads = pending.get("native_reads")
+        if not isinstance(reference, dict) or not isinstance(reads, list) or not reads:
+            return
+        candidate["native_resume"] = {**facts, "reads": reads,
+            "read_source": {key: reference[key] for key in ("path", "sha256")}}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return

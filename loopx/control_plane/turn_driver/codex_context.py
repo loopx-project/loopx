@@ -272,7 +272,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     """
     from ..quota.turn_envelope import update_native_context_lifecycle
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
-    from .codex_context_history import checkpoint_native_read, native_resume_verified
+    from .codex_context_history import checkpoint_native_read, native_resume_verified, observe_native_read
 
     if directory is None:
         return {}
@@ -289,16 +289,18 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         with _locked(directory) as root:
             try:
                 state = _state(root)
+                read_state = state
                 same = state.get("session_id") == session and state.get("cwd") == event.get("cwd")
                 if same:
                     recovery = state.get("recovery")
                     if name == "PostToolUse":
                         pages = _verified_context_pages(state, pages)
-                updated = update_native_context_lifecycle(state, event,
+                        read_state = observe_native_read(state, event, pages)
+                updated = update_native_context_lifecycle(read_state, event,
                     new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True,
                     resume_verified=name == "SessionStart" and native_resume_verified(state, event))
                 if name == "PostToolUse":
-                    checkpoint_native_read(state, updated, event, pages)
+                    checkpoint_native_read(read_state, updated, event, pages)
                 if updated != state:
                     _save(root, updated)
                 recovery_needed = same and not updated.get("candidate")
