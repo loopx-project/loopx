@@ -23,6 +23,23 @@ The full frozen source, authored response, bundle, candidate and body must still
 match; an unsupported or altered presentation remains unavailable. New reports
 always use the shared source-link rule above.
 
+A report refused because its model allowance was exhausted can receive one
+new, correlated Turn when the original host independently reads a stable native
+failure containing only its original user input and observes usable allowance
+for the current authentication. A reset time or successful authentication RPC
+alone does not qualify. The shared typed conversation owner also checks the
+original failed kernel receipt, unchanged actor, subscription, window and Task,
+and the absence of any authored response, generation or delivery attempt.
+The original Chat Turn and failed kernel journal remain unchanged. The new Turn
+uses ordinary admission, lease, quota, validation and original-route publication;
+user work retains priority. A second failure is retained, never chained into
+another automatic attempt. Unknown effects, unavailable native metadata,
+revocation, cancellation and an unavailable allowance retain the existing hold.
+The admitted continuation refreshes only its own native adapter to reload
+current authentication while retaining its native thread. This applies to
+original steward reports and ordinary managed Session reports; authentication
+selection and unrelated clients retain their existing owners.
+
 The following synthetic reports use the production formatters. Text views use
 the compiled App Markdown component and its stylesheet; HTML views use the
 standalone report artifact. The same normalized records retain their outcomes,

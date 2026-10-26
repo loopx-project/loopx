@@ -464,6 +464,91 @@ def install_model(steward, tmp_path, sid, *, result_kind="validated_completion")
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("local_session", [False, True])
+@pytest.mark.parametrize("recovery_succeeds", [False, True])
+def test_report_quota_failure_continues_once_after_native_no_effects_and_available_allowance(
+        steward, tmp_path, monkeypatch, provider, local_session, recovery_succeeds):
+    import time
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    store, runtime, _, transport, binding, capture, _ = steward
+    if local_session:
+        session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
+        sid = owner = session["session_id"]
+        actor = reports.selected(sid)["actor"]
+    else:
+        sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+        owner = binding["binding_id"]
+    install_model(steward, tmp_path, sid)
+    calls = []
+
+    def exhausted(adapter, _prompt, event_sink):
+        calls.append(adapter.upstream_thread_id)
+        event_sink("turn.started", {"upstream_turn_id": "quota-refused-native-turn"})
+        raise CodexChatAgentError("The provider allowance was exhausted.")
+
+    real_start = CodexAppServerAdapter.start_turn
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", exhausted)
+    original = finish(runtime, pump_steward_monitors(runtime)[0])
+    native = original["response"]["native_loopx"]
+    assert native["status"] == "failed" and native["result_kind"] == "host_failure"
+    assert native["host_failure"]["kind"] == "unknown"
+    original_path = store._turn_path(sid, original["turn_id"])
+    journal_path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
+    frozen = original_path.read_bytes(), journal_path.read_bytes()
+    _, window = reports.current_window(owner)
+    observations = []
+    proof = {"thread_id": store.load_session(sid)["upstream_thread_id"],
+        "turn_id": original["upstream_turn_id"], "only_original_user_item": True,
+        "codex_error_info": "usageLimitExceeded", "quota_available": False,
+        "quota_observed_at": time.time()}
+
+    def observe(**kwargs):
+        observations.append(kwargs)
+        return dict(proof)
+
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observe))
+    runtime._steward_monitor_next_check.clear()
+    assert pump_steward_monitors(runtime) == []  # Reset time alone is not usable quota.
+    assert len(calls) == 1
+    proof.update(quota_available=True, quota_observed_at=time.time())
+    if recovery_succeeds:
+        monkeypatch.setattr(CodexAppServerAdapter, "start_turn", real_start)
+    runtime._steward_monitor_next_check.clear()
+    old_adapter = runtime.adapters[sid]
+    old_thread = store.load_session(sid)["upstream_thread_id"]
+    continued = pump_steward_monitors(runtime)
+    assert len(continued) == 1, "the original report must not remain stranded after proven quota recovery"
+    result = finish(runtime, continued[0])
+    assert runtime.adapters[sid] is not old_adapter
+    assert old_adapter.session.process.poll() is not None
+    assert store.load_session(sid)["upstream_thread_id"] == old_thread
+    assert result["turn_id"] != original["turn_id"]
+    request = result["loopx_request"]
+    assert request["report_window_id"] == window["window_id"]
+    assert request["todo_id"] == original["loopx_request"]["todo_id"]
+    assert request["actor"] == original["loopx_request"]["actor"]
+    assert request["turn_instance_id"] == original["loopx_request"]["turn_instance_id"] + ".quota-recovery"
+    assert result["response"]["native_loopx"]["status"] == ("committed" if recovery_succeeds else "failed"), result
+    assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
+    assert observations and all(x["turn_id"] == original["upstream_turn_id"] for x in observations)
+    assert all(x["thread_ids"] == [proof["thread_id"]] for x in observations)
+    if not recovery_succeeds:
+        assert not reports.health(owner)["publication_verified"]
+        assert len(calls) == 2
+    elif local_session:
+        assert reports.health(owner)["publication_verified"]
+    else:
+        assert transport.steward_reports.reconcile() == 1
+        assert reports.health(owner)["publication_verified"]
+    before = capture.read_bytes(), len(observations), store.messages(sid)
+    runtime._steward_monitor_next_check.clear()
+    assert pump_steward_monitors(runtime) == []
+    assert before == (capture.read_bytes(), len(observations), store.messages(sid))
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
 @pytest.mark.parametrize("replan_outcome", ["settled", "wait", "invalid_semantic", "already_admitted", "retained_probe"])
 def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(steward, tmp_path, monkeypatch, provider, local_session, replan_outcome):
     from datetime import timezone

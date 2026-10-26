@@ -1,8 +1,9 @@
 """Original-Session app-server transport for the existing governed Turn driver.
 
-No scheduler, task store, consumer or CLI process is created here. The caller
+No scheduler, task store or message consumer is created here. The caller
 selects native work; the existing Turn command owns fresh admission, validation,
-writeback, quota and scheduler handoff. Chat retains its own execution fence.
+writeback, quota and scheduler handoff. Provider metadata uses the existing
+read-only native control client. Chat retains its own execution fence.
 """
 from __future__ import annotations
 
@@ -23,6 +24,20 @@ def native_steward_client_id(actor: Mapping[str, Any], turn_instance_id: str) ->
     if actor.get("schema_version") == "loopx_managed_session_actor_v0":
         return "managed." + turn_instance_id
     return "native." + hashlib.sha256(json.dumps([actor, turn_instance_id], sort_keys=True).encode()).hexdigest()[:40]
+
+
+def report_turn(store: Any, actor: Mapping[str, Any], window: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Read the one bounded continuation, retaining the original failed Turn."""
+    operation = "report." + window["window_id"]
+    original = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation))
+    continued = store.turn_for_client(actor["session_id"], native_steward_client_id(actor, operation + ".quota-recovery"))
+    if continued is not None:
+        request = continued.get("loopx_request") or {}
+        if (not original or (request.get("report_quota_recovery") or {}).get("original_turn_id") != original["turn_id"]
+                or request.get("turn_instance_id") != original["loopx_request"]["turn_instance_id"] + ".quota-recovery"):
+            raise ValueError("the report quota continuation changed its original identity")
+        return continued
+    return original
 
 
 class StewardTurnHost:
@@ -96,10 +111,56 @@ class StewardTurnHost:
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
             **({"report_launch_recovery": launch_recovery} if launch_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
+            **self.report_quota_basis(request),
             **({"preparing_model_context": True} if prepare_context else {}), **report})
         if admitted["refresh_original_scope"]:
             self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
         return {**admitted, "observed_scope_id": scope["current"] if scope else None}
+
+    def report_quota_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Transport original journal observations; the typed owner admits work."""
+        recovery = request.get("report_quota_recovery")
+        if recovery is None:
+            return {}
+        from ...control_plane.turn_driver import inspect_loopx_turn_journal
+        from ..periodic_report.private_generation import attempt_directory
+        from .steward_reports import report_service
+        import time
+        actor = request["actor"]
+        original = self.store.load_turn(actor["session_id"], recovery["original_turn_id"])
+        result = ((original or {}).get("response") or {}).get("native_loopx") or {}
+        reports, owner = report_service(self.controller, actor)
+        _, window = reports.current_window(owner)
+        folder = attempt_directory(reports.root, window) if window else None
+        return {"report_quota_basis": {"original": original,
+            "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], turn_key=result["resume_turn_key"]),
+            "generation_present": folder is None or any((folder / name).exists() for name in
+                ("editorial-response.json", "private-generation.json", "private-delivery.json")),
+            "observed_at": time.time()}}
+
+    def report_quota_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Observe quota recovery, never resume or rewrite the failed native Turn."""
+        result = (original.get("response") or {}).get("native_loopx") or {}
+        request = original.get("loopx_request") or {}
+        if (original.get("status") != "completed" or request.get("work_kind") != "report"
+                or request.get("report_quota_recovery") is not None
+                or result.get("result_kind") != "host_failure" or not original.get("upstream_turn_id")):
+            return None
+        from .codex_adapter import CodexAppServerAdapter
+        from .codex_context import checked_session_home
+        session = self.store.load_session(original["session_id"])
+        if not session or not session.get("codex_home") or not session.get("upstream_thread_id"):
+            return None
+        proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
+            codex_home=Path(session["codex_home"]),
+            model_auth_home=checked_session_home(self.controller.codex_home, session),
+            thread_ids=[session["upstream_thread_id"]], turn_id=original["upstream_turn_id"])
+        if (not proof or proof.get("only_original_user_item") is not True
+                or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
+            return None
+        return {**request, "turn_instance_id": request["turn_instance_id"] + ".quota-recovery",
+            "report_quota_recovery": {"original_turn_id": original["turn_id"], "native_observation": proof}}
 
     def report_selection_recovery(self, original: dict[str, Any], *,
                                   probe_turn: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -260,8 +321,7 @@ class StewardTurnHost:
         from ..periodic_report.private_generation import attempt_directory, validate_private_generation
         from .steward_reports import report_service
         with self.controller.lock, self._report_fence({"actor": actor}):
-            original = self.store.turn_for_client(actor["session_id"],
-                native_steward_client_id(actor, "report." + window["window_id"]))
+            original = report_turn(self.store, actor, window)
             if not original:
                 return
             request = original.get("loopx_request") or {}
@@ -340,6 +400,16 @@ class StewardTurnHost:
                 frozen.setdefault("work_kind", "native_turn")
                 if frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
                     raise ValueError("native steward request identity conflict")
+                if work_kind == "report":
+                    retained = report_turn(self.store, actor, report_window)
+                    if retained is not None and retained["turn_id"] != existing["turn_id"]:
+                        return retained, False
+                    quota_request = self.report_quota_request(existing)
+                    if quota_request is not None:
+                        request = quota_request
+                        client_id = native_steward_client_id(actor, request["turn_instance_id"])
+                        existing = None
+            if existing is not None:
                 monitor_retry = work_kind == "monitor" and self._monitor_selection_failed_before_poll(existing)
                 if not monitor_retry and work_kind != "report":
                     return existing, False
