@@ -161,6 +161,42 @@ with tempfile.TemporaryDirectory() as temporary:
     assert any(c[1:3] == ["bootout", f"gui/{os.getuid()}/{renamed}"] for c in f.calls)
     assert f.loaded and f.switches == 1
 
+    # launchctl can acknowledge bootout while the job is still exiting. Wait
+    # for actual unload before switching; registration visibility is not exit.
+    f = fixture()
+    f.holders = [101, 301]
+    normal_run, lag = f.run, [0]
+    def delayed_unload(command, **kwargs):
+        if command[0] == "/bin/launchctl" and command[1] == "print" and lag[0]:
+            lag[0] -= 1
+            return SimpleNamespace(returncode=0, stdout=f"path = {f.plist}\npid = 300\n")
+        result = normal_run(command, **kwargs)
+        if command[0] == "/bin/launchctl" and command[1] == "bootout":
+            lag[0] = 2
+        return result
+    f.run = delayed_unload
+    with f.context():
+        assert f.handoff()["active_slot"] == "b"
+    assert f.loaded and f.switches == 1 and lag[0] == 0
+
+    # A job which never unloads remains a bounded failure with its recovery
+    # intent intact; waiting is not permission to switch under a live owner.
+    f = fixture()
+    f.holders = [301]
+    normal_run, stopped = f.run, [False]
+    def stuck_unload(command, **kwargs):
+        if command[0] == "/bin/launchctl" and command[1] == "print" and stopped[0]:
+            return SimpleNamespace(returncode=0, stdout=f"path = {f.plist}\npid = 300\n")
+        result = normal_run(command, **kwargs)
+        if command[0] == "/bin/launchctl" and command[1] == "bootout":
+            stopped[0] = True
+        return result
+    f.run = stuck_unload
+    with f.context(), patch.object(host_module.time, "monotonic", side_effect=iter(range(0, 100, 2))), \
+            patch.object(host_module.time, "sleep"):
+        error("chat_pause_failed", f.host.pause_chat_agents)
+    assert f.switches == 0 and private_read(f.root / "chat-recovery.json")["agents"]
+
     # A second independent service participates in the same transaction. Neither
     # label is privileged; both must be restored, without a second account swap.
     f = fixture()

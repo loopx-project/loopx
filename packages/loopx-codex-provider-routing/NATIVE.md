@@ -76,7 +76,10 @@ authorize a restart. Discovery combines open home files with the private launch
 environment of Codex processes, covering warm app-servers that cached auth and
 closed their files. Arguments and environment values are never projected or logged.
 
-Each service's restoration intent is saved privately before unloading. Observed
+Each service's restoration intent is saved privately before unloading. Version
+0.12.7 waits up to five seconds for launchd to finish an acknowledged asynchronous
+unload; a job that remains loaded retains its recovery intent and fails without
+switching accounts. Observed
 descendants are retired only while their kernel identity still matches, even if
 they have since closed every auth file. The provider waits for their exit and
 rechecks native idle under the existing account transaction locks. Up to three

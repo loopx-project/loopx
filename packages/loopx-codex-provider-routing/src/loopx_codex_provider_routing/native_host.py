@@ -515,8 +515,13 @@ class NativeHost:
             try:
                 result = subprocess.run(["/bin/launchctl", "bootout", target],
                                         capture_output=True, text=True, timeout=20)
-                if result.returncode or self._chat_loaded(target):
+                if result.returncode:
                     raise HostError("chat_pause_failed")
+                deadline = time.monotonic() + 5
+                while self._chat_loaded(target):
+                    if time.monotonic() >= deadline:
+                        raise HostError("chat_pause_failed")
+                    time.sleep(0.1)
             except (OSError, subprocess.SubprocessError):
                 raise HostError("chat_pause_failed") from None
             helpers.update(descendants)
