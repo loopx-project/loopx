@@ -23,6 +23,23 @@ The full frozen source, authored response, bundle, candidate and body must still
 match; an unsupported or altered presentation remains unavailable. New reports
 always use the shared source-link rule above.
 
+A report refused because its model allowance was exhausted can receive one
+new, correlated Turn when the original host independently reads a stable native
+failure containing only its original user input and observes usable allowance
+for the current authentication. A reset time or successful authentication RPC
+alone does not qualify. The shared typed conversation owner also checks the
+original failed kernel receipt, unchanged actor, subscription, window and Task,
+and the absence of any authored response, generation or delivery attempt.
+The original Chat Turn and failed kernel journal remain unchanged. The new Turn
+uses ordinary admission, lease, quota, validation and original-route publication;
+user work retains priority. A second failure is retained, never chained into
+another automatic attempt. Unknown effects, unavailable native metadata,
+revocation, cancellation and an unavailable allowance retain the existing hold.
+The admitted continuation refreshes only its own native adapter to reload
+current authentication while retaining its native thread. This applies to
+original steward reports and ordinary managed Session reports; authentication
+selection and unrelated clients retain their existing owners.
+
 The following synthetic reports use the production formatters. Text views use
 the compiled App Markdown component and its stylesheet; HTML views use the
 standalone report artifact. The same normalized records retain their outcomes,
@@ -178,6 +195,18 @@ or accepted work. Removing that Goal remains an explicit native Goal lifecycle
 operation. Monitoring requires the separate explicit setting below.
 
 ### Native status monitoring
+
+If the host restarts before a native watch observes anything, the original
+idle pump can create one separately correlated Chat continuation. It preserves
+the failed request and uses the same native observation identity and deadline.
+The shared typed admission requires an untouched observation-only request, an
+available original worker lock, complete event/history reads and no pending or
+committed native poll receipt. It rechecks current authority, lease generation
+and user work; it never starts a model, repeats business or spends execution
+quota. Unknown effects, unreadable history, an active old worker, revoked or
+paused watches and another failed continuation remain held for reconciliation.
+This bounded recovery applies to both local managed Sessions and the prepared
+steward through the existing host, without another scheduler or consumer.
 
 After preparation, choose **Enable monitoring** in the same connection panel.
 The native continuous-monitor Todo owns enable/pause, the 30–1440 minute cadence,
