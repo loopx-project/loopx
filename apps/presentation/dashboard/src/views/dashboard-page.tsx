@@ -1733,7 +1733,7 @@ function PersonalGoalHome({
         sourceTurnId: message.turn_id ?? undefined,
         sourceCreatedAt: message.created_at,
         goalDraft: normalizeGoalDraft(message.goal_draft),
-        agentLabel: message.role === "user" ? undefined : message.origin === "manager_followup"
+        agentLabel: message.role === "user" ? message.origin === "peer" ? (locale === "zh-CN" ? "协作者" : "Collaborator") : undefined : message.origin === "manager_followup"
           ? "协作回执" : answerIdentityLabel(contextId, selectedAgent.label),
         attachments: workspaceImageAttachments(message.attachments),
         id: managerMessageId.current++, lines: [],
