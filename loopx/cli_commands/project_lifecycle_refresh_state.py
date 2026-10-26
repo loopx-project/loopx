@@ -479,6 +479,7 @@ def handle_refresh_state_command(
     goal_ref: dict[str, str] | None = None
     outcome_update = None
     outcome_update_result = None
+    goal_acceptance_preview = None
     try:
         if getattr(args, "settle_turn", False) and not (
             args.agent_id and args.turn_instance_id and bool(args.todo_id) != bool(args.replan_obligation_id)
@@ -569,9 +570,14 @@ def handle_refresh_state_command(
             raise ValueError("--resume-external-sinks requires the original --turn-instance-id")
         if outcome_update is not None:
             from ..control_plane.goals.acceptance import refine_goal_outcome, public_goal_acceptance
-            outcome_update_result = public_goal_acceptance(refine_goal_outcome(
+            refinement_result = refine_goal_outcome(
                 registry_path=registry_path, runtime_root=args.runtime_root, goal_id=args.goal_id,
-                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update), include_contract=False)
+                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update)
+            outcome_update_result = public_goal_acceptance(refinement_result, include_contract=False)
+            if args.dry_run:
+                # Preview the same ordered composition as execution: the typed
+                # refinement owner supplies the prospective acceptance facts.
+                goal_acceptance_preview = refinement_result["goal_acceptance_contract"]
         payload = refresh_state_run(
             external_delivery={"suppress": bool(args.suppress_external_sinks),
                                "resume_key": getattr(args, "resume_external_sinks", None)},
@@ -619,6 +625,8 @@ def handle_refresh_state_command(
             dry_run=bool(args.dry_run),
             sync_global=not bool(args.no_global_sync),
             goal_ref=goal_ref,
+            **({"goal_acceptance_preview": goal_acceptance_preview}
+               if goal_acceptance_preview is not None else {}),
         )
     except Exception as exc:
         payload = {
