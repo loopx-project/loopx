@@ -740,12 +740,25 @@ function completeGoalNarrative(content: JsonObject): boolean {
       || typeof content.text !== "string" || typeof content.state_file !== "string" || !content.state_file
       || typeof content.revision !== "string" || !ENVELOPED_SHA256_PATTERN.test(content.revision)) return false;
   let end = 0;
-  return content.excluded_todo_regions.every(value => {
+  if (!content.excluded_todo_regions.every(value => {
     const region = jsonObject(value);
     if (!region || !["user", "agent", "archive"].includes(String(region.role))
         || !Number.isSafeInteger(region.start_line) || !Number.isSafeInteger(region.end_line)
         || Number(region.start_line) <= end || Number(region.end_line) < Number(region.start_line)
         || typeof region.revision !== "string" || !ENVELOPED_SHA256_PATTERN.test(region.revision)) return false;
+    end = Number(region.end_line);
+    return true;
+  })) return false;
+  if (!Object.hasOwn(content, "excluded_monitor_receipts")) return true;
+  if (!Array.isArray(content.excluded_monitor_receipts) || !content.excluded_monitor_receipts.length) return false;
+  end = 0;
+  return content.excluded_monitor_receipts.every(value => {
+    const region = jsonObject(value);
+    if (!region || !Number.isSafeInteger(region.start_line) || region.start_line !== region.end_line
+        || Number(region.start_line) <= end || typeof region.revision !== "string"
+        || !ENVELOPED_SHA256_PATTERN.test(region.revision)
+        || (content.excluded_todo_regions as JsonObject[]).some(todo =>
+          Number(region.start_line) >= Number(todo.start_line) && Number(region.end_line) <= Number(todo.end_line))) return false;
     end = Number(region.end_line);
     return true;
   });
@@ -809,7 +822,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       pending.push(read);
     } else if (read.source === "goal_state") {
       if (completeGoalNarrative(content!)) sources.push({...read,
-        reason: `${String(read.reason ?? "")} This registered source delivers all text outside explicitly generated Todo regions inline, with full-file revision and excluded-region lineage; exact canonical Todo reads own task state/claims.`,
+        reason: `${String(read.reason ?? "")} This registered source delivers all text outside explicitly generated Todo regions inline, with full-file revision and excluded-region lineage; exact canonical Todo reads own task state/claims.${content!.excluded_monitor_receipts ? " Recognized historical Monitor receipt lines retain source lineage instead of repeating their encoded bodies; the original file remains available for receipt recovery." : ""}`,
         content: content!});
       else {
         pending.push(read);

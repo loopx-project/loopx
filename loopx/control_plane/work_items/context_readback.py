@@ -15,7 +15,8 @@ from ..coordination.local_authority import read_canonical_todos_if_promoted
 from ..goals.acceptance import inspect_goal_acceptance
 from ..goals.state_resolution import resolve_goal_state
 from ..todos.list_readback import list_goal_todos
-from ..todos.machine_region import find_todo_regions
+from ..todos.machine_region import find_todo_regions, visible_markdown_lines
+from ..scheduler.monitor_batch_receipts import is_monitor_receipt_line
 from ..todos.summary_item import todo_text_content_revision
 
 
@@ -30,22 +31,30 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id):
         content = {"state_file": str(state_file),
             "revision": "sha256:" + sha256(source_bytes).hexdigest()}
         # Only the writer's explicitly marked regions have generated ownership.
-        # Retain every other byte, including frontmatter, arbitrary headings,
-        # comments and historical narrative. Legacy/unmarked input stays a full
+        # Retain every other byte, except identity-bound historical Monitor
+        # receipt lines owned by their codec. Legacy/unmarked input stays a full
         # progressive read; malformed ownership fails rather than hiding text.
         lines = text.splitlines(keepends=True)
-        regions = find_todo_regions(lines)
+        visible = visible_markdown_lines(lines)
+        regions = find_todo_regions(lines, visible=visible)
         if regions and all(region.marked for region in regions):
-            parts, excluded, start = [], [], 0
+            excluded, skipped = [], set()
             for region in regions:
-                parts.extend(lines[start:region.start])
                 excluded.append({"role": region.role,
                     "start_line": region.start + 1, "end_line": region.end,
                     "revision": "sha256:" + sha256(
                         "".join(lines[region.start:region.end]).encode("utf-8")).hexdigest()})
-                start = region.end
-            parts.extend(lines[start:])
-            content.update(text="".join(parts), excluded_todo_regions=excluded)
+                skipped.update(range(region.start, region.end))
+            receipts = []
+            for index in sorted(visible - skipped):
+                if is_monitor_receipt_line(lines[index], goal_id=goal_id):
+                    receipts.append({"start_line": index + 1, "end_line": index + 1,
+                        "revision": "sha256:" + sha256(lines[index].encode("utf-8")).hexdigest()})
+                    skipped.add(index)
+            content.update(text="".join(line for index, line in enumerate(lines) if index not in skipped),
+                excluded_todo_regions=excluded)
+            if receipts:
+                content["excluded_monitor_receipts"] = receipts
         return content
     if source == "goal_acceptance":
         # The typed acceptance owner scopes task-binding observations while

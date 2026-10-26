@@ -25,6 +25,16 @@ This default read changes the Goal obligation from the mixed document to its
 complete non-generated text; it does not summarize requirements or erase history.
 No source file or canonical record is rewritten.
 
+Complete historical Monitor receipt lines are also generated data. The receipt
+codec recognizes their exact marker, schema, Goal/operation identity and encoded
+wrapper; `excluded_monitor_receipts` retains each line interval and SHA-256.
+Their encoded bodies remain in the original file for operation replay, while
+the current canonical Todo reads still supply active work and obligations.
+Ordinary comments, fenced examples, malformed/unknown receipts, foreign-Goal
+receipts and lines with additional prose remain verbatim. This avoids making
+an initial full context read carry an accumulated recovery journal. It does not
+change receipt replay validation or declare a model-input/token saving.
+
 Unmarked or mixed ownership keeps the original full progressive read in
 `agent_channel.required_reads`. Malformed markers, non-generated content inside
 a marked region, unavailable files and invalid UTF-8 fail closed. Unknown
@@ -326,6 +336,12 @@ scoped User 读取保留。默认 Goal 必读对象改为完整非生成正文�
 不重写原文件或权威记录。未标记或混合归属仍须渐进式读取全文；错误标记、标记内非生成
 内容、来源缺失及非法 UTF-8 均拒绝。不能按标题猜测或为预算截断正文；依赖交付前须读取
 全部已提供上下文与剩余必读，来源改变后重新准入，局部验收不能替代整体目标。
+完整的历史 Monitor 回执行也属于生成数据。回执 codec 核对精确标记、schema、Goal／
+operation 身份及编码外层，`excluded_monitor_receipts` 保留各行的区间和 SHA-256。
+编码正文仍留在原文件供原操作恢复；当前工作和义务仍由 canonical Todo 读取提供。
+普通注释、代码块中的示例、损坏或未知回执、其他 Goal 的回执和附带其他文字的行均原样
+保留。这样首轮全文读取不再携带累积的恢复日志；不改变回执重放校验，也不据此宣称
+模型输入或 token 成本已经降低。
 Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；未标记或混合归属
 仅在内部桥接传路径与修订，避免未被消费的正文副本，Agent 仍须渐进式全文读取。显式
 归属的来源才向 typed owner 传完整非生成正文和区域血缘。字节减少不能证明模型费用、
