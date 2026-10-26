@@ -468,9 +468,21 @@ def install_model(steward, tmp_path, sid, *, result_kind="validated_completion")
 def test_report_quota_failure_continues_once_after_native_no_effects_and_available_allowance(
         steward, tmp_path, monkeypatch, provider, local_session, recovery_succeeds):
     import time
+    from datetime import timezone
     from loopx.chat_agent import CodexChatAgentError
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
     from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.capabilities.periodic_report import cadence_runtime
+    import loopx.capabilities.native_chat.steward_reports as report_host
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
     store, runtime, _, transport, binding, capture, _ = steward
     if local_session:
         session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
@@ -545,6 +557,20 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
     runtime._steward_monitor_next_check.clear()
     assert pump_steward_monitors(runtime) == []
     assert before == (capture.read_bytes(), len(observations), store.messages(sid))
+    if recovery_succeeds:
+        point += timedelta(days=1)
+        runtime._steward_monitor_next_check.clear()
+        following = pump_steward_monitors(runtime)
+        assert len(following) == 1
+        next_result = finish(runtime, following[0])
+        assert next_result["response"]["native_loopx"]["status"] == "committed", next_result
+        assert "report_quota_recovery" not in next_result["loopx_request"]
+        assert next_result["loopx_request"]["report_window_id"] != window["window_id"]
+        assert len(observations) == before[1]  # A new window does not inherit old recovery.
+        if not local_session:
+            assert transport.steward_reports.reconcile() == 1
+        assert reports.health(owner)["publication_verified"]
+        assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
