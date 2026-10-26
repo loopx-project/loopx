@@ -858,6 +858,13 @@ jobs:
           PYTHONUTF8: "0"
         run: python -m pytest -q tests/presentation/test_research_history_fixture.py
 
+      - name: Qualify local research HTTP lifecycle on Windows
+        env:
+          PYTHONUTF8: "0"
+        run: >-
+          python -m pytest -q tests/presentation/test_research_analysis_api.py
+          -k "not source_goal and not source_analysis and not source_execution"
+
       - name: Qualify live pytest worker diagnostics on Windows
         run: >-
           python -m pytest -q tests/test_ci_pytest_timing.py
