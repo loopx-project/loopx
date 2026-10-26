@@ -437,6 +437,7 @@ def render_visible_goal_task_body(
     compact_prompt_command: str,
     brief_prompt_command: str,
     thin_prompt_command: str,
+    captured_envelope: bool = False,
 ) -> str:
     del (
         cli_preflight,
@@ -459,6 +460,7 @@ def render_visible_goal_task_body(
         permission_rule=permission_rule,
         agent_scope_instruction=agent_scope_instruction,
         host_wait_rule=CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE,
+        captured_envelope=captured_envelope,
     )
 def render_traex_visible_goal_task_body(
     *,
@@ -519,6 +521,7 @@ def _render_goal_task_body(
     agent_scope_instruction: str,
     host_wait_rule: str,
     work_rule: str = SCOPE_BOUNDED_WORK_RULE,
+    captured_envelope: bool = False,
 ) -> str:
     scope_block = f"\n{agent_scope_instruction}\n" if agent_scope_instruction else ""
     prequota_block = (
@@ -530,6 +533,12 @@ def _render_goal_task_body(
         material_queue_rule=material_queue_rule,
         permission_rule=permission_rule,
     )
+    envelope_rule = (
+        "For TurnEnvelope, honor action/boundary/required_reads; read "
+        "detail_ref.full_decision for the complete same-invocation contract "
+        "before selection, work or settlement. Retain transport flags on fresh guards.\n"
+        if captured_envelope else ""
+    )
     return f"""Advance goal `{goal_id}` from `{active_state}` {host_preamble}
 {scope_block}
 
@@ -539,7 +548,7 @@ def _render_goal_task_body(
 
 {prequota_block}Each work iteration: read complete successful JSON:
 `{quota_guard_command}`
-Use current `interaction_contract`.
+{envelope_rule}Use current `interaction_contract`.
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
 Preserve command flags; truthful evidence.
 Repair entrypoints within authority. Unavailable/incomplete contract: no work/spend/completion claim.

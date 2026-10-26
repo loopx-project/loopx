@@ -155,19 +155,19 @@ def test_inherited_on_rejects_unknown_or_unsupported_before_admission(tmp_path, 
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("profile", ["codex_app", "benchmark"])
+@pytest.mark.parametrize("profile", ["codex_app", "benchmark", "codex_app_ssh_goal"])
 @pytest.mark.skipif(os.name != "posix", reason="Native continuity uses POSIX private directories and locks")
-def test_native_configuration_inherits_only_the_two_declared_scenarios_and_later_off(tmp_path, monkeypatch, profile):
+def test_native_configuration_inherits_declared_scenarios_and_later_off(tmp_path, monkeypatch, profile):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
     if profile == "benchmark":
         monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
         monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
-    host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", "generic_cli"]
+    host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", "codex_app_ssh_goal" if profile == "codex_app_ssh_goal" else "generic_cli"]
     code, result = _run_cli(registry, runtime, "quota", "context-config", *host,
         "--goal-id", "fixture", "--agent-id", "worker")
     assert code == 0 and result["context_delivery"]["enabled"], result
-    expected = "codex_app_heartbeat" if profile == "codex_app" else "codex_benchmark_heartbeat"
+    expected = "codex_app_heartbeat" if profile == "codex_app" else ("codex_app_ssh_goal" if profile == "codex_app_ssh_goal" else "codex_benchmark_heartbeat")
     assert result["context_delivery"]["scenario"] == expected
     root = runtime / "context-delivery"
     assert root.stat().st_mode & 0o077 == 0

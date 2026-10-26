@@ -49,7 +49,7 @@ def resolve_heartbeat_capture_root(
         if turn_envelope:
             raise ValueError("TurnEnvelope requires an explicit decision capture root")
         return None
-    if (not thin or full or compact or brief or native_goal_host
+    if (not thin or full or compact or brief or (native_goal_host and not enabled)
             or (not turn_instance_id and codex_context_root is None)):
         raise ValueError("--decision-output-root requires thin mode and an explicit host-owned Turn ID")
     directory = Path(root).expanduser().absolute()

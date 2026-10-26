@@ -797,6 +797,9 @@ def test_lost_hook_reference_is_scoped_read_only_and_pins_later_pages(tmp_path, 
     ([], None),
     (["--codex-app"], "codex_app_heartbeat"),
     (["--runtime-profile", "codex_app_heartbeat"], "codex_app_heartbeat"),
+    (["--runtime-profile", "codex_app_ssh_goal"], "codex_app_ssh_goal"),
+    (["--host-surface", "codex_app_ssh", "--scheduler-owner", "agent_cli_loop", "--execution-mode", "interactive"], "codex_app_ssh_goal"),
+    (["--host-surface", "codex_app_ssh", "--scheduler-owner", "host_automation", "--execution-mode", "hosted_automation"], None),
     (["--host-surface", "codex_app", "--scheduler-owner", "host_automation", "--execution-mode", "hosted_automation"], "codex_app_heartbeat"),
     (["--host-surface", "codex_cli", "--scheduler-owner", "outer_controller", "--execution-mode", "isolated_headless"], None),
     (["--runtime-profile", "generic_cli"], None),
@@ -835,7 +838,7 @@ def test_activation_reuses_declared_host_mode_and_off_is_inert(tmp_path, monkeyp
     expected = expected if setting == "on" else None
     assert activation["requested"] == (setting or "off")
     assert activation["enabled"] is (expected is not None) and activation["scenario"] == expected
-    assert activation["supported_scenarios"] == ["codex_benchmark_heartbeat", "codex_app_heartbeat"]
+    assert activation["supported_scenarios"] == ["codex_benchmark_heartbeat", "codex_app_heartbeat", "codex_app_ssh_goal"]
     if expected is None:
         assert "native_config" not in result
     else:

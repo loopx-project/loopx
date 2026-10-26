@@ -200,8 +200,8 @@ machine default, with off when absent. The existing worker environment's explici
 not enable delivery. Benchmark trials keep their existing `context_delivery=on`
 opt-in. Workers propagate the resolved trial choice, including default off, to
 both preflight and solver subprocesses without changing the caller's settings.
-On accepts only the two existing declared scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
-declaration), and the existing Codex benchmark heartbeat worker (`generic_cli`
+On accepts the declared native scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
+declaration), Codex App SSH Goal (`--runtime-profile codex_app_ssh_goal`), and the existing Codex benchmark heartbeat worker (`generic_cli`
 plus its explicit heartbeat worker environment). Missing, contradictory or
 unsupported Codex declarations return an error before admission. This machine
 preference is scoped to Codex: other explicitly resolved hosts keep full delivery.
@@ -246,7 +246,10 @@ their separate confirmed-input contract.
 
 For native setup, `quota context-config --codex-app --goal-id GOAL --agent-id AGENT`
 under machine on prepares only that private transport leaf and renders the
-existing hooks and recovery instructions. It does not install or trust hooks,
+existing hooks and recovery instructions. For an SSH Goal, replace `--codex-app`
+with `--runtime-profile codex_app_ssh_goal` in setup and the thin/bootstrap prompt.
+Its generated guard keeps the native Goal identity and visible-Goal settlement;
+it does not become a hosted heartbeat. It does not install or trust hooks,
 change host configuration or restart the running App. Configure and trust its
 exact hooks for the next native session. The native path preserves authentication,
 endpoints, provider selection and connection mode, including implicit history via
@@ -261,12 +264,19 @@ it. A resume may supply different history under the same session ID; the
 [native event contract](https://learn.chatgpt.com/docs/hooks#sessionstart) alone
 does not attest retention. The shared Codex adapter can qualify a resume against
 the complete read's native replay checkpoint: the native-selected physical
-rollout must retain its digest-bound prefix and every observed reader output,
+rollout must retain the digest-bound interval beginning at the current baseline's
+first reader and every observed reader output,
 including complete byte coverage of the pinned capture, with
 matching session, workspace, model and permission mode, and no intervening
 compaction, rollback, replacement or unknown replay record. This bounded IO
-profile covers Codex 0.162.1 and 0.163.0-alpha.11.1 paginated rollouts; missing, changed,
-oversized (over 64 MiB) or unqualified sources fall back to full. It retains the
+profile is qualified on Codex 0.162.1 paginated rollouts. It streams only the
+baseline's reader interval and subsequent records; unrelated earlier history is
+neither hashed nor decoded, and total file size does not decide reuse. The
+session metadata's creator version is not the running host version. Code-mode
+parent emissions must retain the same complete page bytes observed by nested
+reader hooks. Missing or changed evidence and unqualified replay records fall
+back to full. One decoded record remains bounded; this is not a history-size
+limit. Legacy whole-prefix checkpoints require a fresh complete read. It retains the
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
 Opted-in benchmark native children create owner-only files automatically; the
@@ -383,8 +393,8 @@ TurnEnvelope。在基线连续性成立的口径内，两入口仍逐轮发送 `
 已有 worker 环境的 `LOOPX_CONTEXT_DELIVERY=off` 也覆盖继承；环境 on 本身不启用投递。
 benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本次运行已解析的选择
 （含默认关闭）传给预检和 solver 子进程，不改写调用方原设置。
-开启仅接受已有两类声明：Codex App 心跳（`--codex-app` 或等价完整调度声明），以及
-现有 Codex benchmark 心跳 worker（`generic_cli` 与其显式心跳环境）。缺失、冲突、
+开启接受以下原生声明：Codex App 心跳（`--codex-app` 或等价完整调度声明）、
+Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Codex benchmark 心跳 worker（`generic_cli` 与其显式心跳环境）。缺失、冲突、
 不支持的 Codex 声明在准入前报错。机器偏好仅作用于 Codex；其他已明确解析的宿主
 继续完整投递，对这些宿主显式指定 `--context-delivery on` 仍报错。声明只选择 adapter，
 不证明宿主身份或上下文保留。
@@ -398,6 +408,8 @@ benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本�
 
 机器开启后，`quota context-config --codex-app --goal-id GOAL --agent-id AGENT` 只准备
 私有传输末级目录并生成已有 hook 和恢复指令，不安装或信任 hook，也不更改宿主配置。
+SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和 thin/bootstrap 提示，
+沿用可见 Goal 的执行与结算身份；仅启用差分时接入捕获目录，不转换成自动心跳。
 原生 `quota should-run` 与已保存捕获的 `context-project` 共用分页呈现，直接返回第零页、
 固定摘要的后续读取与完整恢复，不另行准入。内联页保持 3 KiB；后续命令最多请求
 8 KiB 正文，并用 `--max-page-output-bytes 7900` 将成功 JSON stdout（含转义、
@@ -423,11 +435,14 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 `PostCompact`、清空、分叉、会话／工作区切换使基线失效；同一会话 ID 的 resume
 也可能使用不同历史，[原生事件契约](https://learn.chatgpt.com/docs/hooks#sessionstart)本身不证明保留。
 共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
-须保留摘要固定的前缀及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
+须保留从当前基线首次 reader 开始的摘要固定区间，以及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
 会话、工作区、模型和权限模式相同，
-中间没有压缩、回滚、替换或未知重放记录。此有界 IO profile 覆盖 Codex 0.162.1 和
-0.163.0-alpha.11.1 的分页 rollout；来源缺失、变化、超过 64 MiB 或无法资格化时回退全量。
-仍采用正常读取后的
+中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1 的分页
+rollout 上验证；流式读取当前基线对应区间及后续记录，不哈希或解码无关旧历史，
+文件总大小不决定是否差分。session metadata 的创建版本不等于当前宿主版本。
+code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部精确页字节。
+证据缺失、改写或重放记录不受支持时回退全量；单条记录的解码内存仍有边界，
+不是历史文件容量限制。旧版全前缀检查点须重新完整读取后建立新检查点。仍采用正常读取后的
 工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。
 开启后的 benchmark 原生子进程自动以仅所有者可访问的权限创建文件，父进程与关闭态
 保持原权限策略；既有可组写的重放来源不能建立跨进程连续性。

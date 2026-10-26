@@ -28,7 +28,7 @@ def context_delivery_machine_configuration_namespace() -> MachineConfigurationNa
         apply_public_update=lambda _current, update: dict(update),
         title="Differential context",
         description=(
-            "Reuse unchanged context for Codex App and benchmark heartbeats. Off by default; "
+            "Reuse unchanged context for Codex App heartbeats, SSH Goals and benchmark heartbeats. Off by default; "
             "unsupported declarations fail and known context loss keeps full context. "
             "Completed reads use an explicit native-hook continuity assumption. "
             "A saved preference does not establish host readiness or actual delta use."

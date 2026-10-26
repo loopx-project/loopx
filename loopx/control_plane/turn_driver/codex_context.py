@@ -24,7 +24,7 @@ from .decision_capture import (
 # Native adapter activation reuses scheduler-owned host declarations. These
 # settings are presentation opt-ins, never host authentication or authority.
 CONTEXT_DELIVERY_SETTINGS = ("off", "on")
-CONTEXT_DELIVERY_SCENARIOS = ("codex_benchmark_heartbeat", "codex_app_heartbeat")
+CONTEXT_DELIVERY_SCENARIOS = ("codex_benchmark_heartbeat", "codex_app_heartbeat", "codex_app_ssh_goal")
 CONTEXT_LIFECYCLE_HOOKS = ("SessionStart", "PreCompact", "PostCompact", "PostToolUse", "Interrupt")
 
 
@@ -81,6 +81,10 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
                     and context.scheduler_owner is SchedulerOwner.HOST_AUTOMATION
                     and context.execution_mode is ExecutionMode.HOSTED_AUTOMATION):
                 scenario = "codex_app_heartbeat"
+            elif (context.host_surface is HostSurface.CODEX_APP_SSH
+                    and context.scheduler_owner is SchedulerOwner.AGENT_CLI_LOOP
+                    and context.execution_mode is ExecutionMode.INTERACTIVE):
+                scenario = "codex_app_ssh_goal"
             elif (context.host_surface is HostSurface.GENERIC_CLI
                     and context.scheduler_owner is SchedulerOwner.AGENT_CLI_LOOP
                     and context.execution_mode is ExecutionMode.INTERACTIVE
@@ -90,6 +94,7 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
             raise ValueError(
                 "--context-delivery on requires a supported declared run mode: "
                 "Codex App heartbeat (--codex-app or --runtime-profile codex_app_heartbeat), "
+                "Codex App SSH Goal (--runtime-profile codex_app_ssh_goal), "
                 "or the Codex benchmark heartbeat worker. Missing, contradictory or unsupported "
                 "declarations are rejected; use --context-delivery off for ordinary full delivery."
             )
@@ -255,7 +260,7 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         *cli_argv, "--format", "json", "quota", "context-hook",
         *([] if inherit_machine else ["--context-delivery", "on"]),
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
-          ["--runtime-profile", "generic_cli"]),
+          ["--runtime-profile", "codex_app_ssh_goal" if scenario == "codex_app_ssh_goal" else "generic_cli"]),
         option, directory]), "timeout": 10}
     return {"hooks": {event: [{**({"matcher": "^Bash$"} if event == "PostToolUse" else {}),
                               "hooks": [handler]}] for event in CONTEXT_LIFECYCLE_HOOKS},

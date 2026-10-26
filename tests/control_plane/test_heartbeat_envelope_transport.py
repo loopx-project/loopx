@@ -1,4 +1,5 @@
 """Qualify the real worker -> renderer -> guard/selection/settlement boundary."""
+import hashlib
 import json
 import os
 import shlex
@@ -243,6 +244,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     if context_delivery:
         # No native proof in this CLI fixture: composed capture must still
         # release ordinary full output and preserve reentry and settlement.
+        (tmp_path / 'context').mkdir(mode=0o700)
         env.update(LOOPX_CONTEXT_DELIVERY='on', LOOPX_EXECUTION_MODE='heartbeat', LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / 'context'))
         # Generated CLI reentry uses this process's environment; preserve the
         # same worker declarations carried by the native tool environment.
@@ -257,6 +259,21 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True)
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
+    def complete_page(value):
+        if value.get('schema_version') != 'context_capture_page_v1':
+            return value
+        digest, body = value['sha256'], b''
+        while True:
+            assert value['ok'] and value['sha256'] == digest and value['offset'] == len(body)
+            body += value['content'].encode()
+            if value['eof']:
+                break
+            read = subprocess.run(shlex.split(value['next_command']), env=env, cwd=project,
+                capture_output=True, text=True, check=True)
+            value = json.loads(read.stdout)
+        assert hashlib.sha256(body).hexdigest() == digest
+        return json.loads(body)
+    first = complete_page(first)
     root = logs / TURN_ID / 'decisions'
     captured = enabled or private_handoff is not None or context_delivery
     if captured:
@@ -285,6 +302,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         '{todo_id}', ALTERNATIVE_TODO_ID)
     rc, selected = _run_generated_cli(command, registry_path=registry)
     assert rc == 0, selected
+    selected = complete_page(selected)
     if captured:
         paths = list(root.glob('*/decision.json'))
         assert len(paths) == 2
@@ -401,3 +419,24 @@ def test_native_context_prompt_keeps_capture_on_reentry(tmp_path, monkeypatch):
                 assert argv[argv.index("--decision-output-root") + 1] == str(tmp_path)
                 assert argv[argv.index("--decision-handoff-socket") + 1] == endpoint
                 assert argv[argv.index("--codex-context-dir") + 1] == context
+
+
+@pytest.mark.parametrize("turn_envelope", [False, True])
+def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, turn_envelope):
+    args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="codex_app_ssh_goal", thin=True)
+    original = build_heartbeat_prompt(**args)
+    assert original == build_heartbeat_prompt(**args, context_delivery="off")
+    assert "--decision-output-root" not in original["quota_guard_command"]
+    with pytest.raises(ValueError, match="host-owned"):
+        build_heartbeat_prompt(**args, decision_output_root=tmp_path)
+    enabled = build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=tmp_path,
+        codex_context_root=str(tmp_path), turn_envelope=turn_envelope)
+    guard = enabled["quota_guard_command"]
+    assert "--runtime-profile codex_app_ssh_goal --begin-turn" in guard
+    assert "--heartbeat-turn-receipt" not in guard and "${LOOPX_TURN" not in guard
+    assert "--decision-output-root" in guard and "--codex-context-root" in guard
+    assert "visible-goal" in enabled["quota_spend_command"]
+    assert enabled["interface_budget"]["within_budget"]
+    if turn_envelope:
+        assert "--turn-envelope" in guard
+        assert "detail_ref.full_decision" in enabled["task_body"]
