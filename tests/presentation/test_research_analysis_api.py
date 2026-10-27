@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import shutil
 import sys
 import tempfile
@@ -21,7 +22,8 @@ from urllib.request import Request, urlopen
 import pytest
 
 from tests.control_plane.host_process_fixture import write_python_host_fixture
-from tests.managed_effect_runtime_fixture import stop_disposable_effect_runtimes
+from tests.managed_effect_runtime_fixture import capture_disposable_effect_runtimes, stop_disposable_effect_runtimes
+from loopx.control_plane import effect_runtime
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import register_pack
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.status.goal_source import GoalSource
@@ -42,6 +44,9 @@ def workspace(tmp_path, monkeypatch, request):
         temporary = tempfile.TemporaryDirectory(prefix="lxra-", dir=parent)
         request.addfinalizer(temporary.cleanup)
         tmp_path = _SYSTEM_TEMP / Path(temporary.name).name
+    # Register before setup can start Node; pytest also runs this on pre-yield
+    # failure, before the borrowed Windows root's directory finalizer.
+    request.addfinalizer(lambda: stop_disposable_effect_runtimes(tmp_path))
     process_temp = tmp_path / "process-tmp"
     process_temp.mkdir()
     for variable in ("TMPDIR", "TEMP", "TMP"):
@@ -127,7 +132,41 @@ print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_t
         server.shutdown()
         worker.join(timeout=5)
         server.server_close()
-        stop_disposable_effect_runtimes(tmp_path)
+
+
+@pytest.mark.parametrize("failure", ["registration", "provider_identity"])
+def test_workspace_setup_failure_stops_owned_runtime(tmp_path, monkeypatch, failure):
+    finalizers, runtimes = [], []
+    original = register_pack
+
+    def registered(**kwargs):
+        result = original(**kwargs)
+        root = kwargs["runtime_root"].parent
+        for locator, _ in capture_disposable_effect_runtimes(root):
+            info = effect_runtime._read_info(locator, fingerprint=None)
+            assert info is not None
+            runtimes.append((locator, info))
+        assert runtimes, "Exercise a real disposable runtime before setup fails"
+        if failure == "registration":
+            raise RuntimeError("Injected registration failure")
+        return result
+
+    monkeypatch.setitem(workspace.__wrapped__.__globals__, "register_pack", registered)
+    if failure == "provider_identity":
+        which = shutil.which
+        monkeypatch.setattr(shutil, "which", lambda command, *a, **k: None if command == "codex" else which(command, *a, **k))
+    setup = workspace.__wrapped__(tmp_path, monkeypatch, SimpleNamespace(addfinalizer=finalizers.append))
+    try:
+        with pytest.raises((RuntimeError, AssertionError), match="Injected registration failure|Use only the synthetic provider"):
+            next(setup)
+        for cleanup in reversed(finalizers):
+            cleanup()
+        for _, info in runtimes:
+            assert not effect_runtime._pid_is_alive(info["pid"]), "Setup failure left an owned runtime alive"
+    finally:
+        # Keep the regression's failing control from leaking its own process.
+        for locator, info in runtimes:
+            effect_runtime._stop_effect_runtime(locator, info, timeout=5, wait_for_process_exit=True)
 
 
 @pytest.mark.parametrize("workspace", [False, True], indirect=True)
@@ -144,7 +183,7 @@ def test_shared_excerpts_reverify_through_http_without_dispatch(workspace, monke
     reads = []
 
     def observed(source):
-        if source == w["sources"] / "facts.txt":
+        if source.samefile(w["sources"] / "facts.txt"):
             reads.append(source)
         return original(source)
 
