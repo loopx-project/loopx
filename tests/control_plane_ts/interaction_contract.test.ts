@@ -1,3 +1,5 @@
+import {EffectiveAction} from "../../loopx/control_plane/quota/effective_action.generated.ts";
+import instructionCases from "./fixtures/primary_action_instruction_selection.json" with {type: "json"};
 import {projectInteractionReadsAndGuidance} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -7,6 +9,8 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { interpretQuotaShouldRunPacket } from "../../loopx/control_plane/effect_program.ts";
 import {
   decodeInteractionContract,
+  projectInteractionExecution,
+  INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION,
   projectInteractionRequiredReads,
   projectInteractionWorkContext,
   projectBlockedSuccessorWaitObservation,
@@ -681,5 +685,35 @@ test("Goal narrative fulfillment needs complete source and ordered region lineag
     const rejected = project({...content, excluded_monitor_receipts: invalid});
     assert.deepEqual(rejected.required_reads, [read]);
     assert.equal((rejected.work_context as JsonObject).complete, false);
+  }
+});
+
+test("current typed instructions flow into legacy guidance after mode refinement", () => {
+  for (const [effectiveAction, replanRequired, expectedMode] of [
+    [EffectiveAction.MONITOR_QUIET_SKIP, false, "monitor_quiet_skip"],
+    [EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED, true, "autonomous_replan"],
+    [EffectiveAction.AGENT_WORKSPACE_REPAIR, false, "agent_workspace_repair"],
+    [EffectiveAction.CAPABILITY_BRIDGE_REPAIR, false, "capability_bridge_repair"],
+  ] as const) {
+    const decision = projectInteractionExecution({schema_version: INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION,
+      effective_action: effectiveAction, state: "eligible", canonical_execution: {must_attempt_work: true, delivery_allowed: false},
+      user_required: false, scoped_user_gate_fallback: false, user_gate_notification_suppressed: false,
+      notify_user_on_gate: false, notify_user_on_open_todo: false, stop_if_unchanged: false,
+      blocked_successor_wait_observation: false, observation_required: false, replan_required: replanRequired,
+      agent_scope_frontier_actions: [], selection_packet: {}, primary_action_facts: instructionCases[0].facts});
+    assert.equal(decision.mode, expectedMode);
+    const facts = readFacts(), arbitration = facts.arbitration_facts as JsonObject;
+    const result = projectInteractionReadsAndGuidance({...facts, selected_todo: {},
+      primary_action: decision.primary_action!, spend_policy: "after current validation", notify: "DONT_NOTIFY",
+      heartbeat_recommendation: {recommended_mode: "run_agent_command", command: "loopx synthetic-command"},
+      arbitration_facts: {...arbitration, mode: decision.mode,
+        agent_channel: {present: true, must_attempt: decision.must_attempt,
+          delivery_allowed: decision.delivery_allowed, quiet_noop_allowed: decision.quiet_noop_allowed}}});
+    const guidance = result.heartbeat_recommendation as JsonObject;
+    assert.equal(guidance.reason, decision.primary_action);
+    assert.equal(guidance.recommended_mode, expectedMode);
+    assert.equal(guidance.agent_must_attempt, decision.must_attempt);
+    assert.equal(guidance.spend_policy, "after current validation");
+    assert.equal(Object.hasOwn(guidance, "command"), false);
   }
 });

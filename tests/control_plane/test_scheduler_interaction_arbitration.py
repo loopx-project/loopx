@@ -625,3 +625,170 @@ def test_automatic_dated_wait_bounds_rechecks_without_finite_stop(minutes, progr
     assert all(limit is None for limit in hint["unchanged_poll"]["limits"].values())
     assert set(hint["unchanged_poll"]["after_limits"].values()) == {"continue"}
     assert payload == original
+
+
+def test_primary_instruction_adapter_preserves_pinned_python_views():
+    import json
+    from pathlib import Path
+
+    from loopx.control_plane.work_items.primary_action import primary_action_instruction_facts
+
+    fixture = Path(__file__).parents[1] / "control_plane_ts" / "fixtures" / "primary_action_instruction_selection.json"
+    for case in json.loads(fixture.read_text(encoding="utf-8")):
+        expected = deepcopy(case["facts"])
+        name = case["name"]
+        expected["work_lane"]["monitor_due_items"] = (
+            [{"todo_id": "todo_due", "label": "Due monitor"}]
+            if name in {"precedence-0", "precedence-1"} else
+            [{"todo_id": "", "label": "Monitor without id"}] if name == "candidate-edge-2" else []
+        )
+        expected["agent_todos"] = {
+            "first_executable_items": (
+                [{"label": "Advance executable", "actionable": True, "advancement": True}]
+                if name in {f"precedence-{i}" for i in range(6)} else
+                [{"label": "Advance accepted", "actionable": True, "advancement": True}]
+                if name == "candidate-edge-8" else []
+            ),
+            "first_open_items": (
+                [{"label": "Advance open", "actionable": True, "advancement": True}]
+                if name in {f"precedence-{i}" for i in range(7)} else []
+            ),
+        }
+        expected["backlog"] = (
+            [{"goal_id": "G", "label": "Advance backlog"}]
+            if name in {f"precedence-{i}" for i in range(8)} else
+            [{"goal_id": "other", "label": "Unscoped backlog"}] if name == "candidate-edge-9" else []
+        )
+        assert primary_action_instruction_facts(case["payload"]) == expected, name
+
+
+def test_bounded_primary_instruction_facts_preserve_pinned_typed_instructions():
+    import json
+    from pathlib import Path
+
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.work_items.primary_action import primary_action_instruction_facts
+
+    # Select each fixture mode through the real execution owner, independently
+    # of the payload's instruction sources. Expected prose predates the TS owner.
+    mode_inputs = {
+        "bounded_delivery": {"canonical_execution": {"must_attempt_work": True, "delivery_allowed": True}},
+        "bounded_delivery_with_user_notice": {"user_required": True,
+            "canonical_execution": {"must_attempt_work": True, "delivery_allowed": True}},
+        "external_evidence_observation": {"observation_required": True},
+        "autonomous_replan": {"replan_required": True},
+        "task_orchestration": {"effective_action": "coordinate_task_bundle"},
+        "scoped_user_gate_fallback": {"scoped_user_gate_fallback": True},
+        "user_gate_cooldown_wait": {"user_gate_notification_suppressed": True},
+        "automation_prompt_upgrade": {"effective_action": "automation_prompt_upgrade_required"},
+        "user_gate": {"user_required": True, "notify_user_on_gate": True},
+        "user_todo_blocker_push": {"user_required": True, "notify_user_on_open_todo": True},
+        "user_action_required": {"user_required": True},
+        "control_plane_self_repair": {"self_repair_allowed": True},
+        "mapped_noop_if_unchanged": {"stop_if_unchanged": True},
+        "health_blocked": {"state": "blocked_health"},
+        "quota_throttled": {"state": "throttled"},
+        "blocked_wait": {"state": "waiting"},
+    }
+    fixture = Path(__file__).parents[1] / "control_plane_ts" / "fixtures" / "primary_action_instruction_selection.json"
+    for case in json.loads(fixture.read_text(encoding="utf-8")):
+        request = {
+            "schema_version": "interaction_execution_facts_v0",
+            "effective_action": case["mode"], "state": "eligible",
+            "canonical_execution": {"must_attempt_work": False, "delivery_allowed": False},
+            "user_required": False, "scoped_user_gate_fallback": False,
+            "user_gate_notification_suppressed": False, "notify_user_on_gate": False,
+            "notify_user_on_open_todo": False, "stop_if_unchanged": False,
+            "blocked_successor_wait_observation": False,
+            "observation_required": False, "replan_required": False,
+            "agent_scope_frontier_actions": sorted(AGENT_SCOPE_ACTIONS),
+            "primary_action_facts": primary_action_instruction_facts(case["payload"]),
+            "selection_packet": {}, **mode_inputs.get(case["mode"], {}),
+        }
+        result = effect_runtime_result("work_item.interaction_execution.project", request)
+        assert result["mode"] == case["mode"], case["name"]
+        assert result["primary_action"] == case["expected"], case["name"]
+
+
+@pytest.mark.parametrize("rejected", [False, True], ids=["lane", "recovery"])
+def test_primary_instruction_transport_bounds_oversized_backlog(rejected):
+    import json
+
+    from loopx.control_plane.work_items.primary_action import primary_action_instruction_facts
+
+    payload = {
+        "goal_id": "G", "state": "eligible", "effective_action": "normal_run",
+        "execution_obligation": {"must_attempt_work": True, "delivery_allowed": True},
+        "agent_lane_next_action": {"todo_id": "T", "next_step": "Advance"},
+        "autonomous_backlog_candidates": {"items": [
+            {"goal_id": "G", "text": "x" * 80} for _ in range(22_000)
+        ]},
+    }
+    if rejected:
+        payload.update(action_selection_qualification={
+            "state": "rejected", "requested_todo_id": "todo_x",
+            "recovery_action": "reenter_guard_without_selection",
+        }, agent_identity={"agent_id": "A"})
+    channel = build_interaction_contract(payload)["agent_channel"]
+    assert channel["primary_action"] == (
+        "loopx --format json quota should-run --goal-id G --agent-id A" if rejected else "T: Advance"
+    )
+    assert channel["must_attempt"] is (not rejected)
+    assert channel["delivery_allowed"] is (not rejected)
+    assert len(json.dumps(primary_action_instruction_facts(payload)).encode("utf-8")) < 16 * 1024
+
+
+@pytest.mark.parametrize("eligible", [False, True], ids=["none", "after-prefix"])
+@pytest.mark.parametrize("goal_id", ["G", ""])
+def test_primary_instruction_transport_keeps_first_selectable_views(eligible, goal_id):
+    from loopx.control_plane.work_items.primary_action import primary_action_instruction_facts
+
+    todos = [
+        None, {"text": "   "}, {"text": "Monitor", "task_class": "continuous_monitor"},
+        {"text": "Blocked", "status": "blocked"}, {"text": "Done", "done": True},
+        {"text": "Denied", "goal_acceptance_guard": {"allowed": False}},
+    ]
+    monitors = [None, {}, {"text": "  ", "todo_id": "blank"}]
+    backlog = [None, {"goal_id": "G", "text": "  "}]
+    if goal_id:
+        backlog.append({"goal_id": "other", "text": "Wrong goal"})
+    if eligible:
+        todos += [{"text": "  Advance  ", "task_class": "advancement_task"}, {"text": "Later"}]
+        monitors += [{"todo_id": " M ", "text": " Due "}, {"text": "Later"}]
+        backlog += [{"goal_id": "G" if goal_id else "other", "text": " Backlog "},
+                    {"goal_id": "G", "text": "Later"}]
+    facts = primary_action_instruction_facts({
+        "goal_id": goal_id, "work_lane_contract": {"monitor_due_items": monitors},
+        "agent_todo_summary": {"first_executable_items": todos, "first_open_items": todos},
+        "autonomous_backlog_candidates": {"items": backlog},
+    })
+    assert facts["work_lane"]["monitor_due_items"] == (
+        [{"todo_id": "M", "label": "Due"}] if eligible else []
+    )
+    assert facts["agent_todos"] == {
+        "first_executable_items": [{"label": "Advance", "actionable": True, "advancement": True}] if eligible else [],
+        "first_open_items": [{"label": "Advance", "actionable": True, "advancement": True}] if eligible else [],
+    }
+    assert facts["backlog"] == (
+        ([{"goal_id": "G", "label": "Backlog"}] if goal_id else [{"goal_id": "other", "label": "Backlog"}])
+        if eligible else []
+    )
+
+
+def test_primary_instruction_adapter_keeps_non_json_str_and_projection_order():
+    from loopx.control_plane.work_items.primary_action import (
+        build_primary_action_projection,
+        primary_action_instruction_facts,
+    )
+
+    class LegacyText:
+        def __str__(self):
+            return "  Legacy 😀  compatibility  "
+
+    facts = primary_action_instruction_facts({"pending_capability_intent": {"action_summary": LegacyText()}})
+    assert facts["pending_intent"] == "Legacy 😀 compatibility"
+    projection = build_primary_action_projection(
+        {"active_state_next_action": "Earlier instruction"},
+        mode="bounded_delivery", primary_action="Current instruction",
+    )
+    assert list(projection) == ["primary_action", "resolution_trace"]

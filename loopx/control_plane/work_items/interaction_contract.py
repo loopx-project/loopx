@@ -51,6 +51,7 @@ from . import action_selection_contract as selection
 from . import runtime_capability_reentry as capability_reentry_adapter
 from .primary_action import (
     build_primary_action_projection,
+    primary_action_instruction_facts,
     protocol_action_label as _protocol_action_label,
     protocol_action_text,
 )
@@ -304,6 +305,7 @@ def _project_interaction_execution(
     user_required: bool,
     blocked_successor_wait_observation: bool,
     agent_scope_frontier_actions: Collection[str],
+    include_primary_action: bool = False,
 ) -> dict[str, Any]:
     """Transport bounded facts; TypeScript owns mode and execution permission."""
 
@@ -347,6 +349,9 @@ def _project_interaction_execution(
         "replan_required": obligation_kind == AUTONOMOUS_REPLAN_REQUIRED_MODE,
         "agent_scope_frontier_actions": list(agent_scope_frontier_actions),
     }
+    if include_primary_action:
+        request["primary_action_facts"] = primary_action_instruction_facts(dict(payload))
+        request["selection_packet"] = selection.action_selection_context(payload)
     result = effect_runtime_result(
         "work_item.interaction_execution.project", request
     )
@@ -362,6 +367,8 @@ def _project_interaction_execution(
             raise TypeError(
                 f"typed interaction execution returned invalid {field}"
             )
+    if "primary_action" in result and result["primary_action"] is not None and not isinstance(result["primary_action"], str):
+        raise TypeError("typed interaction execution returned an invalid primary action")
     return result
 
 
@@ -1126,6 +1133,7 @@ def _build_interaction_agent_channel(
     must_attempt: bool,
     delivery_allowed: bool,
     quiet_noop_allowed: bool,
+    primary_action: str | None,
     capability_reentry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     channel: dict[str, Any] = {
@@ -1133,7 +1141,7 @@ def _build_interaction_agent_channel(
         "delivery_allowed": delivery_allowed,
         "quiet_noop_allowed": quiet_noop_allowed,
     }
-    channel.update(build_primary_action_projection(payload, mode=mode))
+    channel.update(build_primary_action_projection(payload, mode=mode, primary_action=primary_action))
     work_lane = (
         payload.get("work_lane_contract")
         if isinstance(payload.get("work_lane_contract"), Mapping)
@@ -1591,6 +1599,7 @@ def _build_interaction_contract_projection(
         user_required=user_required,
         blocked_successor_wait_observation=_blocked_successor_wait_observation_required(payload),
         agent_scope_frontier_actions=agent_scope_frontier_actions,
+        include_primary_action=True,
     )
     mode = decision["mode"]
     must_attempt = decision["must_attempt"]
@@ -1640,6 +1649,7 @@ def _build_interaction_contract_projection(
             must_attempt=must_attempt,
             delivery_allowed=delivery_allowed,
             quiet_noop_allowed=quiet_noop_allowed,
+            primary_action=decision["primary_action"],
             capability_reentry=capability_reentry,
         )
     retry_wait = execution_obligation.get("wait")

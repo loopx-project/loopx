@@ -1,3 +1,4 @@
+import {actionSelectionNeedsRecovery} from "./action_selection_admission.ts";
 import {configuredGoalChecks} from "../goals/acceptance_contract.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {projectTurnStartUnavailableContext} from "../capability_hooks.ts";
@@ -15,7 +16,7 @@ import { EffectiveAction } from "../quota/effective_action.generated.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import type { JsonObject } from "../effect_program.ts";
-import { AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
+import { AGENT_SCOPE_FRONTIER_ACTIONS, AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
 import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { monitorIsActive } from "../todos/summary_lanes.ts";
@@ -159,6 +160,7 @@ export interface InteractionExecutionDecision extends JsonObject {
   attempt_basis: string;
   delivery_basis: string;
   normalization_diagnostics: string[];
+  primary_action?: string | null;
 }
 
 function optionalString(value: unknown, label: string): string | null {
@@ -195,6 +197,104 @@ function quietModeAllowsNoop(
     "agent_monitor_only",
     "skip",
   ].includes(mode);
+}
+
+/** Select only Python-coded scalar/label views; never emulate Python str/repr here. */
+export function selectPrimaryActionInstruction(value: unknown, mode: string): string | null {
+  const facts = requireJsonObject(value, "primary action instruction facts");
+  const object = (key: string) => requireJsonObject(facts[key], `primary action ${key}`);
+  const text = (source: JsonObject, key: string) => optionalString(source[key], `primary action ${key}`);
+  const rows = (source: JsonObject, key: string): JsonObject[] => {
+    if (!Array.isArray(source[key])) throw new EffectRuntimeRequestError(`primary action ${key} must be an array`);
+    return source[key].map(item => requireJsonObject(item, `primary action ${key} item`));
+  };
+  const count = (source: JsonObject, key: string): number => {
+    const n = source[key];
+    if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0) {
+      throw new EffectRuntimeRequestError(`primary action ${key} must be a nonnegative integer`);
+    }
+    return n;
+  };
+  const addressed = (source: JsonObject, label: string | null): string | null => {
+    const id = text(source, "todo_id");
+    return label ? (id ? `${id}: ${label}` : label) : null;
+  };
+  const firstCandidate = (): string | null => {
+    const lane = object("agent_lane"), work = object("work_lane");
+    const laneText = text(lane, requireBoolean(lane.next_step_truthy, "next_step_truthy") ? "next_step_label" : "label");
+    if (laneText) return addressed(lane, laneText);
+    if (work.monitor_kind === "todo_monitor_due") {
+      for (const item of rows(work, "monitor_due_items")) {
+        const label = text(item, "label");
+        if (label) return addressed(item, label);
+      }
+    }
+    if (work.obligation === "repair_monitor_schedule_metadata") {
+      const label = text(work, "action_label"), id = text(work, "selected_todo_id");
+      if (label) return id ? `${id}: ${label}` : label;
+    }
+    const gate = object("capability_gate");
+    if (gate.action === "run" && count(gate, "runnable_count")) {
+      return `choose one of ${count(gate, "runnable_count")} capability-runnable todo(s) after steering audit`;
+    }
+    const selected = object("scoped_fallback"), label = text(selected, "label");
+    if (label) return selected.fallback_kind === "deferred_successor_replan"
+      ? addressed(selected, `replan ready deferred successor ${label}`) : label;
+    const todos = object("agent_todos");
+    for (const key of ["first_executable_items", "first_open_items"]) {
+      for (const item of rows(todos, key)) {
+        if (requireBoolean(item.actionable, "actionable") && requireBoolean(item.advancement, "advancement")) {
+          const label = text(item, "label");
+          if (label) return label;
+        }
+      }
+    }
+    const goal = text(facts, "goal_id");
+    for (const item of rows(facts, "backlog")) {
+      if (goal && text(item, "goal_id") !== goal) continue;
+      const label = text(item, "label");
+      if (label) return label;
+    }
+    const recommended = text(facts, "recommended_action");
+    if (requireStringArray(work.reason_codes, "reason_codes").includes("next_action_requires_advancement") && recommended) return recommended;
+    return text(work, "action_text") || text(work, "obligation_text") || recommended;
+  };
+  if (mode === EffectiveAction.GOVERNED_CAPABILITY_INTENT) return text(facts, "pending_intent") || "consume the validated pending capability intent";
+  if (mode === EXTERNAL_OBSERVATION_MODE) return text(facts, "observation_target") ||
+    "verify an observable external handle or compact writeback channel; write a compact blocker when it is absent";
+  if (mode === "autonomous_replan") {
+    const lifecycle = object("lifecycle");
+    if (requireBoolean(lifecycle.present, "lifecycle.present")) return text(lifecycle, "action") ||
+      "settle the exact completed Todo lifecycle or link a real runnable successor; do not create lifecycle-only filler";
+    const packet = object("replan_packet");
+    if (requireBoolean(packet.settlement_only, "settlement_only")) return text(packet, "rule");
+    if (requireBoolean(packet.has_required_outcome, "has_required_outcome") && requireBoolean(packet.has_successor_command, "has_successor_command")) {
+      return "select one bounded next slice; prefer replan_action_packet.writeback_contract.successor_command";
+    }
+    return "produce one typed outcome from the host-projected replan action packet";
+  }
+  if (mode === EffectiveAction.MONITOR_QUIET_SKIP) return "ensure this heartbeat's idempotent quota receipt is committed, then stay quiet if unchanged; the guard records the eligible no-progress observation and an earlier heartbeat receipt does not satisfy this one";
+  if (mode === EffectiveAction.AGENT_MONITOR_ONLY) return "stay quiet until a monitor is due, a verified direct reply arrives, or the work mode changes";
+  if (mode === EffectiveAction.MONITOR_DUE) return text(object("work_lane"), "due_action_text") || "attempt the due monitor and write back only a material transition";
+  if ((AGENT_SCOPE_FRONTIER_ACTIONS as readonly string[]).includes(mode)) return text(facts, "frontier_action") || "stay quiet until this agent has a concrete in-scope runnable todo";
+  if (mode === EffectiveAction.SCOPED_USER_GATE_FALLBACK) return firstCandidate() || "surface the scoped user gate, then advance one non-gated fallback";
+  if (mode === "bounded_delivery_with_user_notice" || mode === "bounded_delivery") return firstCandidate() || "advance scope-bounded work with validation";
+  if (mode === "task_orchestration") {
+    const contract = object("orchestration");
+    const lanes = contract.child_count === null ? count(contract, "peer_count") : count(contract, "child_count");
+    return contract.mode === "adaptive"
+      ? `choose whether to spawn admitted child lanes (${lanes} eligible); the task coordinator reviews evidence and writes back this bundle once`
+      : `activate/resume peer lanes (${lanes} eligible); the task coordinator reviews evidence and writes back this bundle`;
+  }
+  if (["user_gate", "user_todo_blocker_push", "user_action_required"].includes(mode)) return "wait for user/owner action after surfacing the blocker or gate";
+  if (mode === EffectiveAction.OUTCOME_FLOOR_RECOVERY) return "produce the required outcome-floor evidence artifact or write the concrete blocker";
+  if (mode === EffectiveAction.CAPABILITY_BRIDGE_REPAIR) return "execute interaction_contract.agent_channel.next_task_action.operation once with its real task-facing tool and exact target_ref when projected; preflight_allowed is false, and the instruction is context rather than CLI text; on success execute cli_channel.next_cli_actions[0] in the same turn and continue only when quota allows";
+  if (mode === EffectiveAction.AGENT_WORKSPACE_REPAIR) return "create or switch to an independent worktree/branch, then rerun quota guard before file edits";
+  if (mode === "automation_prompt_upgrade") return "update the installed automation once using the stable migration id, run its completion ack, then rerun quota guard";
+  if (mode === "control_plane_self_repair") return "repair the bounded control-plane/status projection fault exposed by quota";
+  if (mode === EffectiveAction.BOUNDARY_PROJECTION_REPAIR) return "repair goal_boundary.write_scope projection before attempting the selected write";
+  if (mode === "mapped_noop_if_unchanged") return "confirm no new instruction/evidence/todo/stale source/safe handoff, then quiet no-op";
+  return text(facts, "contract_obligation") || "do not run delivery work for this goal in this turn";
 }
 
 /**
@@ -426,7 +526,7 @@ export function projectInteractionExecution(value: unknown): InteractionExecutio
     deliverySource = mustAttempt ? deliverySource : "attempt_required";
   }
 
-  return {
+  const decision: InteractionExecutionDecision = {
     schema_version: INTERACTION_EXECUTION_DECISION_SCHEMA_VERSION,
     mode,
     must_attempt: mustAttempt,
@@ -436,6 +536,15 @@ export function projectInteractionExecution(value: unknown): InteractionExecutio
     delivery_basis: deliverySource,
     normalization_diagnostics: normalizationDiagnostics,
   };
+  // Mode-only preflight remains byte-for-byte compatible. Recovery is tested
+  // before even reading instruction facts, so rejected work stays lazy.
+  if (Object.hasOwn(request, "primary_action_facts")) {
+    const packet = requireJsonObject(request.selection_packet, "selection packet");
+    if (!actionSelectionNeedsRecovery(packet, {must_attempt: mustAttempt, delivery_allowed: deliveryAllowed})) {
+      decision.primary_action = selectPrimaryActionInstruction(request.primary_action_facts, mode);
+    }
+  }
+  return decision;
 }
 
 /** The scheduler and typed consumers share these rules, not independent copies. */

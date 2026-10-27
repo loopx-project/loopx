@@ -257,7 +257,7 @@ RETIREMENT_ANCHOR = {
     "heartbeat_recommendation": (17, 1),
     "work_lane_contract": (29, 3),
     "external_evidence_observation": (8, 1),
-    "goal_boundary": (30, 2),
+    "goal_boundary": (29, 3),
     "protocol_action_packet": (1, 2),
 }
 # B3 migration surface: modules that read, write or bind the legacy field, plus

@@ -15,6 +15,26 @@
 
 ---
 
+### Primary-action instruction selection converges in TypeScript (2026-10-27)
+
+`work_item.interaction_execution.project` now selects the primary instruction
+alongside its existing mode, composing selection recovery before instruction
+construction. The three Python decision functions are retired; Python retains
+bounded scalar/label compatibility views, monitor text, resolution trace and
+final serialization; transported list facts are bounded to the first selectable
+row per source. Mode-only preflight, later overrides and persisted formats
+are unchanged. Production Python −185 lines, TS +109, net −76. All eight measured
+CLI outputs retain equal byte counts and normalized content; crossings remain
+1/3/3/75 for both binding counts. No latency improvement is claimed.
+The slice moves one `goal_boundary` prose token Python → TypeScript; lexical budgets move 30/2 → 29/3 with migration surfaces unchanged at 16/1, as recorded in the ledger; registry and anchor move together.
+Validation is complete for this slice: the final canary reports status:
+`passed`, ok: `true`, merge_gate_passed: `true`, manual_holds: `0` and 0 failures;
+all eight benchmark commands retain byte parity and unchanged crossings, with
+median regressions within the stated 5% rule. Remaining limits are the CI-only
+real PostgreSQL server, Node 22.22.3, Windows and browser lanes, plus inherited
+main failures tracked by #7433–#7436 and #7389. See the [ownership, economics and validation ledger](ledger/typescript-control-plane-migration-v0/2026-10-27-primary-action-instruction-selection.md)
+for negative cases, retained-code deletion conditions and code-only rollback.
+
 ### Goal agent-context delegation projection converges in TypeScript (2026-10-25)
 
 `capability_hook.agent_context.project`

@@ -1148,8 +1148,8 @@
           "typescript_migration_surface": 1
         },
         "goal_boundary": {
-          "python_module_budget": 30,
-          "typescript_module_budget": 2,
+          "python_module_budget": 29,
+          "typescript_module_budget": 3,
           "python_migration_surface": 16,
           "typescript_migration_surface": 1
         },
