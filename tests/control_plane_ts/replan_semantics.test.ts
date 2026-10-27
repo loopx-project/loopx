@@ -124,6 +124,52 @@ test("verified original writeback projects only its outstanding debit even after
     current_obligation: null, transition_candidates: []}), /malformed/);
 });
 
+test("only a plain outcome review has a scalar receipt source", () => {
+  const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
+    obligation_id: "replan-1111111111111111", agent_id: "reviewer",
+    stop_condition: "Stop at owner-only decisions.",
+    triggers: [{kind: "goal_outcome_uncovered", text: "Private Goal prose stays outside telemetry"}],
+    replan_context: {context_id: "old-acceptance-basis"}};
+  const request = {operation: "receipt_review_source", agent_id: "reviewer", obligation: source};
+  assert.deepEqual(projectReplanSemantics(request), {review_source: {
+    kind: "goal_outcome_uncovered", stop_condition: source.stop_condition}});
+  for (const patch of [{required: false}, {schema_version: "unknown"}, {agent_id: "another-agent"},
+    {triggers: []}, {triggers: [{kind: "periodic_review_due"}]},
+    {triggers: [{kind: "goal_outcome_uncovered"}, {kind: "external_progress_review_drift"}]},
+    {satisfying_semantic_outcomes: ["new_runnable_successor"]},
+    {progress_baseline: {}}, {progress_window: []},
+    {triggers: [{kind: "goal_outcome_uncovered", progress_baseline: {}}]},
+    {triggers: [{kind: "goal_outcome_uncovered", progress_window: []}]},
+    {stop_condition: null}, {stop_condition: "s".repeat(241)},
+    {resolution_mode: "todo_lifecycle_settlement"},
+    {capability_guard: {schema_version: "semantic_replan_capability_guard_v0"}}]) {
+    assert.deepEqual(projectReplanSemantics({...request, obligation: {...source, ...patch}}), {review_source: null});
+  }
+});
+
+test("a recorded outcome review survives work-link refinement without cached context or discharge", () => {
+  const id = "replan-1111111111111111";
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "open", selected_obligation_id: id, current_obligation: null,
+    transition_candidates: [], agent_id: "reviewer", receipt_review: {
+      kind: "goal_outcome_uncovered", stop_condition: "Stop at owner-only decisions."}};
+  const recovered = projectReplanSemantics(request).obligation as JsonObject;
+  assert.equal(recovered.obligation_id, id);
+  assert.equal(recovered.agent_id, "reviewer");
+  assert.equal(recovered.stop_condition, request.receipt_review.stop_condition);
+  assert.deepEqual(recovered.triggers, [{kind: "goal_outcome_uncovered"}]);
+  assert.equal(recovered.selection_binding, "heartbeat_receipt");
+  assert.equal(recovered.replan_context, undefined);
+  assert.equal(recovered.settlement_action_packet, undefined);
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered}).accepted, false);
+  for (const invalid of [{guard_scoped: false}, {agent_id: null},
+    {receipt_review: null}, {receipt_review: {kind: "periodic_review_due"}},
+    {receipt_review: {kind: "goal_outcome_uncovered"}}]) {
+    assert.throws(() => projectReplanSemantics({...request, ...invalid}), /identity conflicts/);
+  }
+  assert.equal(projectReplanSemantics({...request, selected_obligation_id: null}).obligation, null);
+});
+
 test("obligation source governs both authoring projection and semantic discharge", () => {
   const projection = projectReplanSemantics({operation: "requirements", obligation});
   assert.match(String(projection.cli_semantic_args), /--agent-vision-json/);

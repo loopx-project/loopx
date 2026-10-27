@@ -40,6 +40,7 @@ from ..quota.blocked_transition_notice import build_blocked_transition_notice
 from ..quota.error_codes import HeartbeatReceiptIdentityConflictError
 from ..effect_runtime import EffectRuntimeRejected
 from ..work_items.replan_semantics_codec import project_replan_semantics
+from ..work_items.lifecycle_recovery import attach_receipt_replan_context
 from ..agents.capability_memory import resolve_agent_capabilities
 from ..quota.goal_boundary import (
     goal_boundary as _goal_boundary,
@@ -196,6 +197,7 @@ def _preserve_receipt_bound_replan_obligation(
     replay_phase: ReceiptBoundReplayPhase | None = None,
     transition_candidates: list[dict[str, Any]] | None = None,
     stride_strategy: str = "off",
+    receipt_review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     preserved_replan_id = normalize_todo_replan_obligation_id(
         receipt_bound_replan_obligation_id
@@ -211,6 +213,7 @@ def _preserve_receipt_bound_replan_obligation(
             "replay_phase": replay_phase.value if replay_phase is not None else None,
             "transition_candidates": transition_candidates or [],
             "stride_strategy": stride_strategy,
+            "receipt_review": receipt_review,
         })
     except EffectRuntimeRejected as exc:
         if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
@@ -222,6 +225,79 @@ def _preserve_receipt_bound_replan_obligation(
     if not isinstance(obligation, Mapping) or obligation.get("obligation_id") != preserved_replan_id:
         raise RuntimeError("TypeScript receipt-bound replan obligation shape mismatch")
     return dict(obligation)
+
+
+def _prepare_quota_replan_context(
+    *,
+    status_payload: dict[str, Any],
+    safe_goal_id: str,
+    agent_frontier_id: str | None,
+    item: dict[str, Any],
+    project_asset: dict[str, Any],
+    user_todo_summary: dict[str, Any] | None,
+    agent_todo_summary: dict[str, Any] | None,
+    authoritative_fallback_todo_items: FallbackTodoSource,
+    effective_available_capabilities: Any,
+    work_lane_contract: dict[str, Any] | None,
+    registered_agent_ids: list[str],
+    registry_goal: dict[str, Any],
+    agent_identity: dict[str, Any] | None,
+    receipt_bound_replan_obligation_id: str | None,
+    receipt_bound_replan_guard_scoped: bool,
+    receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
+    receipt_bound_guard_recorded_at: str | None,
+    receipt_bound_replan_review: Mapping[str, Any] | None,
+    replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Project the current frontier and contextualize its receipt-bound review."""
+    replan_todo_items = select_planning_inventory_source_items(
+        item.get("agent_todos"),
+        project_asset.get("agent_todos") if project_asset else None,
+        include_terminal=True,
+    )
+    goal_frontier_context = build_goal_frontier_projection_context_from_status(
+        replan_explore_reader=replan_explore_reader,
+        goal_id=safe_goal_id,
+        agent_id=agent_frontier_id,
+        status_payload=status_payload,
+        item=item,
+        project_asset=project_asset,
+        user_todo_summary=user_todo_summary,
+        agent_todo_summary=agent_todo_summary,
+        agent_todo_source_items=replan_todo_items,
+        fallback_todo_source_items=authoritative_fallback_todo_items,
+        available_capabilities=effective_available_capabilities,
+        work_lane_contract=work_lane_contract,
+        neutral_replan_ack_classifications=AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
+        registered_agent_ids=registered_agent_ids,
+        goal_status=str(registry_goal.get("status") or ""),
+        agent_profile=_quota_agent_profile(agent_identity),
+        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+        receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+    )
+    replan_obligation = (
+        None
+        if receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED
+        else _preserve_receipt_bound_replan_obligation(
+            goal_frontier_context.get("replan_obligation"),
+            receipt_bound_replan_obligation_id,
+            guard_scoped=receipt_bound_replan_guard_scoped,
+            agent_id=agent_frontier_id,
+            replay_phase=receipt_bound_replay_phase,
+            transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
+            stride_strategy=goal_frontier_context["stride_strategy"],
+            receipt_review=receipt_bound_replan_review,
+        )
+    )
+    if replan_obligation and not replan_obligation.get("replan_context") and not replan_obligation.get("settlement_action_packet"):
+        replan_obligation = attach_receipt_replan_context(
+            replan_obligation, None, goal_id=safe_goal_id, agent_id=agent_frontier_id,
+            source_status=status_payload, stride_strategy=goal_frontier_context["stride_strategy"],
+            explore_reader=replan_explore_reader,
+            goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
+            todo_items=replan_todo_items,
+        )
+    return goal_frontier_context, replan_obligation
 
 
 def _same_todo_identity(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -566,6 +642,7 @@ def _prepare_quota_should_run_item(
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
 ) -> _QuotaDecisionPreparation:
     quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "unknown")
@@ -870,42 +947,26 @@ def _prepare_quota_should_run_item(
         if isinstance(agent_identity, dict)
         else []
     )
-    goal_frontier_context = build_goal_frontier_projection_context_from_status(
-        replan_explore_reader=replan_explore_reader,
-        goal_id=safe_goal_id,
-        agent_id=agent_frontier_id,
+    goal_frontier_context, replan_obligation = _prepare_quota_replan_context(
         status_payload=status_payload,
+        safe_goal_id=safe_goal_id,
+        agent_frontier_id=agent_frontier_id,
         item=item,
         project_asset=project_asset,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
-        agent_todo_source_items=select_planning_inventory_source_items(
-            item.get("agent_todos"),
-            project_asset.get("agent_todos") if project_asset else None,
-            include_terminal=True,
-        ),
-        fallback_todo_source_items=authoritative_fallback_todo_items,
-        available_capabilities=effective_available_capabilities,
+        authoritative_fallback_todo_items=authoritative_fallback_todo_items,
+        effective_available_capabilities=effective_available_capabilities,
         work_lane_contract=work_lane_contract,
-        neutral_replan_ack_classifications=AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
         registered_agent_ids=registered_agent_ids,
-        goal_status=str(registry_goal.get("status") or ""),
-        agent_profile=_quota_agent_profile(agent_identity),
+        registry_goal=registry_goal,
+        agent_identity=agent_identity,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+        receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
+        receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
-    )
-    replan_obligation = (
-        None
-        if receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED
-        else _preserve_receipt_bound_replan_obligation(
-            goal_frontier_context.get("replan_obligation"),
-            receipt_bound_replan_obligation_id,
-            guard_scoped=receipt_bound_replan_guard_scoped,
-            agent_id=agent_frontier_id,
-            replay_phase=receipt_bound_replay_phase,
-            transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
-            stride_strategy=goal_frontier_context["stride_strategy"],
-        )
+        receipt_bound_replan_review=receipt_bound_replan_review,
+        replan_explore_reader=replan_explore_reader,
     )
     replan_scope = goal_frontier_context.get("replan_scope") or {}
     goal_frontier_projection = (

@@ -497,8 +497,13 @@ export function projectSemanticReplanGuard(
 ): JsonObject {
   const hasCapability = ["semantic_replan_capability_id", "semantic_replan_gap_id", "semantic_replan_frontier_revision"]
     .some(field => Object.hasOwn(receiptDetails, field));
+  const hasReview = ["semantic_replan_review_kind", "semantic_replan_review_stop_condition"]
+    .some(field => Object.hasOwn(receiptDetails, field));
+  if (hasCapability && hasReview) throw new EffectRuntimeRequestError(
+    "a review source cannot replace a capability guard", "malformed_settlement_state");
   if (!Object.hasOwn(receiptDetails, "semantic_replan_obligation_id")) {
     if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
+    if (hasReview) throw new EffectRuntimeRequestError("a review source requires a selected obligation", "malformed_settlement_state");
     return {
       schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
       scope: "legacy_unscoped",
@@ -508,6 +513,7 @@ export function projectSemanticReplanGuard(
   const rawObligationId = receiptDetails.semantic_replan_obligation_id;
   if (rawObligationId === "" || rawObligationId === null) {
     if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
+    if (hasReview) throw new EffectRuntimeRequestError("a review source requires a selected obligation", "malformed_settlement_state");
     return {
       schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
       scope: "turn_guard",
@@ -521,10 +527,15 @@ export function projectSemanticReplanGuard(
       "malformed_settlement_state",
     );
   }
+  const reviewKind = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_kind, "receipt review kind") : null;
+  const stop = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition, "receipt review stop condition") : null;
+  if (stop && stop.length > 240) throw new EffectRuntimeRequestError(
+    "receipt review stop condition exceeds scalar metadata bounds", "malformed_settlement_state");
   return {
     schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
     scope: "turn_guard",
     selected_obligation_id: selectedObligationId,
+    ...(hasReview ? {selected_review_source: {kind: reviewKind, stop_condition: stop}} : {}),
     ...(hasCapability ? {
       selected_capability_guard: decodeCapabilityGuard({schema_version: "semantic_replan_capability_guard_v0",
         capability_id: receiptDetails.semantic_replan_capability_id, gap_id: receiptDetails.semantic_replan_gap_id,

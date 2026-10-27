@@ -57,6 +57,7 @@ def _receipt_bound_guard_fields(
             and guard.get("selected_obligation_id") == obligation_id
         ),
         "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
+        "receipt_bound_replan_review": guard.get("selected_review_source") if isinstance(guard, Mapping) else None,
         "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
     }
 

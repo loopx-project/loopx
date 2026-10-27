@@ -312,6 +312,12 @@ def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
         # The TS readback owner validates the schema and ids. Preserve the
         # selected authority evidence when adapting the receipt to refresh.
         result["selected_capability_guard"] = dict(capability)
+    if "selected_review_source" in guard:
+        review = guard["selected_review_source"]
+        if not isinstance(review, dict) or selected_obligation_id is None:
+            raise RuntimeError("selected review source requires a typed object and obligation")
+        # Semantic eligibility and scalar bounds belong to the TS owner.
+        result["selected_review_source"] = dict(review)
     return result
 
 

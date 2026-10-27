@@ -567,6 +567,7 @@ def build_quota_should_run(
     receipt_bound_replan_guard_scoped: bool = False,
     receipt_bound_successor_replan: bool = False,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
     turn_instance_id: str | None = None,
     runtime_root: str | Path | None = None,
     workspace_path: Path | None = None,
@@ -664,6 +665,7 @@ def build_quota_should_run(
             authoritative_fallback_todo_items=authoritative_fallback_todo_items,
             replan_explore_reader=tracked_replan_explore_reader,
             receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+            receipt_bound_replan_review=receipt_bound_replan_review,
         )
         route = _resolve_quota_should_run_route(prepared)
         route = _apply_selected_todo_guards(

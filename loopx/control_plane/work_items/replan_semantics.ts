@@ -261,6 +261,18 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       triggerKinds(current).some(kind => ACCEPTANCE_HOLD_TRIGGERS.has(kind))) {
     return {obligation: {...current, obligation_id: selected, selection_binding: "heartbeat_receipt"}};
   }
+  // Work-link maintenance can remove this frontier-only review before its
+  // writeback. The exact receipt retains its typed kind, never raw task prose
+  // or an old decision context. Other duties keep their canonical owners.
+  const review = object(request.receipt_review);
+  if (request.guard_scoped && review.kind === "goal_outcome_uncovered" &&
+      typeof review.stop_condition === "string" && review.stop_condition.trim() && review.stop_condition.length <= 240 &&
+      typeof request.agent_id === "string" && request.agent_id.trim()) {
+    return {obligation: {schema_version: "autonomous_replan_obligation_v0",
+      required: true, obligation_id: selected, agent_id: request.agent_id,
+      stop_condition: review.stop_condition,
+      triggers: [{kind: "goal_outcome_uncovered"}], selection_binding: "heartbeat_receipt"}};
+  }
   throw new EffectRuntimeRequestError(
     "heartbeat receipt settlement identity conflicts with the current autonomous replan obligation",
     "heartbeat_receipt_identity_conflict",
@@ -409,6 +421,24 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation === "turn_transition") return projectTurnTransition(request);
   if (request.operation === "receipt_bound_obligation") return preserveReceiptBoundObligation(request);
   const obligation = requireJsonObject(request.obligation, "obligation");
+  if (request.operation === "receipt_review_source") {
+    const kinds = triggerKinds(obligation);
+    const triggers = Array.isArray(obligation.triggers) ? obligation.triggers : [];
+    // Only this plain frontier review has a complete scalar receipt source.
+    // Mixed, restricted, lifecycle and capability obligations must not lose
+    // their source-specific evidence or discharge rules through this route.
+    return {review_source: obligation.schema_version === "autonomous_replan_obligation_v0" &&
+      obligation.required === true && kinds.length > 0 &&
+      typeof request.agent_id === "string" && request.agent_id.trim() &&
+      obligation.agent_id === request.agent_id &&
+      kinds.every(kind => kind === "goal_outcome_uncovered") &&
+      obligation.resolution_mode == null && obligation.capability_guard == null &&
+      strings(obligation.satisfying_semantic_outcomes).length === 0 &&
+      obligation.progress_baseline == null && obligation.progress_window == null &&
+      triggers.every(trigger => object(trigger).progress_baseline == null && object(trigger).progress_window == null) &&
+      typeof obligation.stop_condition === "string" && obligation.stop_condition.trim() && obligation.stop_condition.length <= 240
+      ? {kind: "goal_outcome_uncovered", stop_condition: obligation.stop_condition} : null};
+  }
   if (request.operation === "transition_eligibility") {
     return {allowed: !requiresStrideDecision(obligation, request.stride_strategy)};
   }

@@ -87,6 +87,20 @@ test("capability guard survives scalar receipt transport and rejects missing sco
   assert.throws(() => projectSemanticReplanGuard({...details, semantic_replan_frontier_revision: undefined}), /capability guard is malformed/);
 });
 
+test("recorded review source retains its stop clause under the exact selected guard", () => {
+  const details = {semantic_replan_obligation_id: "replan-0000000000000001",
+    semantic_replan_review_kind: "goal_outcome_uncovered",
+    semantic_replan_review_stop_condition: "Stop at owner-only decisions."};
+  assert.deepEqual(projectSemanticReplanGuard(details).selected_review_source, {
+    kind: details.semantic_replan_review_kind, stop_condition: details.semantic_replan_review_stop_condition});
+  for (const patch of [{semantic_replan_obligation_id: ""},
+    {semantic_replan_obligation_id: undefined}, {semantic_replan_review_kind: undefined},
+    {semantic_replan_review_stop_condition: undefined}, {semantic_replan_review_stop_condition: "s".repeat(241)},
+    {semantic_replan_capability_id: "explore"}]) {
+    assert.throws(() => projectSemanticReplanGuard({...details, ...patch}));
+  }
+});
+
 test("capability retirement verifies its exact receipt and never erases a committed debit", async () => {
   const obligation = "replan-0000000000000001";
   const guard = {schema_version: "semantic_replan_capability_guard_v0", capability_id: "explore",

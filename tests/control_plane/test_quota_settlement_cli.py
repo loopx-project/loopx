@@ -7208,6 +7208,169 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("stride", [False, True])
+def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool,
+) -> None:
+    """Refreshing cumulative requirements must not rebind an admitted review."""
+    if provider == "sqlite":
+        from canonical_authority_fixture import isolate_sqlite_runtime
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace("status: active-read-only", "status: active"))
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["status"] = "active"
+    registry["goals"][0]["coordination"]["registered_agents"].append("another-agent")
+    registry_path.write_text(json.dumps(registry))
+    _initialize_fixture_authority(project, runtime, provider=provider)
+
+    def call(*args: str, expected_code: int = 0) -> dict[str, Any]:
+        code, result = _run_cli(registry_path, runtime, *args)
+        assert code == expected_code, result
+        return result
+
+    def refine(document: dict[str, Any], operation: str) -> dict[str, Any]:
+        current = call("goal-acceptance", "inspect", "--goal-id", GOAL_ID)
+        path = tmp_path / f"{operation}.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return call("goal-acceptance", "refine", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--document", str(path), "--operation-id", operation,
+            "--expected-provider-revision", current["provider_revision"], "--execute")
+
+    if stride:
+        call("configure-goal", "--goal-id", GOAL_ID,
+            "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    refine({"outcome_id": "delivery", "owner_agent_id": AGENT_ID,
+        "objective": "Deliver the requested artifact",
+        "requirements": [{"id": "original", "description": "Retain the original evidence"}],
+        "todo_ids": [TODO_ID],
+        "source": {"ref": "message:original", "summary": "The owner requested the artifact"}},
+        "declare-outcome")
+    call("todo", "complete", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--no-follow-up", "--evidence", "artifact:initial-delivery")
+    turn = "turn-replan-outcome-refinement"
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn)
+    first = call(*guard_args)
+    assert first["decision"] == "autonomous_replan_required", first
+    identity = first["heartbeat_receipt"]["settlement_identity"]
+    assert identity["binding_kind"] == "autonomous_replan"
+    receipt = _heartbeat_receipt_events(runtime, turn)[0]
+
+    successor = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+        "--text", "Read back the original owner's artifact when available",
+        "--claimed-by", AGENT_ID, "--action-kind", "validate",
+        "--resume-when", "resume_at:2999-01-01T00:00:00Z",
+        "--operation-id", "deferred-result-readback")["todo_id"]
+    updated = refine({"outcome_id": "delivery", "todo_ids": [successor]}, "link-existing-work")
+    expected = updated["goal_acceptance_contract"]["outcome_requirements"]
+    replay = call(*guard_args)
+    assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+    assert replay["selected_todo"] is None
+    context = replay["interaction_contract"]["agent_channel"]["work_context"]
+    acceptance = next(row["content"] for row in context["sources"]
+        if row.get("source") == "goal_acceptance")
+    assert acceptance["goal_acceptance_contract"]["outcome_requirements"] == expected
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert receipt["details"]["semantic_replan_review_kind"] == "goal_outcome_uncovered"
+    assert receipt["details"]["semantic_replan_review_stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
+    assert replay["autonomous_replan_obligation"]["stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
+    assert "semantic_replan_obligation" not in receipt["details"]
+    assert receipt["boundary"]["raw_task_text_recorded"] is False
+
+    # A further owner requirement must be read in the original review, while
+    # the durable receipt and waiting work retain their exact identities.
+    updated = refine({"outcome_id": "delivery",
+        "requirements": [{"id": "recovery", "description": "Validate recovery without losing the original artifact"}],
+        "source": {"ref": "message:recovery", "summary": "The owner added recovery acceptance"}},
+        "add-recovery-requirement")
+    expected = updated["goal_acceptance_contract"]["outcome_requirements"]
+    fresh = call(*guard_args)
+    assert fresh["heartbeat_receipt"]["settlement_identity"] == identity
+    current_context = fresh["autonomous_replan_obligation"]["replan_context"]
+    assert current_context["context_id"] != first["autonomous_replan_obligation"]["replan_context"]["context_id"]
+    sources = fresh["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    acceptance = next(row["content"] for row in sources if row.get("source") == "goal_acceptance")
+    assert acceptance["goal_acceptance_contract"]["outcome_requirements"] == expected
+    original = expected["outcomes"][0]
+    assert {row["id"] for row in original["requirements"]} == {"original", "recovery"}
+    assert original["sources"][0]["ref"] == "message:original"
+    assert _heartbeat_receipt_events(runtime, turn) == [receipt]
+
+    conflict = call(*guard_args, "--todo-id", successor, expected_code=1)
+    assert conflict["ok"] is False
+    assert _heartbeat_receipt_events(runtime, turn) == [receipt]
+    # Wrong scopes cannot borrow this receipt to write back or debit.
+    spend = ["quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
+        "--slots", "1", "--source", "heartbeat", "--execute"]
+    for flag, wrong in [("--goal-id", "another-goal"), ("--agent-id", "another-agent"),
+                         ("--turn-instance-id", "another-turn"),
+                         ("--replan-obligation-id", "replan-2222222222222222")]:
+        invalid = list(spend)
+        invalid[invalid.index(flag) + 1] = wrong
+        call(*invalid, expected_code=1)
+    assert _spend_run_count(runtime) == 0
+
+    from tests.control_plane.test_outcome_replan_composition_cli import _review_packet
+
+    control = fresh["replan_action_packet"].get("stride_control")
+    decision = tmp_path / "current-review.json"
+    decision.write_text(json.dumps(_review_packet(control)))
+    command = fresh["interaction_contract"]["cli_channel"]["next_cli_actions"][0]
+    for old, new in [("<advanced|blocked|exploration_exhausted|no_followup>", "advanced"),
+        ("<surface-id>", "review-current-artifact"), ("<hypothesis-id>", "retain-original-delivery"),
+        ("<probe-kind>", "recovery-check"), ("<evidence-id>", "evidence:current-artifact")]:
+        command = command.replace(old, new)
+    refresh = (*_projected_cli_args(command, turn_instance_id=turn),
+        "--agent-vision-json", str(decision), "--no-global-sync", "--suppress-external-sinks")
+    empty = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
+        "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(decision),
+        "--no-global-sync", "--suppress-external-sinks", expected_code=1)
+    assert empty["appended"] is False
+    assert _spend_run_count(runtime) == 0
+    written = call(*refresh)
+    assert written["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
+    owed = _projected_cli_args(written["settlement_owed"]["command"], turn_instance_id=turn)
+    call(*owed)
+    call(*owed)
+    assert _spend_run_count(runtime) == 1
+    settled = call(*guard_args)
+    assert settled["effective_action"] == "heartbeat_settled_skip"
+    assert settled["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _heartbeat_receipt_events(runtime, turn) == [receipt]
+    after = call("goal-acceptance", "inspect", "--goal-id", GOAL_ID)
+    assert after["goal_acceptance_contract"]["outcome_requirements"] == expected
+    waiting = call("todo", "list", "--goal-id", GOAL_ID, "--todo-id", successor)["todo"]
+    assert waiting["status"] == "open"
+    assert waiting["resume_when"] == "resume_at:2999-01-01T00:00:00Z"
+
+
+def test_receipt_review_does_not_persist_private_or_lossy_stop_clauses() -> None:
+    from argparse import Namespace
+    from loopx.control_plane.quota.settlement_cli import quota_rollout_details
+
+    obligation = {"schema_version": "autonomous_replan_obligation_v0", "required": True,
+        "agent_id": AGENT_ID, "obligation_id": "replan-1111111111111111",
+        "triggers": [{"kind": "goal_outcome_uncovered"}]}
+    for stop, retained in [("Stop at owner-only decisions.", True),
+        ("Stop if Authorization: example is required.", False),
+        ("Stop before\nowner-only decisions.", False), ("s" * 241, False)]:
+        details = quota_rollout_details({"autonomous_replan_obligation": {**obligation, "stop_condition": stop},
+            "replan_action_packet": {"obligation_id": obligation["obligation_id"]}},
+            Namespace(quota_command="should-run", agent_id=AGENT_ID), todo_id=None)
+        assert ("semantic_replan_review_kind" in details) is retained
+        if retained:
+            assert details["semantic_replan_review_stop_condition"] == stop
+        else:
+            assert "semantic_replan_review_stop_condition" not in details
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

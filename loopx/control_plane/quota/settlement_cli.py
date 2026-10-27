@@ -403,6 +403,26 @@ def quota_rollout_details(
         details["admission_resume_when"] = selected_todo.get("resume_when")
         details["admission_resume_ready"] = selected_todo.get("resume_ready")
     replan_packet = payload.get("replan_action_packet")
+    obligation = payload.get("autonomous_replan_obligation")
+    if semantic_replan_obligation_id and isinstance(obligation, Mapping) and obligation.get("obligation_id") == semantic_replan_obligation_id:
+        from ..work_items.replan_semantics_codec import project_replan_semantics
+        from ...rollout_event_log import _safe_details
+
+        source = project_replan_semantics({"operation": "receipt_review_source",
+            "agent_id": getattr(args, "agent_id", None),
+            "obligation": {key: value for key, value in obligation.items() if key != "replan_context"}})
+        review = source["review_source"]
+        if isinstance(review, Mapping):
+            # Retain the original stop clause only when the existing public
+            # metadata serializer preserves it exactly. Unsafe/lossy sources
+            # keep legacy strict recovery; never truncate a governing clause.
+            try:
+                safe = _safe_details({"semantic_replan_review_kind": review["kind"],
+                    "semantic_replan_review_stop_condition": review["stop_condition"]})
+            except ValueError:
+                safe = {}
+            if safe.get("semantic_replan_review_stop_condition") == review["stop_condition"]:
+                details.update(safe)
     receipt = payload.get("heartbeat_receipt")
     capability_guard = (replan_packet.get("capability_guard") if isinstance(replan_packet, Mapping) else None) or (
         receipt.get("semantic_replan_capability_guard") if isinstance(receipt, Mapping) else None
