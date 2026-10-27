@@ -41,6 +41,12 @@ source check for prompt and result schema within that launch. The internal reply
 returns resolved metadata without echoing the source. Standalone consumers and
 post-execution result conversion still validate independently; no cross-attempt
 cache or new model-facing contract is introduced.
+Within the C1 candidate, planning and failed-session recovery consume ordinary
+and adaptive selection in the existing checked action-hash preimage. They reuse
+the typed work owner; Python preserves historical JSON/number encoding without
+selecting work again. Historical non-string primary-ID hints cannot override a
+complete source. Other v0 readers remain until their own migration and recovery
+qualification; no extra model-facing field or bridge call is introduced.
 
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
@@ -66,6 +72,10 @@ C1 的 native 候选在既有 typed owner 的一次调用中组合成果读取�
 Codex CLI 与启用 operation tools 的 app-server 在一次启动的输入准备中，让提示词
 与结果 schema 共用完整来源校验；内部响应只返回已解析元数据，不原样回传来源。
 独立消费者与执行后的结果转换仍各自校验，不引入跨 attempt 缓存或新的模型侧契约。
+在 C1 候选中，规划与失败会话恢复从已有、经校验的动作 hash preimage 消费普通及
+自适应主任务选择，复用 typed 工作 owner；Python 只保留历史 JSON／数字编码，
+不再重新选择。历史非字符串 primary-ID 提示不能覆盖完整来源；其他 v0 reader
+须各自完成迁移及恢复资格后退役，不新增模型侧字段或 bridge 调用。
 
 Preview it explicitly:
 

@@ -1110,6 +1110,55 @@ from 4.864 to 5.163 ms and p95 from 5.570 to 6.010 ms. These are added local cos
 excluding bridge transport, live composition, cold startup, models and full Turn
 cost. They do not qualify the original-quota outcome comparison or C1 cutover.
 
+The candidate's ordinary planner and failed-session reconciliation now also
+consume the selected work from the existing `driver_lineage` call. The shared
+`selectedWorkTodo` owner places ordinary or adaptive selection into that call's
+existing action-hash preimage; Python no longer selects it again or rewrites the
+preimage. Python retains the persisted JSON/number codec and supplies scalar-text
+compatibility hints only for historical non-string primary IDs. Complete inputs
+ignore those hints and retain full source/projection integrity checks. There is
+no new bridge call, model-facing field, persisted schema or cross-attempt cache.
+The public action-signature operation still describes the original envelope.
+
+This replaces selection in the actual plan and failed-session recovery callers,
+including the native CLI's original-capture retry. The remaining v0 Host,
+settlement and controller readers still use their historical selection decoder;
+they retire only after their callers and outstanding receipts migrate and pass
+equivalent recovery qualification. This increment does not qualify complete
+adapter retirement, App/SDK/benchmark adoption or original-quota net benefit.
+
+Qualification against immutable `334c1a772` retains complete plan/recovery outputs
+on frozen File/SQLite CLI inputs. Planning still uses two bridge calls and
+reconciliation one, with equal request/response bytes on these ordinary inputs.
+The actual CLI/provider/Host, completion and settlement modules pass 251 cases;
+ten migration assertions fail on that predecessor while nine historical-codec
+cases pass there. The latter cover omitted/false/zero, whitespace, numeric,
+boolean and collection-valued historical primary IDs, version/mode applicability,
+original Turn keys and resumed bindings. The candidate passes all of them.
+
+There is no qualified latency improvement. Three balanced sequential cohorts
+give 93 warm samples per arm/case. The initial source-worktree versus archived
+baseline comparison has higher candidate medians in all eight ordinary and
+historical plan/recovery rows. Its generated-cache inventories differ. A second
+control uses clean sibling source copies, identical inventories and disabled
+bytecode generation in both arms; it still has mixed or slower observations:
+
+| Complete-source input / operation | Initial baseline → candidate median / p95, ms | Clean control baseline → candidate median / p95, ms |
+| --- | --- | --- |
+| File / plan | 35.129 / 40.776 → 46.227 / 57.355 | 24.174 / 30.183 → 25.330 / 30.443 |
+| File / failed-session recovery | 14.941 / 17.957 → 19.440 / 24.477 | 11.259 / 13.196 → 12.582 / 15.495 |
+| SQLite / plan | 36.979 / 46.065 → 46.461 / 54.795 | 23.820 / 30.178 → 26.408 / 30.523 |
+| SQLite / failed-session recovery | 17.404 / 22.606 → 18.759 / 22.139 | 12.586 / 16.141 → 11.503 / 14.124 |
+
+The initial negative results are retained; the control is not a historical pass
+or proof of their cause. These are raw-helper observations without store IO,
+not full native CLI/Turn timings, cold startup, model cost or accepted outcomes;
+background host load is uncontrolled. Separate owned V8 captures identify
+existing Unicode key ordering/hash work, without proving the latency cause.
+Python wait/IO stacks remain unprofiled because the optional profiler is absent.
+Shared ownership and byte parity do not cancel these cost gaps or earlier
+negative C1 measurements.
+
 ### C1 caller replacement and cutover unit
 
 The cutover unit is a supported entrypoint **and its downstream consumers**,

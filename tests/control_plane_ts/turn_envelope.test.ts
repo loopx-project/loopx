@@ -145,6 +145,30 @@ function payload(): Record<string, unknown> {
   };
 }
 
+test("planning selection shares the work owner and complete sources ignore historical identity hints", () => {
+  for (const adaptive of [false, true]) {
+    const source = payload();
+    if (adaptive) source.task_orchestration_contract = {
+      schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: "todo-primary",
+    };
+    const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+    const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
+    const expected = adaptive ? {todo_id: "todo-primary", source: "task_orchestration_contract.primary_todo_id"}
+      : (envelope.action as JsonObject).selected_todo;
+    const snapshot = structuredClone({complete, envelope});
+    const projection = evaluateTurnEnvelope({operation: "driver_lineage", envelope, payload: complete,
+      historical_route_text: {primary_todo_id: "foreign", effective_action: "foreign"}});
+    assert.deepEqual((projection.action_signature as JsonObject).action,
+      {...(turnEnvelopeActionSignatureDocument(envelope).action as JsonObject), selected_todo: expected});
+    assert.equal(projection.todo_id, adaptive ? "todo-primary" : "todo-1");
+    assert.deepEqual({complete, envelope}, snapshot);
+    // An omitted source keeps the old decoder; supplied null remains invalid.
+    const historical = evaluateTurnEnvelope({operation: "driver_lineage", envelope});
+    assert.deepEqual(((historical.action_signature as JsonObject).action as JsonObject).selected_todo, expected);
+    assert.throws(() => evaluateTurnEnvelope({operation: "driver_lineage", envelope, payload: null}));
+  }
+});
+
 test("managed controller builds its unchanged envelope and typed route in one projection", () => {
   for (const [action, delivery, shouldRun, quiet, expected] of [
     ["normal_run", true, true, false, "ready_for_host"],

@@ -2089,16 +2089,30 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "driver_lineage") {
     const envelope = requireJsonObject(request.envelope, "Turn driver envelope");
     const decision = Object.hasOwn(request, "payload") ? completeHostDecision(request) : null;
+    const historical = !decision && request.historical_route_text !== undefined
+      ? requireJsonObject(request.historical_route_text, "historical route text") : undefined;
+    const orchestration = object(envelope.task_orchestration_contract);
+    // Old journals retain Python's scalar-text codec; selection itself belongs
+    // to the same owner as complete reads and settlement. A complete source
+    // never accepts a caller-provided historical identity override.
+    const selected = selectedWorkTodo({selected_todo: object(envelope.action).selected_todo,
+      task_orchestration_contract: historical && Object.hasOwn(historical, "primary_todo_id")
+        ? {...orchestration, primary_todo_id: scalarString(historical.primary_todo_id, "historical primary Todo")}
+        : orchestration});
+    // Bind selection into the existing hash preimage. Python hashes this exact
+    // document with its historical number codec; no extra work view or copy is
+    // returned across the bridge.
+    const actionSignature = turnEnvelopeActionSignatureDocument(envelope);
+    actionSignature.action = {...object(actionSignature.action), selected_todo: selected};
     return {
       ...(decision ? {goal_id: decision.goal_id ?? null,
         agent_id: object(decision.agent_identity).agent_id ?? null,
         todo_id: selectedWorkTodoId(decision) ?? ""} : {}),
       // Complete source validation above admits no caller-supplied scalar override.
-      route: turnEnvelopeRoute(envelope, decision || request.historical_route_text === undefined
-        ? undefined : requireJsonObject(request.historical_route_text, "historical route text")),
+      route: turnEnvelopeRoute(envelope, historical),
       // Keep the historical Python JSON encoding of this preimage at the
       // transport boundary: JavaScript number spelling can change Turn keys.
-      action_signature: turnEnvelopeActionSignatureDocument(request.envelope),
+      action_signature: actionSignature,
     };
   }
   if (operation === "execution_context") {

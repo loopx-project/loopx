@@ -67,7 +67,16 @@ def test_real_host_reads_original_capture_after_source_change(
         # Observe the real live reader and planner; neither is replaced by a
         # fixture result. Every launch, including retry, uses the same contract.
         assert kwargs["work_contract"]["schema_version"] == "loopx_turn_envelope_v1"
-        planned = original_planner(envelope, **kwargs)
+        # The actual native caller must consume the typed owner's selected
+        # work, not independently decode the historical adapter again.
+        from loopx.control_plane.turn_driver import driver
+
+        def legacy_selection(*_args, **_kwargs):
+            raise AssertionError("native planning reinterpreted historical selection")
+
+        with monkeypatch.context() as planning:
+            planning.setattr(driver, "selected_turn_todo", legacy_selection)
+            planned = original_planner(envelope, **kwargs)
         launch_plans.append(planned)
         return planned
 
@@ -670,7 +679,7 @@ def test_complete_codex_approval_guidance_uses_resolved_boundary(complete_host_r
         assert ("It satisfies the write approval requirement" in prompt) is expected
 
 
-def test_complete_planning_and_failed_recovery_share_lineage(complete_host_request):
+def test_complete_planning_and_failed_recovery_share_lineage(complete_host_request, monkeypatch):
     from copy import deepcopy
     from hashlib import sha256
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
@@ -679,6 +688,12 @@ def test_complete_planning_and_failed_recovery_share_lineage(complete_host_reque
     )
 
     request, original = complete_host_request
+    from loopx.control_plane.turn_driver import driver
+
+    def legacy_selection(*_args, **_kwargs):
+        raise AssertionError("planning/recovery reinterpreted historical selection")
+
+    monkeypatch.setattr(driver, "selected_turn_todo", legacy_selection)
     source = {k: v for k, v in original.items() if k not in {"schema_version", "contract_binding"}}
     # Hash parity protects existing journals, including numeric encodings and
     # Unicode in retained source facts; a new hash silently forks the Turn.
@@ -702,7 +717,7 @@ def test_complete_planning_and_failed_recovery_share_lineage(complete_host_reque
         signature["action"]["selected_todo"] = complete["route"]["selected_todo"]
         expected_hash = "sha256:" + sha256(json.dumps(signature, ensure_ascii=False,
             sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        lineage = _turn_lineage(envelope, selected_todo=complete["route"]["selected_todo"], work_contract=contract)
+        lineage = _turn_lineage(envelope, work_contract=contract)
         assert lineage["action_hash"] == expected_hash
         assert lineage["todo_id"] == expected_todo
         binding = {"schema_version": "loopx_turn_session_binding_v0", "host_session_id": "fixture-session",

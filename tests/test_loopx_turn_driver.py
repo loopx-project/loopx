@@ -84,6 +84,49 @@ def _envelope(
     }
 
 
+@pytest.mark.parametrize("primary, expected", [
+    (None, None), (False, None), (0, None), (" \t", None),
+    (" todo_other ", "todo_other"), (True, "True"), (1e-7, "1e-07"),
+    (["owner"], "['owner']"), ({"id": "owner"}, "{'id': 'owner'}"),
+])
+def test_planning_and_recovery_retain_historical_selected_work_codec(primary, expected):
+    """Old journal identity/hash encoding survives migration to the typed selector."""
+    from hashlib import sha256
+    from loopx.control_plane.quota.turn_envelope import turn_envelope_action_signature_document
+    from loopx.control_plane.turn_driver.driver import reconcile_failed_turn_session_request
+
+    for schema, mode in (("task_orchestration_contract_v2", "adaptive"),
+                         ("task_orchestration_contract_v1", "adaptive"),
+                         ("task_orchestration_contract_v2", "parallel")):
+        envelope = _envelope()
+        envelope["task_orchestration_contract"] = {
+            "schema_version": schema, "mode": mode, "primary_todo_id": primary,
+        }
+        selected = ({"todo_id": expected, "source": "task_orchestration_contract.primary_todo_id"}
+                    if expected is not None and schema == "task_orchestration_contract_v2" and mode == "adaptive"
+                    else envelope["action"]["selected_todo"])
+        signature = turn_envelope_action_signature_document(envelope)
+        signature["action"]["selected_todo"] = selected
+        action_hash = "sha256:" + sha256(json.dumps(signature, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="isolated-headless",
+                                     session_scope="todo", turn_instance_id="legacy-selected-work")
+        assert plan["route"]["selected_todo"] == selected
+        identity = {"lineage": {"goal_id": "fixture-goal", "agent_id": "codex-fixture",
+                               "todo_id": selected["todo_id"], "action_hash": action_hash},
+                    "host": "codex-cli", "execution_mode": "isolated-headless",
+                    "scheduler_owner": plan["host"]["scheduler_owner"], "session_action": "start_new",
+                    "turn_instance_id": "legacy-selected-work"}
+        assert plan["transaction"]["turn_key"] == "sha256:" + sha256(json.dumps(identity, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        binding = {"schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
+                   "goal_id": "fixture-goal", "agent_id": "codex-fixture", "todo_id": selected["todo_id"]}
+        recovered = reconcile_failed_turn_session_request({"turn_envelope": envelope, "session": plan["session"]},
+                                                          session_binding=binding)
+        assert recovered["session"]["action"] == "resume"
+        assert recovered["session"]["binding_status"] == "failed_turn_recovery"
+
+
 def test_turn_plan_projects_ready_route_without_side_effects() -> None:
     envelope = _envelope()
 

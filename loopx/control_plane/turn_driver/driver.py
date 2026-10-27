@@ -73,9 +73,11 @@ def _historical_route_text(envelope: Mapping[str, Any]) -> dict[str, str]:
     Complete contracts do not accept these historical decoding hints.
     """
     signature = _mapping(envelope.get("action_signature"))
+    primary = _mapping(envelope.get("task_orchestration_contract")).get("primary_todo_id")
     return {"source_hash": str(signature.get("source_hash") or ""),
             "envelope_hash": str(signature.get("envelope_hash") or ""),
-            "effective_action": str(envelope.get("effective_action") or "")}
+            "effective_action": str(envelope.get("effective_action") or ""),
+            **({"primary_todo_id": str(primary).strip()} if primary and not isinstance(primary, str) else {})}
 
 
 def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
@@ -139,7 +141,6 @@ def _receipt_bound_replan_identity(
 def _turn_lineage(
     envelope: Mapping[str, Any],
     *,
-    selected_todo: Mapping[str, Any],
     work_contract: object = _ABSENT_WORK_CONTRACT,
     projection: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
@@ -148,14 +149,14 @@ def _turn_lineage(
         **({"payload": work_contract} if work_contract is not _ABSENT_WORK_CONTRACT else
            {"historical_route_text": _historical_route_text(envelope)}),
     )
+    signature = resolved["action_signature"]
+    selected_todo = _mapping(_mapping(signature.get("action")).get("selected_todo"))
     if work_contract is _ABSENT_WORK_CONTRACT:
         # Historical journals retain the exact decoder and JSON preimage.
         identity = {"goal_id": envelope.get("goal_id"), "agent_id": envelope.get("agent_id"),
                     "todo_id": selected_todo.get("todo_id")}
     else:
         identity = resolved
-    signature = resolved["action_signature"]
-    signature["action"] = {**_mapping(signature.get("action")), "selected_todo": dict(selected_todo)}
     # Persisted Turn keys depend on Python's JSON number encoding. Keep this
     # transport codec while the TS owner selects and validates identity facts.
     return {
@@ -249,10 +250,15 @@ def reconcile_failed_turn_session_request(
     """Re-authorize a journaled host request against one current binding."""
 
     envelope = _mapping(request.get("turn_envelope"))
-    selected_todo = selected_turn_todo(envelope)
     try:
+        projection = _turn_envelope_result(
+            "driver_lineage", envelope=envelope,
+            **({"payload": request["work_contract"]} if "work_contract" in request else
+               {"historical_route_text": _historical_route_text(envelope)}),
+        )
+        selected_todo = _mapping(_mapping(projection["action_signature"].get("action")).get("selected_todo"))
         lineage = _turn_lineage(
-            envelope, selected_todo=selected_todo,
+            envelope, projection=projection,
             work_contract=request.get("work_contract", _ABSENT_WORK_CONTRACT),
         )
         settlement_identity = (None if selected_todo else _receipt_bound_replan_identity(
@@ -421,7 +427,6 @@ def build_loopx_turn_plan(
         assert_turn_envelope_consumer_version(envelope)
     except (ValueError, RuntimeError) as exc:
         contract_error = str(exc)
-    selected_todo = selected_turn_todo(envelope)
     # Check the complete source before route/session/transaction planning. Reuse
     # the action-hash boundary rather than adding a separate identity call.
     projection = _turn_envelope_result(
@@ -429,8 +434,8 @@ def build_loopx_turn_plan(
         **({"payload": work_contract} if work_contract is not _ABSENT_WORK_CONTRACT else
            {"historical_route_text": _historical_route_text(envelope)}),
     )
-    lineage = _turn_lineage(envelope, selected_todo=selected_todo,
-                            work_contract=work_contract, projection=projection)
+    selected_todo = _mapping(_mapping(projection["action_signature"].get("action")).get("selected_todo"))
+    lineage = _turn_lineage(envelope, work_contract=work_contract, projection=projection)
     route = (
         LoopXTurnRoute(projection["route"])
         if execution_context.ok and contract_error is None
