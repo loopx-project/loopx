@@ -453,6 +453,10 @@ In a supported run mode, a missing or invalid continuity basis still
 delivers the same original full capture. The current recovery reference is saved
 before optional delta computation, so an oversized warm request or failed
 candidate update cannot select an older capture after compaction or resume.
+The unified-contract C1 candidate combines outcome scope and encoding in that
+same typed call, commits the exact required artifact before publication, and
+pages existing full captures without writing an unused duplicate wire file.
+This candidate optimization does not qualify installed adoption or outcome gains.
 If the current recovery cannot be saved, the old session lookup is invalidated;
 use the explicit original capture reference. If preparation fails before that
 can be established, or invalidation also fails, the CLI reports

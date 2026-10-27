@@ -18,6 +18,13 @@ also covers the direct Turn producer and final host prompts. Quota CLI output
 parity alone does not qualify those consumers. Historical v0 decoding remains
 separate from switching new admissions to a future unified version.
 
+The C1 native candidate composes outcome-reading scope and full/delta encoding
+in one call to the existing typed owner. IO publishes current original recovery
+before that call and commits any scoped required artifact before publishing the
+result. Full views page their existing immutable capture; only deltas need a
+separate encoded wire file. This changes neither the model-facing page contract
+nor the historical reader, default activation, execution or settlement authority.
+
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
 历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
@@ -26,6 +33,11 @@ separate from switching new admissions to a future unified version.
 RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
 还覆盖直接生产契约的 Turn 入口和最终 host prompt；仅 quota CLI 输出等价不能验收
 这些消费者。历史 v0 解码与新准入切换到未来统一版本分别处理。
+
+C1 的 native 候选在既有 typed owner 的一次调用中组合成果读取范围与 full/delta
+编码。IO 在调用前发布当前原始恢复引用，并在发布结果前落盘所需的 scoped 必读
+产物。全文视图直接分页已有不可变 capture，只有 delta 需要额外编码文件；模型侧
+分页契约、历史 reader、默认激活、执行及结算权限均不改变。
 
 Preview it explicitly:
 

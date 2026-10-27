@@ -465,8 +465,9 @@ The native candidate and compaction recovery point to the exact required model
 artifact, rather than the machine's full canonical source. The existing delta
 codec therefore delivers a newly required body's actual text; it cannot borrow
 an unread optional body from a hidden baseline. The current full-source recovery
-reference is published before optional scope composition, then replaced with
-the exact required artifact before encoding. An interruption during composition
+reference is published before optional scope/codec composition. The shared typed
+owner computes both in one call; before exposing any result, IO commits the exact
+required artifact and switches recovery to it. An interruption during composition
 therefore cannot leave the preceding capture selected for recovery. Full page
 coverage remains an
 explicit native-hook continuity assumption, not model-retention proof. Optional
@@ -483,8 +484,8 @@ real-provider owner calls against the prior implementation measured File median
 metadata added 405/415 serialized bytes. This isolates the acceptance owner in
 one TypeScript process, excluding bridge, CLI, cold startup and model costs.
 That foundation added cost before the native scope cutover; it was not an
-efficiency win. The native presentation additionally allocates an exact required
-artifact and calls the same typed owner once before the existing codec. These
+efficiency win. At the scope-cutover checkpoint, native presentation additionally
+allocates an exact required artifact and calls the same typed owner once before the existing codec. These
 costs must be included with page, detail and recovery costs; a smaller first
 input does not establish a net benefit.
 
@@ -525,7 +526,7 @@ serialized page output for File cold/warm/recovery is
 | Lost-context full recovery | 109.126→61.425 | 109.725→56.777 |
 | Index plus one optional complete detail | 96.918→108.557 | 92.460→109.251 |
 
-The additional scope RPC remains: warm bridge calls rise from two to three.
+In that measured version, the additional scope RPC remains: warm bridge calls rise from two to three.
 File warm artifact files total 131,020→160,192 serialized bytes; the index/detail
 operation still uses two calls and now revalidates the derived presentation.
 Cold and recovery use one page instead of two. These measurements cover Python
@@ -534,6 +535,28 @@ not controlled. They exclude initial acceptance collection, process startup,
 child CPU, model/cache tokens, billing, human/setup work and accepted outcomes.
 Cold/recovery transport improves while warm and detail medians regress. This
 is not the original-quota comparison or a positive complete-cost verdict.
+
+At `85c235d29`, the native caller combines scope and encoding through the same
+owners in one request and removes the unused full-wire copy. The former standalone
+scope operation is retired; ordinary codecs and captured-detail readers remain.
+Against `307d000a3`, the same frozen File/SQLite observations and three interleaved
+warm cohorts per arm (21 samples per provider/phase) measure:
+
+| Phase | File median/p95, before→after ms | SQLite median/p95, before→after ms |
+| --- | --- | --- |
+| Cold full input | 37.438/60.718→28.516/38.941 | 34.263/39.924→26.966/39.054 |
+| Warm scope expansion | 42.065/58.640→34.813/45.922 | 39.869/49.047→33.856/45.593 |
+
+Including page-lifecycle observation, these phases now use two rather than three
+bridge calls. File cold artifact bytes fall 162,877→129,299; warm artifacts remain
+160,192. Complete page output is unchanged. Six same-path ordinary/scoped/broad
+File/SQLite comparisons preserve complete public pages and recovery values;
+the one-call regression assertion fails on the baseline. Warm response payload
+grows by 27 bytes despite lower request traffic. Detail/recovery keep their call
+counts; SQLite detail p95 worsens 138.131→175.541 ms without a changed code path.
+Machine load remains uncontrolled and the earlier exclusions still apply.
+This removes demonstrated local transport/IO cost, not the original-quota
+outcome/full-cost gap, short-source growth or all warm artifact overhead.
 
 Small sources provide a counterexample to size savings: four real-entry
 File/SQLite fixtures with two outcomes and four requirements grow from
