@@ -425,6 +425,8 @@ def _derived_source_basis(paths: dict[str, Path]) -> dict[str, object]:
         goal_id=GOAL_ID,
         agent_id="agent-a",
         project=paths["project"],
+        registry_path=paths["registry"],
+        runtime_root=paths["runtime"],
     )
     basis = alignment["source_basis"]
     assert isinstance(basis, dict)

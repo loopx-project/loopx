@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.control_plane.goals.goal_vision import normalize_goal_vision_packet
 from loopx.control_plane.goals.goal_frontier import fallback_source
 from canonical_authority_fixture import (
@@ -415,7 +416,7 @@ def test_real_cli_fallback_monitor_wait_requires_generation_condition(
 
 
 @pytest.mark.parametrize("duplicate_id", [FALLBACK_TODO_ID, PREREQUISITE_TODO_ID])
-def test_real_cli_ambiguous_canonical_fallback_read_is_uncertain(
+def test_duplicate_authored_fallback_is_rejected_before_canonical_creation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     duplicate_id: str,
@@ -428,17 +429,19 @@ def test_real_cli_ambiguous_canonical_fallback_read_is_uncertain(
         + f"  <!-- loopx:todo todo_id={duplicate_id} status=open -->\n"
     )
 
-    initialize_canonical_source_fixture(
-        tmp_path / "runtime", GOAL_ID, state_path=state_file, provider="sqlite",
-    )
-
-    # The canonical succession gate rejects duplicate identities before a
-    # frontier can be projected. Do not fabricate fallback advice from it.
+    before = state_file.read_bytes()
+    with pytest.raises(EffectRuntimeRejected, match="duplicate succession identity"):
+        initialize_canonical_source_fixture(
+            tmp_path / "runtime", GOAL_ID, state_path=state_file, provider="sqlite",
+        )
+    assert state_file.read_bytes() == before
+    # Invalid authored input never becomes authority. The actual CLI cannot
+    # fabricate fallback advice from the uninitialized source afterward.
     assert cli_main(args) == 1
     result = json.loads(capsys.readouterr().out)
     assert result["should_run"] is False
     assert result["state"] == "blocked_health"
-    assert "duplicate succession identity" in result["verbose_debug"]["error"]
+    assert "canonical_authority_required" in json.dumps(result)
     assert "goal_frontier_projection" not in result
 
 

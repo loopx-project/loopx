@@ -370,7 +370,7 @@ def test_cli_canonical_work_change_requires_rebase_and_preserves_original_receip
     code, claimed, _ = _run_amendment_cli(
         capsys, paths["registry"], "todo", "claim", "--goal-id", GOAL_ID,
         "--todo-id", "todo_stage2_b", "--agent-id", "agent-b",
-        "--claimed-by", "agent-b", "--execute", "--format", "json",
+        "--claimed-by", "agent-b", "--format", "json",
     )
     assert code == 0 and claimed["claimed"] is True, claimed
     journal = paths["runtime"] / "goals" / GOAL_ID / "amendment-proposals" / "journal.jsonl"

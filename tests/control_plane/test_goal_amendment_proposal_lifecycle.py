@@ -245,8 +245,8 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
     assert settlement_identity["turn_instance_id"] == TURN_ID
     assert settlement_identity["todo_id"] == TODO_ID
 
-    # 3. The proposal binds the real Stage 1 basis (markdown goal, so the
-    #    real sequence is 0) and the quota-returned obligation, verbatim.
+    # 3. The proposal binds the real canonical snapshot (no event append
+    #    sequence) and the quota-returned obligation, verbatim.
     align_rc, alignment = _run_cli(
         registry_path,
         runtime,
@@ -260,7 +260,7 @@ def test_production_quota_obligation_survives_the_full_amendment_lifecycle(
     )
     assert align_rc == 0, alignment
     basis = alignment["source_basis"]
-    assert basis["revision_basis"] == "markdown_active_state"
+    assert basis["revision_basis"] == "canonical_todo_snapshot"
     assert basis["state_event_basis_sequence"] == 0
 
     proposal = {

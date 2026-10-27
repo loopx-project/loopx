@@ -446,7 +446,7 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
     index.write_bytes(original_settlement + index.read_bytes())
     logs = tmp_path / "logs"
     wakes = logs / "wakes"
-    prior = wakes / "wake-100-prior"
+    prior = wakes / cli.TURN_ID
     prior.mkdir(parents=True)
     prior_receipt = {"turn_id": cli.TURN_ID, "mode": "heartbeat", "stage": "execute", "ok": True}
     (prior / "receipt.json").write_text(json.dumps(prior_receipt))

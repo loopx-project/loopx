@@ -319,7 +319,7 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
 def test_unavailable_closeout_does_not_accept_missing_evidence_or_wrong_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], invalid: str,
 ) -> None:
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     # This guard binds an advancement. A caller cannot close another Monitor
     # or omit the typed evidence required by the existing settlement owner.
     def cli(*args: str) -> tuple[int, dict]:
