@@ -578,15 +578,6 @@ separates shipped foundations from the next end-to-end acceptance milestones.
 
 </details>
 
-## Partner Projects
-
-LoopX welcomes collaboration with other open-source projects to build the
-long-running agent ecosystem. Our confirmed partners include:
-
-- [OpenViking](https://github.com/volcengine/OpenViking) - Self-evolving
-  context database for AI agents
-- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI native distributed file system
-
 <a id="loopx-20-1"></a>
 <a id="whats-new-in-20"></a>
 
@@ -825,6 +816,15 @@ deeper documents and versioned protocols.
 - [ADOPTERS](ADOPTERS.md): voluntary self-attested adoption directory
 - [Ecosystem Adoption](docs/community/ecosystem-adoption.md) - integrations,
   sampling, and derivatives we observe and track
+
+## Partner Projects
+
+LoopX welcomes collaboration with other open-source projects to build the
+long-running agent ecosystem. Our confirmed partners include:
+
+- [OpenViking](https://github.com/volcengine/OpenViking) - Self-evolving
+  context database for AI agents
+- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI native distributed file system
 
 ## Current Status
 

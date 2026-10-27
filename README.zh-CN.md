@@ -516,14 +516,6 @@ provider 的打包和生命周期，不是另一个控制面 owner。详见
 
 </details>
 
-## 合作伙伴项目
-
-LoopX 欢迎与其他开源项目协作，共建长程 Agent 生态。已确认的合作伙伴包括：
-
-- [OpenViking](https://github.com/volcengine/OpenViking) - 面向 AI Agent 的自进化
-  上下文数据库
-- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI 原生分布式文件系统
-
 <a id="loopx-20-1"></a>
 <a id="20-新变化"></a>
 
@@ -738,6 +730,14 @@ LoopX 当前有三个活跃战略计划和一个架构与研究孵化器。这�
 - [ADOPTERS](ADOPTERS.md)：项目与用户自愿维护的采用目录
 - [生态采用清单](docs/community/ecosystem-adoption.zh-CN.md) - 我们观察并持续追踪的
   真实集成、采样借鉴与衍生周边
+
+## 合作伙伴项目
+
+LoopX 欢迎与其他开源项目协作，共建长程 Agent 生态。已确认的合作伙伴包括：
+
+- [OpenViking](https://github.com/volcengine/OpenViking) - 面向 AI Agent 的自进化
+  上下文数据库
+- [NoKV](https://github.com/NoKV-Lab/NoKV) - AI 原生分布式文件系统
 
 ## 当前状态
 
