@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+from html.parser import HTMLParser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -156,7 +157,7 @@ def test_calendar_hook_to_editorial_to_delivery_todo_preserves_window(tmp_path: 
     required = consume_pending_periodic_report_intent(registry_path=registry,
         runtime_root=runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, execute=True)
     assert required["status"] == "editorial_required"
-    request = json.loads(Path(required["editorial_request_path"]).read_text())
+    request = json.loads(Path(required["editorial_request_path"]).read_text(encoding="utf-8"))
     assert request["actual_work_window"]["start_at"] == "2026-09-04T10:00:00Z"
     assert request["actual_work_window"]["end_at"] == "2026-09-11T10:00:00Z"
     assert "2026-09-04 18:00" in request["actual_work_window"]["period_label"]
@@ -346,7 +347,7 @@ def test_calendar_does_not_preempt_existing_stage_work(tmp_path):
     assert "cadence_window" in pending[-1]["payload"]
     required = consume_pending_periodic_report_intent(registry_path=registry,
         runtime_root=runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, execute=True)
-    request = json.loads(Path(required["editorial_request_path"]).read_text())
+    request = json.loads(Path(required["editorial_request_path"]).read_text(encoding="utf-8"))
     assert request["completed_at"] == original[0]["payload"]["stage_completion"]["completed_at"]
 
 
@@ -802,9 +803,35 @@ def test_consumption_queues_authorized_delivery_and_exact_replay_does_not_duplic
     assert Path(first["artifacts"]["generation_bundle_path"]).is_file()
     assert Path(first["artifacts"]["publication_candidate_path"]).is_file()
     html = Path(first["artifacts"]["html_path"]).read_text(encoding="utf-8")
-    assert "本期结论：阶段分析已经形成完整判断" in html
-    assert "当前风险：问题已按影响与证据分层" in html
-    assert "下一步：按影响与可证伪性推进下一阶段" in html
+    class ArticleText(HTMLParser):
+        in_article = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "article":
+                self.in_article = True
+
+        def handle_endtag(self, tag):
+            if tag == "article":
+                self.in_article = False
+
+        def handle_data(self, data):
+            if self.in_article:
+                article_text.append(data)
+
+    # Highlights replace the redundant title-only masthead summary. The
+    # authored conclusion, risks and next steps must still reach report readers.
+    article_text = []
+    ArticleText().feed(html)
+    visible = " ".join(article_text)
+    for authored in (
+        "阶段分析已经形成完整判断",
+        "当前证据已经覆盖全景分类、重点因果与后续处置。",
+        "问题已按影响与证据分层",
+        "主问题、次要问题与待确认边界已经拆开呈现。",
+        "按影响与可证伪性推进下一阶段",
+        "优先验证能覆盖多个问题族的修复。",
+    ):
+        assert authored in visible
     assert replay["status"] == "no_pending_intent"
     assert (
         pending_periodic_report_intents(
@@ -2009,7 +2036,7 @@ def test_real_cli_editorial_fallback_reads_canonical_work_without_display(
         AGENT_ID,
         "--execute",
     ]
-    run = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    run = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert run.returncode == 0, run.stderr
     result = json.loads(run.stdout)
     assert result["status"] == "editorial_required", result
@@ -2018,7 +2045,7 @@ def test_real_cli_editorial_fallback_reads_canonical_work_without_display(
     request = json.loads(before)
     assert {fact["source_ref"] for fact in request["facts"]} == {"todo:todo_finished"}
     assert not state.exists()
-    retry = subprocess.run(command, capture_output=True, text=True, timeout=90)
+    retry = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert retry.returncode == 0, retry.stderr
     assert frozen.read_bytes() == before, (
         "retry must retain the same authored-input basis"

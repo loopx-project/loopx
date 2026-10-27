@@ -11,9 +11,10 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
 authors = [{ name = "LoopX contributors" }]
-# No Python runtime dependencies, but the TypeScript control plane needs a
-# system Node.js >= 22.22.3 (MINIMUM_NODE_VERSION); pip cannot install it.
-dependencies = []
+# Windows does not supply the IANA database used by zoneinfo for schedules.
+# The TypeScript control plane also needs system Node.js >= 22.22.3
+# (MINIMUM_NODE_VERSION); pip cannot install it.
+dependencies = ["tzdata; sys_platform == 'win32'"]
 
 [project.urls]
 Homepage = "https://loopx-project.github.io/loopx/"

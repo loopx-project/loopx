@@ -662,6 +662,7 @@ def client_host(native, monkeypatch, tmp_path):
     monkeypatch.setattr(module, "process_identity", lambda pid: identity if pid == 11 else None)
     adapter.inspect_client_helpers = lambda: ((state["pid"], module.process_identity(state["pid"])), {})
     adapter._home_owners = lambda: []
+    adapter._consumer_agents = lambda owners: []
     adapter.revision = lambda: state["revision"]
     adapter.status = lambda: {"active_slot": state["active"], "selection_revision": state["revision"],
                               "current_login_matches": True, "recovery_required": False,

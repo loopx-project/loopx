@@ -27,6 +27,7 @@ for (const [name, patch] of Object.entries({
   "peer claim": { claimed_by: "peer" }, "exclusion": { excluded_agents: ["worker"] },
   "archived": { archive_state: "archive" }, "terminal": { status: "done" },
   "contradictory done": { done: true }, "removed continuation": { removed_continuation: true },
+  "deferred without condition": { status: "deferred", done: true },
   "monitor": { task_class: "continuous_monitor" }, "user role": { role: "user" },
 })) {
   test(`fallback cannot resolve from ${name}`, () => {
@@ -35,8 +36,8 @@ for (const [name, patch] of Object.entries({
   });
 }
 
-test("dependency facts, not cached readiness or supplied secondary rows, decide waits", () => {
-  const waiter = todo("todo_fallback", { status: "deferred",
+for (const done of [false, true]) test(`dependency facts decide deferred waits with done=${done}`, () => {
+  const waiter = todo("todo_fallback", { status: "deferred", done,
     resume_when: "todo_done:todo_dependency", resume_ready: true });
   const input = request([waiter]);
   input.resume_evaluation = { ...(input.resume_evaluation as JsonObject),

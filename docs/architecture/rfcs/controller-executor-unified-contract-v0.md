@@ -752,6 +752,78 @@ owner; adopt its qualified changes and add only the integration coverage missing
 at the new composition boundary. Keep C1 open until the replacement works and
 the remaining supported readers have explicit cutover/retirement conditions.
 
+### Responsibility convergence and contributor handoff
+
+The [source-backed refactor handoff](ledger/controller-executor-unified-contract-v0/2026-10-27-refactor-handoff.md)
+decomposes C3/C4/C7/C8/C9 into concrete simplification candidates. It belongs to
+this plan, not another roadmap or evidence of shipped implementation. The pinned
+audit separates duplicated decisions, misplaced shared code, existing shared
+owners and hypotheses requiring semantic comparison.
+
+Keep three responsibilities clear:
+
+1. **Core semantic owners:** decide legal work/session/effect transitions and
+   validate original authority and receipts in the existing typed domains.
+2. **Shared managed execution:** drive those decisions through session binding,
+   native invocation, observations and recovery. Reuse existing Turn/effect
+   owners; this is not another permission engine or scheduler.
+3. **Host adapters:** implement native SDK/CLI transport, event translation,
+   supported resume and resource cleanup. Preserve real host differences rather
+   than hiding unsupported behavior behind a nominal common interface.
+
+Select work from the overall roadmap, current user outcome, demonstrated
+bottlenecks, open delivery and canonical work. Package IDs and table order are
+references, not global priority, an Agent's fixed agenda or reserved ownership.
+C1/C2 composition/capture/final-input work and these simplifications are options
+within that same frontier, not competing permanent Agent mandates. Owners name
+code boundaries, not assignments or execution grants; recheck target main,
+open PRs and canonical work before claiming one.
+
+| Existing task / package | Simplification result | Start condition |
+| --- | --- | --- |
+| **C3.1 Managed-operation protocol** | Codex and DSH adopt one operation-session flow; remove duplicated binding/profile checks and handoff/start orchestration, and DSH's dependency on a Codex-owned generic handler | When this duplication is the selected bottleneck: existing single-session behavior and two real callers; retain native differences |
+| **C3.2 Session-binding callers** | Reuse shared persistence; eliminate caller-side binding reconstruction and private cross-host imports where a cohesive existing operation can replace them | Pair with C3.1 if a separate change would leave only a rename/facade; role/generation expansion waits for stable C1 |
+| **C4.1 Receipt-to-continuation** | Adopt a qualified typed Turn observation/continuation boundary; retire replaced Python receipt reconstruction and decisions | Keep journal recovery distinct from next-work decisions; integrate C1 and existing recovery fixes |
+| **C4.2 Outer-worker adoption** | Consume qualified semantic results instead of reconstructing common retry/continuation policy | C4.1; preserve wake ownership, original receipts and opaque-command uncertainty |
+| **C4.3 Settlement-adapter convergence** | Reuse settlement primitives; retire a second step/condition interpreter only where obligations coincide | Candidate: compare Host Todo completion and Turn settlement; coordinate active settlement PRs |
+| **C7.1 Worker/process adapter cleanup** | Reuse applicable launch/drain/cleanup helpers and remove proven duplicated mechanics | Candidate: match ownership, signal/deadline and control-arm semantics first |
+| **C8.1 Operational readback** | App/Chat/CLI consume the same typed work/session facts; retire superseded caller classifications | Candidate: role facts available and duplicate classification demonstrated; retain unknown/coverage and audience boundaries |
+| **C9.1 Lease/source-path retirement** | Remove obsolete normal-writer routing/wrappers after caller migration; retain required release, fence-close and original-receipt recovery | Cross-RFC candidate: shared-authority/TS acceptance, not a controller-launch prerequisite |
+| **C9.2 Contract-test consolidation** | Shared invariant cases and thin native-adapter tests replace duplicated complete-flow fixtures | Companion to the owning replacement; preserve unique integration and negative cases |
+
+These are nine investigation/delivery packages, **not nine promised PRs**, a
+fixed remaining count or mandatory work before C1 lands. Do not select C3.1
+merely because it appears first, or prefer visible code deletion over a more
+valuable current correctness, contract-delivery or authority-retirement outcome.
+If selected, C3.2 may share C3.1's reversible PR. Only actual semantic dependencies
+constrain order. Existing-behavior repairs and proven local simplifications can
+land before C1; contract-dependent cutovers retain that dependency. Similar-looking
+files do not qualify a conditional candidate.
+
+Record why the chosen slice advances the current global outcome, which higher-
+value alternatives or in-flight deliveries were considered, and its actual
+dependency. Reassess after delivery or new evidence; this inventory neither
+exhausts useful work nor obliges an Agent to finish one lane before changing
+focus. Priority advice creates no new admission or approval gate.
+
+Each claimed package carries its source owners/callers, target boundary,
+specific deleted rules/branches, real-path oracle, dependencies and rollback
+in the existing Todo and PR. An audit assigns no peer work and creates no parallel
+task store. Complete caller replacement and deletion in the usable slice; keep a
+wrapper only for an identified external or recovery contract. Measure total
+production changes across languages, semantic owners, complete-transaction
+runtime crossings and the next representative rule's change sites. Python LOC
+reduction or a new shared class alone does not establish simplification; no
+arbitrary net-negative LOC quota replaces correctness or required validation.
+
+Reuse [TypeScript change-locality payoff](typescript-control-plane-migration-v0.md#28-change-locality-as-migration-payoff)
+and [smoke consolidation policy](../../development/good-smokes.md). Internal
+behavior-preserving replacements need real caller/backend evidence, not new
+settings screens. Changed caller-facing operations/readback retain C8's packaged
+frontend failure/recovery journey and first-screen evidence. C1/default-adoption
+complete-cost and benefit qualification remain unchanged; a bounded refactor is
+not full RFC acceptance.
+
 ## 12. Open decisions
 
 1. **Exact wire name and field mapping — contract owner, before C1 cutover.**
@@ -767,3 +839,12 @@ the remaining supported readers have explicit cutover/retirement conditions.
    Test same-model controller/executor first to isolate architecture effects;
    cheaper controller models and different budgets are separate experiments.
    Keep the profile opt-in until full outcome/cost evidence supports a decision.
+
+## Appendix A: Execution ledger
+
+Source audits and subsequent delivery evidence live in
+[`ledger/controller-executor-unified-contract-v0/`](ledger/controller-executor-unified-contract-v0/).
+The directory is the index. A planning/source-inspection entry does not establish
+runtime delivery; live priorities and claims remain in the roadmap and canonical
+work. Keep historical entries append-only and refine the current normative plan
+here rather than treating a dated audit as a permanent execution queue.

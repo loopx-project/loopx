@@ -46,6 +46,7 @@ class ChatConfigurationRequestMixin(
         return {
             f"{media_api.CONTENT_MEDIA_PATH}/file": self._content_media_file,
             accounts_api.CODEX_ACCOUNTS_PATH: self._codex_accounts_read,
+            f"{accounts_api.CODEX_ACCOUNTS_PATH}/clients": self._codex_account_clients,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_read,
             attached_api.CODEX_ATTACHED_LIVE_PATH: self._codex_attached_live,
             request_api.REQUEST_CONTROL_PATH: self._request_control_read,

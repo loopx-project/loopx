@@ -854,6 +854,11 @@ jobs:
       - name: Verify native Windows test Python discovery
         run: node --no-warnings --experimental-strip-types --test tests/control_plane_ts/test_python_runtime.test.ts
 
+      - name: Qualify named report timezones on Windows
+        run: >-
+          python -m pytest -q tests/capabilities/test_periodic_report_cadence.py
+          tests/capabilities/test_periodic_report_machine_defaults.py
+
       - name: Qualify captured research fixture integrity on Windows
         env:
           PYTHONUTF8: "0"
