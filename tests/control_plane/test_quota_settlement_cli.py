@@ -528,16 +528,17 @@ def _append_due_monitors(
 def _append_blocking_user_gate(project: Path) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
-    state_path.write_text(
-        state_text.rstrip()
-        + "\n\n## User Todo\n\n"
-        + "- [ ] [P0-user] Approve the newly introduced delivery gate.\n"
+    gate = (
+        "- [ ] [P0-user] Approve the newly introduced delivery gate.\n"
         + "  <!-- loopx:todo todo_id=todo_fixture_user_gate status=open "
         + "task_class=user_gate action_kind=approve_delivery "
         + f"blocks_agent={AGENT_ID} "
-        + "decision_scope=direction:action:fixture priority=P0-USER -->\n",
-        encoding="utf-8",
+        + "decision_scope=direction:action:fixture priority=P0-USER -->\n"
     )
+    marker = "\n## User Todo\n"
+    updated = (state_text.replace(marker, marker + "\n" + gate, 1)
+               if marker in state_text else state_text.rstrip() + "\n\n## User Todo\n\n" + gate)
+    state_path.write_text(updated, encoding="utf-8")
 
 
 def _heartbeat_receipt_events(

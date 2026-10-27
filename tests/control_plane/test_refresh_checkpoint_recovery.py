@@ -378,8 +378,13 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
 
     # A controller may install completion validation before checkpoint repair.
     # The supplement repairs the existing receipt while the Todo remains open.
+    rc, current = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, cwd=project)
+    assert rc == 0, current
     rc, updated = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
         "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--validation-command", "pytest",
+        "--update-operation-id", "fixture-checkpoint-validation",
+        "--update-expected-provider-revision", str(current["authority_read"]["provider_revision"]),
         "--execute", cwd=project)
     assert rc == 0 and updated["ok"], updated
 
