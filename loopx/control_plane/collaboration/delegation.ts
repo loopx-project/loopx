@@ -290,7 +290,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       return {
         schema_version: "loopx_delegation_preflight_v0",
         binding: {id: binding.id, agent_id: binding.agent_id, todo_id: binding.todo_id},
-        state: "workspace_unavailable", workspace_state: workspace.state,
+        state: "workspace_unavailable", workspace_state: workspace.state, dispatch_allowed: false,
         workspace_next_action: "review_operator_workspace_binding",
         turn_eligible: false, turn_route: null, acceptance_ready: false,
         acceptance_reason_code: null, acceptance_next_action: "none",
@@ -324,7 +324,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       scheduler_acknowledged: false};
     return {
       schema_version: "loopx_delegation_preflight_v0", binding,
-      state: "authority_unavailable", turn_eligible: false, turn_route: null,
+      state: "authority_unavailable", dispatch_allowed: false, turn_eligible: false, turn_route: null,
       acceptance_ready: false, authority_ready: false,
       acceptance_reason_code: null, acceptance_next_action: "none",
       authority_reason: boundedReason(authority.reason, "canonical authority unavailable"),
@@ -350,7 +350,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     "delegation inspection requires a matching effect-free selection refusal");
     const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
     return {
-      schema_version: "loopx_delegation_preflight_v0", binding, state: "turn_blocked",
+      schema_version: "loopx_delegation_preflight_v0", binding, state: "turn_blocked", dispatch_allowed: false,
       turn_eligible: false, turn_route: null, turn_blocker: refusal,
       ...delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current),
       authority_ready: true, authority_reason: null, authority_state: "promoted",
@@ -383,7 +383,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     : executor.available === null ? "runtime_unverified" : "launchable";
   return {
     schema_version: "loopx_delegation_preflight_v0", binding,
-    state, turn_eligible: eligible, turn_route: route.kind,
+    state, dispatch_allowed: state === "launchable" || state === "runtime_unverified",
+    turn_eligible: eligible, turn_route: route.kind,
     ...acceptanceFacts, authority_ready: true, authority_reason: null,
     authority_state: "promoted", authority_next_action: "none",
     promotion_from_surface_allowed: false,

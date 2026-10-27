@@ -108,9 +108,7 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
         # Known refusal, missing canonical acceptance or an unavailable runtime
         # must stop before dispatch. Actual launch and acceptance remain owned
         # by the governed Turn, not this point-in-time preview.
-        if (preflight["state"] not in {"launchable", "runtime_unverified"}
-                or not all(preflight.get(key) is True for key in
-                           ("turn_eligible", "acceptance_ready", "authority_ready"))):
+        if preflight.get("dispatch_allowed") is not True:
             return {"submitted": False, **saved, "preflight": preflight, "reason": "execution_not_launchable"}
         # Re-read the source and operator selection after the potentially slow
         # preview. Delegations.start itself rechecks the exact binding and Turn.

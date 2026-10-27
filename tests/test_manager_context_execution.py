@@ -64,7 +64,7 @@ def flow(tmp_path, monkeypatch):
             return tmp_path / operation
 
         def inspect(self, binding_id):
-            return {"state": "launchable", "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
+            return {"state": "launchable", "dispatch_allowed": True, "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
 
         def start(self, binding_id, operation, semantic_brief, **kwargs):
             started.append((binding_id, operation, semantic_brief, kwargs))
@@ -291,7 +291,7 @@ def test_source_change_during_prepared_recovery_preview_does_not_resume(flow, mo
         else:
             policy["sources"][session["channel_id"]]["execution_bindings"] = []
             _write(_root(root) / "policy.json", policy)
-        return {"state": "launchable", "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
+        return {"state": "launchable", "dispatch_allowed": True, "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
 
     monkeypatch.setattr(execution.Delegations, "inspect", preview)
     monkeypatch.setattr(execution.Delegations, "resume",
@@ -302,12 +302,13 @@ def test_source_change_during_prepared_recovery_preview_does_not_resume(flow, mo
     assert len(started) == 1
 
 
-@pytest.mark.parametrize("missing", ["turn_eligible", "acceptance_ready", "authority_ready"])
-def test_prepared_recovery_requires_every_original_preflight_fact(flow, monkeypatch, missing):
+@pytest.mark.parametrize("decision", ["missing", None, False, "true", 1])
+def test_prepared_recovery_requires_current_typed_dispatch_decision(flow, monkeypatch, decision):
     dispatch(flow)
     monkeypatch.setattr(execution.Delegations, "read", lambda *_: {"status": "prepared"})
     facts = {"state": "launchable", "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
-    facts.pop(missing)
+    if decision != "missing":
+        facts["dispatch_allowed"] = decision
     monkeypatch.setattr(execution.Delegations, "inspect", lambda *_: facts)
     monkeypatch.setattr(execution.Delegations, "resume",
         lambda *_args, **_kwargs: pytest.fail("an unavailable fact cannot permit recovery"), raising=False)
@@ -330,7 +331,7 @@ def test_stop_during_preview_and_context_only_selection_do_not_launch(flow, monk
     active = [True]
     def preview(*_):
         active[0] = False
-        return {"state": "launchable", "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
+        return {"state": "launchable", "dispatch_allowed": True, "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
     monkeypatch.setattr(execution.Delegations, "inspect", preview)
     result = execution.dispatch(root, registry, session=session, turn=turn, request=request, receipt=receipt,
                                 execution_allowed=lambda: active[0])

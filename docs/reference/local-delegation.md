@@ -1565,6 +1565,23 @@ never certify native start, consumption, Todo completion or original-audience
 result delivery. The internal `--codex-confirmed-operation-id` is only an exact
 resume fence, not a caller credential or domain permit.
 
+Before a new task-bound callback dispatch, the adapter uses the same native
+preflight as Chat and consumes its TypeScript-owned `dispatch_allowed` fact.
+Busy or unknown lanes, unavailable authority/acceptance and known unavailable
+runtimes return `blocked` with the preflight; no peer request or worker is
+submitted. A later authorized callback can retry the original confirmed
+operation. Existing operation replay remains read-only and does not require a
+new admission. An unprobed configured runtime may still attempt the bounded
+native launch; the final Turn fence decides any race after preview. This adds
+neither a retry pump nor ordinary Inbox activation without a Todo. The separate
+`original_operation` continuation retains its existing reservation owner.
+
+中文：新建 task-bound callback 委派与 Chat 共用原生预检，直接消费 TypeScript 的
+`dispatch_allowed`。忙碌、状态未知或已知不可执行时只返回 blocked 和预检事实，
+保留原确认，不发布 peer 请求或提交 worker；后续合法回调仍沿原操作重试。已有操作
+重放只读，不重新准入；未探测 runtime 仍可有界尝试，启动竞争继续由最终 Turn fence
+处理。不增加自动重试或无 Todo 的普通 Inbox 唤醒，独立 original_operation 路径保持。
+
 Remove `managed_turn_wake` or the exact delegation requester grant to stop new
 admission. The collector reloads the launch grant at each callback; already
 started work needs its ordinary stop/reconciliation path. Lost spawn ACKs do

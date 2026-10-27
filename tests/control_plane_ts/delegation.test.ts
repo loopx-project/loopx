@@ -69,6 +69,7 @@ test("preflight preserves a quota refusal, but rejects effectful or retargeted e
   const input = {binding,preview,acceptance:{todo_id:binding.todo_id,state:"ready"},validation_files_current:true};
   const observed = delegationPreflight(input);
   assert.equal(observed.state,"turn_blocked"); assert.equal(observed.turn_eligible,false);
+  assert.equal(observed.dispatch_allowed, false);
   assert.equal(observed.acceptance_ready,true); assert.equal(observed.executor,null);
   assert.deepEqual(observed.turn_blocker,projected.selection_rejection);
   assert.deepEqual(delegationPreflight({...input,preview:{...preview,selection_rejection:{
@@ -458,12 +459,16 @@ test("preflight separates task admission, acceptance binding and runtime availab
     managed_executor: {executor: "dsh", available: true, unavailable_reason: null, execution_profile: "explicit-profile"}};
   const params = {binding, preview, validation_files_current: true, acceptance: {todo_id: "todo_review", state: "ready"}};
   assert.equal(delegationPreflight(params).state, "launchable");
+  assert.equal(delegationPreflight(params).dispatch_allowed, true);
   assert.equal(delegationPreflight(params).authority_state, "promoted");
   for (const [available, expected] of [[null, "runtime_unverified"], [false, "runtime_unavailable"]] as const) {
     assert.equal(delegationPreflight({...params, preview: {...preview,
       managed_executor: {...preview.managed_executor, available}}}).state, expected);
+    assert.equal(delegationPreflight({...params, preview: {...preview,
+      managed_executor: {...preview.managed_executor, available}}}).dispatch_allowed, available !== false);
   }
   assert.equal(delegationPreflight({...params, acceptance: null}).state, "acceptance_unavailable");
+  assert.equal(delegationPreflight({...params, acceptance: null}).dispatch_allowed, false);
   assert.equal(delegationPreflight({...params, acceptance: {...params.acceptance, state: "stale"}}).state, "acceptance_unavailable");
   assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
     selected_todo_id: "other"}}}).state, "turn_blocked");
@@ -480,6 +485,7 @@ test("preflight uses scoped native lane facts without inventing App presence", (
       managed_executor: {executor: "generic-cli", available: null, unavailable_reason: null, execution_profile: null}}};
   const original = delegationPreflight(params);
   assert.equal(original.state, "runtime_unverified");
+  assert.equal(original.dispatch_allowed, true);
   assert.equal(original.turn_lane, undefined);
   for (const state of ["absent", "released", "dead"]) {
     const {turn_lane, ...observed} = delegationPreflight({...params, lane: {state, holder: "withheld"}});
@@ -490,6 +496,7 @@ test("preflight uses scoped native lane facts without inventing App presence", (
     const observed = delegationPreflight({...params, lane: {state}});
     assert.equal(observed.state, "turn_blocked");
     assert.equal(observed.turn_eligible, false);
+    assert.equal(observed.dispatch_allowed, false);
     assert.equal(observed.reason, state === "live" ? "turn_lane_in_flight" : "turn_lane_state_unknown");
     assert.equal(observed.acceptance_ready, true);
     assert.deepEqual(observed.effects, original.effects);
@@ -586,6 +593,7 @@ test("preflight reports unavailable current authority without granting execution
   acceptance: null, validation_files_current: false});
   assert.equal(result.state, "authority_unavailable");
   assert.equal(result.authority_ready, false);
+  assert.equal(result.dispatch_allowed, false);
   assert.equal(result.authority_state, "unavailable");
   assert.equal(result.authority_next_action, "repair_canonical_authority");
   assert.equal(result.promotion_from_surface_allowed, false);
