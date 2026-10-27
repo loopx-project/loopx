@@ -422,7 +422,7 @@ def _inspect_attempt(root: Path, identity: SettlementIdentity, purpose: str = "f
 
 def first_delivery_progress(
     root: Path, readback: Any, *, canonical_todos: list[dict[str, Any]] | None = None,
-    observation_unknown: bool = False, registry_path: Path | None = None,
+    observation_unknown: bool = False, registry_path: Path | None = None, verified_direction: bool = False,
 ) -> dict[str, Any] | None:
     """Observe protocol receipts for quota consumers; this grants no write authority.
 
@@ -437,7 +437,7 @@ def first_delivery_progress(
     unknown = observation_unknown
     read_unavailable = False
     try:
-        if not first_delivery_context_enrolled(root, identity) and not checkpoint_continuation_required(readback):
+        if not verified_direction and not first_delivery_context_enrolled(root, identity) and not checkpoint_continuation_required(readback):
             return None
     except (ValueError, OSError):
         read_unavailable = True
@@ -508,6 +508,7 @@ def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | No
     """
     identities = {}
     errors = []
+    verified_directions = set()
     for path in (root / "goals" / goal_id / "checkpoint-contexts").glob("*.json"):
         try:
             receipt = _read_context_receipt(path)
@@ -529,18 +530,19 @@ def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | No
             errors.append({"scope": "goal", "code": "checkpoint_receipt_invalid", "receipt": path.stem})
             continue
         identities[identity.effect_id] = identity.as_dict()
-    if errors:
-        try:
-            recovered = _checkpoint_effect("goal.checkpoint_read_context.inspect_history", {
-                "runtime_root": str(root.resolve()), "goal_id": goal_id,
-                "receipt_names": [error["receipt"] + ".json" for error in errors]})
-            for item in recovered["verified"]:
-                identity = SettlementIdentity.from_runtime_payload(item["identity"])
-                errors = [error for error in errors if error["receipt"] + ".json" != item["receipt_name"]]
-                if agent_id is None or identity.agent_id == agent_id:
-                    identities[identity.effect_id] = identity.as_dict()
-        except (ValueError, OSError):
-            pass  # Unproved history remains explicitly unavailable.
+    try:
+        recovered = _checkpoint_effect("goal.checkpoint_read_context.inspect_history", {
+            "runtime_root": str(root.resolve()), "goal_id": goal_id, "agent_id": agent_id,
+            "receipt_names": [error["receipt"] + ".json" for error in errors]})
+        for item in recovered["verified"]:
+            identity = SettlementIdentity.from_runtime_payload(item["identity"])
+            errors = [error for error in errors if error["receipt"] + ".json" != item["receipt_name"]]
+            if agent_id is None or identity.agent_id == agent_id:
+                identities[identity.effect_id] = identity.as_dict()
+                if item["purpose"] == "first_delivery":
+                    verified_directions.add(identity.effect_id)
+    except (ValueError, OSError):
+        errors.append({"scope": "goal", "code": "checkpoint_history_unavailable"})
     # Share the complete current authority snapshot across observed identities.
     # Do not cap the historical scan or silently lose older pending work.
     canonical_todos = None
@@ -561,7 +563,7 @@ def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | No
             if readback is None or canonical_todos is None:
                 raise ValueError("enrolled checkpoint readback unavailable")
             progress = first_delivery_progress(root, readback, canonical_todos=canonical_todos,
-                observation_unknown=observation_unknown)
+                observation_unknown=observation_unknown, verified_direction=identity.effect_id in verified_directions)
         except (ValueError, OSError):
             progress = effect_runtime_result("turn.first_delivery.evaluate", {"phase": "project", "unknown": True})
         if progress is not None and progress["stage"] != "settled":

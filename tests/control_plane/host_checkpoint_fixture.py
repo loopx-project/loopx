@@ -11,11 +11,16 @@ def checkpoint_decision(context):
     assert context["read_context_id"]
     todo = basis.get("todo")
     identity = context["settlement_identity"]
+    assert isinstance(todo, (dict, list))
+    goal_wide = isinstance(todo, list)
+    if goal_wide:
+        assert identity.get("todo_id") is None
+        todo = {}
     deferred_terminal = bool(todo and todo.get("status") == "done"
         and todo.get("completion_continuation") == "active_goal"
         and todo.get("completion_requested_continuation") == "no_followup"
         and todo.get("completion_turn_key") in {identity["effect_id"], identity["turn_instance_id"]})
-    terminal = todo is None or todo.get("no_followup") is True or deferred_terminal
+    terminal = goal_wide or todo.get("no_followup") is True or deferred_terminal
     assert basis["frontier"]["scope"] == ("goal" if terminal else "agent_lane")
     decision = {"read_context_id": context["read_context_id"], "agent_vision_json": "",
         "vision_unchanged_reason": "", "stop_reason": ""}

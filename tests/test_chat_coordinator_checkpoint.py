@@ -6,6 +6,8 @@ from test_chat_loopx_mode import mode as mode, apply
 from test_chat_project_coordination import project as project
 import pytest
 from loopx.chat_coordinator_checkpoint import CoordinatorCheckpoints
+from loopx.chat_runtime import ChatRuntimeController
+from loopx.chat_store import ChatSessionStore
 from loopx.collaboration_mcp import _pinned_release_environment, _python_module_command
 from loopx.todos import add_goal_todo
 from loopx.control_plane.coordination.local_authority import (
@@ -112,11 +114,13 @@ def test_chat_checkpoint_dispatch_keeps_pause_binding_and_member_namespace(
 ):
     service, sid, repo, settings, _ = mode
     started = apply(mode, "start", settings=settings)
+    service.controller.coordination_runtime_root = repo / "canonical-runtime"
     calls = []
 
     class Checkpoints:
         def __init__(self, registry, root, goal_id, agent_id):
             assert registry == service.controller.registry_path
+            assert root == service.controller.coordination_runtime_root
             assert goal_id == "research" and agent_id == "coordinator"
 
         def read(self, todo):
@@ -175,3 +179,28 @@ def test_chat_checkpoint_dispatch_keeps_pause_binding_and_member_namespace(
 
 
 TOOL_NAME = "loopx_collaboration"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_checkpoint_snapshot_follows_registered_runtime_with_separate_chat_storage(provider, tmp_path, monkeypatch):
+    registry, _, todo = native._fixture(provider, tmp_path, monkeypatch)
+    control = _control(registry)
+    assert json.loads(control.should_run()).get("delivery_result_context")
+    result = json.loads(control.complete_task(todo, AGENT_ID, "Verified retained result.", no_follow_up=True))
+    assert result["stage"] == "direction_pending", result
+    store = ChatSessionStore(tmp_path / "chat-only")
+    controller = ChatRuntimeController(store=store, codex_bin="unused-fixture-host", registry_path=registry)
+    try:
+        session = store.create_session(goal_id=GOAL_ID, agent_id="codex", channel_id=f"goal.{GOAL_ID}",
+            upstream_thread_id="fixture-session", upstream_mode="chat", adapter_kind="codex_app_server")
+        store.update_session(session["session_id"], native_goal={"status": "paused"},
+            loopx_mode={"enabled": True, "paused": True, "settings": {"agent_id": AGENT_ID, "token_budget": 10000}})
+        assert controller.coordination_runtime_root == tmp_path / "runtime"
+        assert store.root.parent != controller.coordination_runtime_root
+        observed = controller.loopx_mode.snapshot(session["session_id"])["coordinator_checkpoint"]
+        assert observed["stage"] == "direction_pending" and observed["result_committed"] is True
+        assert observed["quota_spent"] is False and observed["settlement_identity"] == result["settlement_identity"]
+        context = CoordinatorCheckpoints(registry, controller.coordination_runtime_root, GOAL_ID, AGENT_ID).read(todo)
+        assert context["settlement_identity"] == result["settlement_identity"]
+    finally:
+        controller.close()

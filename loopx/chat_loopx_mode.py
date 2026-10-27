@@ -274,7 +274,7 @@ class ChatLoopXMode:
         checkpoint = None
         if settings.get("agent_id"):
             from .control_plane.goals.checkpoint_context_io import pending_first_delivery_progress
-            checkpoint = pending_first_delivery_progress(self.store.root.parent, session["goal_id"],
+            checkpoint = pending_first_delivery_progress(self.controller.coordination_runtime_root, session["goal_id"],
                 settings["agent_id"], registry_path=self.controller.registry_path)
         # Refresh unfinished observations even while the coordinator is paused:
         # delegated members have their own lifecycles. Accepted labels remain
@@ -936,7 +936,7 @@ class ChatLoopXMode:
                 if service.path(operation_id).exists():
                     raise ValueError("a member operation cannot be reinterpreted as a coordinator checkpoint")
                 from .chat_coordinator_checkpoint import CoordinatorCheckpoints
-                checkpoint = CoordinatorCheckpoints(self.controller.registry_path, self.store.root.parent,
+                checkpoint = CoordinatorCheckpoints(self.controller.registry_path, self.controller.coordination_runtime_root,
                     session["goal_id"], settings["agent_id"])
                 return checkpoint.read(operation_id) if action == "read" else checkpoint.resume(operation_id, {k: v for k, v in brief.items() if k != "purpose"})
             if action == "start" and not service.path(operation_id).exists():

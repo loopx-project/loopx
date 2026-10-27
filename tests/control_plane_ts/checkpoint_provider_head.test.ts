@@ -90,7 +90,7 @@ for (const work of [true, false]) {
 }
 
 for (const readWork of [false, true]) {
-  for (const damage of ["none", "missing-json", "mismatched-json", "missing-markdown", "torn-index", "no-proof", "work-only-proof"] as const) {
+  for (const damage of ["none", "missing-json", "mismatched-json", "missing-markdown", "torn-index", "no-proof", "work-only-proof", "invalid-work-proof"] as const) {
     test(`obsolete ${readWork ? "work" : "direction"} receipt needs a verified matching indexed effect: ${damage}`, async t => {
       const root = await mkdtemp(join(tmpdir(), "checkpoint-old-read-"));
       t.after(() => rm(root, {recursive: true, force: true}));
@@ -103,7 +103,8 @@ for (const readWork of [false, true]) {
       const jsonPath = join(runs, "old.json");
       const markdownPath = join(runs, "old.md");
       const row = {settlement_identity: old, refresh_recovery: {}, json_path: jsonPath, markdown_path: markdownPath,
-        ...(damage === "work-only-proof" ? {result_work_context: {read_context_id: "old-work"}} :
+        ...(damage === "invalid-work-proof" ? {result_work_context: false} :
+          damage === "work-only-proof" ? {result_work_context: {read_context_id: "old-work"}} :
           damage === "no-proof" ? {classification: "quota_slot_spent"} :
           {vision_checkpoint: {satisfied: true, read_context: {read_context_id: "old-direction"}}})};
       if (damage !== "missing-json") writeFileSync(jsonPath, JSON.stringify(damage === "mismatched-json" ? {...row, settlement_identity: current} : row));
@@ -115,7 +116,8 @@ for (const readWork of [false, true]) {
         purpose: "first_delivery", check_other_attempts: true});
       const observe = () => inspectCheckpointReadHistory({runtime_root: root, goal_id: "goal", receipt_names: [name]});
       if (damage === "none" || damage === "work-only-proof" && readWork) {
-        assert.deepEqual(observe().verified, [{receipt_name: name, identity: old}]);
+        assert.deepEqual(observe().verified, [{receipt_name: name, identity: old,
+          purpose: damage === "work-only-proof" ? "delivery_result" : "first_delivery"}]);
         assert.equal(inspect().status, "absent");
         assert.equal(readFileSync(join(contexts, name), "utf8"), "{", "Inspection must not repair another identity's read");
         // An unattributable or current receipt remains unknown, even beside a verified old effect.
@@ -155,4 +157,32 @@ test("history inspection cannot borrow a valid checkpoint from another Goal", as
   assert.throws(() => inspectCheckpointAttempt({runtime_root: root,
     identity: {...identity, goal_id: "goal", effect_id: "new-effect"}, check_other_attempts: true}),
     (error: unknown) => (error as {code: string}).code === "checkpoint_commit_unknown");
+});
+
+test("an indexed work result cannot discharge another Turn's unindexed direction", async t => {
+  const root = await mkdtemp(join(tmpdir(), "checkpoint-direction-proof-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const runs = join(root, "goals", "goal", "runs");
+  const contexts = join(root, "goals", "goal", "checkpoint-contexts");
+  await mkdir(runs, {recursive: true});
+  await mkdir(contexts, {recursive: true});
+  const old = {goal_id: "goal", agent_id: "agent", todo_id: "task", turn_instance_id: "old", effect_id: "old-effect"};
+  const current = {...old, turn_instance_id: "new", effect_id: "new-effect"};
+  const work = {settlement_identity: old, refresh_recovery: {}, result_work_context: {read_context_id: "work"},
+    json_path: join(runs, "work.json"), markdown_path: join(runs, "work.md")};
+  const direction = {settlement_identity: old, refresh_recovery: {}, vision_checkpoint: {satisfied: true,
+    read_context: {read_context_id: "direction"}}, json_path: join(runs, "direction.json"), markdown_path: join(runs, "direction.md")};
+  writeFileSync(work.json_path, JSON.stringify(work));
+  writeFileSync(work.markdown_path, "Committed work\n");
+  writeFileSync(direction.json_path, JSON.stringify(direction));
+  writeFileSync(direction.markdown_path, "Retained direction bytes\n");
+  writeFileSync(join(contexts, createHash("sha256").update(old.effect_id).digest("hex") + ".json"), JSON.stringify({
+    identity: old, purpose: "first_delivery", commit_attempt: {...direction, index_record: direction}}));
+  const inspect = () => inspectCheckpointAttempt({runtime_root: root, identity: current, check_other_attempts: true});
+  writeFileSync(join(runs, "index.jsonl"), JSON.stringify(work) + "\n");
+  assert.throws(inspect, (error: unknown) => (error as {code: string}).code === "checkpoint_commit_unknown");
+  writeFileSync(join(runs, "index.jsonl"), [work, direction].map(row => JSON.stringify(row)).join("\n") + "\n");
+  assert.equal(inspect().status, "absent");
+  writeFileSync(direction.json_path, JSON.stringify({...direction, settlement_identity: current}));
+  assert.throws(inspect, (error: unknown) => (error as {code: string}).code === "checkpoint_commit_unknown");
 });

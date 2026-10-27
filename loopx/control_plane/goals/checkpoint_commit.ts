@@ -1,7 +1,7 @@
 /** Receipt-bound work and direction commits. Index/source claims survive the requesting CLI;
  * the real provider fence lasts through the synchronous durable append. */
 import {createHash} from "node:crypto";
-import {closeSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync} from "node:fs";
+import {closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync} from "node:fs";
 import {dirname, join, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../effect_program.ts";
@@ -142,8 +142,9 @@ function indexedReadProof(rows: JsonObject[], goal: string, name: string): {row:
     const direction = jsonObject(row.vision_checkpoint)?.satisfied === true &&
       jsonObject(jsonObject(row.vision_checkpoint)?.read_context) !== null;
     if (direction && name === checkpointReceiptName(effect, false)) return {row, purpose: "first_delivery"};
-    if ((direction || row.result_work_context != null) && name === checkpointReceiptName(effect, true)) {
-      return {row, purpose: row.result_work_context != null ? "delivery_result" : "first_delivery"};
+    const work = jsonObject(row.result_work_context) !== null;
+    if ((direction || work) && name === checkpointReceiptName(effect, true)) {
+      return {row, purpose: work ? "delivery_result" : "first_delivery"};
     }
   }
   return null;
@@ -158,8 +159,24 @@ export function inspectCheckpointReadHistory(value: unknown): JsonObject {
   const rows = indexBytes(join(root, "goals", goal, "runs", "index.jsonl"))
     .toString("utf8").split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line) as JsonObject);
   if (!Array.isArray(request.receipt_names)) throw new EffectRuntimeRequestError("receipt_names must be an array");
+  const names = new Set<unknown>(request.receipt_names);
+  const contexts = join(root, "goals", goal, "checkpoint-contexts");
+  // Deleted reads cannot appear in a directory scan. Recover their indexed
+  // binding too; accounting/terminal owners still decide whether it is pending.
+  for (const row of rows) {
+    const binding = jsonObject(row.settlement_identity);
+    if (binding?.goal_id !== goal || typeof binding.effect_id !== "string" ||
+        (request.agent_id != null && binding.agent_id !== request.agent_id)) continue;
+    const effect = binding.effect_id;
+    if (!existsSync(join(contexts, checkpointReceiptName(effect, false))) &&
+        !existsSync(join(contexts, checkpointReceiptName(effect, true)))) {
+      if (row.result_work_context != null) names.add(checkpointReceiptName(effect, true));
+      if (jsonObject(row.vision_checkpoint)?.satisfied === true &&
+          jsonObject(jsonObject(row.vision_checkpoint)?.read_context)) names.add(checkpointReceiptName(effect, false));
+    }
+  }
   const verified: JsonObject[] = [];
-  for (const name of request.receipt_names) {
+  for (const name of names) {
     if (typeof name !== "string" || !name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5))) {
       throw new EffectRuntimeRequestError("invalid checkpoint receipt name");
     }
@@ -168,7 +185,8 @@ export function inspectCheckpointReadHistory(value: unknown): JsonObject {
     try {
       const result = inspectCheckpointAttempt({runtime_root: root, identity: proof.row.settlement_identity,
         purpose: proof.purpose});
-      if (result.status === "committed") verified.push({receipt_name: name, identity: proof.row.settlement_identity});
+      if (result.status === "committed") verified.push({receipt_name: name, identity: proof.row.settlement_identity,
+        purpose: proof.purpose});
     } catch (error) {
       if (!(error instanceof EffectRuntimeRequestError) || error.code !== "checkpoint_commit_unknown") throw error;
     }
@@ -215,7 +233,6 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
     let names: string[] = [];
     try { names = readdirSync(contexts); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    const indexed = new Set(rows.map(row => jsonObject(row.settlement_identity)?.effect_id));
     const resultReadName = checkpointReceiptName(requireNonEmptyString(identity.effect_id, "effect_id"), true);
     for (const name of names.filter(name => name.endsWith(".json") && BARE_SHA256_PATTERN.test(name.slice(0, -5)))) {
       // This disjoint path can hold only the original work read, never a direction append.
@@ -236,8 +253,12 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
       }
       const owner = jsonObject(other.identity);
       if (other.purpose === "first_delivery" && other.commit_attempt != null && owner?.effect_id !== identity.effect_id &&
-          owner?.agent_id === identity.agent_id && owner?.todo_id === identity.todo_id && !indexed.has(owner?.effect_id)) {
-        unknown("another original Turn has an unresolved direction append for this Todo");
+          owner?.agent_id === identity.agent_id && owner?.todo_id === identity.todo_id) {
+        const proof = indexedReadProof(rows, goalPathSegment(identity.goal_id), name);
+        if (!proof || proof.purpose !== "first_delivery" ||
+            inspectCheckpointAttempt({runtime_root: root, identity: owner, purpose: "first_delivery"}).status !== "committed") {
+          unknown("another original Turn has an unresolved direction append for this Todo");
+        }
       }
     }
   }

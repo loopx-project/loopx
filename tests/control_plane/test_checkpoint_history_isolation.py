@@ -77,7 +77,8 @@ def test_settled_peer_read_damage_preserves_independent_delivery(provider, purpo
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_recovered_history_retains_original_unspent_accounting(provider, tmp_path, monkeypatch):
+@pytest.mark.parametrize("loss", ["damaged", "deleted"])
+def test_recovered_history_retains_original_unspent_accounting(provider, loss, tmp_path, monkeypatch):
     registry, _, todo = _fixture(provider, tmp_path, monkeypatch)
     control = _control(registry)
     guard = json.loads(control.should_run())
@@ -98,7 +99,11 @@ def test_recovered_history_retains_original_unspent_accounting(provider, tmp_pat
         "runtime_root": str(runtime), "identity": identity.as_dict(), "purpose": "first_delivery"})
     assert proof["status"] == "committed", proof
     for purpose in ("first_delivery", "delivery_result"):
-        _receipt_path(runtime, identity, purpose).write_text("{", encoding="utf-8")
+        path = _receipt_path(runtime, identity, purpose)
+        if loss == "deleted":
+            path.unlink()
+        else:
+            path.write_text("{", encoding="utf-8")
     progress = pending_first_delivery_progress(runtime, GOAL_ID, AGENT_ID, registry_path=registry)
     assert progress["stage"] == "settlement_pending", progress
     assert progress["settlement_identity"] == identity.as_dict()

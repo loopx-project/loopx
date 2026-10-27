@@ -1335,6 +1335,8 @@ never a pending direction append. Unknown paths, incomplete indexes, missing or
 conflicting artifacts and unindexed direction attempts remain fail-closed.
 Status and packaged UI observations use the same native proof to recover the
 original binding; a verified direction never erases pending quota accounting.
+This includes deletion of both disposable reads. Coordinator checkpoint reads
+and recovery follow the registered Goal runtime even when Chat storage is separate.
 
 损坏的历史读取回执只有在路径能绑定到精确索引效果、且对应 JSON/Markdown
 工件通过既有回执优先核验时，才不再阻断独立 checkpoint；检查不会改写旧回执。
@@ -1342,6 +1344,8 @@ original binding; a verified direction never erases pending quota accounting.
 以及未索引的方向提交仍保持拒绝。
 状态和 packaged UI 读回复用同一原生证明恢复原身份；已核验的方向不会抹掉尚未
 完成的配额结算。
+两份可丢弃读取回执都被删除时也适用。Chat 存储分离时，协调员 checkpoint 的
+读取与恢复仍使用注册 Goal 的运行时。
 
 ### 中文：本阶段边界与恢复
 

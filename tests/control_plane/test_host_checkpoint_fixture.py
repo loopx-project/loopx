@@ -15,7 +15,7 @@ def test_fixture_checks_the_original_direction_scope(intent):
                     completion_turn_key="other-turn" if intent == "other-turn" else identity["effect_id"])
     terminal = intent in {"stored", "deferred", "goal-wide"}
     context = {"read_context_id": "fresh-read", "settlement_identity": identity,
-               "basis": {"todo": None if intent == "goal-wide" else todo, "agent_vision": {},
+               "basis": {"todo": [] if intent == "goal-wide" else todo, "agent_vision": {},
                          "frontier": {"scope": "goal" if terminal else "agent_lane"}}}
     assert checkpoint_decision(context)["read_context_id"] == "fresh-read"
     context["basis"]["frontier"]["scope"] = "agent_lane" if terminal else "goal"
