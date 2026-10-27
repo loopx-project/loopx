@@ -1345,14 +1345,14 @@ def _typed_settlement_stage(
 
     freshness_error: CheckpointReadContextRejected | None = None
 
-    def completion_effect(callback: CompletionWriteback, effect_ref: str) -> Mapping[str, Any]:
+    def result_effect(callback: CompletionWriteback | Writeback, effect_ref: str) -> Mapping[str, Any]:
         nonlocal freshness_error
         try:
             return invoke_result_effect(callback, result, effect_ref)
         except CheckpointReadContextRejected as error:
             if error.code not in {"checkpoint_read_context_stale", "delivery_validation_binding_mismatch"}:
                 raise
-            # The Todo owner rejected before commit. Let the typed settlement
+            # The result owner rejected before commit. Let the typed settlement
             # owner abort its prepared effect before reopening validation.
             freshness_error = error
             return {"ok": False, "appended": False, "reason": str(error)}
@@ -1373,8 +1373,8 @@ def _typed_settlement_stage(
                 raise ValueError(
                     "validated_completion requires a todo lifecycle adapter"
                 )
-            return completion_effect(completion_writeback, effect_ref)
-        return invoke_result_effect(writeback, result, effect_ref)
+            return result_effect(completion_writeback, effect_ref)
+        return result_effect(writeback, effect_ref)
 
     def spend_effect(effect_ref: str) -> Mapping[str, Any]:
         try:
@@ -1410,7 +1410,7 @@ def _typed_settlement_stage(
     terminal_checkpoint = None
     if terminal_closeout_required:
         assert terminal_closeout is not None
-        terminal_effect = partial(completion_effect, terminal_closeout)
+        terminal_effect = partial(result_effect, terminal_closeout)
         terminal_checkpoint = journal_adapter.checkpoint_terminal
 
     settlement_result = execute_turn_driver_settlement(

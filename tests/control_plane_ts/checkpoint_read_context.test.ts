@@ -64,6 +64,27 @@ const check = (receipt: unknown, overrides: JsonObject = {}) => evaluate({
   phase: "check", identity, facts, read_context_id: "read-A", receipt, ...overrides,
 });
 
+test("current direction isolates independent peers but original terminal intent requires the whole Goal", () => {
+  for (const terminal of [false, true]) {
+    const current = structuredClone(facts);
+    Object.assign(current.todos[0], {status: "done", claimed_by: identity.agent_id,
+      completion_turn_key: identity.turn_instance_id, no_followup: terminal});
+    Object.assign(current.todos[3], {role: "agent", claimed_by: "independent-peer"});
+    const request = {purpose: "first_delivery", admitted_turn: true, prior: null,
+      checkpoint_continuation: true, full_frontier: true, decision_scope: "agent_lane"};
+    const result = read({...request, facts: current});
+    assert.equal(result.ok, true);
+    assert.equal((result.receipt as JsonObject).decision_scope, terminal ? "goal" : "agent_lane");
+    const changed = structuredClone(current);
+    Object.assign(changed.todos[3], {note: "Independent evidence changed"});
+    const checked = check(result.receipt, {...request, facts: changed});
+    assert.equal(checked.ok, !terminal);
+    if (terminal) assert.equal(checked.error_code, "checkpoint_read_context_stale");
+    Object.assign(changed.todos[1], {evidence: "Changed shared dependency"});
+    assert.equal(check(result.receipt, {...request, facts: changed}).error_code, "checkpoint_read_context_stale");
+  }
+});
+
 test("only matching historical or settled progress permits another read for an unfinished result", () => {
   const original = read({purpose: "delivery_result", admitted_turn: true, result_only: true, prior: null});
   assert.equal(original.ok, true);

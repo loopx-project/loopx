@@ -30,6 +30,56 @@ def _runs(runtime):
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('change', ['revised', 'missing'])
+def test_supplement_direction_keeps_primary_goal_source_fresh(provider, change, tmp_path, monkeypatch):
+    project, runtime, registry, _ = _default_fixture(provider, tmp_path, monkeypatch)
+    owner = project / 'GOAL.md'
+    owner.write_text('Initial independent owner requirement.\n', encoding='utf-8')
+    document = json.loads(registry.read_text())
+    document['goals'][0]['authority_sources'] = [{'kind': 'goal_doc', 'path': 'GOAL.md'}]
+    registry.write_text(json.dumps(document), encoding='utf-8')
+    identity = ('--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--todo-id', TODO_ID)
+    rc, guard = _run_cli(registry, runtime, 'quota', 'should-run', '--codex-app', *identity, cwd=project)
+    assert rc == 0, guard
+    turn = guard['delivery_result_context']['settlement_identity']['turn_instance_id']
+    args = ('refresh-state', *identity, '--turn-instance-id', turn,
+        '--classification', 'verified_progress', '--delivery-outcome', 'outcome_progress',
+        '--delivery-batch-scale', 'implementation', '--delivery-boundary', 'semantic_closeout',
+        '--delivery-workspace-path', str(project), '--no-global-sync', '--suppress-external-sinks')
+    rc, result = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0 and result['vision_checkpoint']['decision'] == 'missing_required', result
+    read = ('checkpoint-context', *identity, '--turn-instance-id', turn)
+    rc, context = _run_cli(registry, runtime, *read, cwd=project)
+    assert rc == 0, context
+    assert 'Initial independent owner requirement.' in context['basis']['goal']['prose']
+    assert context['basis']['goal']['primary_documents']
+    before = _runs(runtime)
+    if change == 'missing':
+        owner.unlink()
+    else:
+        owner.write_text('Revised independent owner requirement.\n', encoding='utf-8')
+    decision = ('--vision-summary', 'Continue the freshly checked requirement route.',
+        '--vision-acceptance', 'The retained candidate and remaining work satisfy the current requirements.')
+    rc, rejected = _run_cli(registry, runtime, *args, *decision,
+        '--checkpoint-read-context', context['read_context_id'], cwd=project)
+    assert rc == 1, rejected
+    assert _runs(runtime) == before and _spend_run_count(runtime) == 0
+    if change == 'missing':
+        owner.write_text('Revised independent owner requirement.\n', encoding='utf-8')
+    rc, current = _run_cli(registry, runtime, *read, cwd=project)
+    assert rc == 0 and current['read_context_id'] != context['read_context_id'], current
+    assert 'Revised independent owner requirement.' in current['basis']['goal']['prose']
+    commit = (*args, *decision, '--checkpoint-read-context', current['read_context_id'])
+    rc, settled = _run_cli(registry, runtime, *commit, cwd=project)
+    assert rc == 0 and settled['vision_checkpoint']['satisfied'], settled
+    after = _runs(runtime)
+    owner.unlink()
+    rc, replay = _run_cli(registry, runtime, *commit, cwd=project)
+    assert rc == 0 and replay['idempotent_replay'], replay
+    assert _runs(runtime) == after and _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('vision', [False, True])
 def test_inflight_rejects_changed_basis_then_revalidates_same_turn(provider, vision, tmp_path, monkeypatch):
     project, runtime, registry, state, context, args = _admit(provider, tmp_path, monkeypatch)

@@ -1537,7 +1537,7 @@ def refresh_state_run(
                     goal_ref=goal_ref,
                     source_admission=source_admission,
                     purpose=checkpoint_purpose,
-                    decision_scope="goal" if default_checkpoint else normalized_progress_scope if first_delivery_checkpoint else None,
+                    decision_scope=normalized_progress_scope if first_delivery_checkpoint and not default_checkpoint else None,
                 ))
                 for projection in (record, index_record, payload):
                     if result_work_checkpoint:
@@ -1615,7 +1615,7 @@ def refresh_state_run(
                         markdown=render_state_refresh_markdown(payload) + "\n",
                         goal_ref=goal_ref, source_admission=source_admission,
                         purpose=checkpoint_purpose, read_context_id=work_read_id,
-                        decision_scope="goal" if default_checkpoint else normalized_progress_scope if first_delivery_checkpoint else None)
+                        decision_scope=normalized_progress_scope if first_delivery_checkpoint and not default_checkpoint else None)
                     for projection in (record, index_record, payload):
                         if result_work_checkpoint:
                             projection["result_work_context"] = saved["context"]

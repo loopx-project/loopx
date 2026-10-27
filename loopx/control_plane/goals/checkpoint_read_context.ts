@@ -98,8 +98,10 @@ export function checkpointBasisSnapshot(request: JsonObject): JsonObject {
   const task = typeof todoId === "string" ? byId.get(todoId) : null;
   if (typeof todoId === "string" && !task) throw new EffectRuntimeRequestError("checkpoint Todo is absent; restore its authoritative record before rereading");
   let frontier: JsonObject[] | null = null;
+  const scope = request.checkpoint_continuation === true && purpose(request) !== "delivery_result"
+    ? (!task || originalTurnRequestsNoFollowup(task, identity) ? "goal" : "agent_lane")
+    : request.decision_scope;
   if (purpose(request) === "first_delivery" || request.full_frontier === true) {
-    const scope = request.decision_scope;
     if (scope !== "agent_lane" && scope !== "goal") {
       throw new EffectRuntimeRequestError("first delivery requires agent_lane or goal decision scope");
     }
@@ -140,7 +142,7 @@ export function checkpointBasisSnapshot(request: JsonObject): JsonObject {
     source: facts.source,
   };
   if (frontier !== null) {
-    basis.frontier = {scope: request.decision_scope, todos: frontier};
+    basis.frontier = {scope, todos: frontier};
   }
   if (purpose(request) !== "supplement_checkpoint") {
     basis.execution_lease = facts.execution_lease ?? null;
@@ -225,8 +227,9 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
     const projected = checkpointSnapshotOrRejection(request);
     if (projected.ok === false) return projected;
     const task = jsonObject(requireJsonObject(projected.basis, "basis").todo);
+    const readScope = jsonObject(requireJsonObject(projected.basis, "basis").frontier)?.scope ?? request.decision_scope;
     if (request.checkpoint_continuation === true && use !== "delivery_result" &&
-        (request.full_frontier !== true || request.decision_scope !== "goal")) {
+        request.full_frontier !== true) {
       return rejected("checkpoint_direction_context_invalid");
     }
     if (use === "first_delivery" && request.checkpoint_continuation === true &&
@@ -252,9 +255,9 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
       ...(originalOutcome ? {original_outcome: originalOutcome} : {}),
       ...(use !== "delivery_result" ? {vision_authoring: visionAuthoringContract()} : {}), receipt: {
       schema_version: use !== "supplement_checkpoint" ? FIRST_RECEIPT_SCHEMA : RECEIPT_SCHEMA,
-      ...(use !== "supplement_checkpoint" ? {purpose: use, decision_scope: request.decision_scope} : {}),
+      ...(use !== "supplement_checkpoint" ? {purpose: use, decision_scope: readScope} : {}),
       read_context_id: requireNonEmptyString(token, "read_context_id"),
-      ...(request.full_frontier === true ? {full_frontier: true, decision_scope: request.decision_scope} : {}),
+      ...(request.full_frontier === true ? {full_frontier: true, decision_scope: readScope} : {}),
       identity, dependency_todo_ids: ids(request.dependency_todo_ids, "dependency_todo_ids"),
       versions: projected.versions, provider_revision: projected.provider_revision,
       ...(use === "delivery_result" ? {work_basis: projected.basis} : {}),
@@ -273,7 +276,7 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
   if (typeof token !== "string" || !token.trim()) return rejected("checkpoint_read_context_required");
   const receipt = jsonObject(request.receipt);
   if (request.checkpoint_continuation === true && use !== "delivery_result" &&
-      (receipt?.full_frontier !== true || receipt.decision_scope !== "goal")) {
+      (receipt?.full_frontier !== true || !["agent_lane", "goal"].includes(String(receipt.decision_scope)))) {
     return rejected("checkpoint_direction_context_invalid");
   }
   if (receipt?.schema_version !== (use !== "supplement_checkpoint" ? FIRST_RECEIPT_SCHEMA : RECEIPT_SCHEMA) ||
@@ -284,7 +287,7 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
   if (canonicalAuthoritySha256(receipt.identity) !== canonicalAuthoritySha256(identity)) {
     return rejected("checkpoint_read_context_identity_mismatch");
   }
-  if (use === "first_delivery" && request.decision_scope != null &&
+  if (use === "first_delivery" && request.checkpoint_continuation !== true && request.decision_scope != null &&
       request.decision_scope !== receipt.decision_scope) {
     return rejected("checkpoint_read_context_scope_mismatch");
   }
@@ -390,7 +393,9 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
     const purpose = receipt.purpose ?? "supplement_checkpoint";
     if (!["first_delivery", "supplement_checkpoint"].includes(String(purpose)) ||
         receipt.schema_version !== (purpose === "first_delivery" ? FIRST_RECEIPT_SCHEMA : RECEIPT_SCHEMA) ||
-        receipt.full_frontier !== true || receipt.decision_scope !== "goal") return rejected("checkpoint_direction_context_invalid");
+        receipt.full_frontier !== true || !["agent_lane", "goal"].includes(String(receipt.decision_scope))) {
+      return rejected("checkpoint_direction_context_invalid");
+    }
     if (receipt.read_context_id !== decision.read_context_id ||
         canonicalAuthoritySha256(receipt.identity) !== canonicalAuthoritySha256(request.identity)) {
       return rejected("checkpoint_direction_binding_mismatch");
@@ -399,6 +404,9 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
         canonicalAuthoritySha256(Object.fromEntries(Object.entries(requireJsonObject(receipt.decision_basis, "direction basis"))
           .map(([key, value]) => [key, canonicalAuthoritySha256(value)])))) {
       return rejected("checkpoint_direction_basis_corrupt");
+    }
+    if (jsonObject(requireJsonObject(receipt.decision_basis, "direction basis").frontier)?.scope !== receipt.decision_scope) {
+      return rejected("checkpoint_direction_context_invalid");
     }
     const vision = jsonObject(decision.agent_vision);
     const unchanged = typeof decision.vision_unchanged_reason === "string" ? decision.vision_unchanged_reason.trim() : "";

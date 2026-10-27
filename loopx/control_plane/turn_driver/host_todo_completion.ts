@@ -512,7 +512,7 @@ function providerSteps(
     const purpose = request.delivery_read_context_id || request.current_agent_checkpoint ? "first_delivery" : "delivery_result";
     const context: ProviderStep = {step_kind: purpose === "delivery_result" ? "delivery_context" : "direction_context",
       args: ["checkpoint-context", "--goal-id", request.goal_id, "--agent-id", request.agent_id,
-        "--todo-id", request.todo_id, "--turn-instance-id", turnId, "--purpose", purpose, "--decision-scope", "goal",
+        "--todo-id", request.todo_id, "--turn-instance-id", turnId, "--purpose", purpose,
         ...(request.goal_instance_id ? ["--goal-instance-id", request.goal_instance_id] : [])],
       legacy_args: null, continue_when: null};
     return [...steps.slice(0, purpose === "first_delivery" ? 2 : 1), context];

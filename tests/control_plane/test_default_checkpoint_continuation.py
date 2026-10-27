@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import sys
-import subprocess
 import pytest
 
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
@@ -33,7 +32,7 @@ def _fixture(provider, tmp_path, monkeypatch, *, validation_command_json=None):
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('terminal', [False, True, 'stored', 'cold_explicit'])
-def test_default_mcp_uses_post_result_basis_and_original_turn(provider, terminal, tmp_path, monkeypatch):
+def test_default_mcp_uses_scoped_post_result_basis_and_original_turn(provider, terminal, tmp_path, monkeypatch):
     registry, state, todo = _fixture(provider, tmp_path, monkeypatch)
     if terminal == 'stored':
         update_goal_todo(registry_path=registry, goal_id=GOAL_ID, todo_id=todo, role='agent',
@@ -49,7 +48,7 @@ def test_default_mcp_uses_post_result_basis_and_original_turn(provider, terminal
     assert first['settlement_identity'] == original
     context = first['context']
     assert context['basis']['todo']['status'] == 'done'
-    assert context['basis']['frontier']['scope'] == 'goal'
+    assert context['basis']['frontier']['scope'] == ('goal' if terminal else 'agent_lane')
     # The tool caller authors only after seeing the returned post-result facts.
     second = json.loads(_control(registry).complete_task(todo, AGENT_ID, 'Candidate verified.',
         **({} if terminal == 'cold_explicit' else options),
@@ -156,7 +155,7 @@ else:
 
 
 @pytest.mark.parametrize('iteration_context', ['fresh', 'resume'])
-def test_default_dsh_continues_the_original_agent_session(iteration_context, tmp_path, monkeypatch):
+def test_default_dsh_continues_original_session_with_agent_lane_direction(iteration_context, tmp_path, monkeypatch):
     registry, state, _ = _fixture('file', tmp_path, monkeypatch)
     project = state.parent
     runner = project / 'runner.py'
@@ -167,7 +166,7 @@ def run_dsh_turn(**kwargs):
         f.write(json.dumps({'session':kwargs['session_id'],'direction':direction})+'\\n')
     if direction:
         r=json.loads(prompt.split('\\n',1)[1]); c=r['checkpoint_context']
-        assert c['basis']['frontier']['scope']=='goal'
+        assert c['basis']['frontier']['scope']=='agent_lane'
         assert pathlib.Path(kwargs['workspace'],'candidate.txt').read_text()=='valid'
         return json.dumps({'read_context_id':c['read_context_id'],
             'vision_unchanged_reason':'Current evidence preserves this session route.'})
@@ -294,3 +293,105 @@ else:
     rows = [json.loads(line) for line in (tmp_path / 'runtime/goals' / GOAL_ID / 'runs/index.jsonl').read_text(encoding='utf-8').splitlines()]
     assert sum(row.get('classification') == 'quota_slot_spent' for row in rows) == (0 if kind == 'wait' else 1)
     assert not any(row.get('completion_todo_id') == todo for row in rows)
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('change_at', ['work', 'validation'])
+def test_managed_progress_revalidates_retained_candidate_on_original_turn(
+    provider, change_at, tmp_path, monkeypatch,
+):
+    registry, state, todo = _fixture(provider, tmp_path, monkeypatch)
+    project, runtime = state.parent, tmp_path / 'runtime'
+    host = project / 'host.py'
+    host.write_text(f'''import json,pathlib,sys
+r=json.load(sys.stdin)
+candidate=pathlib.Path('candidate.txt')
+if r.get('phase') == 'checkpoint_direction':
+    c=r['checkpoint_context']
+    json.dump({{'read_context_id':c['read_context_id'],
+        'vision_unchanged_reason':'The fresh requirements preserve the remaining route.'}},sys.stdout)
+else:
+    if r.get('result_revalidation'):
+        assert candidate.read_text() == 'retained candidate'
+        assert r['result_revalidation']['candidate']['summary'] == 'Candidate verified.'
+        assert r['delivery_result_context']['read_context_id'] != r['result_revalidation']['original_context']['read_context_id']
+        pathlib.Path('revalidated.txt').write_text(r['delivery_result_context']['read_context_id'])
+    else:
+        assert not candidate.exists()
+        candidate.write_text('retained candidate')
+        if {change_at == 'work'!r}:
+            state=pathlib.Path({str(state)!r})
+            state.write_text(state.read_text()+'\\n## Revised acceptance\\nRecheck the retained candidate.\\n')
+    json.dump({{'schema_version':'loopx_turn_result_v0','turn_key':r['turn_key'],
+        'result_kind':'validated_progress','completed_phases':['host_execute','typed_result'],
+        'classification':'candidate_verified','recommended_action':'Review remaining work.',
+        'next_action':'Review remaining work.','delivery_batch_scale':'implementation',
+        'delivery_outcome':'outcome_progress','summary':'Candidate verified.',
+        'vision_unchanged_reason':'Original candidate route.'}},sys.stdout)
+''', encoding='utf-8')
+    validator = project / 'validate.py'
+    validator.write_text(f'''import pathlib
+assert pathlib.Path('candidate.txt').read_text() == 'retained candidate'
+marker=pathlib.Path('validated.txt')
+if not marker.exists():
+    marker.touch()
+    if {change_at == 'validation'!r}:
+        state=pathlib.Path({str(state)!r})
+        state.write_text(state.read_text()+'\\n## Revised acceptance\\nRecheck the retained candidate.\\n')
+''', encoding='utf-8')
+    args = ('turn', 'run-once', '--host', 'generic-cli', '--goal-id', GOAL_ID,
+        '--agent-id', AGENT_ID, '--project', str(project), '--host-adapter-command-json',
+        json.dumps([sys.executable, str(host)]), '--validation-command-json',
+        json.dumps([sys.executable, str(validator)]), '--no-global-sync', '--execute')
+    rc, first = _run_cli(registry, *args)
+    assert rc == 1 and first.get('result_kind') == 'validation_failed', first
+    journal_path = next((runtime / 'goals' / GOAL_ID / 'turns').glob('*.json'))
+    journal = json.loads(journal_path.read_text())
+    assert journal['validation_stage'] == 'result_freshness'
+    assert journal['result_revalidation']['candidate']['summary'] == 'Candidate verified.'
+    assert not journal.get('effect_attempts'), 'Definitive rejection must abort its prepared effect'
+    assert first['effects']['state_written'] is False and first['effects']['quota_spent'] is False
+    identity = journal['result_work_context']['settlement_identity']
+    if provider == 'sqlite':
+        rc, reread = _run_cli(registry, 'checkpoint-context', '--goal-id', GOAL_ID,
+            '--agent-id', AGENT_ID, '--todo-id', todo, '--turn-instance-id', identity['turn_instance_id'],
+            '--purpose', 'delivery_result')
+        assert rc == 0, reread
+    rc, resumed = _run_cli(registry, *args, '--retry-failed-turn', '--resume-turn-key', first['resume_turn_key'])
+    assert rc == 0 and resumed['status'] == 'committed', resumed
+    settled = json.loads(journal_path.read_text())
+    assert settled['result_work_context']['settlement_identity'] == identity
+    assert (project / 'revalidated.txt').exists()
+    rows = [json.loads(line) for line in (runtime / 'goals' / GOAL_ID / 'runs/index.jsonl').read_text().splitlines()]
+    assert sum(row.get('classification') == 'quota_slot_spent' for row in rows) == 1
+    rc, replay = _run_cli(registry, *args, '--retry-failed-turn', '--resume-turn-key', first['resume_turn_key'])
+    assert rc == 0 and replay['replayed'] is True, replay
+    assert (project / 'candidate.txt').read_text() == 'retained candidate'
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+@pytest.mark.parametrize('terminal', [False, True])
+def test_default_direction_scopes_independent_peer_changes(provider, terminal, tmp_path, monkeypatch):
+    registry, _, todo = _fixture(provider, tmp_path, monkeypatch)
+    document = json.loads(registry.read_text())
+    document['goals'][0]['coordination']['registered_agents'].append('independent-peer')
+    registry.write_text(json.dumps(document), encoding='utf-8')
+    peer = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role='agent',
+        text='Independent peer work.', task_class='advancement_task', claimed_by='independent-peer',
+        continuation_policy='same_agent_non_delivery')
+    control = _control(registry)
+    assert json.loads(control.should_run())['should_run'] is True
+    options = {'no_follow_up': True} if terminal else {'next_agent_todo': 'Verify remaining scoped work.'}
+    first = json.loads(control.complete_task(todo, AGENT_ID, 'Candidate verified.', **options))
+    assert first['stage'] == 'direction_pending', first
+    context = first['context']
+    assert context['basis']['frontier']['scope'] == ('goal' if terminal else 'agent_lane')
+    update_goal_todo(registry_path=registry, goal_id=GOAL_ID, todo_id=peer['todo_id'],
+        role='agent', agent_id='independent-peer', note='Independent evidence updated.')
+    response = json.loads(control.complete_task(todo, AGENT_ID, 'Candidate verified.', **options,
+        read_context_id=context['read_context_id'], vision_unchanged_reason='Own result and route remain valid.'))
+    if terminal:
+        assert response['ok'] is False and 'checkpoint_read_context_stale' in json.dumps(response), response
+    else:
+        assert response.get('settlement_complete') is True, response
+        assert response['settlement_identity'] == first['settlement_identity']

@@ -226,7 +226,9 @@ export async function commitCheckpoint(value: unknown,
   const statePath = resolve(requireNonEmptyString(request.state_file, "state_file"));
   const firstDelivery = request.purpose === "first_delivery";
   const resultWork = request.purpose === "delivery_result";
-  const registryPath = firstDelivery || resultWork ? resolve(requireNonEmptyString(request.registry_path, "registry_path")) : null;
+  const registryBound = jsonObject(jsonObject(request.facts)?.source)?.registry_goal != null;
+  const registryPath = firstDelivery || resultWork || registryBound
+    ? resolve(requireNonEmptyString(request.registry_path, "registry_path")) : null;
   const targets = [indexPath, ...(registryPath ? [registryPath] : []), shadowMaintenanceLockPath(root, identity.goal_id),
     legacyCoordinationTodoLockPath(root, identity.goal_id), statePath].map(path => resolve(path));
   const owner = parseQuotaAccountingOwner({

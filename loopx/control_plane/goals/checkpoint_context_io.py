@@ -171,7 +171,7 @@ def check_result_work_context(*, registry_path: Path, runtime_root: Path,
             return _resolve(runtime_root, phase="check", purpose="delivery_result", identity=identity.as_dict(),
                 read_context_id=context.get("read_context_id"),
                 receipt=_read_context_receipt(_receipt_path(runtime_root, identity, "delivery_result")),
-                facts=_local_source_facts(runtime_root, registry_path, state_file, identity, goal_ref, first_delivery=True))
+                facts=_local_source_facts(runtime_root, registry_path, state_file, identity, goal_ref))
 
 
 def bind_result_validation(*, runtime_root: Path, identity: SettlementIdentity, candidate: Mapping[str, Any],
@@ -387,7 +387,7 @@ def check_locked_legacy_result_work(*, runtime_root: Path, registry_path: Path, 
     _resolve(runtime_root, phase="check", purpose="delivery_result", identity=identity.as_dict(),
         read_context_id=context["read_context_id"],
         receipt=_read_context_receipt(_receipt_path(runtime_root, identity, "delivery_result")),
-        facts=_local_source_facts(runtime_root, registry_path, state_file, identity, goal_ref, first_delivery=True))
+        facts=_local_source_facts(runtime_root, registry_path, state_file, identity, goal_ref))
 
 
 def first_delivery_context_enrolled(root: Path, identity: SettlementIdentity, *, result_only: bool = False) -> bool:
@@ -582,7 +582,7 @@ def delivery_result_context_input(
         with exclusive_cross_runtime_file_lock(index, operation="delivery-result-capture"):
             with _source_guard(runtime_root, identity.goal_id, state_file, registry_path):
                 result.update(
-                    facts=_local_source_facts(runtime_root, registry_path, state_file, identity, goal_ref, first_delivery=True),
+                    facts=_local_source_facts(runtime_root, registry_path, state_file, identity, goal_ref),
                     state_sha256=hashlib.sha256(state_file.read_bytes()).hexdigest(),
                     index_sha256=hashlib.sha256(index.read_bytes() if index.exists() else b"").hexdigest(),
                 )
@@ -628,7 +628,6 @@ def _source_guard(root: Path, goal_id: str, state_file: Path, registry_path: Pat
 def _local_source_facts(
     root: Path, registry_path: Path, state_file: Path, identity: SettlementIdentity,
     goal_ref: Mapping[str, Any] | None = None,
-    *, first_delivery: bool = False,
 ) -> dict[str, Any]:
     try:
         text = state_file.read_text(encoding="utf-8")
@@ -668,17 +667,16 @@ def _local_source_facts(
         "source": {"state_file": str(state_file.resolve()), "runtime_root": str(root.resolve()),
                    "authority": "legacy_markdown"},
     }
-    if first_delivery:
-        from ...state_refresh import resolve_goal_state, registered_agents_for_goal
+    from ...state_refresh import resolve_goal_state, registered_agents_for_goal
 
-        registry = load_registry(registry_path)
-        goal, _, current_path = resolve_goal_state(registry=registry, goal_id=identity.goal_id,
-            project_override=None, state_file_override=None)
-        if current_path.resolve() != state_file.resolve() or identity.agent_id not in registered_agents_for_goal(goal):
-            raise ValueError("first delivery source or Agent registration changed; reread the original Turn")
-        facts["source"].update(registry_path=str(registry_path.resolve()), goal_ref=goal_ref,
-            registry_goal=goal)
-        facts["checkpoint_identity"] = identity.as_dict()
+    registry = load_registry(registry_path)
+    goal, _, current_path = resolve_goal_state(registry=registry, goal_id=identity.goal_id,
+        project_override=None, state_file_override=None)
+    if current_path.resolve() != state_file.resolve() or identity.agent_id not in registered_agents_for_goal(goal):
+        raise ValueError("Checkpoint source or Agent registration changed; reread the original Turn")
+    facts["source"].update(registry_path=str(registry_path.resolve()), goal_ref=goal_ref,
+        registry_goal=goal)
+    facts["checkpoint_identity"] = identity.as_dict()
     return facts
 
 
@@ -724,11 +722,9 @@ def read_checkpoint_context(
             raise ValueError("checkpoint-context requires the original committed Turn writeback")
         identity = readback.identity.value
         continuation = checkpoint_continuation_required(readback)
-        if continuation and purpose != "delivery_result" and decision_scope is None:
-            decision_scope = "goal"
-        elif decision_scope is None:
+        if decision_scope is None:
             decision_scope = "agent_lane"
-        with _source_guard(root, goal_id, path, registry_path if first_delivery else None):
+        with _source_guard(root, goal_id, path, registry_path):
             if purpose == "first_delivery":
                 attempt = _inspect_attempt(root, identity)
                 if attempt.get("status") == "committed":
@@ -768,7 +764,7 @@ def read_checkpoint_context(
                     full_frontier=continuation and purpose != "delivery_result",
                     admitted_turn=readback.heartbeat_receipt is not None,
                     read_context_id=uuid4().hex, dependency_todo_ids=dependency_todo_ids or [],
-                    facts=_local_source_facts(root, registry_path, path, identity, goal_ref, first_delivery=first_delivery))
+                    facts=_local_source_facts(root, registry_path, path, identity, goal_ref))
                 receipt = result.pop("receipt")
                 atomic_write_json(_receipt_path(root, identity, purpose), receipt)
     return {**result, "read_context_id": receipt["read_context_id"], "settlement_identity": identity.as_dict(),
@@ -791,7 +787,7 @@ def checkpoint_commit_guard(
     """Capture/preview under source locks. The native save repeats the check
     under the real provider fence; this preliminary check is not the commit."""
     protected = purpose != "supplement_checkpoint"
-    with _source_guard(runtime_root, identity.goal_id, state_file, registry_path if protected else None):
+    with _source_guard(runtime_root, identity.goal_id, state_file, registry_path):
         readback = read_heartbeat_settlement(runtime_root, goal_id=identity.goal_id,
             agent_id=identity.agent_id, todo_id=identity.todo_id, turn_instance_id=identity.turn_instance_id,
             replan_obligation_id=identity.replan_obligation_id, registry_path=registry_path, goal_ref=goal_ref,
@@ -812,7 +808,6 @@ def checkpoint_commit_guard(
                 state_file,
                 identity,
                 goal_ref,
-                first_delivery=protected,
             ))
         yield result
 
@@ -828,16 +823,14 @@ def commit_checkpoint_run(
     """Handoff the held locks and parsed bytes to one native save operation."""
     root = runtime_root.resolve()
     index = root / "goals" / identity.goal_id / "runs" / "index.jsonl"
-    protected = purpose != "supplement_checkpoint"
-    targets = (index, *((registry_path,) if protected else ()),
+    targets = (index, registry_path,
                shadow_maintenance_lock_target(root, identity.goal_id),
                legacy_coordination_todo_lock_path(runtime_root=root, goal_id=identity.goal_id), state_file)
     result = _checkpoint_effect("goal.checkpoint_read_context.commit", {
         "runtime_root": str(root), "state_file": str(state_file.resolve()), "identity": identity.as_dict(),
         "purpose": purpose, "decision_scope": decision_scope, "read_context_id": read_context_id,
-        **({"registry_path": str(registry_path.resolve()),
-            "registry_sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest()}
-           if protected else {}),
+        "registry_path": str(registry_path.resolve()),
+        "registry_sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest(),
         "locks": [cross_runtime_lock_witness(target) for target in targets],
         "state_sha256": hashlib.sha256(state_file.read_bytes()).hexdigest(),
         "index_sha256": hashlib.sha256(index.read_bytes() if index.exists() else b"").hexdigest(),
@@ -847,7 +840,6 @@ def commit_checkpoint_run(
             state_file,
             identity,
             goal_ref,
-            first_delivery=protected,
         ),
         "refresh_retry": refresh_retry, "record": record, "index_record": index_record, "markdown": markdown,
         **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),

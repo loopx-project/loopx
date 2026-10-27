@@ -59,10 +59,9 @@ class CurrentAgentCheckpoint:
                                 receipt = _read_context_receipt(path)
                             try:
                                 _resolve(self.root, phase='check', identity=self.identity.as_dict(),
-                                    purpose=purpose, decision_scope='goal', checkpoint_continuation=True,
+                                    purpose=purpose, checkpoint_continuation=True,
                                     read_context_id=receipt['read_context_id'], receipt=receipt,
-                                    facts=_local_source_facts(self.root, self.registry, self.state, self.identity,
-                                        first_delivery=purpose == 'first_delivery'))
+                                    facts=_local_source_facts(self.root, self.registry, self.state, self.identity))
                             except CheckpointReadContextRejected as error:
                                 if error.code not in {'checkpoint_read_context_stale', 'checkpoint_read_context_unknown_or_replaced'}:
                                     raise
@@ -73,7 +72,7 @@ class CurrentAgentCheckpoint:
                 context = read_checkpoint_context(registry_path=self.registry, runtime_root_override=str(self.root),
                     goal_id=self.identity.goal_id, agent_id=self.identity.agent_id, todo_id=self.identity.todo_id,
                     replan_obligation_id=self.identity.replan_obligation_id, turn_instance_id=self.identity.turn_instance_id,
-                    purpose=purpose, decision_scope='goal')
+                    purpose=purpose)
                 receipt = _read_context_receipt(path)
             else:
                 context = {'read_context_id': receipt['read_context_id'], 'basis': receipt['decision_basis'],
