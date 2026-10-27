@@ -186,7 +186,8 @@ def record_automatic_heartbeat_stall(
     """Commit and reproject the automatic no-spend heartbeat observation."""
 
     turn_id = context.heartbeat_turn_id
-    if turn_id is None:
+    # A default result-read identity is not an automatic Monitor observation.
+    if turn_id is None or not (args.turn_instance_id or getattr(args, "begin_turn", False)):
         return payload, status_payload, cache_metadata, "not_applicable"
     existing_stall = find_monitor_poll_turn(
         context.runtime_root,

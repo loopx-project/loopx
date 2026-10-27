@@ -1164,14 +1164,16 @@ def refresh_state_run(
         # Retained identity cannot override a later explicit policy revision.
         usable_source = retained_source if retained_source and retained_source.get("cadence") == guard_cadence(registry_path,runtime_root,safe_goal_id) else None
         from .control_plane.goals.checkpoint_context_io import _checkpoint_effect
+        requested_replan = autonomous_replan_recorded or bool(settlement_replan_guard.get('selected_obligation_id'))
         replan_stage = _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
             "phase": "replan_stage", "heartbeat_receipt": settlement_readback.heartbeat_receipt if settlement_readback else None,
-            "prior": prior_writeback_run, "requested": autonomous_replan_recorded,
+            "prior": prior_writeback_run, "requested": requested_replan,
             "has_read_context": bool(checkpoint_read_context_id),
-        }) if default_checkpoint and (autonomous_replan_recorded or
+        }) if default_checkpoint and (requested_replan or
             (prior_writeback_run or {}).get("vision_checkpoint", {}).get("replan_stage")) else {
                 "deferred": False, "qualify": autonomous_replan_recorded}
         replan_qualification = qualify_refresh_replan_writeback(
+            defer_until_direction=replan_stage['deferred'],
             replan_explore_reader=read_explore_context,
             replan_source_route={"registry": str(registry_path), "runtime_root": str(runtime_root)},
             capability_evidence=capability_evidence,
@@ -1263,6 +1265,7 @@ def refresh_state_run(
         if (
             normalized_delivery_outcome in ACCOUNTABLE_DELIVERY_OUTCOMES
             and not checkpoint_supplement
+            and not replan_stage['deferred']
         ):
             require_accountable_completion_validation(
                 state_text,

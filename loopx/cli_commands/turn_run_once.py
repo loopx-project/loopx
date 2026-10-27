@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -833,41 +834,31 @@ def execute_turn_run_once(
 
         host_runner: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None
         session_binding_resolver = None
-        if args.host == "codex-app-server":
-            def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-                return current_turn_host_launch_decision(args, registry_path=current_registry,
-                    runtime_root=runtime_root, identity=settlement_identity,
-                    planned_effective_action=payload["turn_envelope"].get("effective_action"),
-                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
-                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                    turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref)
+        def current_launch_decision(current_registry: Path, *, checkpoint_direction: bool = False) -> Mapping[str, Any]:
+            # Revalidate the already admitted identity through the same owner;
+            # global routes check the source before its quota/health mirror.
+            return current_turn_host_launch_decision(args, registry_path=current_registry,
+                runtime_root=runtime_root, identity=settlement_identity,
+                planned_effective_action=payload["turn_envelope"].get("effective_action"),
+                scheduler_execution_context=payload.get("scheduler_execution_context") or {},
+                operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+                turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref,
+                checkpoint_direction=checkpoint_direction)
 
+        if args.host == "codex-app-server":
             native_admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
-            )).with_launch_decision(native_launch_decision)
+            ))
 
             def run_native_host(request: Mapping[str, Any]) -> dict[str, Any]:
-                return native_host_runner(request, lambda: native_admission.launch_lifetime(
+                admitted = native_admission.with_launch_decision(lambda registry: current_launch_decision(
+                    registry, checkpoint_direction=request.get("phase") == "checkpoint_direction"))
+                return native_host_runner(request, lambda: admitted.launch_lifetime(
                     operation="native_conversation_turn_launch"))
 
             host_runner = run_native_host
             session_binding_resolver = native_session_binding_resolver
         elif args.host == "codex-cli":
-
-            def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
-                # Revalidate the already admitted identity through the same
-                # owner. In a global route the source is checked first, even
-                # when its mirror still advertises old quota or health.
-                return current_turn_host_launch_decision(
-                    args, registry_path=current_registry, runtime_root=runtime_root,
-                    identity=settlement_identity,
-                    planned_effective_action=payload["turn_envelope"].get("effective_action"),
-                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
-                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-                    # Keep this Turn's already dispatched required reads at launch.
-                    turn_start_hook_dispatch=turn_start_hook_dispatch,
-                    goal_ref=goal_ref,
-                )
 
             def run_built_in_host(
                 request: Mapping[str, Any],
@@ -887,7 +878,8 @@ def execute_turn_run_once(
                         registry_path=registry_path, goal_id=args.goal_id,
                         planned_goal_ref=goal_ref,
                     )
-                ).with_launch_decision(current_launch_decision)
+                ).with_launch_decision(lambda registry: current_launch_decision(
+                    registry, checkpoint_direction=request.get("phase") == "checkpoint_direction"))
                 if getattr(args, "codex_operation_tools", False):
                     from ..control_plane.turn_driver.codex_operation_host import (
                         run_codex_operation_host,
@@ -988,7 +980,13 @@ def execute_turn_run_once(
                 session["action"] = "resume"
                 session["context_policy"] = {**session.get("context_policy", {}), "mode": "resume"}
                 request["session"] = session
-            with observe_goal_execution(runtime_root, args.goal_id, host=args.host):
+            admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
+                registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
+            )).with_launch_decision(lambda registry: current_launch_decision(registry, checkpoint_direction=True))
+            # Built-in hosts hold their own launch lifetime at actual spawn.
+            lifetime = nullcontext() if args.host in {"codex-cli", "codex-app-server"} else admission.launch_lifetime(
+                operation="checkpoint_direction_launch")
+            with lifetime, observe_goal_execution(runtime_root, args.goal_id, host=args.host):
                 observation = (_run_host_runner(request, runner=host_runner) if host_runner is not None else
                     _run_host(request, argv=raw_argv, project=project, timeout_seconds=args.timeout_seconds))
             if observation.get("ok") is not True:
@@ -997,7 +995,7 @@ def execute_turn_run_once(
                     failure_kind=str(observation.get("failure_kind") or "unknown"))
             decision = dict(observation["value"])
             if decision.get("stop_reason"):
-                return {"result_kind": "user_action_required"}
+                return {"result_kind": "user_action_required", "stop_reason": decision["stop_reason"]}
             if decision.get("result_kind") in {"wait", "user_action_required", "iteration_failed"}:
                 return decision
             if decision.get("agent_vision_json"):
@@ -1010,7 +1008,8 @@ def execute_turn_run_once(
         _state_project, checkpoint_state = resolve_todo_state_path(registry_path=registry_path,
             goal_id=args.goal_id, project=None, state_file=None)
         current_checkpoint = CurrentAgentCheckpoint(registry_path, runtime_root, checkpoint_state,
-            settlement_identity, run_direction)
+            settlement_identity, run_direction,
+            explicit_resume=bool(args.resume_turn_key and args.retry_failed_turn))
 
         def on_managed_start_admitted() -> None:
             if settlement_identity.request_subject is not None:

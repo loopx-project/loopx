@@ -39,7 +39,7 @@ from ..coordination.authority_source_capture import authority_registry_source
 from .path_resolution import resolve_todo_state_path
 from .provider_projection import projection_delivery_requires_ack, settle_canonical_todo_projection
 from .successor_derivation import build_successor_intents
-from .completion_result import read_completion_result, store_completion_result
+from .completion_result import read_completion_result, store_completion_result, resolve_terminal_result_descriptor
 
 _TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v3"
 _ARCHIVE_REQUEST_SCHEMA = "loopx_local_coordination_todo_archive_request_v0"
@@ -316,22 +316,8 @@ def terminal_canonical_todo_if_promoted(
     # The canonical transaction owns missing/role/archive lifecycle decisions.
     # Keep only the optional local validation facts needed by the host adapter.
     target = _todo_by_id(canonical["todos"], todo_id) or {}
-    result_descriptor = None
-    if completion_result_file is not None:
-        try:
-            result_descriptor = store_completion_result(
-                source=completion_result_file, runtime_root=runtime_root,
-                goal_id=goal_id, persist=False,
-            )
-        except FileNotFoundError:
-            if target.get("status") != "done":
-                raise
-            bound = read_completion_result(
-                registry_path=registry_path, runtime_root=runtime_root,
-                goal_id=goal_id, todo_id=todo_id,
-            )["result"]
-            result_descriptor = {key: bound[key] for key in
-                                 ("provider", "sha256", "size_bytes", "content_type")}
+    result_descriptor = resolve_terminal_result_descriptor(completion_result_file,
+        target=target, runtime_root=runtime_root, registry_path=registry_path, goal_id=goal_id, todo_id=todo_id)
     with authority_registry_source(registry_path) as registry_source:
         registered, grants = todo_lifecycle_facts(registry_path, goal_id)
         successor_intents = build_successor_intents(

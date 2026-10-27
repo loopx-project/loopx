@@ -56,6 +56,8 @@ from .journal_store import (
 )
 from .lane_fence import single_executor_per_turn_lane
 from .recovery import (
+    preview_turn_recovery, prepare_terminal_host_recovery, reset_failed_turn_for_retry,
+    recover_existing_turn, admit_unfinished_host,
     assess_existing_turn_recovery,
     build_turn_recovery_audit,
     require_turn_recovery_continuation,
@@ -1619,45 +1621,11 @@ def run_loopx_turn_once(
             plan, fail_closed, execute=True, replayed=False, effects=empty_effects
         )
     if not execute:
-        preview = {
-            "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
-            "status": "preview",
-            "host": host_projection,
-            "result_kind": None,
-            "receipt": None,
-            "scheduler": {"disposition": "not_evaluated"},
-        }
-        # A retained Turn may only need settlement. Project the same typed
-        # recovery owner that execution consumes, without changing its journal
-        # or calling any execution callback. A new Turn keeps the original plan.
-        journal = _load_journal(turn_journal_path(
-            runtime_root, goal_id=goal_id, turn_key=str(transaction_plan["turn_key"])
-        ))
-        preview_plan = plan
-        if journal is not None:
-            envelope = plan.get("turn_envelope")
-            assessment = assess_existing_turn_recovery(
-                journal, request, goal_id=goal_id,
-                agent_id=str(envelope.get("agent_id") or "")
-                if isinstance(envelope, Mapping) else "",
-                turn_key=str(transaction_plan["turn_key"]),
-                retry_failed=retry_failed,
-                session_binding_resolver=session_binding_resolver,
-            )
-            preview_plan = {**plan, "route": {
-                **plan["route"],
-                "would_invoke_host": assessment.decision["reinvoke_host"],
-            }}
-            preview["recovery_audit"] = build_turn_recovery_audit(
-                assessment.decision, journal, status="finished", host_invoked=False
-            )
-        return execution_payload(
-            preview_plan,
-            preview,
-            execute=False,
-            replayed=False,
-            effects=empty_effects,
-        )
+        return preview_turn_recovery(plan, host_projection,
+            journal=_load_journal(turn_journal_path(runtime_root, goal_id=goal_id,
+                turn_key=str(transaction_plan["turn_key"]))), request=request,
+            goal_id=goal_id, turn_key=str(transaction_plan["turn_key"]), retry_failed=retry_failed,
+            session_binding_resolver=session_binding_resolver, empty_effects=empty_effects)
     if writeback is None or spend is None or scheduler is None:
         raise ValueError(
             "executing run-once requires writeback, spend, and scheduler callbacks"
@@ -1725,58 +1693,17 @@ def run_loopx_turn_once(
                 session_binding_resolver=session_binding_resolver,
             )
             recovery_decision = assessment.decision
-            action = recovery_decision.get("action")
-            if action == "return_existing":
-                payload = execution_payload(
-                    plan,
-                    journal,
-                    execute=True,
-                    replayed=True,
-                    effects=empty_effects,
-                )
-                payload.update(recover_post_settlement(
-                    plan=plan, post_settlement=post_settlement, journal=journal,
-                ))
-                payload["recovery"] = build_turn_recovery_audit(
-                    recovery_decision,
-                    journal,
-                    status="finished",
-                    host_invoked=False,
-                )
-                return payload
+            if recovery_decision.get("action") == "return_existing":
+                return recover_existing_turn(plan, journal, recovery_decision,
+                    empty_effects=empty_effects, post_settlement=post_settlement)
             request = require_turn_recovery_continuation(assessment)
 
         # Settlement recovery uses its cached host result and must not reserve
         # another interval. A new host attempt, including failed-result retry,
         # goes through admission before any host or journal attempt mutation.
-        receipt = journal.get("receipt") if isinstance(journal, Mapping) else None
-        validation_reinvokes_host = (
-            isinstance(journal, Mapping)
-            and journal.get("status") == "failed"
-            and isinstance(receipt, Mapping)
-            and receipt.get("failed_phase") == "validation"
-            and journal.get("validation_stage") != "task_postcondition"
-        )
-        terminal_retry = (journal or {}).get("result_revalidation") or {}
-        terminal_view = terminal_retry.get("validation", {})
-        if terminal_retry.get("phase") == "terminal_closeout" and terminal_view.get("status") == "failed":
-            assessment = assess_existing_turn_recovery({"schema_version": journal["schema_version"],
-                "goal_id": goal_id, "turn_key": turn_key, "plan": journal["plan"], **terminal_view}, request,
-                goal_id=goal_id, agent_id=str(plan["turn_envelope"]["agent_id"]), turn_key=turn_key,
-                retry_failed=True, session_binding_resolver=session_binding_resolver)
-            request = require_turn_recovery_continuation(assessment)
-        terminal_work_changed = (result_work is not None and terminal_retry.get("phase") == "terminal_closeout"
-            and terminal_retry.get("validation", {}).get("work_context") != result_work.read())
-        needs_host = (
-            validation_reinvokes_host
-            or journal is None
-            or "typed_result" not in list(journal.get("completed_phases") or [])
-            or terminal_work_changed
-            or isinstance(journal.get("result_revalidation"), dict) and
-                journal["result_revalidation"].get("phase") == "terminal_closeout" and
-                ("typed_result" not in journal["result_revalidation"].get("validation", {}).get("completed_phases", []) or
-                 journal["result_revalidation"].get("validation", {}).get("status") == "failed")
-        )
+        request, needs_host = prepare_terminal_host_recovery(journal, request,
+            plan=plan, goal_id=goal_id, turn_key=turn_key, result_work=result_work,
+            session_binding_resolver=session_binding_resolver)
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
         capture = stage_turn_decision_capture(
@@ -1818,29 +1745,7 @@ def run_loopx_turn_once(
             )
             persist_journal(journal)
 
-        if journal and journal.get("status") == "failed":
-            receipt = (
-                journal.get("receipt")
-                if isinstance(journal.get("receipt"), dict)
-                else {}
-            )
-            if receipt.get("failed_phase") == "validation":
-                if validation_reinvokes_host:
-                    journal.pop("host_result", None)
-                journal.pop("result_kind", None)
-                journal["completed_phases"] = (
-                    list(TRANSACTION_PHASES[:2])
-                    if isinstance(journal.get("host_result"), dict)
-                    else []
-                )
-                journal.pop("task_validation", None)
-                journal.pop("validation_stage", None)
-            journal.pop("reason", None)
-            journal.pop("receipt", None)
-            journal.pop("host_recovery", None)
-            journal.pop("host_failure", None)
-            journal["status"] = "in_progress"
-            persist_journal(journal)
+        reset_failed_turn_for_retry(journal, persist_journal)
         if journal is None:
             journal = {
                 "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
@@ -1857,26 +1762,9 @@ def run_loopx_turn_once(
             journal["admission"] = admission
             persist_journal(journal)
 
-        original_result_committed = (result_work is not None and
-            isinstance(journal.get("result_work_context"), Mapping) and (
-                ("durable_writeback" in journal.get("completed_phases", []) and
-                    post_result_checkpoint is not None and post_result_checkpoint()) or result_work.result_committed()))
-        if result_work is not None and not original_result_committed:
-            revalidation = journal.get("result_revalidation")
-            context = result_work.read()
-            if revalidation is not None and (context == revalidation.get("original_context") or revalidation.get("reread_required") is True):
-                context = result_work.read(reread=True)
-            if context is not None:
-                previous = journal.get("result_work_context")
-                if previous is not None and revalidation is None and previous != context:
-                    raise ValueError("Original Turn work input was replaced; preserve its candidate and reconcile")
-                journal["result_work_context"] = context
-                request["delivery_result_context"] = context
-                if revalidation is not None:
-                    request["result_revalidation"] = revalidation
-                    revalidation["reread_required"] = False
-                # Durable work input precedes dispatch, including cold retries.
-                persist_journal(journal)
+        original_result_committed = (result_work.prepare_request(journal, request,
+            post_result_checkpoint=post_result_checkpoint, persist_journal=persist_journal)
+            if result_work is not None else False)
 
         effects = dict(empty_effects)
 

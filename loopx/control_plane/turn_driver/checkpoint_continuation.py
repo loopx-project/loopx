@@ -18,8 +18,9 @@ from .host_failure import BuiltInHostError, build_host_failure_record
 
 class CurrentAgentCheckpoint:
     def __init__(self, registry: Path, root: Path, state: Path, identity: SettlementIdentity,
-                 runner: Callable[[dict[str, Any]], dict[str, Any]]):
+                 runner: Callable[[dict[str, Any]], dict[str, Any]], *, explicit_resume: bool = False):
         self.registry, self.root, self.state, self.identity, self.runner = registry, root, state, identity, runner
+        self.explicit_resume = explicit_resume
         self._enabled: bool | None = None
 
     def enabled(self) -> bool:
@@ -81,7 +82,7 @@ class CurrentAgentCheckpoint:
             decision = receipt.get('current_agent_decision')
             if decision is None:
                 dispatch = _checkpoint_effect('goal.checkpoint_read_context.work_binding', {
-                    'phase': 'direction_dispatch', 'receipt': receipt})
+                    'phase': 'direction_dispatch', 'receipt': receipt, 'explicit_resume': self.explicit_resume})
                 if dispatch.get('ok') is not True:
                     raise CheckpointReadContextRejected(dispatch)
                 receipt['direction_host_attempt_count'] = dispatch['attempt']
@@ -94,7 +95,13 @@ class CurrentAgentCheckpoint:
                     self._save(path, receipt)
                     raise ValueError(error.reason) from error
                 if decision.get('result_kind') in {'wait', 'user_action_required', 'iteration_failed'}:
+                    # A valid Host response supersedes the prior transport
+                    # failure; retain the total attempt count for future failures.
+                    receipt.pop('direction_host_failure', None)
                     receipt['direction_stopped'] = True
+                    receipt['direction_stops'] = [*receipt.get('direction_stops', []), {
+                        'attempt': dispatch['attempt'], 'result_kind': decision['result_kind'],
+                        **({'stop_reason': decision['stop_reason']} if decision.get('stop_reason') else {})}]
                     self._save(path, receipt)
                     raise ValueError('Current Agent stopped direction continuation; result retained')
                 bound = _checkpoint_effect('goal.checkpoint_read_context.work_binding', {
@@ -103,6 +110,7 @@ class CurrentAgentCheckpoint:
                     raise ValueError(bound.get('error', 'Direction response binding rejected'))
                 receipt = {**receipt, 'current_agent_decision': decision, 'current_agent_binding': bound['binding']}
                 receipt.pop('direction_host_failure', None)
+                receipt.pop('direction_stopped', None)
                 self._save(path, receipt)
             else:
                 bound = _checkpoint_effect('goal.checkpoint_read_context.work_binding', {

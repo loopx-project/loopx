@@ -519,7 +519,7 @@ def build_heartbeat_prompt(
         active_state=active_state_text,
         # Thin remains an installed-CLI worker, as before. Bootstrap/full
         # generator surfaces retain preflight; brief carries it in its body.
-        cli_preflight="" if thin else cli_preflight,
+        cli_preflight=render_cli_preflight(cli_bin=cli_bin, thin=thin),
         pr_review_pre_quota_command=(
             "" if traex_visible_goal else commands["pr_review_pre_quota_command"] or ""
         ),

@@ -29,6 +29,7 @@ import {
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
   readQuotaSettlement,
   readQuotaSettlementSnapshot,
+  selectDefaultResultWorkTurn,
 } from "../../loopx/control_plane/quota/settlement_readback.ts";
 import {
   PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
@@ -482,6 +483,30 @@ function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test("work inference excludes only settled selected planning, preserving ordinary progress recovery", async () => {
+  for (const planned of [false, true]) {
+    const root = await fixture({writeback: true, spend: true,
+      visionCheckpoint: {schema_version: "vision_checkpoint_v0", agent_id: agentId,
+        satisfied: true, delivery_boundary: "semantic_closeout",
+        triggers: [{kind: "material_delivery_outcome", delivery_outcome: "outcome_progress"}]},
+      ...(planned ? {autonomousReplanAck: {schema_version: "autonomous_replan_ack_v0",
+        recorded: true, semantic_delta: {schema_version: "replan_semantic_delta_v0", accepted: true}}} : {}),
+    });
+    try {
+      const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      const events = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      const guard = events.find(event => event.event_kind === "quota_should_run");
+      guard.details.result_freshness = "turn_result_freshness_required_v1";
+      guard.details.semantic_replan_obligation_id = planned ? "replan-0000000000000001" : null;
+      await writeFile(path, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+      assert.equal((await readQuotaSettlement(request(root))).replay_phase, "settled");
+      const selection = request(root, {todo: {status: "open"}});
+      assert.equal((await selectDefaultResultWorkTurn(selection)).turn_instance_id, planned ? null : turnId);
+      assert.equal((await selectDefaultResultWorkTurn({...selection, pending_only: true})).turn_instance_id, null);
+    } finally { await rm(root, {recursive: true, force: true}); }
+  }
+});
 
 function sourceGuardPath(registryPath: string): string {
   const digest = createHash("sha256").update(goalId, "utf8").digest("hex");

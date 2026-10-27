@@ -1,7 +1,7 @@
 """Source/receipt I/O only; checkpoint_read_context.ts owns decision semantics."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 import hashlib
 import json
@@ -275,6 +275,31 @@ class TurnResultWork:
             goal_id=self.identity.goal_id, todo_id=self.identity.todo_id,
             completion_identity_source="turn_settlement")
         return fence["outcome"] == "replay" and fence["status"] == "done"
+
+    def prepare_request(self, journal: dict[str, Any], request: dict[str, Any], *,
+                        post_result_checkpoint: Callable[[], bool] | None,
+                        persist_journal: Callable[[Mapping[str, Any]], None]) -> bool:
+        """Persist the original work basis before dispatch or exact cold recovery."""
+        original_result_committed = (isinstance(journal.get("result_work_context"), Mapping) and (
+                ("durable_writeback" in journal.get("completed_phases", []) and
+                    post_result_checkpoint is not None and post_result_checkpoint()) or self.result_committed()))
+        if not original_result_committed:
+            revalidation = journal.get("result_revalidation")
+            context = self.read()
+            if revalidation is not None and (context == revalidation.get("original_context") or revalidation.get("reread_required") is True):
+                context = self.read(reread=True)
+            if context is not None:
+                previous = journal.get("result_work_context")
+                if previous is not None and revalidation is None and previous != context:
+                    raise ValueError("Original Turn work input was replaced; preserve its candidate and reconcile")
+                journal["result_work_context"] = context
+                request["delivery_result_context"] = context
+                if revalidation is not None:
+                    request["result_revalidation"] = revalidation
+                    revalidation["reread_required"] = False
+                # Durable work input precedes dispatch, including cold retries.
+                persist_journal(journal)
+        return original_result_committed
 
     def read(self, *, reread: bool = False) -> dict[str, Any] | None:
         readback = read_heartbeat_settlement(self.runtime_root, goal_id=self.identity.goal_id,

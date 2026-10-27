@@ -123,3 +123,24 @@ def read_completion_result(*, registry_path: Path, runtime_root: Path,
         raise ValueError("completion result bytes no longer match canonical binding")
     return {"ok": True, "goal_id": goal_id, "todo_id": todo_id,
             "result": binding, "text": data.decode("utf-8"), "audience": "local_operator"}
+
+
+def resolve_terminal_result_descriptor(completion_result_file, *, target, runtime_root, registry_path, goal_id, todo_id):
+    """Recover missing input bytes only from the original completed Todo binding."""
+    result_descriptor = None
+    if completion_result_file is not None:
+        try:
+            result_descriptor = store_completion_result(
+                source=completion_result_file, runtime_root=runtime_root,
+                goal_id=goal_id, persist=False,
+            )
+        except FileNotFoundError:
+            if target.get("status") != "done":
+                raise
+            bound = read_completion_result(
+                registry_path=registry_path, runtime_root=runtime_root,
+                goal_id=goal_id, todo_id=todo_id,
+            )["result"]
+            result_descriptor = {key: bound[key] for key in
+                                 ("provider", "sha256", "size_bytes", "content_type")}
+    return result_descriptor

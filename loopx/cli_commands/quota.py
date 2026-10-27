@@ -967,6 +967,34 @@ def _handle_quota_command(
                 append_cli_rollout_event=append_cli_rollout_event,
             )
     if args.quota_command == "should-run" and heartbeat_turn_id and payload.get("ok") is True:
+        payload = _restore_quota_work_input(args, payload, heartbeat_turn_id=heartbeat_turn_id,
+            heartbeat_receipt_existing=heartbeat_receipt_existing, registry_path=registry_path,
+            runtime_root=runtime_root, runtime_root_arg=runtime_root_arg, goal_ref=goal_ref)
+    attach_reward_memory_recall_after_should_run(
+        payload,
+        quota_command=args.quota_command,
+        heartbeat_turn_id=heartbeat_turn_id,
+        registry_path=registry_path,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+    )
+    return _emit_quota_result(
+        payload,
+        args,
+        context=context,
+        registry_path=registry_path,
+        heartbeat_turn_id=heartbeat_turn_id,
+        usage_quota_started=usage_quota_started,
+        capture_directory=capture_directory,
+        detail_sections=detail_sections,
+        print_payload=print_payload,
+    )
+
+
+def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_receipt_existing,
+                              registry_path, runtime_root, runtime_root_arg, goal_ref):
+    """Restore the original captured input after a successful quota guard."""
+    if args.quota_command == "should-run" and heartbeat_turn_id and payload.get("ok") is True:
         from ..control_plane.goals.checkpoint_context_io import TurnResultWork, result_work_required, result_work_context, result_work_context_exists
         from ..control_plane.quota.settlement import read_heartbeat_settlement
 
@@ -998,22 +1026,4 @@ def _handle_quota_command(
             payload.update(error_code=getattr(error, "code", "delivery_work_context_unknown"),
                 error=str(error),
                 status="delivery_work_context_unavailable", heartbeat_receipt=admitted_receipt)
-    attach_reward_memory_recall_after_should_run(
-        payload,
-        quota_command=args.quota_command,
-        heartbeat_turn_id=heartbeat_turn_id,
-        registry_path=registry_path,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-    )
-    return _emit_quota_result(
-        payload,
-        args,
-        context=context,
-        registry_path=registry_path,
-        heartbeat_turn_id=heartbeat_turn_id,
-        usage_quota_started=usage_quota_started,
-        capture_directory=capture_directory,
-        detail_sections=detail_sections,
-        print_payload=print_payload,
-    )
+    return payload

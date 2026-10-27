@@ -1466,10 +1466,21 @@ export async function selectDefaultResultWorkTurn(value: unknown): Promise<JsonO
           typeof fields.todo_id !== "string" || (request.todo_id !== null && fields.todo_id !== request.todo_id)) continue;
       if (todo?.status === "done" && ![event.run_id, fields.settlement_effect_id].includes(todo.completion_turn_key)) continue;
       const turn = String(event.run_id);
-      if (raw.pending_only === true) {
+      if (raw.pending_only === true || todo?.status !== "done") {
         const readback = readQuotaSettlementFromRequest({...request, todo_id: fields.todo_id, turn_instance_id: turn}, snapshot);
-        if (readback.replay_phase === "settled") continue;
-      } else if (todo?.status !== "done" && snapshot.events.some(done => done.event_kind === "todo_complete" &&
+        // A settled planning obligation must not compete with its later work
+        // admission. Ordinary progress still retains its original-Turn result
+        // recovery path; settlement alone is not proof of planning-only work.
+        const guard = jsonObject(readback.semantic_replan_guard);
+        const planned = guard?.scope === "turn_guard" &&
+          typeof guard.selected_obligation_id === "string" &&
+          isAcceptedReplanWriteback(readback.writeback_run, settlementIdentity({
+            goal_id: request.goal_id, agent_id: request.agent_id!,
+            todo_id: fields.todo_id, turn_instance_id: turn,
+          }));
+        if (readback.replay_phase === "settled" && (raw.pending_only === true || planned)) continue;
+      }
+      if (raw.pending_only !== true && todo?.status !== "done" && snapshot.events.some(done => done.event_kind === "todo_complete" &&
           done.agent_id === request.agent_id && done.run_id === event.run_id && done.todo_id === fields.todo_id &&
           quotaOwnerOwnsProjection(request.owner, done.goal_ref))) continue;
       turns.set(turn, event);

@@ -156,7 +156,9 @@ def render_available_capability_args(values: Any) -> str:
     )
 
 
-def render_cli_preflight(*, cli_bin: str = "loopx") -> str:
+def render_cli_preflight(*, cli_bin: str = "loopx", thin: bool = False) -> str:
+    if thin:
+        return ""
     return install_contract.doctor_preflight_command(cli_bin=cli_bin)
 
 

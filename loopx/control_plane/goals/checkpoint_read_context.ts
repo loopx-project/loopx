@@ -10,6 +10,7 @@ import {claimAllowsAgent} from "../todos/agent_scope.ts";
 import {resultFreshnessRequired, checkpointContinuationRequired} from "../quota/heartbeat_receipt_identity.ts";
 import {visionAuthoringContract} from "./vision_checkpoint.ts";
 import {hostRetryPolicyCheck} from "../turn_driver/turn_journal.ts";
+import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {originalTurnRequestsNoFollowup} from "../todos/completion_state.ts";
 import {terminalValidationRecovery} from "../todos/completion_validation_plan.ts";
 import {decodeTodoCompletionFenceRequest, evaluateTodoCompletionFence,
@@ -266,7 +267,7 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
       ...(request.checkpoint_continuation === true && use !== "delivery_result" && originalOutcome ? {original_outcome: originalOutcome} : {}),
       ...(request.checkpoint_continuation === true && use !== "delivery_result" &&
         canonicalAuthoritySha256(jsonObject(request.receipt)?.identity ?? null) === canonicalAuthoritySha256(identity) ?
-        Object.fromEntries(["direction_host_attempt_count", "direction_host_failure", "direction_stopped"]
+        Object.fromEntries(["direction_host_attempt_count", "direction_host_failure", "direction_stopped", "direction_stops"]
           .filter(key => jsonObject(request.receipt)?.[key] !== undefined)
           .map(key => [key, jsonObject(request.receipt)?.[key]])) : {}),
       ...(use === "delivery_result" && request.result_only === true ? {result_only: true} : {}),
@@ -377,7 +378,19 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
   if (request.phase === "direction_dispatch") {
     const receipt = requireJsonObject(request.receipt, "direction receipt");
     const failure = receipt.direction_host_failure;
-    if (receipt.direction_stopped === true) return rejected("checkpoint_direction_stopped");
+    if (receipt.direction_stopped === true) {
+      const stops = receipt.direction_stops;
+      // Explicit recovery is not a fresh grant. Unknown historical stops and
+      // actual Host Stop reasons stay closed; a read alone never rearms them.
+      if (request.explicit_resume !== true || !Array.isArray(stops) || !stops.length ||
+          stops.some(value => {
+            const stop = jsonObject(value);
+            return !stop || !Number.isInteger(stop.attempt) || Number(stop.attempt) < 1 ||
+              Number(stop.attempt) > Number(receipt.direction_host_attempt_count) ||
+              !["wait", "user_action_required", "iteration_failed"].includes(String(stop.result_kind)) ||
+              Object.hasOwn(stop, "stop_reason");
+          })) return rejected("checkpoint_direction_stopped");
+    }
     if (failure !== undefined) {
       const policy = hostRetryPolicyCheck({host_failure: failure,
         host_attempt_count: receipt.direction_host_attempt_count});
@@ -386,6 +399,22 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
     const count = receipt.direction_host_attempt_count ?? 0;
     if (!Number.isInteger(count) || Number(count) < 0) return rejected("checkpoint_direction_attempt_invalid");
     return {ok: true, attempt: Number(count) + 1};
+  }
+  if (request.phase === "direction_admission") {
+    const current = requireJsonObject(request.current, "current direction admission");
+    const identity = requireJsonObject(request.identity, "original direction identity");
+    const recovery = jsonObject(current.unsettled_host_turn_recovery);
+    const eligible = current.ok === true && current.should_run === true && current.status_health_ok === true &&
+      current.goal_id === identity.goal_id && current.requires_user_action === false &&
+      current.blocked_action_scope == null && jsonObject(current.quota)?.state === "eligible";
+    const sameRecovery = current.effective_action === EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY &&
+      recovery?.scope === "current_turn" && recovery.repair === "durable_writeback" &&
+      recovery.turn_instance_id === identity.turn_instance_id && recovery.binding_kind === "todo" &&
+      recovery.binding_id === identity.todo_id;
+    const sameWork = current.effective_action === request.planned_effective_action &&
+      jsonObject(current.selected_todo)?.todo_id === identity.todo_id &&
+      jsonObject(jsonObject(current.interaction_contract)?.agent_channel)?.delivery_allowed === true;
+    return eligible && (sameRecovery || sameWork) ? {ok: true} : rejected("checkpoint_direction_admission_rejected");
   }
   if (request.phase === "direction_response") {
     const receipt = requireJsonObject(request.receipt, "direction receipt");

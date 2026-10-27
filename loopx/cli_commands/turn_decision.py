@@ -355,6 +355,7 @@ def current_turn_host_launch_decision(
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    checkpoint_direction: bool = False,
 ) -> dict[str, Any]:
     """Re-read the original Turn's eligibility inside its launch lifetime.
 
@@ -393,6 +394,14 @@ def current_turn_host_launch_decision(
         turn_instance_id=identity.turn_instance_id, goal_ref=goal_ref,
         receipt_bound_todo_id=identity.todo_id or None)
     launch = {"current": current, "planned_effective_action": planned_effective_action}
+    if checkpoint_direction:
+        admitted = effect_runtime_result("goal.checkpoint_read_context.work_binding", {
+            "phase": "direction_admission", "current": current, "identity": identity.as_dict(),
+            "planned_effective_action": planned_effective_action,
+        })
+        if admitted.get("ok") is not True:
+            raise FirstPartyHostRuntimeRejected(str(admitted.get("error_code") or "goal_launch_not_allowed"))
+        return {"current": current, "planned_effective_action": current["effective_action"]}
     # The shared typed launch owner retains refusal precedence (including
     # Stop/witness failures) and compares the original effective action.
     if (current.get("should_run") is not True

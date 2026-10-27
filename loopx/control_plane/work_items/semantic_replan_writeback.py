@@ -570,6 +570,7 @@ def qualify_refresh_replan_writeback(
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
     guard_capability: Mapping[str, Any] | None = None,
+    defer_until_direction: bool = False,
 ) -> RefreshReplanQualification:
     """Qualify one refresh's replan delta and accountable settlement outcome."""
 
@@ -620,7 +621,9 @@ def qualify_refresh_replan_writeback(
                 ),
             )
 
-    semantic_delta = enforce_open_replan_writeback(
+    # Pending checkpoint is a retained result, not a semantic ACK. The same
+    # bound obligation is qualified after the current Agent reads that result.
+    semantic_delta = None if defer_until_direction else enforce_open_replan_writeback(
         capability_evidence=capability_evidence, guard_capability=guard_capability,
         newest_first_runs=newest_first_runs,
         state_text=state_text,

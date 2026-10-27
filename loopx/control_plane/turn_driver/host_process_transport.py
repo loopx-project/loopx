@@ -296,25 +296,7 @@ def run_host_process(
     if delegated_lease is not None:
         request["delegated_lease"] = delegated_lease
     bridge = Path(__file__).with_name("host_process_bridge.ts")
-    # The bridge runs on the caller's environment, which may pin the release the
-    # Host must run and name the record its supervisor owns. Copy it instead of
-    # replacing it with the ambient one, and consume the record env from the
-    # copy only: the Host below must not inherit a marker for its supervisor's
-    # record, and the caller's mapping is never mutated.
-    bridge_environment = os.environ.copy() if environment is None else dict(environment)
-    record_value = bridge_environment.pop(HOST_PROCESS_RECORD_ENV, "")
-    supervision = bridge_environment.pop(HOST_PROCESS_PARENT_ENV, "direct")
-    if supervision not in {"direct", "leased"}:
-        raise ValueError("invalid managed Host supervision scope")
-    record_path = Path(record_value) if record_value else None
-    supervises = HOST_PROCESS_SUPERVISES_HOST
-    if record_path is not None and delegated_lease is not None:
-        # A leased run starts the private leased CLI, which records the actual
-        # Host it starts under the owner's record. This supervisor records its
-        # own group beside that record, so readback can prove both exited.
-        record_path = host_process_supervisor_record(record_path)
-        supervises = HOST_PROCESS_SUPERVISES_NESTED_HOST
-        supervision = "leased"
+    bridge_environment, record_value, record_path, supervision, supervises = _bridge_record_scope(environment, delegated_lease)
     launch_budget = max(1.0, timeout_seconds) if timeout_seconds is not None else 30.0
     launch_deadline = time.monotonic() + launch_budget if launch_guard is not None else None
     launch_arguments = (["--guarded-launch", str((time.time() + launch_budget) * 1000)]
@@ -435,3 +417,27 @@ def run_host_process(
         if proc.returncode != 0 or result is None:
             raise RuntimeError("Managed Host process supervision returned no result")
         return result
+
+
+def _bridge_record_scope(environment, delegated_lease):
+    """Separate the supervisor's private record namespace from its child Host."""
+    # The bridge runs on the caller's environment, which may pin the release the
+    # Host must run and name the record its supervisor owns. Copy it instead of
+    # replacing it with the ambient one, and consume the record env from the
+    # copy only: the Host below must not inherit a marker for its supervisor's
+    # record, and the caller's mapping is never mutated.
+    bridge_environment = os.environ.copy() if environment is None else dict(environment)
+    record_value = bridge_environment.pop(HOST_PROCESS_RECORD_ENV, "")
+    supervision = bridge_environment.pop(HOST_PROCESS_PARENT_ENV, "direct")
+    if supervision not in {"direct", "leased"}:
+        raise ValueError("invalid managed Host supervision scope")
+    record_path = Path(record_value) if record_value else None
+    supervises = HOST_PROCESS_SUPERVISES_HOST
+    if record_path is not None and delegated_lease is not None:
+        # A leased run starts the private leased CLI, which records the actual
+        # Host it starts under the owner's record. This supervisor records its
+        # own group beside that record, so readback can prove both exited.
+        record_path = host_process_supervisor_record(record_path)
+        supervises = HOST_PROCESS_SUPERVISES_NESTED_HOST
+        supervision = "leased"
+    return bridge_environment, record_value, record_path, supervision, supervises

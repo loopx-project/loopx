@@ -222,6 +222,41 @@ test("default direction binds the post-result input and response without relabel
   assert.equal(check(direction.receipt, {purpose: "first_delivery", facts: display}).error_code, "checkpoint_read_context_stale");
 });
 
+test("only explicit recovery rearms a known temporary direction stop without resetting attempts", () => {
+  const receipt = {direction_stopped: true, direction_host_attempt_count: 3,
+    direction_stops: [{attempt: 1, result_kind: "wait"}, {attempt: 3, result_kind: "user_action_required"}]};
+  const request = {phase: "direction_dispatch", receipt, explicit_resume: true};
+  assert.equal(work(request).attempt, 4);
+  assert.equal(work({...request, explicit_resume: false}).ok, false);
+  for (const stops of [[], null, [{attempt: 4, result_kind: "wait"}],
+    [{attempt: 1, result_kind: "future"}], [{attempt: 1, result_kind: "wait", stop_reason: "user_stop"}]]) {
+    assert.equal(work({...request, receipt: {...receipt, direction_stops: stops}}).ok, false);
+  }
+  assert.equal(work({...request, receipt: {direction_stopped: true}}).ok, false);
+  const exhausted = {schema_version: "loopx_turn_host_failure_v0", kind: "executor_timeout", attempt: 3,
+    retryable: true, retry: {strategy: "same_configuration", max_attempts: 2, backoff_seconds: 20}};
+  assert.equal(work({...request, receipt: {...receipt, direction_host_failure: exhausted}}).ok, false);
+});
+
+test("direction launch reuses current quota gates and exact original recovery identity", () => {
+  const current = {ok: true, should_run: true, status_health_ok: true, goal_id: identity.goal_id,
+    requires_user_action: false, blocked_action_scope: null, quota: {state: "eligible"},
+    effective_action: "unsettled_host_turn_recovery", unsettled_host_turn_recovery: {
+      scope: "current_turn", repair: "durable_writeback", turn_instance_id: identity.turn_instance_id,
+      binding_kind: "todo", binding_id: identity.todo_id}};
+  const request = {phase: "direction_admission", current, identity, planned_effective_action: "normal_run"};
+  assert.equal(work(request).ok, true);
+  for (const patch of [{ok: false}, {should_run: false}, {status_health_ok: false},
+    {requires_user_action: true}, {requires_user_action: null}, {quota: {state: "exhausted"}},
+    {quota: {state: "paused"}}, {quota: null}, {blocked_action_scope: "write"},
+    {goal_id: "other"}, {effective_action: "normal_run"},
+    {unsettled_host_turn_recovery: {...current.unsettled_host_turn_recovery, repair: "quota_spend"}},
+    {unsettled_host_turn_recovery: {...current.unsettled_host_turn_recovery, turn_instance_id: "other"}},
+    {unsettled_host_turn_recovery: {...current.unsettled_host_turn_recovery, binding_id: "other"}}]) {
+    assert.equal(work({...request, current: {...current, ...patch}}).ok, false);
+  }
+});
+
 test("default work input survives cold restore and validation cannot be relabelled", () => {
   const result = read({purpose: "delivery_result", admitted_turn: true, prior: null, result_only: true});
   const receipt = result.receipt as JsonObject;
