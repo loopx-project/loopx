@@ -12,6 +12,7 @@ import test_quota_settlement_cli as cli
 from canonical_authority_fixture import (
     initialize_canonical_authority,
     isolate_sqlite_runtime,
+    read_fixture_todos,
 )
 
 from loopx.control_plane.coordination.runtime_shadow import (
@@ -62,13 +63,12 @@ def test_retry_monitor_guard_and_replay_keep_receipt_and_work_authority(
     def run(*args: str):
         return cli._run_cli(registry, runtime, *args, cwd=project)
 
-    code, listed = run("todo", "list", "--goal-id", cli.GOAL_ID)
-    assert code == 0, listed
-    for todo in listed["todos"]:
+    todos = read_fixture_todos(state)
+    for todo in todos:
         todo["claimed_by"] = cli.AGENT_ID
     initialize_canonical_authority(
         runtime, cli.GOAL_ID, build_todo_runtime_shadow_projection(
-            goal_id=cli.GOAL_ID, todos=listed["todos"], handoff_mode="soft_claim", leases=[],
+            goal_id=cli.GOAL_ID, todos=todos, handoff_mode="soft_claim", leases=[],
         ), state_path=state, provider=provider,
     )
     code, mapped = run("read-only-map", "--goal-id", cli.GOAL_ID)

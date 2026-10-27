@@ -26,6 +26,8 @@ from typing import Any
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_source_fixture
+
 from loopx.control_plane.effect_runtime import (
     EffectRuntimeRejected,
     effect_runtime_result,
@@ -386,6 +388,13 @@ def _write_fixture(
     }
     if other_state_file is not None:
         paths["other_state_file"] = other_state_file
+    initialize_canonical_source_fixture(
+        runtime, GOAL_ID, state_path=state_file, provider="sqlite",
+    )
+    if other_state_file is not None:
+        initialize_canonical_source_fixture(
+            runtime, OTHER_GOAL_ID, state_path=other_state_file, provider="sqlite",
+        )
     return paths
 
 

@@ -96,7 +96,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
         session_scope='agent',session_id='branch-session',session_profile_digest='synthetic-profile')
     # This owner-focused fixture substitutes only native history verification.
     # The real Host + CLI + canonical context journey lives in test_native_checkpoint.
-    monkeypatch.setattr('loopx.hosts.research_checkpoint._context_session', lambda *_: 'branch-session')
+    monkeypatch.setattr('loopx.hosts.research_checkpoint._context_session', lambda *_, **__: 'branch-session')
     before=run('todo','list','--goal-id','branch','--todo-id',destination_todo)
     args=dict(source_todo_id=source_todo,todo_id=destination_todo,operation_id='context-adoption',
         expected_revision=before['authority_read']['provider_revision'],lease_key='branch-lease',lease_version=1)
