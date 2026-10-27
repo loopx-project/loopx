@@ -126,7 +126,7 @@ test("verified original writeback projects only its outstanding debit even after
 
 test("only a plain outcome review has a scalar receipt source", () => {
   const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
-    obligation_id: "replan-1111111111111111", agent_id: "reviewer",
+    obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
     stop_condition: "Stop at owner-only decisions.",
     triggers: [{kind: "goal_outcome_uncovered", text: "Private Goal prose stays outside telemetry"}],
     replan_context: {context_id: "old-acceptance-basis"}};
@@ -134,7 +134,8 @@ test("only a plain outcome review has a scalar receipt source", () => {
   assert.deepEqual(projectReplanSemantics(request), {review_source: {
     kind: "goal_outcome_uncovered", stop_condition: source.stop_condition}});
   for (const patch of [{required: false}, {schema_version: "unknown"}, {agent_id: "another-agent"},
-    {triggers: []}, {triggers: [{kind: "periodic_review_due"}]},
+    {triggers: []}, {trigger_count: 2}, {trigger_count: undefined},
+    {triggers: [{kind: "periodic_review_due"}]},
     {triggers: [{kind: "goal_outcome_uncovered"}, {kind: "external_progress_review_drift"}]},
     {satisfying_semantic_outcomes: ["new_runnable_successor"]},
     {progress_baseline: {}}, {progress_window: []},

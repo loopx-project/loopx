@@ -429,6 +429,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     // their source-specific evidence or discharge rules through this route.
     return {review_source: obligation.schema_version === "autonomous_replan_obligation_v0" &&
       obligation.required === true && kinds.length > 0 &&
+      obligation.trigger_count === triggers.length &&
       typeof request.agent_id === "string" && request.agent_id.trim() &&
       obligation.agent_id === request.agent_id &&
       kinds.every(kind => kind === "goal_outcome_uncovered") &&

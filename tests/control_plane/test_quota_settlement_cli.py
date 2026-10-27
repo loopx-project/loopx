@@ -7356,7 +7356,7 @@ def test_receipt_review_does_not_persist_private_or_lossy_stop_clauses() -> None
 
     obligation = {"schema_version": "autonomous_replan_obligation_v0", "required": True,
         "agent_id": AGENT_ID, "obligation_id": "replan-1111111111111111",
-        "triggers": [{"kind": "goal_outcome_uncovered"}]}
+        "trigger_count": 1, "triggers": [{"kind": "goal_outcome_uncovered"}]}
     for stop, retained in [("Stop at owner-only decisions.", True),
         ("Stop if Authorization: example is required.", False),
         ("Stop before\nowner-only decisions.", False), ("s" * 241, False)]:
