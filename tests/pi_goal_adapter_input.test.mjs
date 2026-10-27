@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire, registerHooks, syncBuiltinESMExports } from "node:module";
 import os from "node:os";
@@ -52,13 +53,14 @@ async function harness(t, { prime = true } = {}) {
       },
     };
   };
-  extension({
+  const pi = {
     registerCommand: (name, command) => commands.set(name, command),
     registerTool: tool => tools.set(tool.name, tool),
     registerEntryRenderer() {}, appendEntry() {},
     on: (name, handler) => events.set(name, handler),
     sendUserMessage: text => outgoing.push(text),
-  });
+  };
+  extension(pi);
   const ctx = {
     cwd: directory, isIdle: () => idle,
     sessionManager: { getSessionFile: () => file },
@@ -88,7 +90,8 @@ async function harness(t, { prime = true } = {}) {
     assert.equal((await read()).autoResume, true);
   }
   notices.length = 0;
-  return {emit, command, read, settle, outgoing, notices,
+  return {directory, emit, command, read, settle, outgoing, notices,
+    restart: async () => { await emit("session_shutdown"); extension(pi); },
     busy: () => { idle = false; }, probes: () => probes};
 }
 
@@ -180,3 +183,58 @@ test("an input observed after abort preserves the existing pause reason", async 
   assert.equal((await h.read()).pauseReason, "aborted");
   assert.equal((await h.read()).generation, aborted.generation);
 });
+
+for (const kind of ["foreign extension", "own extension", "interactive", "rpc"]) {
+  test(kind + " start during a pending resume survives adapter restart", async t => {
+    const h = await harness(t);
+    h.busy();
+    await h.emit("agent_end", {messages: [{role: "assistant", stopReason: "aborted"}]});
+    const before = await h.read();
+    assert.equal(before.autoResume, false);
+    const entered = Promise.withResolvers(), release = Promise.withResolvers();
+    const rename = fs.rename;
+    let blocked = false;
+    // Delay the real atomic file commit, without replacing the store or CAS.
+    t.mock.method(fs, "rename", async (from, to) => {
+      if (!blocked && String(to).startsWith(h.directory + path.sep)) {
+        const value = JSON.parse(await fs.readFile(from, "utf8"));
+        if (value.autoResume) {
+          blocked = true;
+          entered.resolve();
+          await release.promise;
+        }
+      }
+      return rename(from, to);
+    });
+    t.after(() => release.resolve());
+    const resume = h.command("resume");
+    await entered.promise;
+    const own = kind === "own extension";
+    const source = kind.endsWith("extension") ? "extension" : kind;
+    const text = own ? before.lastInjectedPrompt : "Inspect the new result before continuing";
+    const input = h.emit("input", {source, text});
+    // Explicit input finishes before Pi starts its run; the extension input
+    // handler continues immediately and only its start supplies the fallback.
+    const start = source === "extension"
+      ? h.emit("before_agent_start", {messageType: "user", prompt: text})
+      : input.then(() => h.emit("before_agent_start", {messageType: "user", prompt: text}));
+    release.resolve();
+    await Promise.all([resume, input, start]);
+    assert.equal((await h.read()).autoResume, own);
+    assert.equal((await h.read()).pauseReason, own ? "" : "user_prompt");
+    for (const restart of [false, true]) {
+      if (restart) await h.restart();
+      const probes = h.probes(), messages = h.outgoing.length;
+      await h.settle();
+      assert.equal(h.probes() - probes, Number(own));
+      assert.equal(h.outgoing.length - messages, Number(own));
+    }
+    if (!own) {
+      const probes = h.probes(), messages = h.outgoing.length;
+      await h.command("resume");
+      await h.settle();
+      assert.equal(h.probes() - probes, 1, "later explicit resume obtains fresh admission");
+      assert.equal(h.outgoing.length - messages, 1);
+    }
+  });
+}

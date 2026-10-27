@@ -1061,6 +1061,15 @@ export function createGoalLoop(options) {
     // evaluation. Pi catches input-handler errors, so throwing is not a gate.
     if (prompt === undefined) revoke()
     try {
+      if (prompt !== undefined) {
+        // Classify before waiting for a re-arm: its old paused binding can
+        // still identify our own injection. Every other start must revoke the
+        // older operation, even when its write has not reached disk yet.
+        const binding = await services.store.read(key)
+        if (!isCurrent()) return
+        if (binding && prompt === binding.lastInjectedPrompt) return
+        revoke()
+      }
       // A paused snapshot is not final while an older resume/activation can
       // still save autoResume=true. Revoke dispatch now, then read after those
       // writes finish so this pause also survives a new runtime instance.
@@ -1069,8 +1078,6 @@ export function createGoalLoop(options) {
       const binding = await services.store.read(key)
       if (!isCurrent()) return
       if (!binding || binding.terminal || binding.autoResume === false) return
-      if (prompt !== undefined && prompt === binding.lastInjectedPrompt) return
-      if (prompt !== undefined) revoke()
       const committed = await services.store.write(key, {
         autoResume: false,
         generation: (binding.generation || 0) + 1,
@@ -1084,7 +1091,7 @@ export function createGoalLoop(options) {
       )
     } catch {
       if (!isCurrent()) return
-      if (!fence?.blocked) revoke()
+      revoke()
       services.notify(
         "LoopX auto-continuation stopped for this session, but the input pause could not be saved. Restore state storage, then run /loopx resume; the pause may not survive a restart.",
         "error",
@@ -1156,7 +1163,9 @@ export function createGoalLoop(options) {
       }
       if (disposed) return null
       if (inputFences.get(key) !== inputFence) return null
-      inputFences.set(key, { blocked: false })
+      // Completion is still the same re-arm. A fallback classifying its text
+      // must distinguish completion from a later explicit resume/activation.
+      inputFence.blocked = false
       cancelScheduled(key)
       services.notify(
         `LoopX goal ${binding.goalId} activated; continuation gated by LoopX quota.`,
@@ -1249,7 +1258,7 @@ export function createGoalLoop(options) {
       if (!binding) return null
       if (disposed) return null
       if (inputFences.get(key) !== inputFence) return null
-      inputFences.set(key, { blocked: false })
+      inputFence.blocked = false
       cancelScheduled(key)
       services.notify(`LoopX goal ${binding.goalId} auto-continuation resumed.`, "info")
       return binding

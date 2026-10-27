@@ -65,8 +65,11 @@ into a LoopX-governed visible goal loop.
   that the pause may not survive restart; restore storage before explicit resume.
 - **Origin limits** — `extension` does not identify which extension sent input.
   Unknown-source user starts retain the injected-text fallback; custom starts
-  pause because LoopX only injects user messages. Earlier Pi input handlers can
-  consume an event before this extension sees it. This is not complete prompt
+  pause because LoopX only injects user messages. The fallback compares the
+  injected text before waiting for a pending re-arm and persists a non-own
+  start's pause after older writes; a later explicit resume still takes priority.
+  Earlier Pi input handlers can consume an event before this extension sees it.
+  This is not complete prompt
   provenance: compaction never exempts a prompt or re-arms a pause, and its
   occurrence does not establish the next prompt's producer.
 

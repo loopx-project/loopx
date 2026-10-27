@@ -1960,9 +1960,12 @@ test("new input during resume does not coalesce into the pre-resume pause", asyn
   assert.equal(f.calls.send, 0)
 })
 
-for (const operation of ["resume", "activation"]) {
+for (const [operation, inputKind] of [
+  ["resume", "explicit"], ["activation", "explicit"],
+  ["resume", "fallback"], ["activation", "fallback"],
+]) {
   for (const phase of ["read", "write"]) {
-    test(`input during a pending ${operation} ${phase} stays paused after restart`, async t => {
+    test(`${inputKind} input during a pending ${operation} ${phase} stays paused after restart`, async t => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-rearm-input-"))
       t.after(() => fs.rm(root, { recursive: true, force: true }))
       const disk = createBindingStore(root)
@@ -2002,8 +2005,11 @@ for (const operation of ["resume", "activation"]) {
       const rearm = operation === "resume"
         ? f.loop.resume("durable-race") : f.activate("durable-race")
       await entered.promise
-      const input = f.loop.ownerInput("durable-race")
-      const duplicate = f.loop.ownerInput("durable-race")
+      const pause = () => inputKind === "explicit"
+        ? f.loop.ownerInput("durable-race")
+        : f.loop.userPrompt("durable-race", "Inspect the new result")
+      const input = pause()
+      const duplicate = pause()
       await f.loop.settle("durable-race")
       assert.equal(f.calls.send, 0, "input revokes dispatch before the older operation finishes")
       release.resolve()
@@ -2123,4 +2129,93 @@ test("a failed pending resume does not prevent input from retaining a saved paus
   await f.loop.settle("failed-rearm")
   assert.equal(f.calls.send, 1)
   f.loop.dispose()
+})
+
+for (const laterResume of [false, true]) {
+  test(`fallback classification spanning a completed resume honors later resume=${laterResume}`, async t => {
+    const f = harness({ should_run: true })
+    t.after(() => f.loop.dispose())
+    f.loop.bind("classify", f.services)
+    await f.activate("classify", { autoResume: false })
+    const writing = Promise.withResolvers(), releaseWrite = Promise.withResolvers()
+    const reading = Promise.withResolvers(), releaseRead = Promise.withResolvers()
+    let blockWrite = true, blockRead = false
+    const store = {
+      async read(key) {
+        const value = await f.store.read(key)
+        if (blockRead) {
+          blockRead = false
+          reading.resolve()
+          await releaseRead.promise
+        }
+        return value
+      },
+      async write(key, changes, expected) {
+        if (blockWrite && changes.autoResume === true) {
+          blockWrite = false
+          writing.resolve()
+          await releaseWrite.promise
+        }
+        return f.store.write(key, changes, expected)
+      },
+    }
+    f.loop.bind("classify", { ...f.services, store })
+    const resume = f.loop.resume("classify")
+    await writing.promise
+    blockRead = true
+    const input = f.loop.userPrompt("classify", "Inspect the new result")
+    // Let the older resume finish while classification can still be pending.
+    releaseWrite.resolve()
+    await resume
+    // A dropped input may finish without ever attempting classification.
+    await Promise.race([reading.promise, input])
+    blockRead = false
+    if (laterResume) await f.loop.resume("classify")
+    releaseRead.resolve()
+    await input
+    assert.equal((await f.store.read("classify")).autoResume, laterResume)
+    await f.loop.settle("classify")
+    assert.equal(f.calls.quota, Number(laterResume))
+    assert.equal(f.calls.send, Number(laterResume))
+  })
+}
+
+test("failed fallback classification keeps a pending resume locally revoked", async t => {
+  const f = harness({ should_run: true })
+  t.after(() => f.loop.dispose())
+  f.loop.bind("read-failure", f.services)
+  await f.activate("read-failure", { autoResume: false })
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  let failRead = false, blockWrite = true
+  const notices = []
+  const store = {
+    read(key) {
+      if (failRead) throw new Error("synthetic classification failure")
+      return f.store.read(key)
+    },
+    async write(key, changes, expected) {
+      if (blockWrite && changes.autoResume === true) {
+        blockWrite = false
+        entered.resolve()
+        await release.promise
+      }
+      return f.store.write(key, changes, expected)
+    },
+  }
+  f.loop.bind("read-failure", { ...f.services, store, notify: (...args) => notices.push(args) })
+  const resume = f.loop.resume("read-failure")
+  await entered.promise
+  failRead = true
+  const input = f.loop.userPrompt("read-failure", "Inspect the new result")
+  release.resolve()
+  await Promise.all([resume, input])
+  failRead = false
+  assert.ok(notices.some(([text, kind]) => kind === "error" && /could not be saved/.test(text)))
+  await f.loop.settle("read-failure")
+  assert.equal(f.calls.quota, 0)
+  assert.equal(f.calls.send, 0)
+  await f.loop.resume("read-failure")
+  await f.loop.settle("read-failure")
+  assert.equal(f.calls.quota, 1)
+  assert.equal(f.calls.send, 1)
 })
