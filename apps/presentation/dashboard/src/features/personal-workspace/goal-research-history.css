@@ -207,7 +207,9 @@
 .research-trail-list { display: grid; gap: 0; margin: 0 0 0 8px; padding: 0 0 0 16px; border-left: 1px solid var(--pw-line); list-style: none; }
 .research-trail-list > li { position: relative; min-width: 0; }
 .research-trail-list > li::before { content: ""; position: absolute; top: 23px; left: -20px; width: 7px; height: 7px; border-radius: 50%; background: var(--pw-muted); box-shadow: 0 0 0 4px var(--pw-bg); }
-.research-history .research-trail-list button { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; min-height: 44px; padding: 12px; border: 0; border-radius: 6px; background: none; color: var(--pw-text); font: inherit; font-size: var(--text-body); line-height: var(--leading-prose); text-align: left; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-standard); }
+.research-history .research-trail-list button { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 12px; border: 0; border-radius: 6px; background: none; color: var(--pw-text); font: inherit; font-size: var(--text-body); line-height: var(--leading-prose); text-align: left; cursor: pointer; transition: background-color var(--motion-fast) var(--ease-standard); }
+.research-trail-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.research-trail-list button > svg { color: var(--pw-muted); }
 .research-history .research-trail-list button:hover { background: var(--pw-hover); }
 .research-history .research-trail-list button.is-selected { outline: 1px solid var(--pw-line-strong); }
 .research-trail-change { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }

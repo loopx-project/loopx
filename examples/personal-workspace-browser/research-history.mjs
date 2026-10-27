@@ -128,9 +128,120 @@ runpy.run_path(sys.argv[0], run_name="__main__")
   } catch (failure) {await close(); throw failure;}
 }
 
+// Whole-page comparison pressure: repeated conditions must not bury the next
+// decision, while its exact original finding remains one keyboard action away.
+async function readDecisionTrail(browser) {
+  const directory = await mkdtemp(resolve(tmpdir(), "loopx-decision-reading-"));
+  const fixture = resolve(directory, "history.json");
+  execFileSync(resolveTestPython(), ["-c", `
+import json, sys
+from pathlib import Path
+from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_finding_event
+goal = 'synthetic-decision-reading'
+events = []
+for question in range(3):
+    node = f'question-{question}'
+    title = ['对照能否区分修复机制与额外运行时间，并支持下一轮选择？',
+             'Did the fixed-budget comparison support a different candidate?',
+             '新的证据是否改变了原问题的判断，哪些失败与未知仍需保留？'][question]
+    events.append(build_explore_node_event(goal_id=goal, node_id=node, title=title,
+        recorded_at='2026-01-01T00:00:00Z'))
+    for record in range(5):
+        changed = [] if question == 1 and record == 4 else [f'改用对照方案 {record}，先比较相同预算下的有效结果，再决定是否进入下一轮。' * 3]
+        stopped = [f'STOP {index}: 停止将局部测量直接当作原始目标收益；同一来源中的负结果仍保留。' * 3 for index in range(2)]
+        retained = [f'RETAIN {index}: 保留原始目标、固定预算、历史失败与未知原因，不能从代理改进推断完整任务通过。' * 3 for index in range(3)]
+        interpretation = 'Outcome: ' + ('no_change' if not changed else 'replan')
+        for key, values in [('changed', changed), ('stopped', stopped), ('retained', retained)]:
+            if values: interpretation += ' ' + key + ': ' + ' '.join('- ' + value for value in values)
+        summary = 'Input revision: synthetic-v1 Applicability: current Observation: OBSERVATION: 对照未检验完整任务收益。 Interpretation: ' + interpretation
+        assert len(summary) < 2000
+        events.append(build_explore_finding_event(goal_id=goal, node_id=node,
+            finding_id=f'decision-{question}-{record}', title=f'Comparison {question}, decision {record}',
+            summary=summary, status=['confirmed', 'refuted', 'tentative'][record % 3],
+            recorded_at=f'2026-01-0{question + 1}T0{record}:00:00Z'))
+Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synthetic decision reading', 'events': events}, ensure_ascii=False))
+`, fixture], {cwd: repoRoot});
+  let owner, page;
+  try {
+    owner = await startHistoryOwner(fixture);
+    page = await browser.newPage({viewport: {width: 1280, height: 900}});
+    await page.addInitScript(() => {if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');});
+    await page.goto(`${owner.base}/chat/?goalId=${owner.goal_id}&view=research&statusUrl=%2Fstatus.json`, {waitUntil: 'domcontentloaded'});
+    const history = page.locator('.research-history');
+    await history.getByRole('status').filter({hasText: '18 / 18'}).waitFor();
+    const trail = history.locator('.research-trail');
+    const group = trail.locator('.research-trail-question').first();
+    assert.equal(await trail.locator('.research-trail-question').count(), 3);
+    assert.equal(await group.locator('[data-research-decision]').count(), 3);
+    assert.match(await group.locator('header').innerText(), /已反驳 2.*暂定结论 1|暂定结论 1.*已反驳 2/s);
+    await page.screenshot({path: resolve(outputDir, 'decision-trail-first-desktop.png'), animations: 'disabled'});
+    await trail.evaluate(e => e.scrollIntoView({block: 'start'}));
+    await page.screenshot({path: resolve(outputDir, 'decision-trail-desktop.png'), animations: 'disabled'});
+    await trail.locator('.research-trail-question').last().evaluate(e => e.scrollIntoView({block: 'start'}));
+    await page.screenshot({path: resolve(outputDir, 'decision-trail-lower-desktop.png'), animations: 'disabled'});
+    await page.setViewportSize({width: 390, height: 844});
+    await page.emulateMedia({reducedMotion: 'reduce'});
+    await trail.evaluate(e => e.scrollIntoView({block: 'start'}));
+    await page.screenshot({path: resolve(outputDir, 'decision-trail-phone.png'), animations: 'disabled'});
+    const rowsHeight = await group.locator('.research-trail-list').evaluate(e => e.getBoundingClientRect().height);
+    await writeFile(resolve(outputDir, 'decision-trail-reading.json'), JSON.stringify({rowsHeight}, null, 2));
+    assert(rowsHeight <= 500, `Three recent decisions must be comparable within one phone screen, rather than three repeated documents (${rowsHeight}px)`);
+    for (const locale of ['zh-CN', 'en']) {
+      await page.evaluate(value => localStorage.setItem('loopx-pw-locale', value), locale);
+      await page.reload({waitUntil: 'domcontentloaded'});
+      await history.getByRole('status').filter({hasText: '18 / 18'}).waitFor();
+      const row = group.locator('[data-research-decision]').first();
+      assert.match(await row.innerText(), locale === 'zh-CN' ? /停止 2.*保留 3/s : /Stopped 2.*Retained 3/s);
+      await row.scrollIntoViewIfNeeded();
+      await row.focus(); await row.press('Enter');
+      const detail = history.locator('.research-history-detail');
+      await detail.waitFor();
+      assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-2-4');
+      const original = detail.locator('.research-recorded-finding > .research-finding-sections');
+      assert.match(await original.innerText(), /OBSERVATION: 对照未检验完整任务收益/);
+      for (const text of ['STOP 0:', 'STOP 1:', 'RETAIN 0:', 'RETAIN 1:', 'RETAIN 2:']) assert((await original.innerText()).includes(text));
+      assert.equal(await original.locator('li').count(), 6, 'The exact reader keeps every changed, stopped and retained item');
+      if (locale === 'zh-CN') {
+        await page.screenshot({path: resolve(outputDir, 'decision-trail-reader-phone.png'), animations: 'disabled'});
+        await original.locator('dd').last().scrollIntoViewIfNeeded();
+        await page.screenshot({path: resolve(outputDir, 'decision-trail-reader-tail-phone.png'), animations: 'disabled'});
+      }
+      await detail.press('Escape');
+      assert(await row.evaluate(e => e === document.activeElement), 'Escape restores the exact decision control');
+      const returned = await row.boundingBox();
+      assert(returned.y >= 0 && returned.y + returned.height <= 844, 'Return brings the original decision back into the reading viewport');
+      const noChange = trail.locator('.research-trail-question').nth(1).locator('[data-research-decision]').first();
+      await noChange.click();
+      assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-1-4');
+      assert.match(await original.innerText(), /STOP 0:/, 'A decision with no changed list still has complete stopped and retained evidence');
+      await detail.press('Escape');
+      await group.getByRole('button', {name: locale === 'zh-CN' ? '显示更早记录 · 2' : 'Show earlier records · 2', exact: true}).click();
+      assert.equal(await group.locator('[data-research-decision]').count(), 5, 'Earlier decisions stay reachable');
+      const oldest = group.locator('[data-research-decision]').last();
+      await oldest.click();
+      assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-2-0');
+      await detail.press('Escape');
+      assert(await oldest.evaluate(e => e === document.activeElement));
+      if (locale === 'en') {
+        await trail.evaluate(e => e.scrollIntoView({block: 'start'}));
+        await page.screenshot({path: resolve(outputDir, 'decision-trail-english-phone.png'), animations: 'disabled'});
+      }
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    }
+    const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
+    assert.equal(readback.source_unchanged, true);
+    assert.equal(readback.mutation_attempts, 0, 'Reading and returning cannot perform a write');
+  } finally {
+    await page?.close();
+    await owner?.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+}
+
 export const researchHistoryScenario = {
   id: "research-history",
   async run({browser, collectCoverage, url}) {
+    await readDecisionTrail(browser);
     // The ordinary journey uses the real source verifier and HTTP owner, with
     // no intercepted analysis response and no analysis process or Goal writes.
     const nativeOwner = await startHistoryOwner(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/research-native-readback.json"));

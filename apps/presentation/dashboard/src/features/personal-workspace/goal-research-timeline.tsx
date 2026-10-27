@@ -1,5 +1,5 @@
 import {exploreFindingCopy} from "./explore-finding-copy";
-import {CircleHelp} from "lucide-react";
+import {ChevronRight, CircleHelp} from "lucide-react";
 import {useLayoutEffect, useRef, useState, type CSSProperties} from "react";
 import type {ExploreTimeline, TimelineNode, TimelinePhase} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {exploreTimelinePhaseAt, groupExploreTimelinePoints, groupExploreTimelineDecisions} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
@@ -40,7 +40,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     unstructured: "决策未结构化", unstructuredHint: "结论未按 writeback 结构记录，无法拆出依据与决策。",
     density: "记录密度", densityHint: "柱高为事件数；浅红为无记录空档", ticks: "转向 / 继续",
     routes: "研究路线", routeHint: "仅由显式关联或父子分组相连", singles: "未关联研究项",
-    trail: "决策轨迹", more: "显示更早记录", moreQuestions: "显示更多问题", records: "条决策记录", latestRecord: "最近记录", unknownTime: "时间未知", all: "全部时段",
+    trail: "决策轨迹", more: "显示更早记录", moreQuestions: "显示更多问题", records: "条决策记录", unknownTime: "时间未知", all: "全部时段",
     span: "记录跨度", start: "起点", end: "末端", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
     ...findingCopy.labels, unlabeled: "无结论", phaseNote: "按记录时间三等分，仅为阅读分组，不是预声明的评估窗口。",
     noTime: "没有可用的记录时间，无法放上时间轴；下方记录仍可完整阅读。",
@@ -50,7 +50,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     unstructured: "Unstructured decisions", unstructuredHint: "Findings were not recorded in writeback sections; evidence and decisions cannot be separated.",
     density: "Recording density", densityHint: "Bar height is events; pale red is a recording gap", ticks: "Replan / continue",
     routes: "Research routes", routeHint: "Connected only by recorded relationships or parent grouping", singles: "Unlinked research items",
-    trail: "Decision history", more: "Show earlier records", moreQuestions: "Show more questions", records: "decision records", latestRecord: "Most recent record", unknownTime: "Unknown time", all: "Whole history",
+    trail: "Decision history", more: "Show earlier records", moreQuestions: "Show more questions", records: "decision records", unknownTime: "Unknown time", all: "Whole history",
     span: "Recorded span", start: "Start", end: "End", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
     ...findingCopy.labels, unlabeled: "No finding", phaseNote: "Equal thirds of record time, for reading only; not a pre-declared evaluation window.",
     noTime: "No usable record time; the history cannot be placed on a time axis. All records remain readable below.",
@@ -229,20 +229,26 @@ function TrailQuestion({group, copy, label, timeLabel, selectedIds, onSelect}: {
         {exceptions.map(({status, count}) => <span className={tone(status)} key={status}>{label(status)} {count}</span>)}
       </div>
     </header>
-    <ol className="research-trail-list">{group.items.slice(0, limit).map((item, index) => {
+    <ol className="research-trail-list">{group.items.slice(0, limit).map(item => {
       const decision = item.sections!.decision!;
+      // Preview source text, never a generated title. Complete lists live in
+      // the same exact-finding reader used by every other history selection.
+      const previewKey = decision.changed.length ? "changed" : decision.stopped.length ? "stopped" : "retained";
       return <li key={item.event.event_id}>
         <button type="button" data-research-decision={item.event.event_id}
-          aria-label={`${label(decision.outcome)} · ${item.at === null ? copy.unknownTime : timeLabel(item.at)} · ${item.event.title}`}
+          aria-label={`${label(decision.outcome)} · ${item.at === null ? copy.unknownTime : timeLabel(item.at)} · ${label(item.event.status)} · ${item.event.title}`}
           className={selectedIds.includes(item.event.node_id) ? "is-selected" : ""}
           onClick={event => {event.currentTarget.focus({preventScroll: true}); onSelect(item.event.node_id, item.event.result_id);}}>
-          <span className="research-trail-meta"><b className={`research-outcome is-${decision.outcome}`}>{label(decision.outcome)}</b>
-            <time dateTime={item.at === null ? undefined : item.event.recorded_at}>{item.at === null ? copy.unknownTime : timeLabel(item.at)}</time>
-            <span>{label(item.event.status)}</span>{index === 0 && item.at !== null ? <span>{copy.latestRecord}</span> : null}
+          <span className="research-trail-main">
+            <span className="research-trail-meta"><b className={`research-outcome is-${decision.outcome}`}>{label(decision.outcome)}</b>
+              <time dateTime={item.at === null ? undefined : item.event.recorded_at}>{item.at === null ? copy.unknownTime : timeLabel(item.at)}</time>
+              <span>{label(item.event.status)}</span>
+            </span>
+            {decision[previewKey].length ? <span className="research-trail-change"><em>{label(previewKey)}</em>{decision[previewKey].join("；")}</span> : null}
+            <span className="research-trail-meta">{(["changed", "stopped", "retained"] as const).map(key => decision[key].length
+              ? <span key={key}>{label(key)} {decision[key].length}</span> : null)}</span>
           </span>
-          {decision.changed.length ? <span className="research-trail-change"><em>{copy.changed}</em>{decision.changed.join("；")}</span> : null}
-          {decision.stopped.length ? <span className="research-trail-change"><em>{copy.stopped}</em>{decision.stopped.join("；")}</span> : null}
-          {decision.retained.length ? <span className="research-trail-change"><em>{copy.retained}</em>{decision.retained.join("；")}</span> : null}
+          <ChevronRight size={16} aria-hidden/>
         </button>
       </li>;
     })}</ol>
