@@ -331,8 +331,9 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("changed_context", [False, True])
 def test_due_stride_review_survives_successor_transition_until_decision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, changed_context: bool,
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -443,8 +444,19 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         "stride_decision": decision,
         "todo_delta": [f"create:{successor['todo_id']}", "create:compare two methods"],
     }
+    # A real source revision after delivery must still invalidate the old basis.
+    # Recovery supplies the complete write-time facts, without another guard.
+    if changed_context:
+        state_path = project / json.loads(registry.read_text())["goals"][0]["state_file"]
+        state_path.write_text(state_path.read_text().replace(
+            "Settle one standard Codex App delivery.",
+            "Settle one standard delivery and verify the newly required source."))
+    from tests.control_plane.test_quota_settlement_cli import _heartbeat_receipt_count, _spend_run_count
+    receipt_count = _heartbeat_receipt_count(runtime, "stride-due-review")
+    spend_count = _spend_run_count(runtime)
+    rejected_reference = decision["reference_context_id"] if changed_context else "replan-context-" + "b" * 24
     decision_path.write_text(json.dumps({**vision_packet,
-        "stride_decision": {**decision, "reference_context_id": "replan-context-" + "b" * 24}}))
+        "stride_decision": {**decision, "reference_context_id": rejected_reference}}))
     foreign = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", obligation["obligation_id"],
         "--turn-instance-id", "stride-due-review", "--agent-vision-json", str(decision_path),
@@ -453,6 +465,28 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         expected_code=1)
     assert foreign.get("appended") is not True
     assert "context" in foreign["error"].lower()
+    transition = foreign["replan_transition"]
+    assert transition["reason_code"] == "stride_review_basis_mismatch"
+    assert transition["host_action"] == "read_current_replan_context"
+    assert transition["next_cli_actions"] == []  # No unbound repeat of the rejected write.
+    recovery = transition["context_recovery"]
+    current = recovery["replan_context"]
+    assert recovery["received_context_id"] == rejected_reference
+    assert current["obligation_id"] == obligation["obligation_id"]
+    assert current["agent_id"] == AGENT_ID and current["goal_id"] == GOAL_ID
+    assert current["evidence"]
+    assert current["coverage_ledger"] == []  # This fixture has no typed progress observations.
+    assert current["delivery_receipt"]["context_id"] == current["context_id"]
+    assert recovery["stride_control"]["reference_context_id"] == current["context_id"]
+    if changed_context:
+        assert current["context_id"] != control["reference_context_id"]
+        assert "newly required source" in current["core_goal"]["objective"]
+        decision["axes"]["validation_scope"]["plan"] = "Verify the newly required source and a contrary case."
+    else:
+        assert current["context_id"] == control["reference_context_id"]
+    assert _heartbeat_receipt_count(runtime, "stride-due-review") == receipt_count
+    assert _spend_run_count(runtime) == spend_count
+    decision["reference_context_id"] = current["context_id"]
     decision_path.write_text(json.dumps(vision_packet))
     accepted = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", obligation["obligation_id"],
@@ -464,9 +498,13 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert persisted["agent_vision"]["stride_decision"] == decision
     assert persisted["settlement_identity"]["schema_version"] == "quota_settlement_identity_v1"
     assert persisted["replan_obligation_id"] == obligation["obligation_id"]
-    call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-         "--replan-obligation-id", obligation["obligation_id"], "--turn-instance-id", "stride-due-review",
-         "--slots", "1", "--source", "heartbeat", "--execute")
+    assert persisted["settlement_identity"] == reread["heartbeat_receipt"]["settlement_identity"]
+    for _ in range(2):
+        call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+             "--replan-obligation-id", obligation["obligation_id"], "--turn-instance-id", "stride-due-review",
+             "--slots", "1", "--source", "heartbeat", "--execute")
+    assert _spend_run_count(runtime) == spend_count + 1
+    assert _heartbeat_receipt_count(runtime, "stride-due-review") == receipt_count
 
     # Continue through real authority/history, rather than injecting a crafted
     # context. The next periodic review must see the accepted autonomous decision.

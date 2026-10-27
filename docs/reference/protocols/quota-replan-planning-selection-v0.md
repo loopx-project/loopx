@@ -82,3 +82,41 @@ qualification does not establish installation or original-consumer adoption.
 确切身份冲突、缺少语义增量的拒绝，以及写回后的单次扣额。必须用已安装 CLI
 的隔离合成场景证明旧的提前绑定失败，才将源码验证视为修复。源码/PR 验收
 不代表已经安装或原请求方已经采用。
+
+## Review context changes before writeback / 写回前的评审上下文变化
+
+An enabled stride review can become stale between delivery and writeback.
+For a context-ID mismatch within the same obligation, the semantic writeback
+owner keeps `stride_review_basis_mismatch` and returns
+`host_action=read_current_replan_context` with
+`replan_transition.context_recovery`: the received ID, complete current
+`replan_context`, current `stride_control`, and ordered recovery guidance.
+There is no automatic acceptance or reference replacement. Read the returned
+Goal acceptance, evidence and followthrough, perform applicable source reads,
+and reassess the decision before retrying the original writeback with its same
+Goal/Agent/Turn/obligation and settlement identity. The rejection emits no
+unbound retry command; it commits no writeback or quota spend. Another relevant
+change can reject the retry again. Other validation failures retain their
+existing repair route, and stride-off behavior is unchanged.
+
+启用 stride 的评审可能在投递与写回之间过期。同一 obligation 内发生 context ID
+不匹配时，语义写回 owner 保留 `stride_review_basis_mismatch`，给出
+`host_action=read_current_replan_context`，并返回 `replan_transition.context_recovery`：收到的 ID、完整的当前 `replan_context`、
+当前 `stride_control` 与按序恢复指引。不会自动接受提案或替换引用。消费者先读
+返回的 Goal 验收、证据和后续执行事实，完成适用的来源读取并重新判断，再使用
+原 Goal/Agent/Turn/obligation 和结算身份重试原写回。拒绝响应不再给出丢失身份的
+通用重试命令，不写入进展或扣额；相关事实再次变化仍可再次拒绝。其他校验失败
+保留原恢复路径，stride 关闭时的行为不变。
+
+This does not classify another agent's outcome as irrelevant. Shared acceptance
+and requirement-status changes remain in the review basis until an explicit
+dependency-scoping contract qualifies narrower invalidation. A successful
+same-Turn recovery is not evidence of fewer model tokens or better outcomes.
+The File/SQLite CLI test covers a source change, readback of the changed facts,
+reassessment, accepted writeback and an idempotent single spend; it does not
+qualify installed-host adoption or the complete unified-contract migration.
+
+这不把其他 Agent 的 outcome 自动判为无关。共享验收和要求状态的变化仍属于评审
+依据；只有明确的依赖范围契约通过验收，才能缩小失效范围。同 Turn 恢复成功不
+证明模型 token 减少或效果改善。File/SQLite CLI 测试覆盖来源变化、新事实读回、
+重新判断、有效写回及幂等单次扣额，不代表已安装宿主采用或完整统一契约迁移完成。

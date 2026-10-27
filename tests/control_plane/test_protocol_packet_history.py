@@ -100,7 +100,15 @@ def test_packet_free_release_record_keeps_original_signature_and_authority():
             ).encode()
         ).hexdigest()
     )
-    assert quota_action_signature_document(decision) == document
+    # Re-projecting the source now retains the execution-contract schema too.
+    # That is a new projection, not a reason to rewrite a historical receipt.
+    current_document = quota_action_signature_document(decision)
+    expected_current = deepcopy(document)
+    expected_current["contract_capsule"]["execution_obligation"] = deepcopy(
+        decision["execution_obligation"]
+    )
+    assert current_document == expected_current
+    assert current_document != document
     assert digest == envelope["action_signature"]["envelope_hash"]
     assert (
         extract_turn_authority({"turn_envelope": envelope})["primary_action"]

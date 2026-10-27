@@ -1357,6 +1357,14 @@ def test_packet_retirement_preserves_reads_and_independent_capability_command(tm
     assert "protocol_action_packet" not in envelope["contract_capsule"]
     authority = extract_turn_authority({"turn_envelope": envelope})
     assert authority["primary_action"] == "Generate the exact report."
+    assert authority["action"]["capability_intent"]["command"] == command
+    assert authority["action"]["capability_intent"]["generation_authorized"] is True
+    assert authority["action"]["capability_intent"]["external_delivery_authorized"] is True
+    # This admitted capability operation is allowed while ordinary delivery
+    # remains unavailable. The Host must retain both distinct source facts.
+    assert authority["action"]["delivery_allowed"] is True
+    assert authority["execution_policy"]["normal_delivery_allowed"] is False
+    assert authority["effective_action"] == "governed_capability_intent"
     assert envelope["writeback"]["next_cli_actions"] == [command]
     assert authority["required_reads"]
 

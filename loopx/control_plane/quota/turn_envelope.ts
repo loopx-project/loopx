@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
+import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
 
 import {
   interpretQuotaShouldRunPacket,
@@ -107,31 +108,9 @@ const ACTIONABLE_WARNING_FIELDS = [
 
 const CONTRACT_CAPSULE_FIELDS: Readonly<Record<string, readonly string[]>> = {
   interaction_contract: ["schema_version", "mode"],
-  work_lane_contract: [
-    "schema_version", "lane", "monitor_kind", "next_lane", "obligation",
-    "must_attempt_work", "reason_codes", "monitor_policy", "selected_todo_id",
-    "selected_next_due_at", "non_runnable_non_monitor_count",
-    "material_transition", "action",
-  ],
-  execution_obligation: [
-    "kind", "contract", "contract_obligation", "must_attempt_work",
-    "notify_is_execution_gate", "delivery_allowed", "reason",
-  ],
   goal_route_hint: [
     "schema_version", "kind", "route_decision", "preserves_goal_next_action",
     "goal_next_action_mutation",
-  ],
-  autonomous_replan_scope: [
-    "schema_version", "required", "applies", "scope", "owner_agent_ids",
-    "selected_peer_agent",
-  ],
-  agent_scope_frontier: [
-    "schema_version", "action", "effective_action", "blocks_delivery",
-    "quiet_noop_allowed", "requires_replan", "recommended_action", "spend_policy",
-  ],
-  automation_liveness: [
-    "schema_version", "keep_active", "pause_allowed", "pause_policy",
-    "automation_action",
   ],
   handoff_readiness: [
     "ready", "codex_ready", "handoff_status", "post_handoff_run_seen",
@@ -140,13 +119,6 @@ const CONTRACT_CAPSULE_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "schema_version", "capability_gate_action", "blocked_advancement_count",
     "blocked_due_monitor_count", "mode",
   ],
-};
-
-const CONTRACT_CAPSULE_TEXT_LIMITS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
-  work_lane_contract: { action: 300, material_transition: 240 },
-  execution_obligation: { reason: 240 },
-  agent_scope_frontier: { recommended_action: 320, spend_policy: 220 },
-  automation_liveness: { pause_policy: 260 },
 };
 
 function object(value: unknown): JsonObject {
@@ -749,9 +721,20 @@ function contractCapsule(payload: JsonObject): JsonObject {
   };
   for (const [sourceKey, fields] of Object.entries(CONTRACT_CAPSULE_FIELDS)) {
     const compact = compactFields(
-      payload[sourceKey], fields, CONTRACT_CAPSULE_TEXT_LIMITS[sourceKey] || {},
+      payload[sourceKey], fields, {},
     );
     if (Object.keys(compact).length > 0) capsule[sourceKey] = compact;
+  }
+  // These source owners provide execution contracts, not display summaries.
+  // Preserve clauses and nested/unknown data without interpreting new fields.
+  // The existing signature covers the complete retained JSON; budget overflow
+  // remains diagnostic rather than permission to truncate an obligation.
+  for (const field of [
+    "work_lane_contract", "execution_obligation", "autonomous_replan_scope",
+    "agent_scope_frontier", "automation_liveness",
+  ]) {
+    const contract = object(payload[field]);
+    if (Object.keys(contract).length > 0) capsule[field] = structuredClone(contract);
   }
   const unavailableContext = projectTurnStartUnavailableContext(payload.turn_start_capability_hook_dispatch);
   if (unavailableContext) capsule.unavailable_context = unavailableContext;
@@ -796,17 +779,6 @@ function contractCapsule(payload: JsonObject): JsonObject {
   }
   const taskScope = text(payload.task_scope, 80);
   if (taskScope) capsule.task_scope = taskScope;
-  const workLane = object(payload.work_lane_contract);
-  const outcome = object(workLane.outcome_followthrough);
-  if (Object.keys(outcome).length > 0) {
-    const compactLane = object(capsule.work_lane_contract);
-    compactLane.outcome_followthrough = compactFields(
-      outcome,
-      ["required", "obligation", "accepted_resolution_kinds", "spend_policy"],
-      { spend_policy: 220 },
-    );
-    capsule.work_lane_contract = compactLane;
-  }
   const warnings = ACTIONABLE_WARNING_FIELDS.filter((field) => Boolean(payload[field]));
   if (warnings.length > 0) capsule.actionable_warning_refs = warnings;
   return capsule;
@@ -1070,6 +1042,28 @@ function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): st
   return ACTION_SIGNATURE_COVERAGE_V0;
 }
 
+/** Live consumers must understand the declared wire versions before dispatch.
+ * Historical v0 callers may omit signature metadata; digest verification stays
+ * with its existing owner. Explicit unknown/null declarations are never v0.
+ * This does not make the bounded envelope a complete future work contract.
+ */
+export function assertTurnEnvelopeConsumerVersion(envelope: JsonObject): void {
+  assertSupportedQuotaPacket(envelope);
+  if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION) {
+    throw new EffectRuntimeRequestError("unsupported TurnEnvelope schema_version; use a compatible consumer");
+  }
+  const signature = object(envelope.action_signature);
+  if (Object.hasOwn(signature, "schema_version") && signature.schema_version !== ACTION_SIGNATURE_SCHEMA_VERSION) {
+    throw new EffectRuntimeRequestError("unsupported TurnEnvelope action signature schema_version; use a compatible consumer");
+  }
+  if (Object.hasOwn(signature, "coverage") && (typeof signature.coverage !== "string" || ![
+    ACTION_SIGNATURE_COVERAGE_V0, ACTION_SIGNATURE_COVERAGE_V1, ACTION_SIGNATURE_COVERAGE_V2,
+    ACTION_SIGNATURE_COVERAGE_V3, ACTION_SIGNATURE_COVERAGE_V4, ACTION_SIGNATURE_COVERAGE_V5,
+  ].includes(signature.coverage))) {
+    throw new EffectRuntimeRequestError("unsupported TurnEnvelope action signature coverage; use a compatible consumer");
+  }
+}
+
 export function turnEnvelopeActionSignatureDocument(value: unknown): JsonObject {
   const envelope = requireJsonObject(value, "turn_envelope");
   assertSupportedQuotaPacket(envelope);
@@ -1274,8 +1268,13 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       autonomous_replan_obligation: {...obligation, context_read: reads.review},
       replan_action_packet: replanActionPacket(payload)};
   }
+  if (operation === "consumer_version") {
+    assertTurnEnvelopeConsumerVersion(requireJsonObject(request.envelope, "turn_envelope"));
+    return {ok: true};
+  }
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
+  if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "replan_settlement_identity") return {identity: turnEnvelopeReplanSettlementIdentity(

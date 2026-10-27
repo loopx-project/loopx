@@ -92,6 +92,11 @@ def test_real_host_reads_original_capture_after_source_change(
     source_a = json.loads(original)
     assert source_a["goal_id"] == f.GOAL_ID
     assert source_a["agent_identity"]["agent_id"] == f.AGENT_ID
+    # Direct `turn` bypasses quota CLI emission. Check its actual subprocess
+    # prompt against the same original contracts, including recovery below.
+    for field in ("work_lane_contract", "execution_obligation", "automation_liveness"):
+        assert source_a[field]
+        assert request["turn_envelope"]["contract_capsule"][field] == source_a[field]
     # Change the real provider through its native CAS CLI, not the projection.
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])

@@ -5,6 +5,28 @@ computed `quota should-run` decision. It gives an agent the next action and its
 safety contract without replaying every diagnostic lane in the full quota
 payload.
 
+This page describes the current versioned representation. The
+[unified-contract RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
+proposes replacing the live quota/envelope format choice with one complete
+contract, including differential delivery. Historical captures retain their
+original schema and signature; the proposal does not introduce a new CLI switch.
+The proposed composition point precedes capture and encoding. Today's action
+signature compares its registered projection; equality alone does not establish
+complete source-clause preservation or qualify the unified contract.
+The RFC's [C1 caller replacement](../../architecture/rfcs/controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
+also covers the direct Turn producer and final host prompts. Quota CLI output
+parity alone does not qualify those consumers. Historical v0 decoding remains
+separate from switching new admissions to a future unified version.
+
+中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
+历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
+提议的组合点位于 capture 与编码之前。当前 action signature 比较其注册投影；
+仅签名相等不能证明完整来源条款得到保留，也不能验收统一契约。
+RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
+还覆盖直接生产契约的 Turn 入口和最终 host prompt；仅 quota CLI 输出等价不能验收
+这些消费者。历史 v0 解码与新准入切换到未来统一版本分别处理。
+
 Preview it explicitly:
 
 ```bash
@@ -617,13 +639,91 @@ capsule witnesses. Packet-free v0 envelopes remain supported. The envelope keeps
 - validation/writeback and quota-spend policy;
 - the current scheduler action and cadence acknowledgement command.
 
-The envelope also carries a bounded `contract_capsule` for interaction mode,
+The envelope also carries a `contract_capsule` for interaction mode,
 work-lane and execution obligations, successor/replan duties, automation
 liveness, vision/handoff state, and actionable warning references. A canonical
 `action_signature` is independently built from the full decision and from the
 envelope; matching hashes prove the covered action dimensions agree for that
 projection. They do not prove that every possible quota state has test
 coverage.
+
+The five execution-contract objects `work_lane_contract`,
+`execution_obligation`, `autonomous_replan_scope`, `agent_scope_frontier`, and
+`automation_liveness` retain their complete source JSON, including nested data,
+ordered lists, empty values and unrecognized metadata. Their clauses are not
+subject to display truncation. Both quota-envelope emission and direct Turn
+composition use this shared producer. The shared structured Host prompt now
+forwards the remaining signed capsule for ordinary execution as well as staged
+replanning; previously the ordinary path omitted it. Retaining metadata does
+not interpret it as a new execution permission or support a new required
+semantic. Existing schema/signature coverage and historical captured envelopes
+remain readable without rewriting them. Re-projecting an older raw decision
+with the corrected producer can produce a different signature; validate an
+existing envelope against its saved content and digest. Raw quota output and admission,
+scheduler and settlement decisions are unchanged. Larger capsule bytes remain
+visible in the existing diagnostic budget warning; this correction does not
+claim lower token cost or complete controller-contract unification.
+
+中文：上述五份执行契约完整保留源 JSON，包括嵌套数据、有序列表、空值和未知
+元数据，不按展示预算截断条款。quota 短包与直接 Turn 共用该生产者；共享结构化
+Host 在普通执行和分阶段重规划中都传递剩余的已签名 capsule，修复普通执行
+原先遗漏的问题。保留元数据不表示解释新权限或支持新的必需语义。既有 schema、
+签名覆盖与历史捕获内容继续可读，不改写旧记录。用修正后的生产者重新投影旧
+原始决定可能得到不同签名；既有 envelope 应按保存内容与摘要校验。原始 quota
+输出、准入、调度和
+结算决定不变。增长的字节量仍通过既有预算诊断可见；这项修正不证明 token
+成本下降，也不表示 controller 契约已完全统一。
+
+Live Turn planning, native Codex prompt construction and structured Host
+consumption share the TypeScript owner's version gate. The current consumer
+accepts `loopx_turn_envelope_v0`, action-signature schema v0 and the registered
+v0–v5 coverage versions. An explicitly unknown or null version is rejected
+before Host launch, even when its unchanged action digest still matches. The
+historical digest document does not sign these version declarations, so digest
+equality alone cannot establish consumer compatibility. Existing v0 callers
+that omit signature-version metadata retain their prior behavior; digest,
+lineage, current authority and settlement checks remain separate. Saved capture
+bytes and old signature documents are not rewritten. This gate does not qualify
+a future unified schema or interpret unknown required nested semantics.
+
+中文：实时 Turn 规划、原生 Codex 提示构造和结构化 Host 消费共用 TypeScript
+owner 的版本门。当前 consumer 接受 envelope v0、action-signature schema v0
+及已注册的 v0–v5 coverage；显式未知或 null 版本即使仍携带匹配的旧行动摘要，
+也会在 Host 启动前拒绝。历史摘要文档不签署这些版本声明，摘要相等不能证明
+消费者兼容。省略签名版本元数据的既有 v0 调用方保持原行为；摘要、谱系、当前
+权限和结算校验仍各自负责。既有捕获字节和历史签名文档不改写。此门不表示未来
+统一 schema 已获得资格，也不负责解释未知的必需嵌套语义。
+
+Ordinary structured Host prompts also retain the signed `user`,
+`execution_policy`, `scheduler`, `response_plan`, and
+`task_orchestration_contract` sections, plus the existing captured-decision
+reference when present. These sections are no longer conditional on a staged
+replan reader. Notification policy does not grant or cancel execution authority;
+carrying surrounding Turn plans does not delegate their effects. The prompt
+keeps state writeback, quota and scheduler operations with the outer Turn
+executor and asks the work segment to return its semantic result.
+
+中文：普通结构化 Host 还保留已签名的用户通知、执行策略、调度、响应计划、
+任务编排五个区段，以及已有的捕获决定引用，不再以分阶段 replan reader
+是否存在为条件。通知策略不授予或取消执行权限；传递外围 Turn 计划不等于
+委派其副作用。提示明确由外围 Turn executor 负责状态写回、quota 和调度操作，
+工作段返回语义结果。
+
+The structured Host also receives signed `agent_id`, `decision`, `should_run`,
+`effective_action` and `state`. Its `action` object retains execution flags,
+action choices and capability intent while the existing task/planning carriers
+keep their established locations. `recommended_action` remains a display
+fallback, omitted from this Host projection because it can retain an older
+recommendation than the authoritative `primary_action`. Neither a suggested
+alternative nor a transported intent overrides admission, scope or effect
+ownership. This is input preservation, not a new admission decision or the
+unified-contract writer transition.
+
+中文：结构化 Host 同时收到已签名的 Agent 身份、决定、是否运行、有效行动和
+状态；`action` 保留执行标记、行动选项及能力意图，任务和规划字段沿用已有位置。
+`recommended_action` 是可能落后于权威 `primary_action` 的展示回退，仍不放入
+此 Host 投影。建议选项和传递的意图不覆盖准入、作用域或副作用归属。这是输入
+保真修复，不增加准入决策，也不表示统一契约 writer 已切换。
 
 Required reads use the authoritative `interaction_contract.agent_channel` list,
 including an explicit empty list. Historical interaction-root and payload lists

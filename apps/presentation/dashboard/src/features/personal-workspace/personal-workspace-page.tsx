@@ -13,7 +13,7 @@ import type { ConversationHistoryStatus } from "../../data/use-conversation-hist
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { CollaborationCard } from "./collaboration-card";
-import {ConversationRequests} from "./conversation-requests";
+import {ConversationRequests, OriginalProjectRequests} from "./conversation-requests";
 import {
   compileActionReviewPlan,
   isStaleActionFailure,
@@ -471,7 +471,7 @@ function ManagerConversationTray({
       <div aria-live="polite" className="personal-manager-conversation-messages">
         {visibleMessages.map((message) => (
           <article className={`is-${message.role}`} key={message.id}>
-            <strong>{message.role === "user" ? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
+            <strong>{message.role === "user" ? message.agentLabel ?? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
             <div className="personal-manager-conversation-bubble">
               {message.role === "user" ? <p>{message.text}</p> : <MarkdownText text={message.text} />}
               {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn} onCancelPreparation={onCancelPreparation} /> : null}
@@ -2795,7 +2795,10 @@ export function PersonalWorkspacePage({
         <div className="personal-channel">
           <div>
           <ChannelHeader
-            requestInventory={!workspaceConversations?.entryGate && !readOnly && !rootUnavailable && !runtimeSourceUnavailable && !selectedGoalId && !selectedWorkspaceRef
+            requestInventory={!readOnly && !rootUnavailable && !runtimeSourceUnavailable && originalConversation
+              && (originalConversation.source?.context_kind === "project" || originalConversation.error)
+              ? <OriginalProjectRequests key={originalConversation.target.sessionId} sessionId={originalConversation.target.sessionId} refreshKey={`${managerMessages.length}:${Boolean(managerMessages.at(-1)?.pending)}`}/>
+              : !workspaceConversations?.entryGate && !readOnly && !rootUnavailable && !runtimeSourceUnavailable && !selectedGoalId && !selectedWorkspaceRef
               && (!originalConversation || originalConversation.source?.context_kind === "steward") ? <ConversationRequests
                 key={originalConversation?.session?.session_id ?? "owner"} sessionId={conversationSessionId} ownerFallback={!originalConversation}
                 refreshKey={`${managerMessages.length}:${managerMessages.at(-1)?.id ?? ""}:${Boolean(managerMessages.at(-1)?.pending)}`}/> : undefined}
@@ -3000,7 +3003,7 @@ export function PersonalWorkspacePage({
               <span>{t("workspace.unavailable")}</span>
             </div> : null}
             {conversationHistoryState && conversationHistoryState.phase !== "ready" ? (
-              <div className="personal-history-notice" role="status">
+              <div className={conversationHistoryState.phase === "loading" ? "sr-only" : "personal-history-notice"} role="status">
                 <div><span>{t(`history.${conversationHistoryState.phase}`)}</span>
                   {conversationHistoryState.sendBlocked && conversationHistoryState.phase !== "loading"
                     ? <span>{t("history.currentSessionRecovering")}</span> : null}</div>

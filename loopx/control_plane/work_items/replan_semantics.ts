@@ -455,9 +455,11 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const missingStridePath = requiredStrideReview && !evidenceLinkedPath;
   const staleStride = !!strideDecision && (structuredReview || selectedComparison) &&
     strideDecision.reference_obligation_id !== obligation.obligation_id;
+  const reviewContextChanged = !!strideDecision && (structuredReview || selectedComparison)
+    && (requiredStrideReview || selectedComparison) && strideDecision.reference_context_id !== context.context_id;
   const reviewMismatch = strideDecision && (structuredReview || selectedComparison)
-    ? (requiredStrideReview || selectedComparison) && strideDecision.reference_context_id !== context.context_id
-      ? "Stride decision must reference the delivered due-review context."
+    ? reviewContextChanged
+      ? "Stride decision references a different review context. Read the returned context_recovery before retrying the original writeback."
       : strideReviewMismatch(strideDecision, context, request.stride_review_evidence, vision.todo_delta)
     : null;
   let outcomes = strings(observation.delta_kinds);
@@ -498,6 +500,21 @@ export function projectReplanSemantics(value: unknown): JsonObject {
     schema_version: "replan_semantic_delta_v0", accepted: satisfying.length > 0,
     outcomes, satisfying_outcomes: satisfying, required_any_of: required,
     observation_fingerprint: observation.observation_fingerprint ?? null,
+    // The write-time owner already resolved this complete basis. Return it on
+    // a same-obligation mismatch instead of asking the consumer to guess a new
+    // guard, change its Turn/Todo binding, or retry an unchanged proposal.
+    ...(reviewContextChanged && !staleStride && !missingStride && !missingStridePath && !satisfying.length ? {
+      context_recovery: {
+        received_context_id: strideDecision!.reference_context_id,
+        replan_context: structuredClone(context),
+        stride_control: strideControlContract(context, obligation.obligation_id),
+        instruction: "Read the complete returned replan_context and stride_control, including Goal acceptance, evidence, followthrough and applicable source reads. " +
+          "Reassess the decision against those facts before replacing its reference_context_id; copying the new id alone is not a review. " +
+          "Retry the original writeback with the same Goal, Agent, Turn and replan obligation and its original settlement identity. " +
+          "This response grants no new execution or spend authority and commits no writeback. Do not start another Turn or blindly rerun admission. " +
+          "If the basis changes again, the writer will reject again and return the then-current context.",
+      },
+    } : {}),
     reason: satisfying.length ? "writeback changes an outcome accepted by this obligation source"
       : missingStride ? "enabled stride review requires agent_vision.stride_decision with independent axes/reasons and minimum_evidence from the delivered control contract"
       : missingStridePath ? "due stride review requires an evidence-linked Vision path, including a supported terminal stop"

@@ -245,12 +245,16 @@ class StewardMonitor:
         # the watch as a heartbeat's advancement task.
         # Freeze admission's generation. A pause/re-enable between collection
         # and acquisition must not turn an old observation into fresh work.
-        lease = self._acquire(actor, todo, request["turn_instance_id"],
+        # A new carrier cannot borrow an old acquire receipt after that lease
+        # expired or was released. The native poll identity stays unchanged.
+        recovery = request.get("monitor_restart_recovery")
+        lease_key = "monitor-recovery." + recovery["original_turn_id"] if recovery else request["turn_instance_id"]
+        lease = self._acquire(actor, todo, lease_key,
             expected_version=request["monitor_lease_version"])["lease"]
         try:
             result = self._commit_poll(host, request, turn, context, ["quota", "monitor-poll", *route,
                 "--target-key", todo["target_key"], "--result-hash", observation["result_hash"],
-                "--task-lease-idempotency-key", request["turn_instance_id"],
+                "--task-lease-idempotency-key", lease_key,
                 "--task-lease-expected-version", str(lease["version"]), "--execute",
                 *(["--material-change"] if observation["material_change"] else [])])
         finally:

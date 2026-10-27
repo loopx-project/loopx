@@ -4,7 +4,7 @@
 - **替代 / 关闭：** [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md)
 - **交付成熟度：** Partial；私人运行 profile、团队计划确认与 Todo 物化已交付，完整 M1–M4 未验收。
 - **作者 / 责任人：** LoopX 维护者、管家工程负责人
-- **创建 / 最近规范修订：** 2026-09-13 / 2026-10-04
+- **创建 / 最近规范修订：** 2026-09-13 / 2026-10-27
 - **实现基线：** `7eb4b7bb1661bd5eff63a8725a33169792d5964b`
 - **语言镜像：** [English](capable-manager-semantic-handoff-v0.md)
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[管家连续性](../../reference/protocols/manager-evidence-and-continuity-v0.md)、[Goal Vision/Replan](../../reference/protocols/goal-vision-replan-contract-v0.md)、[桌面入口](desktop-execution-frontends-v0.zh-CN.md)、[共享权威](shared-goal-authority-state-provider-v0.zh-CN.md)、[共享目标对齐/修订](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md)、[TS 迁移](typescript-control-plane-migration-v0.zh-CN.md)
@@ -154,6 +154,13 @@ flowchart LR
 管家短小本机操作，有当前 request/Turn 和已接受 effect receipt 就可能足够。不要为了读文件、回答问题、记录普通笔记强造 Todo、target-capability、repo identity 和 validation command。持久实施工作仍应有任务、范围、验证；垂域 capability 检查归真正需要它的效果，注册 capability 不是思考和调查的通用许可证。
 
 持久语义上下文由小型 typed 身份/控制头、版本化可读 brief、可解析工作/工件引用构成。头部用于路由和合法转移，brief 承载开放的领域含义，Core 不把每句话硬分成固定 schema。这是通用工作稠密状态，不是序列化模型隐藏思维；runtime session 换掉后也能续接。
+
+[Controller/executor 提案](controller-executor-unified-contract-v0.zh-CN.md) 把这种语义交流
+用于同一逻辑 Agent 内的两个 session role。只有 controller 模型消费统一 Core 契约并
+编写 typed Core 操作。Executor 接收自然语言任务和完整授权材料，返回产物/证据，
+不消费专用 Core packet 视图。运行时持有的路由/revision/attempt 元数据复用这些请求
+记录，不形成另一套权限或交接账本。独立 peer Agent 仍保留各自受限的 Core 关系，
+不受这个同 Agent 内部角色划分限制。
 
 优先一次内聚替换，不用兼容包装长期保留两套判断。盘点所有 producer/reader，无损迁移、切换单 writer、删除被替代规则。必须复用有效契约和数据，不必复用每个类、JSON 目录和 prompt。
 

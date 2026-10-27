@@ -5,6 +5,15 @@ files remain flat in this migration to preserve established links; this index
 groups them by responsibility so callers can find the right contract without
 scanning a chronological list.
 
+The [unified work contract and controller/executor RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
+defines the proposed convergence of quota, Turn and host consumers. It is a
+design target, not an additional shipped protocol or a replacement wire format
+that callers can select today. Current versioned contracts below remain valid
+until their documented migration is qualified.
+
+中文：[统一工作契约与 controller/executor 提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+规定 quota、Turn 与 Host 消费者的收敛方向；当前尚未交付新协议，现有版本契约在迁移验收前继续有效。
+
 ## Control Plane And State
 
 - [`active_state_structured_projection_v0`](active-state-structured-projection-v0.md): Active state structured projection v0

@@ -90,7 +90,12 @@ export const researchWorkerReadbackScenario = {
             const region = page.getByRole("region", {name: zh ? "外部执行器状态" : "External worker status", exact: true});
             await region.waitFor();
             assert.match(await region.innerText(), mode === "paused" ? /已暂停复核|review paused/u : /原请求结果未知|Original outcome unknown/u);
-            assert.match(await region.innerText(), /完整费用未知|Complete costs are unknown/u);
+            await region.getByRole("button", {name: zh ? "执行记录范围" : "Execution record scope", exact: true}).click();
+            const recordScope = region.getByRole("tooltip");
+            await recordScope.waitFor({state: "visible"});
+            assert.match(await recordScope.innerText(), /完整费用未知|Complete costs are unknown/u);
+            await page.keyboard.press("Escape");
+            await recordScope.waitFor({state: "hidden"});
             await page.screenshot({path: resolve(outputDir, `research-worker-${mode}-${locale}-${mobile ? "mobile" : "desktop"}.png`), animations: "disabled"});
             await region.locator("summary").click();
             assert.ok((await region.innerText()).includes(authority.obligation_id));
@@ -141,9 +146,13 @@ export const researchWorkerReadbackScenario = {
                   assert.equal(JSON.parse(await readFile(authority.dispatches, "utf8")), 1);
                 }
                 await refresh();
+                await region.getByRole("button", {name: "执行结果未知", exact: true}).click();
                 await region.getByRole("status").waitFor();
                 assert.match(await region.innerText(), /当前执行结果未知/u);
                 assert.ok(!(await region.innerText()).includes(authority.obligation_id), "Invalid association must hide the old operation");
+                assert.equal(await region.getByText(authority.obligation_id, {exact: true}).count(), 0);
+                await page.keyboard.press("Escape");
+                await region.getByRole("status").waitFor({state: "hidden"});
                 await writeFile(authority.receipt, original);
                 await refresh();
                 await region.locator("details").waitFor();

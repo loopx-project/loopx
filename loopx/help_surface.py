@@ -83,6 +83,13 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Start the local dashboard, status service, and Agent Chat service with one command.",
             },
             {
+                "command": "loopx dsh-launch [dsh args...]",
+                "purpose": (
+                    "Launch DeepSeek Harness with this machine's stored provider "
+                    "credential and no secret in argv or output."
+                ),
+            },
+            {
                 "command": "loopx chat --goal-id <goal-id>",
                 "purpose": "Open Goal Studio, ask the read-only Agent for a bounded Todo, and approve its preview before writeback.",
             },

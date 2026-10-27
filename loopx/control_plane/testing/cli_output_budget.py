@@ -703,6 +703,15 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         rationale="interactive local dashboard launched explicitly by the operator",
     ),
     CliOutputCommandClassification(
+        command_id="dsh-launch",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale=(
+            "explicit host launcher invoked on demand; the provider credential "
+            "reaches only the child environment"
+        ),
+    ),
+    CliOutputCommandClassification(
         command_id="diagnose",
         qualification="qualified_default",
         surface_id="diagnose",

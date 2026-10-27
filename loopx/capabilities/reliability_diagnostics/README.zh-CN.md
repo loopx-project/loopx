@@ -219,3 +219,19 @@ projection 报告 `read` 上的重复、一次已恢复的错误、无 stall。
 不改 `loopx status` 首屏。适配器要求外部固定 goal/session/run identity；不会通过 Driver
 或 LoopX CLI 发现绑定。本原型也不提供 matched native/L1 执行、真实 DSH host 测量，或一次合格 C1 实跑。
 bench 工具只在 synthetic 事件流上测量 observer 组件开销，不构成 live 资格。
+
+
+### 精确绑定与新鲜度
+
+手动读取当前会话时，向 `status` 传入 `--expected-binding '<JSON>'`、显式
+`--as-of <当前时间>` 和 `--max-observation-age-ms <非负整数>`。JSON 恰好包含
+`provider_id`、`observer_id`、`session_id` 与 `run_identity`；后者复用 observer
+stats 已有的八个 treatment 字段。非法参数以退出码 2 拒绝；不传绑定时保留历史输出。
+
+新增的 `binding` 包含 `expected`、`eligible`、`reason_codes` 和年龄上限。
+空账本、任一会话／provider／observer 或运行 treatment 不匹配、非 valid 完整性、
+未来观测或最新观测超龄都会拒绝，并把 `stage` 设为 `unknown`；计数与信号仍是历史
+账本证据。原因码为本地读取合同的 `no_observations`、`session_identity_mismatch`、
+`run_identity_mismatch`、`integrity_not_valid`、`observation_in_future`、
+`observation_stale`。匹配只证明观测可采纳，不证明任务成功。读取不会过滤冲突运行、
+写状态、调用 provider 或启用轮询。

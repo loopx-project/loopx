@@ -31,6 +31,20 @@ def configure(registry, runtime, root, mode):
         "--expected-plan-revision", preview["plan_revision"], "--execute")
 
 
+def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    code, catalog = _run_cli(registry, runtime, "machine-config", "describe")
+    assert code == 0 and catalog["schema_version"] == "machine_configuration_catalog_v0", catalog
+    contexts = [item for item in catalog["namespaces"] if item["namespace"] == "context_delivery"]
+    assert len(contexts) == 1
+    assert contexts[0]["schema_versions"] == [CONTEXT_DELIVERY_MACHINE_SCHEMA]
+    assert contexts[0]["configuration_template"] == {
+        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "off",
+    }
+    assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
+    assert not (runtime / "context-delivery").exists()
+
+
 @pytest.mark.parametrize("invalid", [True, False, None, 1, "auto", "codex_app_heartbeat"])
 def test_invalid_machine_mode_never_writes(tmp_path, invalid):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
@@ -141,19 +155,19 @@ def test_inherited_on_rejects_unknown_or_unsupported_before_admission(tmp_path, 
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("profile", ["codex_app", "benchmark"])
+@pytest.mark.parametrize("profile", ["codex_app", "benchmark", "codex_app_ssh_goal"])
 @pytest.mark.skipif(os.name != "posix", reason="Native continuity uses POSIX private directories and locks")
-def test_native_configuration_inherits_only_the_two_declared_scenarios_and_later_off(tmp_path, monkeypatch, profile):
+def test_native_configuration_inherits_declared_scenarios_and_later_off(tmp_path, monkeypatch, profile):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
     if profile == "benchmark":
         monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
         monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
-    host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", "generic_cli"]
+    host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", "codex_app_ssh_goal" if profile == "codex_app_ssh_goal" else "generic_cli"]
     code, result = _run_cli(registry, runtime, "quota", "context-config", *host,
         "--goal-id", "fixture", "--agent-id", "worker")
     assert code == 0 and result["context_delivery"]["enabled"], result
-    expected = "codex_app_heartbeat" if profile == "codex_app" else "codex_benchmark_heartbeat"
+    expected = "codex_app_heartbeat" if profile == "codex_app" else ("codex_app_ssh_goal" if profile == "codex_app_ssh_goal" else "codex_benchmark_heartbeat")
     assert result["context_delivery"]["scenario"] == expected
     root = runtime / "context-delivery"
     assert root.stat().st_mode & 0o077 == 0
@@ -193,11 +207,39 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     recovery = wire["recovery"]
     raw = Path(recovery["path"]).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == recovery["sha256"]
-    assert json.loads(raw) == wire["context"]
+    assert json.loads(raw)["goal_id"] == GOAL_ID
+
+    def complete_reader(view):
+        page = view
+        while True:
+            subprocess.run(shlex.split(hook), input=json.dumps({**event,
+                "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)}),
+                text=True, cwd=project, capture_output=True, check=True)
+            if page["eof"]:
+                break
+            code, page = _run_cli(registry, runtime, "quota", "context-read",
+                "--capture-file", view["path"], "--capture-sha256", view["sha256"],
+                "--offset", str(page["next_offset"]), "--page-bytes", "3072", cwd=project)
+            assert code == 0 and page["ok"], page
+
+    complete_reader(wire)
+    code, warm = _run_cli(registry, runtime, *args, cwd=project)
+    assert code == 0 and warm["mode"] == "delta", warm
+    complete_reader(warm)
+    old_generation = warm["target"]["continuity_generation"]
+    old_configuration = (runtime / "machine/configuration.json").read_bytes()
+    assert configure(registry, runtime, tmp_path, "off")[0] == 0
+    assert configure(registry, runtime, tmp_path, "on")[0] == 0
+    assert (runtime / "machine/configuration.json").read_bytes() == old_configuration
+    code, fresh = _run_cli(registry, runtime, *args, cwd=project)
+    assert code == 0 and fresh["mode"] == "full", fresh
+    assert fresh["target"]["continuity_generation"] != old_generation
     code, page = _run_cli(registry, runtime, "quota", "context-read", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, cwd=project)
-    assert code == 0 and page["sha256"] == recovery["sha256"], page
-    assert page["content"].encode() == raw[:page.get("next_offset") or len(raw)]
+    latest_raw = Path(fresh["recovery"]["path"]).read_bytes()
+    assert code == 0 and page["sha256"] == fresh["recovery"]["sha256"], page
+    assert page["content"].encode() == latest_raw[:page.get("next_offset") or len(latest_raw)]
+    assert Path(recovery["path"]).read_bytes() == raw
     assert _heartbeat_receipt_count(runtime, "machine-original-turn") == 1
     assert _spend_run_count(runtime) == 0 and state.read_bytes() == original_state
     # Explicit off wins over machine on, including old ordinary full output.

@@ -26,3 +26,22 @@ test("terms may span provenance and original multilingual text without mutating 
   assert.deepEqual(searchResearchRecords([source], "质量下降 RUN:42 deadbeef"), [source]);
   assert.deepEqual(searchResearchRecords([source], "quality"), [], "The search does not translate or infer source claims");
 });
+
+test("matches the reader's translated narrative alongside original text and identity, returning only originals", () => {
+  const original = Object.freeze(record({title: "Negative observation", summary: "Original serialized finding", event_id: "old",
+    status: "refuted", run_id: "run:old", execution_observation: {change_reason: "Keep the reference"}}));
+  const other = Object.freeze(record({event_id: "new", title: "Later evidence", status: "confirmed"}));
+  const events = Object.freeze([original, other]);
+  const display = {events: new Map([["old", {...original, title: "负向观察", execution_observation: {change_reason: "保留参考方案"}}]]),
+    sections: new Map([["old", {applicability: "仅限本地", observation: "完整成本未知", interpretation: "",
+      decision: {outcome: "replan", changed: ["核对原始证据"], stopped: ["停止当前路线"], retained: ["保留旧版本"]}}]])};
+  for (const text of ["负向观察", "仅限本地", "完整成本未知", "核对原始证据", "停止当前路线", "保留旧版本", "保留参考方案"]) {
+    assert.deepEqual(searchResearchRecords(events, `${text} RUN:OLD`, "refuted", display), [original]);
+  }
+  assert.deepEqual(searchResearchRecords(events, "负向观察 Negative", "", display), [original]);
+  assert.equal(searchResearchRecords(events, "负向观察", "", display)[0], original);
+  assert.deepEqual(searchResearchRecords(events, "负向观察", "confirmed", display), []);
+  assert.deepEqual(searchResearchRecords(events, "Later", "", display), [other], "Partial translations retain original matching");
+  assert.deepEqual(searchResearchRecords(events, "负向观察"), [], "An absent/stale display never supplies cached aliases");
+  assert.equal(original.title, "Negative observation");
+});

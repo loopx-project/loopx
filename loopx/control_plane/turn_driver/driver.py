@@ -19,7 +19,7 @@ from .subagent_execution_topology import (
     build_subagent_execution_topology,
 )
 from ..quota.turn_envelope import (
-    TURN_ENVELOPE_SCHEMA_VERSION,
+    assert_turn_envelope_consumer_version,
     turn_envelope_action_signature_document,
     turn_envelope_replan_settlement_identity,
 )
@@ -138,8 +138,6 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 
 def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
-    if envelope.get("schema_version") != TURN_ENVELOPE_SCHEMA_VERSION:
-        return LoopXTurnRoute.CONTRACT_ERROR
     signature = _mapping(envelope.get("action_signature"))
     source_hash = str(signature.get("source_hash") or "")
     envelope_hash = str(signature.get("envelope_hash") or "")
@@ -509,9 +507,14 @@ def build_loopx_turn_plan(
         scheduler_owner=scheduler_owner,
     )
     envelope = dict(turn_envelope)
+    contract_error = None
+    try:
+        assert_turn_envelope_consumer_version(envelope)
+    except (ValueError, RuntimeError) as exc:
+        contract_error = str(exc)
     route = (
         _typed_route(envelope)
-        if execution_context.ok
+        if execution_context.ok and contract_error is None
         else LoopXTurnRoute.CONTRACT_ERROR
     )
     selected_todo = selected_turn_todo(envelope)
@@ -609,8 +612,8 @@ def build_loopx_turn_plan(
             "opaque_session_handle_omitted": True,
         },
         **(
-            {"error": session_error or "; ".join(execution_context.errors)}
-            if session_error or not execution_context.ok
+            {"error": contract_error or session_error or "; ".join(execution_context.errors)}
+            if contract_error or session_error or not execution_context.ok
             else {}
         ),
     }

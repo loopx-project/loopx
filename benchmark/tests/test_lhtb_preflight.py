@@ -38,7 +38,8 @@ def test_current_cli_accepts_the_benchmark_default():
 
 
 @pytest.mark.parametrize("legacy_limit", [None, 300])
-def test_config_renderer_removes_only_legacy_null_planning_limit(tmp_path, monkeypatch, legacy_limit):
+@pytest.mark.parametrize("context", [None, "fresh", "resume"])
+def test_config_renderer_removes_only_legacy_null_planning_limit(tmp_path, monkeypatch, legacy_limit, context):
     import yaml
     from benchmark.LHTB.scripts.render_config import main
 
@@ -48,7 +49,8 @@ def test_config_renderer_removes_only_legacy_null_planning_limit(tmp_path, monke
     output = tmp_path / "candidate.yaml"
     monkeypatch.setattr(sys, "argv", ["render_config", "--template", str(template),
         "--output", str(output), "--job-name", "fixture", "--jobs-dir", "runs",
-        "--concurrency", "1", "--model", "fixture", "--effort", "high", "--timeout", "1000"])
+        "--concurrency", "1", "--model", "fixture", "--effort", "high", "--timeout", "1000",
+        *(["--iteration-context", context] if context else [])])
     if legacy_limit is not None:
         with pytest.raises(SystemExit) as error:
             main()
@@ -58,6 +60,7 @@ def test_config_renderer_removes_only_legacy_null_planning_limit(tmp_path, monke
         kwargs = yaml.safe_load(output.read_text())["agents"][0]["kwargs"]
         assert "planning_timeout_sec" not in kwargs
         assert kwargs["task_entry"] == "loopx-planned"
+        assert kwargs["iteration_context"] == (context or "resume")
         assert kwargs["scheduler_timeout_sec"] == 5080
 
 

@@ -17,7 +17,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE_ROOT / "src"))
 host_module = importlib.import_module("loopx_codex_provider_routing.native_host")
 from loopx_codex_provider_routing.native import private_read  # noqa: E402
-from loopx_codex_provider_routing.native_processes import _codex_home, codex_home  # noqa: E402
+from loopx_codex_provider_routing.native_processes import _codex_home, codex_home, lima_pidfile  # noqa: E402
 
 BUNDLE = "/Applications/Example.app"
 EXE = BUNDLE + "/Contents/MacOS/Example"
@@ -121,6 +121,7 @@ class Fixture:
         stack.enter_context(patch.object(host_module.sys, "platform", "darwin"))
         stack.enter_context(patch.object(host_module, "process_identity", side_effect=lambda p: self.records.get(p)))
         stack.enter_context(patch.object(host_module, "codex_home", return_value=None))
+        stack.enter_context(patch.object(host_module, "responsible_pid", return_value=None))
         stack.enter_context(patch.object(host_module.subprocess, "run", side_effect=self.run))
         stack.enter_context(patch.object(host_module.os, "kill", side_effect=self.kill))
         return stack
@@ -457,6 +458,78 @@ with tempfile.TemporaryDirectory() as temporary:
         error("state_untrusted", f.host.resume_chat_agents)
     assert not f.calls
 
+    # A reparented VM holds this home, but belongs to a separate manager, not
+    # the current App. Prove its instance using kernel responsibility, the
+    # exact pidfile and the manager's scoped JSON inventory. This is still a
+    # read-only hold: a running instance says nothing about workload idleness.
+    for mutation in (None, "unknown", "same_app_name", "pid_reused", "holder_reused", "changed_responsibility",
+                     "wrong_instance", "wrong_catalog", "duplicate", "changed_pidfile", "manager_unavailable",
+                     "untrusted_binary", "different_binary", "not_hostagent", "stopped"):
+        f = fixture()
+        vm = "/System/Library/Frameworks/Virtualization.framework/VirtualMachine"
+        binary = f.home / "limactl"
+        binary.write_text("synthetic manager; subprocess is intercepted")
+        binary.chmod(0o700)
+        instance_dir = f.home / ".colima/_lima/example-vm"
+        instance_dir.mkdir(parents=True)
+        pidfile = instance_dir / "ha.pid"
+        pidfile.write_text("700\n")
+        pidfile.chmod(0o600)
+        f.holders = [200]
+        f.records[200] = (1, vm, 100, 1)  # Older than current App, PPID=1.
+        f.records[700] = (1, str(binary), 99, 2)
+        manager = {"name": "example-vm", "dir": str(instance_dir), "hostAgentPID": 700, "status": "Running"}
+        primary_run = f.run
+        def manager_run(command, **kwargs):
+            if command[0] == str(binary):
+                f.calls.append(command)
+                assert command == [str(binary), "list", "--format", "json"]
+                assert kwargs["env"]["LIMA_HOME"] == str(instance_dir.parent)
+                if mutation == "pid_reused":
+                    f.records[700] = (1, str(binary), 5000, 5)
+                if mutation == "holder_reused":
+                    f.records[200] = (1, vm, 5000, 5)
+                if mutation == "changed_pidfile":
+                    pidfile.write_text("701\n")
+                if mutation == "manager_unavailable":
+                    raise subprocess.TimeoutExpired(command, 5)
+                return SimpleNamespace(returncode=0, stdout=json.dumps(manager) + "\n"
+                                       + (json.dumps(manager) if mutation == "duplicate" else ""))
+            return primary_run(command, **kwargs)
+        f.run = manager_run
+        if mutation == "wrong_instance":
+            manager["dir"] = str(instance_dir.with_name("other-vm"))
+        if mutation == "stopped":
+            manager["status"] = "Stopped"
+        if mutation == "untrusted_binary":
+            binary.chmod(0o777)
+        if mutation == "same_app_name":
+            f.records[700] = (1, EXE, 99, 2)  # Path/name still cannot grant App ownership.
+        responsibilities = iter((700, 701)) if mutation == "changed_responsibility" else None
+        def responsible(_pid):
+            return None if mutation == "unknown" else next(responsibilities) if responsibilities else 700
+        with f.context(), patch.object(host_module, "responsible_pid", side_effect=responsible), \
+                patch.object(host_module, "lima_pidfile", return_value=None if mutation == "not_hostagent" else
+                             str(f.home / "other/ha.pid") if mutation == "wrong_catalog" else str(pidfile)), \
+                patch.object(host_module.shutil, "which", return_value=str(binary.with_name("other"))
+                             if mutation == "different_binary" else str(binary)):
+            if mutation in ("pid_reused", "holder_reused", "changed_responsibility"):
+                error("client_changed", f.host.clients)
+            else:
+                row = f.host.clients()["clients"][0]
+                assert row["kind"] == "unmanaged" and row["restartable"] is False
+                assert row["restart_blocker"] == ("manager_unverified" if mutation == "unknown"
+                                                  else "external_workload_unverified")
+                if mutation is None:
+                    assert row["manager"] == {"pid": 700, "process": "limactl",
+                                               "instance": "example-vm", "status": "Running"}
+                elif mutation != "unknown":
+                    assert "instance" not in row["manager"]
+                # No raw command, path, environment, auth or private catalog.
+                assert str(f.home) not in json.dumps(row)
+        assert f.switches == 0 and not f.killed and not (f.root / "chat-recovery.json").exists()
+        assert not any(c[0] == "/bin/launchctl" and c[1] != "print" for c in f.calls)
+
     f = fixture()
     (f.root / "chat-recovery.json").write_text(json.dumps({
         "schema_version": "codex_native_accounts_v1", "agents": {"unrelated.service": "digest"}}))
@@ -493,5 +566,24 @@ except OSError:
     pass
 else:
     raise AssertionError("ambiguous environment accepted")
+
+# A secret/argv lookalike or environment entry cannot supply the pidfile.
+from loopx_codex_provider_routing import native_processes as process_module  # noqa: E402
+for arguments, environment, expected in (
+    ([b"limactl", b"hostagent", b"--pidfile=/example/ha.pid", b"private-secret"], [], "/example/ha.pid"),
+    ([b"limactl", b"hostagent", b"--pidfile", b"/example/ha.pid"], [], "/example/ha.pid"),
+    ([b"limactl", b"shell"], [b"--pidfile=/decoy"], None),
+    ([b"limactl", b"hostagent", b"--pidfile=/one", b"--pidfile=/two"], [], None),
+    ([b"limactl", b"hostagent", b"--pidfile"], [], None),
+    ([b"limactl", b"hostagent", b"--pidfile=relative"], [], None),
+):
+    with patch.object(process_module, "_procargs", return_value=process_bytes(arguments, environment)):
+        assert lima_pidfile(123) == expected
+
+# Optional private SPI absence or denial remains unknown; no name fallback.
+for failure in (OSError("denied"), AttributeError("symbol absent")):
+    with patch.object(process_module.sys, "platform", "darwin"), \
+            patch.object(process_module.ctypes, "CDLL", side_effect=failure):
+        assert process_module.responsible_pid(123) is None
 
 print("native host client handoff smoke passed (identity, scope, switch and recovery)")

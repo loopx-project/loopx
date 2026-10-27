@@ -3,9 +3,71 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray } from "../runtime_decode.ts";
 import { authorityUnicodeCompare } from "../coordination/authority_store_codec.ts";
 import { normalizeStewardGoalScope, resolveConversationScope } from "./conversation_scope.ts";
+import {normalizeOriginalConversationRecipient} from "./semantic_request.ts";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 
 type Recipient = { goal_id: string; agent_id?: string };
 type LocalDeliveryScope = "all_registered" | "selected";
+
+function originalConversationGrant(params: JsonObject): JsonObject {
+  const requester = requireJsonObject(params.requester, "original requester");
+  const parsed = parseExactGoalRef(requester.goal_ref);
+  const agent = requireNonEmptyString(requester.agent_id, "requesting Agent");
+  if (parsed.kind !== "parsed" || Object.keys(requester).sort().join(",") !== "agent_id,goal_ref"
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/.test(agent)) {
+    throw new EffectRuntimeRequestError("original conversation requires an exact registered requester");
+  }
+  return {requester, source_id: requireNonEmptyString(params.original_source_id, "original source identity"),
+    parent_request_id: requireNonEmptyString(params.parent_request_id, "original parent request"),
+    recipient: normalizeOriginalConversationRecipient(params.recipient)};
+}
+function originalConversationTargets(policy: JsonObject): JsonObject[] {
+  if (policy.schema_version !== "loopx_manager_context_policy_v1") throw new EffectRuntimeRequestError("invalid source policy");
+  requireJsonObject(policy.sources, "context sources");
+  const rows = policy.original_conversation_targets ?? [];
+  if (!Array.isArray(rows) || rows.length > 128) throw new EffectRuntimeRequestError("invalid original conversation grants");
+  return rows.map(value => {
+    const row = requireJsonObject(value, "original conversation grant");
+    return originalConversationGrant({...row, original_source_id: row.source_id});
+  });
+}
+
+export function inspectOriginalConversationGrants(params: JsonObject): JsonObject {
+  const policy = requireJsonObject(params.policy, "source policy");
+  const session = params.session_id;
+  return {policy_sha256: canonicalAuthoritySha256(policy), grants: originalConversationTargets(policy)
+    .filter(row => session === undefined || (row.recipient as JsonObject).session_id === session)};
+}
+
+/** Registered-recipient defaults never enroll this explicit recipient kind. */
+export function requireOriginalConversationGrant(params: JsonObject): JsonObject {
+  const grant = originalConversationGrant(params);
+  const policy = requireJsonObject(params.policy, "source policy");
+  if (params.parent_access_verified !== true || !originalConversationTargets(policy).some(row =>
+    canonicalAuthoritySha256(row) === canonicalAuthoritySha256(grant))) {
+    throw new EffectRuntimeRequestError("original source has no explicit grant to this conversation recipient");
+  }
+  return grant;
+}
+
+export function configureOriginalConversationGrant(params: JsonObject): JsonObject {
+  const policy = requireJsonObject(params.policy, "source policy"), rows = originalConversationTargets(policy);
+  const grant = originalConversationGrant(params), enable = requireBoolean(params.grant, "original conversation grant");
+  if (params.expected_policy_sha256 !== canonicalAuthoritySha256(policy)) {
+    throw new EffectRuntimeRequestError("source policy changed; refresh before changing the conversation grant");
+  }
+  if (enable && (params.parent_access_verified !== true
+      || canonicalAuthoritySha256(grant.recipient) !== canonicalAuthoritySha256(params.current_recipient))) {
+    throw new EffectRuntimeRequestError("source or original conversation recipient is unavailable");
+  }
+  const key = canonicalAuthoritySha256(grant), present = rows.some(row => canonicalAuthoritySha256(row) === key);
+  const next = enable ? present ? rows : [...rows, grant] : rows.filter(row => canonicalAuthoritySha256(row) !== key);
+  if (next.length > 128) throw new EffectRuntimeRequestError("original conversation grant capacity exceeded");
+  const updated = present === enable ? policy : {...policy, original_conversation_targets: next};
+  return {policy: updated, would_change: present !== enable,
+    policy_sha256: canonicalAuthoritySha256(updated), grant};
+}
 
 /** Retire only this exact native conversation's grants. Historical requests and
  * receipts remain readable; neither another App nor a legacy source is revoked.

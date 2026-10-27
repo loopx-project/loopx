@@ -307,7 +307,10 @@ def codex_cli_result_schema(
 
 
 def _prompt(request: Mapping[str, Any]) -> str:
+    from ..quota.turn_envelope import assert_turn_envelope_consumer_version
+
     envelope = _mapping(request.get("turn_envelope"))
+    assert_turn_envelope_consumer_version(envelope)
     staged = _mapping(_mapping(envelope.get("detail_ref")).get("replan_action_packet")).get("review")
     model_request = request
     if staged:

@@ -114,3 +114,91 @@ def test_explicit_as_of_validation_is_independent_of_ledger(
         assert "as_of must be a timezone-aware ISO-8601 timestamp" in result.stderr
         assert not result.stdout
     assert (path.read_bytes() if path.exists() else None) == before
+
+def test_cli_exact_binding_is_fail_closed_and_read_only(tmp_path):
+    records = run_dsh_fixture()["ledger_records"]
+    stats = next(row for row in records if "run_identity" in row)
+    envelope = next(row for row in records if "session_id" in row)
+    binding = {
+        "provider_id": stats["provider_id"],
+        "observer_id": stats["observer_id"],
+        "session_id": envelope["session_id"],
+        "run_identity": stats["run_identity"],
+    }
+    path = ledger_path(tmp_path, FIXTURE_GOAL_ID)
+    append_ledger_records(path, records)
+    before = path.read_bytes()
+    flags = [
+        "--expected-binding",
+        json.dumps(binding),
+        "--max-observation-age-ms",
+        "1000",
+    ]
+    result = run_status(tmp_path, *flags, "--with-receipt")
+    assert result["projection"]["binding"]["eligible"] is False
+    assert "integrity_not_valid" in result["projection"]["binding"]["reason_codes"]
+    assert result["projection"]["stage"] == "unknown"
+    assert result["receipt"]["observation_entered_scheduler_inputs"] is False
+    assert path.read_bytes() == before
+    historical = run_status(tmp_path, *flags, as_of=None, raw=True)
+    assert historical.returncode == 2
+    assert "explicit as_of" in historical.stderr
+    assert not historical.stdout
+    assert path.read_bytes() == before
+
+
+def test_cli_exact_binding_matching_single_run_and_invalid_input(tmp_path):
+    records = run_dsh_fixture()["ledger_records"]
+    event = next(row for row in records if "session_id" in row)
+    event = {**event, "sequence": 0}
+    stats = next(row for row in records if "run_identity" in row)
+    stats = {
+        **stats,
+        "observed_event_count": 1,
+        "accepted_event_count": 1,
+        "rejected_event_count": 0,
+        "rejected_by_reason": {},
+        "backpressure_drop_count": 0,
+        "observer_failure_count": 0,
+    }
+    binding = {
+        "provider_id": stats["provider_id"],
+        "observer_id": stats["observer_id"],
+        "session_id": event["session_id"],
+        "run_identity": stats["run_identity"],
+    }
+    path = ledger_path(tmp_path, FIXTURE_GOAL_ID)
+    append_ledger_records(path, [event, stats])
+    before = {
+        str(p.relative_to(tmp_path)): p.read_bytes()
+        for p in tmp_path.rglob("*")
+        if p.is_file()
+    }
+    result = run_status(
+        tmp_path,
+        "--expected-binding",
+        json.dumps(binding),
+        "--max-observation-age-ms",
+        "0",
+        as_of=event["observed_at"],
+    )
+    assert result["projection"]["binding"]["eligible"] is True
+    assert result["projection"]["binding"]["reason_codes"] == []
+    for invalid in ("null", "[]", "{}", "not-json"):
+        failure = run_status(
+            tmp_path,
+            "--expected-binding",
+            invalid,
+            "--max-observation-age-ms",
+            "1000",
+            raw=True,
+        )
+        assert failure.returncode == 2
+        assert "Traceback" not in failure.stderr
+        assert not failure.stdout
+    after = {
+        str(p.relative_to(tmp_path)): p.read_bytes()
+        for p in tmp_path.rglob("*")
+        if p.is_file()
+    }
+    assert after == before

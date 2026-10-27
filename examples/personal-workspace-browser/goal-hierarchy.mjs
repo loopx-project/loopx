@@ -38,7 +38,7 @@ export const goalHierarchyScenario = {
         await writeFile(path, JSON.stringify({goal_id, display_name, parent_goal_id, events: []}));
         return path;
       }));
-      owner = await startHistoryOwner(paths);
+      owner = await startHistoryOwner(paths, {workspaceDirectory: true});
       // A second, independent status backend with its own "research" root so a
       // history entry can restore a source and a root scope together.
       const remotePaths = await Promise.all([["research", "Research"], ["operations", "Operations"],
@@ -48,9 +48,13 @@ export const goalHierarchyScenario = {
           await writeFile(path, JSON.stringify({goal_id, display_name, parent_goal_id, events: []}));
           return path;
         }));
-      ownerB = await startHistoryOwner(remotePaths);
-      const directory = await (await fetch(`${owner.base}/status.json?view=workspace-directory`)).json();
-      assert.equal(directory.goals.find(g => g.id === "portfolio").parent_goal_id, "research");
+      ownerB = await startHistoryOwner(remotePaths, {workspaceDirectory: true});
+      const directoryResponse = await fetch(`${owner.base}/status.json?view=workspace-directory`);
+      assert.equal(directoryResponse.status, 200);
+      const directory = await directoryResponse.json();
+      assert.deepEqual(directory.goals.map(goal => [goal.id, goal.parent_goal_id]).sort(),
+        captures.map(([id, _name, parent]) => [id, parent]).sort(),
+        "The real directory preserves every parent, including orphans and cycles");
       const entry = new URL(url);
       const researchFocus = {research_lens: "graph", research_goal: "calibration", research_node: JSON.stringify(["source-one", "source-two"]),
         research_pack: "a".repeat(64), research_analysis_goal: "calibration"};

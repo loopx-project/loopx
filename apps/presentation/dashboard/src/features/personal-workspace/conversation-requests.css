@@ -36,5 +36,20 @@
 
 .conversation-requests-search {display:flex;gap:8px;padding:12px 24px;}
 .conversation-requests-search input {min-width:0;flex:1;border:1px solid var(--pw-line);border-radius:6px;background:var(--pw-bg);color:var(--pw-text);font:inherit;padding:8px 12px;}
+.project-peer-dialog h3 {font-size:var(--text-body);margin:20px 0 12px;}
+.project-peer-dialog h4 {font-size:var(--text-body);margin:16px 0 8px;}
+.project-peer-request {border-bottom:1px solid var(--pw-line);padding:12px 0;overflow-wrap:anywhere;}
+.project-peer-request .personal-md p,.project-peer-request .personal-md li,.project-peer-request > ul {font-size:var(--text-lead);line-height:var(--leading-prose);}
+.project-peer-request > summary {display:flex;align-items:baseline;justify-content:space-between;gap:16px;cursor:pointer;}
+.project-peer-request > summary > span {flex-shrink:0;color:var(--pw-muted);}
+.project-peer-request > summary > strong {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.project-peer-request[open] > summary > strong {display:block;-webkit-line-clamp:unset;}
+.project-peer-grants {margin-top:24px;border-top:1px solid var(--pw-line);padding-top:8px;}
+.project-peer-grants label {display:grid;gap:6px;margin:12px 0;}
+.project-peer-grants input,.project-peer-grants select {width:100%;min-width:0;padding:8px 12px;border:1px solid var(--pw-line);border-radius:6px;background:var(--pw-bg);color:var(--pw-text);font:inherit;}
+.project-peer-grants > ul {list-style:none;padding:0;}
+.project-peer-grants > ul > li {display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0;overflow-wrap:anywhere;}
+.project-peer-grant:not([open]) > summary {display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;cursor:pointer;}
+@media(max-width:640px) {.project-peer-request > summary {align-items:flex-start;flex-direction:column;gap:4px;}.project-peer-request > summary > span {flex-shrink:1;}}
 .conversation-requests-search + .conversation-requests-body {max-height:calc(100dvh - 280px);}
 @media(max-width:640px) {.conversation-requests-search {padding-inline:16px;flex-wrap:wrap;}.conversation-requests-search input {flex-basis:100%;}.conversation-requests-search + .conversation-requests-body {max-height:calc(100dvh - 290px);}}

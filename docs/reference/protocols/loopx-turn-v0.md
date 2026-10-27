@@ -22,6 +22,17 @@ The protocol is host-neutral. A Codex CLI adapter is the first target, but the
 driver lifecycle must not depend on Codex-specific session files, transcript
 formats, or benchmark task schemas.
 
+The [controller/executor RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
+proposes reusing this governed lifecycle across managed, attached heartbeat and
+external-worker paths. A Turn remains the admitted work/settlement unit, not one
+model message or timer wake. Splitting native session roles does not create a
+second business executor, quota identity or independent control plane.
+
+中文：[controller/executor 提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+拟让托管、附着 heartbeat 与外部 worker 复用这套生命周期。Turn 仍是获准工作及其
+结算单元，不等于一条模型消息或一次唤醒；拆分会话角色不增加业务执行者或 quota 身份。
+上述跨入口收敛仍待实现与真实路径验收。
+
 ### Execution deadline defaults
 
 `turn run-once` now has no default single-turn wall-time limit (previously

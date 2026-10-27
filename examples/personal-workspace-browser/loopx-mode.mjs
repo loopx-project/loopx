@@ -68,6 +68,7 @@ export const loopxModeScenario = {
       const team = page.getByRole("region", {name: "团队执行详情"});
       const memberCard = name => team.locator(".goal-team-bindings > li").filter({hasText: name});
       const pulseCount = bucket => team.locator(`.goal-team-pulse li[data-bucket="${bucket}"] strong`).innerText();
+      const dialog = page.getByRole("dialog", {name: "团队执行情况"});
       await memberCard("local-analyst").getByText("已通过当前验收", {exact: true}).waitFor();
       await team.getByText("本页有无法核验的工作，请检查原请求；不要直接重新派工。", {exact: true}).waitFor();
       await team.locator(".goal-team-operations").getByText("记录不可读 · 无法核验", {exact: true}).waitFor();
@@ -88,16 +89,25 @@ export const loopxModeScenario = {
       if (await memberCard("cloud-reviewer").getByText("执行中", {exact: true}).count() || await pulseCount("executing") !== "0") {
         throw new Error("Stopped worker was labeled executing");
       }
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({state: "hidden"});
+      if (!await page.locator(".goal-loopx-team-trigger").evaluate(el => el === document.activeElement)) throw new Error("Closing desktop team details lost keyboard focus");
+      if (Math.abs(await page.locator(".personal-channel-scroll").evaluate(el => el.scrollTop) - scrollBefore) > 1) throw new Error("Desktop team details changed conversation scroll");
       await page.setViewportSize({width: 390, height: 844});
+      // Finish responsive reflow before measuring a separate mobile modal cycle.
+      await page.screenshot({path: resolve(outputDir, "goal-conversation-mobile.png"), fullPage: false, animations: "disabled"});
+      const mobileScrollBefore = await page.locator(".personal-channel-scroll").evaluate(el => el.scrollTop);
+      await page.getByRole("button", {name: "团队执行情况", exact: true}).click();
+      await team.getByRole("button", {name: "下一页", exact: true}).click();
+      await memberCard("cloud-reviewer").getByText("需要恢复原执行", {exact: true}).waitFor();
       await page.screenshot({path: resolve(outputDir, "goal-team-execution-mobile.png"), fullPage: false, animations: "disabled"});
       if (api.turnRequests.length) throw new Error("Inspecting the team started a model turn");
-      const dialog = page.getByRole("dialog", {name: "团队执行情况"});
       const dialogBox = await dialog.boundingBox();
       if (!dialogBox || dialogBox.x < 15 || Math.abs(dialogBox.x + dialogBox.width / 2 - 195) > 1 || dialogBox.y + dialogBox.height > 844) throw new Error("Team dialog lost its centered, bounded mobile layout");
       await page.keyboard.press("Escape");
       await dialog.waitFor({state: "hidden"});
       if (!await page.locator(".goal-loopx-team-trigger").evaluate(el => el === document.activeElement)) throw new Error("Closing team details lost keyboard focus");
-      if (Math.abs(await page.locator(".personal-channel-scroll").evaluate(el => el.scrollTop) - scrollBefore) > 1) throw new Error("Team details changed conversation scroll");
+      if (Math.abs(await page.locator(".personal-channel-scroll").evaluate(el => el.scrollTop) - mobileScrollBefore) > 1) throw new Error("Mobile team details changed conversation scroll");
       const mobileComposer = await composer.boundingBox();
       if (!mobileComposer || mobileComposer.width < 200 || mobileComposer.y + mobileComposer.height > 844) throw new Error("Mobile composer is not usable");
       await page.screenshot({path: resolve(outputDir, "goal-conversation-mobile.png"), fullPage: false, animations: "disabled"});

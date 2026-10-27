@@ -902,6 +902,58 @@ def test_modern_decision_through_real_readers() -> None:
     assert "protocol_action_packet" not in capsule
 
 
+def test_ordinary_host_preserves_signed_surrounding_turn_policies() -> None:
+    from loopx.control_plane.turn_driver.host_candidate import render_prompt
+
+    source = _full_decision()
+    source.update(should_run=False, normal_delivery_allowed=False, decision='skip',
+                  effective_action='quota_skip', action_required=True, open_count=1)
+    source['execution_obligation']['must_attempt_work'] = False
+    source['work_lane_contract']['must_attempt_work'] = False
+    source['interaction_contract']['cli_channel'].update(
+        next_cli_actions=[], spend_allowed_now=False, spend_after_validation=False,
+    )
+    source['interaction_contract']['user_channel'].update(action_required=True, notify='NOTIFY')
+    source['interaction_contract']['agent_channel'].update(
+        must_attempt=False, delivery_allowed=False, quiet_noop_allowed=False,
+    )
+    source['interaction_contract']['response_plan'] = {
+        'schema_version': 'interaction_response_plan_v0',
+        'kind': 'surface_user_gate', 'decision': 'ask_user', 'action_sequence': ['notify', 'wait'],
+        'silent_wait_allowed': False,
+    }
+    source['task_orchestration_contract'] = {
+        'schema_version': 'task_orchestration_contract_v1',
+        'mode': 'task_scoped_peer', 'activation_allowed': False,
+        'writeback_owner': 'task_coordinator',
+    }
+    envelope = build_turn_envelope(source)
+    assert not envelope.get('replan_action_packet')
+    authority = extract_turn_authority({'turn_envelope': envelope})
+    prompt = render_prompt(authority)
+    delivered, _ = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:\n', 1)[1])
+    assert delivered['user']['notify'] == 'NOTIFY'
+    assert delivered['action']['must_attempt'] is False
+    assert delivered['action']['delivery_allowed'] is False
+    assert delivered['action']['quiet_noop_allowed'] is False
+    assert delivered['should_run'] is False
+    assert delivered['effective_action'] == 'quota_skip'
+    assert delivered['execution_policy']['normal_delivery_allowed'] is False
+    assert delivered['execution_policy']['safe_bypass_allowed'] is False
+    assert delivered['task_orchestration_contract']['activation_allowed'] is False
+    assert delivered['response_plan']['silent_wait_allowed'] is False
+    for field in ('user', 'execution_policy', 'scheduler', 'response_plan', 'task_orchestration_contract'):
+        assert delivered[field] == envelope[field]
+        altered = deepcopy(envelope)
+        del altered[field]
+        with pytest.raises(ValueError, match='action signature'):
+            extract_turn_authority({'turn_envelope': altered})
+    # Carrying policy is not delegating its effects to the model. The native
+    # executor still applies settlement and scheduler operations after return.
+    assert 'do not execute state writeback, quota or scheduler commands' in prompt
+    assert 'writeback' not in authority
+
+
 @pytest.mark.parametrize("user_required", [False, True], ids=["quiet-wait", "user-gate"])
 def test_missing_protocol_packet_cannot_reopen_a_non_delivery_decision(user_required: bool) -> None:
     source = _full_decision()

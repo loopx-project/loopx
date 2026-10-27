@@ -288,7 +288,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
 
     snapshot = (store.session_snapshot(session_id, strict_messages=True) if message_limit is not None
                 else store.session_snapshot(session_id))
-    from ...chat_history import page_chat_messages
+    from .chat_history import page_chat_messages
     page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
                               cursor=message_cursor) if message_limit is not None else None)
     context_messages = snapshot["messages"]

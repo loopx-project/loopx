@@ -118,6 +118,14 @@ For changed requirements or reviews, add this envelope to the **existing**
 its ordinary routing, Turn, checkpoint and delivery arguments. This does not
 replace them.
 
+An enabled due Stride review binds the delivered context, which includes outcome
+facts. When this milestone changes those facts, apply the refinement first with
+the standalone command below, then re-enter the guard with the same Turn identity
+and read its fresh context before authoring the complete Vision decision. Omit
+the already applied update from that ordinary writeback. No extra refinement is
+needed when the facts are unchanged. Do not copy a new context ID into an old
+decision without reviewing the changed facts.
+
 The batched response's `goal_outcome_update` acknowledges the operation with its
 status and canonical revision; it does not echo the complete acceptance contract.
 The same receipt remains present if the later ordinary writeback fails. Retry the
@@ -126,6 +134,14 @@ requirements and evidence remain in `goal-acceptance inspect` and admitted work
 context; the compact receipt cannot substitute for reading that basis before a
 new refinement. Standalone `goal-acceptance refine` and conversation outcome tools
 retain their full readback.
+
+Batching is sequential: refinement commits before ordinary writeback. A dry-run
+uses the typed owner's prospective acceptance facts; `planned` commits nothing.
+If execution returns `stride_review_basis_mismatch` with an `applied` or
+`replayed` refinement receipt, preserve that effect and use the same-Turn fresh
+context route above. Repeating the stale Vision alone cannot recover it. An
+identical refinement operation recovers its receipt without applying it again;
+never replace its operation ID to evade the existing receipt or CAS check.
 
 Do not add an immediate inspection solely to acknowledge this receipt. Reuse the
 complete admitted context while current; inspect only when that basis is absent

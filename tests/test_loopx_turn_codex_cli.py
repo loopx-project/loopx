@@ -1690,3 +1690,24 @@ def test_default_turn_cli_rejects_stopped_source_behind_stale_global_mirror(
     assert not _session_files(runtime)
     index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
     assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("declaration", ["envelope", "signature", "coverage"])
+def test_codex_host_rejects_unknown_contract_version_before_process(tmp_path, monkeypatch, declaration):
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+
+    executable, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    request = _request()
+    envelope = request["turn_envelope"]
+    if declaration == "envelope":
+        envelope["schema_version"] = "unsupported_work_contract"
+    else:
+        envelope["action_signature"] = {
+            "schema_version" if declaration == "signature" else "coverage": "unsupported_required_semantics",
+        }
+    with pytest.raises(EffectRuntimeRejected, match="unsupported TurnEnvelope"):
+        run_codex_cli_host(request, runtime_root=tmp_path / "runtime", project=tmp_path,
+                           codex_bin=str(executable), timeout_seconds=5)
+    assert not log.exists()
+    assert not _session_files(tmp_path / "runtime")

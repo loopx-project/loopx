@@ -131,12 +131,18 @@ def project_replan_writeback_rejection(
     capability_guard = obligation.get("capability_guard")
     if isinstance(capability_guard, Mapping) and rejection.semantic_delta.get("readback_actions"):
         next_cli_actions = rejection.semantic_delta["readback_actions"]
+    context_recovery = rejection.semantic_delta.get("context_recovery")
+    if isinstance(context_recovery, Mapping):
+        # TS owns the mismatch classification and complete review basis. Reading
+        # that basis precedes retry; the generic unbound writeback command would
+        # merely repeat the rejection and can lose the original Turn identity.
+        next_cli_actions = []
     return {
         "schema_version": REPLAN_WRITEBACK_REJECTION_SCHEMA_VERSION,
         "required": True,
         "host_action": (
-            "settle_todo_lifecycle"
-            if lifecycle_reentry is not None
+            "read_current_replan_context" if isinstance(context_recovery, Mapping)
+            else "settle_todo_lifecycle" if lifecycle_reentry is not None
             else "read_current_capability_evidence" if capability_guard
             else "write_typed_semantic_delta"
         ),
@@ -147,6 +153,7 @@ def project_replan_writeback_rejection(
         "reason_code": rejection.semantic_delta.get("reason_code"),
         "triggers": triggers,
         "next_cli_actions": next_cli_actions,
+        **({"context_recovery": dict(context_recovery)} if isinstance(context_recovery, Mapping) else {}),
         **({"capability_guard": dict(capability_guard)} if isinstance(capability_guard, Mapping) else {}),
     }
 

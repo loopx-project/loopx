@@ -913,3 +913,135 @@ def test_dsh_fixture_exercises_every_contract_hazard_and_stays_degraded() -> Non
         + receipt["rejected_event_count"]
         + receipt["backpressure_drop_count"]
     )
+
+def expected_binding():
+    return {
+        "provider_id": DSH_PROVIDER_ID,
+        "observer_id": OBSERVER,
+        "session_id": SESSION,
+        "run_identity": RUN_IDENTITY.as_dict(),
+    }
+
+
+def test_exact_binding_admits_only_fresh_matching_passive_evidence():
+    result = projection_for(
+        envelope(0),
+        stats(),
+        expected_binding=expected_binding(),
+        as_of=at(1),
+        max_observation_age_ms=1000,
+    )
+    assert result["binding"]["eligible"] is True
+    assert result["binding"]["reason_codes"] == []
+    assert result["authority"] == "none"
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ({"session_id": "another-session"}, "session_identity_mismatch"),
+        ({"observer_id": "another-observer"}, "run_identity_mismatch"),
+        (
+            {"run_identity": {**RUN_IDENTITY.as_dict(), "task_id": "another-task"}},
+            "run_identity_mismatch",
+        ),
+    ],
+)
+def test_exact_binding_refuses_identity_mismatch(change, reason):
+    result = projection_for(
+        envelope(0),
+        stats(),
+        expected_binding={**expected_binding(), **change},
+        as_of=at(1),
+        max_observation_age_ms=1000,
+    )
+    assert result["binding"]["eligible"] is False
+    assert reason in result["binding"]["reason_codes"]
+    assert result["stage"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "now,reason",
+    [
+        (at(2), "observation_stale"),
+        ("2026-09-01T09:59:59+00:00", "observation_in_future"),
+    ],
+)
+def test_exact_binding_refuses_old_or_future_observations(now, reason):
+    result = projection_for(
+        envelope(0),
+        stats(),
+        expected_binding=expected_binding(),
+        as_of=now,
+        max_observation_age_ms=1000,
+    )
+    assert result["binding"]["eligible"] is False
+    assert reason in result["binding"]["reason_codes"]
+
+
+def test_exact_binding_checks_future_instants_across_clock_offsets():
+    result = projection_for(
+        envelope(0, observed_at="2026-09-01T09:30:00-01:00"),
+        envelope(1, observed_at="2026-09-01T10:00:00+00:00"),
+        stats(accepted_event_count=2),
+        expected_binding=expected_binding(),
+        as_of="2026-09-01T10:00:01+00:00",
+        max_observation_age_ms=1000,
+    )
+    assert "observation_in_future" in result["binding"]["reason_codes"]
+    assert result["stage"] == "unknown"
+
+
+def test_exact_binding_cannot_hide_another_session_or_invalid_integrity():
+    result = projection_for(
+        envelope(0),
+        envelope(0, session_id="another-session"),
+        stats(accepted_event_count=2),
+        expected_binding=expected_binding(),
+        as_of=at(1),
+        max_observation_age_ms=1000,
+    )
+    assert "session_identity_mismatch" in result["binding"]["reason_codes"]
+    invalid = projection_for(
+        envelope(0),
+        expected_binding=expected_binding(),
+        as_of=at(1),
+        max_observation_age_ms=1000,
+    )
+    assert "integrity_not_valid" in invalid["binding"]["reason_codes"]
+    assert invalid["stage"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_observation_age_ms": 1000},
+        {"as_of": at(1)},
+        {"as_of": at(1), "max_observation_age_ms": -1},
+        {"as_of": at(1), "max_observation_age_ms": True},
+    ],
+)
+def test_exact_binding_requires_explicit_clock_and_age_bound(kwargs):
+    with pytest.raises(ValueError):
+        projection_for(
+            envelope(0), stats(), expected_binding=expected_binding(), **kwargs
+        )
+
+
+@pytest.mark.parametrize(
+    "observed,now,limit,reason",
+    [
+        ("2026-09-01T10:00:00.0000001Z", "2026-09-01T10:00:00Z", 0,
+         "observation_in_future"),
+        ("2026-09-01T10:00:00Z", "2026-09-01T10:00:01.0000001Z", 1000,
+         "observation_stale"),
+    ],
+)
+def test_exact_binding_preserves_fractional_timestamp_boundaries(observed, now, limit, reason):
+    result = projection_for(
+        envelope(0, observed_at=observed), stats(), expected_binding=expected_binding(),
+        as_of=now, max_observation_age_ms=limit,
+    )
+    assert result["binding"]["eligible"] is False
+    assert reason in result["binding"]["reason_codes"]
+    assert result["stage"] == "unknown"

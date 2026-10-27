@@ -153,6 +153,25 @@ text; readback does not rewrite the ledger.
 | `signals` | `stall_suspected`, `repetition_suspected`, `unrecovered_error`, `event_loss`, `integrity_not_valid` |
 | `integrity` | the receipt status and reason codes |
 
+### Exact binding and freshness
+
+For a manual current-session read, pass `status --expected-binding '<JSON>'`
+with `--as-of <current timestamp>` and `--max-observation-age-ms <nonnegative integer>`.
+The JSON object has exactly `provider_id`, `observer_id`, `session_id` and
+`run_identity` (the eight existing observer-stats treatment fields above).
+Invalid input exits with code 2. Omission preserves historical projection output.
+
+The optional `binding` object contains `expected`, `eligible`, `reason_codes`
+and `max_observation_age_ms`. It refuses an empty ledger, any different
+session/provider/observer or run treatment, non-valid integrity, any future
+observation, or a latest observation older than the caller's ceiling. Refusal
+sets `stage` to `unknown`; counts and signals remain historical ledger evidence.
+Reason codes are local to this read contract: `no_observations`,
+`session_identity_mismatch`, `run_identity_mismatch`, `integrity_not_valid`,
+`observation_in_future`, and `observation_stale`. Matching evidence proves
+admissibility only, never task success. The read does not filter out conflicting
+runs, write state, call a provider, or enable polling.
+
 ## Use It
 
 ```bash

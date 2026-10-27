@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -47,6 +48,14 @@ def test_accepted_replan_promotes_the_new_route_and_keeps_explicit_choice() -> N
         envelope["action"]["action_portfolio"]["primary"]["todo_id"]
         == "todo_replan_successor"
     )
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+
+    authority = extract_turn_authority({"turn_envelope": envelope})
+    prompt = render_prompt(authority)
+    delivered, _ = json.JSONDecoder().raw_decode(prompt.split("Turn authority JSON:\n", 1)[1])
+    assert delivered["action"]["action_portfolio"] == portfolio
+    assert delivered["action"]["action_portfolio"]["selection_policy"]["recommendation_role"] == "default_not_binding"
+    assert delivered["selected_todo"]["todo_id"] == "todo_replan_successor"
     chosen = build_quota_should_run(
         status,
         goal_id=REPLAN_GOAL,

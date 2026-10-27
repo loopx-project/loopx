@@ -740,10 +740,13 @@ def refresh_state_run(
     sync_global: bool = True,
     external_delivery: dict[str, Any] | None = None,
     goal_ref: dict[str, str] | None = None,
+    goal_acceptance_preview: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
     safe_goal_id = validate_goal_id_path_segment(goal_id)
+    if goal_acceptance_preview is not None and not dry_run:
+        raise ValueError("prospective acceptance facts are valid only for dry-run planning")
     if next_action_basis and not next_action:
         raise ValueError("--next-action-basis requires --next-action")
     if checkpoint_read_context_id and not turn_instance_id:
@@ -967,6 +970,15 @@ def refresh_state_run(
         state_text, planning_events, todo_fields = (
             planning_source.state_text, planning_source.events, planning_source.todo_fields,
         )
+        if goal_acceptance_preview is not None:
+            # Only the batched CLI dry-run supplies this owner-produced plan.
+            # Execution always reads committed canonical facts. In particular,
+            # do not qualify a due Stride decision against the pre-update basis.
+            if not isinstance(todo_fields, dict) or not isinstance(todo_fields.get("agent_todos"), dict):
+                raise ValueError("outcome preview requires a canonical planning snapshot")
+            todo_fields = {**todo_fields, "agent_todos": {
+                **todo_fields["agent_todos"], "goal_acceptance_contract": goal_acceptance_preview,
+            }}
         expected_write_state_text = state_text
         normalized_next_action = normalize_next_action_text(next_action) if next_action else None
         if normalized_next_action and registry_goal is None:

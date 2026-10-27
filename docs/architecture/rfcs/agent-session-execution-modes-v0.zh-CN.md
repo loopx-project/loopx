@@ -7,7 +7,7 @@
 - **作者 / 负责人：** 由维护者指示整理的契约。它把桌面端提案中已有的会话归属决策
   抽取并规范化。会话归属与宿主接入决策需要维护者接受。
 - **创建日期：** 2026-09-15
-- **最近规范性修订：** 2026-09-15
+- **最近规范性修订：** 2026-10-27
 - **实现基线：** `6c3da75ca`
 - **相关契约：** [桌面执行前端](desktop-execution-frontends-v0.zh-CN.md)、
   [单属主本地守护进程](single-owner-local-daemon-v0.md)、
@@ -184,6 +184,17 @@ claim 与完成回执，以及"只有经过验证的回写才推进工作"这一
 提示词推断出的模式变更。
 
 <a id="reusable-agent-operations-and-continuation-ownership"></a>
+
+### Controller 与 executor 会话角色
+
+[统一工作契约 RFC](controller-executor-unified-contract-v0.zh-CN.md) 提议同一逻辑 Agent
+可选地使用一个 controller 模型会话和一个业务 executor。这是角色区别，不是第三种执行
+模式或权限等级。同时准入前，先扩展既有 binding owner，显式记录 role/generation、
+独立有序队列与各自上下文基线。不能往单一 Agent 级 native-session 槽位写两个 ID。
+一个活跃 executor 的不变量约束业务工作；controller role 不许可第二个并发业务 executor。
+它通过既有受限操作访问 Core，host 强制把 Core 凭据/写工具排除在 executor 权限之外。
+角色变化、Stop、迟到结果及 controller 恢复须保留原 request/attempt 和结算绑定。
+该 profile 合格前，已有绑定行为不变；不隐式转换或提升 host。
 
 ### 可复用的 Agent 操作与续跑归属
 
@@ -484,6 +495,7 @@ App 自有心跳的模型唤醒抑制仍需要宿主下发前钩子。通用 pro
 | [TypeScript 控制面迁移](typescript-control-plane-migration-v0.zh-CN.md) | 迁移期间由哪个面拥有类型化状态机、effect 与结算规则 | 成为机器强制的模式转换属于那个类型化边界。Python 适配器可以桥接契约，但不得分叉会话模式权威。 |
 | [Goal Channel 协作](goal-channel-collaboration-v0.zh-CN.md) | Goal 绑定的协作面、通道投递与通知 | 拥有协作投递到哪里。本 RFC 拥有投递所针对的会话绑定，以及该绑定能否接受它。 |
 | [LoopX Turn v0](../../reference/protocols/loopx-turn-v0.md) | 有界受治理 Turn：decide、execute、validate、write back、spend once | 托管宿主使用的执行单元，也是返回受治理结果的挂接宿主使用的单元。本 RFC 不扩展 Turn 契约。 |
+| [Controller/executor 与统一契约](controller-executor-unified-contract-v0.zh-CN.md) | 统一 Core 输入、模型角色分工、自然语言 executor 交流与路径退役 | 本文拥有角色绑定、mode 和 host 生命周期；新提案拥有跨路径验收。Controller 模型区别于下一行的纯 disposition 函数。 |
 | [Turn 循环控制器](../../reference/protocols/turn-loop-controller-v0.md) | 继续 Turn 的纯处置转换及其预算语义 | 判断是否还有下一个 Turn 有资格执行。它不拥有会话、不启动进程、不调度工作。 |
 | [宿主模式规划](../../reference/protocols/host-mode-plan-v0.md) | 依据意图与已声明能力做面向用户的宿主模式选择，以及它打印的预览命令 | 这是另一个轴：工作如何推进、经由哪个连接器。它不是模式权威；被选中的宿主仍须按本 RFC 声明其会话模式。 |
 | [会话运行时投影](../../reference/protocols/session-runtime-loopx-projection-v0.md) | 把外部运行时会话只读投影进 LoopX，且不复制私有 trace | 与 `attached_host` 一致：运行时拥有 transcript，LoopX 拥有自己的状态。本 RFC 不新增投影字段。 |

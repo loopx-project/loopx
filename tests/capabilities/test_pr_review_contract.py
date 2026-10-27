@@ -281,6 +281,20 @@ def test_docs_plan_does_not_invent_code_symbols() -> None:
     assert template["review_order"] == ["docs/design.md"]
 
 
+def test_bilingual_presentation_keeps_canonical_evidence_and_validation_requirements() -> None:
+    template = build_review_template(_item(areas={"product_runtime": 1}))
+    assert [section["label"] for section in template["sections"]] == [
+        "动机", "改动思路", "具体改动", "对主干的风险", "我的整体评价"]
+    assert [section["minimum_prose_characters"] for section in template["sections"]] == [40, 80, 180, 120, 60]
+    assert "## 动机 / Motivation" in template["sections"][0]["agent_instruction"]
+    assert "Problem / Evidence / " in template["output_hint"]
+    assert "PASS / FAIL / UNVERIFIED" in template["output_hint"]
+    assert "not a new language quota" in template["output_hint"]
+    # Style is carried by the existing writing hint, not a new evidence bypass.
+    assert "check-result" in template["output_hint"]
+    assert "read it back" in template["output_hint"]
+
+
 def test_agent_instruction_plan_requires_default_off_user_experience_evidence() -> None:
     item = _item(areas={"agent_instruction_surface": 1})
     item["key_files"] = [

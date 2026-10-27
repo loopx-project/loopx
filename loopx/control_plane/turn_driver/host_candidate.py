@@ -11,7 +11,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
-from ..quota.turn_envelope import turn_envelope_action_signature_document
+from ..quota.turn_envelope import assert_turn_envelope_consumer_version, turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
@@ -74,6 +74,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     """Return the signed action and safety boundary exactly as projected."""
 
     envelope = _mapping(request.get("turn_envelope"))
+    assert_turn_envelope_consumer_version(envelope)
     signature = _mapping(envelope.get("action_signature"))
     source_hash = str(signature.get("source_hash") or "")
     envelope_hash = str(signature.get("envelope_hash") or "")
@@ -104,6 +105,18 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         "write_scope": list(write_scope) if isinstance(write_scope, list) else [],
         "workspace_guard": _mapping(boundary.get("workspace_guard")),
     }
+    # Preserve signed decision facts, including explicit false/null values.
+    # They describe the admitted Turn; this adapter never re-decides admission.
+    for field in ("agent_id", "decision", "should_run", "effective_action", "state"):
+        if field in envelope:
+            authority[field] = envelope[field]
+    # Keep decision flags and registered choices alongside the relocated task.
+    # recommended_action is a bounded display fallback and can retain an older
+    # recommendation; it must not compete with the signed primary_action.
+    remaining_action = {key: value for key, value in action.items()
+        if key not in {"primary_action", "recommended_action", "selected_todo", "core_goal", "planning_horizon", "acceptance_index"}}
+    if remaining_action:
+        authority["action"] = remaining_action
     # Keep the established scope/workspace aliases once, and transport every
     # remaining signed restriction rather than rebuilding policy in this IO adapter.
     remaining_boundary = {
@@ -112,10 +125,12 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     }
     if remaining_boundary:
         authority["boundary"] = remaining_boundary
-    if staged:
-        for field in ("user", "execution_policy", "scheduler", "response_plan", "task_orchestration_contract"):
-            if envelope.get(field) is not None:
-                authority[field] = envelope[field]
+    # These signed obligations apply to ordinary work as well as staged replan.
+    # Forward the existing projection; transport must not decide which policy
+    # is relevant from the presence of a replan reader.
+    for field in ("user", "execution_policy", "scheduler", "response_plan", "task_orchestration_contract"):
+        if envelope.get(field) is not None:
+            authority[field] = envelope[field]
     if isinstance(envelope.get("work_context"), Mapping):
         authority["work_context"] = dict(envelope["work_context"])
     selected = selected_turn_todo(envelope)
@@ -131,8 +146,10 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         value = _mapping(capsule.get(field))
         if value:
             authority[field] = value
+    # Ordinary execution needs the same work/continuation obligations as replan.
+    # Keep their signed source data; this adapter must not classify or execute it.
     remaining_capsule = {key: value for key, value in capsule.items() if key not in authority}
-    if staged and remaining_capsule:
+    if remaining_capsule:
         authority["contract_capsule"] = remaining_capsule
     context = _mapping(envelope.get("agent_context"))
     if context:
@@ -161,7 +178,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
                 else item for item in horizon["work_items"]
             ]
         authority["planning_horizon"] = horizon
-    if context.get("detail_ref") or replan or authority.get("vision_continuation_audit") or horizon:
+    if detail or context.get("detail_ref") or replan or authority.get("vision_continuation_audit") or horizon:
         # Replan/acceptance evidence and historical capability references need
         # the saved observation's route and hash. Native capture validation owns
         # its binding; this adapter neither reads it nor re-enters admission.
@@ -262,7 +279,14 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         "Do not repeat reads already fulfilled in work_context. Write only inside write_scope, "
         "and obey workspace_guard and all supplied boundary restrictions and stop conditions. "
         "Checkpointed approval covers only its active_write_scope; other approval gates remain. "
-        "Do not infer authority from other prose.\n\n"
+        "Do not infer authority from other prose. "
+        "User notification policy does not grant or cancel execution authority. "
+        "Respect action.must_attempt, action.delivery_allowed and action.quiet_noop_allowed "
+        "when present; alternatives and capability intents do not override admission or scope. "
+        "Obey execution_policy and task_orchestration_contract when supplied. "
+        "Scheduler and response plans describe the surrounding Turn: do not execute "
+        "state writeback, quota or scheduler commands from this work segment. "
+        "Return the semantic result; the outer Turn executor owns those effects.\n\n"
         f"{context_instruction}"
         f"{planning_context_instruction}"
         f"{replan_instruction}"

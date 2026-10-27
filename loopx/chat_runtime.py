@@ -812,6 +812,11 @@ class ChatRuntimeController:
         if self.project_contexts.conversation_bindings is not None:
             from .capabilities.native_chat.external_conversations import ChatExternalConversations
             recovery = ChatExternalConversations(self).queued_recovery_context(session, active, accepted_turn_id)
+        native_quota_refresh = bool(active and active_id == accepted_turn_id
+            and active.get("status") == "queued" and active.get("origin") == "native_loopx"
+            and active.get("loopx_execution") is True
+            and (active.get("loopx_request") or {}).get("work_kind") == "report"
+            and isinstance((active.get("loopx_request") or {}).get("report_quota_recovery"), dict))
         with self.lock:
             current = self.adapters.get(session_id)
             manager_profile_changed = bool(
@@ -830,6 +835,7 @@ class ChatRuntimeController:
                 and current.healthcheck()
                 and not manager_profile_changed
                 and not recovery.get("quota_attempt")
+                and not native_quota_refresh
                 and (isinstance(current, CodexAppServerAdapter) and current.session.read_only_review) == bool(recovery.get("read_only_review"))
                 and model_allocation is None
                 and not settings_changed
@@ -1438,6 +1444,9 @@ class ChatRuntimeController:
                     return
                 turn_id = str(turn["turn_id"])
                 try:
+                    if turn.get("origin") == "peer" or "collaboration_request" in turn:
+                        from .capabilities.native_chat.conversation_bindings import OriginalConversationRequests
+                        OriginalConversationRequests(self).validate_turn(session_id, turn)
                     # An empty queue needs no provider preparation. Claim real
                     # work first, keeping the existing enqueue/retirement fence
                     # above and the Turn's execution/stop checks below.
@@ -1726,6 +1735,12 @@ class ChatRuntimeController:
                 project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
             from .chat_coordination import prepare_turn_context
             current_turn = self.store.load_turn(session_id, turn_id) or {}
+            if current_turn.get("origin") == "peer" or "collaboration_request" in current_turn:
+                from .capabilities.native_chat.conversation_bindings import OriginalConversationRequests
+                peer_requests = OriginalConversationRequests(self)
+                peer_requests.validate_turn(session_id, current_turn)
+                if not isinstance(adapter, CodexAppServerAdapter):
+                    raise ValueError("original conversation peer tools are unavailable for this executor")
             native_request = current_turn.get("loopx_request") or {}
             native_loopx = native_request.get("operation") == "native_turn"
             report_context_rebind = False
@@ -1738,7 +1753,7 @@ class ChatRuntimeController:
             # Internal native work has no external message event. Its typed
             # original-actor admission above must succeed before using the
             # Session's existing portfolio reader; it never fabricates ingress.
-            scope = (conversation_scope(session) if native_loopx else
+            scope = (conversation_scope(session) if native_loopx or current_turn.get("origin") == "peer" else
                 conversation_scope(session, origin=str(current_turn.get("origin") or "unknown")))
             if isinstance(adapter, CodexAppServerAdapter):
                 # Handlers are bound per Turn. An external input sharing a Goal
@@ -1753,7 +1768,7 @@ class ChatRuntimeController:
                     if conversation_scope(session)["kind"] == "owner_goal"
                     else None
                 )
-            native_command = parse_native_goal_command(message)
+            native_command = None if current_turn.get("origin") == "peer" else parse_native_goal_command(message)
             if native_command is not None:
                 validate_goal_chat(session, attachments)
                 if scope["kind"] != "owner_goal":
@@ -1805,6 +1820,8 @@ class ChatRuntimeController:
                     if execution_lock is not None:
                         execution_lock.__exit__(None, None, None)
                     adapter.goal_driver = None
+            elif current_turn.get("origin") == "peer":
+                response = peer_requests.execute(session_id, turn_id, adapter.session, event_sink)
             else:
                 from .usage_goal import observe_goal_execution
                 if isinstance(adapter, CodexAppServerAdapter):

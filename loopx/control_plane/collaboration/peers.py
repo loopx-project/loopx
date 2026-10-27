@@ -73,6 +73,58 @@ def require_operation_id(value: str) -> str:
     return value
 
 
+def original_conversation_request(root, registry, goal_id, agent_id, *, operation,
+                                  parameters, chat_url="http://127.0.0.1:8767", caller_goal_ref=None):
+    """Use the current Chat host; loopback IO never substitutes a requester identity."""
+    import ipaddress
+    import json
+    from urllib.error import HTTPError
+    from urllib.parse import urlparse
+    from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
+
+    address = urlparse(chat_url)
+    try:
+        loopback = (address.hostname == "localhost" or ipaddress.ip_address(address.hostname or "").is_loopback)
+        if address.port is not None and not 0 < address.port <= 65535:
+            loopback = False
+    except ValueError:
+        loopback = False
+    if not loopback or address.scheme != "http" or address.path not in ("", "/") or address.username is not None or address.password is not None or address.query or address.fragment:
+        raise ValueError("original conversation requests require the intended local Chat service URL")
+    # Capture the exact registered source before IO, then let the receiving
+    # host independently reread its source, grants and original Session.
+    with collaboration_goal_scope(registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=caller_goal_ref) as scope:
+        if not scope.exact:
+            raise ValueError("original conversation requests require an exact Goal instance")
+        payload = {**parameters, "operation": operation, "coordination_runtime_root": str(Path(root).resolve()),
+            "requester": {"goal_ref": scope.caller_goal_ref, "agent_id": agent_id}}
+    request = Request(chat_url.rstrip("/") + "/api/chat/collaboration",
+        data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    class OriginalHostOnly(HTTPRedirectHandler):
+        def redirect_request(self, *_args, **_kwargs):
+            return None
+    opener = build_opener(ProxyHandler({}), OriginalHostOnly())
+    try:
+        with opener.open(request, timeout=60) as response:
+            raw = response.read(128001)
+            if len(raw) > 128000:
+                raise ValueError("original conversation Chat response is oversized; retry the same operation")
+            result = json.loads(raw)
+    except HTTPError as exc:
+        try:
+            raw = exc.read(128001)
+            if len(raw) > 128000:
+                raise ValueError("oversized local service error")
+            result = json.loads(raw)
+        except (ValueError, OSError):
+            raise ValueError("original conversation Chat service is unavailable; retry the same operation") from exc
+        error = result.get("error") if isinstance(result, dict) else None
+        raise ValueError(error or "original conversation request did not verify; retry the same operation") from exc
+    if not isinstance(result, dict) or not result.get("ok"):
+        raise ValueError("original conversation Chat service returned an unverified result")
+    return result
+
+
 def _operation_address(root: Path, scope, source_agent_id: str, operation_id: str) -> tuple[str, Path]:
     """The existing immutable peer-operation address, shared with replay reads."""
     source_id = "peer:" + _hash([
@@ -247,6 +299,40 @@ def returns(root, goal_id, agent_id, *, mark_read=False, scope=None):
     }, scope=scope)
 
 
+def _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key):
+    from .inbox import result_paths, result_identity_matches
+    requester = {"goal_ref": scope.caller_goal_ref, "agent_id": agent_id} if scope and scope.exact else None
+    if route.get("kind") != "peer" or route.get("requester") != requester or requester["goal_ref"]["goal_id"] != goal_id:
+        raise ValueError("original conversation return scope mismatch")
+    request_id, recipient = route["request_id"], route["recipient"]
+    row = _entry(root, None, None, request_id, recipient=recipient)
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+    try:
+        effect_runtime_result("collaboration.project.return_route", {"entry": row, "route": route})
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+    if any(route.get(key) != row.get(key) for key in ("request_id", "source_id", "source_agent_id", "requester", "recipient")):
+        raise ValueError("original conversation return route identity conflict")
+    folder = _root(root) / "replies" / request_id
+    result = next((path for path in result_paths(folder) if path.stem == result_key and path.stem.startswith("conclusion")), None)
+    if result is None:
+        raise ValueError("read the peer conclusion before acknowledging it")
+    with _request_lock(root, request_id, None, result, force_exact=True):
+        reply = _read(result)
+        delivery = _read(folder / (result_key + ".delivery.json"))
+        if not result_identity_matches(reply, row, result) or delivery.get("status") != "delivered" or any(
+                delivery.get(key) != row.get(key) for key in ("recipient", "requester")):
+            raise ValueError("read the exact original conversation conclusion before acknowledging it")
+        value = {"request_id": request_id, "requester": requester, "recipient": recipient,
+            **({"result_key": result_key} if "result_key" in reply else {})}
+        path = folder / (result_key + ".consumed.json")
+        if path.exists() and any(_read(path).get(key) != val for key, val in value.items()):
+            raise ValueError("peer consumption receipt scope mismatch")
+        if not path.exists():
+            _write(path, {**value, "consumed_at": _now()})
+    return {"ok": True, "request_id": request_id, "result_key": result_key, "consumed": True}
+
+
 def consume_return(
     root,
     goal_id,
@@ -274,6 +360,8 @@ def consume_return(
                 result_key=result_key,
             )
     route = _read(_root(root) / "roundtrips" / (_request_id(request_id) + ".json"))
+    if "recipient" in route:
+        return _consume_original_conversation_return(root, route, goal_id, agent_id, scope, result_key)
     if (
         route.get("kind") != "peer"
         or route.get("goal_id") != goal_id

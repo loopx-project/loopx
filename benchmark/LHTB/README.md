@@ -114,8 +114,10 @@ not replayed; bootstrap and Todo lifecycle follow the installed product version.
 ## Shared execution configuration
 
 `LOOPX_EXECUTION_MODE` selects `plain`, `native-goal`, `heartbeat` (default),
-`turn` or `loopx-goal`. `LOOPX_ITERATION_CONTEXT` defaults to `fresh`; heartbeat and Turn
-accept `resume`, sharing the same Goal/Agent session across planning, wakes and Todos. Turn also requires `LOOPX_VALIDATION_COMMAND_JSON`,
+`turn` or `loopx-goal`. `LOOPX_ITERATION_CONTEXT` defaults to `resume` for heartbeat and Turn,
+sharing the same Goal/Agent session across planning, wakes and Todos. Other modes
+retain `fresh`. Set `LOOPX_ITERATION_CONTEXT=fresh` explicitly for an independent
+conversation on each invocation; existing frozen jobs keep their recorded settings. Turn also requires `LOOPX_VALIDATION_COMMAND_JSON`,
 an argv array for the independently protected task validator. No generic
 benchmark scoring or hidden-verifier feedback is introduced.
 

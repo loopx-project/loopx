@@ -18,6 +18,7 @@ import loopx.pr_review as pr_review_module  # noqa: E402
 from loopx.capabilities.project_skill_delivery.core import (  # noqa: E402
     discover_project_scoped_skill_ids,
 )
+from loopx.capabilities.pr_review_queue.review_body import check_review_body  # noqa: E402
 from loopx.doctor import REQUIRED_INSTALLED_SKILL_PHRASES  # noqa: E402
 from loopx.pr_review import (  # noqa: E402
     _github_search_date,
@@ -107,9 +108,6 @@ def main() -> int:
         "Full PR Review And Bilingual Format",
         "findings-only or blocker-only body is incomplete",
         "Cover every changed surface and key symbols",
-        "详细中文评审",
-        "英文简短结论",
-        "complete Chinese five-block review plus one concise English verdict",
         "review_execution_contract.verdict_policy",
         "validation_matrix",
         "validation_source",
@@ -128,7 +126,10 @@ def main() -> int:
         "--target-exact-head NUMBER@HEAD_OID",
     ):
         assert phrase in skill_text, phrase
-    assert len(skill_source.splitlines()) <= 180, len(skill_source.splitlines())
+    # The adapter grows from 165/11,818 to 181/13,018 lines/UTF-8 bytes to
+    # preserve body-edit authority and compatibility obligations. Keep it thin
+    # without removing those clauses to fit the former 180-line budget.
+    assert len(skill_source.splitlines()) <= 190, len(skill_source.splitlines())
     for duplicated_contract_heading in (
         "Per-PR Evidence And Depth Gate",
         "Motivation Causal Chain",
@@ -637,6 +638,20 @@ def main() -> int:
         assert section["agent_instruction"], section
         assert "quota.py" not in section["agent_instruction"], section
     assert all(section["minimum_prose_characters"] > 0 for section in template["sections"])
+    preferred_titles = ["动机 / Motivation", "改动思路 / Approach", "具体改动 / Changes",
+                        "对主干的风险 / Risks", "我的整体评价 / Verdict"]
+    for section, title in zip(template["sections"], preferred_titles, strict=True):
+        assert title in section["agent_instruction"], section
+    body_head = "a" * 40
+    canonical_body = (REPO_ROOT / "examples/fixtures/pr-review.body.md").read_text(
+        encoding="utf-8").replace("HEAD_OID", body_head).replace("VERDICT", "APPROVE")
+    bilingual_body = canonical_body
+    for label, title in zip(labels, preferred_titles, strict=True):
+        bilingual_body = bilingual_body.replace(f"## {label}\n", f"## {title}\n")
+    canonical_check = check_review_body(canonical_body, head_oid=body_head, behavior_bearing=True)
+    assert canonical_check["valid"], canonical_check
+    assert check_review_body(bilingual_body, head_oid=body_head,
+                             behavior_bearing=True) == canonical_check
     concrete_change = next(
         section for section in template["sections"] if section["label"] == "具体改动"
     )

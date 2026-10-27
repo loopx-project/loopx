@@ -773,13 +773,26 @@ starts with `/loopx-pr-review`, words such as `open`, `closed`, `merged`,
 skip the review. Downgrade only for explicit opt-out phrases such as `只统计`,
 `只列出`, `stats only`, `list only`, `不要 review`, or `不用分析`.
 
-The published review is a full-PR bilingual review: one complete Chinese
-five-block review covering every changed surface, key symbol, positive and
-negative path, and validation, plus one concise English machine verdict
+The published review is a full-PR review primarily in Chinese: five complete
+sections covering every changed surface, key symbol, positive and negative path,
+and validation, plus one concise English machine verdict
 (`APPROVE`, `REQUEST_CHANGES`, or the author-owned `COMMENTED` fallback). The
-Chinese review carries the depth and evidence; the English verdict carries the
-machine-readable state and validation summary. A findings-only or blocker-only
-body is not a complete PR review.
+body carries the depth and evidence; the English verdict carries the
+machine-readable state and validation summary. Prefer `动机 / Motivation`,
+`改动思路 / Approach`, `具体改动 / Changes`, `对主干的风险 / Risks` and
+`我的整体评价 / Verdict`. These map to the same Chinese canonical section ids;
+existing headings and evidence floors remain valid. Older installed parsers use
+the canonical Chinese headings; the body's primary language stays Chinese.
+
+Use connected Chinese prose for the main narrative, problem analysis, evidence
+and conclusion. Keep finding titles informative and short; optional
+Problem / Evidence / Impact / Fix labels introduce Chinese explanations. Retain
+accurate English technical terms, symbols and commands where useful, explaining
+unfamiliar terms once. Mark validation PASS / FAIL / UNVERIFIED, using compact
+tables for actual comparisons. Do not expand English labels into long English
+passages, duplicate the analysis in both languages, impose a language ratio or
+delete evidence to make the text shorter. This is writing guidance, not a new
+language gate. A findings-only or blocker-only body is incomplete.
 
 The opening `动机` must stand alone for a reader unfamiliar with the repository:
 who encounters the problem, one triggering task and concrete before/after

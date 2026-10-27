@@ -26,6 +26,9 @@ for i in range(20):
         events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'finding-{i}',title='Negative evidence, not acceptance',
             summary='Input revision: fixed-v1 Applicability: Fixed source only; the later attempt remains unverified. Observation: The measured change was -0.25ms and does not establish causal benefit. Trial4failed2checks; local-only evidence remains preliminary. Interpretation: Outcome: replan retained: - Keep V18 changed: - Check the original evidence stopped: - Never claim native success',
             status='refuted' if i%4==0 else 'tentative',recorded_at=f'2026-01-01T{i:02}:30:00Z'))
+events.append(build_explore_finding_event(goal_id=goal,node_id='question-0',finding_id='finding-0',
+    title='Later evidence remains unverified',summary=events[1]['summary'].replace('fixed-v1','fixed-v2').replace('-0.25ms','-0.50ms'),
+    status='tentative',supersedes=events[1]['event_id'],recorded_at='2026-01-01T19:45:00Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 展示语言','events':events},ensure_ascii=False))
 `, path], {cwd: repoRoot});
   const capture = JSON.parse(await readFile(path, "utf8"));
@@ -50,6 +53,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
   const translate = row => row.text.replaceAll("Does ", "").replaceAll(" improve native utility under the fixed budget?", " 是否在固定预算内改善原生收益？")
     .replaceAll("Not established; no native validation yet.", "尚未确定；尚无原生验证。")
     .replaceAll("Negative evidence, not acceptance", "负向证据，尚未通过验收")
+    .replaceAll("Later evidence remains unverified", "后续证据，仍未核验")
     .replaceAll("Fixed source only; the later attempt remains unverified.", "仅适用于固定来源；后续尝试仍未核验。")
     .replaceAll("The measured change was ", "实测变化为 ").replaceAll(" and does not establish causal benefit.", "，尚不能证明因果收益。")
     .replace(/(⟪LX\d+⟫); (⟪LX\d+⟫) evidence remains preliminary\./g, (original, trial, scope) =>
@@ -68,7 +72,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
     const outputs = Object.fromEntries(["zh", "en"].map(language => {
       const p = prepareTrajectoryAssessment({input, config: {model: "gpt-6.1-sol", effort: "max", service_tier: "fast", output_language: language}});
       let rows = JSON.parse(p.prompt.split("\n\ndisplay_fields:\n")[1]).map(row => ({field_id: row.field_id, text: language === "zh" ? translate(row) : row.text}));
-      if (variant === "partial") rows = [{...rows[0], text: "999"}, ...rows.slice(2)];
+      if (variant === "partial") rows = [{...rows[0], text: "999"}, ...rows.slice(2, -1)];
       return [language, {assessments: TRAJECTORY_METRICS.flatMap(metric => names.map((episode_id, index) => ({episode_id, metric,
         verdict: index < 3 ? "unknown" : index === 3 ? "no" : "yes",
         reason: reasons[language][index] ?? (language === "zh" ? "合成证据；负面结果并未证明因果收益，原生效果仍未核验。" : "Synthetic evidence; a negative result does not establish causal benefit. Native effectiveness remains unverified."),
@@ -162,9 +166,9 @@ export const researchDisplayLanguageScenario = {
         const question = reader.locator(".research-reader-question");
         assert(await question.evaluate(element => element.open), "The route's complete question opens with its finding");
         assert.match(await question.innerText(), /V18 是否在固定预算/);
-        assert.match(await reader.innerText(), /实测变化为 -0.25ms/);
+        assert.match(await reader.innerText(), /实测变化为 -0.50ms/);
         assert.match(await reader.innerText(), /第4次尝试有2项检查未通过（Trial4failed2checks）；仅限本地（local-only）的证据仍属初步/);
-        assert.match(await reader.innerText(), /已反驳/);
+        assert.match(await reader.innerText(), /暂定结论/);
         assert(!await reader.locator(".research-finding-sections").first().innerText().then(text => text.includes("Input revision:")));
         const provenance = reader.locator('.research-node-provenance');
         await provenance.locator(':scope > summary').click();
@@ -193,6 +197,39 @@ export const researchDisplayLanguageScenario = {
         assert(await allRecords.locator("li").first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16), "Expanded history uses readable body typography");
         assert(!await allRecords.innerText().then(text => text.includes("Input revision:")), "Serialized source labels stay inside original view");
         const search = allRecords.getByRole("searchbox", {name: "搜索研究记录"});
+        const downloadRecords = async () => {
+          const download = page.waitForEvent("download");
+          await allRecords.getByRole("button", {name: "下载匹配记录（JSON）", exact: true}).click();
+          return JSON.parse(await readFile(await (await download).path(), "utf8"));
+        };
+        const originalsExport = await downloadRecords();
+        await search.fill("V18 是否在固定预算");
+        await allRecords.evaluate(element => element.scrollIntoView({block: "start"}));
+        await page.screenshot({path: resolve(outputDir, `research-translated-search-title-${width}.png`), animations: "disabled"});
+        await allRecords.getByRole("status", {name: new RegExp(`^匹配 1 / ${capture.events.length} 条已读记录`)}).waitFor();
+        assert.equal(await allRecords.locator(".research-history-records > li").count(), 1, "Displayed Chinese titles are searchable");
+        const finding = capture.events.find(event => event.event_kind === "finding");
+        await search.fill(`第4次尝试 ${finding.event_id}`);
+        await allRecords.getByRole("status", {name: new RegExp(`^匹配 2 / ${capture.events.length} 条已读记录`)}).waitFor();
+        const lineageIds = [finding.event_id, capture.events.at(-1).event_id];
+        assert.deepEqual((await downloadRecords()).records, originalsExport.records.filter(event => lineageIds.includes(event.event_id)),
+          "The original id also matches its explicit successor lineage; downloads retain both original records");
+        await search.fill(`第4次尝试 ${finding.event_id} fixed-v1`);
+        await allRecords.getByRole("status", {name: new RegExp(`^匹配 1 / ${capture.events.length} 条已读记录`)}).waitFor();
+        const translatedFinding = allRecords.locator(".research-history-records > li").first();
+        await translatedFinding.locator(":scope > details > summary").click();
+        assert.match(await translatedFinding.innerText(), /实测变化为 -0.25ms/);
+        const exported = await downloadRecords();
+        assert.deepEqual(exported.records, originalsExport.records.filter(event => event.event_id === finding.event_id),
+          "Chinese matching downloads the original event, not translated prose");
+        await page.screenshot({path: resolve(outputDir, `research-translated-search-body-${width}.png`), animations: "disabled"});
+        await search.fill(`核对原始证据 ${finding.event_id} fixed-v1`);
+        await allRecords.getByRole("status", {name: new RegExp(`^匹配 1 / ${capture.events.length} 条已读记录`)}).waitFor();
+        await original.click();
+        await allRecords.getByRole("status", {name: new RegExp(`^匹配 0 / ${capture.events.length} 条已读记录`)}).waitFor();
+        assert.equal(await search.inputValue(), `核对原始证据 ${finding.event_id} fixed-v1`, "Original view retains the query but removes translation-only matches");
+        await history.getByRole("button", {name: "查看译文", exact: true}).click();
+        await allRecords.getByRole("status", {name: new RegExp(`^匹配 1 / ${capture.events.length} 条已读记录`)}).waitFor();
         await search.fill(capture.events[0].title);
         assert.equal(await allRecords.locator(".research-history-records > li").count(), 1, "Search matches original text while translations are displayed");
         const record = allRecords.locator(".research-history-records > li").first();
@@ -207,6 +244,40 @@ export const researchDisplayLanguageScenario = {
         await history.getByRole("button", {name: "查看译文", exact: true}).click();
         await allRecords.getByRole("button", {name: "清除筛选", exact: true}).click();
         assert.equal(await allRecords.locator(".research-history-records > li").count(), capture.events.length);
+        await search.fill("finding-0");
+        assert.equal(await allRecords.locator(".research-history-records > li").count(), 2);
+        const revision = allRecords.locator(".research-record-entry").last();
+        await revision.locator(":scope > summary").click();
+        const comparison = revision.locator(".research-record-comparison");
+        const compareEntry = comparison.locator(":scope > summary");
+        await compareEntry.focus(); await compareEntry.press("Enter");
+        const comparisonText = comparison.locator(".research-comparison-field").nth(1);
+        await comparisonText.waitFor();
+        await comparisonText.evaluate(element => element.scrollIntoView({block: "center"}));
+        await page.screenshot({path: resolve(outputDir, `research-display-version-comparison-${width}.png`), animations: "disabled"});
+        assert.match(await comparisonText.innerText(), /实测变化为 -0\.50ms/,
+          "Version comparison uses the same qualified snapshot translation as the history reader");
+        assert.match(await comparisonText.innerText(), /实测变化为 -0\.25ms/);
+        assert.match(await comparisonText.innerText(), /尚不能证明因果收益/);
+        assert.match(await comparison.innerText(), /已反驳/);
+        const comparisonIds = await comparison.getByRole("combobox").inputValue();
+        const changedCount = await comparison.getByRole("status").innerText();
+        const sourceTexts = capture.events.filter(event => event.result_id === "finding-0").map(event => event.summary);
+        const originalTexts = comparisonText.locator("details > summary");
+        assert.equal(await originalTexts.count(), 2);
+        await originalTexts.first().click();
+        await comparisonText.getByText(sourceTexts[1], {exact: true}).waitFor();
+        await originalTexts.first().click();
+        await original.click();
+        assert.match(await comparisonText.innerText(), /The measured change was -0\.50ms/);
+        assert.equal(await comparison.getByRole("combobox").inputValue(), comparisonIds,
+          "Original/translation toggles retain the exact comparison pair");
+        assert.equal(await comparison.getByRole("status").innerText(), changedCount,
+          "Translation changes never alter the count of changed source fields");
+        await history.getByRole("button", {name: "查看译文", exact: true}).click();
+        await compareEntry.focus(); await compareEntry.press("Enter");
+        assert(await compareEntry.evaluate(element => element === document.activeElement));
+        await allRecords.getByRole("button", {name: "清除筛选", exact: true}).click();
         await allRecords.locator(":scope > summary").click();
         await history.getByRole("button", {name: "查看分析", exact: true}).click();
         const analysis = history.getByRole("region", {name: "轨迹深度分析", exact: true});
@@ -253,6 +324,19 @@ export const researchDisplayLanguageScenario = {
         await scope.selectOption({label: "部分译文"});
         await history.locator(".research-display-language > span").filter({hasText: /译文 \d+ \/ \d+/}).waitFor();
         assert.match(await history.locator(".research-route-caption").first().innerText(), /Does V18/, "Missing/invalid title remains original");
+        await allRecords.locator(":scope > summary").click();
+        await allRecords.getByRole("searchbox").fill("finding-0");
+        const partialComparison = allRecords.locator(".research-record-entry").last();
+        await partialComparison.locator(":scope > summary").click();
+        await partialComparison.locator(".research-record-comparison > summary").click();
+        const partialText = partialComparison.locator(".research-comparison-field").nth(1);
+        await partialText.waitFor();
+        assert.match(await partialText.innerText(), /Keep V18/,
+          "A missing translation retains the exact source item beside translated fields");
+        assert.match(await partialText.innerText(), /保留 V18/);
+        await partialText.evaluate(element => element.scrollIntoView({block: "center"}));
+        await page.screenshot({path: resolve(outputDir, `research-display-version-partial-${width}.png`), animations: "disabled"});
+        await allRecords.locator(":scope > summary").click();
         if (width === 1440) {
           const before = await fetch(`${owner.base}/fixture/readback`).then(response => response.json());
           assert.equal(before.mutation_attempts, 0, "Reading, language and original toggles never execute");
@@ -267,6 +351,14 @@ export const researchDisplayLanguageScenario = {
         await scope.selectOption({label: "其他来源"});
         await history.getByText("译文版本不适用，显示原文", {exact: true}).waitFor();
         assert.match(await history.locator(".research-route-caption").first().innerText(), /Does V18/);
+        await allRecords.locator(":scope > summary").click();
+        await search.fill("V18 是否在固定预算");
+        await allRecords.getByRole("status", {name: new RegExp(`^匹配 0 / ${capture.events.length} 条已读记录`)}).waitFor();
+        await search.fill(capture.events[0].title);
+        await allRecords.getByRole("status", {name: new RegExp(`^匹配 1 / ${capture.events.length} 条已读记录`)}).waitFor();
+        assert.equal(await allRecords.locator(".research-history-records > li strong").first().innerText(), capture.events[0].title,
+          "A mismatched source cannot retain the previous translation's search aliases");
+        await allRecords.locator(":scope > summary").click();
         await scope.selectOption({label: "完整固定快照"});
         await original.waitFor();
         await page.reload({waitUntil: "domcontentloaded"}); await original.waitFor();

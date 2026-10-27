@@ -101,7 +101,7 @@ def test_completed_registration_recovers_missing_display_from_current_authority(
 
 def test_pending_registration_rejects_source_changed_during_validation(recoverable_registration, monkeypatch):
     from loopx.control_plane.coordination import goal_storage_initialization
-    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired, read_canonical_todos_if_promoted
 
     arguments = recoverable_registration
     capture = goal_storage_initialization.build_runtime_shadow_source_snapshot
@@ -114,8 +114,14 @@ def test_pending_registration_rejects_source_changed_during_validation(recoverab
     monkeypatch.setattr(goal_storage_initialization, "build_runtime_shadow_source_snapshot", changed_capture)
     with pytest.raises(ValueError, match="source changed during validation"):
         project_registry.register_project_goal(**arguments)
-    assert read_canonical_todos_if_promoted(
-        runtime_root=arguments["runtime_root"], goal_id=arguments["goal_id"]) is None
+    # Ordinary reads must refuse the uninitialized Goal after registration was
+    # rejected; the retired pre-cutover None fallback would hide that state.
+    with pytest.raises(CanonicalAuthorityRequired) as rejected:
+        read_canonical_todos_if_promoted(
+            runtime_root=arguments["runtime_root"], goal_id=arguments["goal_id"])
+    assert rejected.value.code == "canonical_authority_required"
+    assert rejected.value.payload["goal_id"] == arguments["goal_id"]
+    assert rejected.value.payload["legacy_fallback_used"] is False
 
 
 @pytest.mark.parametrize("objective", [

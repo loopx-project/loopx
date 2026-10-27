@@ -144,7 +144,7 @@ export function ChannelTimeline({
       <article className={`personal-message is-${item.message.role}`} key={item.id}>
         {item.message.role !== "user" ? <span className="personal-message-avatar"><Bot size={17} /></span> : null}
         <div>
-          <header><strong>{item.message.role === "user" ? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
+          <header><strong>{item.message.role === "user" ? item.message.agentLabel ?? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
           {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <MarkdownText text={item.message.text} /> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.text.length >= MIN_SEPARATE_ANSWER_LENGTH

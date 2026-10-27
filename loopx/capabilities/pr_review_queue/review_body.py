@@ -6,7 +6,16 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
-REQUIRED_FINAL_SECTIONS = ["动机", "改动思路", "具体改动", "对主干的风险", "我的整体评价"]
+# Presentation aliases share the existing canonical section ids. They do not
+# broaden evidence matching to arbitrary headings that contain a Chinese word.
+REVIEW_SECTION_TITLES = {
+    "动机": "动机 / Motivation",
+    "改动思路": "改动思路 / Approach",
+    "具体改动": "具体改动 / Changes",
+    "对主干的风险": "对主干的风险 / Risks",
+    "我的整体评价": "我的整体评价 / Verdict",
+}
+REQUIRED_FINAL_SECTIONS = list(REVIEW_SECTION_TITLES)
 FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE = (
@@ -122,11 +131,13 @@ def _review_sections(body: str) -> tuple[dict[str, list[str]], list[str]]:
         heading = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", stripped)
         if heading:
             level, label = len(heading[1]), heading[2]
-            if label in REQUIRED_FINAL_SECTIONS:
-                if label in sections:
-                    reasons.append(f"duplicate_section:{label}")
-                sections.setdefault(label, [])
-                current, section_level = label, level
+            canonical = next((section for section, title in REVIEW_SECTION_TITLES.items()
+                              if label in (section, title)), None)
+            if canonical is not None:
+                if canonical in sections:
+                    reasons.append(f"duplicate_section:{canonical}")
+                sections.setdefault(canonical, [])
+                current, section_level = canonical, level
             elif level <= section_level:
                 current = None
             continue

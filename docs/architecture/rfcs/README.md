@@ -191,6 +191,14 @@ Paired diffs do not certify translation accuracy.
     settlement, and typed Effect Program foundations are shipped. Replan
     planning/ACK stays domain-local until a second real lifecycle justifies
     extraction.
+- [Controller / Executor Sessions and One Governed Work Contract v0](controller-executor-unified-contract-v0.md)
+  ([中文版](controller-executor-unified-contract-v0.zh-CN.md))
+  - **Delivery on `main`:** Design only; no unified schema or dual-session profile is implemented.
+  - **Current boundary:** Replaces permanent quota/Turn packet views with one
+    contract including differential context; controller-only model access to
+    Core, natural-language executor work and runtime-owned identity/recovery.
+    C1–C9 connect concrete refactors, real host adoption and complete-cost
+    qualification without changing defaults or launching experiments.
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
   ([中文版](typescript-control-plane-migration-v0.zh-CN.md))
   - **Delivery on `main`:** Substantially implemented; active migration.
@@ -272,6 +280,14 @@ Paired diffs do not certify translation accuracy.
     owner inventory grants no activation, and R6 and D1–D3 retain their own gates.
 
 ## Planning, Research, And Adaptive Intelligence
+
+- [LoopX × LayerFS — Engineering Exploration and Evaluation v0](layerfs-engineering-exploration-evaluation-v0.md)
+  ([中文版](layerfs-engineering-exploration-evaluation-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; no provider integration or measured benefit.
+  - **Current boundary:** Optional execution-workspace provider under existing
+    Explore/Host owners; real-environment branch/handoff conformance, then warm
+    worktree comparisons and native/passive/governed outcome/cost attribution.
+    Filesystem checkpoints do not qualify complete research-state continuation.
 
 - [Goal-scoped Capability Portfolio and Connector Lifecycle v0](goal-scoped-capability-portfolio-v0.md)
   ([中文版](goal-scoped-capability-portfolio-v0.zh-CN.md))

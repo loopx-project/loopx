@@ -649,3 +649,18 @@ test("blocked and unchanged observations never count as advanced work; caps pres
   assert.throws(() => validateReplanContext({...context, decision_followthrough: {...follow,
     observations: [{...follow.observations[0], result_class: "invented"}]}}), /followthrough/);
 });
+
+
+test("shared acceptance stays in the review basis when another outcome owner changes", () => {
+  const acceptance = {outcome_requirements: {outcomes: [{outcome_id: "shared-result",
+    owner_agent_id: "agent-b", requirements: [{id: "verified", planning_satisfied: true}]}]}};
+  const original = projectReplanContext({...request, stride_strategy: "evidence_conditioned_v1",
+    goal_facts: {registry_objective: "Deliver the shared result", acceptance_contract: acceptance}});
+  const changed = structuredClone(acceptance);
+  changed.outcome_requirements.outcomes[0].requirements[0].planning_satisfied = false;
+  const current = projectReplanContext({...request, stride_strategy: "evidence_conditioned_v1",
+    goal_facts: {registry_objective: "Deliver the shared result", acceptance_contract: changed}});
+  assert.notEqual(original.context_id, current.context_id);
+  assert.deepEqual((current.core_goal as JsonObject).acceptance_contract, changed);
+  assert.equal((original.core_goal as JsonObject).objective, (current.core_goal as JsonObject).objective);
+});

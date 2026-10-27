@@ -296,6 +296,19 @@ review record. This is sequential composition: refinement commits before the
 normal writeback. If writeback fails, its returned refinement receipt identifies
 what committed; retry the identical operation rather than assuming rollback.
 
+An enabled due Stride review also binds the delivered context, including these
+outcome facts. For a changed milestone, refine first, re-enter the same Turn's
+guard, read its current facts and author the complete decision before ordinary
+writeback. Do not silently rebind a stale decision. Batched dry-run now uses the
+acceptance owner's prospective contract, so it detects the same basis mismatch
+as execution without committing a refinement, run or spend. Execution retains
+its sequential contract and partial-effect receipt; recover an already applied
+refinement by its original operation, then reassess against fresh context.
+Ordinary batching, unchanged work and the exact-context gate remain unchanged.
+Real File/SQLite CLI cases cover preview, stale refusal, fresh-context recovery,
+retained requirements and single-debit replay. This is source qualification,
+not installed adoption, general atomicity or a model-efficiency claim.
+
 | Event | Default action | Existing mechanism |
 | --- | --- | --- |
 | Material direct-user deliverable/correction | Add to the matching outcome, retaining prior intent | Host context + native refinement or skill/CLI bridge |

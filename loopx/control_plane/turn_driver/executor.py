@@ -156,7 +156,7 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("LoopX Turn plan has no valid transaction turn_key")
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     if route.get("would_invoke_host") is not True:
-        raise ValueError("LoopX Turn route is not host executable")
+        raise ValueError(str(plan.get("error") or "LoopX Turn route is not host executable"))
     request = {
         "schema_version": LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
         "turn_key": turn_key,

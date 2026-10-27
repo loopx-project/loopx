@@ -4,6 +4,28 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {compactTodoContextSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
 
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
+import {updateNativeContextLifecycle} from "../../loopx/control_plane/quota/native_context_lifecycle.ts";
+
+test("only the provider-qualified native replay can retain a complete resume baseline", () => {
+  const state = {session_id: "native", cwd: "/workspace", context_epoch: "original",
+    candidate: {basis: "native_hook_assumption", capture_bytes_verified: true}};
+  const event = {hook_event_name: "SessionStart", source: "resume", session_id: "native", cwd: "/workspace"};
+  const request = {state, event, new_epoch: "replacement", resume_verified: true};
+  assert.deepEqual(updateNativeContextLifecycle(request), state);
+  for (const invalid of [
+    {...request, resume_verified: false},
+    {...request, event: {...event, resume_verified: true}, resume_verified: false},
+    {...request, state: {...state, pending: {}}},
+    {...request, state: {...state, candidate: {...state.candidate, capture_bytes_verified: false}}},
+    {...request, event: {...event, source: "compact"}},
+    {...request, event: {...event, cwd: "/different"}},
+  ]) {
+    const result = updateNativeContextLifecycle(invalid);
+    assert.equal(result.context_epoch, "replacement");
+    assert.equal(result.candidate, undefined);
+  }
+  assert.equal(state.context_epoch, "original");
+});
 
 test("replacements and sparse edits own their values without mutating either capture", () => {
   const original = {registry: {body: "Retain every original requirement. ".repeat(400), changed: {value: 1}},
@@ -100,6 +122,48 @@ test("fresh control with exact warm bodies; changed source revisions do not rese
   assert.deepEqual(recover(result, baseline, current).context, current);
   assert.ok(JSON.stringify(result).length < JSON.stringify(full(current)).length / 2);
   assert.deepEqual(baseline.context, original);
+});
+
+test("relocated reusable strings reference the exact base while current controls stay inline", () => {
+  const original = {registry: {authoring: long}, current_control: {instruction: long}};
+  const current = {registry: {attachment: {guidance: long}}, current_control: {instruction: long}};
+  const initial = prepareContextDelivery({context: original, scope, capture_id: "before", surface: "quota_packet"});
+  const args = {context: current, scope, capture_id: "after", surface: "quota_packet"};
+  const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.equal(delta.mode, "delta");
+  const tree = delta.changes as {changed: {registry: {changed: {attachment: {changed: {guidance: unknown}}}}}};
+  assert.deepEqual(tree.changed.registry.changed.attachment.changed.guidance, {from: ["registry", "authoring"]});
+  assert.deepEqual(inline(delta, ["current_control"]), current.current_control);
+  assert.deepEqual(restoreContextDelivery({delivery: delta, baseline: initial,
+    current: prepareContextDelivery(args)}).context, current);
+  assert.deepEqual(initial.context, original);
+  assert.deepEqual(prepareContextDelivery(args).context, current); // cold delivery remains literal
+
+  // References never read the patch being applied, inherited properties, or a
+  // different string. Any damaged reference recovers this exact current capture.
+  for (const reference of [["registry", "missing"], ["constructor", "name"], [], ["current_control"], ["registry", -1], "registry.authoring"]) {
+    const damaged = structuredClone(delta);
+    const node = (damaged.changes as typeof tree).changed.registry.changed.attachment.changed;
+    node.guidance = {from: reference};
+    const restored = restoreContextDelivery({delivery: damaged, baseline: initial, current: prepareContextDelivery(args)});
+    assert.equal(restored.mode, "full");
+    assert.deepEqual(restored.context, current);
+  }
+});
+
+test("new reusable arrays can relocate exact strings without copying current edits", () => {
+  const original = {registry: {text: long, other: long + " old"}};
+  const current = {registry: {items: [long + " old", long, long + " new"]}};
+  const initial = prepareContextDelivery({context: original, scope, capture_id: "before", surface: "quota_packet"});
+  const args = {context: current, scope, capture_id: "after", surface: "quota_packet"};
+  const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.equal(delta.mode, "delta");
+  assert.deepEqual(restoreContextDelivery({delivery: delta, baseline: initial,
+    current: prepareContextDelivery(args)}).context, current);
+  const wire = JSON.stringify(delta.changes);
+  assert.match(wire, /"from"/);
+  assert.match(wire, / new/); // changed requirements are literal, never fuzzy matches
+  assert.ok(wire.length < JSON.stringify(current).length / 2);
 });
 
 test("exact-base source and requirement reorders preserve current positions", () => {
@@ -413,11 +477,35 @@ test("whole packet reuses complete projections; live controls and unknown fields
   assert.equal(restoreContextDelivery({delivery: broken, baseline, current: packetFull(current, "capture-b")}).mode, "full");
 });
 
+test("native delta controls are usable without an executable copy of the baseline", () => {
+  const current = packet(), baseline = packetFull(current);
+  const cli = (current.interaction_contract as JsonObject).cli_channel as JsonObject;
+  cli.selection_command = {command_args_template: "select-current-task"};
+  const delta = prepareContextDelivery({context: current, scope, capture_id: "capture-b", surface: "quota_packet",
+    baseline, continuity: {basis: "native_hook_assumption", capture_bytes_verified: true, target: baseline.target}});
+  // This reader has only the serialized new input, as after a tool-process
+  // restart. Retained requirement text belongs to model context, not this reader.
+  const input = JSON.parse(JSON.stringify(delta)) as JsonObject;
+  assert.equal(input.mode, "delta");
+  assert.equal(inline(input, ["interaction_contract", "cli_channel", "selection_command", "command_args_template"]),
+    "select-current-task");
+  assert.equal(inline(input, ["interaction_contract", "cli_channel", "settlement_plan", "ordered_steps", 1, "command_template"]),
+    "writeback-a");
+  assert.equal(inline(input, ["goal_boundary", "approval"]), "pending");
+  // Actual baseline loss still requires the immutable current full capture.
+  const recovered = restoreContextDelivery({delivery: input, current: packetFull(current, "capture-b")});
+  assert.equal(recovered.mode, "full");
+  assert.deepEqual(recovered.context, current);
+});
+
 test("array edits preserve append, removal, reorder, duplicate entries and exact scalar types", () => {
   const before = packet(), baseline = packetFull(before);
   const old = (before.planning_horizon as JsonObject).work_items as JsonObject[];
   const cases: unknown[] = [[], [old[1]], [...old, {id: "three", body: long}], [old[1], old[0]],
-    [old[0], old[0]], [null, "", false, 0], null, "", {items: old},
+    [old[0], old[0]], [null, "", false, 0],
+    ["\"\\\n\t\u0000", "完整🙂", "\ud800", "\udfff", 1e-7, 1e21],
+    [{"\"\\\n\u0000": [null, false, "完整🙂"], "\ud800": {values: [], items: {}}}],
+    null, "", {items: old},
     [{...old[0], late_constraint: "STOP now", revision: "r2"}, old[1]]];
   for (const items of cases) {
     const current = {...before, planning_horizon: {work_items: items}};

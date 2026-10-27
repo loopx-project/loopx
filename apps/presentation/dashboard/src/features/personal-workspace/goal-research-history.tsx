@@ -119,18 +119,21 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const sectionCopy = zh ? {inputRevision: "输入版本", applicability: "适用范围", observation: "观察", interpretation: "解读", changed: "变化", stopped: "停止", retained: "保留"}
     : {inputRevision: "Input revision", applicability: "Applicability", observation: "Observation", interpretation: "Interpretation", changed: "Changed", stopped: "Stopped", retained: "Retained"};
   const outcomeCopy: Record<string, string> = zh ? {replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定"} : {replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human"};
-  const findingBody = (finding: ExploreHistoryEvent) => {
+  const findingNarrative = (finding: ExploreHistoryEvent) => {
     const sections = findingSections(finding);
     const decision = sections?.decision;
-    const execution = finding.execution_observation;
-    const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
-    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{sections ? <dl className="research-finding-sections">
+    return sections ? <dl className="research-finding-sections">
       <dt>{sectionCopy.observation}</dt><dd>{sections.observation}</dd>
       {decision ? <>
         <dt>{zh ? "决策" : "Decision"}</dt><dd><b className={`research-outcome is-${decision.outcome}`}>{outcomeCopy[decision.outcome] ?? decision.outcome}</b></dd>
         {(["changed", "stopped", "retained"] as const).map(key => decision[key].length ? <Fragment key={key}><dt>{sectionCopy[key]}</dt><dd key={key}><ul>{decision[key].map(item => <li key={item}>{item}</li>)}</ul></dd></Fragment> : null)}
       </> : <><dt>{sectionCopy.interpretation}</dt><dd>{sections.interpretation}</dd></>}
-    </dl> : <p>{finding.summary}</p>}{execution ? <details><summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</summary>
+    </dl> : <p>{finding.summary}</p>;
+  };
+  const findingBody = (finding: ExploreHistoryEvent) => {
+    const execution = finding.execution_observation;
+    const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
+    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{execution ? <details><summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</summary>
       <dl className="research-finding-sections">
         <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
         {execution.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(execution.change_reason)}</dd></> : null}
@@ -540,7 +543,9 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
       {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={goalId} events={history.canonical?.events ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
+        displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}
         renderBody={currentDisplay && !originalDisplay ? findingBody : undefined}
+        renderSummary={currentDisplay && !originalDisplay ? findingNarrative : undefined}
         complete={read.complete} stale={Boolean(error || history.error)} busy={busy} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/> : null}
     </details> : null}
   </section>;

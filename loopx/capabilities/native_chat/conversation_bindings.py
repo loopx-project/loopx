@@ -53,9 +53,9 @@ class ChatConversationBindings:
         return _read_json(self.path)
 
     @staticmethod
-    def _core(operation: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _core(operation: str, params: dict[str, Any], *, large_local_snapshot: bool = False) -> dict[str, Any]:
         try:
-            result = effect_runtime_result(operation, params)
+            result = effect_runtime_result(operation, params, large_local_snapshot=large_local_snapshot)
         except EffectRuntimeRejected as exc:
             raise ValueError(str(exc)) from exc
         if not isinstance(result, dict):
@@ -605,3 +605,413 @@ def _host_audiences(store: Any, session: dict[str, Any]) -> list[str]:
                 and candidate.get("external_conversation_binding_id")):
             owners.add(candidate["external_conversation_binding_id"])
     return sorted(owners)
+
+
+class OriginalConversationRequests:
+    """Chat/source/store IO for the shared original-conversation request profile.
+
+    The existing source policy, peer operation, request, revision, result and
+    Session FIFO remain their respective owners. No shadow queue is created.
+    """
+
+    def __init__(self, controller):
+        self.controller = controller
+        self.store = controller.store
+        self.root = controller.coordination_runtime_root
+        self.bindings = controller.project_contexts.conversation_bindings
+        if self.bindings is None:
+            raise ValueError("original conversation bindings are unavailable")
+
+    _core = staticmethod(ChatConversationBindings._core)
+
+    def _policy(self):
+        from ...control_plane.collaboration.inbox import _read, _root
+        path = _root(self.root) / "policy.json"
+        return _read(path) if path.exists() else {"schema_version": "loopx_manager_context_policy_v1", "sources": {}}
+
+    def _observation(self, session_id):
+        session = self.store.load_session(session_id)
+        if session is None:
+            raise ValueError("original project Session is unavailable")
+        saved = session.get("project_context") or {}
+        current = self.bindings.read()
+        binding = next((row for row in current["bindings"] if row["binding_id"] == saved.get("binding_id")), None)
+        if binding is None:
+            raise ValueError("original conversation grant was revoked")
+        observed = dict(self.bindings.observe(binding["transport_ref"]))
+        return binding, observed
+
+    def _recipient(self, session_id, expected_binding, observation, policy):
+        current = self.bindings.read()
+        if next((row for row in current["bindings"] if row["binding_id"] == expected_binding["binding_id"]), None) != expected_binding:
+            raise ValueError("original conversation binding changed during verification")
+        return self._core("collaboration.project.recipient", {"current": current,
+            "binding_id": expected_binding["binding_id"], "observation": observation,
+            "available_projects": self.bindings.projects.available(),
+            "session": self.store.load_session(session_id), "policy": policy,
+            "sessions": [self.store.load_session(row["session_id"]) for row in self.store.list_sessions()]})
+
+    @contextmanager
+    def _source(self, requester, parent_request_id, *, require_active=True):
+        from ...control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+        from ...control_plane.collaboration.inbox import _entry
+        from ...control_plane.collaboration.peer_context_observation import require_parent_context_access
+        ref = requester.get("goal_ref") or {}
+        with collaboration_goal_scope(self.controller.registry_path, goal_id=ref.get("goal_id"),
+                agents=(requester.get("agent_id"),), caller_goal_ref=ref, require_active=require_active) as scope:
+            if not scope.exact or requester != {"goal_ref": scope.caller_goal_ref, "agent_id": requester.get("agent_id")}:
+                raise ValueError("an exact original requester is required")
+            parent = _entry(self.root, scope.goal_id, requester["agent_id"], parent_request_id, scope=scope)
+            if "request_control" in parent and self._view(parent)["control_state"] in {"cancelled", "cancellation_pending"}:
+                raise ValueError("the original source request was cancelled")
+            access = require_parent_context_access(self.root, self.controller.registry_path, parent,
+                requester["agent_id"], scope=scope)
+            yield {"requester": requester, "parent": parent, "parent_request_id": parent_request_id,
+                "original_source_id": access["source_id"], "parent_access_verified": True}, scope
+
+    @contextmanager
+    def _fenced(self, session_id, requester, parent_request_id):
+        from ...control_plane.collaboration.source_policy_fence import source_policy_fence
+        from ...control_plane.collaboration.inbox import _root
+        binding, observed = self._observation(session_id)
+        # Every writer uses source -> Goal -> binding -> request -> Session.
+        # Provider IO precedes these fences; canonical identity is reread inside.
+        with source_policy_fence(_root(self.root) / "policy.json"), self._source(requester, parent_request_id) as (source, scope):
+            with exclusive_file_lock(self.bindings.path, operation="original_conversation_peer"):
+                policy = self._policy()
+                selected = self._recipient(session_id, binding, observed, policy)
+                yield {**source, "policy": policy, "recipient": selected["recipient"],
+                    "current_recipient": selected["recipient"], "policy_sha256": selected["policy_sha256"]}, scope
+
+    def configure(self, session_id, body):
+        from ...control_plane.collaboration.inbox import _root, _write, _read
+        from ...control_plane.collaboration.source_policy_fence import source_policy_fence
+        enable = body.get("grant")
+        if not isinstance(enable, bool):
+            raise ValueError("grant must be an explicit boolean")
+
+        def apply(facts):
+            plan = self._core("collaboration.source.original_conversation_grant", {
+                **facts, "grant": enable, "expected_policy_sha256": body.get("expected_policy_sha256")})
+            path = _root(self.root) / "policy.json"
+            if body.get("execute") is True and plan["would_change"]:
+                _write(path, plan["policy"])
+                if _read(path) != plan["policy"]:
+                    raise OSError("original conversation source grant did not verify")
+            return {"ok": True, "executed": body.get("execute") is True,
+                **{key: value for key, value in plan.items() if key != "policy"}}
+
+        if enable:
+            with self._fenced(session_id, body["requester"], body["parent_request_id"]) as (facts, _):
+                return apply(facts)
+        # An owner may revoke a retained grant even while its provider or source
+        # is unavailable. This does not authorize reading or starting its work.
+        with source_policy_fence(_root(self.root) / "policy.json"):
+            recipient = body["recipient"]
+            if recipient.get("session_id") != session_id:
+                raise ValueError("original conversation revocation scope mismatch")
+            return apply({"policy": self._policy(), "recipient": recipient,
+                "requester": body["requester"], "parent_request_id": body["parent_request_id"],
+                "original_source_id": body["source_id"]})
+
+    def management_view(self, session_id, *, search="", cursor=None):
+        from ...control_plane.collaboration.inbox import _root, _read
+        from ...control_plane.collaboration.source_policy_fence import source_policy_fence
+        with source_policy_fence(_root(self.root) / "policy.json"):
+            policy = self._policy()
+            view = self._core("collaboration.source.original_conversation_grants", {"policy": policy, "session_id": session_id})
+        for grant in view["grants"]:
+            requester = grant["requester"]
+            address = {"goal_ref": requester["goal_ref"], "agent_id": requester["agent_id"]}
+            try:
+                from ...control_plane.collaboration.inbox import _hash
+                parent = _read(_root(self.root) / "entries" / _hash(address) / (grant["parent_request_id"] + ".json"))
+                if parent.get("goal_ref") != requester["goal_ref"] or parent.get("agent_id") != requester["agent_id"]:
+                    raise ValueError("source grant parent identity changed")
+                grant["source_purpose"] = (parent.get("brief") or {}).get("purpose", parent.get("message", ""))
+            except (ValueError, OSError):
+                grant["source_purpose"] = None
+        try:
+            binding, observed = self._observation(session_id)
+            with exclusive_file_lock(self.bindings.path, operation="original_conversation_inventory"):
+                view.update(self._recipient(session_id, binding, observed, policy), available=True)
+        except (ValueError, KeyError, OSError) as exc:
+            return {"ok": True, **view, "available": False, "error": str(exc), "candidates": [], "requests": []}
+        candidates, unreadable, overflow = [], 0, False
+        # Content is projected only to the trusted local owner. A later grant
+        # still rechecks the exact registration, parent lineage and source.
+        for path in sorted((_root(self.root) / "entries").glob("*/*.json")):
+            try:
+                row = _read(path)
+                if row.get("schema_version") != "loopx_manager_context_entry_v2" or not row.get("goal_ref"):
+                    continue
+                purpose = (row.get("brief") or {}).get("purpose", row.get("message", ""))
+                if search.strip().casefold() not in " ".join((row["goal_ref"]["goal_id"], row["agent_id"], purpose)).casefold():
+                    continue
+                candidates.append({"requester": {"goal_ref": row["goal_ref"], "agent_id": row["agent_id"]},
+                    "parent_request_id": row["request_id"], "purpose": (row.get("brief") or {}).get("purpose", row.get("message", ""))})
+                if len(candidates) == 128:
+                    overflow = True
+                    break
+            except (ValueError, OSError, KeyError):
+                unreadable += 1
+        view.update(candidates=candidates, coverage={"unreadable": unreadable, "overflow": overflow})
+        page = self._inbox(view["recipient"], mark_read=False, cursor=cursor)
+        view["requests"], view["requests_has_more"] = page["items"], page["has_more"]
+        view["requests_next_cursor"] = page["next_cursor"]
+        from ...control_plane.collaboration.inbox import result_paths, inspect_result_identity, reply_status
+        for item in view["requests"]:
+            results = []
+            statuses = {row.get("result_key", row["phase"]): row["status"] for row in reply_status(self.root, item)}
+            queue = self._core("collaboration.project.continuation", {"entry": self._entry(item["request_id"], item["recipient"])})
+            turn = self.store.turn_for_client(session_id, queue["client_turn_id"])
+            item["queue_status"] = turn.get("status") if turn else None
+            for path in result_paths(_root(self.root) / "replies" / item["request_id"]):
+                reply = _read(path)
+                if inspect_result_identity(reply, self._entry(item["request_id"], item["recipient"]), path):
+                    results.append({"result_key": path.stem, "text": reply["text"], "decision": reply["decision"],
+                        "request_revision": reply.get("request_revision", 1), "delivery_status": statuses.get(path.stem, "queued")})
+            item["returns"] = results
+        return {"ok": True, **view}
+
+    def discover(self, requester, parent_request_id):
+        from ...control_plane.collaboration.inbox import _root
+        from ...control_plane.collaboration.source_policy_fence import source_policy_fence
+        with source_policy_fence(_root(self.root) / "policy.json"), self._source(requester, parent_request_id) as (source, _):
+            grants = self._core("collaboration.source.original_conversation_grants", {"policy": self._policy()})["grants"]
+        recipients, unavailable = [], 0
+        for grant in grants:
+            if grant["requester"] != requester or grant["parent_request_id"] != parent_request_id:
+                continue
+            try:
+                with self._fenced(grant["recipient"]["session_id"], requester, parent_request_id) as (facts, _):
+                    self._core("collaboration.source.original_conversation_access", facts)
+                    if facts["recipient"] != grant["recipient"]:
+                        raise ValueError("original conversation recipient changed")
+                    session = self.store.load_session(facts["recipient"]["session_id"])
+                    recipients.append({"recipient": facts["recipient"], "title": session.get("title") or "Project conversation"})
+            except (ValueError, KeyError, OSError):
+                unavailable += 1
+        return {"ok": True, "recipients": recipients, "unavailable": unavailable}
+
+    def publish(self, body):
+        from ...control_plane.collaboration.inbox import _hash, _now, _read, _request_lock, _root, _write
+        from ...control_plane.collaboration.peers import _operation_address
+        recipient = body["recipient"]
+        session_id = recipient["session_id"]
+        with self._fenced(session_id, body["requester"], body["parent_request_id"]) as (facts, scope):
+            if recipient != facts["recipient"]:
+                raise ValueError("original conversation recipient identity changed")
+            source_id, op_path = _operation_address(self.root, scope, body["requester"]["agent_id"], body["operation_id"])
+            # Native planning owns identity and replay. The old operation is
+            # consulted before any queue input or return route can be written.
+            prior = _read(op_path) if op_path.exists() else None
+            preview = self._core("collaboration.project.request", {**facts, "source_id": source_id,
+                "request": {"recipient": recipient, "brief": body["brief"]}, "observed_at": _now()})
+            request_id = preview["entry"]["request_id"]
+            path = _root(self.root) / "entries" / _hash({"recipient": recipient}) / (request_id + ".json")
+            with _request_lock(self.root, request_id, None, op_path, force_exact=True):
+                prior = _read(op_path) if op_path.exists() else prior
+                plan = self._core("collaboration.project.request", {**facts, "source_id": source_id,
+                    "request": {"recipient": recipient, "brief": body["brief"]}, "observed_at": _now(),
+                    "operation": prior, "entry": _read(path) if path.exists() else None})
+                row = plan["entry"]
+                route = plan["return_route"]
+                route_path = _root(self.root) / "roundtrips" / (request_id + ".json")
+                if route_path.exists() and _read(route_path) != route:
+                    raise ValueError("original requester return route identity conflict")
+                if prior is None:
+                    _write(op_path, plan["operation"])
+                if not route_path.exists():
+                    _write(route_path, route)
+                if _read(route_path) != route:
+                    raise OSError("original requester return route did not verify")
+                if not plan["replayed"]:
+                    _write(path, row)
+                if _read(path) != row:
+                    raise OSError("original conversation request did not verify")
+                view = self._view(row)
+                if view["control_state"] == "cancelled":
+                    raise ValueError("original conversation request is cancelled")
+                turn, created = self._enqueue(row)
+        recovered = self._resume(session_id, turn, created)
+        return {"ok": True, "request_id": request_id, "recipient": recipient, "turn_id": turn["turn_id"],
+            "status": turn["status"], "replayed": not created, "goal_created": False, "recovered_result": recovered}
+
+    def _enqueue(self, row):
+        queue = self._core("collaboration.project.continuation", {"entry": row})
+        turn, created = self.store.create_queued_turn(row["recipient"]["session_id"],
+            client_turn_id=queue["client_turn_id"], message=queue["message"], origin="peer",
+            collaboration_request=queue["collaboration_request"])
+        return turn, created
+
+    def _stop_turns(self, session_id, client_ids):
+        stopped = None
+        for client_id in client_ids:
+            turn = self.store.turn_for_client(session_id, client_id)
+            if turn and turn["status"] not in TERMINAL_TURN_STATES:
+                stopped = self.controller.interrupt_turn(session_id=session_id, turn_id=turn["turn_id"])
+        return stopped
+
+    def _resume(self, session_id, turn, created):
+        recovered = None
+        if not created and turn.get("collaboration_answer") is not None:
+            recovered = self._complete_answer(session_id, turn, turn["collaboration_answer"])["collaboration_result"]
+        if turn["status"] not in TERMINAL_TURN_STATES:
+            context = self.controller.project_contexts.session_context(self.store.load_session(session_id))
+            self.controller.resume_session_queue(session_id=session_id, work_dir=Path(context["project"]), objective=str(context.get("objective") or context["title"]))
+        return recovered
+
+    def _entry(self, request_id, recipient):
+        from ...control_plane.collaboration.inbox import _entry
+        return _entry(self.root, None, None, request_id, recipient=recipient)
+
+    def _view(self, row):
+        return self._core("collaboration.request.control", {"entry": row, "input": {"operation": "inspect"}, "source": {}})["view"]
+
+    def _inbox(self, recipient, *, mark_read, request_id=None, cursor=None):
+        from ...control_plane.collaboration.inbox import _now
+        result = self._core("collaboration.inbox.read", {"runtime_root": str(self.root.resolve()),
+            "scope": {"profile_id": "original_conversation_v0", "recipient": recipient},
+            "operation": "receiver_read" if mark_read else "pending", "request_id": request_id,
+            "include_settled": not mark_read,
+            "cursor": cursor,
+            "observed_at": _now(), "read_command": "original project Turn supplied context"}, large_local_snapshot=True)
+        return result["result"]
+
+    def control(self, body):
+        from ...control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+        from ...control_plane.collaboration.source_policy_fence import source_policy_fence
+        from ...control_plane.collaboration.inbox import _now, _root, _request_lock, _hash, _write, _read
+        requester, recipient = body["requester"], body["recipient"]
+        operation, parameters = body["control"], body["parameters"]
+        if operation not in {"inspect", "revise", "cancel"} or not isinstance(parameters, dict):
+            raise ValueError("unsupported original conversation source control")
+        row = self._entry(body["request_id"], recipient)
+        if row["requester"] != requester:
+            raise ValueError("original requester identity changed")
+        if operation == "revise":
+            fence = self._fenced(recipient["session_id"], requester, row["parent_request_id"])
+        else:
+            # Revocation or a closed recipient must not remove the original
+            # source's ability to inspect/cancel its retained request.
+            @contextmanager
+            def retained_source():
+                with source_policy_fence(_root(self.root) / "policy.json"), collaboration_goal_scope(
+                        self.controller.registry_path, goal_id=requester["goal_ref"]["goal_id"],
+                        agents=(requester["agent_id"],), caller_goal_ref=requester["goal_ref"]) as scope:
+                    if not scope.exact:
+                        raise ValueError("original requester exact instance is unavailable")
+                    yield {}, scope
+            fence = retained_source()
+        with fence as (facts, _), _request_lock(self.root, row["request_id"], None, Path(), force_exact=True):
+            current = self._entry(row["request_id"], recipient)
+            route = _read(_root(self.root) / "roundtrips" / (row["request_id"] + ".json"))
+            self._core("collaboration.project.return_route", {"entry": current, "route": route})
+            if operation == "revise":
+                if recipient != facts["recipient"]:
+                    raise ValueError("original conversation recipient changed")
+                self._core("collaboration.source.original_conversation_access", facts)
+            plan = self._core("collaboration.request.control", {"entry": current,
+                "input": {**parameters, "operation": operation},
+                "source": {"actor": "source", "actor_agent_id": requester["agent_id"],
+                    "actor_requester": requester,
+                    "recipient_active": operation == "revise", "observed_at": _now()}})
+            if plan["changed"]:
+                _write(_root(self.root) / "entries" / _hash({"recipient": recipient}) / (row["request_id"] + ".json"), plan["entry"])
+            if operation == "revise":
+                turn, created = self._enqueue(plan["entry"])
+        stop = None
+        if operation == "revise":
+            self._resume(recipient["session_id"], turn, created)
+        elif operation == "cancel":
+            queue = self._core("collaboration.project.continuation", {"entry": plan["entry"]})
+            stop = self._stop_turns(recipient["session_id"], [*queue["superseded_client_turn_ids"], queue["client_turn_id"]])
+        return {"ok": True, "request_control": plan["view"], "replayed": plan.get("replayed", False), "turn_stop": stop}
+
+    def validate_turn(self, session_id, turn):
+        if turn.get("origin") != "peer" and "collaboration_request" not in turn:
+            return
+        reference = turn.get("collaboration_request")
+        if turn.get("origin") != "peer" or not isinstance(reference, dict):
+            raise ValueError("peer Turn provenance is unavailable")
+        row = self._entry(reference["request_id"], reference["recipient"])
+        if row["recipient"]["session_id"] != session_id:
+            raise ValueError("peer Turn does not belong to this original Session")
+        self._core("collaboration.project.continuation", {"entry": row, "turn": turn})
+        with self._fenced(session_id, row["requester"], row["parent_request_id"]) as (facts, _):
+            self._validate_current(row, facts)
+            if self._view(row)["control_state"] == "cancelled":
+                raise ValueError("original conversation request was cancelled")
+
+    def _validate_current(self, row, facts):
+        from ...control_plane.collaboration.inbox import _read, _root
+        self._core("collaboration.project.request", {**facts, "source_id": row["source_id"],
+            "request": {"recipient": row["recipient"], "brief": row["brief"]}, "entry": row,
+            "operation": None, "observed_at": row["delivered_at"],
+            "route": _read(_root(self.root) / "roundtrips" / (row["request_id"] + ".json"))})
+
+    def _complete_answer(self, session_id, turn, answer):
+        from ...control_plane.collaboration.inbox import _now, _request_lock, _root, _hash, _write, record_result
+        from ...chat import CHAT_AGENT_RESPONSE_SCHEMA_VERSION
+        if set(answer) != set(self._core("collaboration.project.response_schema", {})["required"]):
+            raise ValueError("original conversation answer has unsupported fields")
+        ref = turn["collaboration_request"]
+        row = self._entry(ref["request_id"], ref["recipient"])
+        with self._fenced(session_id, row["requester"], row["parent_request_id"]) as (facts, _):
+            self._validate_current(row, facts)
+            self._core("collaboration.source.original_conversation_access", facts)
+            if facts["recipient"] != row["recipient"]:
+                raise ValueError("original conversation recipient changed")
+            with _request_lock(self.root, row["request_id"], None, Path(), force_exact=True):
+                row = self._entry(row["request_id"], row["recipient"])
+                self._core("collaboration.project.continuation", {"entry": row, "turn": turn})
+                view = self._view(row)
+                if (view["control_state"] == "cancelled" or answer["request_revision"] != view["revision"]
+                        or answer["request_digest"] != view["revision_digest"]):
+                    raise ValueError("original conversation answer belongs to a stale or cancelled request")
+                plan = self._core("collaboration.request.assess", {"entry": row,
+                    "actor_recipient": row["recipient"], "recipient_active": True, "observed_at": _now(),
+                    "revision": answer["request_revision"], "revision_digest": answer["request_digest"],
+                    "decision": answer["decision"], "reason": answer["reason"]})
+                if plan["changed"]:
+                    _write(_root(self.root) / "entries" / _hash({"recipient": row["recipient"]}) / (row["request_id"] + ".json"), plan["entry"])
+            receipt = record_result(self.root, row, "conclusion", answer["text"], request_revision=answer["request_revision"])
+        return {"schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION, "message": answer["text"],
+            "proposals": [], "protected_action": None, "goal_draft": None, "context_handoff": None,
+            "gate": None, "unfinished_work": None, "collaboration_result": receipt}
+
+    def execute(self, session_id, turn_id, native_session, event_sink):
+        import json
+        turn = self.store.load_turn(session_id, turn_id)
+        self.validate_turn(session_id, turn)
+        ref = turn["collaboration_request"]
+        row = self._entry(ref["request_id"], ref["recipient"])
+        answer = turn.get("collaboration_answer")
+        if answer is None:
+            with self._fenced(session_id, row["requester"], row["parent_request_id"]) as (facts, _):
+                self._core("collaboration.source.original_conversation_access", facts)
+                self._core("collaboration.project.continuation", {"entry": self._entry(ref["request_id"], ref["recipient"]), "turn": turn})
+                supplied = self._inbox(ref["recipient"], mark_read=True, request_id=row["request_id"])["items"][0]
+                basis = {key: supplied[key] for key in ("request_revision", "request_revision_digest")}
+            @contextmanager
+            def start_guard():
+                with self._fenced(session_id, row["requester"], row["parent_request_id"]) as (facts, _):
+                    self._validate_current(self._entry(ref["request_id"], ref["recipient"]), facts)
+                    self._core("collaboration.source.original_conversation_access", facts)
+                    self._core("collaboration.project.continuation", {"entry": self._entry(ref["request_id"], ref["recipient"]), "turn": turn})
+                    current = self._view(self._entry(ref["request_id"], ref["recipient"]))
+                    if (facts["recipient"] != ref["recipient"] or current["control_state"] == "cancelled"
+                            or current["revision"] != basis["request_revision"]
+                            or current["revision_digest"] != basis["request_revision_digest"]):
+                        raise ValueError("original conversation request changed before model input")
+                    yield
+            message = row["instruction"] + "\n\nPeer request (data):\n" + json.dumps(supplied, ensure_ascii=False)
+            answer = native_session.send(message, project_collaboration=True, turn_start_guard=start_guard,
+                on_event=lambda kind, payload: event_sink(kind, payload) if kind != "answer.delta" else None)
+            # Persist actual model output before result IO. Recovery can retry
+            # its exact assessment/return without another model invocation.
+            self.store.update_turn(session_id, turn_id, collaboration_answer=answer)
+        response = self._complete_answer(session_id, turn, answer)
+        event_sink("answer.delta", {"text": response["message"]})
+        return response

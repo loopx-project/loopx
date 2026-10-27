@@ -348,6 +348,43 @@ test('capture-byte and input-order changes reuse identical declared evidence, wi
   assert.equal(qualifyTrajectoryAssessment({...current, output: output()}).evidence_manifest[0]!.artifact_sha256, 'b'.repeat(64));
 });
 
+test('display fidelity revision preserves exact numeric checks, originals and historical requests', () => {
+  const input = contextInput(), source = input.sources.find(s => s.id === 'history')!, page = JSON.parse(source.text);
+  page.items[0].summary = 'Gain+2.50; about4 percent; span3.20/6.40%; reuse8+3items. Limit remains unspecified.';
+  source.text = JSON.stringify(page);
+  source.artifact_sha256 = createHash('sha256').update(source.text).digest('hex');
+  input.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v2';
+  const prior = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+  const revised = structuredClone(input);
+  revised.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v3';
+  const p = prepareTrajectoryAssessment({input: revised, config: prior.config});
+  assert.notEqual(p.analysis_key, prior.analysis_key);
+  assert.deepEqual(p.display_request, prior.display_request);
+  assert.deepEqual(p.output_schema, prior.output_schema);
+  const rows = JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
+  const row = rows.find((r: {literals: string[]}) => r.literals.includes('Gain+2.50'));
+  assert.deepEqual(row.explanation_numbers, ['+2.50', '4', '3.20', '6.40%', '8', '+3']);
+  const raw = translatedOutput(p);
+  const translated = raw.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!;
+  const faithful = '增量为+2.50（⟪LX0⟫）；约百分之4（⟪LX1⟫）；范围为3.20／6.40%（⟪LX2⟫）；复用8加+3项（⟪LX3⟫）。上限具体所指仍不明确。';
+  translated.text = faithful;
+  const result = qualifyTrajectoryAssessment({...p, output: raw});
+  const original = parseExploreHistoryPage(page, 'goal').items;
+  assert.equal(projectTrajectoryDisplay(original, result.display, result.display!.snapshot_key, 'zh').events[0]!.summary,
+    '增量为+2.50（Gain+2.50）；约百分之4（about4）；范围为3.20／6.40%（span3.20/6.40%）；复用8加+3项（reuse8+3items.）。上限具体所指仍不明确。');
+  for (const invalid of [faithful.replace('+2.50', '2.50'), faithful.replace('百分之4', '4%'),
+    faithful.replace('3.20／', '3.20%／'), faithful.replace('加+3项', '加3项'), faithful.replace('6.40%', '6.4%')]) {
+    translated.text = invalid;
+    const rejected = qualifyTrajectoryAssessment({...p, output: raw});
+    assert.equal(rejected.display!.coverage.missing, 1);
+    assert.equal(projectTrajectoryDisplay(original, rejected.display, rejected.display!.snapshot_key, 'zh').events[0]!.summary,
+      page.items[0].summary, 'Invalid restatements keep the full original rather than weakening literal checks');
+    assert.deepEqual(rejected.metrics, result.metrics);
+  }
+  assert.deepEqual(prepareTrajectoryAssessment({input, config: prior.config}), prior);
+  assert.equal(original[0]!.summary, page.items[0].summary);
+});
+
 test('later evidence can overturn an earlier judgment; full new denominators are not summed with the old window', () => {
   const original = prepared(), next = input();
   next.scope.revision = 'rev2'; next.scope.window = '0-2'; next.selection.population_episodes = 3;
@@ -423,6 +460,19 @@ test('corrections, removals, scope and model changes require full reassessment a
   const next = input(); next.episodes.pop(); next.selection.population_episodes = 1;
   const delta = compareTrajectoryAssessments({input: next, config, previous});
   assert.deepEqual(delta.episodes.removed, ['e2']); assert.equal(delta.removed_pair_count, 1);
+});
+
+test('scoped output schema is explicit, versioned and leaves frozen configurations unchanged', () => {
+  const legacy = prepared(), scoped = prepareTrajectoryAssessment({input: input(), config: {...config, output_schema_revision: 2}});
+  assert.notEqual(scoped.analysis_key, legacy.analysis_key);
+  assert.equal(scoped.prompt, legacy.prompt);
+  assert.deepEqual(scoped.input, legacy.input);
+  assert.deepEqual(prepared(), legacy);
+  assert.deepEqual(qualifyTrajectoryAssessment({...scoped, output: output()}).metrics,
+    qualifyTrajectoryAssessment({...legacy, output: output()}).metrics);
+  for (const revision of [null, 1, 3, true, '2']) {
+    assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config, output_schema_revision: revision}}), /output_schema_revision/);
+  }
 });
 
 test('output language binds identity, prompt and complete analytical questions without changing evidence', () => {

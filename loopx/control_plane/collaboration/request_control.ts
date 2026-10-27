@@ -7,7 +7,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
-import {normalizeCollaborationBrief, planCollaborationRequestPublication, receiverDecision, sameRequest, type ReceiverDecision} from "./semantic_request.ts";
+import {CONVERSATION_ENTRY_SCHEMA, normalizeOriginalConversationRecipient, normalizeCollaborationBrief, planCollaborationRequestPublication, receiverDecision, sameRequest, type ReceiverDecision} from "./semantic_request.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {REQUEST_CONTROL_SCHEMA, REQUEST_AMENDMENT_RESULT_SCHEMA, REQUEST_AMENDMENT_OUTCOMES,
   type RequestAmendmentOutcome} from "./request_control_contract.ts";
@@ -51,6 +51,12 @@ function timestamp(value: unknown): string {
 }
 function array(value: unknown, max: number): unknown[] {ensure(Array.isArray(value) && value.length <= max, "request control capacity exceeded"); return value;}
 function same(a: unknown, b: unknown): boolean {return canonicalAuthoritySha256(a) === canonicalAuthoritySha256(b);}
+function receiverMatches(entry: JsonObject, source: JsonObject): boolean {
+  return entry.schema_version === CONVERSATION_ENTRY_SCHEMA
+    ? source.actor_agent_id == null && source.actor_recipient !== undefined
+      && same(normalizeOriginalConversationRecipient(source.actor_recipient), entry.recipient)
+    : source.actor_agent_id === entry.agent_id && source.actor_recipient === undefined;
+}
 function recoverableRecordBytes(entry: JsonObject, state: Control): number {
   const retained = structuredClone(state);
   const active = retained.reservations.find(row => row.terminal === null);
@@ -80,10 +86,20 @@ export function requestOriginalDigest(entry: JsonObject): string {
     !["instruction", "delivered_at", "source_channel", "request_control"].includes(key))));
 }
 function initial(entry: JsonObject): Control {
-  ensure(entry.schema_version === "loopx_manager_context_entry_v2", "request control requires the exact-instance source profile");
-  const ref = goalRef(entry.goal_ref);
-  ensure(ref.goal_id === entry.goal_id && !Object.hasOwn(entry, "execution_binding_id"), "request profile cannot control an independently bound host execution");
-  digest(entry.request_id, "request_id"); id(entry.agent_id, "receiver Agent"); text(entry.source_id, "source_id", 512);
+  if (entry.schema_version === CONVERSATION_ENTRY_SCHEMA) {
+    normalizeOriginalConversationRecipient(entry.recipient);
+    const requester = obj(entry.requester, "original requester"); keys(requester, ["goal_ref", "agent_id"]);
+    goalRef(requester.goal_ref); id(requester.agent_id, "requester Agent");
+    ensure(entry.source_kind === "peer" && entry.source_agent_id === requester.agent_id
+      && !["goal_id", "goal_ref", "agent_id", "execution_binding_id"].some(key => Object.hasOwn(entry, key)),
+    "original conversation profile cannot impersonate a Goal receiver");
+  } else {
+    ensure(entry.schema_version === "loopx_manager_context_entry_v2", "request control requires the exact-instance source profile");
+    const ref = goalRef(entry.goal_ref);
+    ensure(ref.goal_id === entry.goal_id && !Object.hasOwn(entry, "execution_binding_id"), "request profile cannot control an independently bound host execution");
+    id(entry.agent_id, "receiver Agent");
+  }
+  digest(entry.request_id, "request_id"); text(entry.source_id, "source_id", 512);
   return {schema_version: REQUEST_CONTROL_SCHEMA, request_sha256: requestOriginalDigest(entry),
     revisions: [{revision: 1, brief: normalizeCollaborationBrief(entry.brief), reason: "Original request",
       created_at: timestamp(entry.delivered_at), read_at: null, assessment: null}],
@@ -156,6 +172,8 @@ export function readRequestControl(entry: JsonObject): Control {
     if (row.terminal !== null) result.terminal = requestTerminalSummary(row.terminal, result);
     return result;
   });
+  ensure(entry.schema_version !== CONVERSATION_ENTRY_SCHEMA || reservations.length === 0,
+    "original conversation requests cannot reserve Goal effects");
   ensure(reservations.filter(r => r.terminal === null).length <= 1
     && reservations.slice(0, -1).every(r => r.terminal !== null)
     && new Set(reservations.map(r => r.binding.operation_id)).size === reservations.length, "request has conflicting effect reservations");
@@ -170,6 +188,12 @@ export function readRequestControl(entry: JsonObject): Control {
   });
   ensure(new Set(operations.map(r => r.operation_id)).size === operations.length, "duplicate request operation receipt");
   return {schema_version: REQUEST_CONTROL_SCHEMA, request_sha256: original.request_sha256, revisions, cancellation, reservations, operations};
+}
+export function initializeControlledRequest(entry: JsonObject): JsonObject {
+  const state = readRequestControl(entry);
+  ensure(recoverableRecordBytes(entry, state) <= 128000,
+    "request record capacity reached; preserve cancellation and terminal recovery space");
+  return {...entry, request_control: state};
 }
 function assessmentObservation(entry: JsonObject, revision: Revision, legacy: unknown): {value: Revision["assessment"]; unavailable: boolean} {
   if (revision.assessment !== null || revision.revision !== 1 || legacy === null) return {value: revision.assessment, unavailable: false};
@@ -201,7 +225,7 @@ export function recordControlledRequestRead(params: JsonObject): JsonObject {
     "supplied request digest does not match its revision");
   const plan = planRequestControl({entry, input: {operation: "read", operation_id: "read:" + basis,
     revision: revision.revision, revision_digest: basis}, source: {actor: "receiver", actor_agent_id: params.actor_agent_id,
-    observed_at: params.observed_at, legacy_assessment: params.legacy_assessment ?? null,
+    actor_recipient: params.actor_recipient, observed_at: params.observed_at, legacy_assessment: params.legacy_assessment ?? null,
     legacy_assessment_unavailable: params.legacy_assessment_unavailable === true}});
   return {...plan, readback: {supplied_revision: revision.revision, revision_digest: basis,
     current_revision_at_record: state.revisions.length, model_comprehension_verified: false}};
@@ -214,7 +238,7 @@ export function recordControlledRequestAssessment(params: JsonObject): JsonObjec
   ensure(params.revision_digest == null ? revision.revision === 1 : params.revision_digest === basis,
     "assessed request digest does not match its revision");
   const decision = receiverDecision(params.decision), reason = text(params.reason, "assessment reason");
-  ensure(decision !== null && params.actor_agent_id === entry.agent_id, "request assessment actor or decision is invalid");
+  ensure(decision !== null && receiverMatches(entry, params), "request assessment actor or decision is invalid");
   const recorded = assessmentObservation(entry, revision, params.legacy_assessment ?? null).value;
   if (recorded !== null) {
     ensure(recorded.decision === decision && recorded.reason === reason, "request revision already has a different assessment");
@@ -224,6 +248,7 @@ export function recordControlledRequestAssessment(params: JsonObject): JsonObjec
   }
   return planRequestControl({entry, input: {operation: "assess", operation_id: "assess:" + canonicalAuthoritySha256({basis, decision, reason}),
     revision: revision.revision, revision_digest: basis, decision, reason}, source: {actor: "receiver", actor_agent_id: params.actor_agent_id,
+    actor_recipient: params.actor_recipient, recipient_active: params.recipient_active,
     goal_active: params.goal_active, observed_at: params.observed_at, legacy_assessment: params.legacy_assessment ?? null,
     legacy_assessment_unavailable: params.legacy_assessment_unavailable === true,
     legacy_read: params.legacy_read ?? null, legacy_read_unavailable: params.legacy_read_unavailable === true}});
@@ -247,8 +272,10 @@ export function requestControlView(entry: JsonObject, legacyAssessment: unknown 
     ? `Recover original effect ${active.binding.operation_id} before another effect for this request. ${state.cancellation || correctionPending ? "The source control is pending its terminal receipt, not proof of no change." : "A timeout does not release the reservation."}`
     : state.cancellation ? "This request is cancelled. Retain historical results and committed Goal changes; do not start new work for this request."
     : `Use request revision ${current.revision} and its exact digest for assessment and request-derived effects. Return results with request_revision=${current.revision}; earlier observations remain bound to their original revisions. Request context grants no new Goal or execution permission.`;
-  return {schema_version: REQUEST_CONTROL_SCHEMA, request_id: entry.request_id, goal_ref: entry.goal_ref,
-    receiver_agent_id: entry.agent_id, revision: current.revision, control_version: state.operations.length,
+  return {schema_version: REQUEST_CONTROL_SCHEMA, request_id: entry.request_id,
+    ...(entry.schema_version === CONVERSATION_ENTRY_SCHEMA ? {recipient: entry.recipient}
+      : {goal_ref: entry.goal_ref, receiver_agent_id: entry.agent_id}),
+    revision: current.revision, control_version: state.operations.length,
     revision_digest: requestRevisionDigest(entry, current),
     brief: current.brief, reason: current.reason, read_at: readAt,
     read_readback: readAt !== null ? "recorded" : readUnavailable ? "unavailable" : "not_recorded",
@@ -270,6 +297,8 @@ export function planRequestControl(params: JsonObject): JsonObject {
   const operation = String(input.operation);
   ensure(Object.hasOwn(OP_FIELDS, operation), "unsupported request control operation");
   const op = operation as keyof typeof OP_FIELDS;
+  const conversation = entry.schema_version === CONVERSATION_ENTRY_SCHEMA;
+  ensure(!conversation || op !== "reserve" && op !== "settle", "original conversation requests cannot reserve Goal effects");
   keys(input, op === "inspect" ? ["operation"] : ["operation", "operation_id", ...OP_FIELDS[op]]);
   const state = readRequestControl(entry);
   let requestedBasis: JsonObject | null = null;
@@ -283,12 +312,15 @@ export function planRequestControl(params: JsonObject): JsonObject {
     view: project(entry)};
   const operationId = id(input.operation_id, "request operation_id");
   const requestSha = canonicalAuthoritySha256({input,
-    ...(op === "settle" ? {} : {actor: source.actor, actor_agent_id: source.actor_agent_id ?? null}),
+    ...(op === "settle" ? {} : {actor: source.actor, actor_agent_id: source.actor_agent_id ?? null,
+      ...(conversation ? {actor_recipient: source.actor_recipient ?? null, actor_requester: source.actor_requester ?? null} : {})}),
     ...(op === "reserve" ? {amendment: source.amendment} : {}), ...(op === "settle" ? {terminal: source.terminal} : {})});
   ensure(source.actor === "source" || source.actor === "receiver", "request actor is not authenticated");
-  if (source.actor === "receiver") ensure(source.actor_agent_id === entry.agent_id, "request receiver identity mismatch");
+  if (source.actor === "receiver") ensure(receiverMatches(entry, source), "request receiver identity mismatch");
   else ensure(entry.source_kind === "peer" ? source.actor_agent_id === entry.source_agent_id : source.actor_agent_id === null,
     "request source actor identity mismatch");
+  if (conversation && source.actor === "source") ensure(source.actor_requester != null && same(source.actor_requester, entry.requester),
+    "original requester exact identity mismatch");
   const original = state.operations.find(row => row.operation_id === operationId);
   if (original) {
     ensure(original.request_sha256 === requestSha, "request operation identity conflict", "request_operation_conflict");
@@ -297,7 +329,7 @@ export function planRequestControl(params: JsonObject): JsonObject {
   }
   const now = timestamp(source.observed_at), current = state.revisions.at(-1)!;
   const active = state.reservations.find(r => r.terminal === null);
-  if (op === "revise" || op === "assess" || op === "reserve") ensure(source.goal_active === true,
+  if (op === "revise" || op === "assess" || op === "reserve") ensure(conversation ? source.recipient_active === true : source.goal_active === true,
     "inactive Goal permits request cancellation and recovery, not new request work");
   let result: JsonObject;
   if (op === "revise" || op === "cancel" || op === "reserve") {
@@ -320,6 +352,7 @@ export function planRequestControl(params: JsonObject): JsonObject {
     if (op === "read") revision.read_at ??= now;
     else {
       ensure(revision === current && state.cancellation === null, "a stale or cancelled request cannot receive a new assessment");
+      ensure(!conversation || revision.read_at !== null, "read this original conversation request revision before assessing it");
       const decision = receiverDecision(input.decision); ensure(decision !== null, "receiver decision is invalid");
       const value = {decision, reason: text(input.reason, "assessment reason"), assessed_at: now};
       ensure(revision.assessment === null, "request revision already assessed; recover its original operation");

@@ -454,6 +454,26 @@ with no diagnostic input passed into prompts or scheduler decisions. Existing
 CLI ledger reads are unbounded; do not put this command on an automatic polling
 loop before adding an owner-reviewed read budget/snapshot strategy.
 
+### Exact-binding manual readback
+
+The optional `status --expected-binding '<JSON>' --as-of <timestamp>
+--max-observation-age-ms <integer>` read binds the existing goal argument to
+one expected `provider_id`, `observer_id`, `session_id` and `run_identity`.
+The latter uses the observer stats' existing exact fields: `worker_id`,
+`model_id`, `task_id`, `environment_id`, `tools_id`, `budget_id`,
+`adapter_revision` and `observer_revision`. Tokens follow the observer identity
+schema; unknown/missing fields fail before producing a projection.
+
+This bound read requires an explicit evaluation timestamp and caller-selected
+non-negative age ceiling. Its `binding.eligible` is false for another session or
+treatment, missing/invalid integrity, future observations or an exceeded age
+ceiling; the stage is then `unknown`. It rejects ambiguity rather than hiding
+other runs by filtering the ledger. Eligibility says only that this binding's
+observation is admissible, never that its task succeeded. Unbound historical
+reads retain their prior shape. Both forms remain manual, read-only and
+unbounded ledger reads: this contract does not authorize automatic polling or
+supply the owner-reviewed read budget required for a panel.
+
 ## Qualification Plan and Stop Conditions
 
 1. **C0 adapter fidelity:** compare native execution with the managed adapter,

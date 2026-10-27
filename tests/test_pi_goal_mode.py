@@ -218,3 +218,10 @@ def test_pi_goal_adapter_authority_contract() -> None:
     assert node, "Node.js >=22.22.3 is required for the shipped Pi adapter"
     test_file = Path(__file__).with_name("pi_goal_adapter_authority.test.mjs")
     subprocess.run([node, "--test", str(test_file)], check=True)
+
+
+def test_pi_goal_adapter_input_contract() -> None:
+    node = shutil.which("node")
+    assert node, "Node.js >=22.22.3 is required for the shipped Pi adapter"
+    test_file = Path(__file__).with_name("pi_goal_adapter_input.test.mjs")
+    subprocess.run([node, "--test", str(test_file)], check=True)

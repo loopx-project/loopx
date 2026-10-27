@@ -583,7 +583,7 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
-@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1"])
+@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"])
 @pytest.mark.parametrize("context", [False, True])
 def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding, context):
     scope, _, _, input_path, sources, _ = pack
@@ -594,7 +594,7 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
         dict(schema_version="loopx_explore_result_event_v0", event_id="question-new", result_id="question", goal_id="solver", event_kind="node",
              node_kind="question", recorded_at="2026-01-02T00:00:00Z", title="Does V19 help?", summary="Still unknown.", status="blocked"),
     ]}
-    if encoding == "source_text_aliases_with_literal_values_v1":
+    if encoding in {"source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"}:
         history["items"][0]["summary"] = "Trial4failed2checks"
     text = json.dumps(history, ensure_ascii=False)
     (sources / "history.json").write_text(text)
@@ -640,7 +640,7 @@ print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_to
             read_citation(**operation, source_id="history", first_line=1, last_line=1)
     else:
         assert not any("context_citations" in field for field in result["result"]["display"]["fields"])
-    if encoding == "source_text_aliases_with_literal_values_v1":
+    if encoding in {"source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"}:
         assert any(field["text"] == "第4次尝试有2项检查未通过（Trial4failed2checks）。"
                    for field in result["result"]["display"]["fields"])
     assert result["job"]["usage"]["input_tokens"] == 19  # one shared attempt, not four new jobs

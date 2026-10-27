@@ -8,7 +8,11 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+from pathlib import Path
+from types import SimpleNamespace
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from urllib.error import HTTPError
@@ -17,14 +21,37 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from tests.control_plane.host_process_fixture import write_python_host_fixture
+from tests.managed_effect_runtime_fixture import capture_disposable_effect_runtimes, stop_disposable_effect_runtimes
+from loopx.control_plane import effect_runtime
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import register_pack
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.status.goal_source import GoalSource
 from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
 
+_SYSTEM_TEMP = Path(tempfile.gettempdir())
+
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch, request):
+    if os.name == "nt":
+        # Hash-qualified job directories must also be valid CreateProcess cwd
+        # values. This HTTP fixture does not exercise the long-path contract.
+        parent = str(_SYSTEM_TEMP.resolve())
+        if not parent.startswith("\\\\?\\"):
+            parent = "\\\\?\\UNC\\" + parent[2:] if parent.startswith("\\\\") else "\\\\?\\" + parent
+        # Cleanup must still handle deeper source namespaces after a failure.
+        temporary = tempfile.TemporaryDirectory(prefix="lxra-", dir=parent)
+        request.addfinalizer(temporary.cleanup)
+        tmp_path = _SYSTEM_TEMP / Path(temporary.name).name
+    # Register before setup can start Node; pytest also runs this on pre-yield
+    # failure, before the borrowed Windows root's directory finalizer.
+    request.addfinalizer(lambda: stop_disposable_effect_runtimes(tmp_path))
+    process_temp = tmp_path / "process-tmp"
+    process_temp.mkdir()
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(process_temp))
+    monkeypatch.setattr(tempfile, "tempdir", str(process_temp))
     runtime, sources = tmp_path / "runtime", tmp_path / "sources"
     sources.mkdir()
     evidence = b"Prior question\nOnly the diagnostic was measured; native utility remains untested.\n"
@@ -47,10 +74,15 @@ def workspace(tmp_path, monkeypatch, request):
                                       "citations": [dict(source_id="facts", first_line=2, last_line=2)]}, "findings": [], "next_experiments": []}
     binary = tmp_path / "bin"
     binary.mkdir()
-    provider = binary / "codex"
-    provider.write_text(f'''#!{sys.executable}
+
+    def write_provider(source):
+        return write_python_host_fixture(binary / "codex", source)
+
+    shebang = "#!python" if os.name == "nt" else f"#!{sys.executable}"
+    provider = write_provider(f'''{shebang}
 from pathlib import Path
 import json,sys,time
+sys.stdin.reconfigure(encoding='utf-8')
 prompt=sys.stdin.read()
 with Path({str(count)!r}).open('a') as stream: stream.write('started\\n')
 mode=Path({str(mode)!r}).read_text()
@@ -68,8 +100,9 @@ if '\\n\\ndisplay_fields:\\n' in prompt:
 Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output,ensure_ascii=False),encoding='utf-8')
 print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_tokens':2}}}}))
 ''')
-    provider.chmod(0o700)
     monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    selected = shutil.which("codex")
+    assert selected and Path(selected).samefile(provider), "Use only the synthetic provider"
     state, registry = tmp_path / "active.md", tmp_path / "registry.json"
     state.write_text("# Synthetic research workspace\n")
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{"id": goal, "repo": str(tmp_path), "state_file": "active.md"} for goal in ("research-owner", "other-owner")]}))
@@ -92,11 +125,48 @@ print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_t
 
     operation = dict(goal_id="research-owner", pack_id=pack["pack_id"], analysis_key=pack["analysis_key"])
     try:
-        yield dict(request=request, operation=operation, mode=mode, count=count, server=server, sources=sources, before=before, tmp_path=tmp_path)
+        yield dict(request=request, operation=operation, mode=mode, count=count, server=server, sources=sources, before=before, tmp_path=tmp_path,
+                   provider_source=provider.with_suffix(".py") if os.name == "nt" else provider,
+                   write_provider=write_provider)
     finally:
         server.shutdown()
         worker.join(timeout=5)
         server.server_close()
+
+
+@pytest.mark.parametrize("failure", ["registration", "provider_identity"])
+def test_workspace_setup_failure_stops_owned_runtime(tmp_path, monkeypatch, failure):
+    finalizers, runtimes = [], []
+    original = register_pack
+
+    def registered(**kwargs):
+        result = original(**kwargs)
+        root = kwargs["runtime_root"].parent
+        for locator, _ in capture_disposable_effect_runtimes(root):
+            info = effect_runtime._read_info(locator, fingerprint=None)
+            assert info is not None
+            runtimes.append((locator, info))
+        assert runtimes, "Exercise a real disposable runtime before setup fails"
+        if failure == "registration":
+            raise RuntimeError("Injected registration failure")
+        return result
+
+    monkeypatch.setitem(workspace.__wrapped__.__globals__, "register_pack", registered)
+    if failure == "provider_identity":
+        which = shutil.which
+        monkeypatch.setattr(shutil, "which", lambda command, *a, **k: None if command == "codex" else which(command, *a, **k))
+    setup = workspace.__wrapped__(tmp_path, monkeypatch, SimpleNamespace(addfinalizer=finalizers.append))
+    try:
+        with pytest.raises((RuntimeError, AssertionError), match="Injected registration failure|Use only the synthetic provider"):
+            next(setup)
+        for cleanup in reversed(finalizers):
+            cleanup()
+        for _, info in runtimes:
+            assert not effect_runtime._pid_is_alive(info["pid"]), "Setup failure left an owned runtime alive"
+    finally:
+        # Keep the regression's failing control from leaking its own process.
+        for locator, info in runtimes:
+            effect_runtime._stop_effect_runtime(locator, info, timeout=5, wait_for_process_exit=True)
 
 
 @pytest.mark.parametrize("workspace", [False, True], indirect=True)
@@ -113,7 +183,7 @@ def test_shared_excerpts_reverify_through_http_without_dispatch(workspace, monke
     reads = []
 
     def observed(source):
-        if source == w["sources"] / "facts.txt":
+        if source.samefile(w["sources"] / "facts.txt"):
             reads.append(source)
         return original(source)
 
@@ -414,14 +484,14 @@ def test_explicit_native_context_reaches_process_and_changed_source_blocks_reuse
     before = read(pack_id=registered["pack_id"])["pack"]
     assert before["native_outcomes"]["projection"]["retained"] is None
     assert before["job"] is None and not w["count"].exists()
-    provider = w["tmp_path"] / "bin" / "codex"
+    provider = w["provider_source"]
     prompt_path = w["tmp_path"] / "received-prompt.txt"
-    provider.write_text(provider.read_text().replace("prompt=sys.stdin.read()",
-        f"prompt=sys.stdin.read()\nPath({str(prompt_path)!r}).write_text(prompt)"))
+    w["write_provider"](provider.read_text(encoding="utf-8").replace("prompt=sys.stdin.read()",
+        f"prompt=sys.stdin.read()\nPath({str(prompt_path)!r}).write_text(prompt,encoding='utf-8')"))
     operation = {**w["operation"], "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
     w["mode"].write_text("ok")
     assert read(body=operation)["job"]["status"] == "succeeded"
-    context = json.loads(prompt_path.read_text().split("\n\nNative outcome context:\n")[1])
+    context = json.loads(prompt_path.read_text(encoding="utf-8").split("\n\nNative outcome context:\n")[1])
     assert context["metric"]["higher_is_better"] is False
     assert context["best_valid"]["value"] == context["final_valid"]["value"] == 9
     assert context["retained"] is None
@@ -450,8 +520,10 @@ def source_analysis_workspace(w, name, *, enabled=True):
         reads = 0
 
         def __init__(self):
-            super().__init__(name, name, "/registry", "/runtime", "/cli", "/python",
-                             "/bin", "local", "host", "research-owner")
+            root = w["tmp_path"]
+            super().__init__(name, name, str(root / "registry.json"), str(root / "runtime"),
+                             str(root / "source-cli"), sys.executable,
+                             str(root / "bin"), "local", "host", "research-owner")
 
         def read_status(self, goal_id=None):
             self.reads += 1
@@ -705,9 +777,9 @@ def test_synthesis_only_citation_uses_existing_reader_and_does_not_execute(works
     path.write_text(json.dumps(data))
     registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner", input_path=path,
                                source_root=w["sources"], title="Synthetic grounded synthesis")
-    provider = w["tmp_path"] / "bin" / "codex"
-    script = provider.read_text().replace("Path(sys.argv[sys.argv.index('-o')+1]).write_text", "output['synthesis']['summary']['citations'][0]['first_line']=1\nPath(sys.argv[sys.argv.index('-o')+1]).write_text")
-    provider.write_text(script)
+    provider = w["provider_source"]
+    script = provider.read_text(encoding="utf-8").replace("Path(sys.argv[sys.argv.index('-o')+1]).write_text", "output['synthesis']['summary']['citations'][0]['first_line']=1\nPath(sys.argv[sys.argv.index('-o')+1]).write_text")
+    w["write_provider"](script)
     before = read(pack_id=registered["pack_id"])["pack"]
     assert before["job"] is None and not w["count"].exists()
     operation = {**w["operation"], "pack_id":registered["pack_id"], "analysis_key":before["analysis_key"]}

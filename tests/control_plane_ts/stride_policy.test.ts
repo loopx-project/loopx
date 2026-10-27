@@ -196,6 +196,14 @@ for (const kind of decisionReviewTriggers) test(`${kind} records stride even whe
       reference_context_id: "replan-context-" + "b".repeat(24)}}});
   assert.equal(foreignContext.accepted, false);
   assert.equal(foreignContext.reason_code, "stride_review_basis_mismatch");
+  const recovery = foreignContext.context_recovery as Record<string, any>;
+  assert.deepEqual(recovery.replan_context, obligation.replan_context);
+  assert.equal(recovery.stride_control.reference_context_id, contextId);
+  assert.equal(recovery.received_context_id, "replan-context-" + "b".repeat(24));
+  assert.equal(stale.context_recovery, undefined);
+  // Returning the current facts must not alias or mutate the authority input.
+  recovery.replan_context.context_id = "changed-by-consumer";
+  assert.equal(obligation.replan_context.context_id, contextId);
   const bareDecision = projectReplanSemantics({operation: "qualify", obligation,
     observation_delta: {delta_kinds: ["new_concrete_blocker"]},
     agent_vision: {stride_decision: proposal}});

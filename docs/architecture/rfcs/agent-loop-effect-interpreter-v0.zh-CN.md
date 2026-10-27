@@ -5,7 +5,7 @@
 | 状态 | 已接受 |
 | 替代 / 关闭 | 无 |
 | 日期 | 2026-08-08 |
-| 最近规范性修订 | 2026-10-01 |
+| 最近规范性修订 | 2026-10-27 |
 | 作者 | LoopX maintainers |
 | 范围 | 公开控制面文档、packet 合同、重构方向、测试策略 |
 
@@ -323,8 +323,10 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 
 #### Heartbeat 与 TurnEnvelope 收敛
 
-沿用既有 M7.4 与 roadmap S2/S3/S6/S8，统一 heartbeat 和 Turn host 消费的
-**执行事实**，宿主效果的所有权仍分别保留。已准入 Todo 随后等待定时、PR 或能力时，
+沿用既有 M7.4 与 roadmap S2/S3/S6/S8，把 heartbeat 和 Turn 执行统一为
+**一份受治理工作契约**，显式保留宿主效果所有权。[Controller/executor RFC](controller-executor-unified-contract-v0.zh-CN.md)
+拥有完整 schema/消费者迁移和可选模型会话分工：以同一 schema、full/delta 交付及不可变
+恢复替代长期 quota/Turn 视图。这不宣称 cutover 已交付。已准入 Todo 随后等待定时、PR 或能力时，
 typed receipt owner 保留原回写与结算路径；即使工作已 deferred 或等待已到期，重入也
 只投影原收尾，不恢复业务执行、不选择后继、不创建重试时钟。恢复复用原回执中的正向
 工作准入和精确结算绑定；工作区修复本身没有业务结果，须先经同轮正常 guard 对精确
@@ -469,7 +471,7 @@ live 模型结果、App 采用或以下三项收敛验收完成。
 | Todo | 可观察结果与决定性验收 |
 |---|---|
 | 核对 heartbeat 与 TurnEnvelope 的执行和上下文要求 | 同一捕获的权威决策保留 actor/Goal/Todo、必读全文、claim/lease、选择、replan/收尾、带条件结算和 scheduler 所有权。删除渲染分支前列明遗漏与重复事实。覆盖可选能力关闭、仅 recall、仅 ingest、绑定失效和 provider 失败；私有详情只经有权限的引用访问。 |
-| 在真实宿主 renderer 采用同一 typed 投影 | heartbeat full/thin 与 Turn host 消费同一执行事实及同 Turn 捕获/详情入口；显式保留通知和 scheduler 的宿主传输。真实 File/SQLite CLI 与打包 Codex App 覆盖重入、来源丢失、必读前拒绝、迟到结果、backoff 和一次结算；补读不触发第二次准入。最后调用方迁移后才退役旧投影。 |
+| 在真实宿主入口采用统一契约 | heartbeat full/thin 与 Turn host 消费同一 schema 及同 Turn 捕获/详情入口，不长期保留分格式的语义视图；显式保留通知和 scheduler 的宿主传输。真实 File/SQLite CLI 与打包 Codex App 覆盖重入、来源丢失、必读前拒绝、迟到结果、backoff 和一次结算；补读不触发第二次准入。最后调用方迁移后才退役旧投影。 |
 | 核验上下文形态及迁移默认 | 将相同的正常、replan、等待/恢复与可选能力负载同时对照当前完整和短包路径，测量载荷/model token、详情 IO、延迟、资源增长、遗漏、决策与结果质量。数据丢失、重复效果、身份和结算错误保持硬约束；保留受支持的已保存 prompt/回执与可逆 rollout，根据证据再改预算或默认。 |
 
 **上下文成本与投影融合：下一实现切片**
@@ -484,12 +486,14 @@ live 模型结果、App 采用或以下三项收敛验收完成。
 
 1. **以完整首包、后续子树增量作为融合目标。** 优先优化 benchmark case 内 solver 实际
    消费的普通 `quota should-run` 输入，实验操作者/控制面对话及个人维护包为次要项。
-   共享投影首次完整交付，支持温态复用时只交付精确变化子树，solver 无需切换 TurnEnvelope。
+   共享投影首次完整交付，支持温态复用时只交付精确变化子树。Solver 保留产品入口，
+   两种旧 packet 格式共同迁入统一契约。
    包内去重和冷启动缩减作为配套；连续做小清理不能替代重复输入路径的验收。存储 capture
    缩小或 import 清理不能证明模型输入节省。
-2. **一个投影 owner，两个传输调用方。** 扩展已有 typed interaction/work-context owner，
-   同时生成完整和增量上下文，由 quota 与 TurnEnvelope 消费。保留原始捕获、required-source
-   校验、调用、选择、结算与详情入口；Python 保留来源 IO，host 保留效果执行和上下文连续性
+2. **跨宿主使用同一契约、同一交付机制。** 扩展已有 typed interaction/work-context owner，
+   同时生成完整和增量上下文，用统一 schema 替代 quota 与 TurnEnvelope 输出 schema；
+   旧 decoder 只服务具名迁移 reader 和历史回执 replay。不同宿主外层包装不构成不同契约
+   视图。保留原始捕获、required-source 校验、调用、选择、结算与详情入口；Python 保留来源 IO，host 保留效果执行和上下文连续性
    观察。不新增独立准入服务、diff daemon 或 Python 上下文决策 owner。刻画调用方并在采用后
    删除被替代投影。输出释放前的 host 传输 ACK 既不证明模型完整收到了内容，也不证明其仍被
    保留。现有 capture/handoff 是接入位置，并非已经实现的连续性契约。
@@ -518,6 +522,10 @@ live 模型结果、App 采用或以下三项收敛验收完成。
 | CLI 采用 | 保持普通 quota 入口和现有 capture/detail 路径；能观察活跃模型上下文的 host 在传输边界提供可选基线绑定。没有连续性观察者的裸 CLI 返回全量，不能静默信任上次输出文件。具体参数/wire 形式在调用方刻画后确定，不新增命令族。 |
 | Turn 采用 | 消费同一完整/增量上下文 owner，同时保留 Turn 签名和外层 executor 效果归属。host 独占的结算执行与手动 CLI agent 的可执行结算义务仍有区别。 |
 | 表示选择 | 计入绑定和删除元数据后，只有更小才发送 delta，否则发送全量。不为字节目标截断值或改变来源选择。 |
+
+以下按 surface 区分的绑定描述现有交付/迁移契约；对应 reader 活跃时仍必须遵守。
+Controller/executor 提案的 C1–C9 替换两种输出格式；历史 capture 保留原版本，
+不能借用新 schema 基线。
 
 **来源与变化边界。** 共享的 `context_delivery_v1` 展示覆盖完整 quota packet、
 完整 Turn envelope 及其公共 work context。surface 纳入既有 Goal/Agent/session/epoch/
@@ -1163,6 +1171,12 @@ M7 只有在真实 vertical slice 满足 Product Outcome Contract、旧路径被
 - `turn_driver/executor` 应在提交 receipt 前通过 `interpret_turn_result_packet` 派生 result status 和 next phase。
 
 ## 语义控制与执行归属
+
+可选的 [controller/executor profile](controller-executor-unified-contract-v0.zh-CN.md)
+在既有 owner 内分配模型职责：controller 是唯一面向 Core 的模型客户端，executor 在
+host 强制范围内交流自然语言工作与产物。它不同于确定性的 Turn Loop Controller。
+同一 Agent 可绑定这两个角色，不增加竞争业务 executor 或第二份权限。单会话仍可用；
+角色绑定、结果验证和完整成本资格先于默认提升。
 
 LoopX 的语义控制面跨 Turn、Agent 与 runtime 保持工作含义：intent、ownership、
 dependency、authority、evidence 和 continuation。执行责任覆盖它实际拥有的 typed

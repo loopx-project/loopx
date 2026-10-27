@@ -44,6 +44,18 @@ live tasks, hidden evaluation, credentials, raw trajectories, submissions, and
 unpublished comparisons remain maintainer-owned. Engineering readiness does not
 by itself establish a C2 uplift claim.
 
+The [unified work contract and session-role RFC](../docs/architecture/rfcs/controller-executor-unified-contract-v0.md)
+extends this build map with C7: benchmark workers should reuse the same qualified
+product profile and governed lifecycle as other entrypoints. Benchmark-family
+adapters retain task, environment, verifier and scoring semantics. Proposed
+single-/two-session comparisons count both sessions and all recovery costs;
+helper delivery neither launches trials nor changes frozen historical arms.
+
+中文：[统一工作契约与会话角色提案](../docs/architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+的 C7 延伸本建设图：worker 复用同一已验收产品模式和治理生命周期，benchmark 适配器
+保留题目、环境、验证与评分语义。拟议单双会话对照计入双方及全部恢复成本；
+交付 helper 不启动实验，也不修改已冻结的历史对照臂。
+
 ## Current work
 
 - [Execution observations through ordinary Goal planning](runtime/EXECUTION_OBSERVATIONS.md)

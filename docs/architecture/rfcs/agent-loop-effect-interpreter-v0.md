@@ -5,7 +5,7 @@
 | Status | Accepted |
 | Supersedes / closes | none |
 | Date | 2026-08-08 |
-| Last normative revision | 2026-10-01 |
+| Last normative revision | 2026-10-27 |
 | Author | LoopX maintainers |
 | Scope | Public control-plane docs, packet contracts, refactor direction, test strategy |
 
@@ -464,8 +464,12 @@ The existing R5 CLI captures full decisions before projection, with a private di
 
 #### Heartbeat and Turn Envelope convergence
 
-Under existing M7.4 and roadmap S2/S3/S6/S8, converge the **execution facts**
-used by heartbeat and Turn hosts, while keeping host effect ownership separate.
+Under existing M7.4 and roadmap S2/S3/S6/S8, converge heartbeat and Turn
+execution into **one governed work contract**, while keeping host effect
+ownership explicit. The [controller/executor RFC](controller-executor-unified-contract-v0.md)
+owns the complete schema/consumer migration and optional model-session split.
+Its target replaces permanent quota/Turn views with one schema, full/delta
+delivery and immutable recovery; this does not claim that cutover has shipped.
 When an admitted Todo later waits on a timer, PR or capability, the typed
 receipt owner preserves its original writeback and settlement route. Reentry
 projects only that closeout, including for deferred work and after the wait
@@ -692,7 +696,7 @@ Continue in this order using the existing owners and checkpoints:
 | Todo | Observable outcome and decisive acceptance |
 |---|---|
 | Reconcile execution/context requirements across heartbeat and TurnEnvelope | Same captured authoritative decision preserves actor/Goal/Todo, required full reads, claim/lease, action selection, replan/closure, conditional settlement and scheduler ownership. Inventory omitted/duplicated facts before deleting render branches. Include optional capabilities off, recall-only, ingest-only, stale binding and provider failure; private detail is accessed only through authorized references. |
-| Adopt one typed projection in real host renderers | Heartbeat full/thin and Turn host consume the same execution facts and per-Turn capture/detail route. Keep host-specific notification and scheduler transport explicit. Real File/SQLite CLI plus packaged Codex App tests cover reentry, source loss, refusal before required reads, late results, backoff and exactly-once settlement; no second admission from a detail read. Retire the replaced projection only after its last caller moves. |
+| Adopt one contract in real host entrypoints | Heartbeat full/thin and Turn host consume the same schema and per-Turn capture/detail route, with no permanent format-specific semantic views. Keep host-specific notification and scheduler transport explicit. Real File/SQLite CLI plus packaged Codex App tests cover reentry, source loss, refusal before required reads, late results, backoff and exactly-once settlement; no second admission from a detail read. Retire the replaced projection only after its last caller moves. |
 | Qualify the context shape and migration default | Compare the same normal, replan, wait/recovery and optional-capability workloads against both current full and compact paths. Measure payload/model tokens, detail IO, latency, resource growth, omissions and decision/outcome quality. Keep data loss, duplicate effects, identity and settlement errors as hard constraints. Preserve supported saved prompts/receipts and reversible rollout; change budgets or defaults only with that evidence. |
 
 **Context cost and projection convergence: next implementation slice**
@@ -712,13 +716,17 @@ The next slice stays within the existing three convergence acceptances above:
    ordinary `quota should-run` input actually consumed by benchmark case solvers;
    operator/control-plane and personal maintenance packets are secondary. The
    shared projection delivers complete context on first use and exact changed
-   subtrees on supported warm turns. Solvers need not switch to TurnEnvelope.
+   subtrees on supported warm turns. Solvers retain their product entrypoint;
+   both old packet formats migrate to the single contract.
    In-packet deduplication and cold-start reduction complement this work; a
    succession of small cleanups must not substitute for qualifying the repeated
    input path. A smaller stored capture or import cleanup proves no model saving.
-2. **One projection owner, two transport consumers.** Extend the existing typed
-   interaction/work-context owner for full and delta context; quota and
-   TurnEnvelope consume it. Preserve original capture, required-source checks,
+2. **One contract and one delivery mechanism across hosts.** Extend the existing
+   typed interaction/work-context owner for full and delta context. Replace
+   quota and TurnEnvelope output schemas with the unified schema; retain old
+   decoders only for identified migration readers and historical receipt replay.
+   Different host wrappers do not create different contract views. Preserve
+   original capture, required-source checks,
    invocation, selection, settlement and detail routes. Python retains source IO;
    hosts retain their effects and context-continuity observation. No independent
    admission service, diff daemon or Python context-decision owner is needed.
@@ -762,6 +770,11 @@ App consumers, and their full fallback. A standalone diff helper is insufficient
 | CLI adoption | Keep the ordinary quota entrypoint and existing capture/detail route. A host that can observe the active model context passes the optional baseline binding at that transport boundary. A bare CLI with no continuity observer returns full context; it must not silently trust a previous output file. Exact argument/wire shape follows caller characterization, not a new command family. |
 | Turn adoption | Consume the same full/delta context owner while retaining Turn signatures and outer-executor effects. Host-only settlement execution remains distinct from a manual CLI agent's executable settlement obligations. |
 | Choice of representation | Emit a delta only when it is smaller after binding/removal metadata. Otherwise emit full context. Do not truncate values or change source selection to meet a byte target. |
+
+The surface-specific bindings below describe the existing delivery/migration
+contract. They remain mandatory while those readers are active; C1–C9 of the
+controller/executor proposal replaces both emitted formats. Historical captures
+keep their original version and may never reuse a new-schema baseline.
 
 **Source and change boundaries.** The shared `context_delivery_v1` presentation
 covers whole quota packets, whole Turn envelopes and their common work context.
@@ -1741,6 +1754,14 @@ Example replacements:
   `interpret_turn_result_packet` before committing a receipt.
 
 ## Semantic control and execution ownership
+
+The optional [controller/executor profile](controller-executor-unified-contract-v0.md)
+separates model responsibilities within these owners: the controller is the sole
+model-facing Core client; the executor exchanges natural-language work and
+artifacts under host-enforced scope. It is not the deterministic Turn Loop
+Controller. One Agent may bind those two roles without creating two competing
+work executors or a second authority. Single-session behavior remains available;
+role binding, result validation and total-cost qualification precede promotion.
 
 LoopX's semantic control plane preserves work meaning across Turns, Agents and
 runtimes: intent, ownership, dependencies, authority, evidence and continuation.

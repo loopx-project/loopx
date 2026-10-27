@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from .decision_capture import capture_page_range as _capture_page_range
+
 
 def read_native_trace_file(path: Path, *, tail: bool = False) -> bytes:
     from ..effect_runtime import MAX_REQUEST_BYTES
@@ -87,7 +89,7 @@ def _native_tool_is_bound(tail: list[dict[str, Any]], completed: list[dict[str, 
                  and isinstance(tool.get("code_mode_runtime_tool_id"), str)
                  and bool(tool["code_mode_runtime_tool_id"])
                  and tool.get("model_visible_call_id") is None and len(cells) == 1
-                 and completed[0]["seq"] < cells[0]["seq"] < tools[0]["seq"]
+                 and tail[0]["seq"] < cells[0]["seq"] < tools[0]["seq"]
                  and isinstance(cells[0]["payload"].get("source_js"), str)
                  and isinstance(cells[0]["payload"].get("model_visible_call_id"), str)
                  and not any(row["payload"].get("type") == "code_cell_ended"
@@ -120,24 +122,6 @@ def _read_bundle_payload(bundle: Path, ref: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("native payload must be an object")
     return value
-
-
-def _capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tuple[int, int] | None:
-    if page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
-        return None
-    start, content = page.get("offset"), page.get("content")
-    if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
-        return None
-    data = content.encode("utf-8")
-    end = start + len(data)
-    if (page.get("total_bytes") != len(raw) or end > len(raw) or not data
-            or page.get("eof") is not (end == len(raw))
-            or page.get("next_offset") != (None if end == len(raw) else end)
-            or raw[start:end] != data):
-        # A host preview can remain valid JSON while shortening content
-        # and retaining the original cursor. It proves no bytes.
-        return None
-    return start, end
 
 
 def codex_context_in_active_input(observation: dict[str, Any], *, baseline: dict[str, Any], session_id: str) -> bool:
@@ -186,13 +170,24 @@ def codex_context_in_active_input(observation: dict[str, Any], *, baseline: dict
                      and row["payload"].get("inference_call_id") == inference]
         tools = [row for row in tail if row["payload"].get("type") == "tool_call_started"
                  and row["payload"].get("tool_call_id") == tool_id]
-        if len(completed) != 1 or len(tools) != 1 or not tail[0]["seq"] < completed[0]["seq"] < tools[0]["seq"]:
+        if (len(completed) != 1 or len(tools) != 1
+                or not tail[0]["seq"] < min(completed[0]["seq"], tools[0]["seq"])):
             return False
+        if completed[0]["seq"] > tools[0]["seq"]:
+            # Streaming announces a tool/cell before response completion. The
+            # complete model output must still precede this exact live runtime;
+            # an announcement or an unfinished inference alone proves nothing.
+            runtimes = [row for row in tail if row["payload"].get("type") == "tool_call_runtime_started"
+                        and row["payload"].get("tool_call_id") == tool_id]
+            if (len(runtimes) != 1
+                    or not completed[0]["seq"] < runtimes[0]["seq"]):
+                return False
         tool = tools[0]["payload"]
         if tool.get("kind") != {"type": "exec_command"}:
             return False
         if any(row.get("codex_turn_id") != turn or row["payload"].get("type") == "codex_turn_ended"
-               or (row["payload"].get("type") == "tool_call_ended" and row["payload"].get("tool_call_id") == tool_id)
+               or (row["payload"].get("type") in ("tool_call_ended", "tool_call_runtime_ended")
+                   and row["payload"].get("tool_call_id") == tool_id)
                for row in tail):
             return False
         output = _read_bundle_payload(bundle, completed[0]["payload"]["response_payload"])

@@ -8,6 +8,7 @@ from .review_body import (
     AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
     AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
     REQUIRED_FINAL_SECTIONS,
+    REVIEW_SECTION_TITLES,
     review_body_requirements,
 )
 from .approval_closeout import approval_closeout_contract
@@ -15,7 +16,7 @@ from .architecture_assessment import ARCHITECTURE_ASSESSMENT
 from .visual_assessment import VISUAL_ASSESSMENT
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 24
+REVIEW_POLICY_REVISION = 25
 
 # Agent-consumed prose is observable behavior even when JSON shape is stable.
 # Reuse the existing semantic verdicts; this is evidence within the same review.
@@ -68,7 +69,7 @@ VISUAL_EXPLANATION_PUBLICATION: dict[str, Any] = {
         "Keep labels public-safe and readable; inspect the rendered diagram before publication, "
         "or use the prose/table fallback and disclose that rendering was not verified. "
         "A diagram is optional presentation guidance, never a new required result field, evidence "
-        "receipt, approval condition or substitute for findings, validation, the complete Chinese "
+        "receipt, approval condition or substitute for findings, validation, the complete bilingual "
         "five-section review and English verdict. Code blocks still do not satisfy explanatory "
         "section floors. Reuse the existing Markdown surface; do not create an image service, "
         "upload private artifacts or infer publication/merge authority."
@@ -403,7 +404,7 @@ def _section(label: str, minimum: int, instruction: str) -> dict[str, Any]:
         "word_hint": f"至少 {minimum} 个正文字符；不含标题、链接地址、代码和重复行",
         "minimum_prose_characters": minimum,
         "content": "",
-        "agent_instruction": instruction,
+        "agent_instruction": f"Prefer the heading `## {REVIEW_SECTION_TITLES[label]}`. " + instruction,
     }
 
 
@@ -451,6 +452,16 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             "Render the verified structured result using the five sections. "
             "Open the body with one `Reviewer:` line (reviewer_declaration.body_marker) "
             "carrying result.reviewer's actor_kind, model and provider. "
+            "Write the main narrative, analysis, evidence and conclusion in connected Chinese prose. "
+            "Keep accurate English technical terms, symbols and commands where useful; explain "
+            "unfamiliar terms once. Bilingual headings, short finding titles and optional "
+            "Problem / Evidence / Impact / Fix labels can aid navigation, but their explanations "
+            "stay primarily Chinese. Do not turn English labels into long English paragraphs or "
+            "a second translation of the same analysis. Keep one concise English verdict. "
+            "Use PASS / FAIL / UNVERIFIED for validation, and "
+            "a compact table only for genuinely comparable observations. Do not translate every sentence "
+            "twice, impose a language ratio, repeat conclusions or remove evidence to reduce density. "
+            "This is writing guidance, not a new language quota or an exception to any evidence gate. "
             "The capability-owned review_execution_contract is the evidence and completeness authority. Save the exact final Markdown in result.review_body before check-result; publish that checked body and read it back. Section floors reject empty shells, not certify reasoning. Explain concrete paths and counterexamples; do not pad or duplicate evidence to meet a floor."
             " Follow visual_explanation when a diagram or table improves understanding; retain the complete prose review."
         ),

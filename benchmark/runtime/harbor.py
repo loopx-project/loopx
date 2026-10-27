@@ -58,7 +58,7 @@ class BenchmarkCodex(CodexOffline):
         self,
         *args,
         execution_mode="heartbeat",
-        iteration_context="fresh",
+        iteration_context=None,
         codex_sandbox="danger-full-access",
         validation_command=None,
         turn_timeout_sec=None,

@@ -22,7 +22,7 @@ SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 @dataclass(frozen=True)
 class Execution:
     mode: str = "heartbeat"
-    context: str = "fresh"
+    context: str | None = None
     sandbox: str = "danger-full-access"
     timeout_seconds: float | None = None
     validation_command: tuple[str, ...] = ()
@@ -31,6 +31,8 @@ class Execution:
     context_delivery: str = "off"
 
     def __post_init__(self) -> None:
+        if self.context is None:
+            object.__setattr__(self, "context", "resume" if self.mode in {"heartbeat", "turn"} else "fresh")
         if self.context_delivery not in ("off", "on") or (self.context_delivery != "off" and self.mode != "heartbeat"):
             raise ValueError("context_delivery supports only off or on with heartbeat execution")
         if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):

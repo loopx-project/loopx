@@ -191,6 +191,7 @@ jobs:
           npm run smoke:chat-turn-acceptance-retry
           npm run smoke:chat-upgrade
           npm run smoke:delegation-search
+          npm run smoke:task-inspector-route
       - name: Qualify packaged team evidence and feedback recovery
         if: matrix.shard == 2
         working-directory: apps/presentation/dashboard
@@ -857,6 +858,13 @@ jobs:
         env:
           PYTHONUTF8: "0"
         run: python -m pytest -q tests/presentation/test_research_history_fixture.py
+
+      - name: Qualify local research HTTP lifecycle on Windows
+        env:
+          PYTHONUTF8: "0"
+        run: >-
+          python -m pytest -q tests/presentation/test_research_analysis_api.py
+          -k "not source_goal and not source_analysis and not source_execution"
 
       - name: Qualify live pytest worker diagnostics on Windows
         run: >-

@@ -73,6 +73,18 @@ def apply_context_machine_options(
             raise ValueError("native Codex context delivery needs JSON and a capture destination")
     if explicit is None:
         args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
+    # An off/on round trip can miss lifecycle events. Store replacement
+    # invalidates reuse even when its content hash returns to the old value.
+    # This metadata only narrows reuse; it is not retention or work authority.
+    from ..capabilities.machine_configuration.store import machine_configuration_store_path
+    import hashlib
+
+    try:
+        info = machine_configuration_store_path(runtime_root).stat()
+        generation = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+        args._context_delivery_generation = hashlib.sha256(repr(generation).encode()).hexdigest()
+    except FileNotFoundError:
+        args._context_delivery_generation = None
     location_missing = not (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
         or getattr(args, "decision_handoff_socket", None))
     capture_missing = (heartbeat or command == "should-run") and not (

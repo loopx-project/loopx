@@ -72,6 +72,7 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
                 "request_peer",
                 "return_result",
                 "consume_peer_result",
+                "original_conversation_collaboration",
             }
             for tool in tools.tools:
                 assert not {
@@ -85,6 +86,15 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
             assert "conclusion to the original requester" in returned.description
             assert "Preserve requested substantive detail" in returned.description
             assert "State material gaps" in returned.description
+            # A legacy Goal alias cannot authorize original-session IO.
+            result = await session.call_tool(
+                "original_conversation_collaboration",
+                {"operation": "discover", "parameters": {"parent_request_id": "a" * 64}},
+            )
+            assert result.isError
+            assert "exact Goal instance" in " ".join(
+                block.text for block in result.content if block.type == "text"
+            )
             result = await session.call_tool(
                 "request_peer",
                 {
@@ -108,6 +118,14 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
             registry.write_text(json.dumps(config))
             result = await session.call_tool("read_context", {})
             assert result.isError
+            result = await session.call_tool(
+                "original_conversation_collaboration",
+                {"operation": "discover", "parameters": {"parent_request_id": "a" * 64}},
+            )
+            assert result.isError
+            assert "requires registered Agents" in " ".join(
+                block.text for block in result.content if block.type == "text"
+            )
             result = await session.call_tool(
                 "request_peer",
                 {

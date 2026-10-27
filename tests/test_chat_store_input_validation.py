@@ -7,7 +7,7 @@ import pytest
 
 import loopx.chat_store as chat_store
 from loopx.chat_store import CHAT_SESSION_SCHEMA_VERSION, ChatSessionStore
-from loopx.chat_history import page_chat_messages
+from loopx.capabilities.manager_context.chat_history import page_chat_messages
 
 
 def test_agent_model_value_keeps_provider_protocol_characters() -> None:

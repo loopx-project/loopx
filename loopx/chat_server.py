@@ -1579,8 +1579,37 @@ class ChatRequestHandler(
             status=202 if result.get("turn") else 200,
         )
 
+    def _project_collaboration(self, session_id=None, *, apply=False):
+        from .capabilities.native_chat.conversation_bindings import OriginalConversationRequests
+        try:
+            service = OriginalConversationRequests(self.server.runtime_controller)
+            if not apply:
+                query = parse_qs(urlparse(self.path).query)
+                return self._send_json(service.management_view(session_id, search=str(query.get("search", [""])[0])[:200], cursor=query.get("cursor", [None])[0]))
+            body = self._read_json(max_bytes=128000)
+            if session_id is not None:
+                if set(body) - {"grant", "execute", "requester", "parent_request_id", "recipient", "source_id", "expected_policy_sha256"}:
+                    raise ValueError("unsupported original conversation grant fields")
+                return self._send_json(service.configure(session_id, body))
+            if Path(str(body.pop("coordination_runtime_root", ""))).resolve() != service.root.resolve():
+                raise ValueError("Chat service belongs to another coordination runtime")
+            operation = body.pop("operation", None)
+            common = {"requester", "parent_request_id"}
+            if operation == "discover" and set(body) == common:
+                return self._send_json(service.discover(body["requester"], body["parent_request_id"]))
+            if operation == "request" and set(body) == common | {"recipient", "operation_id", "brief"}:
+                return self._send_json(service.publish(body), status=202)
+            if operation == "control" and set(body) == {"requester", "recipient", "request_id", "control", "parameters"}:
+                return self._send_json(service.control(body))
+            raise ValueError("unsupported original conversation collaboration request")
+        except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
+            self._send_error(str(exc), status=409, delivery_state="unresolved")
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        peer_parts = path.strip("/").split("/")
+        if len(peer_parts) == 5 and peer_parts[:3] == ["api", "chat", "sessions"] and peer_parts[4] == "collaboration":
+            return self._project_collaboration(peer_parts[3])
         if path == DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH:
             return self._handle_extension_presentation_surfaces()
         if path == DEFAULT_EXTENSION_PROJECTION_PATH:
@@ -1705,6 +1734,11 @@ class ChatRequestHandler(
         if not self._require_loopback_origin():
             return
         path = urlparse(self.path).path
+        if path == "/api/chat/collaboration":
+            return self._project_collaboration(apply=True)
+        peer_parts = path.strip("/").split("/")
+        if len(peer_parts) == 5 and peer_parts[:3] == ["api", "chat", "sessions"] and peer_parts[4] == "collaboration":
+            return self._project_collaboration(peer_parts[3], apply=True)
         if self._dispatch_zcode_goal(path, apply=True):
             return
         post_dispatch: dict[str, Callable[[], None]] = {

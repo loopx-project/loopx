@@ -353,6 +353,154 @@ def prepared(steward, tmp_path, monkeypatch, provider="sqlite"):
     return sid, actor, monitor
 
 
+def stopped_watch(steward, tmp_path, monkeypatch, provider, audience):
+    store, runtime, _, transport, _, capture, _ = steward
+    if audience == "managed":
+        _, session, actor, todo_id, _ = local_watch(steward, tmp_path, monkeypatch, provider)
+        sid = session["session_id"]
+    else:
+        sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+        todo_id = monitor.current(actor)["todo_id"]
+    transport.reconcile()  # deliver setup's original request, before the watch
+    # A crash after acceptance, before an observation or native poll. The
+    # original failed request remains immutable; only the host pump may recover.
+    with monkeypatch.context() as stopped_worker:
+        stopped_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
+        original_turn = pump_steward_monitors(runtime)[0]
+    store.update_turn(sid, original_turn["turn_id"], status="failed", error_code="server_restarted",
+        error="The original host stopped before observation.", response=None, upstream_turn_id=None)
+    store.append_event(sid, original_turn["turn_id"], kind="turn.failed", payload={"error_code": "server_restarted"})
+    store.update_session(sid, active_turn_id=None, status="ready")
+    return sid, actor, todo_id, original_turn
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("audience", ["steward", "managed"])
+@pytest.mark.parametrize("released_original_lease", [False, True])
+def test_restart_before_observation_recovers_the_original_due_watch_once(steward, tmp_path, monkeypatch, provider, audience, released_original_lease):
+    import json
+    store, runtime, _, transport, _, capture, _ = steward
+    sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    calls, writes = capture.read_bytes(), list(steward[2].writes)
+    used = spent_slots(StewardMonitor(runtime), actor)
+    if released_original_lease:
+        monitor = StewardMonitor(runtime)
+        watch = local_watch_row(runtime, actor, todo_id)
+        old_lease = monitor._acquire(actor, watch, original_turn["loopx_request"]["turn_instance_id"])["lease"]
+        monitor._release(actor, watch, old_lease)
+    retained = store.load_turn(sid, original_turn["turn_id"])
+    watch = local_watch_row(runtime, actor, todo_id)
+    runtime._steward_monitor_next_check.clear()
+    recovered = pump_steward_monitors(runtime)
+    assert len(recovered) == 1, "a proven pre-observation restart must not strand a due watch"
+    assert recovered[0]["turn_id"] != retained["turn_id"]
+    assert recovered[0]["loopx_request"]["turn_instance_id"] == retained["loopx_request"]["turn_instance_id"]
+    completed = finish(runtime, recovered[0])
+    assert completed["status"] == "completed", completed
+    assert completed["response"]["native_loopx"]["status"] == "observed"
+    after = local_watch_row(runtime, actor, todo_id)
+    assert after["next_due_at"] != watch["next_due_at"] and after.get("result_hash")
+    assert store.load_turn(sid, retained["turn_id"]) == retained
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    transport.reconcile()
+    assert steward[2].writes == writes and capture.read_bytes() == calls
+    assert spent_slots(StewardMonitor(runtime), actor) == used
+    # Native once-only semantics, not just the ephemeral pump cache.
+    rows = [json.loads(line) for line in (runtime.coordination_runtime_root / "goals" / actor["goal_id"] / "runs" / "index.jsonl").read_text().splitlines()]
+    assert len([row for row in rows if row.get("classification") == "quota_monitor_poll"
+        and row.get("turn_instance_id") == retained["loopx_request"]["turn_instance_id"]]) == 1
+    wait_for_next_observation_tick(after)
+    edit_local_watch(runtime, actor, todo_id, "--next-due-at", (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat())
+    following = pump_steward_monitors(runtime)
+    assert len(following) == 1
+    next_observation = finish(runtime, following[0])
+    assert next_observation["status"] == "completed", next_observation
+    assert "monitor_restart_recovery" not in following[0]["loopx_request"]
+    assert store.load_turn(sid, retained["turn_id"]) == retained and capture.read_bytes() == calls
+    assert spent_slots(StewardMonitor(runtime), actor) == used
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("audience", ["steward", "managed"])
+@pytest.mark.parametrize("fault", ["unknown_error", "native_started", "delta", "unknown_event", "broken_history",
+    "pending_poll", "legacy_poll", "queued", "worker_busy", "active_lease", "retry_fails"])
+def test_stopped_watch_recovery_preserves_unknown_effects_user_priority_and_one_attempt(steward, tmp_path, monkeypatch, provider, audience, fault):
+    from contextlib import nullcontext
+    from loopx.control_plane.quota.monitor_poll import _monitor_poll_effect_id, _monitor_poll_receipt_path
+    from loopx.file_lock import exclusive_file_lock
+    store, runtime, _, transport, _, capture, _ = steward
+    sid, actor, todo_id, original_turn = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    request = original_turn["loopx_request"]
+    root = runtime.coordination_runtime_root
+    if fault in {"unknown_error", "native_started", "delta"}:
+        changes = {"unknown_error": {"error_code": "runtime_error"},
+            "native_started": {"upstream_turn_id": "unknown-native-turn"}, "delta": {"delta_count": 1}}[fault]
+        store.update_turn(sid, original_turn["turn_id"], **changes)
+    elif fault == "unknown_event":
+        store.append_event(sid, original_turn["turn_id"], kind="native_loopx.monitor_poll", payload={"unknown": True})
+    elif fault == "broken_history":
+        index = root / "goals" / actor["goal_id"] / "runs" / "index.jsonl"
+        index.parent.mkdir(parents=True, exist_ok=True)
+        with index.open("ab") as output:
+            output.write(b'\n{"unknown":')
+    elif fault in {"pending_poll", "legacy_poll"}:
+        effect = _monitor_poll_effect_id(runtime_root=root, goal_id=actor["goal_id"], agent_id=actor["agent_id"],
+            turn_instance_id=request["turn_instance_id"], todo_id=None if fault == "legacy_poll" else todo_id,
+            target_key=None, goal_ref=None)
+        receipt = _monitor_poll_receipt_path(root, actor["goal_id"], effect)
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text('{"status":"provider_pending"}')  # even incomplete evidence must hold
+    elif fault == "queued":
+        store.create_queued_turn(sid, client_turn_id="new-user-work", message="Handle my current request first.", origin="web")
+    elif fault == "active_lease":
+        monitor = StewardMonitor(runtime)
+        monitor._acquire(actor, local_watch_row(runtime, actor, todo_id), "independent-watch-owner")
+    elif fault == "retry_fails":
+        def unavailable(*_args, **_kwargs):
+            raise OSError("Synthetic source failed before the new poll.")
+        monkeypatch.setattr(StewardMonitor, "_commit_poll", unavailable)
+    original = store.load_turn(sid, original_turn["turn_id"])
+    watch, calls, writes = local_watch_row(runtime, actor, todo_id), capture.read_bytes(), list(steward[2].writes)
+    runtime._steward_monitor_next_check.clear()
+    guard = (exclusive_file_lock(store.turn_execution_lock_path(sid, original_turn["turn_id"]), timeout_seconds=0)
+        if fault == "worker_busy" else nullcontext())
+    with guard:
+        recovered = pump_steward_monitors(runtime)
+    if fault == "retry_fails":
+        assert len(recovered) == 1 and finish(runtime, recovered[0])["status"] == "failed"
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+    else:
+        assert recovered == []
+    assert store.load_turn(sid, original_turn["turn_id"]) == original
+    assert local_watch_row(runtime, actor, todo_id) == watch
+    transport.reconcile()
+    assert capture.read_bytes() == calls and steward[2].writes == writes
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("audience", ["steward", "managed"])
+def test_reopened_controller_recovers_only_the_persisted_untouched_watch(steward, tmp_path, monkeypatch, provider, audience):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.chat_runtime import ChatRuntimeController
+    store, runtime, _, _, _, capture, _ = steward
+    sid, actor, todo_id, original = stopped_watch(steward, tmp_path, monkeypatch, provider, audience)
+    before, retained = capture.read_bytes(), store.load_turn(sid, original["turn_id"])
+    runtime.close()
+    reopened = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,
+        registry_path=runtime.registry_path, project_contexts=runtime.project_contexts)
+    reopened.manager_scope_resolver = runtime.manager_scope_resolver
+    try:
+        turns = pump_steward_monitors(reopened)
+        assert len(turns) == 1 and finish(reopened, turns[0])["status"] == "completed"
+        assert local_watch_row(reopened, actor, todo_id).get("last_checked_at")
+        assert reopened.store.load_turn(sid, original["turn_id"]) == retained
+        assert not pump_steward_monitors(reopened) and capture.read_bytes() == before
+    finally:
+        reopened.close()
+
+
 @pytest.mark.parametrize("unreadable", ["session", "queued_turn"])
 @pytest.mark.parametrize("storage_provider", ["file", "sqlite"])
 def test_unreadable_conversation_does_not_starve_another_native_monitor(steward, tmp_path, monkeypatch, unreadable, storage_provider):

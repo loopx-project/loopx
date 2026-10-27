@@ -201,10 +201,13 @@ def binding(env):
 
 
 @pytest.mark.parametrize("planning_mode", ["heartbeat", "turn"])
+@pytest.mark.parametrize("context", [None, "resume"])
 def test_planning_heartbeat_and_turn_share_one_binding(
-    tmp_path, monkeypatch, planning_mode
+    tmp_path, monkeypatch, planning_mode, context
 ):
     env = resume_env(tmp_path, monkeypatch)
+    if context is None:
+        env.pop("LOOPX_ITERATION_CONTEXT")
     plan_env = plan_stage(env, monkeypatch) | {"LOOPX_EXECUTION_MODE": planning_mode}
     if planning_mode == "turn":
         plan_env["LOOPX_VALIDATION_COMMAND_JSON"] = '["true"]'
@@ -369,7 +372,8 @@ def test_explicit_fresh_replaces_corrupt_shared_binding(tmp_path, monkeypatch):
 @pytest.mark.skipif(
     not os.environ.get("LOOPX_TEST_CODEX_BIN"), reason="native Codex binary required"
 )
-def test_native_codex_resume_keeps_planning_history(tmp_path, monkeypatch):
+@pytest.mark.parametrize("context", [None, "resume"])
+def test_native_codex_resume_keeps_planning_history(tmp_path, monkeypatch, context):
     """Exercise installed Codex against a disposable local Responses endpoint."""
     requests = []
 
@@ -439,6 +443,8 @@ def test_native_codex_resume_keeps_planning_history(tmp_path, monkeypatch):
             "LOOPX_CODEX_TURN_TIMEOUT_SEC": "30",
             "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 600),
         }
+        if context is None:
+            env.pop("LOOPX_ITERATION_CONTEXT")
         first = run_once(plan_stage(env, monkeypatch))
         second = run_once(env)
         assert first["ok"] and second["ok"]

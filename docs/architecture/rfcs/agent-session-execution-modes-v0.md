@@ -9,7 +9,7 @@
   the session-ownership decision already described for the Desktop frontend.
   Session-ownership and host-admission decisions require maintainer acceptance.
 - **Created:** 2026-09-15
-- **Last normative revision:** 2026-09-15
+- **Last normative revision:** 2026-10-27
 - **Implementation baseline:** `6c3da75ca`
 - **Related contracts:** [Desktop execution frontends](desktop-execution-frontends-v0.md),
   [Single-owner local daemon](single-owner-local-daemon-v0.md),
@@ -228,6 +228,22 @@ Forbidden alternate authorities: a host-local store as Goal, Todo, quota,
 monitor, or lifecycle truth; conversation text as a receipt; a second scheduler
 for the same binding; a Goal-wide default binding; and a mode change inferred
 from a probe, a transport, or a prompt.
+
+### Controller and executor session roles
+
+The [unified work contract RFC](controller-executor-unified-contract-v0.md)
+proposes an optional controller model session plus one business executor under
+one logical Agent. This is a role distinction, not a third execution mode or
+authority rank. Extend the existing binding owner with explicit role/generation,
+separate ordered queues and independent context baselines before admitting both
+sessions. Never overwrite the single Agent-scoped native-session slot with two
+IDs. The one-active-executor invariant applies to the business work; a controller
+role is not permission for a second simultaneous business executor. Its only
+Core access is through existing scoped operations, and host enforcement keeps
+Core credentials/write tools outside executor access. Role changes, stop, late
+results and controller recovery must retain the original request/attempt and
+settlement binding. Until that profile qualifies, existing bindings retain their
+current behavior; no implicit conversion or host promotion follows.
 
 ### Reusable Agent operations and continuation ownership
 
@@ -614,6 +630,7 @@ extending this RFC with a competing rule.
 | [TypeScript control-plane migration](typescript-control-plane-migration-v0.md) | Which surface owns typed state machines, effects, and settlement rules during migration | Mode transitions that become machine-enforced belong to that typed boundary. Python adapters may bridge the contract but must not fork session-mode authority. |
 | [Goal Channel collaboration](goal-channel-collaboration-v0.md) | Goal-bound collaboration surfaces, channel delivery, notifications | Owns where collaboration is delivered. This RFC owns which session binding the delivery targets and whether that binding can accept it. |
 | [LoopX Turn v0](../../reference/protocols/loopx-turn-v0.md) | The bounded governed Turn: decide, execute, validate, write back, spend once | The execution unit used by managed hosts and by attached hosts that return governed results. This RFC does not extend the Turn contract. |
+| [Controller/executor and unified contract](controller-executor-unified-contract-v0.md) | Unified Core input, model-role split, natural-language executor exchange and path retirement | This RFC owns role binding, modes and host lifecycle; the new proposal owns cross-path acceptance. The controller model is distinct from the pure disposition function below. |
 | [Turn loop controller](../../reference/protocols/turn-loop-controller-v0.md) | The pure disposition transition for continued Turns and its budget semantics | Decides whether another Turn is eligible. It does not own a session, start processes, or schedule work. |
 | [Host mode plan](../../reference/protocols/host-mode-plan-v0.md) | User-facing host-mode selection from intent and advertised capabilities, and the preview command it prints | A different axis: how work advances and through which connector. It is not a mode authority; a selected host must still declare its session mode per this RFC. |
 | [Session runtime projection](../../reference/protocols/session-runtime-loopx-projection-v0.md) | The read-only projection of an external runtime session into LoopX without copying private traces | Consistent with `attached_host`: the runtime owns transcripts, LoopX owns its own state. This RFC adds no projection fields. |

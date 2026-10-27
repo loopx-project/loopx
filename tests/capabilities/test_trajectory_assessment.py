@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 from pathlib import Path
 import sys
@@ -10,6 +11,7 @@ import threading
 import time
 
 import pytest
+from jsonschema import Draft202012Validator, ValidationError
 
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment import (
     execute,
@@ -17,6 +19,7 @@ from loopx.capabilities.benchmark_toolkit.trajectory_assessment import (
     read_job,
     request_cancel,
 )
+from loopx.control_plane.effect_runtime import effect_runtime_result
 
 
 @pytest.fixture
@@ -62,6 +65,50 @@ def prepared(tmp_path):
         encoding="utf-8",
     )
     return prepare(path, model="fixture", effort="max", service_tier="fast")
+
+
+@pytest.mark.parametrize("language", [None, "zh", "en"])
+@pytest.mark.parametrize("synthesis", [False, True])
+def test_generation_schema_enforces_episode_evidence_before_provider_output(prepared, language, synthesis):
+    evidence = copy.deepcopy(prepared["input"])
+    evidence["sources"].append({**evidence["sources"][0], "id": "sibling"})
+    evidence["sources"].append({**evidence["sources"][0], "id": "display-only"})
+    evidence["episodes"].append(dict(id="second", question="A separate intervention?",
+                                      source_ids=["sibling"], eligible_metrics=["information_gain"]))
+    evidence["selection"].update(population_episodes=2)
+    config = dict(model="fixture", effort="max", service_tier="fast", research_synthesis=synthesis)
+    if language:
+        config["output_language"] = language
+    legacy = effect_runtime_result("benchmark.trajectory.prepare", dict(input=evidence, config=config))
+    scoped = effect_runtime_result("benchmark.trajectory.prepare", dict(
+        input=evidence, config={**config, "output_schema_revision": 2}))
+    Draft202012Validator.check_schema(scoped["output_schema"])
+    schema = Draft202012Validator(scoped["output_schema"])
+    original_schema = Draft202012Validator(legacy["output_schema"])
+    result = dict(assessments=[dict(episode_id="episode", metric="benefit_test", verdict="yes",
+        reason="Observed utility test", citations=[dict(source_id="source", first_line=1, last_line=1)])], limitations=[])
+    if language:
+        result["episode_questions"] = []
+    if synthesis:
+        result["synthesis"] = dict(summary=dict(text="Declared sample only", episode_ids=["episode"],
+            citations=[dict(source_id="source", first_line=1, last_line=1)]), findings=[], next_experiments=[])
+    schema.validate(result)
+    for foreign in ["sibling", "display-only", "invented"]:
+        invalid = copy.deepcopy(result)
+        invalid["assessments"][0]["citations"][0]["source_id"] = foreign
+        original_schema.validate(invalid)
+        with pytest.raises(ValidationError):
+            schema.validate(invalid)
+    for key, value in [("episode_id", "second"), ("episode_id", "invented"), ("metric", "information_gain")]:
+        invalid = copy.deepcopy(result)
+        invalid["assessments"][0][key] = value
+        with pytest.raises(ValidationError):
+            schema.validate(invalid)
+    result["assessments"][0].update(verdict="unknown", citations=[])
+    schema.validate(result)
+    assert scoped["analysis_key"] != legacy["analysis_key"]
+    assert scoped["prompt"] == legacy["prompt"]
+    assert effect_runtime_result("benchmark.trajectory.prepare", dict(input=evidence, config=config)) == legacy
 
 
 def provider(

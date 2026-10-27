@@ -16,7 +16,7 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtim
 from ...file_lock import exclusive_file_lock
 from .trajectory_assessment import _digest, _write, execute, read_job, request_cancel
 
-DEFAULT_CONFIG = {"model": "gpt-6.1-sol", "effort": "max", "service_tier": "fast", "research_synthesis": True,
+DEFAULT_CONFIG = {"model": "gpt-6.1-sol", "effort": "max", "service_tier": "fast", "output_schema_revision": 2, "research_synthesis": True,
                   "research_synthesis_revision": 2}
 
 

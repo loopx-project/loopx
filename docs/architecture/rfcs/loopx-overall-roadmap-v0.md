@@ -3,8 +3,9 @@
 - Status: Accepted
 - Supersedes / closes: none
 - Scope baseline: architecture audit at 2026-09-16, `0aa6179de`; RFC inventory
-  updated through 2026-10-11 against `5c62c5c03`; steward reproduction baseline is
-  preserved separately in Section 8.
+  updated through 2026-10-11 against `5c62c5c03`; controller/contract refinement
+  uses `08e290fb5` on 2026-10-27. Steward reproduction baseline is preserved
+  separately in Section 8.
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
@@ -177,6 +178,31 @@ proposed experiments, and preserves observed cost when output is rejected.
 Its packaged source/recovery and comprehension checks qualify that reading
 slice; independent scientific calibration, installed adoption and 2.0 release
 acceptance remain open. Proposed experiments are advice, not execution authority.
+
+### Unified contract and controller/executor delivery
+
+The [controller/executor RFC](controller-executor-unified-contract-v0.md)
+refines S2/S4/S6/S7/S11: one governed work schema replaces quota/Turn packet
+format choices and incorporates full-first differential context. The optional
+controller model alone talks to Core; the executor receives natural-language
+work and materials, while existing host/Core owners retain identity, permissions,
+recovery and settlement. Session roles, execution modes, wake sources and
+benchmark arms remain separate axes. This is design direction, not shipped
+behavior or evidence of lower cost.
+
+C1's [caller cutover map](controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
+includes quota emission, the direct Turn producer and the final native/structured
+host prompts. A common capture does not unify those consumers. Qualification
+checks source obligations through composition, reconstruction and actual final
+input; new-admission cutover stays separate from historical receipt replay.
+
+Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
+qualify unified single-session inputs, then role binding and shared lifecycle,
+replan/result authoring, executor exchange, benchmark reuse, packaged App
+readback and retirement. Qualify both the App heartbeat journey and the actual
+benchmark consumer; managed Codex can carry an implementation but proves neither
+by itself. Reuse active context/recovery work. No new Goal, scheduler, parallel
+roadmap, benchmark launch or default promotion follows from these task entries.
 
 ### Current priorities after research and acceptance integration
 
@@ -464,6 +490,7 @@ subsystem was not performed. Section 8 records the focused audit.
 | [Complete State Recovery and Controlled Reactivation v0](complete-state-recovery-v0.md) | S2/S10 | Accepted design; backup create and configuration-only isolated recovery exist, complete-state verify/reactivation do not | M1: readable inert audit in Settings/Capability Center with owner/next action and no live authority; M3: recover one packaged local File/SQLite Goal, continue unfinished work, and record recovered/lost work, human cost, holds, owner reuse, and zero protected duplicate operations |
 | [Composable State Machines and Recovery Verification v0](composable-state-machines-recovery-verification-v0.md) | S2/S3/S10 | Design only; local conformance is reusable evidence | P1: one typed boundary, then ownership/writeback/settlement fault sequences and conditional progress; production entrypoint and real-backend evidence |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.md) | S2 | Accepted; core implemented, adoption continues | P0: reuse effect/recovery, cover R1 partial commits; retain domain-local replan ACK |
+| [Controller / Executor and Unified Work Contract](controller-executor-unified-contract-v0.md) | S2/S4/S6/S7/S11 | Design only; schema cutover and dual-session behavior unimplemented | P1: C1–C9 converge one contract, exact differential context, role binding, shared lifecycle and benchmark/App adoption; require independent outcomes and complete costs before default promotion |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | S2 | Accepted; whole-transaction migration active | P0/P1: R1–R4 hot transactions first; T0–T4 caller/deletion/cost evidence; no full rewrite prerequisite |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | S2 | Accepted; registry/inventory/drift and subsequent typed slices exist | P1: converge by semantic role and active producer/consumer; no name-based enum merging; review schema changes separately |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | S2/S3/S7 | Accepted; stores, local transactions and service-admission foundations exist | P1→P2: R5 local D1–D3, R6 authenticated hosts; real backend/soak/recovery before promotion |
@@ -490,6 +517,7 @@ subsystem was not performed. Section 8 records the focused audit.
 | [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | S8/S9 + R2/R3 | Accepted; canonical operation seam exists, managed native transport under owner review | Qualify source-context vs admitted-executor separation, exact human approval→one-shot consumption→domain evidence→original-route return; owned Turn/delegation need not await Desktop authentication. Live approval/effect/wakeup remain unqualified; finance provider stays separate |
 | [Provider-side authorization at effect acceptance (v0)](provider-effect-acceptance-v0.md) | S8/S9, supporting S2/S4 | Accepted design only; no runtime integration or qualified provider | M1: controlled provider and deterministic revoke/crash/replay conformance; strict production wiring remains gated by exact Goal lifetime, receipt retention and independent provider qualification |
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | S11/S3 | Accepted; partial M2 composition/successor; §11.5 result/adoption refinement proposed | P1: one real provider result -> scoped interpretation -> adopted step/successor, exact lineage/shared write gate and packaged readback; qualify shadow before opt-in, retain composition gaps; defer inference and M4 portfolio ranking |
+| [LoopX × LayerFS Engineering Exploration and Evaluation v0](layerfs-engineering-exploration-evaluation-v0.md) | S4/S8/S11 | Proposal; no integration or benefit claim | Bounded experiment: real environment fork/handoff/clean export, then matched warm-worktree and control-policy comparisons; preserve existing research-state/authority owners, count complete cost and negative results; no new priority or default |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | S11/S7 | Accepted; M1 observation and source-level replan decision followthrough; adaptive policy/continuation unqualified | P2: §7.6 mechanism/evidence scope review -> actual probe/adoption/full cost; §7.7 same-state continuation and recovery before adaptive promotion. Preserve per-Turn settlement and authority; no forced-hour pivot or default cadence change |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.md) | S1/S3/S6/S8/S11 | Accepted; read-only settings/context inspection slice | P1: correction→fresh-session decision across existing owners, then demand-driven composition and measured method evolution; no universal memory database or second opt-in |
 | [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | S6/S11 | Accepted; Stage 1 verified-outcome binding | P1 read-only reducer→P2 pilot: distinguish recalled/applied/utility, no automatic ranking change |

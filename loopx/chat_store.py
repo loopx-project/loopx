@@ -1400,12 +1400,18 @@ class ChatSessionStore(ChatIngressStore):
                 "started_at", "first_event_at", "completed_at", "last_activity_at",
                 "delta_count", "sse_reconnect_count", "expires_at", "host_claim_id",
                 "completion_id", "loopx_execution", "loopx_request",
+                "collaboration_answer",
             }
             unknown = set(changes) - allowed
             if unknown:
                 raise ValueError(f"unsupported chat turn fields: {sorted(unknown)}")
             if expected_statuses is not None and payload.get("status") not in expected_statuses:
                 return None
+            if "collaboration_answer" in changes:
+                answer = changes["collaboration_answer"]
+                if (payload.get("origin") != "peer" or not isinstance(payload.get("collaboration_request"), dict)
+                        or not isinstance(answer, dict) or payload.get("collaboration_answer", answer) != answer):
+                    raise ValueError("original peer model output is immutable and belongs only to its admitted Turn")
             payload.update(changes)
             _atomic_write_json(path, payload, preserve_mode=True)
             return payload

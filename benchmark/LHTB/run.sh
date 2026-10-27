@@ -49,8 +49,14 @@ export PYTHONPATH="$LOOPX_SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"
 LOOPX_EXECUTION_MODE="${LOOPX_EXECUTION_MODE:-heartbeat}"
 LOOPX_TASK_ENTRY="${LOOPX_TASK_ENTRY:-}"
 [[ -z "${LOOPX_PLANNING_TIMEOUT_SEC:-}" ]] || die "Remove LOOPX_PLANNING_TIMEOUT_SEC; planning shares LOOPX_SCHEDULER_TIMEOUT_SEC with execution"
-LOOPX_ITERATION_CONTEXT="${LOOPX_ITERATION_CONTEXT:-fresh}"
 LOOPX_VALIDATION_COMMAND_JSON="${LOOPX_VALIDATION_COMMAND_JSON:-[]}"
+if [[ -z "${LOOPX_ITERATION_CONTEXT:-}" ]]; then
+  LOOPX_ITERATION_CONTEXT="$("$VENV/bin/python" -c '
+import json, sys
+from benchmark.runtime.codex import Execution
+print(Execution(mode=sys.argv[1], validation_command=json.loads(sys.argv[2])).context)
+' "$LOOPX_EXECUTION_MODE" "$LOOPX_VALIDATION_COMMAND_JSON")"
+fi
 SHARED_CODEX_AGENT_DIR="$LOOPX_SRC_DIR/benchmark/runtime"
 [[ -f "$SHARED_CODEX_AGENT_DIR/codex_offline.py" ]] || \
   die "Shared offline Codex adapter not found: $SHARED_CODEX_AGENT_DIR/codex_offline.py"

@@ -43,12 +43,14 @@ def _write(path: Path, value: Any) -> None:
 def prepare(
     input_path: Path, *, model: str, effort: str, service_tier: str,
     research_synthesis: bool = True,
+    output_schema_revision: int | None = 2,
 ) -> dict[str, Any]:
     return effect_runtime_result(
         "benchmark.trajectory.prepare",
         {
             "input": json.loads(input_path.read_text(encoding="utf-8")),
             "config": {"model": model, "effort": effort, "service_tier": service_tier,
+                       **({"output_schema_revision": output_schema_revision} if output_schema_revision is not None else {}),
                        **({"research_synthesis": True, "research_synthesis_revision": 2} if research_synthesis else {})},
         },
     )

@@ -1,11 +1,120 @@
 import {useEffect, useRef, useState} from "react";
 import {ChevronRight, ListChecks, RefreshCw, X} from "lucide-react";
-import {fetchChatSession, fetchChatSessions, type ChatVisibleMessage} from "../../data/chat";
+import {fetchChatSession, fetchChatSessions, requestJson, type ChatVisibleMessage} from "../../data/chat";
+import {z} from "zod";
 import {fetchConversationRequests, type ConversationRequest, type ConversationRequestInventory} from "../../data/conversation-requests";
 import {ContextHelp} from "./context-help";
 import {MarkdownText} from "./markdown";
 import {useWorkspaceI18n} from "./i18n";
 import "./conversation-requests.css";
+
+const originalRecipientSchema = z.object({schema_version: z.literal("collaboration_original_conversation_recipient_v0"),
+  binding_id: z.string(), session_id: z.string(), identity_sha256: z.string()});
+const requesterSchema = z.object({goal_ref: z.object({goal_id: z.string(), goal_instance_id: z.string()}), agent_id: z.string()});
+const sourceGrantSchema = z.object({requester: requesterSchema, parent_request_id: z.string(),
+  source_id: z.string(), recipient: originalRecipientSchema});
+const projectInboxSchema = z.object({ok: z.literal(true), available: z.boolean(), policy_sha256: z.string(),
+  grants: z.array(sourceGrantSchema.extend({source_purpose: z.string().nullable().optional()})), recipient: originalRecipientSchema.optional(),
+  candidates: z.array(z.object({requester: requesterSchema, parent_request_id: z.string(), purpose: z.string()})),
+  requests_has_more: z.boolean().optional(), requests_next_cursor: z.string().nullable().optional(), error: z.string().optional(),
+  coverage: z.object({unreadable: z.number(), overflow: z.boolean()}).optional(),
+  requests: z.array(z.object({request_id: z.string(), requester: requesterSchema,
+    brief: z.object({purpose: z.string(), context: z.string(), constraints: z.array(z.string()), acceptance: z.array(z.string()), return_requirement: z.string(),
+      inputs: z.array(z.object({ref: z.string(), description: z.string(), sha256: z.string().optional()}))}),
+    queue_status: z.string().nullable(), request_control_view: z.object({revision: z.number(), control_state: z.string(),
+      assessment: z.object({decision: z.string(), reason: z.string()}).nullable()}),
+    returns: z.array(z.object({result_key: z.string(), text: z.string(), decision: z.string(), request_revision: z.number(), delivery_status: z.string()}))}))})
+  .refine(value => !value.available || value.recipient !== undefined, "Verified recipient identity is required");
+
+/** The original project conversation's existing collaboration entry. */
+export function OriginalProjectRequests({sessionId, refreshKey}: {sessionId: string; refreshKey: string}) {
+  const {locale} = useWorkspaceI18n(), zh = locale === "zh-CN";
+  const [open, setOpen] = useState(false), [search, setSearch] = useState("");
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [view, setView] = useState<z.infer<typeof projectInboxSchema> | null>(null);
+  const [selected, setSelected] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const generation = useRef(0), dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLButtonElement>(null), body = useRef<HTMLDivElement>(null);
+  const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}/collaboration`;
+  useEffect(() => {setOpen(false); setView(null); setSelected(""); setSearch(""); setCursor(null);}, [sessionId]);
+  useEffect(() => {if (body.current) body.current.scrollTop = 0;}, [cursor]);
+  useEffect(() => {if (open) dialog.current?.showModal(); else dialog.current?.close();}, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const current = ++generation.current, abort = new AbortController();
+    setBusy(true); setError(false); setSelected("");
+    void requestJson<unknown>(`${path}?search=${encodeURIComponent(search)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {signal: abort.signal}).then(raw => {
+      if (current !== generation.current) return;
+      const next = projectInboxSchema.parse(raw);
+      if (next.recipient && next.recipient.session_id !== sessionId) throw new Error("Conversation identity changed");
+      setView(next);
+    }).catch(() => {if (!abort.signal.aborted && current === generation.current) {setError(true); setView(null);}})
+      .finally(() => {if (current === generation.current) setBusy(false);});
+    return () => {generation.current++; abort.abort();};
+  }, [open, sessionId, search, cursor, revision, refreshKey]);
+  async function change(grant: boolean, source: Record<string, unknown>) {
+    if (!view) return;
+    const current = generation.current;
+    setBusy(true); setError(false);
+    try {
+      await requestJson(path, {method: "POST", body: JSON.stringify({...source, grant, execute: true, expected_policy_sha256: view.policy_sha256})});
+      if (current === generation.current) setRevision(value => value + 1);
+    } catch {if (current === generation.current) {setError(true); setView(null);}}
+    finally {if (current === generation.current) setBusy(false);}
+  }
+  const close = () => {setOpen(false); trigger.current?.focus();};
+  const candidate = view?.candidates.find(row => row.parent_request_id === selected);
+  const name = (source: z.infer<typeof requesterSchema>) => `${source.goal_ref.goal_id} · ${source.agent_id}`;
+  const title = zh ? "协作请求" : "Collaboration requests";
+  return <div className="conversation-requests-entry">
+    <button ref={trigger} type="button" aria-haspopup="dialog" onClick={() => setOpen(true)}><ListChecks size={16}/>{title}</button>
+    <dialog ref={dialog} className="conversation-requests-dialog project-peer-dialog" aria-labelledby="project-peer-title"
+      onCancel={event => {event.preventDefault(); close();}} onClick={event => {if (event.target === event.currentTarget) close();}}>
+      <header><h2 id="project-peer-title" tabIndex={-1} autoFocus>{title}</h2><div><button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)} aria-label={zh ? "刷新协作请求" : "Refresh collaboration requests"}><RefreshCw size={16}/></button><button type="button" onClick={close} aria-label={zh ? "关闭协作请求" : "Close collaboration requests"}><X size={18}/></button></div></header>
+      <div ref={body} className="conversation-requests-body" aria-busy={busy}>
+        {error ? <p role="alert">{zh ? "协作来源或记录未能核验。" : "Collaboration sources or records could not be verified."} <button type="button" onClick={() => setRevision(value => value + 1)}>{zh ? "重新读取" : "Reload"}</button></p> : null}
+        {busy && !view ? <p role="status">{zh ? "正在核验…" : "Verifying…"}</p> : null}
+        {view ? <>
+          {!view.available ? <p role="alert">{zh ? "原会话当前不可接收请求，请恢复原 App、项目与执行器连接后重试。已保留的授权仍可撤销。" : "The original conversation cannot receive requests. Restore its App, project and executor connection, then retry. Retained grants can still be revoked."}</p> : null}
+          <section aria-label={zh ? "收到的请求" : "Received requests"}><h3>{zh ? "收到的请求" : "Received requests"}</h3>
+            {!view.available ? <p>{zh ? "请求记录暂不可核验。" : "Request records are temporarily unverifiable."}</p> : !view.requests.length ? <p>{zh ? "暂无协作请求" : "No collaboration requests"}</p> : view.requests.map(row => {
+              const control = row.request_control_view, latest = row.returns.filter(result => result.request_revision === control.revision).at(-1);
+              const state = control.control_state === "cancelled" ? (zh ? "已取消" : "Cancelled")
+                : latest ? (latest.delivery_status === "delivered" ? (zh ? "请求方已读" : "Read by requester") : (zh ? "结论待请求方读取" : "Conclusion awaiting requester"))
+                : row.queue_status === "failed" ? (zh ? "执行失败，记录已保留" : "Execution failed; records retained")
+                : row.queue_status === "running" || row.queue_status === "starting" ? (zh ? "处理中" : "In progress")
+                : row.queue_status === "queued" ? (zh ? "已排队" : "Queued")
+                : row.queue_status ? (zh ? "本轮已结束，结论待核验" : "Turn ended; conclusion unverified")
+                : (zh ? "等待入队确认" : "Awaiting queue confirmation");
+              return <details key={row.request_id} className="project-peer-request"><summary><strong>{row.brief.purpose}</strong><span>{state}</span></summary>
+                <p>{name(row.requester)}</p><MarkdownText text={row.brief.context}/>
+                {row.brief.constraints.length ? <ul>{row.brief.constraints.map((line, i) => <li key={i}>{line}</li>)}</ul> : null}
+                {row.brief.inputs.length ? <ul>{row.brief.inputs.map(input => <li key={input.ref}><code>{input.ref}</code> · {input.description}{input.sha256 ? <details><summary>{zh ? "内容摘要" : "Content digest"}</summary><code>{input.sha256}</code></details> : null}</li>)}</ul> : null}
+                <h4>{zh ? "验收与返回" : "Acceptance and return"}</h4><ul>{row.brief.acceptance.map((line, i) => <li key={i}>{line}</li>)}</ul><MarkdownText text={row.brief.return_requirement}/>
+                {control.assessment ? <p>{({adopt: zh ? "已采用" : "Adopted", defer: zh ? "已暂缓" : "Deferred", reject: zh ? "已拒绝" : "Rejected", no_change: zh ? "无需变更" : "No change"} as Record<string, string>)[control.assessment.decision]} · {control.assessment.reason}</p> : null}
+                {row.returns.map(result => <article key={result.result_key}><h4>{zh ? `修订 ${result.request_revision} 的结论` : `Revision ${result.request_revision} conclusion`}</h4><MarkdownText text={result.text}/></article>)}
+              </details>;
+            })}
+            {cursor ? <button type="button" disabled={busy} onClick={() => setCursor(null)}>{zh ? "返回首页" : "First page"}</button> : null}
+            {view.requests_has_more && view.requests_next_cursor ? <button type="button" disabled={busy} onClick={() => setCursor(view.requests_next_cursor ?? null)}>{zh ? "下一页" : "Next page"}</button> : null}
+          </section>
+          <section className="project-peer-grants" aria-label={zh ? "接收来源" : "Allowed sources"}><h3>{zh ? "接收来源" : "Allowed sources"}</h3>
+            {view.grants.length ? <ul>{view.grants.map(grant => <li key={JSON.stringify(grant)}><div><strong>{name(grant.requester)}</strong><details className="project-peer-grant"><summary>{grant.source_purpose ?? (zh ? "来源记录暂不可读" : "Source record unavailable")}</summary><code>{grant.parent_request_id}</code></details></div><button type="button" disabled={busy} onClick={() => void change(false, {requester: grant.requester, recipient: grant.recipient, source_id: grant.source_id, parent_request_id: grant.parent_request_id})}>{zh ? "撤销" : "Revoke"}</button></li>)}</ul> : null}
+            <label>{zh ? "查找来源请求" : "Find source request"}<input type="search" value={search} maxLength={200} onChange={event => setSearch(event.target.value)}/></label>
+            <label>{zh ? "来源请求" : "Source request"}<select value={selected} disabled={busy || !view.available} onChange={event => setSelected(event.target.value)}>
+              <option value="">{zh ? "选择一条原请求" : "Choose an original request"}</option>
+              {view.candidates.map(row => <option key={row.parent_request_id} value={row.parent_request_id}>{name(row.requester)} · {row.purpose}</option>)}
+            </select></label>
+            {candidate ? <details><summary>{zh ? "查看来源请求" : "Read source request"}</summary><MarkdownText text={candidate.purpose}/></details> : null}
+            <p>{zh ? "允许所选来源的协作请求加入本会话队列。" : "Allow the selected source's collaboration requests into this conversation's queue."}</p>
+            {view.coverage?.overflow || view.coverage?.unreadable ? <p role="status">{zh ? "部分来源未显示，请细化搜索并核对原请求。" : "Some sources are not shown. Refine the search and verify the original request."}</p> : null}
+            <button type="button" disabled={busy || !view.available || !candidate} onClick={() => candidate && void change(true, {requester: candidate.requester, parent_request_id: candidate.parent_request_id})}>{zh ? "允许此来源" : "Allow this source"}</button>
+          </section>
+        </> : null}
+      </div>
+    </dialog>
+  </div>;
+}
 
 function requestStage(row: ConversationRequest, zh: boolean) {
   if (!row.unfinished) return row.control_state === "cancelled" ? (zh ? "已取消" : "Cancelled")

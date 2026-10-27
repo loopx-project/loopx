@@ -4,7 +4,7 @@
 - **Supersedes / closes:** [Personal Follow-through independent proposal](personal-follow-through-v0.md)
 - **Delivery maturity:** Partial; private runtime profile, team-plan confirmation and Todo materialization shipped; complete M1–M4 remain unqualified.
 - **Authors / owners:** LoopX maintainers; manager engineering owner
-- **Created / last normative revision:** 2026-09-13 / 2026-10-04
+- **Created / last normative revision:** 2026-09-13 / 2026-10-27
 - **Implementation baseline:** `7eb4b7bb1661bd5eff63a8725a33169792d5964b`
 - **Language mirror:** [中文版](capable-manager-semantic-handoff-v0.zh-CN.md)
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Manager continuity](../../reference/protocols/manager-evidence-and-continuity-v0.md), [Goal Vision/Replan](../../reference/protocols/goal-vision-replan-contract-v0.md), [Desktop frontends](desktop-execution-frontends-v0.md), [Shared authority](shared-goal-authority-state-provider-v0.md), [Shared Goal alignment/amendment](shared-goal-alignment-and-governed-amendment-v0.md), [TS migration](typescript-control-plane-migration-v0.md)
@@ -186,6 +186,15 @@ Work-request identity derives from origin plus an immutable request ID/revision.
 For a small local manager action, a current request/Turn and accepted effect receipt can be enough. Do not manufacture a Todo, target-capability, repository identity and validation command merely to read a file, answer a question or record an ordinary note. Durable implementation work still benefits from explicit tasks, scope and validation. Domain-capability checks belong to effects requiring that capability; capability registration is not universal permission to think or investigate.
 
 The durable semantic context consists of a small typed identity/control header plus a versioned human-readable brief and resolvable work/artifact references. The header drives routing and legal transitions. The brief carries open-ended domain meaning; Core does not classify every sentence into a rigid schema. This is dense general-task state, not serialization of the model's hidden thoughts. The same context remains available when a runtime session is replaced.
+
+The [controller/executor proposal](controller-executor-unified-contract-v0.md)
+applies this semantic exchange to two session roles within one logical Agent.
+Only the controller model consumes the unified Core contract and authors typed
+Core operations. The executor receives natural-language work with complete
+authorized materials and returns artifacts/evidence, not a specialized Core
+packet view. Runtime-owned routing/revision/attempt metadata reuses these request
+records; it is not another authority or handoff ledger. This does not restrict
+independent peer Agents, which retain their own scoped Core relationships.
 
 Prefer one cohesive replacement to compatibility wrappers that preserve duplicate decisions. Inventory every existing producer/reader, migrate with lossless mappings, switch one writer and delete the replaced rules. Reusing contracts and data is required; reusing every current class, JSON directory and prompt is not.
 

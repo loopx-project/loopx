@@ -665,7 +665,18 @@ App 格式和其他 Lark Markdown 结构仍有各自的验收边界。
 `source_grants.ts` 解析已注册 Goal 接收者。另一方面，`conversation_bindings.py`
 可以发现原项目 Session，但 `queued_admission.py` 仍只通过既有人类/provider 来源
 准入绑定输入。发现会话并没有打通这两份契约；伪造 Goal 或 `origin=web` 都不是合法适配。
-以下是实现计划，不代表已交付验收。
+下文继续作为验收契约。源码提案已沿这些 owner 将确切的
+`source_session_v1` 请求方接入已有的 Codex 本人私聊项目会话，保留原 Session、
+native thread 与 null Goal；恢复旧线程时使用单 Turn response schema，不要求增加
+dynamic tools。File/SQLite 集成沿用生产来源、请求、FIFO、修订与回传 owner，只有
+模型传输使用脚本替身。打包浏览器证据仅认证本机管理路径；旧请求方 profile、
+其他执行器、已安装 provider 投递与自然接收方采用仍待验收。操作和恢复方式见
+[原项目会话协作契约](../../reference/original-project-collaboration.md)。
+这仍是提案行为，不代表已交付验收。
+
+已接受的纠正以修订/digest 绑定的续办进入同一 FIFO，包括原结论已被读取后的纠正。
+队列写入和已存答案的恢复复用该修订，不再次调用模型；首个 Turn 与结果保留为历史。
+面板选择当前修订的状态，不把较早结论显示为当前待读取的结果。
 
 发现、授权、请求发布、接收方读取/评估和回传应使用同一个类型化接收者身份。
 在现有 collaboration owner 内，给已注册 Goal/Agent 接收者增加显式原会话接收者。

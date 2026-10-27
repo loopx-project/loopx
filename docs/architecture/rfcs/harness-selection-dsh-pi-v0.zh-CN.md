@@ -595,3 +595,19 @@ lane 的接收者解析、报告可先用的目标级里程碑——仍然开放
 profile、权限状态、第二执行器或工作权威，因此更丰富的回答契约不得扩大通道可读或
 可改的范围；本文也不提升任何一行的状态——M1-M4 接入里程碑与跨前端投影行仍归
 [Agent 会话执行模式](./agent-session-execution-modes-v0.zh-CN.md)。
+
+
+### 精确绑定的手动诊断读取
+
+`status --expected-binding '<JSON>' --as-of <timestamp> --max-observation-age-ms <integer>`
+在现有 goal 参数上固定 `provider_id`、`observer_id`、`session_id` 和 `run_identity`。
+后者使用 observer stats 的现有完整字段：`worker_id`、`model_id`、`task_id`、
+`environment_id`、`tools_id`、`budget_id`、`adapter_revision`、`observer_revision`。
+缺少或未知字段、非法 identity token 会拒绝输出。
+
+调用方必须给出明确评价时间及非负观测年龄上限。其他 session/treatment、
+完整性不合法、缺少观测、未来观测或超过年龄上限都会令 `binding.eligible=false`，
+并令 stage 为 `unknown`，而不是过滤掉其他运行后误称健康。eligible 只表示该绑定的
+观测可采用，不表示任务成功。不指定绑定时保留原有历史读取格式。读取仍然手动、
+只读且不限制 ledger 大小；不授权自动轮询，不替代面板必需的 owner-reviewed 读取预算，
+也不证明 C0/C1 live qualification。

@@ -255,6 +255,7 @@ class ManagedSessionTurn:
               settlement_recovery: dict[str, Any] | None = None,
               selection_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
         from .conversation_bindings import ChatConversationBindings
+        from .steward_turn import StewardTurnHost
         if self.controller.closed.is_set():
             raise ValueError("the original Chat host is stopped")
         actor = request["actor"]
@@ -284,6 +285,8 @@ class ManagedSessionTurn:
             "monitor_todo": monitor, **report,
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
             **({"report_selection_recovery": selection_recovery} if selection_recovery is not None else {}),
+            **StewardTurnHost(self.controller).report_quota_basis(request),
+            **StewardTurnHost(self.controller).monitor_restart_basis(request),
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
@@ -351,7 +354,27 @@ class ManagedSessionTurn:
                 if frozen != request:
                     raise ValueError("managed Turn request identity conflict; inspect the original operation")
                 from .steward_turn import StewardTurnHost
-                selection_recovery = StewardTurnHost(controller).report_selection_recovery(existing) if report_window is not None else None
+                host = StewardTurnHost(controller)
+                if report_window is not None:
+                    from .steward_turn import report_turn
+                    retained = report_turn(self.store, request["actor"], report_window)
+                    if retained is not None and retained["turn_id"] != existing["turn_id"]:
+                        return retained, False
+                    quota_request = host.report_quota_request(existing)
+                    if quota_request is not None:
+                        request = quota_request
+                        client_id += ".quota-recovery"
+                        existing = None
+                selection_recovery = host.report_selection_recovery(existing) if existing is not None and report_window is not None else None
+                restart_request = host.monitor_restart_request(existing) if existing is not None and monitor_deadline is not None else None
+                if restart_request is not None:
+                    client_id += ".restart-recovery"
+                    continued = self.store.turn_for_client(session_id, client_id)
+                    if continued is not None:
+                        return continued, False
+                    request, existing = restart_request, None
+                    request["monitor_lease_version"] = retained["version"] if retained else 0
+            if existing is not None:
                 if selection_recovery is None:
                     return existing, False  # Failed/unknown work is never replayed.
                 client_id += ".admission-retry"
