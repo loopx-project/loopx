@@ -12,7 +12,7 @@ GOAL_VISION_WAIT_STATE_SCHEMA_VERSION = "goal_vision_wait_state_v0"
 
 
 def _vision_wait_blocker_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    fields = ("todo_id", "task_class", "status", "claimed_by", "excluded_agents", "reason")
+    fields = ("todo_id", "task_class", "status", "priority", "claimed_by", "excluded_agents", "reason")
     return [{key: item[key] for key in fields if key in item} for item in items if isinstance(item, dict)]
 
 

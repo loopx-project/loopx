@@ -384,3 +384,49 @@ def test_monitor_and_excluded_blocker_cannot_cover_causal_work() -> None:
         result = decision(state=source, runs=[vision_run(declared=False)])
         assert not result["goal_frontier_projection"].get("vision_wait_state")
         assert result["goal_frontier_projection"]["acceptance_gaps"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("priority", ["P0", "P2"])
+def test_cli_current_agent_wait_preserves_canonical_blocker_priority(
+    tmp_path: Path, capsys, provider: str, priority: str,
+) -> None:
+    state_file = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state_file.write_text(
+        f"# Active Goal State\n\n## Agent Todo\n\n"
+        f"- [ ] [{priority}] Await authorized source recovery.\n"
+        "  <!-- loopx:todo todo_id=todo_source_a status=blocked "
+        "task_class=blocker claimed_by=worker -->\n"
+    )
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [{
+        "id": GOAL, "status": "active", "domain": "engineering",
+        "waiting_on": "codex", "state_file": str(state_file), "repo": str(tmp_path),
+        "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
+        "quota": {"compute": 1.0, "window_hours": 24, "slot_minutes": 1},
+        "coordination": COORDINATION,
+    }]}))
+    runtime = tmp_path / "runtime"
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state_file, provider=provider)
+    runs = runtime / "goals" / GOAL / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    run = vision_run(declared=False)
+    run["agent_vision"]["todo_delta"] = ["retain:todo_source_a"]
+    json_path, markdown_path = runs / "checkpoint.json", runs / "checkpoint.md"
+    json_path.write_text(json.dumps(run))
+    markdown_path.write_text("# Source checkpoint\n")
+    (runs / "index.jsonl").write_text(json.dumps({
+        **run, "json_path": str(json_path), "markdown_path": str(markdown_path),
+    }) + "\n")
+
+    assert cli_main([
+        "--format", "json", "--registry", str(registry), "--runtime-root", str(runtime),
+        "quota", "should-run", "--verbose", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--runtime-profile", "ark_managed_agent_goal",
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    wait = result["goal_frontier_projection"]["vision_wait_state"]
+    assert wait["reason_code"] == "current_agent_blocker"
+    assert wait["selected_todo_id"] == "todo_source_a"
+    assert wait["selected_todo_priority"] == priority
+    assert wait["automatic_resume"] is False
