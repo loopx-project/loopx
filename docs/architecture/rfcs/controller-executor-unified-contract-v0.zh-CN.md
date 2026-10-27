@@ -570,6 +570,62 @@ C1 首个实现片必须把完整字段/条款迁移与真实单会话 producer�
 Native-resume/context 工作保留原 owner；采用其已验收改动，只补新组合边界缺少的集成
 覆盖。替换真正可用且其余受支持 reader 有明确切换/退役条件之前，C1 保持未完成。
 
+### 职责收敛与贡献者交接
+
+[有源码依据的重构交接清单](ledger/controller-executor-unified-contract-v0/2026-10-27-refactor-handoff.zh-CN.md)
+把 C3/C4/C7/C8/C9 拆成具体精简候选。它属于本计划，不是另一份 roadmap，也不证明
+实现已交付。固定版本核对区分重复决策、归属不当的共享代码、已有共享 owner，以及
+需要语义比较才能成立的假设。
+
+保持三个清晰的职责：
+
+1. **Core 语义 owner：** 在既有 typed 领域内裁决合法工作、会话、effect 转移，验证
+   原权限与回执。
+2. **公共受管执行：** 按这些裁决驱动会话绑定、原生调用、观察与恢复。复用既有
+   Turn/effect owner；不是另一套权限引擎或调度器。
+3. **Host adapter：** 实现原生 SDK/CLI transport、事件转换、实际支持的 resume 和资源
+   清理。保留真实宿主差异，不能用名义统一接口隐藏不支持的行为。
+
+从整体 roadmap、当前用户成果、实际瓶颈、在途交付与 canonical 工作中选择任务。
+工作包编号和表格顺序只是引用，不是全局优先级、某个 Agent 的固定议程或预留归属。
+C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿，不是永久分给不同 Agent
+的竞争议程。Owner 指代码边界，不代表任务分配或执行授权；认领前重新核对目标 main、
+开放 PR 与 canonical 工作。
+
+| 既有任务 / 工作包 | 精简结果 | 启动条件 |
+| --- | --- | --- |
+| **C3.1 受管操作协议** | Codex、DSH 采用同一操作会话流程；删除重复 binding/profile 校验、handoff/start 编排，以及 DSH 对 Codex 模块内通用 handler 的依赖 | 此重复被选为当前瓶颈时：现有单会话行为、两个真实调用方，保留原生差异 |
+| **C3.2 会话绑定调用方** | 复用共享持久化；以既有完整操作替换调用方重建 binding 和跨 Host 私有导入 | 若独立拆开只剩改名/facade，则与 C3.1 一起交付；role/generation 扩展等待 C1 稳定 |
+| **C4.1 回执到继续决策** | 采用已合格 typed Turn 观察/继续边界；退役被替代的 Python 回执重建与决策 | 保留 journal 恢复与下一工作决策的区别；整合 C1 及已有恢复修复 |
+| **C4.2 外层 worker 采用** | 消费已合格语义结果，移除自行重建的公共重试/继续策略 | C4.1；保留唤醒归属、原回执和不透明命令的不确定性 |
+| **C4.3 结算 adapter 收敛** | 复用 settlement 原语；仅在义务一致时删除第二套步骤/条件解释器 | 候选：比较 Host Todo completion 与 Turn settlement，并对齐在途结算 PR |
+| **C7.1 Worker/进程 adapter 精简** | 复用适用 launch/drain/cleanup helper，删除已证实重复的机制 | 候选：先核对归属、信号/截止时间及对照组语义 |
+| **C8.1 运行 readback** | App/Chat/CLI 消费同一 typed 工作/会话事实，退役被替代的调用方分类 | 候选：role 事实可用且证实分类重复；保留 unknown/coverage 与受众边界 |
+| **C9.1 租约/来源旧路径退役** | 调用方迁移后删除过时正常 writer 路由/wrapper；保留必要 release、fence-close 和原回执恢复 | 跨 RFC 候选：遵循 shared-authority/TS 验收，不作为 controller 启动前置 |
+| **C9.2 契约测试合并** | 共用不变量案例，加薄原生 adapter 测试，替换重复完整流程 fixture | 随所属替换交付；保留独有集成与负例 |
+
+这是九个调查/交付工作包，**不是承诺九个 PR**、固定剩余数量，也不是 C1 合入前必须
+完成的工作。不能因 C3.1 排在前面就选择它，也不能为了可见删代码而放弃当前更有价值的
+正确性、契约交付或 authority 退役成果。若选定 C3.1，C3.2 可以属于同一个可逆 PR。
+只有真实语义依赖约束顺序。现有行为修复和已证实局部精简可以先于 C1 交付；依赖契约
+的切换仍保留该依赖。不能仅凭文件相似就认定候选具备实施条件。
+
+记录所选切片为何推进当前全局成果、考虑过哪些更高价值替代项或在途交付，以及实际
+依赖。交付或新证据出现后重新评估；此盘点不穷尽有价值工作，也不要求 Agent 做完
+一条工作线才能换方向。优先级建议不新增准入或批准 gate。
+
+每个已认领工作包在既有 Todo/PR 内携带来源 owner/调用方、目标边界、具体删除的规则/
+分支、真实路径 oracle、依赖与回退。审计不替其他 Agent 分配任务，也不建立平行任务库。
+可用切片应完成调用方替换和删除；仅对具名外部接口或恢复契约保留 wrapper。记录跨语言
+生产代码总变化、语义 owner、完整事务 runtime crossing，以及下一项代表性规则的
+修改位置。Python LOC 减少或新增共享类不能单独证明精简；不以任意净减行数配额
+替代正确性或必需验证。
+
+复用 [TS 修改局部性收益](typescript-control-plane-migration-v0.zh-CN.md#28-以修改局部性衡量迁移收益)
+及 [smoke 合并规则](../../development/good-smokes.md)。内部行为保持替换需要真实调用方/
+后端证据，无需新设置页面。改变调用方操作/readback 时，仍需 C8 的打包前端失败/恢复
+旅程及首屏证据。C1/默认采用的完整成本与收益资格不变；有界重构不代表完整 RFC 验收。
+
 ## 12. 待决事项
 
 1. **精确 wire 名称与字段映射——contract owner，在 C1 cutover 前。** 优先演进一个
@@ -582,3 +638,11 @@ Native-resume/context 工作保留原 owner；采用其已验收改动，只补�
 3. **资源分配与默认——product/evaluation owner，在 C7–C8 后。** 先用相同模型的
    controller/executor 隔离架构影响；更便宜的 controller 模型与不同预算另行实验。
    完整成果/成本证据支持决定前，profile 保持 opt-in。
+
+## Appendix A: Execution ledger / 执行记录
+
+源码核对及后续交付证据位于
+[`ledger/controller-executor-unified-contract-v0/`](ledger/controller-executor-unified-contract-v0/)。
+目录即索引。规划/源码检查记录不证明 runtime 交付；当前优先级与认领仍在 roadmap 和
+canonical 工作中维护。历史记录保持 append-only，当前规范性计划在本文修订，不能把
+某日审计当作永久执行队列。

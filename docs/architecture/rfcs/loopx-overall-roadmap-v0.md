@@ -204,6 +204,17 @@ benchmark consumer; managed Codex can carry an implementation but proves neither
 by itself. Reuse active context/recovery work. No new Goal, scheduler, parallel
 roadmap, benchmark launch or default promotion follows from these task entries.
 
+The RFC's [responsibility-convergence handoff](controller-executor-unified-contract-v0.md#responsibility-convergence-and-contributor-handoff)
+adds source-backed C3/C4/C7/C8/C9 packages for shared managed-operation flows,
+binding callers, continuation, worker/settlement adapters and conditional old-path
+retirement. Choose among contract delivery, simplification and other current work
+from the global outcome and evidenced bottlenecks, not package order or a fixed
+Agent lane; coordinate in-flight ownership without duplicating it. Reuse existing
+owners and delete replaced rules in real callers. The audit also
+records already-shared code and distinct lifecycles that must not be merged by
+appearance. Packages are claimable slices, not a fixed PR count or new controller
+prerequisites; runtime delivery and qualification remain open.
+
 ### Current priorities after research and acceptance integration
 
 This checkpoint is pinned to main `5550e91bab` (2026-10-23). It reconciles

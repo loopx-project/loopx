@@ -156,6 +156,14 @@ C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-�
 实现载体，但不能单独证明二者。复用活跃的上下文/恢复工作。这些任务项不创建新 Goal、
 scheduler 或并行路线图，不启动 benchmark，不提升默认。
 
+RFC 的[职责收敛交接](controller-executor-unified-contract-v0.zh-CN.md#职责收敛与贡献者交接)
+补充有源码依据的 C3/C4/C7/C8/C9 工作包，覆盖公共受管操作、binding 调用方、继续决策、
+worker/settlement adapter 和有条件的旧路径退役。从全局成果与实际瓶颈选择契约交付、
+精简或其他当前工作，不按工作包行序或固定 Agent 工作线选择；协调在途归属而不重复
+实现。复用已有 owner，在真实调用方删除被替代的规则。核对也列出已经共享的代码，以及不能
+因外形相似就合并的不同生命周期。工作包是可认领切片，不是固定 PR 数量或 controller
+新前置条件；runtime 交付与资格仍未完成。
+
 ### 研究与验收集成后的当前优先级
 
 本检查点固定在 main `5550e91bab`（2026-10-23），核对公共源码交付，不公布私有实验
