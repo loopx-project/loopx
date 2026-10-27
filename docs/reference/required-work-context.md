@@ -283,11 +283,12 @@ setting. Ordinary machine validation still applies to business operations.
 
 Native `quota should-run` and the saved `context-project` entry share the same
 paged presentation. Each returns page zero, a digest-pinned continuation and full
-recovery without another admission. The inline page contains up to 3 KiB and shrinks
-to keep the complete guard stdout, including recovery and instruction fields,
-within 7900 UTF-8 bytes. Without the generated native output configuration, continuations
-request up to 8 KiB of content with `--max-page-output-bytes 7900`, which bounds
-successful JSON stdout including escaping, commands and newline. Consume the inline
+recovery without another admission. Inline and continuation pages use the same
+64000-byte output budget, including recovery, instructions, escaping, commands
+and newline. Content shrinks at UTF-8 boundaries to fit that complete stdout;
+captures that fit finish inline. This default does not depend on a shell output
+declaration. Explicit smaller reader budgets remain available to recover a
+truncated range of the same capture. Consume the inline
 page before following next_command; when the retained-history limit is unknown,
 read one bounded output at a time. This is not a guarantee of model retention.
 Forward exec stdout directly in code mode. Repeating the packet in
@@ -319,12 +320,12 @@ their separate confirmed-input contract.
 For native setup, `quota context-config --codex-app --goal-id GOAL --agent-id AGENT`
 under machine on prepares only that private transport leaf and renders the
 existing hooks, recovery instructions and `config_overrides`. Applying those overrides
-selects 64000-byte continuation outputs and a 20000-token native history limit;
-the initial guard remains within 7900 bytes. The worker applies this configuration
+selects a 20000-token native history limit and declares the existing 64000-byte
+output profile. Both the initial guard and continuations use that page budget,
+including when the shell lacks the declaration. The worker applies this configuration
 automatically inside its isolated opt-in trial. The persistent instruction requests
 22000 tokens for each context-read tool result and 24000 for its code-mode emission,
-forwarding one stdout at a time. Unknown or unsupported output declarations retain
-the small-page default. Remove the generated output overrides together with the
+forwarding one stdout at a time. Remove the generated output overrides together with the
 context setup on rollback; saving a machine preference alone does not apply them.
 This output sizing does not prove retained input, lower fees or task benefit.
 For an SSH Goal, replace `--codex-app`
@@ -529,10 +530,10 @@ Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Co
 SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和 thin/bootstrap 提示，
 沿用可见 Goal 的执行与结算身份；仅启用差分时接入捕获目录，不转换成自动心跳。
 原生 `quota should-run` 与已保存捕获的 `context-project` 共用分页呈现，直接返回第零页、
-固定摘要的后续读取与完整恢复，不另行准入。内联正文最多 3 KiB，必要时缩小，使包含
-恢复字段与完整指引的 guard stdout 不超过 7900 UTF-8 字节。未应用生成的原生输出配置时，后续命令最多请求
-8 KiB 正文，并用 `--max-page-output-bytes 7900` 将成功 JSON stdout（含转义、
-后续命令与换行）限制为 7900 字节。先消费内联页，再跟随 next_command；保留历史
+固定摘要的后续读取与完整恢复，不另行准入。内联页与续页共用 64000 字节输出预算，
+包含恢复字段、完整指引、转义、后续命令与换行；正文按 UTF-8 边界缩小以适配完整 stdout，
+能放下的捕获一次返回。默认值不依赖 shell 输出声明；显式更小的读取预算仍可用于恢复
+同一捕获中被截断的范围。先消费内联页，再跟随 next_command；保留历史
 上限未知时，每次只读一个有界输出。该上限不证明模型保留。Code Mode 直接转发
 exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
 这些短时本地读取命令应前台等到结束；`exec_command` 使用正常的 10000 ms 等待，
@@ -540,10 +541,11 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 `PostToolUse`；模型可见正文完整不等于 hook 观察范围完整。读取器若提前返回，仍须
 消费全部输出片段；hook 覆盖缺失时，下次决定继续全量投递。不伪造读取回执或重跑
 准入来制造差分；丢失上下文后继续该已捕获决定，仍沿它的精确全量恢复引用读取。
-原生配置同时返回 `config_overrides`：应用后，续读输出上限为 64000 字节，原生历史
-上限为 20000 token，首次 guard 仍保持 7900 字节。开启的 benchmark worker 在其
+原生配置同时返回 `config_overrides`：应用后，原生历史上限为 20000 token，并声明已有
+64000 字节输出配置。首次 guard 和续页均使用此分页预算，shell 缺少声明时也一样。
+开启的 benchmark worker 在其
 隔离会话内自动应用；持久指引要求每次续读直接输出预算 22000 token、Code Mode
-输出预算 24000 token，每次直接转发一份 stdout。未知或不支持的输出声明保持小页。
+输出预算 24000 token，每次直接转发一份 stdout。
 回滚时同时移除生成的输出覆盖项；仅保存机器偏好并不会应用这些宿主配置。
 该设置不证明输入保留、总费用降低或任务效果改善。
 读取器校验不可变 capture 的摘要。Post-tool 适配层复用显式输入观察的字节范围校验，
@@ -617,33 +619,30 @@ remains inert and reads the original capture. Failures retain that capture's
 exact digest and Turn receipt; they never rerun admission or spend quota.
 
 With delivery on, a successful saved projection also returns page zero using
-the existing `context_capture_page_v1` fields. Its content is bounded to 3 KiB
-and shrinks against the final presentation's 7900-byte stdout limit, including
-recovery, activation and instruction metadata. Without the generated output profile, subsequent native commands request up to
-8 KiB of content within a 7900-byte successful JSON stdout limit. The optional
-JSON-only `--max-page-output-bytes` flag shrinks content at UTF-8 boundaries and
-preserves the limit in `next_command`. An insufficient limit returns an error
-without a zero-progress page; increase it for the same capture. Omitting the flag
-preserves legacy reader output. Error messages are not subject to an impossible
-page limit, and this option changes no host or retained-history budget.
-When both direct-result and retained-history budgets are known to be sufficient,
-the caller can increase both `--page-bytes` and `--max-page-output-bytes`, for
-example to `32000`, on the same digest-pinned continuation. The body may exceed
-8 KiB only with that explicit output cap, up to the existing capture size limit.
-The cap includes escaping, framing and newline; `next_command` preserves it.
-Codex 0.162.1 qualification uses a 10,000-token history setting and a 12,000-token
-code-mode result budget with one directly forwarded stdout per call. Unknown
-budgets keep the existing 7900-byte native default. A larger requested result
-alone never proves history retention; missing output still needs same-capture
-recovery. The reader flag changes no host setting. The shared native setup described
-above supplies the larger 64000-byte profile and its matching history/execution
-budgets together; only the opted-in worker applies them automatically. A legacy
-consumer that has not applied that setup keeps the existing small-page boundary.
+the existing `context_capture_page_v1` fields. It uses the same 64000-byte
+complete-stdout budget as continuations, including recovery, activation and
+instructions; captures that fit finish inline. JSON `context-read` with no page
+arguments also defaults to 64000 content bytes under a 64000-byte output cap.
+Markdown retains its 4096-byte content default. Explicit page/output arguments
+retain their prior semantics; a page above 8192 bytes still requires a sufficient
+output cap, within the existing capture limit. The JSON-only
+`--max-page-output-bytes` shrinks content at UTF-8 boundaries and persists in
+`next_command`, including for explicitly smaller same-capture recovery. An
+insufficient cap returns an error without a zero-progress page; increase it for
+the same capture. Error messages are not subject to an impossible page limit.
+The reader changes no host or retained-history setting. Historical Codex 0.162.1
+qualification used a 10,000-token history setting and a 12,000-token code-mode
+result budget with one directly forwarded stdout per call; that observation
+does not establish another host's output capacity. The shared native setup above
+supplies matching history/execution budgets; only the opted-in worker applies
+them automatically. Larger defaults never prove history retention, and missing
+output still requires recovery from this same capture.
 Consume `content`, then follow `next_command` through `eof` for full byte coverage.
 The reader verifies the original digest; do not retype or hash the content. The
 existing `command` still restarts at zero for older readers or incomplete inline
 output. If the optional first-page read fails, that same command remains usable.
-Off responses do not add a page or change their existing guidance. No admission
+Off responses do not add an inline page or activate native reuse; their recovery
+references use the same JSON reader default. No admission
 or retention receipt is introduced; an inline page alone cannot prove complete
 input retention.
 
@@ -655,22 +654,20 @@ input retention.
 原始摘要和 Turn 回执，不重新准入或扣减额度。
 
 开启时，成功的已保存投影同时用现有 `context_capture_page_v1` 字段返回第一页。
-该页内容最多 3 KiB，按最终呈现的 7900 字节 stdout 上限缩小，包含恢复、启用配置与
-完整指引元数据；未应用生成的输出配置时，后续原生命令最多请求 8 KiB
-正文，成功 JSON stdout 限制为 7900 字节。可选的 JSON 专用参数
-`--max-page-output-bytes` 按 UTF-8 边界缩减正文，并在 `next_command` 中保留。
-上限不足时返回错误，不返回无进展的分页；增大上限后重读同一捕获。省略该参数
-保持旧读取输出。错误消息不受无法满足的分页上限限制，也不更改宿主或历史输出预算。
-直接输出和保留历史预算均已确认充足时，可以在同一摘要固定的续读命令上同时增大
-`--page-bytes` 和 `--max-page-output-bytes`，例如均为 `32000`。只有显式给出输出
-上限才能请求超过 8 KiB 的正文，最大仍受既有 capture 大小限制；上限包含转义、
-JSON 外层与换行，后续命令继承该值。Codex 0.162.1 定向验证采用 10,000 token 历史
-设置和 12,000 token code-mode 输出预算，每次直接转发一份 stdout。未知预算保持
-7900 字节原生默认；大输出请求不证明历史保留，缺失仍恢复同一 capture。
-读取参数本身不修改宿主设置。上述共享原生配置将 64000 字节分页与配套的历史和执行
-预算一起提供，仅开启的 worker 自动应用；尚未应用该配置的旧读取方保持小页边界。
+该页与续页共用 64000 字节完整 stdout 预算，包含恢复、启用配置与完整指引；能放下的
+捕获一次返回。JSON `context-read` 省略分页参数时，也默认在 64000 字节输出上限下
+请求 64000 字节正文；Markdown 保留 4096 字节正文默认值。显式分页/输出参数保留
+原有语义：超过 8192 字节的页仍须足够的输出上限，且不超过既有 capture 限制。
+JSON 专用参数 `--max-page-output-bytes` 按 UTF-8 边界缩减正文，并在 `next_command`
+中保留，显式更小的同捕获恢复也一样。上限不足时返回错误，不返回无进展分页；
+增大上限后重读同一捕获。错误消息不受无法满足的分页上限限制。
+读取器不修改宿主或保留历史设置。历史 Codex 0.162.1 定向验证采用 10,000 token 历史
+设置和 12,000 token code-mode 输出预算，每次直接转发一份 stdout；该观察不证明
+其他宿主的输出容量。上述共享原生配置提供配套历史和执行预算，仅开启的 worker
+自动应用。较大默认值不证明历史保留，缺失输出仍恢复同一 capture。
 先读取 `content`，再沿 `next_command` 读至 `eof`，确保完整字节覆盖。
 读取器校验原始摘要；无需重抄正文或计算哈希。
 原有 `command` 仍从零开始，供旧读取方或内联输出不完整时重读；可选的首屏读取
-失败时也保留该命令。关闭态不增加分页数据，也不改变既有指引；不新增准入或保留回执；
+失败时也保留该命令。关闭态不增加内联分页或启用原生复用；其恢复引用同样采用 JSON
+读取器默认值。不新增准入或保留回执；
 单页内联内容不证明完整输入仍被保留。

@@ -226,8 +226,8 @@ def register_quota_command(
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
     quota_parser.add_argument("--capture-sha256", help="For context-read/context-project: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
-    quota_parser.add_argument("--page-bytes", type=int, default=4096,
-        help="For context-read: maximum UTF-8 content bytes per page, 256–8192 (default: 4096). "
+    quota_parser.add_argument("--page-bytes", type=int,
+        help="For context-read: maximum UTF-8 content bytes per page (JSON default: 64000 under a 64000-byte stdout budget; Markdown: 4096). "
              "Larger pages require a sufficient --max-page-output-bytes within the capture limit; "
              "use only with known sufficient direct and retained-history output budgets.")
     quota_parser.add_argument("--max-page-output-bytes", type=int,

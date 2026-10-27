@@ -143,7 +143,7 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
     assert code == 0 and json.loads(page["content"]) == original
 
 
-@pytest.mark.parametrize("body", ["Exact requirement.\n" * 700, "完整要求与来源🙂\n" * 700], ids=["ascii", "utf8"])
+@pytest.mark.parametrize("body", ["Exact requirement.\n" * 7000, "完整要求与来源🙂\n" * 7000], ids=["ascii", "utf8"])
 @pytest.mark.parametrize("deep_path", [False, True], ids=["short", "deep"])
 def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp_path, monkeypatch, body, deep_path):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
@@ -170,7 +170,8 @@ def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp
     assert code == 0 and result["mode"] == "full", result
     # Include the final recovery, activation and instruction fields: an inline
     # content cap alone does not bound the actual native guard stdout.
-    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+    assert not result["eof"] and len(result["content"].encode()) > 32000
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 64000
     delivered = Path(result["path"]).read_bytes()
     delivered_digest = hashlib.sha256(delivered).hexdigest()
     assert result["sha256"] == delivered_digest and json.loads(delivered) == json.loads(raw)
@@ -182,7 +183,7 @@ def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp
         argv = shlex.split(page["next_command"])
         code, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
         assert code == 0 and page["offset"] == len(combined)
-        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 64000
         combined += page["content"].encode()
     assert combined == delivered and hashlib.sha256(combined).hexdigest() == delivered_digest
     argv = shlex.split(result["command"])

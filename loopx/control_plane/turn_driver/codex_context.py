@@ -235,7 +235,6 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
         ("The generated native configuration supports 64000-byte context-read outputs and a 20000-token history limit. "
          "Read one continuation per tool call with max_output_tokens=22000. In code-mode, also set the exec "
          "pragma max_output_tokens to 24000 and forward successful stdout directly with text(result.output). "
-         "Keep the initial guard result small; these larger budgets apply to context-read calls only. "
          if page_output_bytes == NATIVE_CONTEXT_LARGE_OUTPUT_BYTES else "") +
         "For code-mode reads, size batches against both direct-result and retained-history output limits; "
         "max_output_tokens alone does not establish the latter. Read one output at a time with "
@@ -342,7 +341,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
 
 
 def _context_pages(value: object) -> list[dict[str, Any]]:
-    """Decode native shell/MCP JSON output; never classify arbitrary prose.
+    """Decode native shell/MCP JSON records; never classify arbitrary prose.
 
     Incomplete JSON has no successful page. The pending delivery stays pending.
     Native output truncation that is not reported here remains an assumption gap.
@@ -351,7 +350,19 @@ def _context_pages(value: object) -> list[dict[str, Any]]:
         try:
             value = json.loads(value)
         except ValueError:
-            return []
+            # CLI stdout is one complete JSON record per line. Other commands
+            # may precede/follow it in the same shell result; do not search for
+            # embedded JSON substrings or accept an incomplete record. Capture
+            # identity and every reported byte are still verified below.
+            pages = []
+            for line in value.splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict):
+                    pages.extend(_context_pages(record))
+            return pages
     if not isinstance(value, dict):
         return []
     if value.get("schema_version") == "context_capture_page_v1":

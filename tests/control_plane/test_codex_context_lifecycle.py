@@ -177,6 +177,59 @@ def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_pa
     assert third["mode"] == "delta"
 
 
+@pytest.mark.parametrize("prefix", ["Pre-quota complete.\n", '{"ok":true}\n'])
+def test_mixed_stdout_complete_records_establish_original_baseline(tmp_path, monkeypatch, prefix):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "plan_summary": {"requirements": "Retain complete requirements. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first)
+    original = Path(first["recovery"]["path"]).read_bytes()
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+        "tool_response": {"exit_code": 0, "output": prefix + json.dumps(pages[0])}})
+    deliver(tmp_path, event, pages[1:])
+    recovered = context._state(tmp_path)
+    assert "pending" not in recovered and recovered["candidate"]["capture_bytes_verified"]
+    assert recovered["candidate"]["capture_file"] == first["recovery"]["path"]
+    _, second = project(tmp_path, "two", payload=payload)
+    assert second["mode"] == "delta" and second["base"] == first["target"]
+    assert Path(first["recovery"]["path"]).read_bytes() == original
+
+
+@pytest.mark.parametrize("damage", ["embedded", "quoted", "truncated", "wrong_bytes", "failed"])
+def test_mixed_stdout_invalid_page_cannot_establish_baseline(tmp_path, monkeypatch, damage):
+    event = setup(tmp_path, monkeypatch)
+    _, first = project(tmp_path, payload={"ok": True, "requirements": "Complete original. " * 2000})
+    pages = read_pages(tmp_path, first)
+    page = dict(pages[0])
+    if damage == "wrong_bytes":
+        page["content"] = "x" + page["content"][1:]
+    text = json.dumps(page)
+    if damage == "embedded":
+        text = "Quoted example: " + text
+    elif damage == "quoted":
+        text = json.dumps(text)
+    elif damage == "truncated":
+        text = text[:-20]
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+        "tool_response": {"exit_code": 1 if damage == "failed" else 0,
+            "output": "Other command output.\n" + text}})
+    deliver(tmp_path, event, pages[1:])
+    assert "candidate" not in context._state(tmp_path)
+    # Same original missing range restores eligibility without another guard.
+    deliver(tmp_path, event, pages[:1])
+    assert context._state(tmp_path)["candidate"]["capture_bytes_verified"]
+
+
+def test_mixed_stdout_can_contain_multiple_complete_page_records(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    _, first = project(tmp_path, payload={"ok": True, "requirements": "Complete original. " * 2000})
+    pages = read_pages(tmp_path, first)
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+        "tool_response": {"exit_code": 0,
+            "output": "Pre-quota.\n" + "\n".join(json.dumps(page) for page in pages) + "\nFinished.\n"}})
+    assert context._state(tmp_path)["candidate"]["capture_bytes_verified"]
+
+
 @pytest.mark.parametrize("location", ["nested", "sibling"])
 def test_command_workdir_preserves_native_session_delta_and_recovery(tmp_path, monkeypatch, location):
     event = setup(tmp_path, monkeypatch)
@@ -282,7 +335,7 @@ def test_native_page_zero_without_metadata_room_retains_original_recovery(tmp_pa
     setup(tmp_path, monkeypatch)
     _, wire = project(tmp_path, payload={"ok": True, "requirements": "完整要求🙂" * 1000})
     before = context._state(tmp_path)
-    monkeypatch.setattr(quota_capture, "NATIVE_CONTEXT_PAGE_OUTPUT_BYTES", 1)
+    monkeypatch.setattr(quota_capture, "native_context_page_budget", lambda: (64000, 1))
     with pytest.raises(QuotaDecisionTransportError, match="saved original decision"):
         quota_capture.native_context_capture_view(wire, Path(wire["recovery"]["path"]).parent,
             context_directory=str(tmp_path))

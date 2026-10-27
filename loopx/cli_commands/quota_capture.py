@@ -18,7 +18,7 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
-    NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
     native_context_page_budget,
     read_context_capture_file as _read_capture,
 )
@@ -96,6 +96,13 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if output_limit is not None and (type(output_limit) is not int or output_limit <= 0
                 or getattr(args, "format", None) != "json"):
             raise ValueError("max-page-output-bytes requires JSON output and a positive integer")
+        if size is None:
+            if args.format == "json":
+                if output_limit is None:
+                    output_limit = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
+                size = max(8192, min(NATIVE_CONTEXT_PAGE_BYTES, output_limit))
+            else:
+                size = 4096
         from ..control_plane.turn_driver.codex_context import codex_context_directory
 
         context_dir = codex_context_directory(directory=getattr(args, "codex_context_dir", None),
@@ -111,9 +118,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             raise ValueError("context-read requires the original capture file and its exact SHA-256")
         from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
 
-        # Unknown host budgets keep the established small-page boundary. A
-        # caller with a qualified direct AND history budget can request one
-        # larger bounded output instead of many CLI/hook/model round trips.
+        # Default JSON reads share the native large-page profile. Explicit
+        # smaller budgets can recover a truncated range of this same capture.
         maximum = max(8192, min(output_limit or 8192, MAX_REQUEST_BYTES))
         if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= maximum:
             raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192; "
@@ -170,8 +176,8 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     # fields. Capping only content leaves the guard itself vulnerable to native
     # truncation before the consumer can discover its continuation command.
     page = read_context_capture(argparse.Namespace(capture_file=reference["path"],
-        capture_sha256=reference["sha256"], offset=0, page_bytes=3072,
-        format="json", max_page_output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES),
+        capture_sha256=reference["sha256"], offset=0, page_bytes=page_bytes,
+        format="json", max_page_output_bytes=output_bytes),
         presentation=result, next_page_bytes=page_bytes, next_page_output_bytes=output_bytes)
     if page["ok"]:
         result = page
@@ -181,7 +187,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             {**result, "ancestry": projected.get("ancestry", 0)})
     else:
         result["instruction"] = instruction + CONTEXT_CAPTURE_PAGE_GUIDANCE
-        if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 > NATIVE_CONTEXT_PAGE_OUTPUT_BYTES:
+        if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 > output_bytes:
             raise QuotaDecisionTransportError("Native context metadata exceeds the output limit; "
                 "read the saved original decision and receipt without rerunning admission.")
     return result
@@ -498,7 +504,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                     +
                     "Normal completed full reads establish an explicit continuity assumption; no input diagnostics or provider change is required. "
                     "The generated output profile uses 64000-byte continuations and a 20000-token native history limit; "
-                    "unknown budgets retain small pages. Known invalidation or incomplete reads keep full recovery. "
+                    "the same page profile applies without the shell override. Explicit smaller reader budgets remain available for truncated-range recovery. "
                     "Set --context-delivery off and remove the generated context configuration, including its output overrides, to restore ordinary output. "
                     "This command installs nothing and grants no execution authority."}
         except (OSError, ValueError, TypeError) as exc:
