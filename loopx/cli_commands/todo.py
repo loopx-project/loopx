@@ -494,12 +494,28 @@ def handle_todo_command(
                 claimed_by=args.claimed_by,
                 agent_id=args.agent_id,
                 claim_only=True,
+                manage_execution=(args.agent_id is not None and args.agent_id == args.claimed_by
+                    and args.task_lease_idempotency_key is None and args.task_lease_expected_version is None),
                 claim_operation_id=args.claim_operation_id,
                 task_lease_idempotency_key=args.task_lease_idempotency_key,
                 task_lease_expected_version=args.task_lease_expected_version,
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
             )
+            if payload.get("ok") and payload.get("execution_managed") and not args.dry_run:
+                route = ["loopx", "--registry", str(registry_path), "--runtime-root",
+                    str(resolve_runtime_root(load_registry(registry_path), runtime_root_arg)), "--format", "json"]
+                selected = ["--goal-id", args.goal_id, "--todo-id", args.todo_id,
+                    "--agent-id", args.agent_id, "--claim-operation-id", payload["claim_operation_id"]]
+                payload["next_cli_actions"] = [shlex.join([*route, "todo", action, *selected, *extra]) for action, extra in (
+                    ("update", ["--update-operation-id", "<progress-operation-id>", "--note", "<progress>"]),
+                    ("complete", ["--evidence", "<validated-evidence>"]),
+                )]
+                payload["instruction"] = "Continue the task. Use this original claim reference for progress or completion; retain normal Turn settlement when applicable."
+                # Normal callers need the accepted task reference, not lease
+                # counters or a second inline copy of the native receipt.
+                for internal in ("lease", "lease_changed", "lease_idempotent", "original_receipt"):
+                    payload.pop(internal, None)
         elif args.todo_command == "update":
             validate_todo_update_options(args)
             payload = update_goal_todo(
@@ -507,6 +523,7 @@ def handle_todo_command(
                 runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id,
                 todo_id=args.todo_id,
+                claim_operation_id=args.claim_operation_id,
                 text=args.text,
                 priority=args.priority,
                 clear_priority=args.clear_priority,
@@ -667,6 +684,7 @@ def handle_todo_command(
                     runtime_root_arg=runtime_root_arg,
                     goal_id=args.goal_id,
                     todo_id=args.todo_id,
+                    claim_operation_id=args.claim_operation_id,
                     role=args.role,
                     decision_outcome=args.decision_outcome,
                     evidence=args.evidence,

@@ -303,6 +303,7 @@ def update_goal_todo(
     clear_claim: bool = False,
     claim_only: bool = False,
     claim_operation_id: str | None = None,
+    manage_execution: bool = False,
     update_operation_id: str | None = None,
     update_expected_provider_revision: str | None = None,
     update_expected_registry_sha256: str | None = None,
@@ -337,9 +338,6 @@ def update_goal_todo(
         raise ValueError(
             "todo update accepts either resume_when or clear_resume_when, not both"
         )
-    if claim_operation_id is not None:
-        if not claim_only:
-            raise ValueError("claim_operation_id is supported only by todo claim")
     if task_lease_expected_version is not None and task_lease_idempotency_key is None:
         raise ValueError(
             "--task-lease-expected-version requires --task-lease-idempotency-key"
@@ -379,6 +377,7 @@ def update_goal_todo(
             actor_agent_id=agent_id,
             dry_run=dry_run,
             operation_id=claim_operation_id,
+            manage_execution=manage_execution,
             task_lease_idempotency_key=task_lease_idempotency_key,
             task_lease_expected_version=task_lease_expected_version,
             project=project,
@@ -423,6 +422,7 @@ def update_goal_todo(
             actor_agent_id=agent_id, role=role, text=text, note=note, dry_run=dry_run,
             project=project, state_file=state_file,
             operation_id=update_operation_id,
+            claim_operation_id=claim_operation_id,
             authority_reason=authority_reason,
             expected_provider_revision=update_expected_provider_revision,
             expected_registry_sha256=update_expected_registry_sha256,
@@ -455,6 +455,7 @@ def complete_goal_todo(
     completion_validation_workspace_path: Path | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    claim_operation_id: str | None = None,
     note: str | None = None,
     no_followup: bool = False,
     successor_todo_ids: list[str] | None = None,

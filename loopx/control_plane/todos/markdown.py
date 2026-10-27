@@ -309,6 +309,10 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         if payload.get("instruction"):
             lines.extend(["", str(payload["instruction"])])
         lines.extend(_render_settlement_plan(payload["settlement_plan"]))
+    if not payload.get("error") and payload.get("execution_managed"):
+        lines.extend(["", f"- claim_operation_id: `{payload['claim_operation_id']}`"])
+        for command in payload.get("next_cli_actions", []):
+            lines.extend(["", "```sh", command, "```"])
     correctness = payload.get("local_state_write_correctness")
     if isinstance(correctness, dict):
         intent = correctness.get("write_intent") if isinstance(correctness.get("write_intent"), dict) else {}

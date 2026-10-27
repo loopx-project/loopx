@@ -134,6 +134,7 @@ def route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any]
         completion_validation_workspace_path=(
             call.get("completion_validation_workspace_path") if complete else None
         ),
+        claim_operation_id=call.get("claim_operation_id"),
         task_lease_idempotency_key=call.get("task_lease_idempotency_key"),
         task_lease_expected_version=_non_negative_integer(
             call.get("task_lease_expected_version"),
@@ -259,6 +260,7 @@ def terminal_canonical_todo_if_promoted(
     completion_identity_source: str | None,
     completion_delivery_workspace: Mapping[str, Any] | None,
     completion_validation_workspace_path: Path | None,
+    claim_operation_id: str | None,
     task_lease_idempotency_key: str | None,
     task_lease_expected_version: int | None,
     no_followup: bool,
@@ -362,7 +364,8 @@ def terminal_canonical_todo_if_promoted(
             and target.get("task_class") == "continuous_monitor"
         )
         request = {
-            "schema_version": _TERMINAL_REQUEST_SCHEMA,
+            "schema_version": ("loopx_local_coordination_todo_terminal_lifecycle_request_v4"
+                               if claim_operation_id is not None else _TERMINAL_REQUEST_SCHEMA),
             **({"review_basis": dict(review_basis)} if review_basis is not None else {}),
             **({"expected_todo_text_sha256": expected_todo_text_sha256}
                if expected_todo_text_sha256 is not None or require_captured_todo_text else {}),
@@ -389,6 +392,7 @@ def terminal_canonical_todo_if_promoted(
                     completion_turn_key=completion_turn_key,
                 )}
             ),
+            **({"claim_operation_id": claim_operation_id} if claim_operation_id is not None else {}),
             "lease_idempotency_key": task_lease_idempotency_key,
             "lease_expected_version": task_lease_expected_version,
             "allow_user_gate_auto_acquire": command == "complete",

@@ -154,6 +154,7 @@ def claim_canonical_todo_if_promoted(
     operation_id: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    manage_execution: bool = False,
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any]:
@@ -163,7 +164,8 @@ def claim_canonical_todo_if_promoted(
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
-            "schema_version": LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA,
+            "schema_version": ("loopx_local_coordination_todo_claim_request_v2" if manage_execution
+                               else LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA),
             "runtime_root": str(runtime_root.expanduser().resolve(strict=False)),
             "goal_id": goal_id,
             "todo_id": todo_id,
@@ -177,6 +179,7 @@ def claim_canonical_todo_if_promoted(
                 if operation_id is not None
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
+            **({"manage_execution": True} if manage_execution else {}),
             "lease_request": (
                 {
                     "idempotency_key": task_lease_idempotency_key,

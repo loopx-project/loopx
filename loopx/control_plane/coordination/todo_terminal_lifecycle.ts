@@ -1,3 +1,4 @@
+import {claimExecutionReference, claimExecutionProof} from "./claim_execution.ts";
 import {HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {planUserCompletion, requireCompletionDecisionOutcome} from "../todos/user_completion.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
@@ -113,6 +114,7 @@ interface CoordinationTodoTerminalLifecycleBaseInput {
   readonly lifecycle_grants: readonly JsonObject[];
   readonly authority_reason: string | null;
   readonly decision_outcome: typeof DECISION_OUTCOMES[number] | null;
+  readonly claim_operation_id?: string;
   readonly lease_idempotency_key: string | null;
   readonly lease_expected_version: number | null;
   readonly allow_user_gate_auto_acquire: boolean;
@@ -418,6 +420,7 @@ function normalizeTerminalInput(
     authority_reason: optionalString(raw.authority_reason, "authority_reason"),
     decision_outcome: raw.decision_outcome === null
       ? null : requireLiteral(raw.decision_outcome, DECISION_OUTCOMES, "decision_outcome"),
+    ...(raw.claim_operation_id == null ? {} : {claim_operation_id: claimExecutionReference(raw.claim_operation_id, raw.lease_idempotency_key, raw.lease_expected_version)}),
     lease_idempotency_key: optionalString(raw.lease_idempotency_key, "lease_idempotency_key"),
     lease_expected_version: optionalSafeInteger(
       raw.lease_expected_version,
@@ -518,6 +521,7 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
       expected_provider_revision: input.user_update.expected_provider_revision ?? null,
       expected_registry_sha256: input.user_update.expected_registry_sha256 ?? null,
     }}),
+    ...(input.claim_operation_id === undefined ? {} : {claim_operation_id: input.claim_operation_id}),
     actor_agent_id: input.actor_agent_id,
     authority_reason: input.authority_reason,
     decision_outcome: input.decision_outcome,
@@ -1250,6 +1254,10 @@ export async function executeCoordinationTodoTerminalLifecycle(
     }
     head = observation.authority;
   }
+  if (input.claim_operation_id !== undefined) {
+    try { input = {...input, ...await claimExecutionProof(store, head.head, input, input.claim_operation_id, input.requested_no_followup), claim_operation_id: undefined}; }
+    catch (error) { return terminalFailure("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable"); }
+  }
   let update: NormalizedCoordinationTodoUpdateInput | undefined;
   if (input.user_update !== undefined) {
     try {
@@ -1553,7 +1561,10 @@ export async function executeCoordinationTodoTerminalLifecycle(
           error instanceof Error ? error.message : "Invalid original completion identity");
       }
       if (fence.outcome === "continue" && fence.reason === "same_turn_terminal_upgrade") {
-        const originalInput = {...input, requested_no_followup: false,
+        const originalInput = {...input,
+          ...(normalized.claim_operation_id === undefined ? {} : {claim_operation_id: normalized.claim_operation_id,
+            lease_idempotency_key: normalized.lease_idempotency_key, lease_expected_version: normalized.lease_expected_version}),
+          requested_no_followup: false,
           operation_id: completionTurnOperationId(input, false)};
         const original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
         if (original === null) return terminalFailure("terminal_completion_receipt_required",

@@ -104,6 +104,9 @@ import {
 export const LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_claim_request_v0";
 export const LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v1";
+export const LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2";
+export const LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA = "loopx_local_coordination_todo_update_request_v6";
+export const LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v4";
 export const LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_create_request_v0";
 export const LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v1";
@@ -1026,11 +1029,14 @@ export async function claimLocalCoordinationTodo(
   try {
     const input = requireJsonObject(value, "local coordination Todo claim request");
     if (input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA) {
+        input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA) {
       throw new Error("local coordination Todo claim request schema mismatch");
     }
+    if (Object.hasOwn(input, "manage_execution") && input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA)
+      throw new TypeError("Managed execution requires claim request v2");
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
-      input.schema_version === LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA);
+      input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA);
     if (typeof input.dry_run !== "boolean") {
       throw new Error("dry_run must be a JSON boolean");
     }
@@ -1076,6 +1082,7 @@ export async function claimLocalCoordinationTodo(
         registered_agents: registeredAgents,
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         lease_request: leaseRequest,
+        ...(input.manage_execution === undefined ? {} : {manage_execution: input.manage_execution as boolean}),
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),
       }, authoritySourcesCurrent);
@@ -1186,9 +1193,12 @@ export async function updateLocalCoordinationTodo(
         input.schema_version !== COORDINATION_TODO_REVIEWED_UPDATE_REQUEST_SCHEMA &&
         input.schema_version !== COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA &&
         input.schema_version !== COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA &&
-        input.schema_version !== COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA) {
+        input.schema_version !== COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA) {
       throw new TypeError("local coordination Todo update request schema mismatch");
     }
+    if (Object.hasOwn(input, "claim_operation_id") && input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA)
+      throw new TypeError("Claim execution reference requires update request v6");
     const planningIntent = input.planning_intent == null ? undefined :
       requireJsonObject(input.planning_intent, "Todo planning intent");
     if (planningIntent && Object.keys(planningIntent).length &&
@@ -1212,7 +1222,8 @@ export async function updateLocalCoordinationTodo(
     if (validationRevisionUpdate && input.completion_validation_revision == null) {
       throw new TypeError("Completion validation revision update requires its revision payload");
     }
-    const reviewed = observationUpdate || completionUpdate || validationRevisionUpdate ||
+    const reviewed = input.schema_version === LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA ||
+      observationUpdate || completionUpdate || validationRevisionUpdate ||
       input.schema_version === COORDINATION_TODO_REVIEWED_UPDATE_REQUEST_SCHEMA;
     if (!reviewed && ["lifecycle_grants", "authority_reason", "registry_source",
       "expected_provider_revision", "expected_registry_sha256"].some(field => Object.hasOwn(input, field))) {
@@ -1250,6 +1261,7 @@ export async function updateLocalCoordinationTodo(
         lease_idempotency_key: input.lease_idempotency_key == null ? null :
           requireAuthorityStoreId(input.lease_idempotency_key, "lease_idempotency_key"),
         lease_expected_version: optionalNonNegativeSafeInteger(input.lease_expected_version, "lease_expected_version"),
+        ...(input.claim_operation_id == null ? {} : {claim_operation_id: requireAuthorityStoreId(input.claim_operation_id, "claim_operation_id")}),
         patch: requireJsonObject(input.patch, "Todo update patch"),
         planning_intent: planningIntent,
         ...(observationUpdate ? {
@@ -1287,9 +1299,12 @@ export async function terminalLifecycleLocalCoordinationTodo(
     decision_read_from_provider: true, legacy_fallback_used: false};
   try {
     const input = requireJsonObject(value, "local coordination Todo terminal request");
-    if (input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA) {
+    if (input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA) {
       throw new TypeError("local coordination Todo terminal request schema mismatch; regenerate with the current runtime");
     }
+    if (Object.hasOwn(input, "claim_operation_id") && input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA)
+      throw new TypeError("Claim execution reference requires terminal request v4");
     const operationIntent = decodeTerminalOperationIntent(input);
     const reviewBasis = input.review_basis == null ? undefined : requireJsonObject(input.review_basis, "terminal review basis");
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input, true, reviewBasis?.registry_sha256);
@@ -1353,6 +1368,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
           input.lease_idempotency_key === null || input.lease_idempotency_key === undefined
             ? null : requireAuthorityStoreId(input.lease_idempotency_key, "lease idempotency key"),
         lease_expected_version: leaseExpectedVersion,
+        ...(input.claim_operation_id == null ? {} : {claim_operation_id: requireAuthorityStoreId(input.claim_operation_id, "claim_operation_id")}),
         allow_user_gate_auto_acquire: input.allow_user_gate_auto_acquire as boolean,
         requested_no_followup: input.requested_no_followup as boolean,
         requested_completion_identity_source:

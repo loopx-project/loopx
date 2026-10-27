@@ -1836,3 +1836,21 @@ test("an engagement fence does not authorize retired legacy task-lease writers",
     backup_required: true,
   });
 });
+
+test("managed execution fields cannot be ignored by older public transports", async () => {
+  const runtime = await import("../../loopx/control_plane/coordination/local_authority_runtime.ts");
+  const noStore = {createStore: () => {throw new Error("must reject before opening a provider");}};
+  for (const v of [0, 1]) {
+    const result = await runtime.claimLocalCoordinationTodo({schema_version: `loopx_local_coordination_todo_claim_request_v${v}`,
+      manage_execution: true}, noStore);
+    assert.match(String(result.reason), /requires claim request v2/);
+  }
+  for (const v of [0, 1, 2, 3, 4, 5]) {
+    const result = await runtime.updateLocalCoordinationTodo({schema_version: `loopx_local_coordination_todo_update_request_v${v}`,
+      claim_operation_id: "original-claim"}, noStore);
+    assert.match(String(result.reason), /requires update request v6/);
+  }
+  const terminal = await runtime.terminalLifecycleLocalCoordinationTodo({
+    schema_version: "loopx_local_coordination_todo_terminal_lifecycle_request_v3", claim_operation_id: "original-claim"}, noStore);
+  assert.match(String(terminal.reason), /requires terminal request v4/);
+});

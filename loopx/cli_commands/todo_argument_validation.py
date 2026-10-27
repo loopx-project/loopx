@@ -612,8 +612,8 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         raise ValueError("--update-operation-id is supported only by todo update")
     if getattr(args, "update_expected_provider_revision", None) is not None and args.todo_command != "update":
         raise ValueError("--update-expected-provider-revision is supported only by todo update")
-    if getattr(args, "claim_operation_id", None) is not None and args.todo_command != "claim":
-        raise ValueError("--claim-operation-id is supported only by todo claim")
+    if getattr(args, "claim_operation_id", None) is not None and args.todo_command not in {"claim", "update", "complete"}:
+        raise ValueError("--claim-operation-id is supported only by todo claim/update/complete")
     if (
         getattr(args, "completion_identity_key", None)
         and args.todo_command != "complete"
