@@ -38,7 +38,8 @@ def _checkpoint_effect(method: str, request: dict[str, Any]) -> Any:
         # RPC wire. Only this locked local checkpoint path opts into the exact,
         # digest-bound same-UID snapshot transport; default effects stay bounded.
         return effect_runtime_result(method, request,
-            large_local_snapshot=method != "goal.checkpoint_read_context.inspect_attempt")
+            large_local_snapshot=method not in ("goal.checkpoint_read_context.inspect_attempt",
+                                                "goal.checkpoint_read_context.inspect_history"))
     except EffectRuntimeRejected as error:
         raise CheckpointReadContextRejected({"ok": False, "error": str(error),
             "error_code": error.diagnostic_code, "reread_required": False}) from error
@@ -434,21 +435,32 @@ def first_delivery_progress(
     committed = False
     selected: dict[str, Any] = {}
     unknown = observation_unknown
+    read_unavailable = False
     try:
         if not first_delivery_context_enrolled(root, identity) and not checkpoint_continuation_required(readback):
             return None
     except (ValueError, OSError):
-        unknown = True
+        read_unavailable = True
     try:
         if canonical_todos is None:
             canonical_todos = _delivery_observation_todos(root, identity.goal_id, registry_path)
         selected = next((todo for todo in canonical_todos if todo["todo_id"] == identity.todo_id), {})
         committed = selected.get("status") == "done" and selected.get("completion_turn_key") in {identity.effect_id, identity.turn_instance_id}
+    except (ValueError, OSError):
+        unknown = True
+    try:
         direction_path = _receipt_path(root, identity)
         direction = _read_context_receipt(direction_path) if direction_path.exists() else {}
     except (ValueError, OSError):
         direction = {}
-        unknown = True
+        read_unavailable = True
+    if read_unavailable:
+        try:
+            proof = _checkpoint_effect("goal.checkpoint_read_context.inspect_attempt", {
+                "runtime_root": str(root.resolve()), "identity": identity.as_dict(), "purpose": "first_delivery"})
+            unknown = unknown or proof.get("status") != "committed"
+        except (ValueError, OSError):
+            unknown = True
     progress = effect_runtime_result("turn.first_delivery.evaluate", {
         "phase": "project", "result_committed": committed,
         "checkpoint_continuation": checkpoint_continuation_required(readback),
@@ -490,8 +502,9 @@ def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | No
                                    *, registry_path: Path | None = None) -> dict[str, Any] | None:
     """Isolate historical observation faults; admission still uses strict reads.
 
-    An unreadable digest cannot be assigned to an Agent. Keep that Goal-scoped
-    uncertainty visible without replacing another lane's normal next action.
+    An unreadable digest without verified indexed proof cannot be assigned to
+    an Agent. Keep that Goal-scoped uncertainty visible without replacing
+    another lane's normal next action; proved bindings retain pending accounting.
     """
     identities = {}
     errors = []
@@ -516,6 +529,18 @@ def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | No
             errors.append({"scope": "goal", "code": "checkpoint_receipt_invalid", "receipt": path.stem})
             continue
         identities[identity.effect_id] = identity.as_dict()
+    if errors:
+        try:
+            recovered = _checkpoint_effect("goal.checkpoint_read_context.inspect_history", {
+                "runtime_root": str(root.resolve()), "goal_id": goal_id,
+                "receipt_names": [error["receipt"] + ".json" for error in errors]})
+            for item in recovered["verified"]:
+                identity = SettlementIdentity.from_runtime_payload(item["identity"])
+                errors = [error for error in errors if error["receipt"] + ".json" != item["receipt_name"]]
+                if agent_id is None or identity.agent_id == agent_id:
+                    identities[identity.effect_id] = identity.as_dict()
+        except (ValueError, OSError):
+            pass  # Unproved history remains explicitly unavailable.
     # Share the complete current authority snapshot across observed identities.
     # Do not cap the historical scan or silently lose older pending work.
     canonical_todos = None

@@ -371,6 +371,7 @@ export function createEffectRuntimeHandlers(
     ["goal.checkpoint_read_context.commit", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({commitCheckpoint}) => params => commitCheckpoint(params, context.authorityProvider))],
     ["goal.checkpoint_read_context.inspect_replay", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointReplay}) => inspectCheckpointReplay)],
     ["goal.checkpoint_read_context.inspect_attempt", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointAttempt}) => inspectCheckpointAttempt)],
+    ["goal.checkpoint_read_context.inspect_history", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointReadHistory}) => inspectCheckpointReadHistory)],
     ["goal.vision_wait.coverage", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectVisionWaitCoverage}) => projectVisionWaitCoverage)],
     ["goal.vision_wait.project", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectGoalVisionWaitState}) => projectGoalVisionWaitState)],
     ["goal.shared_goal_alignment.project", lazyHandler(() => import("./goals/shared_goal_alignment.ts"), ({projectSharedGoalAlignment}) => projectSharedGoalAlignment)],

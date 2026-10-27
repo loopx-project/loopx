@@ -129,6 +129,53 @@ function writeReceipt(path: string, receipt: JsonObject): void {
   renameSync(temporary, path);
 }
 
+function checkpointReceiptName(effect: string, work: boolean): string {
+  return createHash("sha256").update(effect + (work ? ":delivery_result" : "")).digest("hex") + ".json";
+}
+
+function indexedReadProof(rows: JsonObject[], goal: string, name: string): {row: JsonObject; purpose: string} | null {
+  for (const row of rows) {
+    const binding = jsonObject(row.settlement_identity);
+    if (binding?.goal_id !== goal) continue;
+    const effect = binding.effect_id;
+    if (typeof effect !== "string") continue;
+    const direction = jsonObject(row.vision_checkpoint)?.satisfied === true &&
+      jsonObject(jsonObject(row.vision_checkpoint)?.read_context) !== null;
+    if (direction && name === checkpointReceiptName(effect, false)) return {row, purpose: "first_delivery"};
+    if ((direction || row.result_work_context != null) && name === checkpointReceiptName(effect, true)) {
+      return {row, purpose: row.result_work_context != null ? "delivery_result" : "first_delivery"};
+    }
+  }
+  return null;
+}
+
+/** Observation only: recover bindings from verified indexed effects, never from
+ * unreadable bytes. Pending accounting remains visible under the recovered identity. */
+export function inspectCheckpointReadHistory(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "checkpoint read history inspection");
+  const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
+  const goal = goalPathSegment(request.goal_id);
+  const rows = indexBytes(join(root, "goals", goal, "runs", "index.jsonl"))
+    .toString("utf8").split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line) as JsonObject);
+  if (!Array.isArray(request.receipt_names)) throw new EffectRuntimeRequestError("receipt_names must be an array");
+  const verified: JsonObject[] = [];
+  for (const name of request.receipt_names) {
+    if (typeof name !== "string" || !name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5))) {
+      throw new EffectRuntimeRequestError("invalid checkpoint receipt name");
+    }
+    const proof = indexedReadProof(rows, goal, name);
+    if (!proof) continue;
+    try {
+      const result = inspectCheckpointAttempt({runtime_root: root, identity: proof.row.settlement_identity,
+        purpose: proof.purpose});
+      if (result.status === "committed") verified.push({receipt_name: name, identity: proof.row.settlement_identity});
+    } catch (error) {
+      if (!(error instanceof EffectRuntimeRequestError) || error.code !== "checkpoint_commit_unknown") throw error;
+    }
+  }
+  return {ok: true, verified};
+}
+
 /** Caller holds the index lock. Unindexed artifacts never prove a committed
  * direction. A completely absent attempt may be retried; torn writes stay held. */
 export function inspectCheckpointAttempt(value: unknown): JsonObject {
@@ -143,7 +190,7 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
     (work ? row.result_work_context != null : jsonObject(row.vision_checkpoint)?.satisfied === true &&
       jsonObject(row.vision_checkpoint)?.read_context != null));
   const path = join(root, "goals", goalPathSegment(identity.goal_id), "checkpoint-contexts",
-    `${createHash("sha256").update(requireNonEmptyString(identity.effect_id, "effect_id") + (work ? ":delivery_result" : "")).digest("hex")}.json`);
+    checkpointReceiptName(requireNonEmptyString(identity.effect_id, "effect_id"), work));
   let receipt: JsonObject | null = null;
   let receiptError: unknown;
   try { receipt = requireJsonObject(JSON.parse(readFileSync(path, "utf8")), "read receipt"); }
@@ -168,16 +215,25 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
     let names: string[] = [];
     try { names = readdirSync(contexts); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    const indexed = new Set(indexBytes(join(runsDir, "index.jsonl")).toString("utf8").split(/\r?\n/)
-      .filter(line => line.trim()).map(line => jsonObject(JSON.parse(line).settlement_identity)?.effect_id));
-    const resultReadName = `${createHash("sha256").update(requireNonEmptyString(identity.effect_id, "effect_id") + ":delivery_result").digest("hex")}.json`;
+    const indexed = new Set(rows.map(row => jsonObject(row.settlement_identity)?.effect_id));
+    const resultReadName = checkpointReceiptName(requireNonEmptyString(identity.effect_id, "effect_id"), true);
     for (const name of names.filter(name => name.endsWith(".json") && BARE_SHA256_PATTERN.test(name.slice(0, -5)))) {
       // This disjoint path can hold only the original work read, never a direction append.
       // Losing it cannot erase the successful result or create direction uncertainty.
       if (name === resultReadName) continue;
       let other: JsonObject;
       try { other = requireJsonObject(JSON.parse(readFileSync(join(contexts, name), "utf8")), "read receipt"); }
-      catch { unknown("checkpoint read receipt is unavailable; preserve original Turn artifacts before retrying"); }
+      catch {
+        const proof = indexedReadProof(rows, goalPathSegment(identity.goal_id), name);
+        if (proof) {
+          // Reuse receipt-first artifact verification without scanning other reads.
+          // A work proof alone cannot establish that a direction append committed.
+          const verified = inspectCheckpointAttempt({runtime_root: root, identity: proof.row.settlement_identity,
+            purpose: proof.purpose});
+          if (verified.status === "committed") continue;
+        }
+        unknown("checkpoint read receipt is unavailable; preserve original Turn artifacts before retrying");
+      }
       const owner = jsonObject(other.identity);
       if (other.purpose === "first_delivery" && other.commit_attempt != null && owner?.effect_id !== identity.effect_id &&
           owner?.agent_id === identity.agent_id && owner?.todo_id === identity.todo_id && !indexed.has(owner?.effect_id)) {
