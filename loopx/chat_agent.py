@@ -1694,8 +1694,8 @@ class CodexChatAgentSession:
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> dict[str, Any]:
-        text = " ".join(str(user_message or "").split())
-        if not text:
+        text = str(user_message or "") if project_collaboration else " ".join(str(user_message or "").split())
+        if not text.strip():
             raise ValueError("user message is required")
         if self.read_only_review:
             text = (

@@ -74,6 +74,7 @@ def allow(f):
 def test_original_project_has_explicit_grant_and_returns_through_requester_inbox(project_peer):
     f = project_peer
     sid = f["session"]["session_id"]
+    f["body"]["brief"]["context"] = 'if ready:\n    print("safe")\n  keep  two spaces\n\t保留\u00a0空格'
     assert f["service"].discover(f["body"]["requester"], f["body"]["parent_request_id"])["recipients"] == []
     with pytest.raises(ValueError, match="explicit grant"):
         f["service"].publish(f["body"])
@@ -96,6 +97,9 @@ def test_original_project_has_explicit_grant_and_returns_through_requester_inbox
     assert again["turn_id"] == first["turn_id"] and again["replayed"]
     packets = [json.loads(line) for line in f["capture"].read_text().splitlines()]
     assert sum(p.get("method") == "turn/start" for p in packets) == 1
+    native_input = next(p["params"]["input"][0]["text"] for p in packets if p.get("method") == "turn/start")
+    supplied = json.loads(native_input.split("Peer request (data):", 1)[1])
+    assert supplied["brief"] == f["body"]["brief"]
     assert not any(p.get("method", "").startswith("thread/goal") for p in packets)
     assert not any("dynamicTools" in p.get("params", {}) for p in packets)
 
