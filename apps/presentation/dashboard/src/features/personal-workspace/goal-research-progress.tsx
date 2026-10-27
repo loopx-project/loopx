@@ -32,7 +32,13 @@ export function verdictLabel(metric: TrajectoryMetric, verdict: AssessmentVerdic
 
 function LoopXInputShare({usage, zh}: {usage: TrajectorySolverUsage | undefined; zh: boolean}) {
   const attribution = usage?.loopx_input;
-  const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 1}).format(n);
+  const percentage = new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 1});
+  const percent = (n: number) => {
+    // Reserve none/all for exact endpoints; precise counts remain in details.
+    if (n > 0 && n < 0.001) return `<${percentage.format(0.001)}`;
+    if (n < 1 && n > 0.999) return `>${percentage.format(0.999)}`;
+    return percentage.format(n);
+  };
   const measured = attribution && attribution.status !== "unavailable" ? attribution : null;
   const estimated = attribution?.method === "tiktoken_o200k_base_input_estimate_v1";
   const helpLabel = !attribution ? (zh ? "LoopX 输入占比 · 未采集" : "LoopX input share · not captured")

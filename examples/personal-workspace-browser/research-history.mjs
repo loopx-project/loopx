@@ -572,7 +572,7 @@ export const researchHistoryScenario = {
     let holdCitation = false, failedCitation = false, citationStarted, releaseCitation;
     let unavailableAnalysis = false, failedAnalysisPack = "a", episodeMetadataLimit = null, comparisonFixture = false;
     let analysisWrites = 0, analysisReads = 0, localizedFixture = false, continuationFixture = false, equivalentContinuation = false;
-    let versionComparison = "shared";
+    let versionComparison = "shared", inputShare;
     let unavailableTask = false;
     const taskReads = [];
     try {
@@ -596,6 +596,16 @@ export const researchHistoryScenario = {
           const selected = ["b", "c", "d"].find(id => query.get("pack_id") === id.repeat(64)) ?? "a";
           if (holdOldAnalysis && selected === "a") {slowStarted(); await new Promise(resolve => {releaseOld = resolve;});}
           const readback = comparisonFixture ? comparisonReadback() : analysisReadback(selected);
+          if (inputShare !== undefined) {
+            const usage = readback.pack.solver_usage.projection;
+            Object.assign(usage, {input_tokens: 1_000_000, cached_input_tokens: 600_000, uncached_input_tokens: 400_000, loopx_input: inputShare});
+            Object.assign(usage.turns[0].usage, {input_tokens: usage.input_tokens, cached_input_tokens: usage.cached_input_tokens, uncached_input_tokens: usage.uncached_input_tokens});
+            usage.request_coverage = {method: 'codex_request_reconciliation_v1', status: 'verified', counter_basis: 'all_requests',
+              unique_requests: 1, compaction_requests: 0, duplicate_records: 0, counter_observations: 1, observed_through: usage.end,
+              all_requests: {input_tokens: usage.input_tokens, cached_input_tokens: usage.cached_input_tokens, cache_write_input_tokens: 0,
+                output_tokens: usage.output_tokens, reasoning_output_tokens: 0, total_tokens: usage.input_tokens + usage.output_tokens},
+              compaction: {input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0, total_tokens: 0}};
+          }
           if (continuationFixture) {
             const p = readback.pack, base = selected === 'b';
             p.pack_id = (base ? 'b' : 'a').repeat(64);
@@ -1072,6 +1082,51 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       const progress = history.getByRole("region", {name: "长程效果与用量", exact: true});
       await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
       const effects = progress.locator('.research-effect-metrics');
+      await effects.waitFor();
+      // A measured nonzero share must not read as none, or a near-full share
+      // as all. Exercise the actual reader, including its exact counts.
+      for (const locale of ['zh-CN', 'en']) {
+        await page.evaluate(locale => localStorage.setItem('loopx-pw-locale', locale), locale);
+        const localizedProgress = page.getByRole('region', {name: locale === 'zh-CN' ? '长程效果与用量' : 'Long-horizon results and usage', exact: true});
+        for (const [tokens, expected] of [[20, '<0.1%'], [0, '0%'], [999_999, '>99.9%'], [1_000_000, '100%']]) {
+          inputShare = {method: 'provider_input_token_attribution_v1', status: 'complete',
+            attributed_requests: 1, total_requests: 1, attributed_input_tokens: 1_000_000, total_input_tokens: 1_000_000,
+            loopx_input_tokens: tokens, loopx_cached_input_tokens: null, input_fraction: tokens / 1_000_000,
+            uncached_input_fraction: null, input_fraction_bounds: [tokens / 1_000_000, tokens / 1_000_000]};
+          await page.reload({waitUntil: 'networkidle'});
+          const basis = localizedProgress.locator('.research-progress-basis');
+          if (!await basis.evaluate(e => e.open)) {
+            await basis.locator(':scope > summary').focus();
+            await page.keyboard.press('Enter');
+          }
+          const share = localizedProgress.locator('[data-loopx-input-share]');
+          await share.waitFor({state: 'visible'});
+          if (tokens === 20) for (const width of [1280, 390]) {
+            await page.setViewportSize({width, height: width === 390 ? 844 : 900});
+            await share.evaluate(e => e.closest('.research-usage').scrollIntoView({block: 'start', behavior: 'instant'}));
+            await page.screenshot({path: resolve(outputDir, `research-input-share-${locale}-${width}.png`), animations: 'disabled'});
+            assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+          }
+          assert.equal(await share.textContent(), expected, 'None and all are reserved for exact endpoints');
+          const detail = share.locator('xpath=../..').locator('.research-usage-detail');
+          if (!await detail.evaluate(e => e.open)) {
+            await detail.locator('summary').focus();
+            await page.keyboard.press('Enter');
+          }
+          await detail.locator('dl').waitFor({state: 'visible'});
+          assert.equal(await detail.locator('dd').nth(0).innerText(), `${tokens.toLocaleString('en-US')} tokens`);
+          assert.equal(await detail.locator('dd').nth(1).innerText(), '1,000,000 tokens');
+          if (tokens === 20) {
+            await detail.evaluate(e => e.scrollIntoView({block: 'center', behavior: 'instant'}));
+            await page.screenshot({path: resolve(outputDir, `research-input-share-${locale}-detail-390.png`), animations: 'disabled'});
+          }
+          await basis.locator(':scope > summary').focus();
+          await page.keyboard.press('Enter');
+        }
+      }
+      inputShare = undefined;
+      await page.evaluate(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
+      await page.reload({waitUntil: 'networkidle'});
       await effects.waitFor();
       assert.equal(await effects.locator('.research-effect-metric').count(), 6, 'All six analyzer metrics are primary without opening analysis or cost details');
       assert.equal(await progress.locator('.research-progress-basis').evaluate(e => e.open), false, 'Sources and cost share one secondary disclosure by default');
