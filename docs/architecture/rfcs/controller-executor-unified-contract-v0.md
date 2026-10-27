@@ -881,6 +881,27 @@ model-facing view or a cache across attempts; the final complete model input and
 its instruction obligations must remain unchanged. Other effect/session
 consumers, packaged adoption and full-cost qualification remain open.
 
+Against rebased predecessor `4c4e9b346`, frozen real File/SQLite CLI requests
+produce identical complete prompts, result contracts, historical-only outputs
+and invalid-source diagnostics. Host preparation still makes two RPCs; total
+request bytes decrease by five and responses grow by 190 bytes per group. Six
+sequential cohorts, with separate verified runtime namespaces and 93 warm
+samples per arm/case, observe these median/p95 values in milliseconds:
+
+| Request provenance / Host | Predecessor | Complete-source consumer |
+| --- | --- | --- |
+| File / Codex | 27.544 / 32.366 | 31.258 / 40.408 |
+| File / structured | 25.948 / 32.642 | 30.007 / 39.242 |
+| SQLite / Codex | 25.695 / 31.070 | 31.889 / 37.696 |
+| SQLite / structured | 24.409 / 30.258 | 33.242 / 42.287 |
+
+These observations are negative local costs, not a speedup. Provider labels
+identify request provenance; the measured groups perform no authority-store IO.
+Machine/background load remains uncontrolled. Startup, other calls, complete
+Turn/model/cache/billing/human costs and accepted outcomes are excluded. Earlier
+overlapping, non-isolated exploratory timing is not qualified; neither source
+convergence nor these samples establish original-quota net benefit.
+
 The Codex result schema and shared candidate adapter now use one checked
 complete-contract profile read for evidence applicability. They no longer decide
 that requirement from the internal capsule on new requests. The existing
