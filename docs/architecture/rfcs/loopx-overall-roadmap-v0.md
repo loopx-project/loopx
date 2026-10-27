@@ -1449,11 +1449,16 @@ recovery. Legacy Markdown is read-only and cannot authorize Todo mutations;
 File/SQLite and PostgreSQL result transactions retain their typed head/CAS owner. See the
 [operating protocol](../../reference/protocols/goal-vision-replan-contract-v0.md#opt-in-first-delivery-freshness).
 New supported admissions also persist the default current-Agent checkpoint
-continuation contract. Required checkpoints use the actual post-result/full
-frontier read; MCP returns it to the current tool caller, while managed execution
+continuation contract. Required checkpoints use the actual post-result, complete
+relevant frontier read; MCP returns it to the current tool caller, while managed execution
 resumes its original Host/session. Noncompletion outcomes retain their original
 receipt and use the existing supplement owner. Related direction changes require
 only a new direction judgment, preserving successful results and single spend.
+Definitively rejected progress writes retain their candidate for original-Turn
+revalidation. Ordinary direction preserves independent Agent lanes; original
+no-followup still requires the whole Goal. Supplementary direction includes
+registered primary Goal documents under the same registry fence. Chat treats
+unavailable observations as read failures with read-only recovery, not pending settlement.
 Ordinary terminal completion uses the existing same-Turn upgrade after checkpoint
 and spend. Historical result-only, explicit first-delivery and supplement Turns
 retain their persisted contract. Complete changed-frontier recovery, packaged

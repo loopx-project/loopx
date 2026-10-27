@@ -1180,6 +1180,23 @@ original completion arguments; the facade does not infer that intent from a new
 frontier or a replacement Agent. This does not certify Goal
 completion or supply the complete changed-frontier scheduling contract.
 
+A definitive pre-commit freshness rejection of a progress writeback uses the same
+prepared-effect abort and retained-candidate recovery as completion. Cold retry
+revalidates that candidate against the new basis on its original Turn; an
+unknown effect is not treated as a proved rejection.
+
+The typed owner selects the complete relevant Agent lane and dependency closure
+for an ordinary current-Agent direction checkpoint. Independent peer-only updates
+do not invalidate it. Original no-followup intent still requires the complete
+Goal frontier, regardless of a caller's narrower scope. Supplementary direction
+reads and commits include the same registered primary Goal documents and registry
+fence; changing or losing a document requires recovery before a new decision can
+commit. Exact committed receipt replay retains its historical result.
+
+An unavailable observation without an original settlement identity is not a
+pending settlement. Packaged Chat shows that read failure and offers a read-only
+reread; restoring its source does not itself dispatch or spend.
+
 Historical receipts without this mode retain their prior contract, including
 result-only and already-spent missing-checkpoint supplement recovery. Unknown
 modes and downgrade attempts fail closed. The explicit `first_delivery` v2
@@ -1350,6 +1367,14 @@ HTTP/controller 和原生 checkpoint，使用确定性 SDK，保留会话与原�
 单次扣额及重载/重放零增量。真实 Lark、实时模型效果与 token 成本、Native
 Desktop 渲染仍未验证，不能从 status/quota 投影存在推断这些旅程已通过，
 也不能据此关闭 Goal。
+
+进度写回在提交前收到确定的 freshness 拒绝时，与完成写回共用预备效果撤销及
+候选保留路径。冷恢复在原 Turn 上按新依据重验候选；未知效果不能当作已证明
+未提交。普通当前 Agent 方向检查读取完整相关 lane 和依赖闭包，无关 peer 更新
+不使其失效；原 no-followup 意图仍要求全 Goal 前沿，caller 不能缩小该范围。
+补充方向与结果方向共用注册的主 Goal 文档和 registry fence，文档变化或缺失
+先拒绝新提交，已提交的精确回执仍按历史恢复。没有原结算身份的观察不可用不等于
+结算待完成；打包 Chat 如实显示读取失败并提供只读重读，来源恢复不自动派发或扣额。
 
 
 ### Recovery checks and support boundary
