@@ -190,6 +190,12 @@ recovery and settlement. Session roles, execution modes, wake sources and
 benchmark arms remain separate axes. This is design direction, not shipped
 behavior or evidence of lower cost.
 
+The controller session's [intelligent mediation](controller-executor-unified-contract-v0.md#controller-intelligence-and-semantic-compression)
+concentrates task choice, necessary material and result interpretation in that
+session. Deterministic composition and exact delta encoding retain their own
+owners. Qualify retained obligations and subsequent accepted work against the
+controller's added complete costs; query counts or text size cannot pass it.
+
 C1's [caller cutover map](controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
 includes quota emission, the direct Turn producer and the final native/structured
 host prompts. A common capture does not unify those consumers. Qualification
