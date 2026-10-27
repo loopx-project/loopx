@@ -130,7 +130,7 @@ def test_recovery_markdown_preserves_routing_and_error_precedence(decision):
 
 @pytest.mark.parametrize("decision", ["unchanged", "patch"])
 def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_path: Path, decision: str):
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     rc, initial = _run_cli(
         registry,
         runtime,
@@ -299,7 +299,7 @@ def test_same_turn_checkpoint_supplement_with_read_context_is_idempotent(tmp_pat
 def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     tmp_path: Path,
 ) -> None:
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     _initialize_git_checkout(project)
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
@@ -378,14 +378,10 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
 
     # A controller may install completion validation before checkpoint repair.
     # The supplement repairs the existing receipt while the Todo remains open.
-    state_path.write_text(
-        state_path.read_text(encoding="utf-8").replace(
-            selected_marker,
-            selected_marker.replace(" -->", " validation_command=pytest -->"),
-            1,
-        ),
-        encoding="utf-8",
-    )
+    rc, updated = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--validation-command", "pytest",
+        "--execute", cwd=project)
+    assert rc == 0 and updated["ok"], updated
 
     vision = (
         "--vision-summary",
@@ -438,7 +434,7 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
 
 
 def test_invalid_supplement_leaves_original_writeback_intact(tmp_path: Path):
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     binding = (
         "--agent-id",
         AGENT_ID,

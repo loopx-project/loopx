@@ -7,6 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from canonical_authority_fixture import (
+    advance_canonical_fixture_authority, initialize_canonical_source_fixture, read_fixture_todos,
+)
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
 from loopx.cli import main
 from loopx.control_plane.goals.start_contract import (
     build_goal_start_prompt,
@@ -24,6 +29,7 @@ def bound_goal(tmp_path):
         json.dumps(
             {
                 "schema_version": "0.1",
+                "common_runtime_root": str(tmp_path / "runtime"),
                 "goals": [
                     {
                         "id": "planning-goal",
@@ -37,6 +43,9 @@ def bound_goal(tmp_path):
             }
         )
     )
+    initialize_canonical_source_fixture(
+        tmp_path / "runtime", "planning-goal", state_path=state, provider="sqlite",
+    )
     return dict(
         registry_path=registry,
         goal_id="planning-goal",
@@ -44,6 +53,15 @@ def bound_goal(tmp_path):
         text="Investigate the failure, then repair and validate it.\nKeep the API stable.",
         project=tmp_path,
         runtime_root_arg=str(tmp_path / "runtime"),
+    )
+
+
+def _replace_frontier(bound_goal, operation_id):
+    advance_canonical_fixture_authority(
+        Path(bound_goal["runtime_root_arg"]), bound_goal["goal_id"],
+        build_todo_runtime_shadow_projection(goal_id=bound_goal["goal_id"],
+            todos=read_fixture_todos(bound_goal["project"] / "state.md"),
+            handoff_mode="soft_claim", leases=[]), operation_id=operation_id,
     )
 
 
@@ -82,6 +100,7 @@ def test_existing_plan_is_an_incremental_frontier_not_a_new_goal(bound_goal):
 
 ## User Todos
 """)
+    _replace_frontier(bound_goal, "fixture-existing-plan")
     packet = build_task_planning_packet(**bound_goal)
     assert packet["runnable_todo_ids"] == ["todo_existing"]
     assert [step["id"] for step in packet["ordered_steps"]] == [
@@ -136,9 +155,10 @@ def test_full_frontier_and_live_blockers_ignore_display_order_and_terminal_items
         f"  <!-- loopx:todo todo_id=todo_gate_{status} status={status} task_class=user_gate action_kind=approve blocks_agent=planner -->"
         for status in ("open", "blocked", "done", "deferred")
     ]
-    for ordered in (work, list(reversed(work))):
+    for position, ordered in enumerate((work, list(reversed(work)))):
         state.write_text("# Active Goal State\n\n## Agent Todos\n" + "\n".join(ordered)
                          + "\n\n## User Todos\n" + "\n".join(gates) + "\n")
+        _replace_frontier(bound_goal, f"fixture-frontier-order-{position}")
         packet = build_task_planning_packet(**bound_goal)
         assert set(packet["runnable_todo_ids"]) == {f"todo_work_{i}" for i in range(40)}
         assert set(packet["blocking_todo_ids"]) == {"todo_gate_open", "todo_gate_blocked"}

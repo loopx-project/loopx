@@ -9,7 +9,7 @@ import sys
 import time
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import EffectRuntimeConflict
@@ -94,14 +94,14 @@ def _replace_source_goal(registry: Path, instance_id: str) -> None:
 
 def fixture(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry, binding, delivery, original = _missing(tmp_path)
+    project, runtime, registry, binding, delivery, original = _missing(tmp_path, provider=provider)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todos = [{"schema_version": "todo_item_v0", "todo_id": name, "index": index,
         "role": "agent", "status": "open", "done": False, "text": f"Synthetic page work {name}",
         "task_class": "advancement_task", "archive_state": "active", "source_section": "Agent Todo",
         "claimed_by": AGENT_ID} for index, name in enumerate((TODO_ID, "todo_dependency", "todo_unrelated"), 1)]
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease", leases=[])
-    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    advance_canonical_fixture_authority(runtime, GOAL_ID, projection, operation_id="fixture-checkpoint-fences")
     for todo in todos:
         rc, lease = _run_cli(registry, runtime, "task-lease", "acquire", "--goal-id", GOAL_ID,
             "--todo-id", todo["todo_id"], "--owner", AGENT_ID,
