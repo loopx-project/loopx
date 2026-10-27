@@ -1299,6 +1299,17 @@ rolling back a runtime, finish or reconcile pending protected Turns with a
 compatible runtime; preserve original receipts and successful artifacts. This
 does not add cross-host atomicity, Goal certification or model-quality guarantees.
 
+An original committed Todo result remains replayable if its disposable work-read
+receipt is lost or damaged; the typed completion proof, rather than a new read,
+owns that recovery. On a historical result-only Turn, a verified indexed writeback
+may precede an unfinished terminal result. Only matching identity, work context
+and recovery evidence allow another result read in that lane. A settled Turn with
+its original quota debit may
+also validate its still-unfinished Todo, using the proved original work writeback
+rather than a later direction row. Pending current checkpoint lanes retain exact
+writeback replay; missing or conflicting commit proof stays fail-closed.
+An unclaimed successor must be claimed before its work admission.
+
 ### 中文：本阶段边界与恢复
 
 普通新执行默认保存结果依据并在 Todo owner 提交时检查新鲜度。
@@ -1316,6 +1327,13 @@ CLI/MCP 自动携带原 Turn 和原 key；managed 在派发前持久保存依据
 相关依据变化时，未提交结果必须重新验证候选；结果已经提交时只重新读取和
 判断方向。原 Turn、已提交结果和回执保持原身份，不能把旧判断贴上新 token。
 索引不完整或关键提交未知时保留原 artifacts，先协调原回执，不能换 Turn 绕过。
+原 Todo 结果已提交时，可丢失的工作读取回执损坏或缺失不应阻止其精确恢复；
+该恢复以 typed completion proof 为准。历史 result-only Turn 的已验证索引写回
+可能早于尚未完成的终态结果，仅身份、工作依据及恢复证据全部匹配时允许重读。
+已完成结算且有原扣额回执的 Turn 也可验证尚未完成的 Todo，恢复依据必须是已证明的原工作写回，
+不能误用之后的方向记录。尚待结算的当前 checkpoint 路径仍保留精确写回重放，
+缺失或冲突的提交证明继续拒绝。
+未认领的后继 Todo 必须先认领，再获得工作 admission。
 明确的 `required=false/satisfied=true/decision=not_required` 沿用既有 checkpoint
 豁免；缺少 checkpoint 记录不能被观察器猜成无需判断。
 
