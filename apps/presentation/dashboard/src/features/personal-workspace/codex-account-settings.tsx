@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { z } from "zod";
 import { RefreshCw, CheckCircle2, Circle, AlertCircle } from "lucide-react";
 import { requestJson } from "../../data/chat";
 import { useWorkspaceI18n } from "./i18n";
@@ -17,6 +18,20 @@ type AccountStatus = {
     credits_available: boolean | null }>;
 };
 
+// The provider owns classification and restart eligibility. Missing/partial
+// reads cannot be presented as an empty or restartable inventory.
+const inventorySchema = z.object({
+  ok: z.literal(true), complete: z.literal(true),
+  clients: z.array(z.object({
+    pid: z.number().int().min(2), process: z.string().min(1),
+    kind: z.enum(["app", "service", "unmanaged"]), restartable: z.boolean(),
+    service: z.string().optional(), restart_blocker: z.string().optional(),
+    manager: z.object({ pid: z.number().int().min(2), process: z.string().min(1),
+      instance: z.string().optional(), status: z.string().optional() }).optional(),
+  })),
+});
+type ClientInventory = z.infer<typeof inventorySchema>;
+
 const copy = {
   "zh-CN": {
     title: "Codex 原生账号", enabled: "自动接续已启用", disabled: "自动接续已关闭",
@@ -27,7 +42,7 @@ const copy = {
     restart: "允许自动退出并重开 GPT 客户端", restarting: "正在退出 GPT、切换账号并重新打开",
     forceQuit: "正常退出失败时自动强制关闭 GPT，无需再次确认",
     effectForce: "仅使用下方已登记账号。额度耗尽后先正常退出 GPT；退出失败时自动强制结束该实例，再切换账号并重新打开。强制退出会中断该实例的当前工作。",
-    reopen: "重新打开 GPT", other_clients_busy: "还有其他进程占用 GPT 登录；关闭占用后检查额度重试",
+    reopen: "重新打开 GPT", other_clients_busy: "仍有暂不能自动重启的登录占用，可在下方查看",
     client_quit_refused: "GPT 未接受正常退出；本次未换号，自动尝试已暂停", client_quit_timeout: "GPT 尚未退出；本次未换号，自动尝试已暂停",
     client_changed: "GPT 进程已变化；已暂停本次切换", handoff_pending: "独立切换进程正在完成接续，请稍候",
     handoff_interrupted: "接续进程中断；请检查并恢复本次切换", quota_stale: "额度记录已过期，正在重新检查",
@@ -45,6 +60,13 @@ const copy = {
     native_unavailable: "无法连接原生槽位管理器，请检查本机安装后重试。",
     launchFailed: "账号已切换，但界面未能重新打开。可以从原来的 GPT 入口打开；请勿重复切换。",
     failure: "操作未完成。刷新状态后可以重试。", recoveryHint: "恢复会还原未完成事务；撤销会还原最近一次切换。两者都需要客户端关闭，且不会覆盖后续登录修改。",
+    clients: "登录占用", clientsRefresh: "重新检查占用", clientsChecking: "正在检查登录占用",
+    clientsUnknown: "占用情况暂时无法确认", clientsEmpty: "本次未发现登录占用",
+    clientsCount: "个占用", clientsHeld: "个暂不能自动重启", clientsManaged: "支持受控重启",
+    clientsApp: "GPT 客户端", clientsService: "后台服务", clientsOther: "外部进程", clientsProcesses: "个进程",
+    clientsDetail: "清单记录检查时的进程归属，切换时会重新核验。支持受控重启仍需已启用退出与重开权限；外部工作负载须先核实空闲及恢复条件。检查占用不读取凭证内容、不换号、不结束进程。",
+    manager_unverified: "尚未核实管理器，保留占用等待",
+    external_workload_unverified: "外部工作负载的空闲与恢复条件尚未核实",
   },
   en: {
     title: "Native Codex accounts", enabled: "Automatic handoff enabled", disabled: "Automatic handoff off",
@@ -55,7 +77,7 @@ const copy = {
     restart: "Allow automatic GPT client quit and restart", restarting: "Quitting GPT, switching accounts and reopening",
     forceQuit: "Force quit GPT if normal quit fails, without another confirmation",
     effectForce: "Use only the registered accounts below. After exhaustion, try normal quit first; if it fails, force quit that GPT instance, switch accounts and reopen. Force quit interrupts work in that instance.",
-    reopen: "Reopen GPT", other_clients_busy: "Another process still owns the GPT login; close it and check quota to retry",
+    reopen: "Reopen GPT", other_clients_busy: "A login holder cannot be restarted automatically; inspect it below",
     client_quit_refused: "GPT refused normal quit; no account changed and automatic retries are paused", client_quit_timeout: "GPT has not exited; no account changed and automatic retries are paused",
     client_changed: "The GPT process changed; this switch was paused", handoff_pending: "The independent handoff is still finishing; please wait",
     handoff_interrupted: "The handoff process stopped; inspect and recover this switch", quota_stale: "Quota observations expired; checking again",
@@ -73,6 +95,13 @@ const copy = {
     native_unavailable: "Cannot connect to the native slot manager. Check the local installation and retry.",
     launchFailed: "The account switched, but the interface could not reopen. Open the original GPT entry; do not repeat the switch.",
     failure: "The operation did not finish. Refresh its status before retrying.", recoveryHint: "Recovery restores an interrupted transaction; undo restores the last switch. Both require closed clients and refuse to overwrite later login changes.",
+    clients: "Login holders", clientsRefresh: "Recheck holders", clientsChecking: "Checking login holders",
+    clientsUnknown: "Login holders could not be confirmed", clientsEmpty: "No login holders found in this check",
+    clientsCount: "holders", clientsHeld: "cannot restart automatically", clientsManaged: "Supports controlled restart",
+    clientsApp: "GPT client", clientsService: "Background service", clientsOther: "External process", clientsProcesses: "processes",
+    clientsDetail: "This inventory records process ownership at check time; switching revalidates it. Controlled restart still requires quit-and-reopen permission. External workloads need verified idle and recovery conditions. This check reads no credential contents, switches no account and ends no process.",
+    manager_unverified: "Manager not verified; the holder remains a hold",
+    external_workload_unverified: "External workload idle and recovery conditions are unverified",
   },
 };
 
@@ -82,6 +111,10 @@ export function CodexAccountSettings() {
   const [status, setStatus] = useState<AccountStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [inventory, setInventory] = useState<ClientInventory | null>(null);
+  const [inventoryBusy, setInventoryBusy] = useState(false);
+  const [inventoryChecked, setInventoryChecked] = useState<Date | null>(null);
+  const inventoryRequest = useRef(0);
   const endpoint = "/api/chat/codex-accounts";
   const label = (key: string | null | undefined) => c[key as keyof typeof c] ?? c.unavailable;
   const read = useCallback(async () => {
@@ -91,26 +124,53 @@ export function CodexAccountSettings() {
       setError(false);
     } catch { setError(true); }
   }, []);
+  const readInventory = useCallback(async () => {
+    const request = ++inventoryRequest.current;
+    setInventoryBusy(true);
+    setInventory(null);
+    setInventoryChecked(null);
+    try {
+      const result = inventorySchema.safeParse(await requestJson<unknown>(`${endpoint}/clients`));
+      if (request === inventoryRequest.current && result.success) {
+        setInventory(result.data);
+        setInventoryChecked(new Date());
+      }
+    } catch { /* Unknown stays visible; quota status and policy are independent. */ }
+    finally { if (request === inventoryRequest.current) setInventoryBusy(false); }
+  }, []);
   useEffect(() => {
     void read();
     const timer = window.setInterval(() => { if (!document.hidden) void read(); }, 5000);
     return () => window.clearInterval(timer);
   }, [read]);
+  useEffect(() => {
+    // Inspect once on entry; the ordinary status timer must not scan processes.
+    if (status?.available) void readInventory();
+    return () => { inventoryRequest.current += 1; };
+  }, [status?.available, readInventory]);
   async function act(operation: string, parameters = {}) {
     setBusy(true);
     setError(false);
+    inventoryRequest.current += 1;
+    setInventory(null);
+    setInventoryChecked(null);
     try {
       const result = await requestJson<AccountStatus>(endpoint, {
         method: "POST", body: JSON.stringify({ operation, parameters }),
       });
       setStatus(result);
     } catch { await read(); setError(true); }
-    finally { setBusy(false); }
+    finally { setBusy(false); void readInventory(); }
   }
   const enabled = status?.policy?.enabled === true;
   const restartClients = status?.policy?.restart_clients === true;
   const forceQuitClients = status?.policy?.force_quit_clients === true;
   const problem = status?.code || (status?.ok === false ? "native_unavailable" : null);
+  const holders = [...(inventory?.clients ?? [])].sort((a, b) => Number(a.restartable) - Number(b.restartable));
+  const held = holders.filter(client => !client.restartable).length;
+  const appHolders = holders.filter(client => client.kind === "app" && client.restartable);
+  const appProcesses = new Map<string, number[]>();
+  for (const client of appHolders) appProcesses.set(client.process, [...(appProcesses.get(client.process) ?? []), client.pid]);
   return <section className="personal-codex-accounts" data-testid="codex-account-settings" aria-busy={busy}>
     <header><h2>{c.title}</h2><span>{status?.active_slot ? `${c.current} ${status.active_slot.toUpperCase()} · ` : ""}{enabled ? c.enabled : c.disabled}</span></header>
     {!status ? <p role="status">{c.checking}</p> : null}
@@ -134,6 +194,23 @@ export function CodexAccountSettings() {
           : <Circle size={17} aria-hidden />}
         <span>{label(status.recovery_required ? "recovery_required" : status.action)}</span>
       </div>
+      <details className="codex-account-holders" data-testid="codex-account-holders">
+        <summary aria-live="polite">{c.clients} · {inventoryBusy ? c.clientsChecking : inventory
+          ? holders.length ? `${holders.length} ${c.clientsCount}${held ? ` · ${held} ${c.clientsHeld}` : ""}` : c.clientsEmpty
+          : c.clientsUnknown}</summary>
+        <div className="codex-account-actions"><button type="button" disabled={busy || inventoryBusy}
+          onClick={() => void readInventory()}><RefreshCw aria-hidden size={16} />{c.clientsRefresh}</button>
+          {inventoryChecked ? <span>{c.last} {inventoryChecked.toLocaleTimeString(locale)}</span> : null}</div>
+        <p>{c.clientsDetail}</p>
+        {inventory ? <ul>{holders.filter(client => client.kind !== "app" || !client.restartable).map(client => <li key={client.pid}>
+          <div><strong>{client.service || client.process}</strong><span>PID {client.pid} · {client.kind === "app"
+            ? c.clientsApp : client.kind === "service" ? c.clientsService : c.clientsOther}</span>
+            {client.manager ? <span>{client.manager.process}{client.manager.instance ? ` · ${client.manager.instance}` : ""} · PID {client.manager.pid}</span> : null}</div>
+          <span>{client.restartable ? c.clientsManaged : label(client.restart_blocker || "external_workload_unverified")}</span>
+        </li>)}{appHolders.length ? <li><div><strong>{c.clientsApp} · {appHolders.length} {c.clientsProcesses}</strong>
+          {[...appProcesses].map(([process, pids]) => <span key={process}>{process} · PID {pids.join(", ")}</span>)}</div>
+          <span>{c.clientsManaged}</span></li> : null}</ul> : null}
+      </details>
       <div className="codex-account-list">
         {status.slots.map(slot => {
           const row = status.accounts?.find(a => a.slot === slot);

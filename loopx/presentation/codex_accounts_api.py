@@ -40,6 +40,8 @@ class CodexAccountService:
         try:
             if operation == "status":
                 value = self.provider.status()
+            elif operation == "clients":
+                value = self.provider.clients()
             elif operation == "configure":
                 with self.mutex:
                     if parameters.get("enabled") is False:
@@ -91,6 +93,9 @@ class CodexAccountsRequestMixin:
 
     def _codex_accounts_read(self) -> None:
         cast(_HTTP, self)._send_json(self.server.codex_account_service.call("status", {}))
+
+    def _codex_account_clients(self) -> None:
+        cast(_HTTP, self)._send_json(self.server.codex_account_service.call("clients", {}))
 
     def _codex_accounts_write(self) -> None:
         http = cast(_HTTP, self)

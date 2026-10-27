@@ -23,9 +23,17 @@
 .personal-codex-accounts details { border-top: 1px solid var(--pw-line); padding-top: 16px; }
 .personal-codex-accounts summary { cursor: pointer; padding: 4px 0; }
 .personal-codex-accounts details p { margin: 12px 0; }
+.codex-account-holders ul { list-style: none; padding: 0; margin: 16px 0 0; }
+.codex-account-holders summary { color: var(--pw-text); }
+.codex-account-holders li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px 0; border-top: 1px solid var(--pw-line); overflow-wrap: anywhere; }
+.codex-account-holders li > div { display: grid; gap: 4px; }
+.codex-account-holders strong { color: var(--pw-text); font-weight: 500; }
+.codex-account-holders li > span { color: var(--pw-text); }
+.codex-account-holders .codex-account-actions { margin-top: 12px; }
 .personal-codex-accounts [role="alert"] { display: flex; gap: 8px; align-items: flex-start; color: var(--pw-red); }
 @media (max-width: 640px) {
   .codex-account-list { grid-template-columns: 1fr; gap: 20px; }
   .codex-account-list dl { grid-template-columns: 1fr 1fr; width: 100%; }
   .codex-account-list article > button { width: 100%; }
+  .codex-account-holders li { grid-template-columns: 1fr; gap: 8px; }
 }
