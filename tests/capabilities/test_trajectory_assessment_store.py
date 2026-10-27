@@ -583,7 +583,7 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
-@pytest.mark.parametrize("encoding", ["default", None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"])
+@pytest.mark.parametrize("encoding", ["default", None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3", "source_text_aliases_with_literal_values_v4"])
 @pytest.mark.parametrize("context", [False, True])
 def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding, context):
     from loopx.capabilities.benchmark_toolkit.trajectory_assessment import prepare
@@ -596,7 +596,7 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
         dict(schema_version="loopx_explore_result_event_v0", event_id="question-new", result_id="question", goal_id="solver", event_kind="node",
              node_kind="question", recorded_at="2026-01-02T00:00:00Z", title="Does V19 help?", summary="Still unknown.", status="blocked"),
     ]}
-    if encoding in {"default", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"}:
+    if encoding in {"default", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3", "source_text_aliases_with_literal_values_v4"}:
         history["items"][0]["summary"] = "Trial4failed2checks"
     text = json.dumps(history, ensure_ascii=False)
     (sources / "history.json").write_text(text)
@@ -612,7 +612,7 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
                                config=None if encoding == "default" else initial["config"])
     if encoding == "default":
         prepared = prepare(input_path, model="gpt-6.1-sol", effort="max", service_tier="fast")
-        assert prepared["input"]["display_snapshot"]["translation_encoding"] == "source_text_aliases_with_literal_values_v3"
+        assert prepared["input"]["display_snapshot"]["translation_encoding"] == "source_text_aliases_with_literal_values_v4"
         assert prepared["analysis_key"] == registered["analysis_key"]
         assert json.loads(input_path.read_text()) == data
     current = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
@@ -648,7 +648,7 @@ print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_to
             read_citation(**operation, source_id="history", first_line=1, last_line=1)
     else:
         assert not any("context_citations" in field for field in result["result"]["display"]["fields"])
-    if encoding in {"default", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"}:
+    if encoding in {"default", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3", "source_text_aliases_with_literal_values_v4"}:
         assert any(field["text"] == "第4次尝试有2项检查未通过（Trial4failed2checks）。"
                    for field in result["result"]["display"]["fields"])
     assert result["job"]["usage"]["input_tokens"] == 19  # one shared attempt, not four new jobs

@@ -58,7 +58,7 @@ test('new generation selects faithful display defaults without upgrading frozen 
     const before = structuredClone(original);
     const frozen = prepareTrajectoryAssessment({input: original, config: configForLanguage});
     const next = prepareTrajectoryAssessment({input: original, config: configForLanguage, generation_defaults: true});
-    assert.equal(next.input.display_snapshot!.translation_encoding, 'source_text_aliases_with_literal_values_v3');
+    assert.equal(next.input.display_snapshot!.translation_encoding, 'source_text_aliases_with_literal_values_v4');
     assert.notEqual(next.analysis_key, frozen.analysis_key);
     assert.equal(next.config.output_language, language);
     assert.deepEqual(next.input.sources, original.sources);
@@ -66,7 +66,8 @@ test('new generation selects faithful display defaults without upgrading frozen 
     assert.deepEqual(original, before, 'Writer normalization does not modify the captured input');
     assert.deepEqual(prepareTrajectoryAssessment({input: next.input, config: next.config}), next);
     assert.deepEqual(prepareTrajectoryAssessment({input: original, config: configForLanguage}), frozen);
-    for (const encoding of ['source_text_aliases_v1', 'source_text_aliases_with_literal_values_v2'] as const) {
+    for (const encoding of ['source_text_aliases_v1', 'source_text_aliases_with_literal_values_v2',
+      'source_text_aliases_with_literal_values_v3', 'source_text_aliases_with_literal_values_v4'] as const) {
       const explicit = structuredClone(original);
       explicit.display_snapshot!.translation_encoding = encoding;
       assert.deepEqual(prepareTrajectoryAssessment({input: explicit, config: configForLanguage, generation_defaults: true}),
@@ -376,42 +377,44 @@ test('capture-byte and input-order changes reuse identical declared evidence, wi
   assert.equal(qualifyTrajectoryAssessment({...current, output: output()}).evidence_manifest[0]!.artifact_sha256, 'b'.repeat(64));
 });
 
-test('display fidelity revision preserves exact numeric checks, originals and historical requests', () => {
-  const input = contextInput(), source = input.sources.find(s => s.id === 'history')!, page = JSON.parse(source.text);
-  page.items[0].summary = 'Gain+2.50; about4 percent; span3.20/6.40%; reuse8+3items. Limit remains unspecified.';
-  source.text = JSON.stringify(page);
-  source.artifact_sha256 = createHash('sha256').update(source.text).digest('hex');
-  input.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v2';
-  const prior = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
-  const revised = structuredClone(input);
-  revised.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v3';
-  const p = prepareTrajectoryAssessment({input: revised, config: prior.config});
-  assert.notEqual(p.analysis_key, prior.analysis_key);
-  assert.deepEqual(p.display_request, prior.display_request);
-  assert.deepEqual(p.output_schema, prior.output_schema);
-  const rows = JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
-  const row = rows.find((r: {literals: string[]}) => r.literals.includes('Gain+2.50'));
-  assert.deepEqual(row.explanation_numbers, ['+2.50', '4', '3.20', '6.40%', '8', '+3']);
-  const raw = translatedOutput(p);
-  const translated = raw.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!;
-  const faithful = '增量为+2.50（⟪LX0⟫）；约百分之4（⟪LX1⟫）；范围为3.20／6.40%（⟪LX2⟫）；复用8加+3项（⟪LX3⟫）。上限具体所指仍不明确。';
-  translated.text = faithful;
-  const result = qualifyTrajectoryAssessment({...p, output: raw});
-  const original = parseExploreHistoryPage(page, 'goal').items;
-  assert.equal(projectTrajectoryDisplay(original, result.display, result.display!.snapshot_key, 'zh').events[0]!.summary,
-    '增量为+2.50（Gain+2.50）；约百分之4（about4）；范围为3.20／6.40%（span3.20/6.40%）；复用8加+3项（reuse8+3items.）。上限具体所指仍不明确。');
-  for (const invalid of [faithful.replace('+2.50', '2.50'), faithful.replace('百分之4', '4%'),
-    faithful.replace('3.20／', '3.20%／'), faithful.replace('加+3项', '加3项'), faithful.replace('6.40%', '6.4%')]) {
-    translated.text = invalid;
-    const rejected = qualifyTrajectoryAssessment({...p, output: raw});
-    assert.equal(rejected.display!.coverage.missing, 1);
-    assert.equal(projectTrajectoryDisplay(original, rejected.display, rejected.display!.snapshot_key, 'zh').events[0]!.summary,
-      page.items[0].summary, 'Invalid restatements keep the full original rather than weakening literal checks');
-    assert.deepEqual(rejected.metrics, result.metrics);
-  }
-  assert.deepEqual(prepareTrajectoryAssessment({input, config: prior.config}), prior);
-  assert.equal(original[0]!.summary, page.items[0].summary);
-});
+for (const encoding of ['source_text_aliases_with_literal_values_v3', 'source_text_aliases_with_literal_values_v4'] as const) {
+  test(`display fidelity ${encoding} preserves exact numeric checks, originals and historical requests`, () => {
+    const input = contextInput(), source = input.sources.find(s => s.id === 'history')!, page = JSON.parse(source.text);
+    page.items[0].summary = 'Gain+2.50; about4 percent; span3.20/6.40%; reuse8+3items. Limit remains unspecified.';
+    source.text = JSON.stringify(page);
+    source.artifact_sha256 = createHash('sha256').update(source.text).digest('hex');
+    input.display_snapshot!.translation_encoding = 'source_text_aliases_with_literal_values_v2';
+    const prior = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
+    const revised = structuredClone(input);
+    revised.display_snapshot!.translation_encoding = encoding;
+    const p = prepareTrajectoryAssessment({input: revised, config: prior.config});
+    assert.notEqual(p.analysis_key, prior.analysis_key);
+    assert.deepEqual(p.display_request, prior.display_request);
+    assert.deepEqual(p.output_schema, prior.output_schema);
+    const rows = JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
+    const row = rows.find((r: {literals: string[]}) => r.literals.includes('Gain+2.50'));
+    assert.deepEqual(row.explanation_numbers, ['+2.50', '4', '3.20', '6.40%', '8', '+3']);
+    const raw = translatedOutput(p);
+    const translated = raw.display_translations.find((r: {field_id: string}) => r.field_id === row.field_id)!;
+    const faithful = '增量为+2.50（⟪LX0⟫）；约百分之4（⟪LX1⟫）；范围为3.20／6.40%（⟪LX2⟫）；复用8加+3项（⟪LX3⟫）。上限具体所指仍不明确。';
+    translated.text = faithful;
+    const result = qualifyTrajectoryAssessment({...p, output: raw});
+    const original = parseExploreHistoryPage(page, 'goal').items;
+    assert.equal(projectTrajectoryDisplay(original, result.display, result.display!.snapshot_key, 'zh').events[0]!.summary,
+      '增量为+2.50（Gain+2.50）；约百分之4（about4）；范围为3.20／6.40%（span3.20/6.40%）；复用8加+3项（reuse8+3items.）。上限具体所指仍不明确。');
+    for (const invalid of [faithful.replace('+2.50', '2.50'), faithful.replace('百分之4', '4%'),
+      faithful.replace('3.20／', '3.20%／'), faithful.replace('加+3项', '加3项'), faithful.replace('6.40%', '6.4%')]) {
+      translated.text = invalid;
+      const rejected = qualifyTrajectoryAssessment({...p, output: raw});
+      assert.equal(rejected.display!.coverage.missing, 1);
+      assert.equal(projectTrajectoryDisplay(original, rejected.display, rejected.display!.snapshot_key, 'zh').events[0]!.summary,
+        page.items[0].summary, 'Invalid restatements keep the full original rather than weakening literal checks');
+      assert.deepEqual(rejected.metrics, result.metrics);
+    }
+    assert.deepEqual(prepareTrajectoryAssessment({input, config: prior.config}), prior);
+    assert.equal(original[0]!.summary, page.items[0].summary);
+  });
+}
 
 test('later evidence can overturn an earlier judgment; full new denominators are not summed with the old window', () => {
   const original = prepared(), next = input();

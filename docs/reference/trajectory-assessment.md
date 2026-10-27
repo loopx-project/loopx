@@ -304,18 +304,37 @@ leading signs, precision and percent suffixes stay exact, while spelled-out unit
 are explained in the output language. An adjacent topic cannot resolve an
 ambiguous referent without supporting field-bound evidence. This remains model
 guidance; the exact-literal qualifier and original-text fallback are unchanged.
-New CLI preparations and default pack registrations select it when a captured
-display snapshot has no explicit encoding. The normalized input is saved with
-that choice before analysis. Explicit encodings/configurations and frozen inputs
-retain their exact prompts, identities and artifacts; reading or refreshing them
-never starts or upgrades analysis. Translation quality belongs to the existing
-analysis generation, with original text available for comparison.
+Its frozen prompts and identities remain unchanged.
 
 显式数值编码 v3 增加生成时的逐项忠实性核对：正负号、精度和百分号按允许的原始写法
 保留，文字单位用目标语言解释；不能仅凭邻近主题补全含糊所指。这仍是模型指导，
-既有字面校验和原文回退不放宽。新CLI准备和默认pack登记在快照未指定编码时采用v3，
-先将选择保存到版本化输入，再由既有分析入口生成。显式编码/配置及历史输入的提示、
-身份和产物保持，阅读与刷新不升级或执行分析。译文质量由默认生成承担，原文仍可核对。
+既有字面校验和原文回退不放宽，已保存的v3提示和身份保持。
+
+New CLI preparations and default pack registrations now select
+`"source_text_aliases_with_literal_values_v4"` when a captured display snapshot
+has no explicit encoding. It retains v3 fidelity guidance and asks for idiomatic
+prose with context-appropriate terminology: input groups, repeated measurements,
+relative percentages and percentage-point changes keep their distinct meanings.
+Explain established quantities directly, without commentary about source-token
+encoding or a duplicate English paraphrase. Preserve each required source token
+once, the complete meaning and any unresolved referent or unit.
+
+The normalized input saves this choice before analysis. Explicit encodings and
+configurations, including v3, and frozen inputs keep their exact prompts, keys,
+schemas and artifacts. Reading or refreshing them never upgrades or starts an
+analysis. This extends generation guidance in the existing analysis job; it
+adds no translation editor or revision workflow. Literal validation is unchanged
+and cannot certify terminology, semantic fidelity or comprehension. Original
+text remains available for comparison; model adherence and installed adoption
+require their own evidence.
+
+新CLI准备和默认pack登记在快照未指定编码时采用v4，先把选择保存到版本化输入。
+它保留v3忠实性指导，要求用自然语言说明有依据的数量，按语境区分样本组与执行队列、
+输入与重复测量、相对百分比与百分点；不再解释源标记如何编码或拆分，也不重复附英文
+释义。原始标记仍保留一次，完整含义、条件、失败和未明所指不省略。
+显式编码／配置和历史输入的提示、身份、结构及产物保持，浏览与刷新不升级或执行。
+译文改进沿既有分析生成，不增加编辑器或修订流程。字面校验不能证明术语、语义或理解
+质量；原文仍可核对，模型实际遵从和正式采用须另外验证。
 
 Translated prose is applied to decoded narrative fields; it is never serialized
 and reparsed as an Explore decision. Owner-format labels or list markers inside
