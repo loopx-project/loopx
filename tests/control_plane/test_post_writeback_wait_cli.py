@@ -12,6 +12,7 @@ import pytest
 from canonical_authority_fixture import (
     initialize_canonical_authority,
     isolate_sqlite_runtime,
+    read_fixture_todos,
 )
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import (
@@ -119,14 +120,13 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
             )
             return rc, json.loads(capsys.readouterr().out)
 
-    rc, listed = run("todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0, listed
+    source_todos = read_fixture_todos(state)
     initialize_canonical_authority(
         runtime,
         GOAL_ID,
         build_todo_runtime_shadow_projection(
             goal_id=GOAL_ID,
-            todos=listed["todos"],
+            todos=source_todos,
             handoff_mode="soft_claim",
             leases=[],
         ),

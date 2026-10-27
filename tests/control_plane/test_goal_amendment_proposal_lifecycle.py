@@ -45,7 +45,7 @@ TURN_ID = "turn-amendment-lifecycle-1"
 
 def _write_fixture(root: Path) -> tuple[Path, Path, Path]:
     """One isolated, healthy synthetic Goal: active, one registered agent,
-    one open Todo, an empty runtime (no event log, no run rows)."""
+    one open canonical Todo and no prior run rows."""
 
     project = root / "project"
     runtime = root / "runtime"
@@ -108,6 +108,10 @@ def _write_fixture(root: Path) -> tuple[Path, Path, Path]:
         )
         + "\n",
         encoding="utf-8",
+    )
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    initialize_canonical_source_fixture(
+        runtime, GOAL_ID, state_path=state_path, provider="sqlite",
     )
     return project, runtime, registry_path
 

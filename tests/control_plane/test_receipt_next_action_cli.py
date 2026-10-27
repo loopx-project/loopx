@@ -9,6 +9,7 @@ import pytest
 import test_quota_settlement_cli as fixture
 from canonical_authority_fixture import (
     initialize_canonical_authority, isolate_sqlite_runtime,
+    read_fixture_todos,
     without_resume_observation_time as stable,
 )
 
@@ -44,10 +45,9 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
                 "--format", "json", *args])
             return code, json.loads(capsys.readouterr().out)
 
-    code, initial = run("todo", "list", "--goal-id", fixture.GOAL_ID)
-    assert code == 0, initial
+    source_todos = read_fixture_todos(state)
     canonical = initialize_canonical_authority(runtime, fixture.GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, todos=initial["todos"],
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, todos=source_todos,
             handoff_mode="soft_claim", leases=[]), state_path=state, provider=provider)
     binding = ("--agent-id", fixture.AGENT_ID, "--todo-id", fixture.TODO_ID,
         "--turn-instance-id", "original-next-action-turn")
@@ -137,11 +137,10 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
     def run(*args: str) -> tuple[int, dict]:
         return fixture._run_cli(registry, runtime, *args, cwd=project)
 
-    code, listed = run("todo", "list", "--goal-id", fixture.GOAL_ID)
-    assert code == 0, listed
+    source_todos = read_fixture_todos(state)
     initialize_canonical_authority(runtime, fixture.GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID,
-            todos=listed["todos"], handoff_mode="soft_claim", leases=[]),
+            todos=source_todos, handoff_mode="soft_claim", leases=[]),
         state_path=state, provider=provider)
     turn = "replan-recommendation-recovery"
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", fixture.GOAL_ID,

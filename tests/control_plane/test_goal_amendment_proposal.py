@@ -291,6 +291,7 @@ def _write_fixture(
     with_other_goal: bool = False,
     runs: Any = _DEFAULT_RUNS,
     other_goal_runs: Any = _DEFAULT_RUNS,
+    provider: str = "sqlite",
 ) -> dict[str, Path]:
     project = root / "project"
     runtime = root / "runtime"
@@ -389,11 +390,11 @@ def _write_fixture(
     if other_state_file is not None:
         paths["other_state_file"] = other_state_file
     initialize_canonical_source_fixture(
-        runtime, GOAL_ID, state_path=state_file, provider="sqlite",
+        runtime, GOAL_ID, state_path=state_file, provider=provider,
     )
     if other_state_file is not None:
         initialize_canonical_source_fixture(
-            runtime, OTHER_GOAL_ID, state_path=other_state_file, provider="sqlite",
+            runtime, OTHER_GOAL_ID, state_path=other_state_file, provider=provider,
         )
     return paths
 
@@ -1031,16 +1032,14 @@ def test_markdown_basis_zero_from_real_projection_admits(tmp_path: Path) -> None
     assert record["base_state_event_basis_sequence"] == 0
 
 
-def test_markdown_basis_with_fabricated_positive_sequence_fails_closed(
+def test_canonical_basis_with_fabricated_positive_sequence_fails_closed(
     tmp_path: Path,
 ) -> None:
-    # The inverse counterexample: with sequence fabricated to 5 the old
-    # decoder happily admitted the proposal as unverifiable. 0 is the only
-    # markdown basis the Stage 1 producer can emit, so any other value is
-    # not a producible base and must fail closed instead of being retained.
+    # A canonical snapshot has no event append sequence. Fabricating a
+    # positive sequence must fail closed instead of retaining the proposal.
     paths = _write_fixture(tmp_path)
 
-    with pytest.raises(ValueError, match="markdown_active_state"):
+    with pytest.raises(ValueError, match="canonical_todo_snapshot"):
         _admit(paths, _proposal(paths, {"base_state_event_basis_sequence": 5}))
 
     assert _journal_rows(paths) == []
@@ -1206,7 +1205,9 @@ def test_corrupt_journal_line_fails_closed_and_retains_nothing(
 
 
 def test_retention_does_not_advance_the_derived_head(tmp_path: Path) -> None:
-    paths = _write_fixture(tmp_path)
+    # File provides the byte-stable oracle; SQLite read connections may create
+    # WAL/SHM sidecars without changing the committed authority.
+    paths = _write_fixture(tmp_path, provider="file")
     before_tree = _canonical_tree_snapshot(paths)
 
     first = _admit(paths, _proposal(paths))

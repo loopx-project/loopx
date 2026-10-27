@@ -7,7 +7,10 @@ import pytest
 import time
 
 import test_quota_settlement_cli as cli
-from canonical_authority_fixture import isolate_sqlite_runtime
+from canonical_authority_fixture import (
+    advance_canonical_fixture_authority, isolate_sqlite_runtime, read_fixture_todos,
+)
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from benchmark.runtime.checkpoint import capture_after_wake, capture_before_replan
 from loopx.control_plane.effect_runtime import effect_runtime_result
@@ -57,6 +60,7 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
     project, runtime, registry = cli._write_fixture(tmp_path)
     if trigger:
         cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    cli._initialize_fixture_authority(project, runtime, provider="sqlite")
     skills = tmp_path / "skills"
     skills.mkdir()
     binary = tmp_path / "codex"
@@ -134,7 +138,7 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
 def test_real_cli_settlement_capture_verification_and_inert_materialization(
         tmp_path, monkeypatch, opportunity, corrupt, collisions):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = cli._write_fixture(tmp_path)
+    project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args)
@@ -250,7 +254,7 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
     from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = cli._write_fixture(tmp_path)
+    project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args, cwd=project)
@@ -401,7 +405,7 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
     import sys
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = cli._write_fixture(tmp_path)
+    project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
 
     def run(*args):
@@ -432,6 +436,13 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
             f"  <!-- loopx:todo todo_id={cli.TODO_ID} status=open claimed_by={cli.AGENT_ID} -->\n"))
     # This helper supplies synthetic repeated observations; retain the real
     # source settlement history instead of replacing its authoritative readback.
+    advance_canonical_fixture_authority(
+        runtime, cli.GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=cli.GOAL_ID, todos=read_fixture_todos(
+                project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"),
+            handoff_mode="soft_claim", leases=[],
+        ), operation_id="fixture-replan-source",
+    )
     index.write_bytes(original_settlement + index.read_bytes())
     logs = tmp_path / "logs"
     wakes = logs / "wakes"
@@ -524,10 +535,9 @@ def test_controller_participant_keeps_canonical_state_and_journals_inert(tmp_pat
     project, runtime, registry = cli._write_fixture(tmp_path)
     source_ref = capture_first_party_host_goal_ref(registry_path=registry, goal_id=cli.GOAL_ID)
     state = project / f'.codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md'
-    code, listed = cli._run_cli(registry, runtime, 'todo', 'list', '--goal-id', cli.GOAL_ID)
-    assert code == 0, listed
+    source_todos = read_fixture_todos(state)
     initialize_canonical_authority(runtime, cli.GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=cli.GOAL_ID, todos=listed['todos'],
+        build_todo_runtime_shadow_projection(goal_id=cli.GOAL_ID, todos=source_todos,
                                             handoff_mode='hard_lease', leases=[]),
         state_path=state, provider=provider)
     def run(*args):
@@ -707,7 +717,7 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
     if os.geteuid() == 0:
         pytest.skip("Real POSIX permission denial requires an unprivileged test user")
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = cli._write_fixture(tmp_path)
+    project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
     skills = tmp_path / "skills"
     skills.mkdir()
     binary = tmp_path / "codex"
@@ -747,6 +757,13 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
     index = runtime / "goals" / cli.GOAL_ID / "runs/index.jsonl"
     original = index.read_bytes()
     cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    advance_canonical_fixture_authority(
+        runtime, cli.GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=cli.GOAL_ID, todos=read_fixture_todos(
+                project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"),
+            handoff_mode="soft_claim", leases=[],
+        ), operation_id="fixture-later-replan-0",
+    )
     index.write_bytes(original + index.read_bytes())
     solution = project / "solution.py"
     solution.write_text("retained_candidate = 7\n")
@@ -807,6 +824,13 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
     from datetime import datetime, timedelta, timezone
     source_history = index.read_bytes()
     cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    advance_canonical_fixture_authority(
+        runtime, cli.GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=cli.GOAL_ID, todos=read_fixture_todos(
+                project / f".codex/goals/{cli.GOAL_ID}/ACTIVE_GOAL_STATE.md"),
+            handoff_mode="soft_claim", leases=[],
+        ), operation_id="fixture-later-replan-1",
+    )
     observations = [json.loads(line) for line in index.read_text().splitlines()]
     observed_at = datetime.now(timezone.utc)
     for number, row in enumerate(observations):

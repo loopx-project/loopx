@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from test_quota_settlement_cli import (
@@ -34,10 +34,9 @@ def test_blocked_lifecycle_closes_original_attempt_without_a_retry_clock(
                            "--format", "json", *args])
             return rc, json.loads(capsys.readouterr().out)
 
-    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0, listed
+    source_todos = read_fixture_todos(state)
     initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease", leases=[],
+        goal_id=GOAL_ID, todos=source_todos, handoff_mode="hard_lease", leases=[],
     ), state_path=state, provider=provider)
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", f"blocked-lifecycle-{provider}")

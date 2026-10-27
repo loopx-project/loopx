@@ -138,6 +138,10 @@ def _write_dual_registry_fixture(root: Path) -> dict[str, Path]:
         "registry_b": registry_b,
     }
     _append_runs(paths, _stall_runs())
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    initialize_canonical_source_fixture(
+        runtime_a, GOAL_ID, state_path=state_file, provider="sqlite",
+    )
     return paths
 
 
@@ -200,7 +204,7 @@ def test_cli_submits_proposal_and_lists_journal_json(
     assert list_payload["rows"][0]["journal_append_sequence"] == 1
 
 
-def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
+def test_cli_does_not_use_current_directory_when_registered_authority_is_missing(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -212,6 +216,7 @@ def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
     registry = json.loads(paths["registry"].read_text(encoding="utf-8"))
     goal = next(item for item in registry["goals"] if item["id"] == GOAL_ID)
     goal["repo"] = str(tmp_path / "missing-registered-project")
+    registry["common_runtime_root"] = str(tmp_path / "missing-registered-runtime")
     paths["registry"].write_text(json.dumps(registry), encoding="utf-8")
 
     # A different current directory happens to contain a same-named Goal
@@ -244,7 +249,7 @@ def test_cli_does_not_use_current_directory_when_registered_state_is_missing(
     )
     assert exit_code == 1
     assert payload["ok"] is False
-    assert "goal state file is missing" in payload["error"]
+    assert "Canonical authority is required" in payload["error"]
     assert not journal.exists()
 
 
@@ -344,7 +349,7 @@ def test_cli_single_registry_submit_and_list_positive_control(
     assert list_payload["rows"][0]["proposal_id"] == "gap_stage2_001"
 
 
-def test_cli_legacy_work_change_requires_rebase_and_preserves_original_receipt(
+def test_cli_canonical_work_change_requires_rebase_and_preserves_original_receipt(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
     paths = _write_fixture(tmp_path)
@@ -362,11 +367,12 @@ def test_cli_legacy_work_change_requires_rebase_and_preserves_original_receipt(
 
     first = submit(proposal)
     assert first["admission"] == "admitted"
-    state = paths["state_file"].read_text(encoding="utf-8")
-    needle = "todo_id=todo_stage2_b "
-    assert needle in state
-    paths["state_file"].write_text(state.replace(needle, needle + "claimed_by=agent-b "),
-                                   encoding="utf-8")
+    code, claimed, _ = _run_amendment_cli(
+        capsys, paths["registry"], "todo", "claim", "--goal-id", GOAL_ID,
+        "--todo-id", "todo_stage2_b", "--agent-id", "agent-b",
+        "--claimed-by", "agent-b", "--execute", "--format", "json",
+    )
+    assert code == 0 and claimed["claimed"] is True, claimed
     journal = paths["runtime"] / "goals" / GOAL_ID / "amendment-proposals" / "journal.jsonl"
     original_bytes = journal.read_bytes()
     assert submit(proposal) == first

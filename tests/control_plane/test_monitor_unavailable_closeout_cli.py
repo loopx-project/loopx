@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from test_quota_settlement_cli import (
@@ -57,11 +57,20 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
                            "--format", "json", *args])
             return rc, json.loads(capsys.readouterr().out)
 
-    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0, listed
+    if provider == "markdown":
+        before = state.read_bytes()
+        rc, refused = cli("todo", "list", "--goal-id", GOAL_ID)
+        assert rc == 1 and refused["error_code"] == "canonical_authority_required", refused
+        assert refused["write_admitted"] is False
+        assert refused["legacy_fallback_used"] is False
+        assert state.read_bytes() == before
+        assert _classification_count(runtime, "monitor_observation_unavailable") == 0
+        assert _spend_run_count(runtime) == 0
+        return
+    source_todos = read_fixture_todos(state)
     if provider != "markdown":
         initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease", leases=[],
+            goal_id=GOAL_ID, todos=source_todos, handoff_mode="hard_lease", leases=[],
         ), state_path=state, provider=provider)
     original_turn = f"unavailable-original-{provider}"
     binding = ("--agent-id", AGENT_ID, "--todo-id", MONITOR_ID,
@@ -223,7 +232,7 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         monitor = next(todo for todo in after_late["todos"] if todo["todo_id"] == MONITOR_ID)
         assert {k: monitor.get(k) for k in OBSERVATION_FIELDS} == fields
         assert {todo["todo_id"] for todo in after_late["todos"]} == {
-            todo["todo_id"] for todo in listed["todos"]
+            todo["todo_id"] for todo in source_todos
         }
         assert _classification_count(runtime, "monitor_observation_unavailable") == 1
         assert _classification_count(runtime, "quota_monitor_poll") == 0
