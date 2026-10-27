@@ -1483,45 +1483,9 @@ class Delegations:
         self, path: Path, row: dict, result: dict, *, publish: bool = True,
         already_locked: bool = False, unstarted_turn: bool = False,
     ) -> None:
-        turn_key = result.get("resume_turn_key")
-        if turn_key:
-            # Validate the public shape before persisting an address supplied
-            # by the CLI boundary.
-            turn_journal_path(self.root, goal_id=self.goal_id, turn_key=turn_key)
-        if publish:
-            # Only native receipt facts needed by the typed status owner cross
-            # this boundary. Evidence, settlement details and Host configuration
-            # remain with their original result instead of entering another RPC.
-            observation = {key: result.get(key) for key in (
-                "schema_version", "mode", "ok", "dry_run", "replayed", "status",
-                "reason", "result_kind", "quota_slot_spend_count", "effects",
-            )}
-            host = result.get("host")
-            observation["host"] = {"executable": host.get("executable")} if isinstance(host, dict) else None
-            decision = effect_runtime_result("collaboration.delegation.observe", {
-                "from": row["status"], "to": "turn_returned",
-                "turn_execution": observation, "unstarted_turn": unstarted_turn,
-            })
-            row["status"] = decision["status"]
-            if row["status"] == "prepared":
-                row["error"] = result["reason"]
-        if turn_key and (not publish or row["status"] != "prepared"):
-            row["turn_key"] = turn_key
-        row["turn_result"] = {
-            key: result.get(key)
-            for key in (
-                "status",
-                "result_kind",
-                "resume_turn_key",
-                "reason",
-                "host_failure",
-                "error",
-            )
-        }
-        if already_locked:
-            self._fenced_write_locked(path, row)
-        else:
-            self._fenced_write(path, row)
+        # Keep the bound service seam used by existing recovery/fault-injection callers.
+        delegation_validation.record_turn_result(self, path, row, result, publish=publish,
+            already_locked=already_locked, unstarted_turn=unstarted_turn)
 
     def _receiver_adopted(self, row: dict, binding: dict) -> bool:
         request_id = row["identity"]["request_id"]
