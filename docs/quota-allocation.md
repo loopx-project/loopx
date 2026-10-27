@@ -868,6 +868,21 @@ including `generic_cli`, `outer_controller`, and native CLI profiles. An explici
 asking for the selection it just accepted. This does not enable `--begin-turn`
 for those hosts or change legacy calls without a Turn identity.
 
+Hosts that already support `--begin-turn` may combine it with `--todo-id` to
+qualify a known choice on the initial guard. Reuse the returned Turn identity
+for recovery; beginning a Turn does not claim a lease or bypass admission.
+With an open scoped user gate, an explicitly selected eligible action is checked
+against that gate directly, including choices outside the compact display.
+The default fallback ranking is not an authority boundary. Covered actions,
+budget/health stops, capability requirements and committed receipt identities
+retain their existing checks.
+
+已支持 `--begin-turn` 的宿主可以同时传入 `--todo-id`，在第一次 guard 中校验
+已选工作，减少一次选择调用。恢复时复用返回的 Turn 身份；开始 Turn 不等于
+取得租约或绕过准入。存在限定范围的用户审批时，显式选择的合格工作直接按该
+审批范围校验，即使它不在精简展示中。默认推荐顺序不构成权限边界；受审批
+约束的工作、预算和健康停止条件、能力要求及已绑定回执仍保留原有校验。
+
 A single already-claimed candidate keeps the direct execution path without an
 extra selection round trip. A sole unclaimed candidate instead projects the
 existing explicit selection contract: recommendation alone must not create a

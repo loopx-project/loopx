@@ -740,12 +740,30 @@ def _prepare_quota_should_run_item(
     if task_orchestration_contract_is_actionable(task_orchestration_contract):
         capability_monitor_contract = capability_monitor_fallback = None
     work_lane_contract = capability_monitor_contract or work_lane_contract
+    # Resolve the exact choice before selecting a gate-independent route. The
+    # ranked fallback is advice, not an additional permission boundary.
+    requested_action_candidate = (
+        build_explicit_advancement_next_action(
+            agent_identity=agent_identity,
+            agent_todo_items=agent_todo_planning_source_items,
+            available_capabilities=effective_available_capabilities,
+            todo_id=requested_action_todo_id,
+            selection_binding="pending_action_selection",
+        )
+        if requested_action_todo_id
+        else None
+    )
     scoped_user_gate_fallback = _scoped_user_gate_fallback(
         user_todo_summary,
         agent_todo_summary,
         capability_gate=capability_gate,
         allow_unrelated_gate=bool(quota.get("safe_bypass_allowed")),
         monitor_debt_backoff_active=bool(monitor_debt_arbitration.get("active")),
+        requested_todo_id=requested_action_todo_id,
+        requested_candidate=next((
+            item for item in agent_todo_planning_source_items
+            if item.get("todo_id") == requested_action_todo_id
+        ), None) if requested_action_candidate is not None else None,
     )
     work_lane_contract = (
         scoped_user_gate_due_monitor_contract(
@@ -912,19 +930,6 @@ def _prepare_quota_should_run_item(
         recovery_allowed = False
         reason = str(projection_gap_repair.get("reason") or reason)
     boundary_projection_repair = None
-    # Resolve exact identity before Agent/display compaction. Live callers supply
-    # the complete source; pure status callers use only their supplied snapshot.
-    requested_action_candidate = (
-        build_explicit_advancement_next_action(
-            agent_identity=agent_identity,
-            agent_todo_items=agent_todo_planning_source_items,
-            available_capabilities=effective_available_capabilities,
-            todo_id=requested_action_todo_id,
-            selection_binding="pending_action_selection",
-        )
-        if requested_action_todo_id
-        else None
-    )
     state_path = goal_state_path(registry_goal)
     return _QuotaDecisionPreparation(
         status_payload=status_payload,

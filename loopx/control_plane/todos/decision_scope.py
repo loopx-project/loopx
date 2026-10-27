@@ -317,7 +317,8 @@ def todo_gate_relations(gates: list[dict[str, Any]], items: list[dict[str, Any]]
 
 def select_scoped_gate_fallback(gates: list[dict[str, Any]], items: list[dict[str, Any]], *,
                                agent_id: str | None, allow_unrelated_gate: bool,
-                               monitor_debt_backoff_active: bool) -> dict[str, Any] | None:
+                               monitor_debt_backoff_active: bool,
+                               requested_todo_id: str | None = None) -> dict[str, Any] | None:
     """Decode legacy facts; the typed owner returns positions, never display rows."""
     if not gates or not items:
         return None
@@ -336,6 +337,7 @@ def select_scoped_gate_fallback(gates: list[dict[str, Any]], items: list[dict[st
         "fallback",
         _evaluate("fallback", gates=[facts(gate) for gate in gates], candidates=[facts(item) for item in items],
                   agent_id=normalize_todo_claimed_by(agent_id), allow_unrelated_gate=allow_unrelated_gate,
+                  requested_todo_id=normalize_todo_id(requested_todo_id),
                   monitor_debt_backoff_active=monitor_debt_backoff_active),
         schema_versions=frozenset({"scoped_gate_fallback_selection_v0"}),
         nullable=True,

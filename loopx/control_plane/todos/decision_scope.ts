@@ -97,6 +97,7 @@ export function fallbackGateRelation(gate: JsonObject, item: JsonObject): JsonOb
  * Return source positions, leaving display compaction and wording to adapters. */
 export function selectScopedGateFallback(request: JsonObject): JsonObject | null {
   const agent = optionalNonEmptyString(request.agent_id, "agent_id");
+  const requested = optionalNonEmptyString(request.requested_todo_id, "requested_todo_id");
   const debt = requireBoolean(request.monitor_debt_backoff_active, "monitor_debt_backoff_active");
   const allowUnrelated = requireBoolean(request.allow_unrelated_gate, "allow_unrelated_gate");
   const gates = rows(request.gates).map((gate, index) => ({gate, index})).filter(({gate}) =>
@@ -129,7 +130,7 @@ export function selectScopedGateFallback(request: JsonObject): JsonObject | null
     if (match) {
       blockingGate ??= match;
       blocked.push({candidate_index: candidate.index, gate_index: match.index, relation: match.relation});
-    } else selected ??= candidate;
+    } else if (!requested || candidate.item.todo_id === requested) selected ??= candidate;
   }
   if (!selected || (!blockingGate && !allowUnrelated)) return null;
   const surface = blockingGate ?? gates[0]!;

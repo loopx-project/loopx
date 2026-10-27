@@ -6313,6 +6313,7 @@ def test_pending_action_selection_does_not_commit_after_new_user_gate(
         "--priority", "P0", "--task-class", "user_gate",
         "--action-kind", "approve_delivery", "--blocks-agent", AGENT_ID,
         "--agent-id", AGENT_ID, "--decision-scope", "direction:action:fixture",
+        "--unblocks-todo-id", ALTERNATIVE_TODO_ID,
     )
     assert added_rc == 0, added
     selected_rc, selected = _run_cli(

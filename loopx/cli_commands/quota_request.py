@@ -161,9 +161,9 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
         raise QuotaCommandValidationError(
             "`loopx quota void-slot` requires --void-generated-at"
         )
-    if command == "should-run" and args.todo_id and not args.turn_instance_id:
+    if command == "should-run" and args.todo_id and not (args.turn_instance_id or begin_turn):
         raise QuotaCommandValidationError(
-            "`loopx quota should-run --todo-id` requires --turn-instance-id"
+            "`loopx quota should-run --todo-id` requires --turn-instance-id or --begin-turn"
         )
     if begin_turn and command != "should-run":
         raise QuotaCommandValidationError(
@@ -172,11 +172,6 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
     if begin_turn and args.turn_instance_id:
         raise QuotaCommandValidationError(
             "--begin-turn cannot be combined with --turn-instance-id"
-        )
-    if begin_turn and args.todo_id:
-        raise QuotaCommandValidationError(
-            "--begin-turn cannot select --todo-id; reuse the exact "
-            "--turn-instance-id returned by the initial guard"
         )
     if begin_turn and not args.agent_id:
         raise QuotaCommandValidationError(
