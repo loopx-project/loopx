@@ -516,6 +516,7 @@ export const typedActionsScenario = {
         return {
           closeHeight: close?.height ?? 0,
           closeTopInset: close ? close.top - header.top : 0,
+          closeBottomInset: close ? header.bottom - close.bottom : 0,
           closeWidth: close?.width ?? 0,
           headerHeight: header.height,
           paddingTop: Number.parseFloat(style.paddingTop),
@@ -524,8 +525,11 @@ export const typedActionsScenario = {
       if (drawerHeaderVisual.closeHeight < 44 || drawerHeaderVisual.closeWidth < 44) {
         throw new Error(`Goal drawer close control is below the 44px target: ${JSON.stringify(drawerHeaderVisual)}`);
       }
-      if (drawerHeaderVisual.headerHeight < 84 || drawerHeaderVisual.paddingTop < 18 || drawerHeaderVisual.closeTopInset < 18) {
-        throw new Error(`Goal drawer header is still pinned too close to the top edge: ${JSON.stringify(drawerHeaderVisual)}`);
+      // Goal details use the compact header adopted with the readable Goal
+      // inspector. Preserve its 44px target and breathing room on both edges.
+      if (drawerHeaderVisual.headerHeight < 68 || drawerHeaderVisual.paddingTop < 12
+        || drawerHeaderVisual.closeTopInset < 12 || drawerHeaderVisual.closeBottomInset < 12) {
+        throw new Error(`Goal drawer header clips or crowds its close control: ${JSON.stringify(drawerHeaderVisual)}`);
       }
       const goalDrawerOrder = await page.locator(".personal-drawer-body").evaluate((element) => {
         const lark = element.querySelector(".personal-goal-notification");
@@ -752,6 +756,7 @@ export const typedActionsScenario = {
       if (englishMonitorShortcut?.normalized_parameters.target !== "Check the current Goal for blockers, progress, and new outputs") throw new Error(`English scheduled-check shortcut did not fall back to the localized default check target: ${JSON.stringify(englishMonitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeEnglishMonitorShortcut) throw new Error("English scheduled-check shortcut wrote durable state before confirmation");
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "Configure scheduled check" }).click();
       const englishScheduleForm = page.getByRole("dialog", { name: "Configure scheduled check", exact: true });
       const previewsBeforeEnglishCalendarSchedule = api.actionPreviews.length;
@@ -1153,6 +1158,7 @@ export const typedActionsScenario = {
       await page.getByRole("region", {name:"资料召回",exact:true}).waitFor({state:"visible"});
       await page.locator(".personal-capability-list").getByRole("button", { name: "已退役的 Authority 观测" }).click();
       const retiredDetail = page.locator(".personal-capability-detail");
+      await retiredDetail.getByRole("button", {name: "只读能力", exact: true}).click();
       await retiredDetail.getByText(/--clear-local-authority-shadow/).waitFor();
       if (await retiredDetail.getByRole("checkbox").count()
           || await retiredDetail.getByRole("button", { name: "预览变更", exact: true }).count()) {
@@ -1164,7 +1170,7 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, "retired-observation-settings-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize(desktopViewport);
       await page.locator(".personal-capability-list").getByRole("button", { name: "周期报告" }).click();
-      for (const label of [/^启用$/u, /^报告 Profile/u, /^Goal Channel 路由/u, /^时区/u]) {
+      for (const label of [/^启用$/u, /^报告 Profile/u, /^报告接收会话/u, /^时区/u]) {
         await page.getByLabel(label).waitFor({ state: "visible" });
       }
       await page.screenshot({ path: resolve(outputDir, "goal-capability-zh-cn.png"), fullPage: false, animations: "disabled" });
@@ -2017,9 +2023,9 @@ export const typedActionsScenario = {
       if (monitorShortcut?.normalized_parameters.target !== "检查当前 Goal 的阻塞、进度与新产出") throw new Error(`定时检查快捷方式未回落到本地化默认检查目标：${JSON.stringify(monitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeMonitorShortcut) throw new Error("定时检查快捷方式在确认前写入了持久状态");
       await page.getByRole("button", { name: "关闭", exact: true }).click();
-      if (await page.locator(".personal-composer-tools").getAttribute("open") === null) {
-        throw new Error("Closing a configuration draft lost the open shortcut menu across composer folding");
-      }
+      // Selecting a shortcut dismisses the shared action menu. Reopen it for
+      // the next draft, as with the English configuration journey above.
+      await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", {name: "配置定时检查"}).click();
       const monitorForm = page.getByRole("dialog", {name: "配置定时检查", exact: true});
       const previewsBeforeUnsupportedSchedule = api.actionPreviews.length;
