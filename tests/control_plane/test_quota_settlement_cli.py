@@ -528,6 +528,7 @@ def _append_due_monitors(
 def _append_blocking_user_gate(project: Path) -> None:
     from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
     from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
+    from loopx.control_plane.todos.todo_summary import canonical_todo_read_record
 
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
@@ -544,7 +545,8 @@ def _append_blocking_user_gate(project: Path) -> None:
     # Reuse the section owner for both authored and already materialized input.
     # This edits fixture source only; callers still initialize or advance CAS.
     rendered = render_canonical_todo_sections(
-        state_text, [*read_fixture_todos(state_path), *additions],
+        state_text, [canonical_todo_read_record(row)
+                     for row in [*read_fixture_todos(state_path), *additions]],
         provider_revision="fixture-user-gate",
     )
     state_path.write_text(rendered.markdown, encoding="utf-8")
