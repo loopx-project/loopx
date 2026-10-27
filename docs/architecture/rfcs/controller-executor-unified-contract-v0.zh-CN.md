@@ -372,8 +372,8 @@ TypeScript 和四项真实 Codex `0.163.0-alpha.11.1` 静态 loopback 检查。�
 中断回归最初因仍选中前次 capture 而失败；将当前恢复发布前移到可选 scope 调用之前
 后通过。在运行源码 `e1c69289a`，标准 premerge 有两项在 `8b37000b3` 同样复现的失败：既有
 `run_loopx_turn_once` 决策函数过大，以及前序 owner 收敛后 `turn_route` 的 producer
-覆盖过期。本 native 增量未修改这些文件；历史结果不是通过或例外。当前集成已 rebase
-到 `b69021498`，采用 [#7520](https://github.com/loopx-project/loopx/pull/7520)
+覆盖过期。本 native 增量未修改这些文件；历史结果不是通过或例外。集成已先 rebase
+到 `b69021498`，再到 `f63647e2e`，保留目标主干的原生输出预算行为，并采用 [#7520](https://github.com/loopx-project/loopx/pull/7520)
 对真实 TypeScript producer/scanner 的修复，并在 `fec9cd3af` 将原 capture 恢复从
 run-once 编排中分离，保留既有 capture owner 与 session 恢复。大小阈值不变。当前
 完整组合的资格归精确集成 head 的 PR 证据，不能沿用旧 native 切片的测试计数。

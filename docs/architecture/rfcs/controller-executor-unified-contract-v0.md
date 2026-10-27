@@ -502,7 +502,8 @@ At runtime `e1c69289a`, standard premerge failed two checks also reproduced on `
 the existing oversized `run_loopx_turn_once` decision function and stale
 `turn_route` producer coverage after the earlier owner convergence. The native
 increment did not change those files; that historical result is not a pass or
-an exception. The current integration, rebased onto `b69021498`, incorporates
+an exception. The integration was rebased onto `b69021498`, then onto
+`f63647e2e` with the target-main native output-budget behavior retained. It incorporates
 the actual TypeScript producer/scanner repair from [#7520](https://github.com/loopx-project/loopx/pull/7520).
 It also isolates original-capture restoration from run-once orchestration at
 `fec9cd3af`, preserving the existing capture owner and session recovery. The
