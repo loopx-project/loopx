@@ -36,6 +36,11 @@ flattening the legacy authority layout. Executable-action and admitted-replan
 facts retain their typed owner; Codex boundary guidance uses the complete source.
 The original capture metadata and historical-only decoder remain supported.
 This changes no complete model input, effect owner or cross-attempt freshness rule.
+Codex CLI and operation-equipped app-server input preparation share one complete
+source check for prompt and result schema within that launch. The internal reply
+returns resolved metadata without echoing the source. Standalone consumers and
+post-execution result conversion still validate independently; no cross-attempt
+cache or new model-facing contract is introduced.
 
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
@@ -58,6 +63,9 @@ C1 的 native 候选在既有 typed owner 的一次调用中组合成果读取�
 已准入 replan 事实仍由既有 typed owner 提供，Codex 边界指导读取完整来源。
 原 capture 元数据和仅用于历史请求的 decoder 保留；完整模型输入、effect 归属及
 跨 attempt 新鲜度规则不变。
+Codex CLI 与启用 operation tools 的 app-server 在一次启动的输入准备中，让提示词
+与结果 schema 共用完整来源校验；内部响应只返回已解析元数据，不原样回传来源。
+独立消费者与执行后的结果转换仍各自校验，不引入跨 attempt 缓存或新的模型侧契约。
 
 Preview it explicitly:
 

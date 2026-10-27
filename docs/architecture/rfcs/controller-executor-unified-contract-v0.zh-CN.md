@@ -662,10 +662,41 @@ authority-store IO；机器及后台负载仍未控制。不含启动、其他�
 缓存／账单／人工成本及验收成果。早期与验证重叠且未独立隔离的探索计时不作资格；
 源码收敛和这些样本均不能证明相对原 quota 的净收益。
 
+后续输入准备增量在同一次 Codex 启动内，由提示词和结果 schema 共用一次完整
+来源校验。CLI 进程与启用 operation tools 的 app-server 都消费这一既有 adapter
+边界。独立调用提示词／schema 仍各自校验，结构化结果转换在执行后重新校验来源；
+不跨 attempt、模型执行或结果处理缓存校验值。typed owner 只返回行动、replan、
+approval 和 profile 适用性事实，不再通过 bridge 原样回传完整来源。Python 消费
+自己持有的原始已校验输入，并保留结构化 authority 值的独立副本。完整模型输入、
+原 reader、启动 guard、结果验证和外层结算不变。
+
+自有 V8 进程捕获 500 次基线来源校验，显示 canonical hash 与 Unicode key
+排序占用明显 CPU；未覆盖 Python、transport 或 provider IO，inclusive 权重不是
+节省时延。它支持移除同一次准备中的重复校验，不支持弱化完整性或跨执行复用。
+原负面测量按历史保留；本增量不关闭 C1 相对原 quota 的成果／完整成本及采用要求。
+
+相对重基到目标 `ff9e97f8e` 的前序 `75bd69bf6`，六组顺序交错 cohort、每 arm／case 93 次温态样本，
+完整 prompt／schema／result、历史输出和无效来源诊断完全一致。Codex 输入准备从
+两次 RPC 降为一次；结构化提示与执行后 candidate 转换仍保留两次。File／SQLite 的
+Codex 请求字节为 86,293／86,399 → 43,144／43,197，响应为 62,554／62,606 → 211；
+结构化请求各减少五字节，响应变为 422 字节。这里是内部 JSON payload，不含 framing。
+
+| 请求来源 / Host | `75bd69bf6` median / p95 毫秒 | 输入准备增量 median / p95 毫秒 |
+| --- | --- | --- |
+| File / Codex | 22.147 / 26.204 | 12.003 / 13.653 |
+| File / structured | 22.269 / 26.310 | 23.124 / 27.843 |
+| SQLite / Codex | 21.656 / 26.511 | 11.734 / 17.183 |
+| SQLite / structured | 21.324 / 23.608 | 23.716 / 26.079 |
+
+Codex 局部准备成本改善，两个结构化时延仍是负向观察，不能被传输量下降抵销。
+负载没有 store IO 或真实模型工作；各自有独立 runtime、顺序执行避免本 Agent 的
+验证重叠，但后台负载仍未控制。不含启动、其他调用、整轮、tokens／缓存、账单、
+实施／人工与验收成果；不是原 quota 对照，也不证明整体净收益。
+
 Codex 结果 schema 与共享 candidate adapter 现通过同一经过校验的完整契约
 profile 读取判断证据要求是否适用；新请求不再从内部 capsule 决定该要求。
 该读取与模型输入校验复用既有 TypeScript 完整性／来源／身份校验器，没有新增
-packet 视图、wire 字段或按证据字段分别调用。缺省契约仍解码历史 capsule；
+模型侧 packet 视图或按证据字段分别调用。缺省契约仍解码历史 capsule；
 显式 null 或被修改的契约会拒绝。空／非对象 profile 保持原来的不适用行为，
 停止结果仍不要求证据，已提供证据原样交给既有结果验证器。此次迁移的是适用性
 判断，未改写证据内容校验，也尚未迁移全部执行路由和结算消费者。

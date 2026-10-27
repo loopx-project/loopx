@@ -902,11 +902,53 @@ Turn/model/cache/billing/human costs and accepted outcomes are excluded. Earlier
 overlapping, non-isolated exploratory timing is not qualified; neither source
 convergence nor these samples establish original-quota net benefit.
 
+The next input-preparation increment shares one complete-source check between
+prompt and result-schema construction within a single Codex launch. Both the
+CLI process and operation-equipped app-server use this existing adapter boundary.
+Standalone prompt/schema calls still check independently; structured result
+conversion checks its source again after execution. No checked value is cached
+across attempts, model work or result handling. The typed owner now returns only
+action/replan/approval/profile applicability facts instead of echoing the full
+source over the bridge. Python consumes its original checked input, retaining
+the structured authority's detached values. Complete model input, original
+readers, launch guards, result validation and outer settlement remain unchanged.
+
+An owned V8 capture of 500 baseline source checks locates substantial CPU work
+in canonical hashing and Unicode key ordering. It excludes Python, transport and
+provider IO; its inclusive weights are not elapsed-time savings. This motivates
+removing duplicate checks at one preparation boundary, not weakening integrity
+checks or sharing validation across execution. Earlier negative measurements
+remain historical evidence; this increment does not close C1's original-quota
+outcome/full-cost or adoption requirements.
+
+Against rebased predecessor `75bd69bf6` on target `ff9e97f8e`, six sequential interleaved cohorts
+(93 warm samples per arm/case) retain identical complete prompt/schema/result,
+historical output and invalid-source diagnostics. Codex preparation drops from
+two RPCs to one; structured prompt plus post-execution candidate conversion
+retains two. Codex request bytes are 86,293/86,399 → 43,144/43,197 for File/SQLite;
+responses are 62,554/62,606 → 211. Structured requests decrease by five bytes and
+responses become 422 bytes. These are internal JSON payloads, excluding framing.
+
+| Request provenance / Host | `75bd69bf6` median / p95 ms | Prepared input median / p95 ms |
+| --- | --- | --- |
+| File / Codex | 22.147 / 26.204 | 12.003 / 13.653 |
+| File / structured | 22.269 / 26.310 | 23.124 / 27.843 |
+| SQLite / Codex | 21.656 / 26.511 | 11.734 / 17.183 |
+| SQLite / structured | 21.324 / 23.608 | 23.716 / 26.079 |
+
+Codex's local preparation improves; both structured timings remain negative
+observations despite lower transport volume. The workload performs no store IO
+or real model work. Separate owned runtimes and sequential arms avoid this
+Agent's validation overlap, but background load remains uncontrolled. Startup,
+other calls, full Turn, tokens/cache, billing, implementation/human cost and
+accepted outcomes remain outside this measurement; it is not the original-quota
+comparison or proof of overall benefit.
+
 The Codex result schema and shared candidate adapter now use one checked
 complete-contract profile read for evidence applicability. They no longer decide
 that requirement from the internal capsule on new requests. The existing
 TypeScript integrity/source/lineage validator serves both this read and model
-input validation; no new packet view, wire field or per-evidence-field call is
+input validation; no new model-facing packet view or per-evidence-field call is
 introduced. Omitted contracts retain historical capsule decoding; explicit null
 or altered contracts reject. Empty/non-object profiles preserve their previous
 non-applicability, stop results still need no evidence, and supplied evidence is
