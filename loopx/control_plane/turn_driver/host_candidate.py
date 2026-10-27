@@ -7,6 +7,7 @@ boundaries. DSH and optional cloud hosts share this exact result contract.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from hashlib import sha256
 import json
 from typing import Any
@@ -81,10 +82,11 @@ def execution_profile_present(request: Mapping[str, Any]) -> bool:
     supplied contract never falls back. Schema and candidate adapters share this
     read, while evidence content validation stays with the result executor.
     """
-    decision = _complete_host_source(request)
-    if decision is None:
-        envelope = _mapping(request.get("turn_envelope"))
-        decision = _mapping(envelope.get("contract_capsule"))
+    checked = _complete_host_source(request, operation="host_context")
+    if checked is not None:
+        return checked["execution_profile_present"]
+    envelope = _mapping(request.get("turn_envelope"))
+    decision = _mapping(envelope.get("contract_capsule"))
     profile = decision.get("execution_profile")
     return isinstance(profile, Mapping) and bool(profile)
 
@@ -132,7 +134,9 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         primary_action = checked["primary_action"]
         if not isinstance(primary_action, str) or not primary_action.strip():
             raise ValueError("signed TurnEnvelope has no primary_action")
-        decision = checked["decision"]
+        # Keep the old detached authority value without echoing its complete
+        # bytes through the checked-source RPC.
+        decision = deepcopy(_mapping(request["work_contract"]))
         return {**decision, "primary_action": primary_action,
             "execution_profile": _mapping(decision.get("execution_profile")),
             "replan_action_packet": decision.get("replan_action_packet") if checked["replan_admitted"] else None,

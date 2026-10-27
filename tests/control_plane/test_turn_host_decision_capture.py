@@ -404,7 +404,7 @@ def test_complete_result_evidence_applicability_uses_admitted_profile(complete_h
     from loopx.control_plane.quota.turn_envelope import (
         build_turn_envelope, compose_turn_decision, turn_envelope_action_signature_document,
     )
-    from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema
+    from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema, prepare_codex_cli_input
     from loopx.control_plane.turn_driver.host_candidate import build_result
 
     request, original = complete_host_request
@@ -426,6 +426,7 @@ def test_complete_result_evidence_applicability_uses_admitted_profile(complete_h
         for consumer_request in (complete, historical):
             schema = codex_cli_result_schema(consumer_request)
             assert bool(schema.get("allOf")) is expected
+            assert bool(prepare_codex_cli_input(consumer_request)[1].get("allOf")) is expected
             result = build_result(consumer_request, candidate)
             assert (result["classification"] == "missing_host_execution_evidence") is expected
             for field in ("work_evidence", "validation_evidence"):
@@ -528,6 +529,83 @@ def test_codex_prompt_preserves_complete_source_and_historical_version_gate(comp
     broken["turn_envelope"]["schema_version"] = "unsupported_fixture_version"
     with pytest.raises(RuntimeError, match="unsupported TurnEnvelope schema_version"):
         _prompt(broken)
+
+
+def test_complete_structured_authority_keeps_detached_source(complete_host_request):
+    from copy import deepcopy
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
+
+    request, contract = complete_host_request
+    before = deepcopy(contract)
+    authority = extract_turn_authority(request)
+    authority["contract_binding"]["source_decision_hash"] = "changed local authority"
+    authority["selected_todo"]["text"] = "changed local work"
+    assert contract == before and request["work_contract"] == before
+
+
+@pytest.mark.parametrize("operation_tools", [False, True])
+def test_complete_codex_launch_shares_input_check_only_within_attempt(
+    complete_host_request, tmp_path, monkeypatch, operation_tools,
+):
+    from copy import deepcopy
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.turn_driver.codex_cli import _prompt, codex_cli_result_schema, run_codex_cli_host
+    from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host
+    from tests.test_codex_operation_host import FAKE_SERVER
+
+    request, _ = complete_host_request
+    expected_prompt, expected_schema = _prompt(request), codex_cli_result_schema(request)
+    prompt_file, schema_file = tmp_path / "prompt.txt", tmp_path / "schema.json"
+    if operation_tools:
+        executable = tmp_path / "fake-operation-host"
+        executable.write_text(FAKE_SERVER.replace(
+            'assert row["params"]["outputSchema"]["type"] == "object"',
+            'import pathlib\n        '
+            f'pathlib.Path({str(schema_file)!r}).write_text(json.dumps(row["params"]["outputSchema"]))',
+        ))
+        executable.chmod(0o700)
+        monkeypatch.setenv("FAKE_OPERATION_PROMPT_FILE", str(prompt_file))
+    else:
+        executable = _fixture_module()._write_fake_codex(tmp_path)
+        executable.write_text(executable.read_text().replace(
+            "prompt = sys.stdin.read()", "prompt = sys.stdin.read()\n"
+            f"pathlib.Path({str(prompt_file)!r}).write_text(prompt)\n"
+            f"pathlib.Path({str(schema_file)!r}).write_text(pathlib.Path(args[args.index('--output-schema') + 1]).read_text())",
+        ))
+    observed = []
+    original = turn_envelope.effect_runtime_result
+
+    def observe(method, arguments, **kwargs):
+        if arguments.get("operation") in {"host_context", "validate_complete"}:
+            observed.append(arguments["operation"])
+        return original(method, arguments, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_result", observe)
+    options = dict(runtime_root=tmp_path / "runtime", project=tmp_path / "project",
+        codex_bin=str(executable), timeout_seconds=10)
+    run = run_codex_cli_host
+    if operation_tools:
+        run = run_codex_operation_host
+        options.update(registry_path=tmp_path / "project/.loopx/registry.json",
+            model="test-model", reasoning_effort="xhigh")
+    for _ in range(2):
+        observed.clear()
+        result = run(request, **options)
+        assert result["turn_key"] == request["turn_key"]
+        # The existing app-server client folds prompt whitespace before send;
+        # CLI stdin retains the original bytes. Neither adapter changes here.
+        assert prompt_file.read_text().startswith(
+            " ".join(expected_prompt.split()) if operation_tools else expected_prompt)
+        assert json.loads(schema_file.read_text()) == expected_schema
+        # A fresh attempt checks again; preparing its prompt and schema shares
+        # the one check. Result validation and outer settlement remain separate.
+        assert observed == ["host_context"]
+    changed = deepcopy(request)
+    changed["work_contract"]["reason"] = "source changed after a successful launch"
+    before = prompt_file.read_bytes(), schema_file.read_bytes()
+    with pytest.raises((RuntimeError, ValueError)):
+        run(changed, **options)
+    assert before == (prompt_file.read_bytes(), schema_file.read_bytes())
 
 
 @pytest.mark.parametrize("host", ["codex", "structured"])

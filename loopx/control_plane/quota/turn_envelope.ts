@@ -2077,12 +2077,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   }
   if (operation === "host_context") {
     const {decision, projection} = completeHostSource(request);
-    // The structured Host consumes the complete source. Only the existing
-    // action and resolved-control facts come from its checked projection;
-    // Python must not recreate replan/capability or write-approval rules.
-    return {decision, primary_action: object(projection.action).primary_action ?? null,
+    // The caller already holds this exact checked source. Return only the
+    // resolved facts it needs, not another full copy over the transport.
+    return {primary_action: object(projection.action).primary_action ?? null,
       replan_admitted: Object.keys(object(projection.replan_action_packet)).length > 0,
-      checkpointed_write_approval: Object.hasOwn(object(projection.boundary), "checkpointed_boundary_authority")};
+      checkpointed_write_approval: Object.hasOwn(object(projection.boundary), "checkpointed_boundary_authority"),
+      execution_profile_present: Object.keys(object(decision.execution_profile)).length > 0};
   }
   if (operation === "driver_route") return {route: turnEnvelopeRoute(requireJsonObject(request.envelope, "Turn route envelope"),
     request.historical_route_text === undefined ? undefined : requireJsonObject(request.historical_route_text, "historical route text"))};

@@ -196,6 +196,12 @@ def _has_subagent_topology(request: Mapping[str, Any] | None) -> bool:
 def codex_cli_result_schema(
     request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    return _result_schema(request)
+
+
+def _result_schema(
+    request: Mapping[str, Any] | None, *, checked: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     text_limits = dict(HOST_RESULT_TEXT_LIMITS)
     properties: dict[str, Any] = {
         "schema_version": {
@@ -277,7 +283,8 @@ def codex_cli_result_schema(
             "enum": ["codex-cli"],
         }
         properties["child_execution_receipts"] = child_receipts
-    evidence_required = execution_profile_present(request or {})
+    evidence_required = (checked["execution_profile_present"] if checked is not None
+        else execution_profile_present(request or {}))
     schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
@@ -305,21 +312,47 @@ def codex_cli_result_schema(
 
 
 def _prompt(request: Mapping[str, Any]) -> str:
+    return _render_prompt(request, checked=_checked_prompt_context(request))
+
+
+def _checked_prompt_context(request: Mapping[str, Any]) -> dict[str, Any] | None:
     from ..quota.turn_envelope import assert_turn_envelope_consumer_version
 
     envelope = _mapping(request.get("turn_envelope"))
-    from .host_candidate import _captured_model_input, _complete_host_source
+    from .host_candidate import _complete_host_source
 
     # The complete owner checks the adapter version, source and lineage in one
     # call. Keep the standalone version gate only for historical requests.
     try:
         checked = _complete_host_source(request, operation="host_context")
-        complete_input = _captured_model_input(request) if checked is not None else None
     except RuntimeError:
         # Preserve the historical diagnostic precedence for doubly malformed
         # input without imposing a second bridge call on valid requests.
         assert_turn_envelope_consumer_version(envelope)
         raise
+    return checked
+
+
+def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Prepare one launch's prompt and schema from one complete-source check.
+
+    This value never crosses an attempt/result boundary or enters a cache.
+    Standalone consumers still validate independently; historical requests keep
+    their existing prompt/schema readers. Launch and result authority stay with
+    the original Host and outer executor.
+    """
+    checked = _checked_prompt_context(request)
+    if checked is None:
+        return _prompt(request), codex_cli_result_schema(request)
+    return _render_prompt(request, checked=checked), _result_schema(request, checked=checked)
+
+
+def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | None) -> str:
+    from ..quota.turn_envelope import assert_turn_envelope_consumer_version
+    from .host_candidate import _captured_model_input
+
+    envelope = _mapping(request.get("turn_envelope"))
+    complete_input = _captured_model_input(request) if checked is not None else None
     complete = complete_input is not None
     if not complete:
         assert_turn_envelope_consumer_version(envelope)
@@ -863,9 +896,10 @@ def run_codex_cli_host(
         temporary = Path(directory)
         schema_path = temporary / "result-schema.json"
         output_path = temporary / "last-message.json"
+        input_text, result_schema = prepare_codex_cli_input(request)
         schema_path.write_text(
             json.dumps(
-                codex_cli_result_schema(request),
+                result_schema,
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
@@ -911,7 +945,6 @@ def run_codex_cli_host(
 
         events = HostOutputLines(observe_event)
         diagnostics = HostOutputLines(observe_stderr)
-        input_text = _prompt(request)
         with capture_codex_input_source(project, input_text, lineage["goal_id"], observed_session):
             observed = run_host_process(command, project=project, input_text=input_text,
                 timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,

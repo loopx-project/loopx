@@ -828,7 +828,7 @@ def test_executable_legacy_goal_stop_after_selection_prevents_host_launch(
     run_codex_cli_host(request, **options)
     binding = _session_files(tmp_path / "runtime")[0]
     original_binding = binding.read_bytes()
-    original_prompt = codex_cli._prompt
+    original_input = codex_cli.prepare_codex_cli_input
 
     def stop_before_dispatch(current):
         with project_registry_transaction(registry_path, operation="fixture_stop_before_launch") as transaction:
@@ -838,9 +838,9 @@ def test_executable_legacy_goal_stop_after_selection_prevents_host_launch(
                 "updated_at": "2026-10-10T12:00:00Z", "reason": "Owner stopped this Goal",
             }
             transaction.commit(registry)
-        return original_prompt(current)
+        return original_input(current)
 
-    monkeypatch.setattr(codex_cli, "_prompt", stop_before_dispatch)
+    monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", stop_before_dispatch)
     request["session"]["context_policy"]["mode"] = context
     request["session"]["action"] = "resume" if context == "resume" else "start_new"
     with pytest.raises(FirstPartyHostRuntimeRejected, match="goal_stopped"):
@@ -867,7 +867,7 @@ def test_default_turn_cli_blocks_native_launch_after_canonical_goal_stop(
     project, runtime, registry_path = _write_live_fixture(tmp_path, provider=provider)
     executable, log = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
-    original_prompt = codex_cli._prompt
+    original_input = codex_cli.prepare_codex_cli_input
     reached_host = []
 
     def stop_before_dispatch(current):
@@ -879,9 +879,9 @@ def test_default_turn_cli_blocks_native_launch_after_canonical_goal_stop(
                 "updated_at": "2026-10-10T12:00:00Z", "reason": "Owner stopped this Goal",
             }
             transaction.commit(registry)
-        return original_prompt(current)
+        return original_input(current)
 
-    monkeypatch.setattr(codex_cli, "_prompt", stop_before_dispatch)
+    monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", stop_before_dispatch)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = cli_main([
@@ -919,7 +919,7 @@ def test_source_goal_change_after_session_selection_prevents_host_launch(
     run_codex_cli_host(request, **options)
     binding = _session_files(tmp_path / "runtime")[0]
     original_binding = binding.read_bytes()
-    original_prompt = codex_cli._prompt
+    original_input = codex_cli.prepare_codex_cli_input
 
     def change_before_dispatch(current):
         # Session selection has succeeded, but no new Host request exists yet.
@@ -935,9 +935,9 @@ def test_source_goal_change_after_session_selection_prevents_host_launch(
                     "updated_at": "2026-10-10T12:00:00Z", "reason": "Owner stopped this Goal",
                 }
             transaction.commit(registry)
-        return original_prompt(current)
+        return original_input(current)
 
-    monkeypatch.setattr(codex_cli, "_prompt", change_before_dispatch)
+    monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", change_before_dispatch)
     request["session"]["context_policy"]["mode"] = context
     request["session"]["action"] = "resume" if context == "resume" else "start_new"
     with pytest.raises(FirstPartyHostRuntimeRejected) as error:
@@ -1650,7 +1650,7 @@ def test_default_turn_cli_rejects_stopped_source_behind_stale_global_mirror(
         1,
     ))
     monkeypatch.setenv("FAKE_CODEX_LOG", str(native_log))
-    original_prompt = codex_cli._prompt
+    original_input = codex_cli.prepare_codex_cli_input
     stopped = []
 
     def stop_source_before_dispatch(request):
@@ -1667,9 +1667,9 @@ def test_default_turn_cli_rejects_stopped_source_behind_stale_global_mirror(
         assert json.loads(source_registry.read_text())["goals"][0]["activation"]["state"] == "stopped"
         assert mirror.read_bytes() == original_mirror
         stopped.append(result)
-        return original_prompt(request)
+        return original_input(request)
 
-    monkeypatch.setattr(codex_cli, "_prompt", stop_source_before_dispatch)
+    monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", stop_source_before_dispatch)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = cli_main([

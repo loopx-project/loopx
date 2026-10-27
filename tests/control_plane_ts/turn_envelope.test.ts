@@ -635,7 +635,8 @@ test("pending capability action outranks stale replan commands and remains signe
   const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
   const completeEnvelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
   const host = evaluateTurnEnvelope({operation: "host_context", payload: contract, envelope: completeEnvelope});
-  assert.deepEqual(host.decision, contract); // Preserve the stale observation as data, not admitted work.
+  assert.equal(Object.hasOwn(host, "decision"), false); // Do not echo the checked source over the bridge.
+  assert.equal(host.execution_profile_present, false);
   assert.equal(host.primary_action, "advance one bounded segment");
   assert.equal(host.replan_admitted, false);
   const replanContract = evaluateTurnEnvelope({operation: "compose_complete",
