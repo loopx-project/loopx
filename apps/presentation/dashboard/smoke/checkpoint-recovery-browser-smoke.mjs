@@ -91,13 +91,32 @@ try {
   await page.setViewportSize({width:390,height:844});await page.emulateMedia({reducedMotion:"reduce"});
   await page.getByRole("button",{name:"恢复推进",exact:true}).scrollIntoViewIfNeeded();
   path=resolve(out,"settled-narrow.png");await page.screenshot({path,animations:"disabled"});screenshots.push(await artifact(path));
+  const unavailable=await command("unavailable");
+  assert.equal(unavailable.snapshot.coordinator_checkpoint.stage,"observation_unavailable");
+  assert.equal(unavailable.snapshot.coordinator_checkpoint.settlement_identity,undefined);
+  await page.reload();
+  await page.getByText("LoopX · 核验信息暂不可用",{exact:true}).waitFor({timeout:60000});
+  assert.equal(await page.getByText("原执行尚未完成结算",{exact:false}).count(),0);
+  const reread=page.getByRole("button",{name:"重新读取",exact:true});
+  await reread.click();
+  assert.equal(writes().length,1,"Unavailable observation reread is not an execution request");
+  const held=await command("inspect");
+  assert.deepEqual(held.counts,{result:1,debit:1});assert.equal(held.dispatches.length,1);
+  path=resolve(out,"unavailable-narrow.png");await page.screenshot({path,animations:"disabled"});screenshots.push(await artifact(path));
+  await page.setViewportSize({width:1512,height:982});
+  path=resolve(out,"unavailable-desktop.png");await page.screenshot({path,animations:"disabled"});screenshots.push(await artifact(path));
+  await command("restore_observation");
+  await page.reload();
+  await page.getByRole("button",{name:"恢复推进",exact:true}).waitFor({timeout:60000});
+  assert.equal(writes().length,1);
   const saved=await command("save");
   assert.equal(writes().length,1);
   assert.equal(workspace.errors.length,0,workspace.errors.join("\n"));
   await writeFile(resolve(out,"http-observations.json"),JSON.stringify(requests,null,2));
   const proof={packaged:true,target_http_mocked:false,transport:"deterministic_sdk",paid_calls:0,
     non_owning_shell_fixture:"existing personal-workspace navigation/status API; target sessions/loopx uses production owner",
-    browser_version:browser.version(),clicked_continue_review:true,reloads:2,
+    browser_version:browser.version(),clicked_continue_review:true,reloads:4,
+    unavailable_observation:{read_only_reread:true,restored:true,counts:held.counts},
     original_identity,settled_identity:saved.settled_identity,replayed_identity:replayed.replayed_identity,
     result_sha256_before:before.result_sha256,result_sha256_after:after.result_sha256,
     business_counts_before:before.counts,business_counts_after:after.counts,business_counts_replayed:replayed.counts,
@@ -105,7 +124,7 @@ try {
     session_id_before:before.session_id,session_id_after:saved.session_id,
     upstream_thread_id_before:before.upstream_thread_id,upstream_thread_id_after:saved.upstream_thread_id,
     errors:workspace.errors,screenshots,native_evidence:[]};
-  for(const name of ["before.json","first-result.json","inspect.json","replay.json","save.json"])
+  for(const name of ["before.json","first-result.json","inspect.json","replay.json","save.json","unavailable.json","restore_observation.json"])
     proof.native_evidence.push(await artifact(resolve(out,"backend",name)));
   proof.native_evidence.push(await artifact(resolve(out,"http-observations.json")));
   await writeFile(resolve(out,"proof.json"),JSON.stringify(proof,null,2));

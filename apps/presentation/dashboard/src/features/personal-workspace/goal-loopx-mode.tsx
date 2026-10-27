@@ -1,6 +1,6 @@
 import {ContextHelp} from "./context-help";
 import {useEffect, useRef, useState} from "react";
-import {Pause, Play, Settings2, Users, X} from "lucide-react";
+import {Pause, Play, RefreshCw, Settings2, Users, X} from "lucide-react";
 import {fetchLoopXMode, updateLoopXMode, type LoopXModeSnapshot, type LoopXModeSettings} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import {GoalTeamWork} from "./goal-team-work";
@@ -46,6 +46,7 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
     return () => {alive = false; window.clearInterval(interval);};
   }, [sessionId]); // onChange is the owning component's stable state setter.
   const active = Boolean(snapshot?.enabled && snapshot.active_turn_id);
+  const checkpointUnavailable = Boolean(snapshot?.enabled && ["observation_unavailable", "operation_unknown"].includes(snapshot.coordinator_checkpoint?.stage ?? ""));
   const native = snapshot?.native.status ?? "absent";
   const resume = !["absent", "complete"].includes(native);
   const configured = Boolean(snapshot?.settings.agent_id && snapshot.settings.token_budget
@@ -56,6 +57,7 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
   };
   const status = !snapshot?.enabled ? (zh ? "普通对话" : "Conversation")
     : snapshot.recovery_required ? (zh ? "LoopX · 需要恢复连接" : "LoopX · Reconnect required")
+    : snapshot.coordinator_checkpoint?.stage === "observation_unavailable" ? (zh ? "LoopX · 核验信息暂不可用" : "LoopX · Review information unavailable")
     : snapshot.coordinator_checkpoint?.stage === "operation_unknown" ? (zh ? "LoopX · 原执行状态无法核验" : "LoopX · Original execution unverified")
     : snapshot.coordinator_checkpoint?.result_committed ? (active ? (zh ? "LoopX · 正在核验已保留结果" : "LoopX · Reviewing retained result") : (zh ? "LoopX · 结果已保留，待协调员核验" : "LoopX · Result retained, coordinator review pending"))
     : native === "blocked" ? (zh ? "LoopX · 需要处理阻塞" : "LoopX · Blocked")
@@ -84,6 +86,13 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
     } catch (failure) {setError(failure instanceof Error ? failure.message : String(failure));}
     finally {setBusy(false);}
   }
+  async function rereadCheckpoint() {
+    if (!sessionId) return;
+    setBusy(true); setError("");
+    try {const result = await fetchLoopXMode(sessionId); setSnapshot(result); onChange(result);}
+    catch (failure) {setError(failure instanceof Error ? failure.message : String(failure));}
+    finally {setBusy(false);}
+  }
   const needsReadback = snapshot?.deliveries.some(row => ["rejected", "unavailable"].includes(row.status));
   const pendingMessages = snapshot?.ingress.filter(row => row.status !== "delivered") ?? [];
   return <section className="goal-loopx-mode" aria-label={zh ? "LoopX 运行模式" : "LoopX execution mode"}>
@@ -92,15 +101,16 @@ export function GoalLoopXMode({sessionId, onPrepare, onExecute, onChange}: {
       <div className="goal-loopx-mode-actions">
         {configured && sessionId ? <button type="button" className="goal-loopx-team-trigger" onClick={() => setPanel("team")} aria-haspopup="dialog"><Users size={16}/>{zh ? "团队执行情况" : "Team execution"}{needsReadback ? <span className="goal-loopx-alert-dot" aria-label={zh ? "最近回读需要核验" : "Last observations need review"}/> : null}</button> : null}
         <button type="button" disabled={busy || snapshot?.conversation_busy || !snapshot} onClick={openSettings} aria-label={zh ? "运行设置" : "Settings"} title={zh ? "运行设置与用量" : "Settings and usage"} aria-haspopup="dialog"><Settings2 size={16}/></button>
-        <button type="button" className="goal-loopx-primary" disabled={busy || Boolean(snapshot?.conversation_busy && !active)} title={active ? (zh ? "暂停协调员；已派发的成员继续执行" : "Pause coordinator; dispatched members keep working") : undefined} onClick={async () => {
+        <button type="button" className="goal-loopx-primary" disabled={busy || Boolean(snapshot?.conversation_busy && !active && !checkpointUnavailable)} title={active ? (zh ? "暂停协调员；已派发的成员继续执行" : "Pause coordinator; dispatched members keep working") : undefined} onClick={async () => {
           if (!snapshot) {await prepareSettings(); return;}
           if (active) void mutate("pause");
+          else if (checkpointUnavailable) void rereadCheckpoint();
           else if (!configured || Number(snapshot.settings.token_budget ?? 0) <= Number(snapshot.native.tokensUsed ?? 0)) openSettings();
           else onExecute(resume ? "resume" : "start");
-        }}>{active ? <Pause size={14}/> : <Play size={14}/>}{active ? (zh ? "暂停协调员" : "Pause coordinator") : !snapshot?.enabled ? (zh ? "开启 LoopX 模式" : "Enable LoopX") : snapshot.coordinator_checkpoint ? (zh ? "继续核验" : "Continue review") : native === "complete" ? (zh ? "开启新一轮" : "Start new run") : (zh ? "恢复推进" : "Continue")}</button>
+        }}>{active ? <Pause size={14}/> : checkpointUnavailable ? <RefreshCw size={14}/> : <Play size={14}/>}{active ? (zh ? "暂停协调员" : "Pause coordinator") : !snapshot?.enabled ? (zh ? "开启 LoopX 模式" : "Enable LoopX") : checkpointUnavailable ? (zh ? "重新读取" : "Reread") : snapshot.coordinator_checkpoint ? (zh ? "继续核验" : "Continue review") : native === "complete" ? (zh ? "开启新一轮" : "Start new run") : (zh ? "恢复推进" : "Continue")}</button>
       </div>
     </div>
-    {snapshot?.coordinator_checkpoint ? <p role="status">{snapshot.coordinator_checkpoint.stage === "operation_unknown" ? (zh ? "原执行状态暂不可核验；恢复连接后重读，不能据此重新派发任务。" : "Original execution cannot be verified. Reconnect and reread before dispatching any work.") : (zh ? "原执行尚未完成结算；继续核验后，协调员会读取当前事实并核验下一步。" : "Original execution is awaiting settlement. Continue review lets the coordinator read current facts and review the next step.")}</p> : null}
+    {snapshot?.coordinator_checkpoint ? <p role="status">{snapshot.coordinator_checkpoint.stage === "observation_unavailable" ? (zh ? "核验信息读取失败；请恢复来源后重新读取。" : "Review information could not be read. Restore its source, then reread.") : snapshot.coordinator_checkpoint.stage === "operation_unknown" ? (zh ? "原执行状态暂不可核验；恢复连接后重读，不能据此重新派发任务。" : "Original execution cannot be verified. Reconnect and reread before dispatching any work.") : (zh ? "原执行尚未完成结算；继续核验后，协调员会读取当前事实并核验下一步。" : "Original execution is awaiting settlement. Continue review lets the coordinator read current facts and review the next step.")}</p> : null}
     {pendingMessages.length ? <p role="status">{zh ? "待处理消息：" : "Pending messages: "}{pendingMessages.map(row => `${row.mode === "loopx_queue" ? "queue" : "inbox"} · ${row.status}`).join(" / ")}</p> : null}
     {needsReadback ? <button className="goal-loopx-review-notice" type="button" onClick={() => setPanel("team")}>{zh ? "最近成员回读有未通过或无法核验的结果 · 查看团队" : "Last member observations include rejected or unverified results · View team"}</button> : null}
     {(error || readError) && !panel ? <p className="personal-composer-error" role="alert">{error || readError}</p> : null}

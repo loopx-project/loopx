@@ -146,6 +146,13 @@ def main():
                 assert not failures,failures
                 value={**native_snapshot(),'http':http,'original_identity':original,
                        'settled_identity':decisions[0]['settlement']['settlement_identity']}
+            elif command in {'unavailable', 'restore_observation'}:
+                damaged=runtime_root/'goals'/goal_id/'checkpoint-contexts'/('f'*64+'.json')
+                if command=='unavailable':
+                    damaged.write_text('{',encoding='utf-8')
+                else:
+                    damaged.unlink()
+                value={'snapshot':controller.loopx_mode.snapshot(sid),'native':native_snapshot()}
             else:raise ValueError('Unknown fixture command')
             (out/(command+'.json')).write_text(json.dumps(value,indent=2),encoding='utf-8')
             print(json.dumps(value),flush=True)
