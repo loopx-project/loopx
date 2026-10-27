@@ -221,6 +221,49 @@ test("new reusable arrays can relocate exact strings without copying current edi
   assert.ok(wire.length < JSON.stringify(current).length / 2);
 });
 
+test("relocated immutable records reuse complete subtrees without hiding fresh descendants", () => {
+  const records = Array.from({length: 48}, (_, i) => ({id: `r${i}`,
+    evidence: [`artifact:original-${i}`, `artifact:validation-${i}`],
+    details: {accepted: false, attempts: [i, i + 1]}}));
+  const original = {registry: {records, object: {records}}, current_control: {records}};
+  const current = {registry: {moved: {records, object: {records}}}, current_control: {records}};
+  const initial = prepareContextDelivery({context: original, scope, capture_id: "before", surface: "quota_packet"});
+  const args = {context: current, scope, capture_id: "after", surface: "quota_packet"};
+  const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.equal(delta.mode, "delta");
+  // A relocated array of short, typed records must not retransmit every record.
+  const tree = (delta.changes as JsonObject).changed as JsonObject;
+  assert.ok(Buffer.byteLength(JSON.stringify(tree.registry)) < 600);
+  assert.deepEqual(inline(delta, ["current_control"]), current.current_control);
+  const restored = restoreContextDelivery({delivery: delta, baseline: initial, current: prepareContextDelivery(args)});
+  assert.deepEqual(restored.context, current);
+  ((restored.context as typeof current).registry.moved.records[0].details).accepted = true;
+  assert.equal(original.registry.records[0].details.accepted, false);
+  assert.equal(current.registry.moved.records[0].details.accepted, false);
+
+  const changed = structuredClone(current);
+  changed.registry.moved.records.reverse();
+  changed.registry.moved.records[0].details.accepted = true;
+  changed.registry.moved.records[1].evidence = [];
+  const edited = {...args, context: changed};
+  const next = prepareContextDelivery({...edited, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.deepEqual(restoreContextDelivery({delivery: next, baseline: initial,
+    current: prepareContextDelivery(edited)}).context, changed);
+
+  // Reuse cannot swallow a known fresh control nested in an otherwise equal
+  // container. Existing acceptance/current-review assertions cover every surface.
+  const horizon = {core_goal: {objective: long, acceptance_contract: {records}}};
+  const first = prepareContextDelivery({context: {planning_horizon: horizon}, scope,
+    capture_id: "horizon-before", surface: "quota_packet"});
+  const request = {context: {planning_horizon: structuredClone(horizon)}, scope,
+    capture_id: "horizon-after", surface: "quota_packet"};
+  const second = prepareContextDelivery({...request, baseline: first, retained: {complete: true, target: first.target}});
+  assert.equal(second.mode, "delta");
+  assert.equal(inline(second, ["planning_horizon", "core_goal", "objective"]), long);
+  assert.deepEqual(restoreContextDelivery({delivery: second, baseline: first,
+    current: prepareContextDelivery(request)}).context, request.context);
+});
+
 test("exact-base source and requirement reorders preserve current positions", () => {
   const initial = context();
   const outcomes = ((source(initial, 2).goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject).outcomes as JsonObject[];

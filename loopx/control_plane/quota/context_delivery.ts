@@ -334,16 +334,26 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
   const exact = new Set(forced.map(pathKey)), ancestors = new Set<string>();
   for (const path of forced) for (let i = 0; i < path.length; i++) ancestors.add(pathKey(path.slice(0, i)));
   // Binding or source reordering can relocate already-read authoring. Index
-  // exact strings once; a reusable target may copy them from the immutable
-  // base. Forced current controls still take precedence over this index.
+  // exact strings and structured subtrees from the immutable base. A target
+  // containing any forced-current descendant cannot use a subtree reference.
   const strings = new Map<string, {from: Path}>();
+  type Candidate = {reference: {from: Path}; value: unknown};
+  const subtrees = new Map<number, {candidates: Candidate[]; indexed?: Map<string, Candidate>}>();
   const index = (value: unknown, path: Path) => {
     if (typeof value === "string") {
       const reference = {from: path}, previous = strings.get(value);
       if (bytes(reference) < bytes({value}) && (!previous || bytes(reference) < bytes(previous)))
         strings.set(value, reference);
-    } else if (Array.isArray(value)) value.forEach((v, i) => index(v, [...path, i]));
-    else if (jsonObject(value)) Object.entries(value as JsonObject).forEach(([k, v]) => index(v, [...path, k]));
+    } else if (Array.isArray(value) || jsonObject(value)) {
+      const reference = {from: path}, valueSize = size(value);
+      if (bytes(reference) < size({value})) {
+        const bucket = subtrees.get(valueSize) ?? {candidates: []};
+        bucket.candidates.push({reference, value});
+        subtrees.set(valueSize, bucket);
+      }
+      if (Array.isArray(value)) value.forEach((v, i) => index(v, [...path, i]));
+      else Object.entries(value as JsonObject).forEach(([k, v]) => index(v, [...path, k]));
+    }
   };
   index(before, []);
   const visit = (a: unknown, b: unknown, path: Path): Delta | null => {
@@ -351,6 +361,23 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
     if (exact.has(key)) return {value: clone(b)};
     if (!ancestors.has(key) && equal(a, b)) return null;
     if (typeof b === "string" && strings.has(b)) return clone(strings.get(b)!);
+    let reference: {from: Path} | undefined;
+    if (!ancestors.has(key) && (Array.isArray(b) || jsonObject(b))) {
+      // Most current controls cannot reuse a subtree, and unchanged siblings
+      // already returned above. Hash only size buckets actually needed by a
+      // remaining candidate; avoid hashing the complete baseline eagerly.
+      const bucket = subtrees.get(size(b));
+      if (bucket && !bucket.indexed) {
+        bucket.indexed = new Map();
+        for (const candidate of bucket.candidates) {
+          const hash = digest(candidate.value), previous = bucket.indexed.get(hash);
+          if (!previous || bytes(candidate.reference) < bytes(previous.reference)) bucket.indexed.set(hash, candidate);
+        }
+      }
+      const reusable = bucket?.indexed?.get(digest(b));
+      // Size and hash lookup are indices: exact equality remains the oracle.
+      if (reusable && equal(reusable.value, b)) reference = reusable.reference;
+    }
     let delta: Delta;
     if ((jsonObject(a) || a === undefined) && jsonObject(b)) {
       const old = (a ?? {}) as JsonObject, next = b as JsonObject;
@@ -369,32 +396,34 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
         if (child) items.push([String(i), child]);
       });
       delta = groupCurrentValues({items: Object.fromEntries(items), ...(old?.length !== b.length ? {length: b.length} : {})}, size);
-    } else return {value: clone(b)};
+    } else delta = {value: clone(b)};
     // Sizing does not publish a value. Copy only a replacement that is chosen,
     // rather than every unchanged subtree and every discarded ancestor value.
-    return size(delta) < size({value: b}) ? delta : {value: clone(b)};
+    const result = size(delta) < size({value: b}) ? delta : {value: clone(b)};
+    return reference && size(reference) < size(result) ? clone(reference) : result;
   };
   return visit(before, after, []);
 }
 
 /** Array indices address the exact hashed baseline, not inferred entity ids.
  * Reorders, duplicate values and length changes are lossless structural edits.
- * A relocated string may reference the exact immutable base. No timestamp,
+ * A relocated value may reference the exact immutable base. No timestamp,
  * revision normalization, fuzzy identity or prose diff is involved. */
 function applyTree(before: unknown, delta: Delta | null, baseline: unknown = before): unknown {
   if (delta === null) return clone(before);
   if ("value" in delta) return clone(delta.value);
   if ("from" in delta) {
-    if (Object.keys(delta).length !== 1 || !Array.isArray(delta.from)) throw new Error("invalid string reference");
+    if (Object.keys(delta).length !== 1 || !Array.isArray(delta.from)) throw new Error("invalid baseline reference");
     let value = baseline;
     for (const key of delta.from) {
       if (!(typeof key === "string" || typeof key === "number" && Number.isSafeInteger(key) && key >= 0)
           || value === null || typeof value !== "object" || !Object.hasOwn(value, key))
-        throw new Error("string reference is not an own baseline path");
+        throw new Error("reference is not an own baseline path");
       value = (value as Record<string | number, unknown>)[key];
     }
-    if (typeof value !== "string") throw new Error("string reference has no exact baseline string");
-    return value;
+    if (typeof value !== "string" && !Array.isArray(value) && !jsonObject(value))
+      throw new Error("reference has no exact baseline string or subtree");
+    return clone(value);
   }
   if ("items" in delta) {
     if (before !== undefined && !Array.isArray(before)) throw new Error("array baseline missing");
@@ -469,7 +498,7 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
         + "Do not also fetch the full projection just to materialize JSON or replace missing Code Mode variables; "
         + "tool-process memory is separate from retained model context. If required baseline content is unavailable "
         + "or continuity is uncertain, recover this capture in full before dependent work. " : "")
-      + "A value replaces its subtree; from copies the exact string at that path in the base capture, never in current changes. Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
+      + "A value replaces its subtree; from copies the exact string, array or object at that path in the base capture, never in current changes. Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
   // Native consumers page the wire before they can use its baseline. Deliver

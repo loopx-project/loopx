@@ -194,11 +194,15 @@ input; grouping saves repeated wrappers rather than omitting controls. The
 codec compares this encoding with ordinary edits and full replacement before
 choosing. A reader that does not recognize the edit recovers the full capture.
 
-Eligible reusable strings may also use `from`, an array of object keys or exact
-array indices in the immutable base capture. This avoids resending identical
-authoring when task binding or source ordering moves it to another field. The
-reference copies the complete exact string, never a similar string or a value
-from the current patch. Current and unknown controls remain inline. Missing,
+Eligible reusable strings, arrays and objects may also use `from`, an array of
+object keys or exact array indices in the immutable base capture. This avoids
+resending identical authoring and evidence records when task binding or source
+ordering moves them to another field. The reference copies the complete exact
+value, never a similar value or one from the current patch. A subtree containing
+any field required as current input cannot use a whole-subtree reference. The
+codec chooses a reference only when smaller than its literal or recursive edit.
+Current and unknown controls remain inline. Older string-only readers recover
+the current full capture for an unsupported structured reference. Missing,
 malformed or incompatible references recover the same full current capture;
 the reconstructed context must still match its complete digest. Cold delivery,
 session invalidation and authority remain unchanged. This saves transport only;
@@ -449,6 +453,12 @@ TurnEnvelope。在基线连续性成立的口径内，两入口仍逐轮发送 `
 `removed`；数组的 `items` 与 `values` 使用精确索引，`length` 调整长度。
 字段仍在本轮输入中，只减少重复 wrapper；codec 比较普通编辑、合并字段
 与完整替换后选择，无法识别该编辑的读者恢复完整 capture。
+可复用的字符串、数组和对象还可用 `from` 引用不可变基线中的精确键或数组索引，
+避免绑定任务或来源重排后重传相同的指导与证据记录。它复制完整相同的值，不读取
+当前 patch，也不模糊匹配。含有必须逐轮发送字段的子树不能整体引用；引用只有比
+完整值及递归编辑更小时才采用。当前和未知控制仍完整发送；只支持字符串引用的
+旧读者遇到结构化引用时恢复当前完整 capture。引用缺失、损坏或不兼容仍按同一
+捕获恢复，完整重建摘要须匹配。冷启动、连续性失效、权限与结算语义保持。
 这些只改变既有选项内的展示，不新增配置或准入。缺少可用连续性依据、epoch 改变、patch 损坏
 或读者不兼容时，自动恢复同一原始 full capture，不重跑 guard、不问询、不扣额，
 也不授予执行权限。传输减少本身不证明实际模型费用或结果改善。

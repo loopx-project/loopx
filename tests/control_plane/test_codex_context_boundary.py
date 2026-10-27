@@ -232,8 +232,16 @@ def test_native_shared_delta_with_small_compact_recovery_reference(tmp_path, hos
     scope = dict(goal_id="fixture", agent_id="agent", session_id="synthetic-session", context_epoch="before-compact")
     source = {"complete": True, "sources": [{"source": "selected_todo", "content": {
         "todo": {"todo_id": "todo_fixture", "text": SOURCE, "note": "Stop before publishing.", "status": "open"}}}]}
+    # A real reader must receive relocated structured provenance as well as
+    # string edits. Current review conclusions remain literal on both surfaces.
+    source["sources"].append({"source": "goal_acceptance", "content": {
+        "goal_acceptance_contract": {"outcome_requirements": {"revision": 1, "outcomes": [{
+            "id": "outcome", "requirements": [{"id": "requirement", "status": "unverified",
+                "agent_review": {"conclusion": "uncertain", "evidence_refs": [
+                    f"artifact:validation-{i:03d}" for i in range(60)]}}]}]}}}})
     target_source = json.loads(json.dumps(source))
     target_source["sources"][0]["content"]["todo"]["note"] = "Stop before publishing or deploying."
+    target_source["sources"].reverse()
     def projection(context):
         if surface == "quota_packet":
             return {"goal_id": "fixture", "agent_id": "agent", "should_run": True,
@@ -245,6 +253,16 @@ def test_native_shared_delta_with_small_compact_recovery_reference(tmp_path, hos
     delta = prepare_context_delivery(target_source, scope=scope, capture_id="capture-b", surface=surface,
         baseline=base, retained={"complete": True, "target": base["target"]})
     assert delta["mode"] == "delta"
+    def structured_reference(node):
+        if not isinstance(node, dict):
+            return False
+        if "from" in node:
+            value = base["context"]
+            for key in node["from"]:
+                value = value[key]
+            return isinstance(value, (dict, list))
+        return any(structured_reference(child) for child in node.get("changed", node.get("items", {})).values())
+    assert structured_reference(delta["changes"])
     assert restore_context_delivery(delta, baseline=base, current=target)["context"] == target_source
     files = {}
     for name, value in (("base", base), ("target", target), ("delta", delta)):
