@@ -186,10 +186,17 @@ function outcomeContextPacket(linkPeer = false): JsonObject {
     }}}};
 }
 
+function nativeProjection(payload: JsonObject, source_capture: JsonObject): JsonObject {
+  const prepared = evaluateTurnEnvelope({operation: "native_context_delivery", payload, source_capture,
+    scope: {goal_id: goal, agent_id: "author", session_id: "session", context_epoch: "epoch"},
+    capture_id: "reading", surface: "quota_packet"});
+  return (prepared.projection ?? (prepared.delivery as JsonObject).context) as JsonObject;
+}
+
 test("scoped model context retains canonical source, global controls and exact optional detail", () => {
   const payload = outcomeContextPacket(), before = structuredClone(payload);
   const source_capture = {path: "/capture/original.json", sha256: "a".repeat(64)};
-  const context = evaluateTurnEnvelope({operation: "outcome_context", payload, source_capture});
+  const context = nativeProjection(payload, source_capture);
   assert.equal(context.schema_version, "outcome_context_projection_v0");
   assert.equal((context.read_scope as JsonObject).scope_applied, true);
   assert.deepEqual((context.context as JsonObject).goal_boundary, payload.goal_boundary);
@@ -210,33 +217,41 @@ test("scoped model context retains canonical source, global controls and exact o
   assert.throws(() => evaluateTurnEnvelope({operation: "captured_outcome", payload: altered, source_payload: payload, outcome_ref: ""}), /differs from its original source/);
   assert.throws(() => evaluateTurnEnvelope({operation: "captured_outcome", payload: context, outcome_ref: ""}), /original outcome source/);
   const broad = {...payload, autonomous_replan_obligation: {id: "whole-goal"}};
-  assert.deepEqual(evaluateTurnEnvelope({operation: "outcome_context", payload: broad, source_capture}), broad);
+  assert.deepEqual(nativeProjection(broad, source_capture), broad);
   const unknown = outcomeContextPacket();
   const content = (((((unknown.interaction_contract as JsonObject).agent_channel as JsonObject).work_context as JsonObject).sources as JsonObject[])[0]).content as JsonObject;
   const acceptance = content.goal_acceptance_contract as JsonObject;
   (((acceptance.outcome_requirements as JsonObject).outcomes as JsonObject[])[1]).future_obligation = "Unknown cross-Agent constraint";
   // Even a plan bound to that complete source must not hide unknown semantics.
   (content.outcome_context as JsonObject).acceptance_digest = canonicalAuthoritySha256(acceptance);
-  assert.deepEqual(evaluateTurnEnvelope({operation: "outcome_context", payload: unknown, source_capture}), unknown);
+  assert.deepEqual(nativeProjection(unknown, source_capture), unknown);
   const unread = outcomeContextPacket();
   (unread.interaction_contract as JsonObject).agent_channel.required_reads = [{source: "goal_acceptance", command: "pending-read"}];
-  assert.deepEqual(evaluateTurnEnvelope({operation: "outcome_context", payload: unread, source_capture}), unread);
+  assert.deepEqual(nativeProjection(unread, source_capture), unread);
   const future = outcomeContextPacket();
   future.interaction_contract.agent_channel.work_context.sources[0].reason += " Retain a future instruction.";
-  assert.deepEqual(evaluateTurnEnvelope({operation: "outcome_context", payload: future, source_capture}), future);
+  assert.deepEqual(nativeProjection(future, source_capture), future);
+  assert.deepEqual(nativeProjection(payload, {...source_capture, sha256: "invalid"}), payload,
+    "scope failure retains the original source before the ordinary codec");
+  const failedCodec = evaluateTurnEnvelope({operation: "native_context_delivery", payload, source_capture,
+    scope: {goal_id: goal, agent_id: "author", session_id: "session", context_epoch: "epoch"},
+    capture_id: "reading", surface: "unsupported"});
+  assert.deepEqual(failedCodec.projection, context, "codec failure retains the complete required projection");
+  assert.equal(failedCodec.delivery, undefined);
 });
 
 test("warm scope expansion delivers previously unread requirements; lost baseline recovers the same required input", () => {
-  const project = (payload: JsonObject, letter: string) => evaluateTurnEnvelope({operation: "outcome_context", payload,
-    source_capture: {path: `/capture/${letter}.json`, sha256: letter.repeat(64)}});
-  const before = project(outcomeContextPacket(), "a"), after = project(outcomeContextPacket(true), "b");
   const scope = {goal_id: goal, agent_id: "author", session_id: "same-session", context_epoch: "same-epoch"};
-  const baseline = evaluateTurnEnvelope({operation: "context_delivery", context: before, scope, capture_id: "first", surface: "quota_packet"});
-  const delivery = evaluateTurnEnvelope({operation: "context_delivery", context: after, scope, capture_id: "second", surface: "quota_packet",
-    baseline, retained: {complete: true, target: baseline.target}});
+  const project = (payload: JsonObject, letter: string, extra: JsonObject = {}) => evaluateTurnEnvelope({
+    operation: "native_context_delivery", payload, scope, capture_id: letter, surface: "quota_packet",
+    source_capture: {path: `/capture/${letter}.json`, sha256: letter.repeat(64)}, ...extra});
+  const first = project(outcomeContextPacket(), "a"), baseline = first.delivery as JsonObject;
+  assert.equal(first.projection, undefined, "full delivery already contains the exact projection");
+  const next = project(outcomeContextPacket(true), "b", {baseline, retained: {complete: true, target: baseline.target}});
+  const after = next.projection as JsonObject, delivery = next.delivery as JsonObject;
   assert.equal(delivery.mode, "delta");
   assert.ok(JSON.stringify(delivery).includes("Unique peer requirement"), "a machine-only canonical source is not retained model context");
-  const current = evaluateTurnEnvelope({operation: "context_delivery", context: after, scope, capture_id: "second", surface: "quota_packet"});
+  const current = evaluateTurnEnvelope({operation: "context_delivery", context: after, scope, capture_id: "b", surface: "quota_packet"});
   const restored = evaluateTurnEnvelope({operation: "context_recovery", delivery, baseline, current});
   assert.deepEqual(restored.context, after);
   const lost = evaluateTurnEnvelope({operation: "context_recovery", delivery, current});

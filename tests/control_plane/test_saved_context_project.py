@@ -197,12 +197,16 @@ def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp
 @pytest.mark.parametrize("failure", ["wire", "inline_read"])
 def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path, monkeypatch, failure):
     from loopx.cli import build_parser
-    from loopx.cli_commands.quota_capture import project_saved_context_capture
+    from loopx.cli_commands.quota_capture import project_saved_context_capture, native_context_capture_view, read_context_capture
     from loopx.control_plane.turn_driver import codex_context, decision_capture
 
     path, root, context = tmp_path / "original.json", tmp_path / "cache", tmp_path / "native"
     original = {"ok": True, "goal_id": "saved-goal", "agent_identity": {"agent_id": "saved-agent"},
         "heartbeat_receipt": {"turn_instance_id": "saved-turn"}, "requirement": "Current complete requirements."}
+    if failure == "wire":
+        # Keep current controls inline; a large reusable source makes this a
+        # genuine delta-wire failure rather than a full-view fixture.
+        original["plan_summary"] = {"requirements": original["requirement"] * 800}
     raw = json.dumps(original).encode()
     path.write_bytes(raw)
     root.mkdir(mode=0o700)
@@ -211,10 +215,25 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
     monkeypatch.chdir(tmp_path)
     codex_context.codex_context_hook(str(context), {"hook_event_name": "SessionStart", "source": "startup",
         "session_id": "native-session", "cwd": str(tmp_path)})
+    if failure == "wire":
+        previous = root / "previous"
+        previous.mkdir(mode=0o700)
+        prior = codex_context.project_codex_context({**original, "heartbeat_receipt": {"turn_instance_id": "prior-turn"}},
+            directory=str(context), capture_directory=previous, goal_id="saved-goal", agent_id="saved-agent",
+            surface="quota_packet", capture_id="prior-capture")
+        page = native_context_capture_view(prior, previous, context_directory=str(context))
+        while True:
+            codex_context.codex_context_hook(str(context), {"hook_event_name": "PostToolUse",
+                "session_id": "native-session", "cwd": str(tmp_path), "tool_response": page})
+            if page["eof"]:
+                break
+            page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
     write_capture = decision_capture.write_decision_capture
+    failures = []
 
     def fail_optional_wire(path, payload, **kwargs):
         if failure == "wire" and path.name == "delivery.json":
+            failures.append(path)
             raise OSError("optional wire unavailable")
         return write_capture(path, payload, **kwargs)
 
@@ -230,6 +249,7 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
     result = project_saved_context_capture(args)
     assert result["ok"] and result["mode"] == "full"
     if failure == "wire":
+        assert len(failures) == 1  # Exercise the remaining delta-wire IO failure.
         assert result["path"] == str(path) and result["sha256"] == digest
     else:
         assert "content" not in result and result["recovery"]["sha256"] == digest
@@ -319,9 +339,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
-    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider, native_capture_wire
     from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture, _input_text
-    from tests.control_plane.test_codex_context_capture import _delivered
+    from tests.control_plane.test_codex_context_capture import _delivered, _last_page
     from tests.control_plane.test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _write_fixture, _spend_run_count, _heartbeat_receipt_count
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -394,18 +414,15 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
                 descriptor = json.loads(output.split("\nOutput:\n", 1)[-1])
                 assert descriptor["ok"] and descriptor["mode"] == ("full" if name == "cold" else "delta")
-                wire = json.loads((Path(descriptor["path"]).parent / "delivery.json").read_text())
+                wire = native_capture_wire(descriptor)
                 assert descriptor["target"] == wire["target"]
                 observed[name] = (wire, descriptor)
-                data = Path(descriptor["path"]).read_bytes()
                 # The existing page protocol also admits the projector's first
                 # page. Old installed projectors still start with command.
-                offset = descriptor["next_offset"] if "content" in descriptor else 0
-                for offset in range(len(data) if offset is None else offset, len(data), 4096):
-                    # Synthetic captures are ASCII JSON; public reader owns every byte.
-                    queue.append(shlex.join([*cli, "--format", "json", "quota", "context-read",
-                        "--capture-file", descriptor["path"], "--capture-sha256", descriptor["sha256"],
-                        "--offset", str(offset)]))
+                if "content" not in descriptor:
+                    queue.append(descriptor["command"])
+                elif not descriptor["eof"]:
+                    queue.append(descriptor["next_command"])
                 phase = name + "_read"
                 if not queue:
                     return response(request, number, message)
@@ -413,15 +430,20 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             else:
                 name = phase.split("_")[0]
                 descriptor = observed[name][1]
-                assert _delivered(request, descriptor["sha256"]) == Path(descriptor["path"]).read_text().rstrip("\n")
-                if name == "warm":
-                    phase = "done"
-                    return message
-                # Full wire context is observed exactly, then reuse in the next call.
-                phase = "warm"
-                if host == "benchmark":
-                    return message  # A new worker wake owns its own original guard.
-                return response(request, number, message)
+                page = _last_page(request)
+                assert page and page["ok"] and page["sha256"] == descriptor["sha256"]
+                if not page["eof"]:
+                    command = page["next_command"]
+                else:
+                    assert _delivered(request, descriptor["sha256"]) == Path(descriptor["path"]).read_text().rstrip("\n")
+                    if name == "warm":
+                        phase = "done"
+                        return message
+                    # Full context was observed exactly; reuse it on the next call.
+                    phase = "warm"
+                    if host == "benchmark":
+                        return message  # A new worker wake owns its own original guard.
+                    return response(request, number, message)
             if host == "app_code_mode":
                 return {"type": "custom_tool_call", "id": f"fc_{number}", "call_id": f"call_{number}",
                     "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.exec_command('
@@ -472,9 +494,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         else:
             _configure_provider(home, url)
             config = home / "config.toml"
-            overrides = "".join(f"{key}={json.dumps(value)}\n"
+            config.write_text("".join(key + "=" + json.dumps(value) + "\n"
                 for key, value in configuration["config_overrides"].items())
-            config.write_text(overrides + config.read_text())
+                + "developer_instructions=" + json.dumps(configuration["developer_instructions"])
+                + "\n" + config.read_text())
             with (home / "config.toml").open("a") as config:
                 config.write("[sandbox_workspace_write]\nnetwork_access=true\n")
             if host == "app_code_mode":

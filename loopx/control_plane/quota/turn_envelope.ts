@@ -512,6 +512,24 @@ function capturedOutcomeRead(request: JsonObject): JsonObject {
   return {...common, outcome_ref: ref, outcome};
 }
 
+/** One native projection call, after IO has published the current full recovery.
+ * Reuse both owners without another model wire or retention claim. Full codec
+ * results already carry the projection; delta/fallback results return it only
+ * for the caller's immutable required-context capture, never as hidden input.
+ */
+function nativeContextDelivery(request: JsonObject): JsonObject {
+  let projection = requireJsonObject(request.payload, "native context source");
+  try { projection = capturedOutcomeContext(request); }
+  catch { /* Optional scope failure retains the original complete source. */ }
+  try {
+    const delivery = prepareContextDelivery({...request, context: projection}, LEGACY_QUOTA_CONTEXT_FIELDS);
+    return delivery.mode === "full" ? {delivery} : {projection, delivery};
+  } catch {
+    // Preserve a successful scope projection when the optional codec fails.
+    return {projection};
+  }
+}
+
 /** Reuse the existing settlement authoring owner, never a summary or a chain. */
 function replanAuthoringContract(payload: JsonObject): JsonObject {
   const contract = object(object(payload.replan_action_packet).writeback_contract);
@@ -2095,7 +2113,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const envelope = buildTurnEnvelope(request);
     return {envelope, route: turnEnvelopeRoute(envelope)};
   }
-  if (operation === "outcome_context") return capturedOutcomeContext(request);
+  if (operation === "native_context_delivery") return nativeContextDelivery(request);
   if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

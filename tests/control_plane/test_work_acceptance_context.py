@@ -259,7 +259,7 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         original_operation = turn_envelope._turn_envelope_result
 
         def unavailable(operation, **request):
-            if operation == "outcome_context":
+            if operation == "native_context_delivery":
                 raise ValueError("synthetic optional scope projection failure")
             return original_operation(operation, **request)
 

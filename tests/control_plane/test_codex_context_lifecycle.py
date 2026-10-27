@@ -155,6 +155,34 @@ def deliver(root, event, pages):
             "tool_use_id": f"page-{page.get('offset')}", "tool_response": json.dumps(page)}) == {}
 
 
+def test_native_projection_uses_one_boundary_and_pages_its_existing_full_capture(tmp_path, monkeypatch):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from loopx.control_plane.quota import turn_envelope
+
+    setup(tmp_path, monkeypatch)
+    operation = turn_envelope._turn_envelope_result
+    calls = []
+
+    def counted(name, **request):
+        calls.append(name)
+        return operation(name, **request)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", counted)
+    payload, wire = project(tmp_path)
+    # One source/projection boundary, rather than a scope request followed by
+    # another encoding request for the same current capture.
+    assert len(calls) == 1
+    assert wire["mode"] == "full" and wire["context"] == payload
+    recovery = wire["recovery"]
+    original = Path(recovery["path"]).read_bytes()
+    view = native_context_capture_view(wire, Path(recovery["path"]).parent,
+        context_directory=str(tmp_path))
+    assert view["path"] == recovery["path"] and view["sha256"] == recovery["sha256"]
+    assert not (Path(view["path"]).parent / "delivery.json").exists()
+    assert Path(view["path"]).read_bytes() == original
+    assert json.loads(view["content"]) == payload and view["eof"] is True
+
+
 def test_scope_projection_interruption_keeps_current_original_recovery(tmp_path, monkeypatch):
     from loopx.control_plane.quota import turn_envelope
 
@@ -169,7 +197,7 @@ def test_scope_projection_interruption_keeps_current_original_recovery(tmp_path,
         pass
 
     def interrupt(name, **request):
-        if name == "outcome_context":
+        if name == "native_context_delivery":
             observed.append(context._state(tmp_path))
             raise ScopeInterrupted()
         return operation(name, **request)

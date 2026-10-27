@@ -516,10 +516,20 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 
                 try:
-                    projected = _turn_envelope_result("outcome_context", payload=payload,
-                        source_capture={key: recovery[key] for key in ("path", "sha256")})
+                    prepared = _turn_envelope_result("native_context_delivery", payload=payload,
+                        source_capture={key: recovery[key] for key in ("path", "sha256")},
+                        **request, surface=surface, capture_id=capture_id)
+                    result = prepared.get("delivery")
+                    projected = prepared.get("projection", result.get("context") if isinstance(result, dict) else None)
+                    if not isinstance(projected, dict):
+                        raise ValueError("native projection result has no complete context")
                 except (ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
-                    projected = payload  # optional presentation failure retains the complete source
+                    projected = payload
+                    # A failed optional composition can still use the ordinary
+                    # codec; its own failure returns the original full source.
+                    result = project_captured_context(payload, directory=capture_directory,
+                        request=request, captured_recovery=recovery,
+                        goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
                 if projected.get("schema_version") == "outcome_context_projection_v0":
                     payload = projected
                     recovery = capture_context_projection(payload, directory=capture_directory,
@@ -527,10 +537,9 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     recovery["presentation_schema"] = payload["schema_version"]
                     publish_recovery(recovery)
 
-                result = project_captured_context(payload, directory=capture_directory,
-                    request=request, captured_recovery=recovery,
-                    goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
+                result = result if isinstance(result, dict) else payload
                 if result.get("schema_version") == "context_delivery_v1":
+                    result["recovery"] = recovery
                     state["recovery"]["target"] = result["target"]
                     state["pending"].update(target=result["target"], ancestry=result["ancestry"])
                     _save(root, state)
