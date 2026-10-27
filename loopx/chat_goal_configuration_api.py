@@ -626,20 +626,20 @@ class GoalConfigurationRequestMixin:
                 capability_id, readback_configuration, desired_configuration, applied
             )
         except Exception:
-            if capability_id != "reward_memory" or not applied.get("written"):
+            if not applied.get("written"):
                 raise
             self._send_partial_write_receipt(
-                applied={**applied, "error": "Memory configuration was written, but current readback is unavailable.",
+                applied={**applied, "error": "Configuration was written, but current readback is unavailable.",
                     "recommended_action": "Reload the current Goal configuration before previewing another change."},
                 capability_id=capability_id, desired_configuration=desired_configuration,
                 desired_public=desired_public, goal_id=goal_id, plan=plan,
             )
             return
         if not readback_verified:
-            if capability_id == "reward_memory" and applied.get("written"):
+            if applied.get("written"):
                 self._send_partial_write_receipt(
-                    applied={**applied, "error": "Configuration was written, but the memory binding readback did not verify.",
-                        "recommended_action": "Reload the current Goal configuration and inspect the binding before previewing another change."},
+                    applied={**applied, "error": "Configuration was written, but current readback did not verify.",
+                        "recommended_action": "Reload the current Goal configuration before previewing another change."},
                     capability_id=capability_id, desired_configuration=desired_configuration,
                     desired_public=desired_public, goal_id=goal_id, plan=plan,
                 )
