@@ -20,7 +20,7 @@ process.env.LOOPX_PERSONAL_WORKSPACE_PORT=String(probe.address().port);
 await new Promise((done,reject)=>probe.close(error=>error?reject(error):done()));
 process.env.LOOPX_PERSONAL_WORKSPACE_PACKAGED="1";
 const {repoRoot,port,startServer}=await import("../../../../examples/personal-workspace-browser/fixture.mjs");
-const {openWorkspacePage}=await import("../../../../examples/personal-workspace-browser/scenario-context.mjs");
+const {openWorkspacePage,fetchWorkspaceBackend}=await import("../../../../examples/personal-workspace-browser/scenario-context.mjs");
 const fixture=spawn(resolveTestPython({repoRoot}),["-u","apps/presentation/dashboard/smoke/checkpoint-recovery-http-fixture.py",resolve(out,"backend")],
   {cwd:repoRoot,stdio:["pipe","pipe","pipe"],windowsHide:true});
 const exited=once(fixture,"exit");
@@ -45,7 +45,7 @@ try {
       await page.route(`**/api/chat/sessions/${session.session_id}/loopx`,async route=>{
         const request=route.request();
         const body=request.method()==="POST"?request.postDataJSON():null;
-        const response=await route.fetch({url:`${origin}/api/chat/sessions/${session.session_id}/loopx`});
+        const response=await fetchWorkspaceBackend(route,origin);
         requests.push({method:request.method(),body,status:response.status(),response:await response.json()});
         await route.fulfill({response});
       });

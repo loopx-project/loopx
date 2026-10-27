@@ -65,11 +65,11 @@ def main():
               'config_digest':hashlib.sha256(config.read_bytes()).hexdigest()}
     store.update_session(sid,loopx_tools=True,native_goal={'status':'paused','tokensUsed':0},
                          loopx_mode={'enabled':True,'paused':True,'settings':settings})
+    patches.setenv('LOOPX_CHAT_CODEX_HOME',str(isolated/'codex-home'))
     controller=ChatRuntimeController(store=store,codex_bin='missing-codex',registry_path=registry)
     adapter=SimpleNamespace(goal_driver=SimpleNamespace(stopped=threading.Event()),
                             session=SimpleNamespace(),upstream_thread_id='synthetic-original-sdk',
                             close_session=lambda:None,healthcheck=lambda:True)
-    patches.setattr(controller,'_check_codex_home',lambda _:None)
     patches.setattr(controller,'_ensure_adapter_locked',lambda *a,**k:adapter)
     controller.adapters[sid]=adapter
     dispatches=[]; failures=[]; decisions=[]

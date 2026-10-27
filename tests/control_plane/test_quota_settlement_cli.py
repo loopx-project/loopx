@@ -3995,8 +3995,7 @@ def test_same_turn_identityless_guard_upgrades_and_settles_full_chain(
     successor_guard_rc, successor_guard = _run_cli(
         registry_path, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--available-capability", "network", "--scan-path", str(project),
-    )
+        "--available-capability", "network", )
     assert successor_guard_rc == 0, successor_guard
     assert successor_guard["selected_todo"]["todo_id"] == successor_id
 
@@ -4798,7 +4797,7 @@ def test_default_visible_goal_admission_still_rejects_unbound_manual_spend(
     bound_rc, bound = _run_cli(registry_path, runtime, "quota", "should-run",
         "--runtime-profile", profile, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--turn-instance-id", identity["turn_instance_id"],
-        "--scan-path", str(project))
+        )
     assert bound_rc == 0, bound
     plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == identity
@@ -6940,8 +6939,7 @@ def test_default_visible_goal_todoless_replan_replays_original_admission(
     assert all(f"--turn-instance-id {original['turn_instance_id']}" in action for action in actions)
     bound_rc, bound = _run_cli(registry_path, runtime, "quota", "should-run",
         "--runtime-profile", "codex_app_ssh_goal", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--scan-path", str(project),
-        "--turn-instance-id", original["turn_instance_id"])
+        "--agent-id", AGENT_ID, "--turn-instance-id", original["turn_instance_id"])
 
     assert bound_rc == 0, bound
     assert bound["decision"] == "autonomous_replan_required", bound

@@ -146,7 +146,7 @@ else:
     rc, result = _run_cli(registry, 'turn', 'run-once', '--host', 'generic-cli', '--goal-id', GOAL_ID,
         '--agent-id', AGENT_ID, '--project', str(project), '--host-adapter-command-json',
         json.dumps([sys.executable, str(host)]), '--validation-command-json', json.dumps([sys.executable, str(validator)]),
-        '--scan-root', str(project), '--no-global-sync', '--execute')
+        '--no-global-sync', '--execute')
     assert rc == 0 and result.get('status') == 'committed', json.dumps(result, indent=2)
     assert len((project / 'direction.txt').read_text().splitlines()) == 1
     rows = [json.loads(line) for line in (tmp_path / 'runtime/goals' / GOAL_ID / 'runs/index.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -173,12 +173,14 @@ def run_dsh_turn(**kwargs):
             'vision_unchanged_reason':'Current evidence preserves this session route.'})
     pathlib.Path(kwargs['workspace'],'candidate.txt').write_text('valid')
     return json.dumps({'result_kind':'validated_progress','classification':'dsh_progress',
-        'summary':'Verified one scoped candidate.','next_action':'Review remaining work.'})
+        'summary':'Verified one scoped candidate.','next_action':'Review remaining work.',
+        'work_evidence':['artifact:candidate.txt'],
+        'validation_evidence':['check:scoped-candidate-validation']})
 ''', encoding='utf-8')
     rc, result = _run_cli(registry, 'turn', 'run-once', '--host', 'dsh', '--goal-id', GOAL_ID,
         '--agent-id', AGENT_ID, '--project', str(project), '--dsh-runner', str(runner),
         '--iteration-context', iteration_context, '--validation-command-json', json.dumps([sys.executable, '-c', 'pass']),
-        '--scan-root', str(project), '--no-global-sync', '--execute')
+        '--no-global-sync', '--execute')
     assert rc == 0 and result['status'] == 'committed', result
     sessions = [json.loads(line) for line in (project / 'sessions.jsonl').read_text().splitlines()]
     assert [row['direction'] for row in sessions] == [False, True]
@@ -286,7 +288,7 @@ else:
     rc, result = _run_cli(registry, 'turn', 'run-once', '--host', 'generic-cli', '--goal-id', GOAL_ID,
         '--agent-id', AGENT_ID, '--project', str(project), '--host-adapter-command-json',
         json.dumps([sys.executable, str(host)]), '--validation-command-json', json.dumps([sys.executable, '-c', 'pass']),
-        '--scan-root', str(project), '--no-global-sync', '--execute')
+        '--no-global-sync', '--execute')
     assert rc == 0 and result['status'] in {'committed','stopped'}, json.dumps(result, indent=2)
     assert (project / 'direction.txt').exists() == (kind != 'wait')
     rows = [json.loads(line) for line in (tmp_path / 'runtime/goals' / GOAL_ID / 'runs/index.jsonl').read_text(encoding='utf-8').splitlines()]

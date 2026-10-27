@@ -11,11 +11,16 @@ import pytest
 
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, REPO_ROOT, _run_cli, _write_fixture, _spend_run_count,
+    _initialize_fixture_authority,
 )
 
 
-def _missing(root: Path, *, provider: str = "sqlite", defer=False, historical=False):
-    project, runtime, registry = _write_fixture(root, provider=provider)
+def _missing(root: Path, *, provider: str = "sqlite", defer=False, historical=False, initialize=None):
+    project, runtime, registry = _write_fixture(root)
+    if initialize is None:
+        _initialize_fixture_authority(project, runtime, provider=provider)
+    else:
+        initialize(project, runtime, registry)
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
     for args in (
         ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -46,7 +51,8 @@ def _missing(root: Path, *, provider: str = "sqlite", defer=False, historical=Fa
 
 
 def test_checkpoint_recovery_is_not_a_fresh_turn_preflight(tmp_path):
-    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime)
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
     rc, admitted = _run_cli(registry, runtime, "quota", "should-run",
@@ -80,7 +86,7 @@ def test_historical_explicit_first_delivery_cli_rejects_stale_and_replays_succes
         SettlementIdentity(goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID),
         semantic_replan_guard_scoped=True, semantic_replan_obligation_id=None)
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
-                         "--scan-path", str(project), cwd=project)
+                         cwd=project)
     assert rc == 0, json.dumps(guard)
     read = ("checkpoint-context", *binding, "--purpose", "first_delivery")
     rc, context = _run_cli(registry, runtime, *read, cwd=project)
@@ -129,7 +135,7 @@ def test_delivery_result_basis_precedes_cas_and_replays_before_current_freshness
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo, peer], handoff_mode="soft_claim"), state_path=state, provider=provider)
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
-        "--scan-path", str(project), cwd=project)
+        cwd=project)
     assert rc == 0, guard
     read = ("checkpoint-context", *binding, "--purpose", "delivery_result")
     rc, context = _run_cli(registry, runtime, *read, cwd=project)
@@ -188,12 +194,12 @@ def test_missing_replaced_stale_context_requires_reread_and_preserves_delivery(t
         "--checkpoint-read-context", a["read_context_id"], cwd=project)
     assert rc == 1 and replaced["error_code"] == "checkpoint_read_context_unknown_or_replaced", replaced
 
-    # A synthetic source edit represents a peer's completed update. The separate
-    # concurrency test proves the cooperating writer cannot cross the commit guard.
+    # Update the canonical Todo owner, not its Markdown display.
     rc, updated = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
         "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--text", "Validate the updated delivery scope.",
-        "--execute", cwd=project)
-    assert rc == 0 and updated["ok"], updated
+        "--update-operation-id", "checkpoint-peer-scope", "--update-expected-provider-revision",
+        b["provider_revision"], cwd=project)
+    assert rc == 0, updated
     rc, stale = _run_cli(registry, runtime, *delivery, *vision,
         "--checkpoint-read-context", b["read_context_id"], cwd=project)
     assert rc == 1 and stale["error_code"] == "checkpoint_read_context_stale", stale
@@ -221,22 +227,14 @@ def test_missing_replaced_stale_context_requires_reread_and_preserves_delivery(t
 def test_large_goal_context_keeps_complete_basis_and_checkpoint_only_recovery(
     tmp_path, monkeypatch, provider,
 ):
-    from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from canonical_authority_fixture import isolate_sqlite_runtime
     from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
 
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry, binding, delivery, original = _missing(tmp_path, provider=provider)
+    project, runtime, registry, binding, delivery, original = _missing(tmp_path,
+        initialize=lambda project, runtime, _: _initialize_fixture_authority(project, runtime, provider=provider))
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
-    if provider != "legacy":
-        todo = {"schema_version": "todo_item_v0", "todo_id": TODO_ID, "index": 1,
-                "role": "agent", "status": "open", "done": False,
-                "text": "Validate and settle the selected delivery.",
-                "task_class": "advancement_task", "archive_state": "active",
-                "source_section": "Agent Todo"}
-        projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo])
-        advance_canonical_fixture_authority(runtime, GOAL_ID, projection, operation_id="fixture-checkpoint-context")
     # The original failure came from complete source prose, not from the
     # small prior Turn receipt. Keep the source intact and cross both 2 MiB
     # request and response boundaries through the real local CLI/runtime.
@@ -247,8 +245,7 @@ def test_large_goal_context_keeps_complete_basis_and_checkpoint_only_recovery(
     rc, context = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)
     assert rc == 0, {key: value for key, value in context.items() if key != "basis"}
     assert context["basis"]["goal"]["prose"].endswith(large_prose.strip())
-    assert context["basis"]["source"]["authority"] == (
-        "legacy_markdown" if provider == "legacy" else f"{provider}_v0")
+    assert context["basis"]["source"]["authority"] == f"{provider}_v0"
     state.write_text(state.read_text(encoding="utf-8") + "\nUpdated acceptance context.\n",
                      encoding="utf-8")
     supplement = (*delivery,
@@ -279,7 +276,6 @@ def test_context_reads_real_canonical_todo_and_owner_acceptance(tmp_path, monkey
         isolate_sqlite_runtime(tmp_path, monkeypatch)
         import tempfile
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    project, runtime, registry, _, _, _ = _missing(tmp_path, provider=provider)
     todo = {"schema_version": "todo_item_v0", "todo_id": TODO_ID, "index": 1,
             "role": "agent", "status": "done", "done": True, "text": "Canonical delivered result",
             "task_class": "advancement_task", "archive_state": "active", "source_section": "Agent Todo"}
@@ -290,7 +286,10 @@ def test_context_reads_real_canonical_todo_and_owner_acceptance(tmp_path, monkey
     projection["goal_acceptance"] = {"schema_version": "loopx_goal_acceptance_v0", "enabled": True,
         "revision": 1, "digest": hashlib.sha256(canonical_bytes(document)).hexdigest(),
         "document": document, "bindings": [], "verification": None}
-    advance_canonical_fixture_authority(runtime, GOAL_ID, projection, operation_id="fixture-checkpoint-context")
+    def initialize(project, runtime, _registry):
+        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    project, runtime, registry, _, _, _ = _missing(tmp_path, historical=True, initialize=initialize)
     context = read_checkpoint_context(registry_path=registry, runtime_root_override=str(runtime),
         goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID)
     assert context["basis"]["todo"]["text"] == "Canonical delivered result"

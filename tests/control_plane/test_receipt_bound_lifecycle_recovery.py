@@ -20,7 +20,7 @@ RECOVERED = {**SOURCE, 'resolution_mode': 'receipt_bound_replan_settlement',
 
 @pytest.mark.parametrize('case', ['recovered', 'unsettled', 'wrong_candidate',
     'no_candidate', 'unguarded', 'wrong_source', 'no_source', 'non_boolean'])
-def test_selection_boundary(case):
+def test_incomplete_lifecycle_candidate_cannot_replace_receipt_source(case):
     candidate = {'lifecycle_settled': True, 'obligation': copy.deepcopy(RECOVERED)}
     source = copy.deepcopy(SOURCE)
     context = {'replan_obligation': {'obligation_id': 'replan-fedcba9876543210'},
@@ -43,8 +43,9 @@ def test_selection_boundary(case):
             with pytest.raises(ValueError, match='source identity differs'): call()
             return
         chosen, _ = call()
-    expected = (RECOVERED if case in ['recovered', 'no_source'] else
-                context['replan_obligation'] if case == 'unguarded' else SOURCE)
+    # A candidate's settled boolean is not native lifecycle proof. These
+    # intentionally incomplete objects cannot replace the admitted source.
+    expected = context['replan_obligation'] if case in {'unguarded', 'no_source'} else SOURCE
     assert chosen == expected
 
 
@@ -56,7 +57,7 @@ def test_native_lifecycle_writeback_and_replay(tmp_path, monkeypatch, provider):
     base = ['--goal-id', cli.GOAL_ID, '--agent-id', cli.AGENT_ID]
     original_binding = [*base, '--todo-id', cli.TODO_ID, '--turn-instance-id', cli.TURN_ID]
     code, guard = run('quota', 'should-run', '--codex-app', *original_binding,
-        '--scan-path', str(project), '--available-capability', 'shell', '--available-capability', 'filesystem_write')
+        '--available-capability', 'shell', '--available-capability', 'filesystem_write')
     assert code == 0 and guard['ok'], guard
     # Only this isolated fixture seeds the already-supported historical protocol.
     cli._historical_turn(runtime)
@@ -70,7 +71,7 @@ def test_native_lifecycle_writeback_and_replay(tmp_path, monkeypatch, provider):
         '--vision-summary', 'The original bounded fixture deliverable passed.',
         '--vision-acceptance', 'Retain original acceptance and exact result.', '--no-global-sync', '--suppress-external-sinks')
     assert code == 0 and refreshed['ok'], refreshed
-    code, spent = run('quota', 'spend-slot', *original_binding, '--execute', '--scan-path', str(project))
+    code, spent = run('quota', 'spend-slot', *original_binding, '--execute', )
     assert code == 0 and spent['ok'] and cli._spend_run_count(runtime) == 1, spent
 
     turn = 'receipt-bound-review'
@@ -82,8 +83,7 @@ def test_native_lifecycle_writeback_and_replay(tmp_path, monkeypatch, provider):
     assert receipt['semantic_replan_source']['obligation']['resolution_mode'] == 'todo_lifecycle_settlement', admitted
     source_bytes = json.dumps(receipt['semantic_replan_source'], sort_keys=True)
     closeargs = ['todo', 'complete', *base, '--todo-id', cli.TODO_ID,
-        '--completion-identity-key', completed['completion_identity_key'], '--no-follow-up',
-        '--evidence', 'Original bounded fixture validator passed.']
+        '--completion-identity-key', completed['completion_identity_key'], '--no-follow-up']
     code, closed = run(*closeargs)
     assert code == 0 and closed['completion_recovery'] == 'lifecycle_reentry_terminal_closeout', closed
     assert closed['completion_receipt_id'] == completed['completion_receipt_id']
@@ -114,14 +114,20 @@ def test_native_lifecycle_writeback_and_replay(tmp_path, monkeypatch, provider):
     delta = written['autonomous_replan_ack']['semantic_delta']
     assert delta['accepted'] is True and delta['obligation_id'] == oid, written
     assert cli._spend_run_count(runtime) == 1
-    spend = ['quota', 'spend-slot', *binding, '--execute', '--scan-path', str(project)]
+    spend = ['quota', 'spend-slot', *binding, '--execute', ]
     code, settled = run(*spend)
-    assert code == 0 and settled['ok'] and settled['settlement_progress']['state'] == 'settled', settled
-    assert cli._spend_run_count(runtime) == 2
+    assert code == 0 and settled['ok'], settled
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+    ledger = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        todo_id=None, turn_instance_id=turn, replan_obligation_id=oid, registry_path=registry)
+    assert ledger is not None and ledger.settlement.failure is None
+    # Main's blocked-retry closeout is exempt: preserve the original debit,
+    # with no new debit for this evidence-linked blocked outcome.
+    assert ledger.spend_run is None and cli._spend_run_count(runtime) == 1
     for args in (refresh, spend, closeargs):
         code, replay = run(*args)
         assert code == 0 and replay['idempotent_replay'] is True, replay
-    assert cli._spend_run_count(runtime) == 2 and marker.read_text() == 'run\n'
+    assert cli._spend_run_count(runtime) == 1 and marker.read_text() == 'run\n'
     code, current = run('quota', 'should-run', '--codex-app', *base, '--turn-instance-id', 'lifecycle173-later')
     assert code == 0 and current['ok'], current
     assert current['heartbeat_receipt'].get('semantic_replan_obligation_id') != oid
@@ -151,7 +157,7 @@ def test_original_source_cardinality(case):
         call=lambda: writer.qualify_replan_writeback(newest_first_runs=[],state_text='',agent_id='fixture-agent',
             goal_id='fixture-goal',todo_fields={},guard_scoped=True,guard_semantic_replan_obligation_id=OID,
             receipt_bound_guard_recorded_at='2026-08-13T05:00:00Z',receipt_bound_source=source)
-        if case!='matching':
+        if case not in {'matching', 'unsettled'}:
             with pytest.raises(EffectRuntimeRejected,match='lifecycle source does not match'):call()
             return
         chosen,_=call()
@@ -159,4 +165,6 @@ def test_original_source_cardinality(case):
     if case=='matching':
         assert chosen['resolution_mode']=='receipt_bound_replan_settlement'
         assert 'fresh_vision_path_outcome' in chosen['satisfying_semantic_outcomes']
-    else:assert chosen==source
+    else:
+        assert chosen['resolution_mode'] == 'todo_lifecycle_settlement'
+        assert chosen['satisfying_semantic_outcomes'] == SOURCE['satisfying_semantic_outcomes']

@@ -37,11 +37,11 @@ def _fixture(provider, tmp_path, monkeypatch, *, crowded=False, gated=False, pee
                 todos=todos["agent_todos"]["items"] + todos.get("user_todos", {}).get("items", []), handoff_mode="soft_claim"),
             state_path=state, provider=provider)
     args = ("quota", "should-run", "--goal-id", GOAL_ID,
-            "--agent-id", AGENT_IDS[0], "--scan-root", str(project))
+            "--agent-id", AGENT_IDS[0])
     return project, runtime, registry, state, args
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("selector", [(), ("--include-detail", "agent-todos"),
     ("--include-detail", "user-todos"), ("--include-detail", "goal-boundary"),
     ("--include-detail", "scheduler"), ("--include-detail", "vision"),
@@ -63,7 +63,7 @@ def test_first_detail_selector_admits_and_cold_replays_original_work(provider, s
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("replan", [False, True])
 def test_unbound_concurrent_reads_return_selectable_identities_then_bind_exact_turn(provider, replan, tmp_path, monkeypatch):
     project, runtime, registry, _, args = _fixture(provider, tmp_path, monkeypatch, crowded=True, replan=replan)
@@ -95,7 +95,7 @@ def test_unbound_concurrent_reads_return_selectable_identities_then_bind_exact_t
     # Use the returned exact selection command, not a test-created replacement ID.
     selection = results[0][1]["interaction_contract"]["cli_channel"]["selection_command"]
     selected_args = shlex.split(selection["command_args_template"].replace("{todo_id}", "todo_fixture_000"))
-    code, selected = _run_cli(registry, runtime, *selected_args, "--scan-root", str(project), cwd=project)
+    code, selected = _run_cli(registry, runtime, *selected_args, cwd=project)
     assert code == 0, json.dumps(selected, indent=2)
     identity = selected["heartbeat_receipt"]["settlement_identity"]
     assert identity["turn_instance_id"] == ids[0] and identity["todo_id"] == "todo_fixture_000"
@@ -111,7 +111,7 @@ def test_unbound_concurrent_reads_return_selectable_identities_then_bind_exact_t
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_user_gate_receipt_does_not_authorize_delivery_or_spend(provider, tmp_path, monkeypatch):
     project, runtime, registry, _, args = _fixture(provider, tmp_path, monkeypatch, gated=True)
     for selector in [(), ("--include-detail", "all")]:
@@ -124,13 +124,13 @@ def test_user_gate_receipt_does_not_authorize_delivery_or_spend(provider, tmp_pa
         code, rejected = _run_cli(registry, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_IDS[0], "--todo-id", "todo_fixture_000",
             "--turn-instance-id", receipt["turn_instance_id"], "--slots", "1",
-            "--source", "heartbeat", "--execute", "--scan-root", str(project), cwd=project)
+            "--source", "heartbeat", "--execute", cwd=project)
         assert code == 1, rejected
         assert _spend_run_count(runtime) == 0
     assert not list((runtime / "goals" / GOAL_ID / "turns").glob("*.json"))
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_another_agent_cannot_restore_the_original_work(provider, tmp_path, monkeypatch):
     project, runtime, registry, _, args = _fixture(provider, tmp_path, monkeypatch, peer=True)
     code, first = _run_cli(registry, runtime, *args, cwd=project)
@@ -145,7 +145,7 @@ def test_another_agent_cannot_restore_the_original_work(provider, tmp_path, monk
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_admission_policy_failure_cannot_bind_an_unbound_turn(provider, tmp_path, monkeypatch):
     project, runtime, registry, _, args = _fixture(provider, tmp_path, monkeypatch, crowded=True)
     code, first = _run_cli(registry, runtime, *args, cwd=project)
@@ -158,7 +158,7 @@ def test_admission_policy_failure_cannot_bind_an_unbound_turn(provider, tmp_path
     monkeypatch.setattr("loopx.control_plane.goals.checkpoint_context_io.default_result_freshness_policy", unavailable)
     command = shlex.split(selection["route_prefix"] + " " +
         selection["command_args_template"].replace("{todo_id}", "todo_fixture_000"))[1:]
-    code, text = _invoke_cli(["--format", "json", *command, "--scan-root", str(project)])
+    code, text = _invoke_cli(["--format", "json", *command])
     rejected = json.loads(text)
     assert code == 1 and rejected["should_run"] is False, rejected
     assert rejected["ok"] is False and rejected["recommended_action"]
@@ -168,17 +168,15 @@ def test_admission_policy_failure_cannot_bind_an_unbound_turn(provider, tmp_path
 
 
 @pytest.mark.parametrize("provider", ["legacy"])
-def test_malformed_first_read_fails_closed_then_repairs_without_moving_tokens(provider, tmp_path, monkeypatch):
+def test_unpromoted_display_cannot_admit_work_after_display_repair(provider, tmp_path, monkeypatch):
     project, runtime, registry, state, args = _fixture(provider, tmp_path, monkeypatch)
     original = state.read_bytes()
     state.write_text(state.read_text(encoding="utf-8").replace("status=open", "status=unsupported"), encoding="utf-8")
     code, failed = _run_cli(registry, runtime, *args, cwd=project)
-    assert code == 1 and failed["status_health_ok"] is False and failed["should_run"] is False, failed
-    assert failed["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert code == 1 and failed["error_code"] == "canonical_authority_required", failed
     assert "delivery_result_context" not in failed and _spend_run_count(runtime) == 0
     state.write_bytes(original)
     code, admitted = _run_cli(registry, runtime, *args, cwd=project)
-    assert code == 0 and admitted["delivery_result_context"]["basis"]["todo"]["todo_id"] == "todo_fixture_000", admitted
-    code, restored = _run_cli(registry, runtime, *args, cwd=project)
-    assert code == 0 and restored["delivery_result_context"] == admitted["delivery_result_context"], restored
+    assert code == 1 and admitted["error_code"] == "canonical_authority_required", admitted
+    assert "delivery_result_context" not in admitted
     assert _spend_run_count(runtime) == 0

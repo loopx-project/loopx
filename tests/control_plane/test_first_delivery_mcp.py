@@ -5,10 +5,8 @@ import json
 
 import pytest
 
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.status import parse_active_state_todos
 from loopx.todos import add_goal_todo
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.test_goal_mode_mcp_settlement import GOAL_ID, AGENT_ID, _write_fixture, _control, _run_cli
 
 
@@ -16,7 +14,7 @@ from tests.test_goal_mode_mcp_settlement import GOAL_ID, AGENT_ID, _write_fixtur
 @pytest.mark.parametrize("new_obligation", [False, True])
 def test_mcp_first_delivery_recovers_stale_direction_without_repeating_result(tmp_path, monkeypatch, provider, new_obligation):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = _write_fixture(tmp_path)
+    registry, state = _write_fixture(tmp_path, provider=provider)
     registration = json.loads(registry.read_text(encoding="utf-8"))
     registration["goals"][0]["adapter"] = {"kind": "fixture_v0", "status": "connected-delivery"}
     registry.write_text(json.dumps(registration), encoding="utf-8")
@@ -25,10 +23,6 @@ def test_mcp_first_delivery_recovers_stale_direction_without_repeating_result(tm
         claimed_by=AGENT_ID, continuation_policy="same_agent_non_delivery")
     todo_id = added["todo_id"]
     runtime = tmp_path / "runtime"
-    todos = parse_active_state_todos(state.read_text(encoding="utf-8"))
-    initialize_canonical_authority(runtime, GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, handoff_mode="soft_claim", todos=todos["agent_todos"]["items"]),
-        state_path=state, provider=provider)
     rc, baseline = _run_cli(registry, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--vision-summary", "Verify the bounded output.", "--vision-acceptance", "Output verification passes.",
         "--no-global-sync", "--suppress-external-sinks")
@@ -54,7 +48,7 @@ def test_mcp_first_delivery_recovers_stale_direction_without_repeating_result(tm
     # Dashboard and Lark projections call the shared collector, not the CLI's
     # Agent decorator. An unscoped read must retain the same recovery message.
     shared = collect_status(registry_path=registry, runtime_root_override=str(runtime),
-        scan_roots=[state.parent], limit=10, goal_id=GOAL_ID, include_public_boundary_scan=False)
+        limit=10, goal_id=GOAL_ID)
     shared_item = shared["attention_queue"]["items"][0]
     assert shared_item["first_delivery_progress"]["stage"] == "direction_pending"
     assert shared_item["recommended_action"] == observed["next_action"]

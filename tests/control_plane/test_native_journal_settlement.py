@@ -45,8 +45,6 @@ def test_original_native_mcp_settlement_reconciles_managed_journal(
         json.dumps([sys.executable, str(host)]),
         "--validation-command-json",
         json.dumps([sys.executable, str(validator)]),
-        "--scan-root",
-        str(project),
         "--no-global-sync",
         "--execute",
     )

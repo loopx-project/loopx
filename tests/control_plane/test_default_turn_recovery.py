@@ -57,7 +57,7 @@ else:
         '--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--project', str(project),
         '--host-adapter-command-json', json.dumps([sys.executable, str(host)]),
         '--validation-command-json', json.dumps([sys.executable, str(validator)]),
-        '--scan-root', str(project), '--no-global-sync', '--execute']
+        '--no-global-sync', '--execute']
     injection = '''import os,sys
 from loopx.cli import main
 from loopx.cli_commands import turn_run_once as tr

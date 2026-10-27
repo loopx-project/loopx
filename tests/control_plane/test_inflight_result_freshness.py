@@ -29,7 +29,7 @@ def _runs(runtime):
     return {p.name: p.read_bytes() for p in (runtime / 'goals' / GOAL_ID / 'runs').glob('*') if p.is_file() and p.suffix in {'.json', '.jsonl', '.md'}}
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('vision', [False, True])
 def test_inflight_rejects_changed_basis_then_revalidates_same_turn(provider, vision, tmp_path, monkeypatch):
     project, runtime, registry, state, context, args = _admit(provider, tmp_path, monkeypatch)
@@ -68,7 +68,7 @@ def test_inflight_rejects_changed_basis_then_revalidates_same_turn(provider, vis
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_inflight_unchanged_basis_does_not_require_new_direction(provider, tmp_path, monkeypatch):
     project, runtime, registry, _, context, args = _admit(provider, tmp_path, monkeypatch)
     rc, committed = _run_cli(registry, runtime, *args, cwd=project)
@@ -94,7 +94,7 @@ def test_inflight_missing_work_receipt_cannot_mint_a_new_read(provider, tmp_path
     assert _runs(runtime) == before
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_historical_inflight_admission_keeps_its_original_policy(provider, tmp_path, monkeypatch):
     from tests.control_plane.test_quota_settlement_cli import _historical_turn
     project, runtime, registry, state, context, args = _admit(provider, tmp_path, monkeypatch)
