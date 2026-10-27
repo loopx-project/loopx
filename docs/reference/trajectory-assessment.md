@@ -304,14 +304,18 @@ leading signs, precision and percent suffixes stay exact, while spelled-out unit
 are explained in the output language. An adjacent topic cannot resolve an
 ambiguous referent without supporting field-bound evidence. This remains model
 guidance; the exact-literal qualifier and original-text fallback are unchanged.
-The curator selects it in a new versioned input through the existing analysis
-action. Earlier encodings retain their exact prompts, identities and artifacts;
-reading or refreshing them never starts or upgrades analysis.
+New CLI preparations and default pack registrations select it when a captured
+display snapshot has no explicit encoding. The normalized input is saved with
+that choice before analysis. Explicit encodings/configurations and frozen inputs
+retain their exact prompts, identities and artifacts; reading or refreshing them
+never starts or upgrades analysis. Translation quality belongs to the existing
+analysis generation, with original text available for comparison.
 
 显式数值编码 v3 增加生成时的逐项忠实性核对：正负号、精度和百分号按允许的原始写法
 保留，文字单位用目标语言解释；不能仅凭邻近主题补全含糊所指。这仍是模型指导，
-既有字面校验和原文回退不放宽。由原输入整理者通过既有分析入口明确生成新版本，
-旧编码的提示、身份和产物保持，阅读与刷新不升级或执行分析。
+既有字面校验和原文回退不放宽。新CLI准备和默认pack登记在快照未指定编码时采用v3，
+先将选择保存到版本化输入，再由既有分析入口生成。显式编码/配置及历史输入的提示、
+身份和产物保持，阅读与刷新不升级或执行分析。译文质量由默认生成承担，原文仍可核对。
 
 Translated prose is applied to decoded narrative fields; it is never serialized
 and reparsed as an Explore decision. Owner-format labels or list markers inside

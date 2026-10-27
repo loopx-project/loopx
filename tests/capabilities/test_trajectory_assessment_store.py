@@ -583,10 +583,12 @@ def test_missing_source_blocks_new_execution_and_leaves_registration_visible(pac
         execute_pack(**operation, codex="must-not-run")
 
 
-@pytest.mark.parametrize("encoding", [None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"])
+@pytest.mark.parametrize("encoding", ["default", None, "source_text_aliases_v1", "source_text_aliases_with_literals_v1", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"])
 @pytest.mark.parametrize("context", [False, True])
 def test_full_history_display_uses_the_same_job_and_preserves_original_versions(pack, tmp_path, encoding, context):
-    scope, _, _, input_path, sources, _ = pack
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment import prepare
+
+    scope, _, initial, input_path, sources, _ = pack
     data = json.loads(input_path.read_text())
     history = {"ok": True, "goal_id": "solver", "total": 2, "next_cursor": None, "items": [
         dict(schema_version="loopx_explore_result_event_v0", event_id="question-old", result_id="question", goal_id="solver", event_kind="node",
@@ -594,19 +596,25 @@ def test_full_history_display_uses_the_same_job_and_preserves_original_versions(
         dict(schema_version="loopx_explore_result_event_v0", event_id="question-new", result_id="question", goal_id="solver", event_kind="node",
              node_kind="question", recorded_at="2026-01-02T00:00:00Z", title="Does V19 help?", summary="Still unknown.", status="blocked"),
     ]}
-    if encoding in {"source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"}:
+    if encoding in {"default", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"}:
         history["items"][0]["summary"] = "Trial4failed2checks"
     text = json.dumps(history, ensure_ascii=False)
     (sources / "history.json").write_text(text)
     data["sources"].append(dict(id="history", artifact="history.json", artifact_sha256=hashlib.sha256(text.encode()).hexdigest(), first_line=1, text=text))
     data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="source-a")
-    if encoding is not None:
+    if encoding is not None and encoding != "default":
         data["display_snapshot"]["translation_encoding"] = encoding
     context_citation = dict(source_id="source", first_line=2, last_line=2)
     if context:
         data["display_snapshot"]["contexts"] = [dict(event_id="question-old", field="summary", citations=[context_citation])]
     input_path.write_text(json.dumps(data))
-    registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Whole history · synthetic")
+    registered = register_pack(**scope, input_path=input_path, source_root=sources, title="Whole history · synthetic",
+                               config=None if encoding == "default" else initial["config"])
+    if encoding == "default":
+        prepared = prepare(input_path, model="gpt-6.1-sol", effort="max", service_tier="fast")
+        assert prepared["input"]["display_snapshot"]["translation_encoding"] == "source_text_aliases_with_literal_values_v3"
+        assert prepared["analysis_key"] == registered["analysis_key"]
+        assert json.loads(input_path.read_text()) == data
     current = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")
     assert current["display_request"]["eligible"] == 4 and current["job"] is None
     provider = tmp_path / "display-provider"
@@ -640,7 +648,7 @@ print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_to
             read_citation(**operation, source_id="history", first_line=1, last_line=1)
     else:
         assert not any("context_citations" in field for field in result["result"]["display"]["fields"])
-    if encoding in {"source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"}:
+    if encoding in {"default", "source_text_aliases_with_literal_values_v1", "source_text_aliases_with_literal_values_v2", "source_text_aliases_with_literal_values_v3"}:
         assert any(field["text"] == "第4次尝试有2项检查未通过（Trial4failed2checks）。"
                    for field in result["result"]["display"]["fields"])
     assert result["job"]["usage"]["input_tokens"] == 19  # one shared attempt, not four new jobs
@@ -657,6 +665,25 @@ print(json.dumps({"type":"turn.completed", "usage":{"input_tokens":19,"output_to
     assert prior["job"]["status"] == "failed" and prior["job"]["attempt"] == 2
     assert prior["result_attempt"] == 1 and prior["result_job"]["usage"]["input_tokens"] == 19
     assert prior["result"] == result["result"]
+    if encoding == "default":
+        # A failed retry keeps the prior successful response reusable. Readback
+        # contains restored literals, so it cannot substitute for raw output.
+        successor_input = json.loads(input_path.read_text())
+        successor_input["scope"]["revision"] = "successor-capture"
+        successor_path = tmp_path / "successor.json"
+        successor_path.write_text(json.dumps(successor_input))
+        successor = register_pack(**scope, input_path=successor_path, source_root=sources,
+                                  title="Same evidence, new capture", base_pack_id=registered["pack_id"])
+        successor_view = inspect_pack(**scope, pack_id=successor["pack_id"], output_language="zh")
+        assert successor_view["continuation"]["base_available"] and successor_view["continuation"]["can_reuse"]
+        assert successor_view["job"] is None
+        reuse = execute_pack(**scope, pack_id=successor["pack_id"], analysis_key=successor_view["analysis_key"],
+                             output_language="zh", codex="must-not-run")
+        assert reuse["status"] == "succeeded" and reuse["reused"]
+        reused = inspect_pack(**scope, pack_id=successor["pack_id"], output_language="zh")
+        assert reused["result"]["display"] == prior["result"]["display"]
+        assert reused["result"]["metrics"] == prior["result"]["metrics"]
+        assert reused["continuation"]["verdict_changes"] == []
     provider.write_text(successful_provider)
     assert execute_pack(**operation, codex=str(provider), retry=True)["status"] == "succeeded"
     result = inspect_pack(**scope, pack_id=registered["pack_id"], output_language="zh")

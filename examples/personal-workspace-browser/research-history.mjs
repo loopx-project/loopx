@@ -719,6 +719,8 @@ export const researchHistoryScenario = {
       await unavailablePanel.getByRole('status').filter({hasText: '分析来源未就绪'}).waitFor();
       assert.equal(await unavailablePanel.locator('header p').count(), 0, 'An empty reader does not repeat analysis instructions');
       await unavailablePanel.press('Escape');
+      await page.waitForFunction(element => element === document.activeElement,
+        await history.getByRole('button', {name: '深度分析', exact: true}).elementHandle());
       assert(await history.getByRole('button', {name: '深度分析', exact: true}).evaluate(e => e === document.activeElement));
       assert.equal(analysisWrites, 0, 'Unavailable analysis, help and recovery are reads');
       await page.setViewportSize({width: 1280, height: 900});

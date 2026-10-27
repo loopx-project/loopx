@@ -351,6 +351,7 @@ def register_pack(
         {
             "input": json.loads(input_path.read_text(encoding="utf-8")),
             "config": config or DEFAULT_CONFIG,
+            "generation_defaults": not config,
         },
     )
     record = {
@@ -571,7 +572,7 @@ def _continuation(runtime_root, owner_goal_id, record, prepared, result, languag
     if base_id is None:
         return None, None
     try:
-        _, previous = _resolve(runtime_root, owner_goal_id, base_id)
+        owner, previous = _resolve(runtime_root, owner_goal_id, base_id)
         base = inspect_pack(runtime_root=runtime_root, owner_goal_id=owner_goal_id,
                             pack_id=base_id, output_language=language, include_continuation=False)
         old = _prepared(previous, language) if language is not None else _prepared(previous)
@@ -589,9 +590,24 @@ def _continuation(runtime_root, owner_goal_id, record, prepared, result, languag
     except (OSError, ValueError):
         readable = False
     usable = readable and base["result"] is not None and base["reason_code"] != "method_changed"
-    prior = {**old, **({"output": base["result"]} if usable else {})}
+    # Readback has restored display literals. Requalify the exact successful
+    # attempt's provider response, including when a later retry failed.
+    output = None
+    if usable:
+        directory = _job(owner, old, old["analysis_key"])
+        if base.get("result_job"):
+            directory = directory / f"attempt-{base['result_job']['attempt']}"
+        try:
+            output = json.loads((directory / "model-output.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            usable = False
+    prior = {**old, **({"output": output} if usable else {})}
+    # Compare analytical rows without resending the restored display sidecar;
+    # the raw response above supplies the versioned display data for reuse.
+    comparison_output = {key: result[key] for key in ("assessments", "limitations", "episode_questions", "synthesis")
+                         if key in result} if result is not None else None
     projection = effect_runtime_result("benchmark.trajectory.continuation", {
-        **prepared, "previous": prior, **({"output": result} if result is not None else {}),
+        **prepared, "previous": prior, **({"output": comparison_output} if result is not None else {}),
     })
     return {
         **projection,

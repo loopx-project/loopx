@@ -33,7 +33,7 @@ function metric(v: unknown): TrajectoryMetric {
   if (!TRAJECTORY_METRICS.includes(v as TrajectoryMetric)) throw new EffectRuntimeRequestError('unsupported metric');
   return v as TrajectoryMetric;
 }
-export function parseTrajectoryInput(raw: unknown): TrajectoryInput {
+export function parseTrajectoryInput(raw: unknown, generationDefaults = false): TrajectoryInput {
   const x = object(raw, 'input');
   if (x.schema_version !== 'trajectory_assessment_input_v1') throw new EffectRuntimeRequestError('unsupported input schema');
   const s = object(x.scope, 'scope'), selection = object(x.selection, 'selection');
@@ -67,7 +67,9 @@ export function parseTrajectoryInput(raw: unknown): TrajectoryInput {
   if (selection.exhaustive && population !== episodes.length) throw new EffectRuntimeRequestError('exhaustive requires a complete known population');
   const display = x.display_snapshot === undefined ? undefined : object(x.display_snapshot, 'display_snapshot');
   if (display && display.schema_version !== 'research_display_snapshot_v1') throw new EffectRuntimeRequestError('unsupported display snapshot');
-  const encoding = display?.translation_encoding;
+  const requestedEncoding = display?.translation_encoding;
+  const encoding = display && generationDefaults && requestedEncoding === undefined
+    ? 'source_text_aliases_with_literal_values_v3' : requestedEncoding;
   if (encoding !== undefined && encoding !== 'source_text_aliases_v1' && encoding !== 'source_text_aliases_with_literals_v1'
       && encoding !== 'source_text_aliases_with_literal_values_v1' && encoding !== 'source_text_aliases_with_literal_values_v2'
       && encoding !== 'source_text_aliases_with_literal_values_v3') {
@@ -242,7 +244,9 @@ const synthesisSchema = {type: 'object', additionalProperties: false,
   }};
 
 export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
-  const input = parseTrajectoryInput(params.input);
+  // Only new writer requests select defaults. Frozen inputs are re-prepared on
+  // every read and must retain their original prompt and analysis identity.
+  const input = parseTrajectoryInput(params.input, params.generation_defaults === true);
   const config = object(params.config, 'config');
   if (config.research_synthesis !== undefined && typeof config.research_synthesis !== 'boolean') {
     throw new EffectRuntimeRequestError('research_synthesis must be boolean');

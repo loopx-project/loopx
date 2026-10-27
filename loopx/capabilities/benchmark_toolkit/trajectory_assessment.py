@@ -49,6 +49,7 @@ def prepare(
         "benchmark.trajectory.prepare",
         {
             "input": json.loads(input_path.read_text(encoding="utf-8")),
+            "generation_defaults": output_schema_revision == 2,
             "config": {"model": model, "effort": effort, "service_tier": service_tier,
                        **({"output_schema_revision": output_schema_revision} if output_schema_revision is not None else {}),
                        **({"research_synthesis": True, "research_synthesis_revision": 2} if research_synthesis else {})},

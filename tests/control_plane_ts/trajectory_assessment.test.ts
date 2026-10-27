@@ -51,6 +51,34 @@ const contextInput = () => {
 const translatedOutput = (p = displayPrepared()) => ({...output(), episode_questions: [{episode_id: 'e1', question: 'A 是否有帮助？'}, {episode_id: 'e2', question: 'B 是否有帮助？'}],
   display_translations: JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!).map((row: {field_id: string; text: string}) => ({field_id: row.field_id, text: `【译文】${row.text}`}))});
 
+test('new generation selects faithful display defaults without upgrading frozen or explicit inputs', () => {
+  for (const language of ['zh', 'en']) {
+    const original = contextInput(), configForLanguage = {...config, output_language: language};
+    delete original.display_snapshot!.translation_encoding;
+    const before = structuredClone(original);
+    const frozen = prepareTrajectoryAssessment({input: original, config: configForLanguage});
+    const next = prepareTrajectoryAssessment({input: original, config: configForLanguage, generation_defaults: true});
+    assert.equal(next.input.display_snapshot!.translation_encoding, 'source_text_aliases_with_literal_values_v3');
+    assert.notEqual(next.analysis_key, frozen.analysis_key);
+    assert.equal(next.config.output_language, language);
+    assert.deepEqual(next.input.sources, original.sources);
+    assert.deepEqual(next.input.episodes, original.episodes);
+    assert.deepEqual(original, before, 'Writer normalization does not modify the captured input');
+    assert.deepEqual(prepareTrajectoryAssessment({input: next.input, config: next.config}), next);
+    assert.deepEqual(prepareTrajectoryAssessment({input: original, config: configForLanguage}), frozen);
+    for (const encoding of ['source_text_aliases_v1', 'source_text_aliases_with_literal_values_v2'] as const) {
+      const explicit = structuredClone(original);
+      explicit.display_snapshot!.translation_encoding = encoding;
+      assert.deepEqual(prepareTrajectoryAssessment({input: explicit, config: configForLanguage, generation_defaults: true}),
+        prepareTrajectoryAssessment({input: explicit, config: configForLanguage}));
+    }
+    const invalid = {...original, display_snapshot: {...original.display_snapshot, translation_encoding: null}};
+    assert.throws(() => prepareTrajectoryAssessment({input: invalid, config: configForLanguage, generation_defaults: true}),
+      /unsupported display translation encoding/);
+  }
+  assert.deepEqual(prepareTrajectoryAssessment({input: input(), config, generation_defaults: true}), prepared());
+});
+
 test('field-bound evidence disambiguates identical notes without sharing translations or changing source authority', () => {
   const input = contextInput(), p = prepareTrajectoryAssessment({input, config: {...config, output_language: 'zh'}});
   const rows = JSON.parse(p.prompt.split('\n\ndisplay_fields:\n')[1]!);
