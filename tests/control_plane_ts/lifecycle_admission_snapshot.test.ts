@@ -11,8 +11,8 @@ const current=admitted.map(item=>({...item,no_followup:true,completion_continuat
 const source={obligation_id:"replan-1111111111111111",resolution_mode:"todo_lifecycle_settlement",
   lifecycle_admission_items:admitted,triggers:admitted.map(item=>({kind:"completed_advancement_without_successor",
     agent_id:"agent-a",todo_id:item.todo_id,completion_turn_key:item.completion_turn_key}))};
-function run(obligation=source,items=current){return projectReplanSemantics({operation:"lifecycle_obligation",
-  obligation,selected_obligation_id:source.obligation_id,agent_id:"agent-a",guard_recorded_at:"2026-09-02T00:00:00Z",items});}
+function run(obligation=source,items=current,guard="2026-09-02T00:00:00Z"){return projectReplanSemantics({operation:"lifecycle_obligation",
+  obligation,selected_obligation_id:source.obligation_id,agent_id:"agent-a",guard_recorded_at:guard,items});}
 test("sealed original admission recovers closeout without rewriting old Todo timestamps",()=>{
   assert.equal((run().obligation as Record<string,unknown>).resolution_mode,"receipt_bound_replan_settlement");
 });
@@ -49,4 +49,13 @@ test("sealed admission accepts the lifecycle owner's closeout timestamp", () => 
     "receipt_bound_replan_settlement");
   items[0].updated_at = "2026-09-01T12:00:00Z";
   assert.throws(() => run(source, items), /lifecycle source does not match/);
+});
+
+test("sealed admission accepts a later closeout in the guard's whole second", () => {
+  const items = current.map(item => ({...item, updated_at: "2026-09-02T00:00:00Z"}));
+  const guard = "2026-09-02T00:00:00.654321Z";
+  assert.equal((run(source, items, guard).obligation as Record<string, unknown>).resolution_mode,
+    "receipt_bound_replan_settlement");
+  items[0].updated_at = "2026-09-01T23:59:59Z";
+  assert.throws(() => run(source, items, guard), /lifecycle source does not match/);
 });

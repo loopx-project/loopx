@@ -174,6 +174,7 @@ function admittedLifecycleSource(request: JsonObject, obligation: JsonObject): J
     const current = Array.isArray(request.items) ? request.items.map(object) : [];
     const timestamp = typeof request.guard_recorded_at === "string"
       ? parseTodoTimestampMicros(request.guard_recorded_at) : null;
+    const admissionSecond = timestamp === null ? null : timestamp / 1_000_000n * 1_000_000n;
     const stable = ["todo_id", "index", "status", "done", "task_class", "archive_state",
       "claimed_by", "last_actor_agent_id", "completed_at",
       "completion_turn_key", "successor_todo_ids", "superseded_by"];
@@ -197,7 +198,7 @@ function admittedLifecycleSource(request: JsonObject, obligation: JsonObject): J
             item.completion_recovery === "lifecycle_reentry_terminal_closeout" &&
             (item.updated_at === prior.updated_at ||
              (typeof item.updated_at === "string" && parseTodoTimestampMicros(item.updated_at) !== null &&
-              parseTodoTimestampMicros(item.updated_at)! >= timestamp))));
+              parseTodoTimestampMicros(item.updated_at)! >= admissionSecond!))));
       });
     source = {items: valid ? items : [], settled: valid && items.every(item => item.no_followup === true)};
   }
