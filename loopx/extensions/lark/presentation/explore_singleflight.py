@@ -19,7 +19,7 @@ def default_lark_explore_config_path(registry_path: Path | None = None) -> Path:
 
 
 def source_lark_explore_config_path(
-    registry_path: Path | None, goal_id: str
+    registry_path: Path | None, goal_id: str, runtime_root_override: str | None = None
 ) -> Path:
     """Resolve the sink config beside the goal's canonical source registry."""
 
@@ -30,6 +30,7 @@ def source_lark_explore_config_path(
     source_registry_path, _ = resolve_explore_source_registry(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_override=runtime_root_override,
     )
     return default_lark_explore_config_path(source_registry_path)
 
@@ -92,7 +93,7 @@ def explore_feishu_sync_busy_packet(
 
 
 def singleflight_issue_fix_material_sync(
-    config_path_resolver: Callable[[Path | None, str], Path],
+    config_path_resolver: Callable[[Path | None, str, str | None], Path],
 ) -> Callable[[Callable[..., dict[str, Any]]], Callable[..., dict[str, Any]]]:
     """Serialize an issue-fix material sync across row, visual, and checkpoint writes."""
 
@@ -113,7 +114,7 @@ def singleflight_issue_fix_material_sync(
                 kwargs.get("external_sink_delivery_authorized", True)
             )
             with explore_feishu_sync_singleflight(
-                config_path=config_path_resolver(resolved_registry, goal_id),
+                config_path=config_path_resolver(resolved_registry, goal_id, kwargs.get("runtime_root_override")),
                 execute=bool(execute and delivery_authorized),
             ) as acquired:
                 if not acquired:

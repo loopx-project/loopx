@@ -1882,6 +1882,7 @@ def sync_issue_fix_explore_on_material_change(
     *,
     registry_path: Path,
     goal_id: str,
+    runtime_root_override: str | None = None,
     agent_id: str | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
@@ -1889,11 +1890,8 @@ def sync_issue_fix_explore_on_material_change(
     external_sink_delivery_authorized: bool = True,
     runner: CommandRunner = default_subprocess_runner,
 ) -> dict[str, Any]:
-    """Project issue-fix facts and sync Lark only when the graph digest changed.
-
-    The canonical Explore result log is updated before this adapter runs.  A
-    failed or interrupted Lark write therefore remains retryable: the stored
-    sink digest advances only after a successful remote sync.
+    """Sync changed graph digests after the canonical Explore log is updated.
+    Failed/interrupted Lark writes remain retryable; advance the stored sink digest only after successful remote sync.
     """
 
     from ....capabilities.issue_fix.explore_projection import (
@@ -1908,10 +1906,12 @@ def sync_issue_fix_explore_on_material_change(
     source_registry_path, compact_source_runtime_route = resolve_explore_source_registry(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_override=runtime_root_override,
     )
     projection_result = project_issue_fix_explore_graph(
         registry_path=source_registry_path,
         goal_id=goal_id,
+        runtime_root_override=runtime_root_override,
         agent_id=agent_id,
         project=project,
         state_file=state_file,

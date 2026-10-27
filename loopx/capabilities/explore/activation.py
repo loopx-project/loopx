@@ -161,6 +161,7 @@ def sync_explore_graph_after_material_refresh(
         result = syncer(
             registry_path=registry_path,
             goal_id=goal_id,
+            runtime_root_override=runtime_root_override,
             agent_id=agent_id,
             project=project,
             state_file=state_file,

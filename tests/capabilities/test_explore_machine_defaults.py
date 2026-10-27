@@ -10,6 +10,10 @@ import sys
 import pytest
 
 from loopx.capabilities.explore.activation import sync_explore_graph_after_material_refresh
+from loopx.capabilities.explore.result_log import (
+    append_explore_result_event, build_explore_node_event, explore_result_log_path,
+)
+from loopx.capabilities.issue_fix.explore_projection import project_issue_fix_explore_graph
 from loopx.capabilities.explore.machine_defaults import (
     EXPLORE_MACHINE_DEFAULTS_SCHEMA, apply_explore_machine_default,
     normalize_explore_machine_defaults, resolve_explore_goal,
@@ -24,6 +28,7 @@ from loopx.chat_goal_configuration_api import _goal_capability_options
 from loopx.configure_goal import configure_goal
 from loopx.control_plane.coordination.goal_storage_initialization import initialize_goal_storage_target
 from loopx.history import collect_history
+from loopx.rollout_event_log import append_rollout_event, build_rollout_event, rollout_event_log_path
 
 
 def configure_machine(root: Path, mode: str):
@@ -36,7 +41,7 @@ def configure_machine(root: Path, mode: str):
 
 
 @pytest.fixture
-def setup(tmp_path):
+def setup(tmp_path, request):
     root = tmp_path / "runtime"
     (tmp_path / "goal.md").write_text("# Goal\n\n## Agent Todos\n")
     path = tmp_path / "registry.json"
@@ -44,7 +49,8 @@ def setup(tmp_path):
             "repo": str(tmp_path), "state_file": "goal.md",
             "spawn_policy": {"spawn_allowed": False, "max_children": 2},
             "coordination": {"registered_agents": ["worker"], "storage_target": {
-                "schema_version": "loopx_new_goal_storage_target_v1", "provider": "file", "handoff_mode": "soft_claim"}}}
+                "schema_version": "loopx_new_goal_storage_target_v1", "provider": getattr(request, "param", "file"),
+                "handoff_mode": "soft_claim"}}}
     path.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(root), "goals": [goal]}))
     initialize_goal_storage_target(root, goal, registry_path=path)
     return path, root, goal
@@ -178,6 +184,7 @@ def test_todo_settlement_plan_uses_selected_runtime(setup, tmp_path, registry_mo
     assert str(selected) in writeback["command_template"]
 
 
+@pytest.mark.parametrize("setup", ["file", "sqlite"], indirect=True)
 @pytest.mark.parametrize("registry_mode,selected_mode", [("off", "planning"), ("planning", "off")])
 def test_refresh_state_uses_selected_runtime_for_graph_activation(setup, tmp_path, registry_mode, selected_mode):
     path, selected, _ = setup
@@ -187,13 +194,29 @@ def test_refresh_state_uses_selected_runtime_for_graph_activation(setup, tmp_pat
     path.write_text(json.dumps(registry))
     configure_machine(root, registry_mode)
     configure_machine(selected, selected_mode)
+    for runtime, label in [(selected, "selected"), (root, "other-runtime")]:
+        for node_id in ("fix_pr_lane", f"{label}-evidence"):
+            append_explore_result_event(explore_result_log_path(runtime, "research"),
+                build_explore_node_event(goal_id="research", node_id=node_id, title=node_id))
+        append_rollout_event(rollout_event_log_path(runtime, "research"),
+            build_rollout_event(goal_id="research", event_kind="capability_gap", status="found",
+                                summary=f"{label} observation", details={"target_capabilities": f"{label}-capability"}))
+    # The oracle selects the intended source directly, without the new override
+    # plumbing. Distinct persisted rows and rollout facts expose cross-root reads.
+    oracle_registry = tmp_path / "oracle-registry.json"
+    oracle_registry.write_text(json.dumps({**registry, "common_runtime_root": str(selected)}))
+    expected = project_issue_fix_explore_graph(registry_path=oracle_registry, goal_id="research")
+    graph = json.dumps(expected["projection"])
+    assert "selected-evidence" in graph and "selected-capability" in graph
+    assert "other-runtime-evidence" not in graph and "other-runtime-capability" not in graph
+    other_before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     registry_before = path.read_bytes()
 
     result = subprocess.run(
         [sys.executable, "-m", "loopx.cli", "--registry", str(path),
          "--runtime-root", str(selected), "--format", "json", "refresh-state",
          "--goal-id", "research", "--suppress-external-sinks", "--no-global-sync"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, cwd=tmp_path,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     packet = json.loads(result.stdout)
@@ -201,12 +224,16 @@ def test_refresh_state_uses_selected_runtime_for_graph_activation(setup, tmp_pat
     assert Path(packet["runtime_root"]) == selected
     activation = packet["explore_graph_sync"]
     assert activation["enabled"] is (selected_mode == "planning")
-    assert activation["status"] == ("not_applicable" if selected_mode == "planning" else "disabled")
+    assert activation["status"] == ("not_configured" if selected_mode == "planning" else "disabled")
+    if selected_mode == "planning":
+        assert activation["semantic_digest"] == expected["semantic_digest"]
+        assert activation["source_runtime_route"]["status"] == "explicit_override"
     assert activation["external_sink_delivery_authorized"] is False
     assert activation["delivery_postcondition"]["satisfied"] is True
     assert path.read_bytes() == registry_before
     assert not (root / "goals" / "research" / "runs" / "index.jsonl").exists()
     assert (selected / "goals" / "research" / "runs" / "index.jsonl").is_file()
+    assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == other_before
 
 
 @pytest.mark.parametrize("explicit_override", [False, True])
@@ -235,6 +262,61 @@ def test_material_refresh_preserves_source_route_without_runtime_override(setup,
     assert len(calls) == (0 if explicit_override else 1)
     if calls:
         assert calls[0]["external_sink_delivery_authorized"] is False
+
+
+@pytest.mark.parametrize("explicit_override", [False, True])
+@pytest.mark.parametrize("delivery_authorized", [False, True])
+def test_material_sync_routes_populated_sources_and_sink_lock(setup, tmp_path, monkeypatch,
+                                                            explicit_override, delivery_authorized):
+    from loopx.extensions.lark.presentation.explore_results import sync_issue_fix_explore_on_material_change
+    from loopx.file_lock import try_exclusive_file_lock
+
+    _, source, goal = setup
+    monkeypatch.chdir(tmp_path)
+    shared = tmp_path / "shared-runtime"
+    source_registry = tmp_path / "source" / ".loopx" / "registry.json"
+    global_registry = tmp_path / "shared" / ".loopx" / "registry.global.json"
+    for registry, runtime, source_ref in [(source_registry, source, None), (global_registry, shared, source_registry)]:
+        registry.parent.mkdir(parents=True)
+        registry.write_text(json.dumps({"schema_version": 1, "registry_role": "global-local" if source_ref else "project",
+            "common_runtime_root": str(runtime), "goals": [{**goal, **({"source_registry": str(source_ref)} if source_ref else {})}]}))
+        for node_id in ("fix_pr_lane", f"{runtime.name}-evidence"):
+            append_explore_result_event(explore_result_log_path(runtime, "research"),
+                build_explore_node_event(goal_id="research", node_id=node_id, title=node_id))
+        (registry.parent / "lark-explore.json").write_text(json.dumps({
+            "schema_version": "loopx_lark_explore_local_config_v0", "board": {
+                "base_token": "BASE_FIXTURE", "tables": {"nodes": "tblNodes", "edges": "tblEdges", "findings": "tblFindings"},
+                "cli_bin": "lark-cli", "identity": "user"}}))
+    selected = shared if explicit_override else source
+    excluded = source if explicit_override else shared
+    selected_registry = global_registry if explicit_override else source_registry
+    config = selected_registry.parent / "lark-explore.json"
+    config_before = config.read_bytes()
+    excluded_before = {p.relative_to(excluded): p.read_bytes() for p in excluded.rglob("*") if p.is_file()}
+
+    def refuse_external_command(*args, **kwargs):
+        raise AssertionError("mode selection does not authorize external delivery")
+
+    with try_exclusive_file_lock(config.with_name(config.name + ".feishu-sync"), operation="fixture_sync") as lock:
+        assert lock is not None
+        result = sync_issue_fix_explore_on_material_change(
+            registry_path=global_registry, goal_id="research", execute=True,
+            runtime_root_override="shared-runtime" if explicit_override else None,
+            external_sink_delivery_authorized=delivery_authorized, runner=refuse_external_command)
+    if delivery_authorized:
+        assert result["status"] == "sync_busy"
+        assert result["external_write_performed"] is False
+    else:
+        assert result["status"] == "external_sink_suppressed"
+        nodes = {node["node_id"] for node in result["projection"]["projection"]["nodes"]}
+        assert f"{selected.name}-evidence" in nodes
+        assert f"{excluded.name}-evidence" not in nodes
+        expected = project_issue_fix_explore_graph(registry_path=selected_registry, goal_id="research",
+                                                 runtime_root_override=str(selected))
+        assert result["semantic_digest"] == expected["semantic_digest"]
+        assert result["projection"]["source_runtime_route"]["status"] == ("explicit_override" if explicit_override else "source_registry")
+    assert config.read_bytes() == config_before
+    assert {p.relative_to(excluded): p.read_bytes() for p in excluded.rglob("*") if p.is_file()} == excluded_before
 
 
 @pytest.mark.parametrize("override", [

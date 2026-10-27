@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ...history import load_registry
-from ...paths import resolve_runtime_root
+from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ...rollout_event_log import load_rollout_events, rollout_event_log_path
 from ...control_plane.todos.path_resolution import resolve_todo_state_path
 from ...control_plane.todos.active_state_editing import section_bounds, todo_blocks
@@ -651,6 +651,7 @@ def project_issue_fix_explore_graph(
     *,
     registry_path: Path,
     goal_id: str,
+    runtime_root_override: str | None = None,
     agent_id: str | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
@@ -665,7 +666,11 @@ def project_issue_fix_explore_graph(
         state_file=state_file,
     )
     registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(registry, registry_path=registry_path)
+    route = resolve_goal_source_runtime_route(
+        registry_path=registry_path, goal_id=goal_id,
+        runtime_root_override=runtime_root_override, registry=registry,
+    )
+    runtime_root = Path(route["source_runtime_root"])
     result_log = explore_result_log_path(runtime_root, goal_id)
     existing_events = load_explore_result_events(result_log, goal_id=goal_id)
     outcomes_packet = build_issue_fix_outcome_collection_from_domain_state(
