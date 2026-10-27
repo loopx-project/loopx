@@ -15,13 +15,7 @@ from examples.control_plane.quota_plan_fixtures import (
     write_codex_heartbeat_fixture,
 )
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.coordination.coordination_state_contract import (
-    TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
-    TODO_DOMAIN_RECORD_FIELDS,
-)
 from tests.control_plane.canonical_authority_fixture import (
-    initialize_canonical_authority,
     isolate_sqlite_runtime,
 )
 
@@ -272,18 +266,10 @@ def test_launcher_binds_ack_to_current_host_readback(
     tmp_path: Path, monkeypatch, provider: str, host: str, launcher: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, runtime, project = write_cli_fixture(tmp_path / "fixture", scoped_agents=True)
+    # Select the provider at creation, never reinitialize the authority already
+    # created by write_cli_fixture under the same operation id.
+    registry, runtime, project = write_cli_fixture(tmp_path / "fixture", scoped_agents=True, provider=provider)
     goal = "needs-operator"
-    state = project / f".codex/goals/{goal}/ACTIVE_GOAL_STATE.md"
-    projection = build_todo_runtime_shadow_projection(
-        goal_id=goal, todos=[], handoff_mode="soft_claim",
-    )
-    projection["todo_read_model"] = {
-        **projection["todo_read_model"],
-        "schema_version": TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
-        "contract_fields": list(TODO_DOMAIN_RECORD_FIELDS),
-    }
-    initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
     codex_home = tmp_path / "codex-home"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CODEX_THREAD_ID", "scheduler-fixture")

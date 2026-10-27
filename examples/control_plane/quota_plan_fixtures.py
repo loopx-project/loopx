@@ -321,7 +321,7 @@ def write_codex_heartbeat_fixture(root: Path, *, goal_id: str, agent_id: str, rr
     path.write_text("\n".join(f"{key} = {json.dumps(value)}" for key, value in fields.items()) + "\n", encoding="utf-8")
 
 
-def write_cli_fixture(root: Path, *, scoped_agents: bool = False) -> tuple[Path, Path, Path]:
+def write_cli_fixture(root: Path, *, scoped_agents: bool = False, provider: str = "sqlite") -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
     registry_path = project / ".loopx" / "registry.json"
@@ -444,7 +444,7 @@ def write_cli_fixture(root: Path, *, scoped_agents: bool = False) -> tuple[Path,
     for record in registry_goals:
         initialize_canonical_authority(runtime, record["id"],
             build_todo_runtime_shadow_projection(goal_id=record["id"], todos=[], handoff_mode="soft_claim"),
-            state_path=project / record["state_file"], provider="sqlite")
+            state_path=project / record["state_file"], provider=provider)
     return registry_path, runtime, project
 
 

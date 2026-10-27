@@ -105,6 +105,13 @@ in its original managed Session. This backend/configuration slice is described
 below; arbitrary new tasks from natural language and the unified Agent UI
 remain separate, unfinished acceptance.
 
+Calendar changes use the existing Goal configuration transaction. If a pause,
+schedule change or clear was written but its readback is unavailable or differs,
+the response retains the partial-write receipt instead of claiming that the old
+configuration was preserved. Reload the source configuration before deciding on
+another change. This does not rerun the task, confirm an unfinished result or
+retire a failed window; those remain with their original lifecycle owners.
+
 The steward becomes a persistent LoopX-managed Agent. Its original private
 conversation remains the user's entry point. Native monitor Todos, Turn
 admission, scheduling and periodic-report publication own recurring work.

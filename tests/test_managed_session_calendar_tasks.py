@@ -317,6 +317,65 @@ def test_real_settings_only_select_existing_completed_source_and_current_preview
     assert not SessionCalendarTasks(runtime).health(session["session_id"])["configured"]
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["pause", "reschedule", "clear"])
+@pytest.mark.parametrize("readback_fault", ["unavailable", "mismatch"])
+def test_calendar_settings_report_persisted_changes_when_readback_is_unverified(
+        steward, tmp_path, monkeypatch, provider, change, readback_fault):
+    from loopx.chat_server import ChatRequestHandler
+    from loopx.capabilities.periodic_report.goal_configuration import configuration_summary
+
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    sid, goal_id = session["session_id"], actor["goal_id"]
+    target = ({**config, "enabled": False} if change == "pause" else
+        {**config, "schedule": {**config["schedule"], "rrule": "FREQ=DAILY;BYHOUR=10;BYMINUTE=0"}}
+        if change == "reschedule" else None)
+    calls, writes, messages = capture.read_bytes(), list(bot.writes), store.messages(sid)
+    with settings_server(steward) as request:
+        apply_configuration(request, goal_id, config)
+        body = {"goal_id": goal_id, "capability_id": "periodic_report", "configuration": target}
+        status, preview = request("/api/chat/goal-configuration/preview", body)
+        assert status == 201, preview
+        original_read = ChatRequestHandler._read_public_goal_configuration
+
+        def unavailable_after_source_write(handler, requested_goal, *args, **kwargs):
+            current = configuration_summary(load_goal_from_registry(runtime.registry_path, goal_id))
+            if requested_goal == goal_id and current == (normalize_configuration(target) if target else None):
+                if readback_fault == "unavailable":
+                    raise OSError("synthetic private readback diagnostic must stay server-side")
+                value = original_read(handler, requested_goal, *args, **kwargs)
+                entry = next(item for item in value["capability_catalog"]["capabilities"]
+                    if item["capability_id"] == "periodic_report")
+                entry["current"] = {"enabled": True}
+                return value
+            return original_read(handler, requested_goal, *args, **kwargs)
+
+        with monkeypatch.context() as fault:
+            fault.setattr(ChatRequestHandler, "_read_public_goal_configuration", unavailable_after_source_write)
+            status, receipt = request("/api/chat/goal-configuration/apply",
+                {**body, "expected_plan_revision": preview["plan_revision"]})
+        # Read the actual source independently of the failed response path.
+        assert configuration_summary(load_goal_from_registry(runtime.registry_path, goal_id)) == (
+            normalize_configuration(target) if target else None)
+        assert status == 207, receipt
+        assert receipt["status"] == "partial_write" and receipt["source_written"] is True
+        assert receipt["readback_verified"] is False and receipt["applied_revision"] is None
+        assert receipt["goal_configuration"] == (None if readback_fault == "unavailable" else {"enabled": True})
+        assert receipt["capability_id"] == "periodic_report" and receipt["goal_id"] == goal_id
+        assert "prior state was preserved" not in receipt["error"]
+        assert "synthetic private" not in json.dumps(receipt)
+        assert "Reload" in receipt["recommended_action"]
+        # A normal read/re-preview settles the uncertainty without replaying a
+        # write, a model turn, a scheduled period or an external delivery.
+        status, loaded = request("/api/chat/goal-configuration?goal_id=" + goal_id, None, method="GET")
+        assert status == 200, loaded
+        status, refreshed = request("/api/chat/goal-configuration/preview", body)
+        assert status == 201 and refreshed["writes_required"] == 0, refreshed
+    assert capture.read_bytes() == calls and bot.writes == writes and store.messages(sid) == messages
+    assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=goal_id) is None
+
+
 @pytest.mark.parametrize("fault", ["queued", "busy", "paused", "unregistered", "stopped"])
 def test_original_user_work_and_withdrawn_authority_win_without_model(steward, tmp_path, monkeypatch, fault):
     session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, "sqlite")
