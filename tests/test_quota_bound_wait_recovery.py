@@ -9,10 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from control_plane.canonical_authority_fixture import (
-    initialize_canonical_authority,
-    isolate_sqlite_runtime,
-)
+from control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.cli import main as cli_main
 from control_plane.test_quota_settlement_cli import (
     AGENT_ID,
@@ -22,12 +19,10 @@ from control_plane.test_quota_settlement_cli import (
     _classification_count,
     _configure_completion_validation_todo,
     _configure_selectable_alternative,
+    _initialize_fixture_authority,
     _initialize_git_checkout,
     _spend_run_count,
     _write_fixture,
-)
-from loopx.control_plane.coordination.runtime_shadow import (
-    build_todo_runtime_shadow_projection,
 )
 
 MONITOR_ID = "todo_causal_monitor"
@@ -116,20 +111,11 @@ def test_bound_wait_recovers_original_turn_before_selecting_successor(
             f"claimed_by={dependency_owner} {dependency_metadata} -->\n"
         )
     )
+    # Finalize source authoring before the first read; unmigrated reads no
+    # longer fall back to the source Markdown.
+    _initialize_fixture_authority(project, runtime, provider=provider)
     rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
     assert rc == 0, listed
-    initialize_canonical_authority(
-        runtime,
-        GOAL_ID,
-        build_todo_runtime_shadow_projection(
-            goal_id=GOAL_ID,
-            todos=listed["todos"],
-            handoff_mode="soft_claim",
-            leases=[],
-        ),
-        state_path=state,
-        provider=provider,
-    )
     binding = (
         "--agent-id",
         AGENT_ID,
