@@ -402,11 +402,11 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
                  hook_event_name="SessionStart", source="startup")
     context.codex_context_hook(str(root), event)
 
-    def guard(turn):
+    def guard(turn, cwd=project):
         rc, view = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", turn, "--decision-output-root", str(captures),
-            "--context-delivery", "on", "--codex-context-dir", str(root), cwd=project)
+            "--context-delivery", "on", "--codex-context-dir", str(root), cwd=cwd)
         assert rc == 0, view
         return view
 
@@ -449,8 +449,11 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
     assert body["heartbeat_receipt"]["turn_instance_id"] == "native-work-next"
     assert context._state(root)["candidate"]["target"] == current["target"]
     assert Path(first["recovery"]["path"]).read_bytes() == original
-    warm = guard("native-work-next")
+    command_workspace = tmp_path / "independent-checkout"
+    command_workspace.mkdir()
+    warm = guard("native-work-next", cwd=command_workspace)
     assert warm["mode"] == "delta" and warm["target"] != current["target"]
+    assert context._state(root)["cwd"] == str(project)
     assert _heartbeat_receipt_count(runtime, "native-work-first") == 1
     assert _heartbeat_receipt_count(runtime, "native-work-next") == 1
     assert _spend_run_count(runtime) == 1

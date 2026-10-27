@@ -518,10 +518,20 @@ Native reuse assumes a normally completed full read was read and remains
 available until a lifecycle invalidation. `PostToolUse` merges complete reader
 ranges in the existing private session journal. EOF alone, known read failures,
 malformed/truncated pages and interrupted paging cannot establish a baseline.
-Compaction, clear, fork, session/workspace change and every SessionStart, including
-same-session resume, invalidate it; ordinary tools and turn endings do not.
+Compaction, clear, fork, session/workspace change and unqualified SessionStart
+invalidate it; ordinary tools and turn endings do not. A same-session resume can
+retain its baseline only when the native replay checkpoint verifies continuity.
 Read the pinned original completely before establishing a new differential chain.
 Repeated events and parallel pages are idempotent.
+Workspace identity comes from native lifecycle events, not a shell command's
+working directory. The same native session can run projection and recovery
+commands in a subdirectory or another checkout without discarding its baseline.
+A native SessionStart reporting a changed workspace still retires the previous
+candidate and recovery selector. Session, Goal and Agent isolation remains in
+force; changing command directories grants no work or publication authority.
+工作区身份由原生生命周期事件确定。命令切换到子目录或另一 checkout 不会清除同一
+原生会话的差分基线；原生 SessionStart 报告工作区变化时仍清除旧基线和恢复选择器。
+Session、Goal 和 Agent 隔离保持不变，切换命令目录不授予工作或发布权限。
 This replaces per-request input-history proof, not the capture integrity check.
 It preserves native providers, authentication, endpoints and connection mode,
 including implicit history. No input diagnostics or forced HTTP is required.

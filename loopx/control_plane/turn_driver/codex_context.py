@@ -193,8 +193,7 @@ def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_i
     state = _state(_private_root(directory))
     session = os.environ.get("CODEX_THREAD_ID")
     if (not session or state.get("session_id") != session
-            or not isinstance(state.get("cwd"), str)
-            or Path(state["cwd"]).resolve() != Path.cwd().resolve()):
+            or not isinstance(state.get("cwd"), str) or not state["cwd"]):
         raise ValueError("original capture lookup requires the same native session and workspace")
     recovery = state.get("recovery")
     if (not goal_id or not agent_id or not isinstance(recovery, dict)
@@ -469,10 +468,10 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 if (not isinstance(session, str) or not session
                         or (native_session and session != native_session)):
                     return payload  # Do not replace a different native session's recovery.
-                if (not native_session or not isinstance(state.get("cwd"), str)
-                        or Path(state["cwd"]).resolve() != Path.cwd().resolve()):
-                    # A later tool can restore cwd/identity and make an old
-                    # selector eligible again, so invalidate before full fallback.
+                # Native lifecycle events own workspace identity and epoch.
+                # A shell tool may run in another checkout without changing
+                # the host session or losing its previously delivered context.
+                if (not native_session or not isinstance(state.get("cwd"), str) or not state["cwd"]):
                     raise ValueError("context recovery requires the same native session and workspace")
                 if not isinstance(epoch, str) or not epoch:
                     raise ValueError("context recovery requires a native context epoch")

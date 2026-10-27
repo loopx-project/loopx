@@ -177,6 +177,74 @@ def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_pa
     assert third["mode"] == "delta"
 
 
+@pytest.mark.parametrize("location", ["nested", "sibling"])
+def test_command_workdir_preserves_native_session_delta_and_recovery(tmp_path, monkeypatch, location):
+    event = setup(tmp_path, monkeypatch)
+    workspace = tmp_path / "checkout"
+    workspace.mkdir()
+    command_cwd = workspace / "nested" if location == "nested" else tmp_path / "other-checkout"
+    command_cwd.mkdir()
+    event["cwd"] = str(workspace)
+    context.codex_context_hook(str(tmp_path), event)
+    monkeypatch.chdir(workspace)
+    payload = {"ok": True, "plan_summary": {
+        "requirements": "Keep the original acceptance and stop conditions. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, first))
+    epoch = context._state(tmp_path)["context_epoch"]
+    repo = Path(__file__).resolve().parents[2]
+    env = {**os.environ, "PYTHONPATH": str(repo)}
+    script = """
+import json, sys
+from pathlib import Path
+from loopx.control_plane.turn_driver.codex_context import project_codex_context
+root = Path(sys.argv[1])
+capture = root / 'two'
+capture.mkdir(mode=0o700)
+print(json.dumps(project_codex_context(json.load(sys.stdin), directory=str(root),
+    capture_directory=capture, goal_id='fixture', agent_id='agent',
+    surface='quota_packet', capture_id='two')))
+"""
+    result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
+        input=json.dumps(payload), text=True, capture_output=True,
+        cwd=command_cwd, env=env, timeout=30, check=True)
+    second = json.loads(result.stdout)
+    assert second.get("mode") == "delta"
+    assert second["target"]["context_epoch"] == epoch
+    assert context._state(tmp_path)["cwd"] == str(workspace)
+    journal = (tmp_path / "session.json").read_bytes()
+    for cwd in (command_cwd, workspace):
+        read = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota", "context-read",
+            "--codex-context-dir", str(tmp_path), "--goal-id", "fixture", "--agent-id", "agent"],
+            cwd=cwd, env=env, capture_output=True, text=True, timeout=30, check=True)
+        page = json.loads(read.stdout)
+        assert page["ok"] and page["sha256"] == second["recovery"]["sha256"]
+    assert (tmp_path / "session.json").read_bytes() == journal
+    deliver(tmp_path, event, read_pages(tmp_path, second))
+    _, third = project(tmp_path, "three", payload=payload)
+    assert third["mode"] == "delta"
+
+
+def test_native_workspace_change_retires_previous_recovery(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    payload = {"requirements": "Retain authority boundaries. " * 1000}
+    _, first = project(tmp_path, payload=payload)
+    deliver(tmp_path, event, read_pages(tmp_path, first))
+    epoch = context._state(tmp_path)["context_epoch"]
+    workspace = tmp_path / "changed-workspace"
+    workspace.mkdir()
+    context.codex_context_hook(str(tmp_path), {**event, "cwd": str(workspace), "source": "resume"})
+    # A real native workspace transition resets the owning lifecycle, even if
+    # the next CLI still happens to run in the old command directory.
+    state = context._state(tmp_path)
+    assert state["context_epoch"] != epoch
+    assert "candidate" not in state and "recovery" not in state
+    with pytest.raises(ValueError):
+        context.read_codex_context_reference(str(tmp_path), goal_id="fixture", agent_id="agent")
+    _, second = project(tmp_path, "two", payload=payload)
+    assert second["mode"] == "full" and second["context"] == payload
+
+
 def test_native_page_zero_exposes_current_continuity_and_preserves_full_recovery(tmp_path, monkeypatch):
     from argparse import Namespace
     from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
@@ -629,7 +697,7 @@ def test_journal_failure_never_recovers_previous_capture(tmp_path, monkeypatch, 
 
 
 @pytest.mark.parametrize("source", ["compact", "resume"])
-@pytest.mark.parametrize("caller", ["subdirectory", "missing_session", "foreign_session"])
+@pytest.mark.parametrize("caller", ["missing_session", "foreign_session"])
 def test_fallback_identity_restoration_keeps_recovery_scoped(tmp_path, monkeypatch, source, caller):
     event = setup(tmp_path, monkeypatch)
     _, first = project(tmp_path)
@@ -637,11 +705,7 @@ def test_fallback_identity_restoration_keeps_recovery_scoped(tmp_path, monkeypat
     original = original_capture.read_bytes()
     context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PreToolUse", "tool_use_id": "guard"})
     with monkeypatch.context() as native_tool:
-        if caller == "subdirectory":
-            subdirectory = tmp_path / "subdirectory"
-            subdirectory.mkdir()
-            native_tool.chdir(subdirectory)
-        elif caller == "missing_session":
+        if caller == "missing_session":
             native_tool.delenv("CODEX_THREAD_ID")
         else:
             native_tool.setenv("CODEX_THREAD_ID", "foreign-session")
@@ -682,7 +746,7 @@ def test_unavailable_recovery_boundary_refuses_current_publication(tmp_path, mon
     assert json.loads(Path(first["recovery"]["path"]).read_bytes())["requirements"] == "Preserve final stop condition."
 
 
-@pytest.mark.parametrize("damage", ["missing", "corrupt", "symlink", "public", "other_workspace",
+@pytest.mark.parametrize("damage", ["missing", "corrupt", "symlink", "public", "invalid_workspace",
     "missing_epoch", "invalid_epoch", "read_failure", "projection_failure"])
 def test_invalid_journal_falls_back_to_original_full(tmp_path, monkeypatch, damage):
     event = setup(tmp_path, monkeypatch)
@@ -699,9 +763,9 @@ def test_invalid_journal_falls_back_to_original_full(tmp_path, monkeypatch, dama
         path.symlink_to(other)
     elif damage == "public":
         path.chmod(0o644)
-    elif damage == "other_workspace":
+    elif damage == "invalid_workspace":
         state = context._state(tmp_path)
-        state["cwd"] = str(tmp_path.parent)
+        state["cwd"] = None
         context._save(tmp_path, state)
     elif damage in {"missing_epoch", "invalid_epoch"}:
         state = context._state(tmp_path)
@@ -819,7 +883,7 @@ def test_lost_hook_reference_is_scoped_read_only_and_pins_later_pages(tmp_path, 
     import argparse
     from loopx.cli_commands.quota_capture import read_context_capture
 
-    setup(tmp_path, monkeypatch)
+    event = setup(tmp_path, monkeypatch)
     _, first = project(tmp_path, payload={"goal_id": "fixture", "requirements": "保留🙂" * 400})
     journal = tmp_path / "session.json"
     args = argparse.Namespace(codex_context_dir=str(tmp_path), goal_id="fixture", agent_id="agent",
@@ -827,7 +891,7 @@ def test_lost_hook_reference_is_scoped_read_only_and_pins_later_pages(tmp_path, 
     if damage == "session":
         monkeypatch.setenv("CODEX_THREAD_ID", "other")
     elif damage == "workspace":
-        monkeypatch.chdir(tmp_path.parent)
+        context.codex_context_hook(str(tmp_path), {**event, "cwd": str(tmp_path.parent), "source": "resume"})
     elif damage in {"goal", "agent"}:
         setattr(args, damage + "_id", "other")
     elif damage == "missing_scope":
