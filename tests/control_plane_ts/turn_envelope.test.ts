@@ -1,6 +1,7 @@
 import { EFFECTIVE_ACTIONS } from "../../loopx/control_plane/quota/effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../../loopx/control_plane/agents/agent_scope_frontier.generated.ts";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -1337,4 +1338,59 @@ test("complete driver projection ignores historical scalar decoding hints", () =
     historical_route_text: {source_hash: "", envelope_hash: "different", effective_action: "autonomous_replan"}});
   assert.equal(normal.route, "ready_for_host");
   assert.deepEqual(forged, normal);
+});
+
+test("complete execution reads one original selection, task commitment and effect conditions", () => {
+  const source = payload();
+  const selected = source.selected_todo as JsonObject;
+  selected.text = "Full task declaration. ".repeat(40) + "Retain the final requirement.\n";
+  selected.future_constraint = {unknown: null, allowed: false};
+  const interaction = source.interaction_contract as JsonObject;
+  (interaction.agent_channel as JsonObject).work_context = {
+    complete: true, selected_todo_ref: "selected_todo", selected_todo_text_verified: true};
+  (interaction.cli_channel as JsonObject).delivery_workspace_causality = {
+    requirement: "required", future: {empty: [], approved: false}};
+  const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const envelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
+  const before = structuredClone({contract, envelope});
+  const result = evaluateTurnEnvelope({operation: "execution_context", payload: contract, envelope});
+  assert.equal((result.selected_todo as JsonObject).todo_id, selected.todo_id);
+  assert.equal((result.selected_todo as JsonObject).task_repository, selected.task_repository);
+  assert.equal((result.selected_todo as JsonObject).text, selected.text);
+  assert.equal(result.sha256, createHash("sha256").update(String(selected.text), "utf8").digest("hex"));
+  assert.equal(result.effective_action, "normal_run");
+  assert.deepEqual((result.writeback as JsonObject).delivery_workspace_causality,
+    (interaction.cli_channel as JsonObject).delivery_workspace_causality);
+  assert.equal(result.replan_guard_scoped, true);
+  assert.equal(result.replan_action_packet, null);
+  assert.deepEqual({contract, envelope}, before);
+  for (const payload of [null, {...contract, reason: "different source"}, {...contract, schema_version: "future"}]) {
+    assert.throws(() => evaluateTurnEnvelope({operation: "execution_context", payload, envelope}));
+  }
+  assert.throws(() => evaluateTurnEnvelope({operation: "execution_context", payload: contract,
+    envelope: {...envelope, writeback: {spend_allowed_now: true}}}), /captured executor source/);
+  for (const todoId of [42, true]) {
+    const malformed = structuredClone(source);
+    (malformed.selected_todo as JsonObject).todo_id = todoId;
+    const invalid = evaluateTurnEnvelope({operation: "compose_complete", payload: malformed, scheduler_execution_args: ""});
+    const adapter = buildTurnEnvelope({payload: invalid, scheduler_execution_args: ""});
+    assert.throws(() => evaluateTurnEnvelope({operation: "execution_context", payload: invalid,
+      envelope: adapter}), /selected Todo/);
+  }
+});
+
+test("complete execution keeps the adaptive primary and unbound selection distinct", () => {
+  for (const adaptive of [true, false]) {
+    const source = payload();
+    source.selected_todo = adaptive ? {todo_id: "child", text: "Child work"}
+      : {future_evidence: {unknown: null}};
+    if (adaptive) source.task_orchestration_contract = {
+      schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: "  primary  "};
+    const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+    const envelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
+    const result = evaluateTurnEnvelope({operation: "execution_context", payload: contract, envelope});
+    assert.deepEqual(result.selected_todo, adaptive
+      ? {todo_id: "primary", source: "task_orchestration_contract.primary_todo_id"} : {});
+    assert.equal(result.sha256, null);
+  }
 });

@@ -1,4 +1,4 @@
-"""Todo writeback adapters that preserve the Turn's effective runtime root."""
+"""Captured Turn execution context and Todo writeback transport."""
 
 from __future__ import annotations
 
@@ -32,6 +32,33 @@ def captured_todo_text_sha256(
     if digest is not None and not isinstance(digest, str):
         raise RuntimeError("Turn captured task source hash must be a string or null")
     return digest
+
+
+def read_turn_execution_context(
+    plan: Mapping[str, Any], envelope: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Read complete execution facts in one call; decode old journals as before."""
+    if "work_contract" in plan:
+        try:
+            result = _turn_envelope_result(
+                "execution_context", envelope=dict(envelope), payload=plan["work_contract"],
+            )
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        if result.get("sha256") is not None and not isinstance(result["sha256"], str):
+            raise RuntimeError("Turn captured task source hash must be a string or null")
+        return result
+    from ..control_plane.turn_driver.driver import selected_turn_todo
+
+    selected = selected_turn_todo(envelope)
+    return {
+        "selected_todo": selected,
+        "sha256": captured_todo_text_sha256(envelope, todo_id=str(selected.get("todo_id") or "")),
+        "effective_action": envelope.get("effective_action"),
+        "writeback": envelope.get("writeback") if isinstance(envelope.get("writeback"), dict) else {},
+        "replan_guard_scoped": "replan_action_packet" in envelope,
+        "replan_action_packet": envelope.get("replan_action_packet"),
+    }
 
 
 def write_turn_validated_completion(

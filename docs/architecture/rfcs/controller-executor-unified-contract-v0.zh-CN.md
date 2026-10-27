@@ -625,14 +625,16 @@ profile 判定与结算仍须迁移。
 未带来源凭据但已经接受完成的恢复场景。
 
 完成任务正文的解析现由既有 TypeScript interaction 来源 owner 统一负责。
-新 `run-once` 请求先校验完整 capture 与内部 adapter 的绑定，再解析并计算完整
-契约中已准入正文的摘要，不再从 adapter 重建该来源。历史 journal 经 Python
-薄 transport 使用同一解析规则，保留 Unicode／空白原始字节、缺失／重复来源拒绝
-及已接受完成回执的恢复。此次删除一套 Python 语义算法，没有新增第二种 packet
-视图。迁移前 `599cf1f72` 的 48 项 File／SQLite 捕获及完成检查通过；候选完整来源
-检查也拒绝被修改的 binding 和显式 null 输入。历史解析原为本地 Python，现在
-增加一次 TypeScript 边界调用；完整路径净成本尚未测量。结果 profile、证据解释
-和其余结算消费者仍须继续迁移。
+同一次粗粒度读取现在向 `run-once` 提供原始选定工作、正文摘要、已准入动作、replan
+与写回条件。完整来源校验在本次调用内复用已核对的 effect 投影，不新增 RPC 或面向
+模型的契约。自适应 primary 与普通选择共用既有 interaction owner。CLI 不再从历史
+adapter 读取这组执行事实，仍传递该 adapter 供来源／签名校验及尚未迁移的消费者使用。
+缺省完整契约保留旧 journal decoder；显式 null 或无效来源不回退。Unicode／空白原始
+字节、缺失／重复来源拒绝、原结算身份及已接受完成回执恢复继续受保护。
+迁移前 `599cf1f72` 的 48 项 File／SQLite 捕获及完成检查通过；候选完整来源检查也
+拒绝被修改的 binding 和显式 null 输入。最初正文摘要迁移将本地 Python 解析变为
+一次 TypeScript 边界调用；本次扩展读取复用该边界，不抵销原新增成本。
+完整 adapter 退役、其余 effect／material 消费者及原 quota 成果／完整成本资格仍开放。
 
 Codex 结果 schema 与共享 candidate adapter 现通过同一经过校验的完整契约
 profile 读取判断证据要求是否适用；新请求不再从内部 capsule 决定该要求。

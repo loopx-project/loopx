@@ -849,17 +849,24 @@ also failed on the prior baseline; their repaired oracle retains changed-task-te
 and historical pre-source acceptance cases on real File/SQLite stores.
 
 Completion task-body resolution now lives with the existing TypeScript interaction
-source owner. New `run-once` requests validate the complete capture against the
-internal adapter, then resolve and hash the complete contract's admitted source;
-they no longer reconstruct that source from the adapter. Historical journals use
-the same resolver through a thin Python transport. Exact Unicode/whitespace bytes,
-missing/ambiguous-source refusals and accepted-receipt recovery remain covered.
-This retires one Python semantic algorithm without introducing a second packet
-view. The old 48-case File/SQLite capture/completion selection passes at
+source owner. The same coarse read now supplies `run-once` with the original
+selected work, task-body commitment, admitted action, replan and writeback
+conditions. Complete-source validation reuses its already-checked effect
+projection within that call; it adds neither another RPC nor a model-facing
+contract. Adaptive primary selection and ordinary selection share the existing
+interaction owner. The CLI no longer reads these execution facts from the
+historical adapter; it still transports that adapter for source/signature checks
+and consumers not yet migrated. Omitted complete contracts retain the old journal
+decoder; supplied null or invalid sources never fall back. Exact Unicode and
+whitespace bytes, missing/ambiguous-source refusals, original settlement identity
+and accepted-receipt recovery remain protected. The old 48-case File/SQLite
+capture/completion selection passes at
 `599cf1f72`; candidate complete-source checks also reject altered bindings and
-explicit null inputs. This adds a TypeScript boundary call where the historical
-resolver was local Python; net full-path cost remains unmeasured. Result profiles,
-evidence interpretation and other settlement consumers still need migration.
+explicit null inputs. The initial task-hash migration added a TypeScript boundary
+where the historical resolver was local Python; this broader read reuses that
+boundary rather than canceling its cost. Full adapter retirement, remaining
+effect/material consumers and original-quota outcome/full-cost qualification
+remain open.
 
 The Codex result schema and shared candidate adapter now use one checked
 complete-contract profile read for evidence applicability. They no longer decide

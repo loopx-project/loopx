@@ -24,6 +24,13 @@ before that call and commits any scoped required artifact before publishing the
 result. Full views page their existing immutable capture; only deltas need a
 separate encoded wire file. This changes neither the model-facing page contract
 nor the historical reader, default activation, execution or settlement authority.
+The candidate's `turn run-once` also reads selection, task commitment, admitted
+action and replan/writeback conditions together from the checked complete source.
+It reuses the task-source boundary call and existing effect projection. The old
+adapter remains for integrity checks and unmigrated consumers, with its execution
+decoder used only for requests that omit the complete contract. Invalid supplied
+contracts never fall back. This does not qualify full adapter retirement or
+outcome/full-cost benefit over original quota.
 
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
@@ -38,6 +45,10 @@ C1 的 native 候选在既有 typed owner 的一次调用中组合成果读取�
 编码。IO 在调用前发布当前原始恢复引用，并在发布结果前落盘所需的 scoped 必读
 产物。全文视图直接分页已有不可变 capture，只有 delta 需要额外编码文件；模型侧
 分页契约、历史 reader、默认激活、执行及结算权限均不改变。
+候选 `turn run-once` 也在同一次经过校验的完整来源读取中获得选定工作、正文摘要、
+已准入动作及 replan／写回条件，复用正文来源的边界调用与既有效果投影。旧 adapter
+仍供完整性校验和未迁移消费者使用；只有缺省完整契约的请求使用旧执行 decoder，
+显式无效契约不回退。完整 adapter 退役及优于原 quota 的成果／完整成本收益仍未资格。
 
 Preview it explicitly:
 

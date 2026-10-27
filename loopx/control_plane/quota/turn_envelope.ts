@@ -20,7 +20,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodoId, scopeInteractionOutcomeReadGuidance, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
+import { capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, scopeInteractionOutcomeReadGuidance, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -1729,7 +1729,7 @@ export function requireCompleteTurnDecision(value: unknown): JsonObject {
 /** One checked source for model input and transport session identity. The
  * historical effect adapter may remain in the request during migration, but it
  * cannot redirect the complete contract to another Goal, Agent or work item. */
-function completeHostDecision(request: JsonObject): JsonObject {
+function completeHostSource(request: JsonObject): {decision: JsonObject; projection: JsonObject} {
   const decision = requireCompleteTurnDecision(request.payload);
   const envelope = requireJsonObject(request.envelope, "complete Turn executor envelope");
   assertTurnEnvelopeConsumerVersion(envelope);
@@ -1750,10 +1750,23 @@ function completeHostDecision(request: JsonObject): JsonObject {
   // An adapter's self-consistent hash does not prove that it carries the
   // admitted decision. Reuse the producer's projection, including writeback
   // and execution conditions, rather than maintaining a second field list.
-  if (signature.source_hash !== canonicalHash(quotaActionSignatureDocument(decision))) {
+  const projection = turnActionProjection(decision);
+  if (signature.source_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(projection))) {
     throw new EffectRuntimeRequestError("complete Turn executor projection differs from admitted source");
   }
-  return decision;
+  return {decision, projection};
+}
+
+function completeHostDecision(request: JsonObject): JsonObject {
+  return completeHostSource(request).decision;
+}
+
+function completeTaskTextSha256(decision: JsonObject, todoId: unknown): string | null {
+  const context = object(object(object(decision.interaction_contract).agent_channel).work_context);
+  const declared = {...object(decision.selected_todo),
+    ...(Object.hasOwn(context, "selected_todo_text_verified")
+      ? {text_source_verified: context.selected_todo_text_verified} : {})};
+  return capturedTodoTextSha256(declared, context, decision.recommended_action, todoId);
 }
 
 export function composeCompleteTurnDecision(value: unknown): JsonObject {
@@ -2079,19 +2092,27 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       action_signature: turnEnvelopeActionSignatureDocument(request.envelope),
     };
   }
+  if (operation === "execution_context") {
+    // The CLI consumes one checked source for execution, not the historical
+    // adapter's layout. Reuse the projection already checked against that
+    // source for effect conditions; this is not another model-facing contract.
+    const {decision, projection} = completeHostSource(request);
+    const work = {selected_todo: object(projection.action).selected_todo,
+      task_orchestration_contract: projection.task_orchestration_contract};
+    return {selected_todo: selectedWorkTodo(work),
+      sha256: completeTaskTextSha256(decision, selectedWorkTodoId(work) ?? ""),
+      effective_action: decision.effective_action ?? null,
+      writeback: object(projection.writeback),
+      replan_guard_scoped: Object.hasOwn(projection, "replan_action_packet"),
+      replan_action_packet: projection.replan_action_packet ?? null};
+  }
   if (operation === "captured_todo_text") {
     const envelope = requireJsonObject(request.envelope, "Turn completion envelope");
-    let action = object(envelope.action), context: unknown = envelope.work_context;
     if (Object.hasOwn(request, "payload")) {
-      const decision = completeHostDecision(request);
-      const workContext = object(object(object(decision.interaction_contract).agent_channel).work_context);
-      action = {selected_todo: {...object(decision.selected_todo),
-        ...(Object.hasOwn(workContext, "selected_todo_text_verified")
-          ? {text_source_verified: workContext.selected_todo_text_verified} : {})},
-        recommended_action: decision.recommended_action};
-      context = workContext;
+      return {sha256: completeTaskTextSha256(completeHostDecision(request), request.todo_id)};
     }
-    return {sha256: capturedTodoTextSha256(object(action.selected_todo), context,
+    const action = object(envelope.action);
+    return {sha256: capturedTodoTextSha256(object(action.selected_todo), envelope.work_context,
       action.recommended_action, request.todo_id)};
   }
   if (operation === "build_controller_input") {

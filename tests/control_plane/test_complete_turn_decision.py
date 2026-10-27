@@ -344,6 +344,27 @@ def test_real_turn_preview_reaches_complete_codex_input(tmp_path, monkeypatch, p
     from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
     from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    from loopx.cli_commands import turn_run_once
+
+    prepare_request = turn_run_once.prepare_turn_host_request
+
+    class SignatureOnlyEnvelope(dict):
+        def get(self, key, default=None):
+            if key in {"action", "task_orchestration_contract", "writeback",
+                       "effective_action", "replan_action_packet"}:
+                raise AssertionError("complete execution read the historical adapter: " + key)
+            return super().get(key, default)
+
+    def require_complete_execution(*args, **kwargs):
+        project, argv, validator, envelope = prepare_request(*args, **kwargs)
+        # Keep the real adapter for source/signature verification, but forbid
+        # CLI execution policy from reading its obsolete field layout. The
+        # persisted plan, native host, provider and settlement remain real.
+        if "work_contract" in args[1]:
+            envelope = SignatureOnlyEnvelope(envelope)
+        return project, argv, validator, envelope
+
+    monkeypatch.setattr(turn_run_once, "prepare_turn_host_request", require_complete_execution)
     f = _fixture_module()
     project, runtime, workspace, registry = f._write_fixture(tmp_path, turn_count=2)
     state = project / ".codex/goals" / f.GOAL_ID / "ACTIVE_GOAL_STATE.md"

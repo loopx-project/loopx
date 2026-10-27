@@ -759,13 +759,19 @@ function shellQuote(value: string): string {
 }
 
 /** The adaptive primary is the work identity for both reads and settlement. */
-export function selectedWorkTodoId(packet: JsonObject): string | null {
+export function selectedWorkTodo(packet: JsonObject): JsonObject {
   const orchestration = jsonObject(packet.task_orchestration_contract) ?? {};
   const primaryTodoId = typeof orchestration.primary_todo_id === "string"
     ? orchestration.primary_todo_id.trim() : "";
   if (orchestration.schema_version === "task_orchestration_contract_v2"
-      && orchestration.mode === "adaptive" && primaryTodoId) return primaryTodoId;
-  const selected = jsonObject(packet.selected_todo) ?? {};
+      && orchestration.mode === "adaptive" && primaryTodoId) {
+    return {todo_id: primaryTodoId, source: "task_orchestration_contract.primary_todo_id"};
+  }
+  return jsonObject(packet.selected_todo) ?? {};
+}
+
+export function selectedWorkTodoId(packet: JsonObject): string | null {
+  const selected = selectedWorkTodo(packet);
   return typeof selected.todo_id === "string" && selected.todo_id.trim() ? selected.todo_id : null;
 }
 
