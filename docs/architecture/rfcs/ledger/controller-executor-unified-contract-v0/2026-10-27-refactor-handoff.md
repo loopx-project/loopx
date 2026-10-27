@@ -132,6 +132,35 @@ different questions; their proximity is not proof they should be one state.
   benefit experiments. Replace real consumers in the delivery slice; preserve
   historical decoding and original effect readback across code rollback.
 
+**Source proposal (2026-10-28).** The existing Effect runtime now composes
+journal receipt qualification and ordered continuation in the typed Turn owner.
+`managed_step.py` sends one complete journal/decision request instead of rebuilding
+an execution payload; the driver uses the same route classifier. The registered
+ordered contract, historical journal decoder and independent recovery decision
+remain. Public Python receipt/budget value objects keep their API, including exact
+integer transport. Native File/SQLite retry, saved-result replay and lost-spend
+response tests retain the original Turn and one debit. Rule mutations exercise
+the actual TS evaluator. This is a single-session source proposal, not C1 cutover,
+C4.2/C4.3 adoption, installed qualification or long-horizon benefit. Reconcile
+original receipts before rollback; no journal or settlement schema changes.
+The same inventory measures 43 maintained Python/TS pairs on the base and 45 on
+this proposal: the new controller and host-failure pairs retain the Python API
+and native failure producer while sharing TS decisions. The pair budget records
+that maintenance cost (43 → 45); generated exclusions and the over-budget
+negative check remain. Deleted Python decisions, rather than the pair count,
+establish convergence. Added bridge traffic is disclosed without a speedup claim.
+
+Review repair rebases this proposal onto the current shared
+`turnEnvelopeRoute` owner and retains `TurnControllerInput` at the Python API.
+It does not restore the former route table or Python policy partitions.
+Receipt qualification rejects empty legacy lineage values before creating a
+validated receipt. Historical Mapping callers retain Python scalar spelling
+through the existing route text codec, including `1.0` and `1e-07`; mismatched
+signatures still fail. The same public API regressions reproduce six empty
+container admissions and two numeric-route refusals at the original proposal
+head, and pass after repair. This corrects compatibility; it does not qualify
+numeric hashes as canonical producer output or close the remaining C4 work.
+
 ## C4.2 — Thin outer-worker semantic adoption
 
 **Candidate for bounded policy convergence.**

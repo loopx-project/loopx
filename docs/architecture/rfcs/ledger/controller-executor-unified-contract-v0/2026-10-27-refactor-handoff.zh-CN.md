@@ -104,6 +104,25 @@ execution 形状的回执，同时调用 `turn_journal.ts` 检查一致性。`re
   等待完整 C1 收益实验。在交付切片中替换真实消费者；代码回退时保留历史解码与原
   effect readback。
 
+**源码提案（2026-10-28）。** 既有 Effect runtime 在 typed Turn owner 内组合 journal
+回执资格与有序继续判定。`managed_step.py` 一次传入完整 journal/decision，不再重建
+execution 载荷；driver 复用同一路由分类器。原注册有序契约、历史 journal decoder 和
+独立恢复判定保持。公开 Python 回执/预算值对象保留 API，整数通过精确编码传递。
+真实 File/SQLite 重试、已存结果重放和扣额丢响应测试保留原 Turn 与单次扣额；规则
+mutation 直接验证实际 TS evaluator。本项仅为单会话源码提案，不代表 C1 切换、
+C4.2/C4.3 采用、已安装资格或长程收益。回滚前核对原回执；journal 和结算 schema 不变。
+同一 inventory 在 base 测得 43 对独立维护的 Python/TS 模块，本提案为 45 对：新增
+controller 与 host-failure 配对保留 Python API 和原生失败 producer，同时共享 TS
+决策。配对预算据此记录维护成本（43 → 45）；生成排除规则和超预算负例保持。
+收敛依据是删除了 Python 决策，不是配对计数；额外 bridge 传输如实披露，不宣称提速。
+
+评审修复将本提案重基到当前共享的 `turnEnvelopeRoute` owner，并保留 Python API 的
+`TurnControllerInput`，不恢复旧路由表或 Python 策略分区。回执资格在创建 validated
+receipt 前拒绝历史空身份值；历史 Mapping 调用方通过既有 route text codec 保留
+Python 标量文本，包括 `1.0` 和 `1e-07`，签名不一致仍拒绝。同一组公开 API 回归在
+原提案 head 复现六个空容器误准入和两个数字路由误拒绝，修复后通过。这是兼容修复，
+不表示 canonical producer 会生成数字 hash，也不关闭其余 C4 工作。
+
 ## C4.2 — 外层 worker 的薄语义采用
 
 **有界策略收敛候选。** `scripts/external_scheduler_worker.py` 的 `_host_attempt`、
