@@ -19,6 +19,7 @@ from ..coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
     read_canonical_todos_if_promoted,
     require_canonical_authority,
+    raise_canonical_write_failure,
 )
 from ...paths import effective_runtime_root
 from ..effect_runtime import (
@@ -298,6 +299,9 @@ def terminal_canonical_todo_if_promoted(
                 "legacy_markdown_fallback_allowed": False,
                 "retry_after": "canonical_provider_readback_loaded",
             }
+        raise_canonical_write_failure(
+            {**payload, "error_code": exc.code}, goal_id=goal_id, operation="todo_terminal",
+        )
         raise LocalCoordinationAuthorityUnavailable(
             str(exc), code=exc.code, payload=payload
         ) from exc
@@ -532,9 +536,15 @@ def archive_canonical_todos_if_promoted(
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any] | None:
-    authority_read = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root, goal_id=goal_id
-    )
+    try:
+        authority_read = read_canonical_todos_if_promoted(
+            runtime_root=runtime_root, goal_id=goal_id
+        )
+    except LocalCoordinationAuthorityUnavailable as exc:
+        raise_canonical_write_failure(
+            {**exc.payload, "error_code": exc.code}, goal_id=goal_id, operation="todo_archive",
+        )
+        raise
     if authority_read is None:
         return None
     provider_revision = authority_read.get("provider_revision")

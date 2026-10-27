@@ -782,6 +782,10 @@ def _stop_effect_runtime(
                 except (OSError, subprocess.TimeoutExpired, UnicodeError, RuntimeError):
                     stopped = False
                 if stopped:
+                    # The child may have exited during the group snapshot,
+                    # after the first nonblocking reap. Retire its wait status
+                    # before returning successful namespace cleanup.
+                    _reap_exited_runtime_child(info)
                     break
             time.sleep(.05)
             continue

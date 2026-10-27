@@ -78,8 +78,6 @@ class CanonicalAuthorityRequired(LocalCoordinationAuthorityRejection):
         payload: Mapping[str, Any] | None = None,
     ) -> None:
         evidence = {
-            "goal_id": goal_id,
-            "operation": operation,
             "write_admitted": False,
             "decision_read_from_provider": False,
             "legacy_fallback_used": False,
@@ -88,6 +86,8 @@ class CanonicalAuthorityRequired(LocalCoordinationAuthorityRejection):
                 "backup_required": True,
             },
             **dict(payload or {}),
+            "goal_id": goal_id,
+            "operation": operation,
         }
         super().__init__(
             "Canonical authority is required; back up and migrate this Goal before retrying",

@@ -58,27 +58,10 @@ def _registry_runtime_root(
     registry: dict[str, Any],
     *,
     registry_path: Path,
-    goal_id: str,
 ) -> Path:
-    runtime_root = resolve_runtime_root(registry, None).expanduser()
-    if not runtime_root.is_absolute():
-        goal = next(
-            (
-                item
-                for item in registry_goals(registry)
-                if str(item.get("id") or "") == goal_id
-            ),
-            None,
-        )
-        repo = Path(str((goal or {}).get("repo") or "")).expanduser()
-        if not repo.is_absolute():
-            repo = (
-                registry_path.parent.parent
-                if registry_path.parent.name == ".loopx"
-                else registry_path.parent
-            )
-        runtime_root = repo / runtime_root
-    return runtime_root.resolve()
+    return resolve_runtime_root(
+        registry, None, registry_path=registry_path,
+    ).expanduser().resolve()
 
 
 def _goal_source_route_packet(
@@ -131,7 +114,6 @@ def resolve_goal_source_runtime_route(
     invoked_runtime = _registry_runtime_root(
         registry_payload,
         registry_path=invoked_registry,
-        goal_id=goal_id,
     )
     if runtime_root_override:
         runtime_root = Path(runtime_root_override).expanduser().resolve()
@@ -200,7 +182,6 @@ def resolve_goal_source_runtime_route(
     source_runtime = _registry_runtime_root(
         source_payload,
         registry_path=source_registry,
-        goal_id=goal_id,
     )
     return _goal_source_route_packet(
         status="source_registry",
